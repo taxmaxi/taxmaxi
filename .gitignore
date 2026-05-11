@@ -1,0 +1,67 @@
+node_modules
+.turbo
+!.env
+.DS_Store
+.cache
+.vercel
+.output
+.wrangler
+.nitro
+*.tsbuildinfo
+*.*.tsbuildinfo
+coverage/
+.dev.vars
+
+/build/
+/api/
+/server/build
+/public/build
+
+# Sentry Config File
+.env.sentry-build-plugin
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.env
+*.local
+
+# uv
+.uv/
+.venv/
+.python-version
+
+# Distribution / packaging
+dist/
+packages/**/build/
+apps/**/build/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Ralph loop output
+.ralph/
+
+# Application logs
+.logs/
+
+# Playwright
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+playwright/.auth/

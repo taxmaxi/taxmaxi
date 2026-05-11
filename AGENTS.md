@@ -1,0 +1,141 @@
+TaxMaxi is an open-source crypto tax API. The API follows RESTful principles and its docs can be found under https://api.taxmaxi.com/openapi.json. You can also install the CLI with `npm i -g tax`, via which you can calculate crypto taxes right from your terminal. The first supported jurisdiction is Germany.
+
+The public product surface is CLI/API first. Do not add a web frontend, CMS, billing system, admin console, or marketing site unless explicitly requested.
+
+## Launch Status
+
+The product is pre-launch and pre-revenue. Prefer clean code and clean schema over compatibility bridges. Hard migrations are acceptable when they simplify the system.
+
+## Repository Scope
+
+Keep these production-shaped surfaces intact:
+
+- `apps/cli` - installable `tax` CLI and future TUI entrypoint
+- `apps/server` - hosted REST API used by the CLI
+- `apps/worker` - BullMQ/Redis worker for sync and classification jobs
+- `packages/core` - domain contracts and framework-light core types
+- `packages/persistence` - schema, SQL, repository contracts, and live layers
+- `packages/rest-api` - HTTP API definitions and handlers
+- `packages/sync-engine` - provider sync, Solana classification, Helius integration, replay/resume logic
+- `packages/sdk` - JS SDK API client
+
+## Build/Lint/Test Commands
+
+### Development
+
+Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `pnpm --filter @my/rest-api run type-check` or `pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists.
+
+### Testing
+
+```bash
+pnpm run test                                    # Run all tests
+pnpm run test transactions.test.ts               # Run single test file
+pnpm run test --project=unit                     # Run only unit tests
+pnpm run test --project=integration              # Run only integration tests
+pnpm run test -t "test name"                     # Run tests matching name
+```
+
+Test files use naming conventions:
+
+- `*.test.ts` - Unit tests
+- `*.integration.test.ts` - Integration tests, usually requiring DB setup
+
+### Code Quality
+
+```bash
+pnpm run lint              # Run oxlint across all packages
+pnpm run format            # Run oxfmt across all packages
+pnpm run type-check        # TypeScript type checking
+```
+
+### Database
+
+```bash
+pnpm --filter @my/persistence run build
+pnpm --filter @my/persistence run migration:generate
+pnpm --filter @my/persistence run migration:run
+```
+
+Preserve useful seed data by rewriting it into clean new seed migrations instead of restoring the old migration chain.
+
+## Naming Conventions
+
+- Files: Services use `PascalCaseService.ts`
+- Classes/Services: PascalCase (`TransactionService`)
+- Functions: camelCase (`getTransactionsForAddress`)
+- Constants: UPPER_SNAKE_CASE (`ZERO_ADDRESS`)
+- Types: PascalCase (`TransactionInsert`)
+
+## Repository Consistency
+
+- Follow existing file placement and naming patterns before creating new files.
+- Prefer colocated private helpers inside an existing module when they are only used there.
+- Create new files only when there is clear reuse or an existing repo pattern for that separation.
+- When in doubt, mirror adjacent files in the same package/layer for structure and naming.
+
+## Architecture Invariants
+
+### Core Boundaries
+
+- `packages/core/**` must not import from adapter or infrastructure packages such as `@my/persistence`, `@my/rest-api`, or app packages.
+- Keep core domain-focused and framework-light where possible: schemas, value objects, contracts, and tagged errors.
+
+### Persistence Boundaries
+
+- In `packages/persistence/src/services/**`, keep files implementation-free:
+  - Allowed: interfaces, `Context.Tag` declarations, shared type aliases, tagged errors.
+  - Not allowed: provider logic, SQL queries, HTTP calls, `Layer.effect(...)`, or `Effect.gen(...)` implementations.
+- Put concrete implementations in `packages/persistence/src/layers/**` and export them via layer barrels only when actually imported externally.
+- If adding a new provider capability, follow this shape:
+  - `services/FooService.ts` -> contract/tag/types only
+  - `layers/FooServiceLive.ts` -> implementation
+
+### REST API Boundaries
+
+- Keep API contracts and schemas in `packages/rest-api/src/definitions/**`.
+- Keep runtime handler implementations in `packages/rest-api/src/layers/**`.
+
+### Sync Engine Boundaries
+
+- Keep provider-specific fetch/normalization logic in `packages/sync-engine/src/providers/**`.
+- Keep source sync orchestration, replay/resume, Helius integration, Solana classification, and queue payload contracts in `packages/sync-engine/src/services/**` and `packages/sync-engine/src/layers/**`.
+- Persistence repositories should expose durable storage operations; sync orchestration should not reach into table details directly.
+
+## Documentation Requirements
+
+- For new files in `packages/persistence/src/services/**` and `packages/persistence/src/layers/**`, add top-level module JSDoc with `@module`.
+- Add JSDoc on exported service contracts/layers and non-obvious exported types.
+- Preserve useful existing docs/comments when refactoring; do not drop high-signal API documentation.
+- When replacing or removing a documented method, add equivalent JSDoc to the new method(s).
+
+## Barrel Files
+
+Only add an export for a service/layer to a barrel file if it is actually imported from other packages/apps. Do not add it if only sibling files import it.
+
+## Function Arguments
+
+Favor a single object parameter over multiple positional args when there are more than two params:
+
+```typescript
+// Preferred
+function createTransaction({ hash, amount, timestamp }: CreateTxParams) {}
+
+// Avoid
+function createTransaction(hash: string, amount: number, timestamp: Date) {}
+```
+
+## Database Queries
+
+Select only needed columns. Do not use `SELECT *`.
+
+## Critical Guidelines
+
+1. No type shortcuts: never use `any` or non-null assertion `!`.
+2. Internal dependencies must use `workspace:*`.
+3. Keep functions small and composable.
+4. Use `Effect.logInfo` and `Effect.logError` for logging. Always pass structured data as the first argument and a static message string as the second, for example `Effect.logInfo({ sourceId, jobId, count }, "Batch processed")`.
+5. In Effect flows, use `Effect.fail` / `Effect.try` error mapping. Avoid throwing raw `Error` manually.
+6. For external or unknown payloads such as OAuth metadata, HTTP bodies, JSONB, provider payloads, and query params, decode with `effect/Schema` instead of manual `typeof` parsing or `as` casts.
+7. Only commit when explicitly requested by the user.
+8. Environment variables must be loaded using Effect Config instead of `process.env` directly.
+9. Keep `.env` files local. They are intentionally present for this working copy but must not be committed.

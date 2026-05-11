@@ -1,0 +1,10 @@
+{
+  "extends": "@my/typescript-config/internal-package.json",
+  "include": ["src"],
+  "exclude": ["node_modules"],
+  "compilerOptions": {
+    "rewriteRelativeImportExtensions": true,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  }
+}

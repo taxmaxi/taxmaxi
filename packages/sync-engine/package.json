@@ -1,0 +1,97 @@
+{
+  "name": "@my/sync-engine",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist/**"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./services": {
+      "types": "./dist/services/index.d.ts",
+      "default": "./dist/services/index.js"
+    },
+    "./layers": {
+      "types": "./dist/layers/index.d.ts",
+      "default": "./dist/layers/index.js"
+    },
+    "./services/SourceSyncService": {
+      "types": "./dist/services/SourceSyncService.d.ts",
+      "default": "./dist/services/SourceSyncService.js"
+    },
+    "./services/SourceSyncProvider": {
+      "types": "./dist/services/SourceSyncProvider.d.ts",
+      "default": "./dist/services/SourceSyncProvider.js"
+    },
+    "./providers/coinbase": {
+      "types": "./dist/providers/coinbase/index.d.ts",
+      "default": "./dist/providers/coinbase/index.js"
+    },
+    "./providers/coinbase/layers": {
+      "types": "./dist/providers/coinbase/layers/index.d.ts",
+      "default": "./dist/providers/coinbase/layers/index.js"
+    },
+    "./providers/coinbase/services": {
+      "types": "./dist/providers/coinbase/services/index.d.ts",
+      "default": "./dist/providers/coinbase/services/index.js"
+    },
+    "./providers/coinbase/services/CoinbaseSyncClient": {
+      "types": "./dist/providers/coinbase/services/CoinbaseSyncClient.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseSyncClient.js"
+    },
+    "./providers/coinbase/services/CoinbaseReferenceDataService": {
+      "types": "./dist/providers/coinbase/services/CoinbaseReferenceDataService.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseReferenceDataService.js"
+    },
+    "./providers/coinbase/services/CoinbaseReferenceMappingService": {
+      "types": "./dist/providers/coinbase/services/CoinbaseReferenceMappingService.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseReferenceMappingService.js"
+    },
+    "./providers/coinbase/services/CoinbaseRecordNormalizer": {
+      "types": "./dist/providers/coinbase/services/CoinbaseRecordNormalizer.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseRecordNormalizer.js"
+    },
+    "./providers/coinbase/services/CoinbaseSourceSyncProvider": {
+      "types": "./dist/providers/coinbase/services/CoinbaseSourceSyncProvider.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseSourceSyncProvider.js"
+    },
+    "./providers/coinbase/services/CoinbaseCredentialRepository": {
+      "types": "./dist/providers/coinbase/services/CoinbaseCredentialRepository.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseCredentialRepository.js"
+    },
+    "./providers/coinbase/services/CoinbaseLegDerivationService": {
+      "types": "./dist/providers/coinbase/services/CoinbaseLegDerivationService.d.ts",
+      "default": "./dist/providers/coinbase/services/CoinbaseLegDerivationService.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "type-check": "tsc --noEmit",
+    "type-check:tests": "tsc -p tsconfig.tests.json",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
+    "format": "oxfmt -c ../../oxfmtrc.jsonc",
+    "lint": "oxlint -c ../../oxlintrc.json"
+  },
+  "dependencies": {
+    "@effect/platform": "0.96.1",
+    "@my/core": "workspace:*",
+    "effect": "3.21.2"
+  },
+  "devDependencies": {
+    "@effect/sql": "0.51.1",
+    "@effect/sql-pg": "0.52.1",
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "drizzle-orm": "1.0.0-beta.13-f728631",
+    "oxfmt": "~0.43.0",
+    "oxlint": "~1.58.0",
+    "typescript": "~6.0.2"
+  }
+}

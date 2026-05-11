@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Node",
+  "extends": "./base.json",
+  "compilerOptions": {
+    "moduleResolution": "NodeNext",
+    "module": "NodeNext",
+    "sourceMap": true,
+    "lib": ["ES2022"],
+    "incremental": true,
+    "types": ["node"]
+  }
+}

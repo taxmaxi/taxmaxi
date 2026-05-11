@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "oxc.oxc-vscode",
+    "expo.vscode-expo-tools",
+    "ms-azuretools.vscode-docker",
+    "yoavbls.pretty-ts-errors",
+    "charliermarsh.ruff",
+    "ms-python.python",
+    "ms-python.debugpy",
+    "ms-python.vscode-pylance",
+    "tomoki1207.pdf"
+  ]
+}

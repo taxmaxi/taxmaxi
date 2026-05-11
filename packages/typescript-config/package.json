@@ -1,0 +1,12 @@
+{
+  "name": "@my/typescript-config",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rm -rf dist"
+  }
+}

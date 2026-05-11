@@ -1,0 +1,42 @@
+{
+  "name": "taxmaxi",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist/**"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run --root ../.. --project=unit packages/sdk/tests",
+    "test:watch": "vitest watch --root ../.. --project=unit packages/sdk/tests",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
+    "format": "oxfmt -c ../../oxfmtrc.jsonc",
+    "lint": "oxlint -c ../../oxlintrc.json"
+  },
+  "dependencies": {
+    "@effect/platform": "0.96.1",
+    "@my/rest-api": "workspace:*",
+    "effect": "3.21.2"
+  },
+  "devDependencies": {
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "oxfmt": "~0.43.0",
+    "oxlint": "~1.58.0",
+    "typescript": "~6.0.2"
+  }
+}

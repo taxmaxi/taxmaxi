@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Internal Package",
+  "extends": "./node.json",
+  "compilerOptions": {
+    "declaration": true,
+    "composite": true,
+    "declarationMap": true
+  }
+}

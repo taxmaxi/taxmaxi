@@ -1,0 +1,83 @@
+{
+  "name": "@my/core",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist/**"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./authentication": {
+      "types": "./dist/authentication/index.d.ts",
+      "default": "./dist/authentication/index.js"
+    },
+    "./authentication/errors": {
+      "types": "./dist/authentication/AuthErrors.d.ts",
+      "default": "./dist/authentication/AuthErrors.js"
+    },
+    "./authorization": {
+      "types": "./dist/authorization/index.d.ts",
+      "default": "./dist/authorization/index.js"
+    },
+    "./currency": {
+      "types": "./dist/currency/index.d.ts",
+      "default": "./dist/currency/index.js"
+    },
+    "./shared/values/Address": {
+      "types": "./dist/shared/values/Address.d.ts",
+      "default": "./dist/shared/values/Address.js"
+    },
+    "./shared/values/LocalDate": {
+      "types": "./dist/shared/values/LocalDate.d.ts",
+      "default": "./dist/shared/values/LocalDate.js"
+    },
+    "./shared/values/Percentage": {
+      "types": "./dist/shared/values/Percentage.d.ts",
+      "default": "./dist/shared/values/Percentage.js"
+    },
+    "./shared/values/Timestamp": {
+      "types": "./dist/shared/values/Timestamp.d.ts",
+      "default": "./dist/shared/values/Timestamp.js"
+    },
+    "./shared/values/MonetaryAmount": {
+      "types": "./dist/shared/values/MonetaryAmount.d.ts",
+      "default": "./dist/shared/values/MonetaryAmount.js"
+    },
+    "./shared/observability/ObservedOperation": {
+      "types": "./dist/shared/observability/ObservedOperation.d.ts",
+      "default": "./dist/shared/observability/ObservedOperation.js"
+    },
+    "./source": {
+      "types": "./dist/source/index.d.ts",
+      "default": "./dist/source/index.js"
+    },
+    "./legal": {
+      "types": "./dist/legal/index.d.ts",
+      "default": "./dist/legal/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
+    "format": "oxfmt -c ../../oxfmtrc.jsonc",
+    "lint": "oxlint -c ../../oxlintrc.json"
+  },
+  "dependencies": {
+    "@effect/platform": "0.96.1",
+    "effect": "3.21.2"
+  },
+  "devDependencies": {
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "oxfmt": "~0.43.0",
+    "oxlint": "~1.58.0",
+    "typescript": "~6.0.2"
+  }
+}

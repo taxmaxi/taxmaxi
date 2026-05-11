@@ -1,0 +1,57 @@
+{
+  "name": "@my/persistence",
+  "version": "0.0.0",
+  "private": true,
+  "files": [
+    "dist/**"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./services": {
+      "types": "./dist/services/index.d.ts",
+      "default": "./dist/services/index.js"
+    },
+    "./layers": {
+      "types": "./dist/layers/index.d.ts",
+      "default": "./dist/layers/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "migration:generate": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs generate",
+    "migration:run": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs migrate",
+    "db:push": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs push --schema ./src/schema/index.ts",
+    "up": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs up",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
+    "format": "oxfmt -c ../../oxfmtrc.jsonc",
+    "lint": "oxlint -c ../../oxlintrc.json"
+  },
+  "dependencies": {
+    "@effect/platform": "0.96.1",
+    "@effect/platform-node": "0.106.0",
+    "@effect/sql": "0.51.1",
+    "@effect/sql-pg": "0.52.1",
+    "@my/core": "workspace:*",
+    "@my/sync-engine": "workspace:*",
+    "drizzle-orm": "1.0.0-beta.13-f728631",
+    "effect": "3.21.2",
+    "pg": "8.20.0",
+    "resend": "6.10.0"
+  },
+  "devDependencies": {
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "@types/pg": "~8.20.0",
+    "drizzle-kit": "1.0.0-beta.13-f728631",
+    "oxfmt": "~0.43.0",
+    "oxlint": "~1.58.0",
+    "typescript": "~6.0.2"
+  }
+}

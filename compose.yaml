@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: taxmaxi
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - taxmaxi_db_data:/var/lib/postgresql
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  taxmaxi_db_data:

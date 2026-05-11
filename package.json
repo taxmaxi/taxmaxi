@@ -1,0 +1,46 @@
+{
+  "name": "taxmaxi",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "prepare": "effect-language-service patch",
+    "generate": "plop",
+    "test": "vitest",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "build": "turbo build",
+    "clean": "turbo run clean && rm -rf node_modules .turbo && rm -f pnpm-lock.yaml",
+    "clean:lite": "turbo run clean && rm -rf .turbo",
+    "clean:tsbuildinfo": "find . -name 'tsconfig.tsbuildinfo' -type f -delete",
+    "db:generate": "pnpm --filter @my/persistence run migration:generate",
+    "db:migrate": "pnpm --filter @my/persistence run migration:run",
+    "db:seed": "pnpm --filter @my/persistence run seed",
+    "lint": "turbo run lint",
+    "format": "turbo run format",
+    "type-check": "turbo run type-check",
+    "server:build": "turbo run build --filter=server...",
+    "server:dev": "turbo run dev --filter=server...",
+    "worker:build": "turbo run build --filter=worker...",
+    "worker:dev": "turbo run dev --filter=worker..."
+  },
+  "devDependencies": {
+    "@effect/language-service": "~0.85.1",
+    "@vitest/coverage-v8": "~4.1.2",
+    "husky": "~9.1.7",
+    "lint-staged": "~16.4.0",
+    "plop": "~4.0.5",
+    "turbo": "~2.9.3",
+    "typescript": "~6.0.2",
+    "vite": "~8.0.3",
+    "vitest": "~4.1.2"
+  },
+  "lint-staged": {
+    "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,vue,astro,svelte}": "oxlint",
+    "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,toml,json,jsonc,yaml,yml,html,vue,css,scss,less,gql,graphql,md,mdx}": "oxfmt"
+  },
+  "packageManager": "pnpm@10.29.1+sha512.48dae233635a645768a3028d19545cacc1688639eeb1f3734e42d6d6b971afbf22aa1ac9af52a173d9c3a20c15857cfa400f19994d79a2f626fcc73fccda9bbc"
+}

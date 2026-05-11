@@ -1,0 +1,32 @@
+{
+  "name": "server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "dotenv -- tsx watch --clear-screen=false src/index.ts",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
+    "format": "oxfmt -c ../../oxfmtrc.jsonc",
+    "lint": "oxlint -c ../../oxlintrc.json"
+  },
+  "dependencies": {
+    "@effect/platform": "0.96.1",
+    "@effect/platform-node": "0.106.0",
+    "@my/persistence": "workspace:*",
+    "@my/rest-api": "workspace:*",
+    "@my/sync-engine": "workspace:*",
+    "bullmq": "5.76.4",
+    "effect": "3.21.2",
+    "ioredis": "5.10.1"
+  },
+  "devDependencies": {
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "dotenv-cli": "~11.0.0",
+    "oxfmt": "~0.43.0",
+    "oxlint": "~1.58.0",
+    "tsx": "~4.21.0",
+    "typescript": "~6.0.2"
+  }
+}
