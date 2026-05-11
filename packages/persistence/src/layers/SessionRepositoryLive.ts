@@ -7,21 +7,18 @@ import { AuthUserId, Session, SessionId, UserAgent } from "@my/core/authenticati
 import { Timestamp } from "@my/core/shared/values/Timestamp"
 import { EntityNotFoundError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { sessions, type SessionRow } from "../schema/SessionsTable.ts"
-import { users } from "../schema/UsersTable.ts"
 import { SessionRepository, type SessionRepositoryService } from "../services/SessionRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
-type SelectedSessionRow = Pick<SessionRow, "id" | "expiresAt" | "createdAt"> & {
+type SelectedSessionRow = Pick<SessionRow, "id" | "provider" | "expiresAt" | "createdAt"> & {
   readonly userId: string
-  readonly googleUserId: string | null
-  readonly passwordHash: string | null
 }
 
 const rowToSession = (row: SelectedSessionRow): Session =>
   Session.make({
     id: SessionId.make(row.id),
     userId: AuthUserId.make(row.userId),
-    provider: row.googleUserId !== null ? "google" : "local",
+    provider: row.provider,
     expiresAt: Timestamp.make({ epochMillis: row.expiresAt.getTime() }),
     createdAt: Timestamp.make({ epochMillis: row.createdAt.getTime() }),
     userAgent: Option.none<UserAgent>(),
@@ -33,10 +30,9 @@ const make = Effect.gen(function* () {
   const selectSessionFields = {
     id: sessions.id,
     userId: sessions.userId,
+    provider: sessions.provider,
     expiresAt: sessions.expiresAt,
     createdAt: sessions.createdAt,
-    googleUserId: users.googleUserId,
-    passwordHash: users.passwordHash,
   } as const
 
   const findById: SessionRepositoryService["findById"] = (id) =>
@@ -44,7 +40,6 @@ const make = Effect.gen(function* () {
       const [row] = yield* db
         .select(selectSessionFields)
         .from(sessions)
-        .leftJoin(users, eq(sessions.userId, users.id))
         .where(eq(sessions.id, id))
 
       if (!row || row.userId === null) {
@@ -55,10 +50,9 @@ const make = Effect.gen(function* () {
         rowToSession({
           id: row.id,
           userId: row.userId,
+          provider: row.provider,
           expiresAt: row.expiresAt,
           createdAt: row.createdAt,
-          googleUserId: row.googleUserId,
-          passwordHash: row.passwordHash,
         })
       )
     }).pipe(wrapSqlError("findById"))
@@ -68,7 +62,6 @@ const make = Effect.gen(function* () {
       const rows = yield* db
         .select(selectSessionFields)
         .from(sessions)
-        .leftJoin(users, eq(sessions.userId, users.id))
         .where(eq(sessions.userId, userId))
 
       const mapped: Session[] = []
@@ -81,10 +74,9 @@ const make = Effect.gen(function* () {
           rowToSession({
             id: row.id,
             userId: row.userId,
+            provider: row.provider,
             expiresAt: row.expiresAt,
             createdAt: row.createdAt,
-            googleUserId: row.googleUserId,
-            passwordHash: row.passwordHash,
           })
         )
       }
@@ -98,6 +90,7 @@ const make = Effect.gen(function* () {
       yield* db.insert(sessions).values({
         id: session.id,
         userId: session.userId,
+        provider: session.provider,
         expiresAt: session.expiresAt.toDate(),
         createdAt: now,
       })

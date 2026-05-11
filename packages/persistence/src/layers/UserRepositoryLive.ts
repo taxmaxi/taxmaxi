@@ -24,8 +24,6 @@ type SelectedUserRow = Pick<
   | "emailVerified"
   | "name"
   | "role"
-  | "googleUserId"
-  | "passwordHash"
   | "createdAt"
   | "updatedAt"
 >
@@ -33,20 +31,6 @@ type SelectedUserRow = Pick<
 const toAuthRole = (role: "user" | "admin"): UserRole => (role === "admin" ? "admin" : "member")
 
 const fromAuthRole = (role: UserRole): "user" | "admin" => (role === "admin" ? "admin" : "user")
-
-const toPrimaryProviderFromLegacyUserColumns = (
-  row: Pick<SelectedUserRow, "googleUserId" | "passwordHash">
-): AuthProviderType => {
-  if (row.googleUserId !== null) {
-    return "google"
-  }
-
-  if (row.passwordHash !== null) {
-    return "local"
-  }
-
-  return "local"
-}
 
 const toDisplayName = ({
   email,
@@ -71,8 +55,6 @@ const make = Effect.gen(function* () {
     emailVerified: users.emailVerified,
     name: users.name,
     role: users.role,
-    googleUserId: users.googleUserId,
-    passwordHash: users.passwordHash,
     createdAt: users.createdAt,
     updatedAt: users.updatedAt,
   } as const
@@ -87,16 +69,21 @@ const make = Effect.gen(function* () {
       return Option.fromNullable(identity).pipe(Option.map((value) => value.provider))
     })
 
-  const rowToAuthUserWithPrimaryProvider = (row: SelectedUserRow) =>
+  const rowToAuthUserWithPrimaryProvider = (
+    row: SelectedUserRow,
+    primaryProviderOverride?: AuthProviderType
+  ) =>
     Effect.gen(function* () {
       const userId = AuthUserId.make(row.id)
       const email = Email.make(row.email)
       const identityProvider = yield* getPrimaryProviderFromIdentity(userId)
 
-      const primaryProvider = Option.match(identityProvider, {
-        onNone: () => toPrimaryProviderFromLegacyUserColumns(row),
-        onSome: (provider) => provider,
-      })
+      const primaryProvider =
+        primaryProviderOverride ??
+        Option.match(identityProvider, {
+          onNone: (): AuthProviderType => "local",
+          onSome: (provider) => provider,
+        })
 
       return AuthUser.make({
         id: userId,
@@ -149,7 +136,6 @@ const make = Effect.gen(function* () {
           emailVerified: user.emailVerified,
           name: user.displayName,
           role: fromAuthRole(user.role),
-          googleUserId: user.primaryProvider === "google" ? user.id : null,
           createdAt: now,
           updatedAt: now,
         })
@@ -161,7 +147,7 @@ const make = Effect.gen(function* () {
         )
       }
 
-      return yield* rowToAuthUserWithPrimaryProvider(created)
+      return yield* rowToAuthUserWithPrimaryProvider(created, user.primaryProvider)
     }).pipe(wrapSqlError("create"))
 
   const update: UserRepositoryService["update"] = (id, data) =>
@@ -170,7 +156,6 @@ const make = Effect.gen(function* () {
         readonly email?: string
         readonly name?: string
         readonly role?: "user" | "admin"
-        readonly googleUserId?: string | null
         readonly emailVerified?: boolean
         readonly updatedAt: Date
       } = {
@@ -178,9 +163,6 @@ const make = Effect.gen(function* () {
         ...(data.displayName !== undefined ? { name: data.displayName } : {}),
         ...(data.role !== undefined ? { role: fromAuthRole(data.role) } : {}),
         ...(data.emailVerified !== undefined ? { emailVerified: data.emailVerified } : {}),
-        ...(data.primaryProvider !== undefined
-          ? { googleUserId: data.primaryProvider === "google" ? id : null }
-          : {}),
         updatedAt: new Date(),
       }
 
@@ -214,7 +196,7 @@ const make = Effect.gen(function* () {
         .where(eq(users.role, "admin"))
         .orderBy(asc(users.email))
 
-      return yield* Effect.forEach(rows, rowToAuthUserWithPrimaryProvider)
+      return yield* Effect.forEach(rows, (row) => rowToAuthUserWithPrimaryProvider(row))
     }).pipe(wrapSqlError("findPlatformAdmins"))
 
   const isPlatformAdmin: UserRepositoryService["isPlatformAdmin"] = (id) =>
