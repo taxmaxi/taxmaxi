@@ -17,6 +17,33 @@ const seedTimestamp = new Date("2026-01-01T00:00:00.000Z")
 
 const blockchains = [
   {
+    name: "bitcoin",
+    chainType: "bitcoin",
+    chainId: null,
+    nativeAssetSymbol: "BTC",
+    explorerUrl: "https://mempool.space",
+    logoUrl: null,
+    coingeckoPlatformId: "bitcoin",
+  },
+  {
+    name: "ethereum",
+    chainType: "evm",
+    chainId: 1,
+    nativeAssetSymbol: "ETH",
+    explorerUrl: "https://etherscan.io",
+    logoUrl: null,
+    coingeckoPlatformId: "ethereum",
+  },
+  {
+    name: "base",
+    chainType: "evm",
+    chainId: 8453,
+    nativeAssetSymbol: "ETH",
+    explorerUrl: "https://basescan.org",
+    logoUrl: null,
+    coingeckoPlatformId: "base",
+  },
+  {
     name: "solana",
     chainType: "solana",
     chainId: null,
@@ -29,6 +56,9 @@ const blockchains = [
 
 const cexRows = [
   { name: "coinbase", website: "https://www.coinbase.com" },
+  { name: "kraken", website: "https://www.kraken.com" },
+  { name: "binance", website: "https://www.binance.com" },
+  { name: "bitstamp", website: "https://www.bitstamp.net" },
 ] as const
 
 const transactionCategories = [
