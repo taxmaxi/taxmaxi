@@ -7,14 +7,14 @@ import { SourceSyncRunRepositoryLive } from "../../src/layers/SourceSyncRunRepos
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_SOURCE_ID,
-  TEST_USER_ID,
+  TEST_PRINCIPAL_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
 import { SourceSyncRunRepository, type SourceSyncJobStatus } from "@my/sync-engine/services"
 
 const SECOND_SOURCE_ID = "00000000-0000-0000-0000-000000000282"
-const OTHER_USER_ID = "00000000-0000-0000-0000-000000000182"
+const OTHER_PRINCIPAL_ID = "00000000-0000-0000-0000-000000000182"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_source_sync_run_repo",
@@ -45,7 +45,7 @@ const seedSecondSource = () =>
         .insert(schema.cexAccount)
         .values({
           cexId: coinbaseCex.id,
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           providerUserId: "coinbase-user-2",
           providerAccountId: "coinbase-account-2",
           accessToken: "test-access-token",
@@ -61,7 +61,7 @@ const seedSecondSource = () =>
 
       yield* db.insert(schema.sources).values({
         id: SECOND_SOURCE_ID,
-        userId: TEST_USER_ID,
+        principalId: TEST_PRINCIPAL_ID,
         name: "Coinbase Source 2",
         providerKey: "coinbase",
         sourceableType: "cex",
@@ -90,7 +90,7 @@ const createProcessingJob = ({
         .insert(schema.processingJobs)
         .values({
           sourceId,
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           mode: "sync",
           status,
           startedAt: status === "processing" ? now : null,
@@ -138,7 +138,7 @@ const updateProcessingJobStatus = ({
 const createRun = ({ requestedSourceCount }: { readonly requestedSourceCount: number }) =>
   runRepository(
     Effect.flatMap(SourceSyncRunRepository, (repository) =>
-      repository.createRun({ userId: TEST_USER_ID, requestedSourceCount })
+      repository.createRun({ principalId: TEST_PRINCIPAL_ID, requestedSourceCount })
     )
   )
 
@@ -183,11 +183,11 @@ describe("SourceSyncRunRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
-  it("creates a run with user id and initial counters", async () => {
+  it("creates a run with principal id and initial counters", async () => {
     const run = await createRun({ requestedSourceCount: 2 })
 
     expect(run).toMatchObject({
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       status: "queued",
       requestedSourceCount: 2,
       queuedSourceCount: 0,
@@ -305,11 +305,11 @@ describe("SourceSyncRunRepositoryLive", () => {
     })
   })
 
-  it("does not expose another user's run", async () => {
+  it("does not expose another principal's run", async () => {
     const run = await createRun({ requestedSourceCount: 0 })
     const visible = await runRepository(
       Effect.flatMap(SourceSyncRunRepository, (repository) =>
-        repository.getVisibleRun({ userId: OTHER_USER_ID, runId: run.id })
+        repository.getVisibleRun({ principalId: OTHER_PRINCIPAL_ID, runId: run.id })
       )
     )
 

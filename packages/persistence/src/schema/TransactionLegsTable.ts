@@ -13,11 +13,11 @@ import {
 import { sql } from "drizzle-orm"
 import { addresses } from "./AddressesTable.ts"
 import { assets } from "./AssetsTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactions } from "./TransactionsTable.ts"
 import { transfers } from "./TransfersTable.ts"
-import { users } from "./UsersTable.ts"
 
 /**
  * Leg kind enum - the accounting classification of each leg
@@ -75,7 +75,9 @@ export const transactionLegs = pgTable(
     timestamp: timestamp("timestamp").notNull(),
 
     // User/address scope
-    userId: uuid("user_id").references(() => users.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "cascade" }),
     addressId: uuid("address_id").references(() => addresses.id, { onDelete: "cascade" }),
 
     // Asset and amount
@@ -151,8 +153,8 @@ export const transactionLegs = pgTable(
     // Query legs by address (for portfolio views)
     index("idx_transaction_legs_address").on(table.addressId),
 
-    // Query legs by user (for tax reports)
-    index("idx_transaction_legs_user").on(table.userId),
+    // Query legs by principal (for tax reports)
+    index("idx_transaction_legs_principal").on(table.principalId),
 
     // Query legs by asset (for FIFO processing)
     index("idx_transaction_legs_asset").on(table.assetId),

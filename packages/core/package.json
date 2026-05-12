@@ -59,12 +59,17 @@
     "./legal": {
       "types": "./dist/legal/index.d.ts",
       "default": "./dist/legal/index.js"
+    },
+    "./ownership": {
+      "types": "./dist/ownership/index.d.ts",
+      "default": "./dist/ownership/index.js"
     }
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
+    "type-check:tests": "tsc -p tsconfig.tests.json",
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
     "format": "oxfmt -c ../../oxfmtrc.jsonc",
     "lint": "oxlint -c ../../oxlintrc.json"

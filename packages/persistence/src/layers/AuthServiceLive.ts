@@ -70,6 +70,7 @@ import { IdentityRepository } from "../services/IdentityRepository.ts"
 import { SessionRepository } from "../services/SessionRepository.ts"
 import { OAuthStateStore } from "../services/OAuthStateStore.ts"
 import { AuthServiceConfig } from "../services/AuthServiceConfig.ts"
+import { PrincipalRepository } from "../services/PrincipalRepository.ts"
 
 const OAUTH_STATE_TTL_MILLIS = 10 * 60 * 1000
 const EMAIL_VERIFICATION_TTL_MILLIS = 10 * 60 * 1000
@@ -147,6 +148,7 @@ const make = Effect.gen(function* () {
   const identityRepo = yield* IdentityRepository
   const sessionRepo = yield* SessionRepository
   const oauthStateStore = yield* OAuthStateStore
+  const principalRepository = yield* PrincipalRepository
   const tokenGenerator = yield* SessionTokenGenerator
   const passwordHasher = yield* PasswordHasher
 
@@ -425,6 +427,16 @@ const make = Effect.gen(function* () {
               })
           )
         )
+
+      yield* principalRepository.createUserPrincipal(userId).pipe(
+        Effect.mapError(
+          () =>
+            new ProviderAuthFailedError({
+              provider: authResult.provider,
+              reason: "Failed to create user principal",
+            })
+        )
+      )
 
       // Create the identity
       yield* createIdentityForUser(userId, authResult)
@@ -750,6 +762,10 @@ const make = Effect.gen(function* () {
             primaryProvider: "local",
             emailVerified: false,
           })
+          .pipe(Effect.mapError(() => new UserAlreadyExistsError({ email })))
+
+        yield* principalRepository
+          .createUserPrincipal(userId)
           .pipe(Effect.mapError(() => new UserAlreadyExistsError({ email })))
 
         // Create local identity with password hash
@@ -1149,6 +1165,7 @@ export const AuthServiceLive: Layer.Layer<
   | IdentityRepository
   | SessionRepository
   | OAuthStateStore
+  | PrincipalRepository
   | SessionTokenGenerator
   | PasswordHasher
 > = Layer.effect(AuthService, make)

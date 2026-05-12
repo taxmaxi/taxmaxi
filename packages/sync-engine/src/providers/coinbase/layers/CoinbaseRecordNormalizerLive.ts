@@ -211,7 +211,7 @@ const providerTransferMetadata = ({
   readonly transaction: CoinbaseTransaction
 }) => ({
   provider: "coinbase",
-  userId: normalizeParams.source.userId,
+  principalId: normalizeParams.source.principalId,
   coinbaseTransactionId: transaction.id,
   providerStatus: transaction.status,
   providerTransactionType: transaction.type,
@@ -362,6 +362,7 @@ const buildFeeTransfer = (params: {
     return {
       transfer: {
         sourceId: params.normalizeParams.sourceRecord.sourceId,
+        principalId: params.normalizeParams.source.principalId,
         sourceRawRecordId: params.normalizeParams.sourceRecord.id,
         externalId: `${params.transaction.id}:${params.externalSuffix}`,
         externalGroupId: params.transaction.id,
@@ -387,7 +388,7 @@ const buildFeeTransfer = (params: {
         notes: params.notes,
         metadata: {
           provider: "coinbase",
-          userId: params.normalizeParams.source.userId,
+          principalId: params.normalizeParams.source.principalId,
           coinbaseTransactionId: params.transaction.id,
           providerStatus: params.transaction.status,
           networkHash: params.transaction.network?.hash ?? null,
@@ -495,7 +496,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
           from: transactionPayload.from ?? null,
           to: transactionPayload.to ?? null,
         },
-        userId: params.source.userId,
+        principalId: params.source.principalId,
       },
       venueContext: {
         venueType: "cex",

@@ -7,6 +7,7 @@
  */
 
 import * as Schema from "effect/Schema"
+import { PrincipalId } from "../ownership/index.ts"
 import { Timestamp } from "../shared/values/Timestamp.ts"
 
 /**
@@ -101,9 +102,9 @@ export class Source extends Schema.Class<Source>("Source")({
   id: SourceId,
 
   /**
-   * User owner identifier for this source
+   * Durable owner principal identifier for this source.
    */
-  userId: Schema.UUID,
+  principalId: PrincipalId,
 
   /**
    * Display name of the source

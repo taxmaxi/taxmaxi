@@ -227,7 +227,7 @@ const processJob = ({
         workerId: config.workerId,
         jobId: payload.jobId,
         sourceId: payload.sourceId,
-        userId: payload.userId,
+        principalId: payload.principalId,
         mode: payload.mode,
         attemptNumber,
         maxAttempts,

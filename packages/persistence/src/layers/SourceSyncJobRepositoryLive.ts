@@ -40,7 +40,7 @@ const ACTIVE_JOB_STATUSES = [
 interface PersistedExecutionJobRow {
   readonly id: string
   readonly sourceId: string
-  readonly userId: string | null
+  readonly principalId: string
   readonly mode: SourceSyncExecutionJob["mode"]
   readonly status: SourceSyncJobStatus
 }
@@ -68,15 +68,6 @@ const toExecutionJob = ({
   readonly jobId: string
 }): Effect.Effect<SourceSyncExecutionJob, SourceSyncJobExecutionRecordConflictError> =>
   Effect.gen(function* () {
-    if (job.userId === null) {
-      return yield* Effect.fail(
-        new SourceSyncJobExecutionRecordConflictError({
-          jobId,
-          reason: "Source sync jobs must have a user id.",
-        })
-      )
-    }
-
     if (job.status !== "pending" && job.status !== "processing") {
       return yield* Effect.fail(
         new SourceSyncJobExecutionRecordConflictError({
@@ -89,7 +80,7 @@ const toExecutionJob = ({
     return {
       id: job.id,
       sourceId: job.sourceId,
-      userId: job.userId,
+      principalId: job.principalId,
       mode: job.mode,
       status: job.status,
     } satisfies SourceSyncExecutionJob
@@ -101,7 +92,7 @@ const make = Effect.gen(function* () {
   const selectActiveJobFields = {
     id: schema.processingJobs.id,
     sourceId: schema.processingJobs.sourceId,
-    userId: schema.processingJobs.userId,
+    principalId: schema.processingJobs.principalId,
     mode: schema.processingJobs.mode,
     status: schema.processingJobs.status,
     updatedAt: schema.processingJobs.updatedAt,
@@ -112,7 +103,7 @@ const make = Effect.gen(function* () {
   const selectExecutionJobFields = {
     id: schema.processingJobs.id,
     sourceId: schema.processingJobs.sourceId,
-    userId: schema.processingJobs.userId,
+    principalId: schema.processingJobs.principalId,
     mode: schema.processingJobs.mode,
     status: schema.processingJobs.status,
   } as const
@@ -154,14 +145,17 @@ const make = Effect.gen(function* () {
       )
     )
 
-  const findActiveJob: SourceSyncJobRepositoryShape["findActiveJob"] = ({ sourceId, userId }) =>
+  const findActiveJob: SourceSyncJobRepositoryShape["findActiveJob"] = ({
+    sourceId,
+    principalId,
+  }) =>
     db
       .select(selectActiveJobFields)
       .from(schema.processingJobs)
       .where(
         and(
           eq(schema.processingJobs.sourceId, sourceId),
-          eq(schema.processingJobs.userId, userId),
+          eq(schema.processingJobs.principalId, principalId),
           inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
         )
       )
@@ -170,16 +164,12 @@ const make = Effect.gen(function* () {
         wrapSyncEngineSqlError("sourceSyncJobRepository.findActiveJob"),
         Effect.map((jobs) =>
           jobs.flatMap((job) => {
-            if (job.userId === null) {
-              return []
-            }
-
             if (job.status === "pending" || job.status === "processing") {
               return [
                 {
                   id: job.id,
                   sourceId: job.sourceId,
-                  userId: job.userId,
+                  principalId: job.principalId,
                   mode: job.mode,
                   status: job.status,
                   updatedAt: job.updatedAt,
@@ -196,12 +186,12 @@ const make = Effect.gen(function* () {
 
   const createProcessingJob = ({
     sourceId,
-    userId,
+    principalId,
     mode,
     maxAttempts,
   }: {
     readonly sourceId: string
-    readonly userId: string
+    readonly principalId: string
     readonly mode: "sync" | "replay"
     readonly maxAttempts: number
   }): Effect.Effect<string, PersistenceError> =>
@@ -210,7 +200,7 @@ const make = Effect.gen(function* () {
         .insert(schema.processingJobs)
         .values({
           sourceId,
-          userId,
+          principalId,
           mode,
           status: "pending",
           attemptCount: 0,
@@ -234,11 +224,11 @@ const make = Effect.gen(function* () {
 
   const createOrReuseJob: SourceSyncJobRepositoryShape["createOrReuseJob"] = ({
     sourceId,
-    userId,
+    principalId,
     mode,
     maxAttempts,
   }) =>
-    createProcessingJob({ sourceId, userId, mode, maxAttempts }).pipe(
+    createProcessingJob({ sourceId, principalId, mode, maxAttempts }).pipe(
       Effect.map(
         (jobId): CreateOrReuseSourceSyncJobResult => ({
           _tag: "CreatedSourceSyncJob",
@@ -250,7 +240,7 @@ const make = Effect.gen(function* () {
           return Effect.fail(toSyncEngineStorageError({ error }))
         }
 
-        return findActiveJob({ sourceId, userId }).pipe(
+        return findActiveJob({ sourceId, principalId }).pipe(
           Effect.flatMap(([concurrentJob]) => {
             if (concurrentJob === undefined) {
               return Effect.fail(toSyncEngineStorageError({ error }))
@@ -260,7 +250,7 @@ const make = Effect.gen(function* () {
               _tag: "ReusedSourceSyncJob",
               id: concurrentJob.id,
               sourceId: concurrentJob.sourceId,
-              userId: concurrentJob.userId,
+              principalId: concurrentJob.principalId,
               mode: concurrentJob.mode,
               status: concurrentJob.status,
               queueName: concurrentJob.queueName,
@@ -322,7 +312,7 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.processingJobs.id, jobId),
             eq(schema.processingJobs.status, "pending"),
-            isNotNull(schema.processingJobs.userId)
+            isNotNull(schema.processingJobs.principalId)
           )
         )
         .returning(selectExecutionJobFields)
@@ -503,7 +493,7 @@ const make = Effect.gen(function* () {
       }
     })
 
-  const getJob: SourceSyncJobRepositoryShape["getJob"] = ({ userId, sourceId, jobId }) =>
+  const getJob: SourceSyncJobRepositoryShape["getJob"] = ({ principalId, sourceId, jobId }) =>
     Effect.gen(function* () {
       const [job] = yield* db
         .select({
@@ -518,7 +508,7 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.processingJobs.id, jobId),
             eq(schema.processingJobs.sourceId, sourceId),
-            eq(schema.processingJobs.userId, userId)
+            eq(schema.processingJobs.principalId, principalId)
           )
         )
         .limit(1)
@@ -555,7 +545,7 @@ const make = Effect.gen(function* () {
       .select({
         id: schema.processingJobs.id,
         sourceId: schema.processingJobs.sourceId,
-        userId: schema.processingJobs.userId,
+        principalId: schema.processingJobs.principalId,
         status: schema.processingJobs.status,
         startedAt: schema.processingJobs.startedAt,
         heartbeatAt: schema.processingJobs.heartbeatAt,
@@ -565,7 +555,7 @@ const make = Effect.gen(function* () {
       .from(schema.processingJobs)
       .where(
         and(
-          isNotNull(schema.processingJobs.userId),
+          isNotNull(schema.processingJobs.principalId),
           inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES),
           or(
             lt(schema.processingJobs.heartbeatAt, staleBefore),
@@ -582,10 +572,6 @@ const make = Effect.gen(function* () {
         wrapSyncEngineSqlError("sourceSyncJobRepository.listStaleActiveJobs"),
         Effect.map((jobs) =>
           jobs.flatMap((job) => {
-            if (job.userId === null) {
-              return []
-            }
-
             if (job.status !== "pending" && job.status !== "processing") {
               return []
             }
@@ -594,7 +580,7 @@ const make = Effect.gen(function* () {
               {
                 id: job.id,
                 sourceId: job.sourceId,
-                userId: job.userId,
+                principalId: job.principalId,
                 status: job.status,
                 startedAt: job.startedAt,
                 heartbeatAt: job.heartbeatAt,
@@ -615,7 +601,7 @@ const make = Effect.gen(function* () {
       .select({
         id: schema.processingJobs.id,
         sourceId: schema.processingJobs.sourceId,
-        userId: schema.processingJobs.userId,
+        principalId: schema.processingJobs.principalId,
         mode: schema.processingJobs.mode,
         status: schema.processingJobs.status,
         startedAt: schema.processingJobs.startedAt,
@@ -628,7 +614,7 @@ const make = Effect.gen(function* () {
       .from(schema.processingJobs)
       .where(
         and(
-          isNotNull(schema.processingJobs.userId),
+          isNotNull(schema.processingJobs.principalId),
           or(
             and(
               eq(schema.processingJobs.status, "pending"),
@@ -657,10 +643,6 @@ const make = Effect.gen(function* () {
         wrapSyncEngineSqlError("sourceSyncJobRepository.listRepairableActiveJobs"),
         Effect.map((jobs) =>
           jobs.flatMap((job) => {
-            if (job.userId === null) {
-              return []
-            }
-
             if (job.status !== "pending" && job.status !== "processing") {
               return []
             }
@@ -669,7 +651,7 @@ const make = Effect.gen(function* () {
               {
                 id: job.id,
                 sourceId: job.sourceId,
-                userId: job.userId,
+                principalId: job.principalId,
                 mode: job.mode,
                 status: job.status,
                 startedAt: job.startedAt,

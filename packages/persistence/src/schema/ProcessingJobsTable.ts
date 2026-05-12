@@ -12,7 +12,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import { sources } from "./SourcesTable.ts"
-import { users } from "./UsersTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 
 export const jobModeEnum = pgEnum("job_mode", ["sync", "replay"])
 export const jobStatusEnum = pgEnum("job_status", ["pending", "processing", "completed", "failed"])
@@ -32,7 +32,9 @@ export const processingJobs = pgTable(
       .references(() => sources.id, {
         onDelete: "cascade",
       }),
-    userId: uuid("user_id").references(() => users.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "cascade" }),
     mode: jobModeEnum("mode").notNull().default("sync"),
     status: jobStatusEnum("status").notNull().default("pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
@@ -54,7 +56,7 @@ export const processingJobs = pgTable(
   },
   (table) => [
     index("idx_processing_jobs_source_id").on(table.sourceId),
-    index("idx_processing_jobs_user_id").on(table.userId),
+    index("idx_processing_jobs_principal_id").on(table.principalId),
     index("idx_processing_jobs_status").on(table.status),
     index("idx_processing_jobs_queue_job").on(table.queueName, table.queueJobId),
     index("idx_processing_jobs_heartbeat_at").on(table.heartbeatAt),

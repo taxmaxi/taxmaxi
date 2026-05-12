@@ -29,6 +29,7 @@
     "db:push": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs push --schema ./src/schema/index.ts",
     "up": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs up",
     "type-check": "tsc --noEmit",
+    "type-check:tests": "tsc -p tsconfig.tests.json",
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
     "format": "oxfmt -c ../../oxfmtrc.jsonc",
     "lint": "oxlint -c ../../oxlintrc.json"

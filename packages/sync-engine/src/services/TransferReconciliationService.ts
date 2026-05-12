@@ -1,5 +1,5 @@
 /**
- * TransferReconciliationService - User-scoped orchestration for matching provider-side
+ * TransferReconciliationService - Principal-scoped orchestration for matching provider-side
  * transfers against canonical onchain receipts.
  *
  * @module TransferReconciliationService
@@ -11,10 +11,10 @@ import type { DeterministicTransferCanonicalizationSummary } from "./TransferRec
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
- * ReconcileTransferCandidatesParams - Scope reconciliation to one user-owned source.
+ * ReconcileTransferCandidatesParams - Scope reconciliation to one principal-owned source.
  */
 export interface ReconcileTransferCandidatesParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
 }
 
@@ -41,7 +41,7 @@ export interface TransferReconciliationSummary {
  */
 export interface TransferReconciliationServiceShape {
   /**
-   * Evaluate provider-side transfer candidates for one user-owned source and persist
+   * Evaluate provider-side transfer candidates for one principal-owned source and persist
    * deterministic, ambiguous, or pending reconciliation state.
    */
   readonly reconcileTransferCandidates: (

@@ -6,7 +6,7 @@ import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepos
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_SOURCE_ID,
-  TEST_USER_ID,
+  TEST_PRINCIPAL_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
@@ -41,18 +41,18 @@ const createJob = ({
   mode = "sync",
   maxAttempts = 3,
   sourceId = TEST_SOURCE_ID,
-  userId = TEST_USER_ID,
+  principalId = TEST_PRINCIPAL_ID,
 }: {
   readonly mode?: SourceSyncJobMode
   readonly maxAttempts?: number
   readonly sourceId?: string
-  readonly userId?: string
+  readonly principalId?: string
 } = {}) =>
   runRepository(
     Effect.flatMap(SourceSyncJobRepository, (repository) =>
       repository.createOrReuseJob({
         sourceId,
-        userId,
+        principalId,
         mode,
         maxAttempts,
       })
@@ -61,11 +61,11 @@ const createJob = ({
 
 const seedSourceFixture = ({
   sourceId,
-  userId,
+  principalId,
 }: {
   readonly sourceId: string
-  readonly userId: string
-}) => runPg(seedSyncEngineRepositoryFixture({ sourceId, userId }))
+  readonly principalId: string
+}) => runPg(seedSyncEngineRepositoryFixture({ sourceId, userId: sourceId, principalId }))
 
 const selectProcessingJob = ({ jobId }: { readonly jobId: string }) =>
   runPg(
@@ -184,7 +184,7 @@ describe("SourceSyncJobRepositoryLive", () => {
       _tag: "ReusedSourceSyncJob",
       id: created.id,
       sourceId: TEST_SOURCE_ID,
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       mode: "sync",
       status: "pending",
       queueName: null,
@@ -200,7 +200,7 @@ describe("SourceSyncJobRepositoryLive", () => {
       _tag: "ReusedSourceSyncJob",
       id: created.id,
       sourceId: TEST_SOURCE_ID,
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       mode: "sync",
       status: "pending",
       queueName: null,
@@ -211,7 +211,7 @@ describe("SourceSyncJobRepositoryLive", () => {
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.findActiveJob({
           sourceId: TEST_SOURCE_ID,
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
         })
       )
     )
@@ -274,7 +274,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(claimed).toMatchObject({
       id: created.id,
       sourceId: TEST_SOURCE_ID,
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       mode: "sync",
       status: "processing",
     })
@@ -432,7 +432,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     const job = await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.getJob({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           jobId: created.id,
         })
@@ -508,31 +508,31 @@ describe("SourceSyncJobRepositoryLive", () => {
     const fixtures = {
       freshPending: {
         sourceId: "00000000-0000-0000-0000-000000000291",
-        userId: "00000000-0000-0000-0000-000000000191",
+        principalId: "00000000-0000-0000-0000-000000000191",
       },
       stalePending: {
         sourceId: "00000000-0000-0000-0000-000000000292",
-        userId: "00000000-0000-0000-0000-000000000192",
+        principalId: "00000000-0000-0000-0000-000000000192",
       },
       staleHeartbeat: {
         sourceId: "00000000-0000-0000-0000-000000000293",
-        userId: "00000000-0000-0000-0000-000000000193",
+        principalId: "00000000-0000-0000-0000-000000000193",
       },
       recentHeartbeat: {
         sourceId: "00000000-0000-0000-0000-000000000294",
-        userId: "00000000-0000-0000-0000-000000000194",
+        principalId: "00000000-0000-0000-0000-000000000194",
       },
       nullHeartbeat: {
         sourceId: "00000000-0000-0000-0000-000000000295",
-        userId: "00000000-0000-0000-0000-000000000195",
+        principalId: "00000000-0000-0000-0000-000000000195",
       },
       completed: {
         sourceId: "00000000-0000-0000-0000-000000000296",
-        userId: "00000000-0000-0000-0000-000000000196",
+        principalId: "00000000-0000-0000-0000-000000000196",
       },
       failed: {
         sourceId: "00000000-0000-0000-0000-000000000297",
-        userId: "00000000-0000-0000-0000-000000000197",
+        principalId: "00000000-0000-0000-0000-000000000197",
       },
     } as const
 
@@ -636,7 +636,7 @@ describe("SourceSyncJobRepositoryLive", () => {
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.findActiveJob({
           sourceId: TEST_SOURCE_ID,
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
         })
       )
     )
@@ -649,12 +649,12 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(nextJob.id).not.toBe(created.id)
   })
 
-  it("keeps getJob backward-compatible for queued, running, completed, and failed statuses", async () => {
+  it("maps persisted job states to API-visible queued, running, completed, and failed statuses", async () => {
     const queued = await createJob()
     const queuedStatus = await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.getJob({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           jobId: queued.id,
         })
@@ -668,7 +668,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     const runningStatus = await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.getJob({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           jobId: queued.id,
         })
@@ -686,7 +686,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     const completedStatus = await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.getJob({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           jobId: queued.id,
         })
@@ -710,7 +710,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     const failedStatus = await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.getJob({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           jobId: failed.id,
         })
@@ -721,7 +721,7 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(failedStatus.message).toBe("Failed terminally")
   })
 
-  it("defaults omitted job mode to sync for migration-compatible old inserts", async () => {
+  it("uses the schema default sync mode when a processing job is inserted without a mode", async () => {
     const jobId = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -729,7 +729,7 @@ describe("SourceSyncJobRepositoryLive", () => {
           .insert(schema.processingJobs)
           .values({
             sourceId: TEST_SOURCE_ID,
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
             status: "pending",
           })
           .returning({ id: schema.processingJobs.id })

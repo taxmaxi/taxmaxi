@@ -340,6 +340,7 @@ const TestLayer = SourceSyncLayer.pipe(
 )
 
 const userId = "00000000-0000-0000-0000-000000000101"
+const principalId = "00000000-0000-0000-0000-000000000102"
 const sourceId = "00000000-0000-0000-0000-000000000201"
 const ownedOnchainAddressId = "00000000-0000-0000-0000-000000000301"
 const ownedOnchainSourceId = "00000000-0000-0000-0000-000000000302"
@@ -352,6 +353,11 @@ const seedCoinbaseSource = () =>
       id: userId,
       email: "coinbase-pr03@taxmaxi.test",
       name: "Coinbase PR-03 Test User",
+    })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
     })
 
     const [coinbaseCex] = yield* db
@@ -368,7 +374,7 @@ const seedCoinbaseSource = () =>
       .insert(schema.cexAccount)
       .values({
         cexId: coinbaseCex.id,
-        userId,
+        principalId,
         providerUserId: "coinbase-user-1",
         providerAccountId: "coinbase-account-1",
         accessToken: "test-access-token",
@@ -425,7 +431,7 @@ const seedCoinbaseSource = () =>
       providerKey: "coinbase",
       sourceableType: "cex",
       cexAccountId: createdAccount.id,
-      userId,
+      principalId,
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -433,7 +439,7 @@ const runSync = () =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
     return yield* sourceSync.startSourceSyncJob({
-      userId,
+      principalId,
       sourceId,
     })
   }).pipe(Effect.provide(TestLayer))
@@ -442,7 +448,7 @@ const fetchJobDetails = ({ jobId }: { readonly jobId: string }) =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
     return yield* sourceSync.getSourceSyncJob({
-      userId,
+      principalId,
       sourceId,
       jobId,
     })
@@ -452,11 +458,11 @@ const replaySource = () =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
     const summary = yield* sourceSync.replaySourceSyncJob({
-      userId,
+      principalId,
       sourceId,
     })
     return yield* sourceSync.getSourceSyncJob({
-      userId,
+      principalId,
       sourceId,
       jobId: summary.jobId,
     })
@@ -542,7 +548,7 @@ const seedMatchedOnchainReceipt = ({
       address: walletAddress,
       type: "bitcoin",
       name: "Owned wallet",
-      userId,
+      principalId,
       createdAt: new Date("2025-04-01T10:00:00.000Z"),
       updatedAt: new Date("2025-04-01T10:00:00.000Z"),
     })
@@ -553,7 +559,7 @@ const seedMatchedOnchainReceipt = ({
       providerKey: "bitcoin",
       sourceableType: "onchain",
       addressId: ownedOnchainAddressId,
-      userId,
+      principalId,
       createdAt: new Date("2025-04-01T10:00:00.000Z"),
       updatedAt: new Date("2025-04-01T10:00:00.000Z"),
     })
@@ -574,7 +580,7 @@ const seedMatchedOnchainReceipt = ({
         providerCreatedAt: new Date("2025-04-01T10:05:00.000Z"),
         providerUpdatedAt: new Date("2025-04-01T10:05:00.000Z"),
         metadata: { provider: "bitcoin" },
-        userId,
+        principalId,
       })
       .returning({ id: schema.transactions.id })
 
@@ -626,6 +632,7 @@ const seedMatchedOnchainReceipt = ({
       tokenId: null,
       notes: null,
       metadata: { provider: "bitcoin" },
+      principalId,
       createdAt: new Date("2025-04-01T10:05:00.000Z"),
       updatedAt: new Date("2025-04-01T10:05:00.000Z"),
     })
@@ -667,7 +674,7 @@ const seedMatchedOnchainSend = ({
       address: walletAddress,
       type: "bitcoin",
       name: "Owned wallet",
-      userId,
+      principalId,
       createdAt: new Date("2025-04-01T10:00:00.000Z"),
       updatedAt: new Date("2025-04-01T10:00:00.000Z"),
     })
@@ -678,7 +685,7 @@ const seedMatchedOnchainSend = ({
       providerKey: "bitcoin",
       sourceableType: "onchain",
       addressId: ownedOnchainAddressId,
-      userId,
+      principalId,
       createdAt: new Date("2025-04-01T10:00:00.000Z"),
       updatedAt: new Date("2025-04-01T10:00:00.000Z"),
     })
@@ -699,7 +706,7 @@ const seedMatchedOnchainSend = ({
         providerCreatedAt: new Date("2025-04-01T10:05:00.000Z"),
         providerUpdatedAt: new Date("2025-04-01T10:05:00.000Z"),
         metadata: { provider: "bitcoin" },
-        userId,
+        principalId,
       })
       .returning({ id: schema.transactions.id })
 
@@ -751,6 +758,7 @@ const seedMatchedOnchainSend = ({
       tokenId: null,
       notes: null,
       metadata: { provider: "bitcoin" },
+      principalId,
       createdAt: new Date("2025-04-01T10:05:00.000Z"),
       updatedAt: new Date("2025-04-01T10:05:00.000Z"),
     })
@@ -765,6 +773,7 @@ const seedConsumedOnchainReceiptAcquisition = () =>
       .select({
         id: schema.transactions.id,
         timestamp: schema.transactions.timestamp,
+        principalId: schema.transactions.principalId,
       })
       .from(schema.transactions)
       .where(
@@ -797,7 +806,7 @@ const seedConsumedOnchainReceiptAcquisition = () =>
         externalId: "onchain-receipt-1:main",
         txHash: null,
         timestamp: receiptTransaction.timestamp,
-        userId,
+        principalId: receiptTransaction.principalId,
         addressId: null,
         assetId: btcAsset.id,
         amount: "0.10000000",
@@ -825,7 +834,7 @@ const seedConsumedOnchainReceiptAcquisition = () =>
     const [receiptLot] = yield* db
       .insert(schema.fifoLots)
       .values({
-        userId,
+        principalId: receiptTransaction.principalId,
         sourceId: ownedOnchainSourceId,
         assetId: btcAsset.id,
         acquiredAt: receiptTransaction.timestamp,
@@ -860,7 +869,7 @@ const seedConsumedOnchainReceiptAcquisition = () =>
         providerCreatedAt: now,
         providerUpdatedAt: now,
         metadata: { provider: "bitcoin" },
-        userId,
+        principalId: receiptTransaction.principalId,
       })
       .returning({ id: schema.transactions.id })
 
@@ -876,7 +885,7 @@ const seedConsumedOnchainReceiptAcquisition = () =>
         externalId: "onchain-spend-1:main",
         txHash: null,
         timestamp: now,
-        userId,
+        principalId: receiptTransaction.principalId,
         addressId: null,
         assetId: btcAsset.id,
         amount: "0.05000000",
@@ -942,7 +951,7 @@ const fetchCanonicalizationState = () =>
         schema.transactions,
         eq(schema.transactions.id, schema.transactionReviews.transactionId)
       )
-      .where(eq(schema.transactionReviews.userId, userId))
+      .where(eq(schema.transactionReviews.principalId, principalId))
 
     const legs = yield* db
       .select({
@@ -1308,7 +1317,7 @@ const injectLegacySendDisposalArtifacts = () =>
         id: schema.transactions.id,
         sourceRawRecordId: schema.transactions.sourceRawRecordId,
         timestamp: schema.transactions.timestamp,
-        userId: schema.transactions.userId,
+        principalId: schema.transactions.principalId,
         externalId: schema.transactions.externalId,
         sourceId: schema.transactions.sourceId,
       })
@@ -1355,7 +1364,7 @@ const injectLegacySendDisposalArtifacts = () =>
         externalId: "tx-send-1:main",
         txHash: null,
         timestamp: sendTransaction.timestamp,
-        userId: sendTransaction.userId,
+        principalId: sendTransaction.principalId,
         addressId: null,
         assetId: btcAsset.id,
         amount: "0.10000000",

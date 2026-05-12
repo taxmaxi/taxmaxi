@@ -23,14 +23,14 @@ import {
 const syncPayload = SourceSyncQueuePayload.make({
   jobId: "job-1",
   sourceId: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   mode: "sync",
 })
 
 const replayPayload = SourceSyncQueuePayload.make({
   jobId: "job-2",
   sourceId: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   mode: "replay",
 })
 

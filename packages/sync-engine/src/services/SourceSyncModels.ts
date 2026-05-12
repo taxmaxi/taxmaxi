@@ -22,7 +22,7 @@ export type ActiveSourceSyncJobStatus = Extract<SourceSyncJobStatus, "pending" |
  */
 export interface SourceSyncSource {
   readonly id: string
-  readonly userId: string
+  readonly principalId: string
   readonly providerKey: string | null
   readonly cexAccountId: string | null
   readonly addressId: string | null
@@ -66,7 +66,7 @@ export type SourceSyncJobMode = Schema.Schema.Type<typeof SourceSyncJobModeSchem
 export interface SourceSyncActiveJob {
   readonly id: string
   readonly sourceId: string
-  readonly userId: string
+  readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
   readonly updatedAt: Date
@@ -80,7 +80,7 @@ export interface SourceSyncActiveJob {
 export interface SourceSyncExecutionJob {
   readonly id: string
   readonly sourceId: string
-  readonly userId: string
+  readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
 }
@@ -91,7 +91,7 @@ export interface SourceSyncExecutionJob {
 export interface SourceSyncStaleActiveJob {
   readonly id: string
   readonly sourceId: string
-  readonly userId: string
+  readonly principalId: string
   readonly status: ActiveSourceSyncJobStatus
   readonly startedAt: Date | null
   readonly heartbeatAt: Date | null
@@ -105,7 +105,7 @@ export interface SourceSyncStaleActiveJob {
 export interface SourceSyncRepairableActiveJob {
   readonly id: string
   readonly sourceId: string
-  readonly userId: string
+  readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
   readonly startedAt: Date | null
@@ -150,7 +150,7 @@ export interface ReusedSourceSyncJob {
   readonly _tag: "ReusedSourceSyncJob"
   readonly id: string
   readonly sourceId: string
-  readonly userId: string
+  readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly status: ActiveSourceSyncJobStatus
   readonly queueName: string | null

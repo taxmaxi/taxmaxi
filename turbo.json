@@ -12,6 +12,9 @@
     "type-check": {
       "dependsOn": ["^type-check"]
     },
+    "type-check:tests": {
+      "dependsOn": ["^type-check:tests"]
+    },
     "dev:tsc": {
       "cache": false,
       "persistent": true

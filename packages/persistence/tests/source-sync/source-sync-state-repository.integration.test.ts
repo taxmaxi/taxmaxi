@@ -6,6 +6,7 @@ import { SourceSyncStateRepositoryLive } from "../../src/layers/SourceSyncStateR
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_SOURCE_ID,
+  TEST_PRINCIPAL_ID,
   TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
@@ -30,7 +31,7 @@ const seedProcessingJob = () =>
       .insert(schema.processingJobs)
       .values({
         sourceId: TEST_SOURCE_ID,
-        userId: TEST_USER_ID,
+        principalId: TEST_PRINCIPAL_ID,
         status: "processing",
       })
       .returning({ id: schema.processingJobs.id })

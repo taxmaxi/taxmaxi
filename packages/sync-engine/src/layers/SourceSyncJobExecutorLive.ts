@@ -119,13 +119,13 @@ const make = Effect.gen(function* () {
   const pageSize = yield* COINBASE_SYNC_PAGE_SIZE_CONFIG
 
   const loadSource = ({
-    userId,
+    principalId,
     sourceId,
   }: {
-    readonly userId: string
+    readonly principalId: string
     readonly sourceId: string
   }): Effect.Effect<SourceSyncSource, SourceNotFoundError | SyncEngineStorageError> =>
-    sourceRepository.findOwnedSourceSyncContext({ userId, sourceId }).pipe(
+    sourceRepository.findOwnedSourceSyncContext({ principalId, sourceId }).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(new SourceNotFoundError({ sourceId })),
@@ -134,7 +134,7 @@ const make = Effect.gen(function* () {
       ),
       sourceSyncSpan({
         name: "source-sync-executor.load-source",
-        attributes: { userId, sourceId },
+        attributes: { principalId, sourceId },
         kind: "client",
       })
     )
@@ -529,7 +529,7 @@ const make = Effect.gen(function* () {
         failedRecords: finalLoop.execution.failedRecords + replaySummary.failedRecords,
       }
       const reconciliationSummary = yield* transferReconciliationService
-        .reconcileTransferCandidates({ userId: source.userId, sourceId: source.id })
+        .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
         .pipe(
           sourceSyncSpan({
             name: "source-sync.reconcile-transfers",
@@ -539,7 +539,7 @@ const make = Effect.gen(function* () {
         )
       const canonicalizationSummary = yield* transferReconciliationService
         .applyDeterministicInternalTransferCanonicalization({
-          userId: source.userId,
+          principalId: source.principalId,
           sourceId: source.id,
         })
         .pipe(
@@ -677,7 +677,7 @@ const make = Effect.gen(function* () {
         failedRecords: normalization.failedRecords,
       }
       const reconciliationSummary = yield* transferReconciliationService
-        .reconcileTransferCandidates({ userId: source.userId, sourceId: source.id })
+        .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
         .pipe(
           sourceSyncSpan({
             name: "source-replay.reconcile-transfers",
@@ -687,7 +687,7 @@ const make = Effect.gen(function* () {
         )
       const canonicalizationSummary = yield* transferReconciliationService
         .applyDeterministicInternalTransferCanonicalization({
-          userId: source.userId,
+          principalId: source.principalId,
           sourceId: source.id,
         })
         .pipe(
@@ -929,7 +929,7 @@ const make = Effect.gen(function* () {
           )
         )
       const source = yield* loadSource({
-        userId: executionJob.userId,
+        principalId: executionJob.principalId,
         sourceId: executionJob.sourceId,
       }).pipe(
         Effect.catchTag("SourceNotFoundError", () =>
@@ -940,7 +940,7 @@ const make = Effect.gen(function* () {
       const mode = executionJob.mode
 
       yield* Effect.annotateCurrentSpan({
-        userId: source.userId,
+        principalId: source.principalId,
         sourceId: source.id,
         jobId,
         provider,

@@ -18,7 +18,7 @@ import {
 
 const source: SourceSyncSource = {
   id: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   providerKey: "coinbase",
   cexAccountId: "cex-account-1",
   addressId: null,
@@ -51,7 +51,7 @@ const makeActiveJob = ({
 }): SourceSyncActiveJob => ({
   id,
   sourceId: source.id,
-  userId: source.userId,
+  principalId: source.principalId,
   mode,
   status,
   updatedAt,
@@ -74,7 +74,7 @@ const makeServiceLayer = ({
 }) => {
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(source)),
-    listUserSourceSyncContexts: () => Effect.succeed([source]),
+    listPrincipalSourceSyncContexts: () => Effect.succeed([source]),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -137,10 +137,16 @@ const runStart = ({
     Effect.gen(function* () {
       const service = yield* SourceSyncService
       if (mode === "sync") {
-        return yield* service.startSourceSyncJob({ userId: source.userId, sourceId: source.id })
+        return yield* service.startSourceSyncJob({
+          principalId: source.principalId,
+          sourceId: source.id,
+        })
       }
 
-      return yield* service.replaySourceSyncJob({ userId: source.userId, sourceId: source.id })
+      return yield* service.replaySourceSyncJob({
+        principalId: source.principalId,
+        sourceId: source.id,
+      })
     }).pipe(Effect.provide(layer))
   )
 
@@ -165,7 +171,7 @@ describe("SourceSyncService queue orchestration", () => {
     expect(enqueued[0]).toMatchObject({
       jobId: "job-sync",
       sourceId: source.id,
-      userId: source.userId,
+      principalId: source.principalId,
       mode: "sync",
     })
   })
@@ -199,7 +205,7 @@ describe("SourceSyncService queue orchestration", () => {
           _tag: "ReusedSourceSyncJob",
           id: "job-reused-pending",
           sourceId: source.id,
-          userId: source.userId,
+          principalId: source.principalId,
           mode: "sync",
           status: "pending",
           queueName: null,
@@ -221,7 +227,7 @@ describe("SourceSyncService queue orchestration", () => {
     expect(enqueued[0]).toMatchObject({
       jobId: "job-reused-pending",
       sourceId: source.id,
-      userId: source.userId,
+      principalId: source.principalId,
       mode: "sync",
     })
   })
@@ -237,7 +243,7 @@ describe("SourceSyncService queue orchestration", () => {
           _tag: "ReusedSourceSyncJob",
           id: "job-reused-processing",
           sourceId: source.id,
-          userId: source.userId,
+          principalId: source.principalId,
           mode: "sync",
           status: "processing",
           queueName: "source-sync",
@@ -340,7 +346,7 @@ describe("SourceSyncService queue orchestration", () => {
       Effect.gen(function* () {
         const service = yield* SourceSyncService
         return yield* service
-          .startSourceSyncJob({ userId: source.userId, sourceId: source.id })
+          .startSourceSyncJob({ principalId: source.principalId, sourceId: source.id })
           .pipe(Effect.either)
       }).pipe(
         Effect.provide(

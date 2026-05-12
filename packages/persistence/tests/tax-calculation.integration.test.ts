@@ -15,6 +15,7 @@ const context = makeIntegrationTestDatabaseContext({
 const TestLayer = TaxCalculationServiceLive.pipe(Layer.provideMerge(context.TestPgClientLive))
 
 const userId = "00000000-0000-0000-0000-000000000111"
+const principalId = "00000000-0000-0000-0000-000000000112"
 const sourceId = "00000000-0000-0000-0000-000000000222"
 const btcContractAddress = "btc-tax-calculation"
 
@@ -45,6 +46,11 @@ const seedTaxFixtures = () =>
       email: "tax-calculation@taxmaxi.test",
       name: "Tax Calculation Test User",
     })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
+    })
 
     const [coinbaseCex] = yield* db
       .select({ id: schema.cex.id })
@@ -60,7 +66,7 @@ const seedTaxFixtures = () =>
       .insert(schema.cexAccount)
       .values({
         cexId: coinbaseCex.id,
-        userId,
+        principalId,
         providerUserId: "coinbase-tax-user",
         providerAccountId: "coinbase-tax-account",
         accessToken: "test-access-token",
@@ -106,7 +112,7 @@ const seedTaxFixtures = () =>
       providerKey: "coinbase",
       sourceableType: "cex",
       cexAccountId: createdAccount.id,
-      userId,
+      principalId,
     })
 
     const shortTermAcquisitionLegId = "00000000-0000-0000-0000-000000000301"
@@ -123,7 +129,7 @@ const seedTaxFixtures = () =>
         sourceId,
         externalId: "short-term-acquisition",
         timestamp: new Date("2025-01-01T10:00:00.000Z"),
-        userId,
+        principalId,
         assetId: btcAsset.id,
         amount: "100000000",
         kind: "acquisition",
@@ -136,7 +142,7 @@ const seedTaxFixtures = () =>
         sourceId,
         externalId: "long-term-acquisition",
         timestamp: new Date("2023-12-01T10:00:00.000Z"),
-        userId,
+        principalId,
         assetId: btcAsset.id,
         amount: "20000000",
         kind: "acquisition",
@@ -149,7 +155,7 @@ const seedTaxFixtures = () =>
         sourceId,
         externalId: "short-term-disposal",
         timestamp: new Date("2025-02-01T10:00:00.000Z"),
-        userId,
+        principalId,
         assetId: btcAsset.id,
         amount: "40000000",
         kind: "disposal",
@@ -162,7 +168,7 @@ const seedTaxFixtures = () =>
         sourceId,
         externalId: "long-term-disposal",
         timestamp: new Date("2025-04-01T10:00:00.000Z"),
-        userId,
+        principalId,
         assetId: btcAsset.id,
         amount: "10000000",
         kind: "disposal",
@@ -175,7 +181,7 @@ const seedTaxFixtures = () =>
         sourceId,
         externalId: "income-leg",
         timestamp: new Date("2025-03-01T10:00:00.000Z"),
-        userId,
+        principalId,
         assetId: btcAsset.id,
         amount: "5000000",
         kind: "income",
@@ -188,7 +194,7 @@ const seedTaxFixtures = () =>
     yield* db.insert(schema.fifoLots).values([
       {
         id: shortTermLotId,
-        userId,
+        principalId,
         sourceId,
         assetId: btcAsset.id,
         acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
@@ -201,7 +207,7 @@ const seedTaxFixtures = () =>
       },
       {
         id: longTermLotId,
-        userId,
+        principalId,
         sourceId,
         assetId: btcAsset.id,
         acquiredAt: new Date("2023-12-01T10:00:00.000Z"),
@@ -252,7 +258,7 @@ const insertIncompleteIncomeLeg = () =>
       sourceId,
       externalId: "income-leg-missing-valuation",
       timestamp: new Date("2025-05-01T10:00:00.000Z"),
-      userId,
+      principalId,
       assetId: asset.id,
       amount: "1000000",
       kind: "income",

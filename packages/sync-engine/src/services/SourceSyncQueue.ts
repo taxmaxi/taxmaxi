@@ -29,7 +29,7 @@ export class SourceSyncQueuePayload extends Schema.Class<SourceSyncQueuePayload>
 )({
   jobId: Schema.String,
   sourceId: Schema.String,
-  userId: Schema.String,
+  principalId: Schema.String,
   mode: SourceSyncJobModeSchema,
 }) {}
 

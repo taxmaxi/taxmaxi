@@ -281,7 +281,7 @@ const enqueuePendingJob = ({
     const payload = SourceSyncQueuePayload.make({
       jobId: job.id,
       sourceId: job.sourceId,
-      userId: job.userId,
+      principalId: job.principalId,
       mode: job.mode,
     })
     const queueJob = yield* Effect.tryPromise({
@@ -334,7 +334,7 @@ const repairPendingJob = ({
       {
         jobId: job.id,
         sourceId: job.sourceId,
-        userId: job.userId,
+        principalId: job.principalId,
         mode: job.mode,
         status: job.status,
         ageMs: ageMs({ now, updatedAt: job.updatedAt }),
@@ -370,7 +370,7 @@ const recoverStaleProcessingJob = ({
       {
         jobId: job.id,
         sourceId: job.sourceId,
-        userId: job.userId,
+        principalId: job.principalId,
         mode: job.mode,
         status: job.status,
         workerId: job.workerId,
@@ -424,7 +424,7 @@ const repairJob = ({
         {
           jobId: job.id,
           sourceId: job.sourceId,
-          userId: job.userId,
+          principalId: job.principalId,
           mode: job.mode,
           status: job.status,
           action: "repair-error",

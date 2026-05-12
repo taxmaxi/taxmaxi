@@ -147,9 +147,11 @@ const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
 
 const seedCoinbaseSources = ({
   userId,
+  principalId,
   sourceIds,
 }: {
   readonly userId: string
+  readonly principalId: string
   readonly sourceIds: ReadonlyArray<string>
 }) =>
   Effect.gen(function* () {
@@ -159,6 +161,11 @@ const seedCoinbaseSources = ({
       id: userId,
       email: `${userId}@taxmaxi.test`,
       name: "Sync Runs API Test User",
+    })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
     })
 
     const coinbaseCex = yield* db
@@ -176,7 +183,7 @@ const seedCoinbaseSources = ({
           .insert(schema.cexAccount)
           .values({
             cexId: coinbaseCex.id,
-            userId,
+            principalId,
             providerUserId: `${sourceId}-provider-user`,
             providerAccountId: `${sourceId}-provider-account`,
             accessToken: "test-access-token",
@@ -196,10 +203,31 @@ const seedCoinbaseSources = ({
           providerKey: "coinbase",
           sourceableType: "cex",
           cexAccountId: createdAccount.id,
-          userId,
+          principalId,
         })
       })
     )
+  })
+
+const seedPrincipalUser = ({
+  userId,
+  principalId,
+}: {
+  readonly userId: string
+  readonly principalId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.users).values({
+      id: userId,
+      email: `${userId}@taxmaxi.test`,
+      name: "Sync Runs API Test User",
+    })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
+    })
   })
 
 const markJobTerminal = ({
@@ -246,8 +274,9 @@ describe("SyncRunsApiLive", () => {
   it.effect("starts a user-wide run with one queued child item per source", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceIds = [crypto.randomUUID(), crypto.randomUUID()]
-      yield* seedCoinbaseSources({ userId, sourceIds })
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const run = yield* client.syncRuns.startSyncRun(undefined)
@@ -266,8 +295,9 @@ describe("SyncRunsApiLive", () => {
   it.effect("returns the current user's run", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceIds = [crypto.randomUUID()]
-      yield* seedCoinbaseSources({ userId, sourceIds })
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const started = yield* client.syncRuns.startSyncRun(undefined)
@@ -289,7 +319,12 @@ describe("SyncRunsApiLive", () => {
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
       const otherUserId = crypto.randomUUID()
-      yield* seedCoinbaseSources({ userId, sourceIds: [crypto.randomUUID()] })
+      yield* seedCoinbaseSources({
+        userId,
+        principalId: crypto.randomUUID(),
+        sourceIds: [crypto.randomUUID()],
+      })
+      yield* seedPrincipalUser({ userId: otherUserId, principalId: crypto.randomUUID() })
 
       const ownerClient = yield* makeAuthenticatedClient({ userId })
       const started = yield* ownerClient.syncRuns.startSyncRun(undefined)
@@ -310,8 +345,9 @@ describe("SyncRunsApiLive", () => {
   it.effect("refreshes child completion into aggregate API status", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceIds = [crypto.randomUUID(), crypto.randomUUID()]
-      yield* seedCoinbaseSources({ userId, sourceIds })
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const started = yield* client.syncRuns.startSyncRun(undefined)

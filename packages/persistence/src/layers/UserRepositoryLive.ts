@@ -19,13 +19,7 @@ import { drizzle } from "./PgClientLive.ts"
 
 type SelectedUserRow = Pick<
   UserRow,
-  | "id"
-  | "email"
-  | "emailVerified"
-  | "name"
-  | "role"
-  | "createdAt"
-  | "updatedAt"
+  "id" | "email" | "emailVerified" | "name" | "role" | "createdAt" | "updatedAt"
 >
 
 const toAuthRole = (role: "user" | "admin"): UserRole => (role === "admin" ? "admin" : "member")

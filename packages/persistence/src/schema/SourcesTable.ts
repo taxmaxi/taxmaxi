@@ -12,7 +12,7 @@ import {
 } from "drizzle-orm/pg-core"
 import { addresses } from "./AddressesTable.ts"
 import { cexAccount } from "./CexAccountTable.ts"
-import { users } from "./UsersTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 
 // Source families we ingest from.
 export const sourceableTypeEnum = pgEnum("sourceable_type", ["onchain", "cex", "dex"])
@@ -38,8 +38,8 @@ export const sources = pgTable(
 
     sourceableType: sourceableTypeEnum("sourceable_type").notNull(), // Source family routing.
 
-    userId: uuid("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
+    principalId: uuid("principal_id")
+      .references(() => principals.id, { onDelete: "cascade" })
       .notNull(),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -51,8 +51,8 @@ export const sources = pgTable(
       sql`${table.addressId} is not null or ${table.cexAccountId} is not null`
     ),
     index("idx_sources_provider_key").on(table.providerKey),
-    uniqueIndex("sources_user_address_unique").on(table.userId, table.addressId),
-    uniqueIndex("sources_user_cex_account_unique").on(table.userId, table.cexAccountId),
+    uniqueIndex("sources_principal_address_unique").on(table.principalId, table.addressId),
+    uniqueIndex("sources_principal_cex_account_unique").on(table.principalId, table.cexAccountId),
   ]
 )
 

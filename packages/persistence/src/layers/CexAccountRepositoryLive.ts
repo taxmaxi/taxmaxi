@@ -22,13 +22,13 @@ import { drizzle } from "./PgClientLive.ts"
 
 type SelectedCexAccountRow = Pick<
   CexAccount,
-  "id" | "cexId" | "userId" | "providerUserId" | "providerAccountId"
+  "id" | "cexId" | "principalId" | "providerUserId" | "providerAccountId"
 >
 
 const rowToCexAccountRecord = (row: SelectedCexAccountRow): CexAccountRecord => ({
   id: row.id,
   cexId: row.cexId,
-  userId: row.userId,
+  principalId: row.principalId,
   providerUserId: row.providerUserId,
   providerAccountId: row.providerAccountId,
 })
@@ -39,7 +39,7 @@ const make = Effect.gen(function* () {
   const selectCexAccountFields = {
     id: cexAccount.id,
     cexId: cexAccount.cexId,
-    userId: cexAccount.userId,
+    principalId: cexAccount.principalId,
     providerUserId: cexAccount.providerUserId,
     providerAccountId: cexAccount.providerAccountId,
   } as const
@@ -67,7 +67,7 @@ const make = Effect.gen(function* () {
           .from(cexAccount)
           .where(
             and(
-              eq(cexAccount.userId, params.userId),
+              eq(cexAccount.principalId, params.principalId),
               eq(cexAccount.cexId, exchange.id),
               eq(cexAccount.providerUserId, params.providerUserId)
             )
@@ -104,7 +104,7 @@ const make = Effect.gen(function* () {
           .insert(cexAccount)
           .values({
             cexId: exchange.id,
-            userId: params.userId,
+            principalId: params.principalId,
             providerUserId: params.providerUserId,
             providerAccountId: params.providerAccountId ?? null,
             accessToken: params.oauthCredentials.accessToken,
@@ -119,7 +119,7 @@ const make = Effect.gen(function* () {
           return yield* Effect.fail(
             new EntityNotFoundError({
               entityType: "CexAccount",
-              entityId: `${params.userId}:${params.cexName}:${params.providerUserId}`,
+              entityId: `${params.principalId}:${params.cexName}:${params.providerUserId}`,
             })
           )
         }

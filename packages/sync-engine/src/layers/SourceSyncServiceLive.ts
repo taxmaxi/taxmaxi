@@ -61,13 +61,13 @@ const make = Effect.gen(function* () {
   const sourceSyncQueue = yield* SourceSyncQueue
 
   const loadSource = ({
-    userId,
+    principalId,
     sourceId,
   }: {
-    readonly userId: string
+    readonly principalId: string
     readonly sourceId: string
   }): Effect.Effect<SourceSyncSource, SourceNotFoundError | SyncEngineStorageError> =>
-    sourceRepository.findOwnedSourceSyncContext({ userId, sourceId }).pipe(
+    sourceRepository.findOwnedSourceSyncContext({ principalId, sourceId }).pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.fail(new SourceNotFoundError({ sourceId })),
@@ -76,7 +76,7 @@ const make = Effect.gen(function* () {
       ),
       sourceSyncSpan({
         name: "source-sync.load-source",
-        attributes: { userId, sourceId },
+        attributes: { principalId, sourceId },
         kind: "client",
       })
     )
@@ -138,12 +138,12 @@ const make = Effect.gen(function* () {
   const enqueuePendingJob = ({
     jobId,
     sourceId,
-    userId,
+    principalId,
     mode,
   }: {
     readonly jobId: string
     readonly sourceId: string
-    readonly userId: string
+    readonly principalId: string
     readonly mode: SourceSyncJobMode
   }): Effect.Effect<void, SourceSyncQueueError> =>
     sourceSyncQueue
@@ -151,24 +151,24 @@ const make = Effect.gen(function* () {
         SourceSyncQueuePayload.make({
           jobId,
           sourceId,
-          userId,
+          principalId,
           mode,
         })
       )
       .pipe(
         sourceSyncSpan({
           name: "source-sync.enqueue-job",
-          attributes: { jobId, sourceId, userId, mode },
+          attributes: { jobId, sourceId, principalId, mode },
           kind: "producer",
         })
       )
 
   const runSourceJob = ({
-    userId,
+    principalId,
     sourceId,
     mode,
   }: {
-    readonly userId: string
+    readonly principalId: string
     readonly sourceId: string
     readonly mode: SourceSyncJobMode
   }): Effect.Effect<
@@ -176,10 +176,10 @@ const make = Effect.gen(function* () {
     UnsupportedProviderError | SourceNotFoundError | SourceSyncQueueError | SyncEngineStorageError
   > =>
     Effect.gen(function* () {
-      const source = yield* loadSource({ userId, sourceId })
+      const source = yield* loadSource({ principalId, sourceId })
       const provider = source.providerKey ?? "unknown"
 
-      yield* Effect.annotateCurrentSpan({ userId, sourceId: source.id, provider, mode })
+      yield* Effect.annotateCurrentSpan({ principalId, sourceId: source.id, provider, mode })
 
       if (source.providerKey === null) {
         return yield* Effect.fail(new UnsupportedProviderError({ provider: "unknown" }))
@@ -187,7 +187,7 @@ const make = Effect.gen(function* () {
 
       const [activeJob] = yield* sourceSyncJobRepository.findActiveJob({
         sourceId: source.id,
-        userId,
+        principalId,
       })
 
       if (activeJob !== undefined) {
@@ -213,7 +213,7 @@ const make = Effect.gen(function* () {
               yield* enqueuePendingJob({
                 jobId: activeJob.id,
                 sourceId: activeJob.sourceId,
-                userId: activeJob.userId,
+                principalId: activeJob.principalId,
                 mode: activeJob.mode,
               })
               yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "enqueued-active-job" })
@@ -235,7 +235,7 @@ const make = Effect.gen(function* () {
 
       const job = yield* sourceSyncJobRepository.createOrReuseJob({
         sourceId: source.id,
-        userId,
+        principalId,
         mode,
         maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
       })
@@ -251,7 +251,7 @@ const make = Effect.gen(function* () {
           yield* enqueuePendingJob({
             jobId: job.id,
             sourceId: job.sourceId,
-            userId: job.userId,
+            principalId: job.principalId,
             mode: job.mode,
           })
         }
@@ -269,7 +269,7 @@ const make = Effect.gen(function* () {
       yield* enqueuePendingJob({
         jobId: job.id,
         sourceId: source.id,
-        userId,
+        principalId,
         mode,
       })
 
@@ -281,16 +281,18 @@ const make = Effect.gen(function* () {
         status: "queued",
         message: null,
       } satisfies SourceSyncJobSummary
-    }).pipe(sourceSyncSpan({ name: "source-sync.job", attributes: { userId, sourceId, mode } }))
+    }).pipe(
+      sourceSyncSpan({ name: "source-sync.job", attributes: { principalId, sourceId, mode } })
+    )
 
   const getSourceSyncJob: SourceSyncServiceShape["getSourceSyncJob"] = ({
-    userId,
+    principalId,
     sourceId,
     jobId,
   }) =>
     Effect.gen(function* () {
       return yield* sourceSyncJobRepository
-        .getJob({ userId, sourceId, jobId })
+        .getJob({ principalId, sourceId, jobId })
         .pipe(
           Effect.catchTag("SourceSyncJobRecordNotVisibleError", () =>
             Effect.fail(new SourceSyncJobNotFoundError({ sourceId, jobId }))
@@ -298,13 +300,15 @@ const make = Effect.gen(function* () {
         )
     })
 
-  const startSourceSyncJob: SourceSyncServiceShape["startSourceSyncJob"] = ({ userId, sourceId }) =>
-    runSourceJob({ userId, sourceId, mode: "sync" })
+  const startSourceSyncJob: SourceSyncServiceShape["startSourceSyncJob"] = ({
+    principalId,
+    sourceId,
+  }) => runSourceJob({ principalId, sourceId, mode: "sync" })
 
   const replaySourceSyncJob: SourceSyncServiceShape["replaySourceSyncJob"] = ({
-    userId,
+    principalId,
     sourceId,
-  }) => runSourceJob({ userId, sourceId, mode: "replay" })
+  }) => runSourceJob({ principalId, sourceId, mode: "replay" })
 
   return SourceSyncService.of({
     startSourceSyncJob,

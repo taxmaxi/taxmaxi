@@ -11,6 +11,8 @@ import * as identities from "./IdentitiesTable.ts"
 import * as legalRules from "./LegalRulesTable.ts"
 import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
+import * as principalClaims from "./PrincipalClaimsTable.ts"
+import * as principals from "./PrincipalsTable.ts"
 import * as providerAssetMappings from "./ProviderAssetMappingsTable.ts"
 import * as providerAssets from "./ProviderAssetsTable.ts"
 import * as providerTransfers from "./ProviderTransfersTable.ts"
@@ -48,6 +50,8 @@ export const schema = {
   ...legalRules,
   ...oauthStates,
   ...processingJobs,
+  ...principalClaims,
+  ...principals,
   ...providerAssetMappings,
   ...providerAssets,
   ...providerTransfers,
@@ -100,6 +104,8 @@ export type {
 } from "./LegalRulesTable.ts"
 export type { OAuthStateRow } from "./OAuthStatesTable.ts"
 export type { ProcessingJob, ProcessingJobInsert } from "./ProcessingJobsTable.ts"
+export type { PrincipalClaimInsert, PrincipalClaimRow } from "./PrincipalClaimsTable.ts"
+export type { PrincipalInsert, PrincipalRow } from "./PrincipalsTable.ts"
 export type {
   ProviderAssetMappingKind,
   ProviderAssetMappingInsert,

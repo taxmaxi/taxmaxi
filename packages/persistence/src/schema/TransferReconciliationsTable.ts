@@ -13,9 +13,9 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import { providerTransfers } from "./ProviderTransfersTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 import { transfers } from "./TransfersTable.ts"
 import { transactions } from "./TransactionsTable.ts"
-import { users } from "./UsersTable.ts"
 
 export const transferReconciliationStatusEnum = pgEnum("transfer_reconciliation_status", [
   "pending",
@@ -37,9 +37,9 @@ export const transferReconciliations = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
 
-    userId: uuid("user_id")
+    principalId: uuid("principal_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+      .references(() => principals.id, { onDelete: "cascade" }),
     providerTransferId: uuid("provider_transfer_id")
       .notNull()
       .references(() => providerTransfers.id, { onDelete: "cascade" }),
@@ -75,7 +75,7 @@ export const transferReconciliations = pgTable(
     uniqueIndex("transfer_reconciliations_provider_transfer_unique_idx").on(
       table.providerTransferId
     ),
-    index("idx_transfer_reconciliations_user_status").on(table.userId, table.status),
+    index("idx_transfer_reconciliations_principal_status").on(table.principalId, table.status),
     index("idx_transfer_reconciliations_canonical_transfer").on(table.canonicalTransferId),
     index("idx_transfer_reconciliations_canonical_transaction").on(table.canonicalTransactionId),
   ]

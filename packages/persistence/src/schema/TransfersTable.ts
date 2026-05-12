@@ -14,6 +14,7 @@ import {
 import { addresses } from "./AddressesTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { blockchains } from "./BlockchainsTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
 import { sources } from "./SourcesTable.ts"
 
@@ -53,6 +54,9 @@ export const transfers = pgTable(
       // Raw provider record this movement was normalized from.
       onDelete: "set null",
     }),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "cascade" }),
     externalId: text("external_id"), // Provider movement id.
     externalGroupId: text("external_group_id"), // Groups related rows (order, tx, batch).
 
@@ -124,6 +128,7 @@ export const transfers = pgTable(
       ),
 
     index("idx_transfers_source_timestamp").on(table.sourceId, table.timestamp),
+    index("idx_transfers_principal_timestamp").on(table.principalId, table.timestamp),
     index("idx_transfers_external_group").on(table.sourceId, table.externalGroupId),
     index("idx_transfers_source_type").on(table.sourceId, table.type),
     index("idx_transfers_blockchain_tx_hash").on(table.blockchainId, table.txHash),

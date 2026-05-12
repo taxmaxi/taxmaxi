@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { SyncEngineSourceRepositoryLive } from "../../src/layers/SyncEngineSourceRepositoryLive.ts"
 import {
   TEST_SOURCE_ID,
+  TEST_PRINCIPAL_ID,
   TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
@@ -35,7 +36,7 @@ describe("SyncEngineSourceRepositoryLive", () => {
     const ownedSource = await runRepository(
       Effect.flatMap(SourceRepository, (repository) =>
         repository.findOwnedSourceSyncContext({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
         })
       )
@@ -43,7 +44,7 @@ describe("SyncEngineSourceRepositoryLive", () => {
     const missingSource = await runRepository(
       Effect.flatMap(SourceRepository, (repository) =>
         repository.findOwnedSourceSyncContext({
-          userId: "00000000-0000-0000-0000-000000009001",
+          principalId: "00000000-0000-0000-0000-000000009001",
           sourceId: TEST_SOURCE_ID,
         })
       )
@@ -52,7 +53,7 @@ describe("SyncEngineSourceRepositoryLive", () => {
     expect(Option.isSome(ownedSource)).toBe(true)
     expect(Option.getOrNull(ownedSource)).toMatchObject({
       id: TEST_SOURCE_ID,
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       providerKey: "coinbase",
     })
     expect(Option.isNone(missingSource)).toBe(true)

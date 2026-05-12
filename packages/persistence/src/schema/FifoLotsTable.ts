@@ -9,15 +9,17 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import { assets } from "./AssetsTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactionLegs } from "./TransactionLegsTable.ts"
-import { users } from "./UsersTable.ts"
 
 export const fifoLots = pgTable(
   "fifo_lots",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").references(() => users.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "cascade" }),
     sourceId: uuid("source_id")
       .notNull()
       .references(() => sources.id),
@@ -48,9 +50,9 @@ export const fifoLots = pgTable(
   (table) => [
     // One FIFO lot per acquisition leg - prevents duplicates on retry
     uniqueIndex("idx_fifo_lots_source_leg").on(table.sourceLegId, table.sourceLegSequence),
-    // Index for user + asset lookups in portfolio queries
-    index("idx_fifo_lots_user_asset_remaining").on(
-      table.userId,
+    // Index for principal + asset lookups in portfolio queries
+    index("idx_fifo_lots_principal_asset_remaining").on(
+      table.principalId,
       table.assetId,
       table.remainingAmount
     ),

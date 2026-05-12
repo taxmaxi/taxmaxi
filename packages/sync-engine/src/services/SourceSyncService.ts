@@ -22,7 +22,7 @@ export class UnsupportedProviderError extends Schema.TaggedError<UnsupportedProv
 ) {}
 
 /**
- * SourceNotFoundError - User has no configured source for the requested source id.
+ * SourceNotFoundError - Principal has no configured source for the requested source id.
  */
 export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>()(
   "SourceNotFoundError",
@@ -32,7 +32,7 @@ export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>
 ) {}
 
 /**
- * SourceSyncJobNotFoundError - Requested job is not visible for the user/source pair.
+ * SourceSyncJobNotFoundError - Requested job is not visible for the principal/source pair.
  */
 export class SourceSyncJobNotFoundError extends Schema.TaggedError<SourceSyncJobNotFoundError>()(
   "SourceSyncJobNotFoundError",
@@ -46,7 +46,7 @@ export class SourceSyncJobNotFoundError extends Schema.TaggedError<SourceSyncJob
  * StartSourceSyncJobParams - Input for starting a provider sync job.
  */
 export interface StartSourceSyncJobParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
 }
 
@@ -54,7 +54,7 @@ export interface StartSourceSyncJobParams {
  * ReplaySourceSyncJobParams - Input for replaying cached raw rows for one source.
  */
 export interface ReplaySourceSyncJobParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
 }
 
@@ -62,7 +62,7 @@ export interface ReplaySourceSyncJobParams {
  * GetSourceSyncJobParams - Input for loading a sync job status.
  */
 export interface GetSourceSyncJobParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
   readonly jobId: string
 }

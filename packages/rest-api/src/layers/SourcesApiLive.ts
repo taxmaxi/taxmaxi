@@ -21,6 +21,7 @@ import {
   SourceSyncService,
 } from "@my/sync-engine/services"
 import {
+  PrincipalRepository,
   SourceRepository as PersistenceSourceRepository,
   TaxCalculationService,
 } from "@my/persistence/services"
@@ -46,14 +47,28 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
   Effect.gen(function* () {
     const taxCalculationService = yield* TaxCalculationService
     const sourceSyncService = yield* SourceSyncService
+    const principalRepository = yield* PrincipalRepository
     const sourceRepository = yield* PersistenceSourceRepository
     const syncEngineSourceRepository = yield* SyncEngineSourceRepository
+
+    const resolvePrincipal = Effect.gen(function* () {
+      const currentUser = yield* CurrentUser
+      const maybePrincipal = yield* principalRepository.findUserPrincipal(currentUser.userId).pipe(
+        Effect.mapError(() => toInternalServerError("Failed to resolve principal."))
+      )
+
+      if (Option.isNone(maybePrincipal)) {
+        return yield* Effect.fail(toInternalServerError("Missing user principal."))
+      }
+
+      return maybePrincipal.value
+    })
 
     return handlers
       .handle("listSources", () =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
-          const sources = yield* sourceRepository.findByUserId(currentUser.userId).pipe(
+          const principal = yield* resolvePrincipal
+          const sources = yield* sourceRepository.findByPrincipalId(principal.id).pipe(
             Effect.mapError((error) => {
               switch (error._tag) {
                 default:
@@ -66,9 +81,9 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("startSourceSyncJob", ({ path }) =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
+          const principal = yield* resolvePrincipal
           const startParams = {
-            userId: currentUser.userId,
+            principalId: principal.id,
             sourceId: path.sourceId,
           }
 
@@ -92,9 +107,9 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("replaySourceSyncJob", ({ path }) =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
+          const principal = yield* resolvePrincipal
           const replayParams = {
-            userId: currentUser.userId,
+            principalId: principal.id,
             sourceId: path.sourceId,
           }
 
@@ -118,10 +133,10 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("getSourceSyncJobStatus", ({ path }) =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
+          const principal = yield* resolvePrincipal
           const job = yield* sourceSyncService
             .getSourceSyncJob({
-              userId: currentUser.userId,
+              principalId: principal.id,
               sourceId: path.sourceId,
               jobId: path.jobId,
             })
@@ -141,13 +156,13 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("calculateTaxForSource", ({ path, payload }) =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
+          const principal = yield* resolvePrincipal
           const sourceId = yield* Schema.decodeUnknown(SourceId)(path.sourceId).pipe(
             Effect.mapError(() => toBadRequestError("Invalid source identifier."))
           )
           const maybeSource = yield* syncEngineSourceRepository
             .findOwnedSourceSyncContext({
-              userId: currentUser.userId,
+              principalId: principal.id,
               sourceId,
             })
             .pipe(

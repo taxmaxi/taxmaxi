@@ -18,7 +18,7 @@ import type { EntityNotFoundError, PersistenceError } from "../errors/Repository
 export interface CexAccountRecord {
   readonly id: string
   readonly cexId: string
-  readonly userId: string
+  readonly principalId: string
   readonly providerUserId: string | null
   readonly providerAccountId: string | null
 }
@@ -27,7 +27,7 @@ export interface CexAccountRecord {
  * EnsureCexAccountForProviderWithOAuthParams - Provisioning and credential payload.
  */
 export interface EnsureCexAccountForProviderWithOAuthParams {
-  readonly userId: string
+  readonly principalId: string
   readonly cexName: string
   readonly providerUserId: string
   readonly providerAccountId?: string

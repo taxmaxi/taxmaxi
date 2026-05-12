@@ -21,7 +21,7 @@ const now = new Date("2026-01-01T00:00:00.000Z")
 
 const coinbaseSource: SourceSyncSource = {
   id: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   providerKey: "coinbase",
   cexAccountId: "cex-1",
   addressId: null,
@@ -29,7 +29,7 @@ const coinbaseSource: SourceSyncSource = {
 
 const bitcoinSource: SourceSyncSource = {
   id: "source-2",
-  userId: "user-1",
+  principalId: "principal-1",
   providerKey: "bitcoin",
   cexAccountId: null,
   addressId: "address-1",
@@ -57,7 +57,7 @@ const makeRun = ({
   readonly message?: string | null
 }): SyncRunRecord => ({
   id,
-  userId: "user-1",
+  principalId: "principal-1",
   status,
   requestedSourceCount,
   queuedSourceCount,
@@ -145,7 +145,7 @@ const makeLayer = ({
 
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.none()),
-    listUserSourceSyncContexts: () => Effect.succeed(listedSources),
+    listPrincipalSourceSyncContexts: () => Effect.succeed(listedSources),
   })
 
   const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, sourceSyncService)
@@ -215,7 +215,7 @@ const makeLayer = ({
 const runWithLayer = (layer: Layer.Layer<SourceSyncRunService>) =>
   Effect.runPromise(
     Effect.flatMap(SourceSyncRunService, (service) =>
-      service.startSyncRun({ userId: "user-1" })
+      service.startSyncRun({ principalId: "principal-1" })
     ).pipe(Effect.provide(layer))
   )
 
@@ -349,7 +349,7 @@ describe("SourceSyncRunService", () => {
 
     const result: SourceSyncRunDetails = await Effect.runPromise(
       Effect.flatMap(SourceSyncRunService, (service) =>
-        service.getSyncRun({ userId: "user-1", runId: "run-1" })
+        service.getSyncRun({ principalId: "principal-1", runId: "run-1" })
       ).pipe(Effect.provide(layer))
     )
 

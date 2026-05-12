@@ -13,7 +13,7 @@ import {
   TEST_EUR_ASSET_ID,
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
-  TEST_USER_ID,
+  TEST_PRINCIPAL_ID,
   makeIntegrationTestDatabaseContext,
   type SyncEngineRepositoryFixture,
   seedSyncEngineAssets,
@@ -166,7 +166,7 @@ const buildCoinbaseSource = ({
   readonly cexAccountId: string
 }): SourceSyncSource => ({
   id: TEST_SOURCE_ID,
-  userId: TEST_USER_ID,
+  principalId: TEST_PRINCIPAL_ID,
   providerKey: "coinbase",
   cexAccountId,
   addressId: null,
@@ -293,7 +293,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
             venueType: "cex",
@@ -312,6 +312,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           feeTransfers: [
             {
               sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
               sourceRawRecordId: TEST_RAW_RECORD_ID,
               externalId: "tx-acquire-1:commission",
               externalGroupId: "group-acquire-1",
@@ -338,11 +339,11 @@ describe("SourceNormalizationRepositoryLive", () => {
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
               sourceRawRecordId: TEST_RAW_RECORD_ID,
               externalId: "leg-acquire-1",
               txHash: null,
               timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              userId: TEST_USER_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
               amount: "1.00000000",
@@ -358,7 +359,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             },
           ],
           transactionReview: {
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
             reviewStatus: "needs_review",
             originalTypeKey: "buy_fiat",
             originalConfidence: "0.95",
@@ -396,7 +397,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
             venueType: "cex",
@@ -415,6 +416,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           feeTransfers: [
             {
               sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
               sourceRawRecordId: TEST_RAW_RECORD_ID,
               externalId: "tx-acquire-1:commission",
               externalGroupId: "group-acquire-1",
@@ -445,7 +447,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               externalId: "leg-acquire-1",
               txHash: null,
               timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              userId: TEST_USER_ID,
+              principalId: TEST_PRINCIPAL_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
               amount: "1.00000000",
@@ -461,7 +463,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             },
           ],
           transactionReview: {
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
             reviewStatus: "needs_review",
             originalTypeKey: "buy_fiat",
             originalConfidence: "0.95",
@@ -503,7 +505,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
             venueType: "cex",
@@ -527,7 +529,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               externalId: "leg-dispose-1",
               txHash: null,
               timestamp: new Date("2025-02-01T10:00:00.000Z"),
-              userId: TEST_USER_ID,
+              principalId: TEST_PRINCIPAL_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
               amount: "0.40000000",
@@ -602,7 +604,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
             venueType: "cex",
@@ -626,7 +628,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               externalId: "leg-acquire-2",
               txHash: null,
               timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              userId: TEST_USER_ID,
+              principalId: TEST_PRINCIPAL_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
               amount: "1.00000000",
@@ -675,7 +677,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
             metadata: { provider: "coinbase" },
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
             venueType: "cex",
@@ -699,7 +701,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               externalId: "leg-dispose-insufficient-1",
               txHash: null,
               timestamp: new Date("2025-02-01T10:00:00.000Z"),
-              userId: TEST_USER_ID,
+              principalId: TEST_PRINCIPAL_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
               amount: "2.00000000",
@@ -797,7 +799,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             providerCreatedAt: new Date("2025-01-15T10:00:00.000Z"),
             providerUpdatedAt: new Date("2025-01-15T10:00:00.000Z"),
             metadata: { provider: "coinbase", partial: true },
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
           },
           venueContext: {
             venueType: "cex",
@@ -816,7 +818,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           feeTransfers: [],
           legs: [],
           transactionReview: {
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
             reviewStatus: "needs_review",
             originalTypeKey: "buy_fiat",
             originalConfidence: null,
@@ -848,7 +850,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             categorizationReason: schema.transactionReviews.categorizationReason,
           })
           .from(schema.transactionReviews)
-          .where(eq(schema.transactionReviews.userId, TEST_USER_ID))
+          .where(eq(schema.transactionReviews.principalId, TEST_PRINCIPAL_ID))
           .orderBy(schema.transactionReviews.createdAt)
           .limit(1)
         const legs = yield* db.select().from(schema.transactionLegs)

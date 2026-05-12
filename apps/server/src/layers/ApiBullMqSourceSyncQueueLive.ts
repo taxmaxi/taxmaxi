@@ -286,7 +286,7 @@ export const makeApiBullMqSourceSyncQueueLive = (options: ApiBullMqSourceSyncQue
                   {
                     jobId: payload.jobId,
                     sourceId: payload.sourceId,
-                    userId: payload.userId,
+                    principalId: payload.principalId,
                     mode: payload.mode,
                     queueName: SOURCE_SYNC_QUEUE_NAME,
                     queueJobId,
@@ -302,7 +302,7 @@ export const makeApiBullMqSourceSyncQueueLive = (options: ApiBullMqSourceSyncQue
             {
               jobId: payload.jobId,
               sourceId: payload.sourceId,
-              userId: payload.userId,
+              principalId: payload.principalId,
               mode: payload.mode,
               queueName: SOURCE_SYNC_QUEUE_NAME,
               queueJobId,

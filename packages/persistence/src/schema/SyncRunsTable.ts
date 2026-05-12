@@ -1,5 +1,5 @@
 import { index, integer, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
-import { users } from "./UsersTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 
 export const syncRunStatusEnum = pgEnum("sync_run_status", [
   "queued",
@@ -20,9 +20,9 @@ export const syncRuns = pgTable(
   "sync_runs",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
+    principalId: uuid("principal_id")
       .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+      .references(() => principals.id, { onDelete: "cascade" }),
     status: syncRunStatusEnum("status").notNull().default("queued"),
     requestedSourceCount: integer("requested_source_count").notNull().default(0),
     queuedSourceCount: integer("queued_source_count").notNull().default(0),
@@ -36,7 +36,7 @@ export const syncRuns = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    index("idx_sync_runs_user_id").on(table.userId),
+    index("idx_sync_runs_principal_id").on(table.principalId),
     index("idx_sync_runs_status").on(table.status),
     index("idx_sync_runs_created_at").on(table.createdAt),
   ]

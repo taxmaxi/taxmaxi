@@ -105,6 +105,7 @@ import {
   CexAccountRepository,
   IdentityRepository,
   OAuthStateStore,
+  PrincipalRepository,
   SessionRepository,
   SourceRepository,
   UserRepository,
@@ -990,6 +991,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
       const authService = yield* AuthService
       const oauthStateStore = yield* OAuthStateStore
       const cexAccountRepo = yield* CexAccountRepository
+      const principalRepository = yield* PrincipalRepository
       const sourceRepo = yield* SourceRepository
       const frontendUrl = yield* Config.string("FRONTEND_URL").pipe(
         Config.withDefault(FRONTEND_URL_DEFAULT),
@@ -1076,9 +1078,24 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
             )
           }
 
+          const maybePrincipal = yield* principalRepository
+            .findUserPrincipal(user.id)
+            .pipe(Effect.mapError((error) => mapPersistenceError(provider, error)))
+
+          if (Option.isNone(maybePrincipal)) {
+            return yield* Effect.fail(
+              new ProviderAuthError({
+                provider,
+                reason: "Missing user principal",
+              })
+            )
+          }
+
+          const principal = maybePrincipal.value
+
           const cexAccount = yield* cexAccountRepo
             .ensureForProviderWithOAuthCredentials({
-              userId: user.id,
+              principalId: principal.id,
               cexName: "coinbase",
               providerUserId: providerResult.providerId,
               oauthCredentials: providerResult.oauthCredentials.value,
@@ -1102,8 +1119,8 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
           const sourceRef = CexSourceRef.make({ cexAccountId: cexAccount.id })
 
           const maybeCoinbaseSource = yield* sourceRepo
-            .findByUserAndSourceRef({
-              userId: user.id,
+            .findByPrincipalAndSourceRef({
+              principalId: principal.id,
               sourceRef,
             })
             .pipe(
@@ -1126,7 +1143,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
             yield* sourceRepo
               .create({
                 id: SourceId.make(crypto.randomUUID()),
-                userId: user.id,
+                principalId: principal.id,
                 name: "Coinbase",
                 providerKey: "coinbase",
                 sourceRef,

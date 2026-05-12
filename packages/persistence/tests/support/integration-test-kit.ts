@@ -36,6 +36,7 @@ const pgUser = testDatabaseConfig.user
 const pgPassword = Redacted.value(testDatabaseConfig.password)
 
 export const TEST_USER_ID = "00000000-0000-0000-0000-000000000181"
+export const TEST_PRINCIPAL_ID = "00000000-0000-0000-0000-000000000183"
 export const TEST_SOURCE_ID = "00000000-0000-0000-0000-000000000281"
 export const TEST_RAW_RECORD_ID = "00000000-0000-0000-0000-000000000381"
 export const TEST_BTC_ASSET_ID = "00000000-0000-0000-0000-000000000481"
@@ -43,6 +44,7 @@ export const TEST_EUR_ASSET_ID = "00000000-0000-0000-0000-000000000482"
 
 export interface SyncEngineRepositoryFixture {
   readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
   readonly cexAccountId: string
   readonly baseBlockchainId: string
@@ -248,9 +250,11 @@ const requireBlockchainId = ({ name }: { readonly name: string }) =>
 
 export const seedSyncEngineRepositoryFixture = ({
   userId = TEST_USER_ID,
+  principalId = TEST_PRINCIPAL_ID,
   sourceId = TEST_SOURCE_ID,
 }: {
   readonly userId?: string
+  readonly principalId?: string
   readonly sourceId?: string
 } = {}) =>
   Effect.gen(function* () {
@@ -260,6 +264,11 @@ export const seedSyncEngineRepositoryFixture = ({
       id: userId,
       email: `sync-engine-${userId}@taxmaxi.test`,
       name: "Sync Engine Repository Test User",
+    })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
     })
 
     const cexId = yield* db
@@ -279,7 +288,7 @@ export const seedSyncEngineRepositoryFixture = ({
       .insert(schema.cexAccount)
       .values({
         cexId,
-        userId,
+        principalId,
         providerUserId: `coinbase-user-${sourceId}`,
         providerAccountId: "coinbase-account-1",
         accessToken: "test-access-token",
@@ -295,7 +304,7 @@ export const seedSyncEngineRepositoryFixture = ({
 
     yield* db.insert(schema.sources).values({
       id: sourceId,
-      userId,
+      principalId,
       name: `Coinbase Source ${sourceId}`,
       providerKey: "coinbase",
       sourceableType: "cex",
@@ -310,6 +319,7 @@ export const seedSyncEngineRepositoryFixture = ({
 
     return {
       userId,
+      principalId,
       sourceId,
       cexAccountId: createdAccount.id,
       baseBlockchainId,

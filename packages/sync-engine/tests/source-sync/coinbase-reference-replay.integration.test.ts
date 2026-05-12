@@ -33,6 +33,7 @@ const context = makeIntegrationTestDatabaseContext({
 const TestPgClientLive = context.TestPgClientLive
 
 const userId = "00000000-0000-0000-0000-000000000151"
+const principalId = "00000000-0000-0000-0000-000000000152"
 const sourceId = "00000000-0000-0000-0000-000000000251"
 
 const makeCoinbaseRecord = ({
@@ -186,6 +187,11 @@ const seedCoinbaseSource = () =>
       email: "coinbase-pr05@taxmaxi.test",
       name: "Coinbase PR-05 Replay User",
     })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
+    })
 
     const [coinbaseCex] = yield* db
       .select({ id: schema.cex.id })
@@ -201,7 +207,7 @@ const seedCoinbaseSource = () =>
       .insert(schema.cexAccount)
       .values({
         cexId: coinbaseCex.id,
-        userId,
+        principalId,
         providerUserId: "coinbase-user-pr05",
         providerAccountId: "coinbase-account-1",
         accessToken: "test-access-token",
@@ -240,7 +246,7 @@ const seedCoinbaseSource = () =>
       providerKey: "coinbase",
       sourceableType: "cex",
       cexAccountId: createdAccount.id,
-      userId,
+      principalId,
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -272,7 +278,7 @@ const runSync = () =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
     return yield* sourceSync.startSourceSyncJob({
-      userId,
+      principalId,
       sourceId,
     })
   }).pipe(Effect.provide(TestLayer))

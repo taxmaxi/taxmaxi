@@ -23,6 +23,7 @@
     "test:watch": "vitest watch --root ../.. --project=unit packages/sdk/tests",
     "dev": "tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
+    "type-check:tests": "tsc -p tsconfig.tests.json",
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
     "format": "oxfmt -c ../../oxfmtrc.jsonc",
     "lint": "oxlint -c ../../oxlintrc.json"

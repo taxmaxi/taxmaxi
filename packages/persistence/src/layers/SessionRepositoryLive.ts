@@ -37,10 +37,7 @@ const make = Effect.gen(function* () {
 
   const findById: SessionRepositoryService["findById"] = (id) =>
     Effect.gen(function* () {
-      const [row] = yield* db
-        .select(selectSessionFields)
-        .from(sessions)
-        .where(eq(sessions.id, id))
+      const [row] = yield* db.select(selectSessionFields).from(sessions).where(eq(sessions.id, id))
 
       if (!row || row.userId === null) {
         return Option.none()

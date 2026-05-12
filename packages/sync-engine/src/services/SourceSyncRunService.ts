@@ -1,5 +1,5 @@
 /**
- * SourceSyncRunService - User-wide source sync run orchestration contract.
+ * SourceSyncRunService - Principal-wide source sync run orchestration contract.
  *
  * @module SourceSyncRunService
  */
@@ -11,7 +11,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 import type { SyncRunItemRecord, SyncRunRecord } from "./SourceSyncRunRepository.ts"
 
 /**
- * SourceSyncRunNotFoundError - Requested user-wide sync run was not found for the user.
+ * SourceSyncRunNotFoundError - Requested principal-wide sync run was not found for the principal.
  */
 export class SourceSyncRunNotFoundError extends Schema.TaggedError<SourceSyncRunNotFoundError>()(
   "SourceSyncRunNotFoundError",
@@ -21,17 +21,17 @@ export class SourceSyncRunNotFoundError extends Schema.TaggedError<SourceSyncRun
 ) {}
 
 /**
- * StartSourceSyncRunParams - Input for starting a user-wide sync run.
+ * StartSourceSyncRunParams - Input for starting a principal-wide sync run.
  */
 export interface StartSourceSyncRunParams {
-  readonly userId: string
+  readonly principalId: string
 }
 
 /**
- * GetSourceSyncRunParams - Input for loading a user-wide sync run.
+ * GetSourceSyncRunParams - Input for loading a principal-wide sync run.
  */
 export interface GetSourceSyncRunParams {
-  readonly userId: string
+  readonly principalId: string
   readonly runId: string
 }
 
@@ -43,16 +43,16 @@ export interface SourceSyncRunDetails extends SyncRunRecord {
 }
 
 /**
- * SourceSyncRunServiceError - Union of user-wide sync run service failures.
+ * SourceSyncRunServiceError - Union of principal-wide sync run service failures.
  */
 export type SourceSyncRunServiceError = SourceSyncRunNotFoundError | SyncEngineStorageError
 
 /**
- * SourceSyncRunServiceShape - API-facing user-wide sync run operations.
+ * SourceSyncRunServiceShape - API-facing principal-wide sync run operations.
  */
 export interface SourceSyncRunServiceShape {
   /**
-   * Start a user-wide run by creating or reusing one source job per source.
+   * Start a principal-wide run by creating or reusing one source job per source.
    */
   readonly startSyncRun: (
     params: StartSourceSyncRunParams
@@ -67,7 +67,7 @@ export interface SourceSyncRunServiceShape {
 }
 
 /**
- * SourceSyncRunService - Context tag for user-wide source sync orchestration.
+ * SourceSyncRunService - Context tag for principal-wide source sync orchestration.
  */
 export class SourceSyncRunService extends Context.Tag("SourceSyncRunService")<
   SourceSyncRunService,

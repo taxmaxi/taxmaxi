@@ -1,6 +1,7 @@
 export * from "./IdentityRepository.ts"
 export * from "./EmailVerificationRequestRepository.ts"
 export * from "./OAuthStateStore.ts"
+export * from "./PrincipalRepository.ts"
 export * from "./SessionRepository.ts"
 export * from "./UserRepository.ts"
 export * from "./SourceRepository.ts"

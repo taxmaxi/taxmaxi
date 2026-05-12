@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import { PrincipalId } from "@my/core/ownership"
 import { Timestamp } from "@my/core/shared/values/Timestamp"
 import {
   CexSourceRef,
@@ -19,7 +20,7 @@ import { SourceRepository, type SourceRepositoryService } from "../services/Sour
 type SelectedSourceRow = Pick<
   SourceRow,
   | "id"
-  | "userId"
+  | "principalId"
   | "name"
   | "providerKey"
   | "sourceableType"
@@ -33,7 +34,7 @@ const make = Effect.gen(function* () {
 
   const selectSourceFields = {
     id: sources.id,
-    userId: sources.userId,
+    principalId: sources.principalId,
     name: sources.name,
     providerKey: sources.providerKey,
     sourceableType: sources.sourceableType,
@@ -70,7 +71,7 @@ const make = Effect.gen(function* () {
 
       return Source.make({
         id: SourceId.make(row.id),
-        userId: row.userId,
+        principalId: PrincipalId.make(row.principalId),
         name: row.name,
         providerKey: row.providerKey,
         sourceRef,
@@ -91,18 +92,28 @@ const make = Effect.gen(function* () {
       return Option.some(source)
     }).pipe(wrapSqlError("findById"))
 
-  const findByUserId: SourceRepositoryService["findByUserId"] = (id) =>
+  const findByPrincipalId: SourceRepositoryService["findByPrincipalId"] = (id) =>
     Effect.gen(function* () {
-      const rows = yield* db.select(selectSourceFields).from(sources).where(eq(sources.userId, id))
+      const rows = yield* db
+        .select(selectSourceFields)
+        .from(sources)
+        .where(eq(sources.principalId, id))
       return yield* Effect.forEach(rows, rowToSource)
-    }).pipe(wrapSqlError("findById"))
+    }).pipe(wrapSqlError("findByPrincipalId"))
 
-  const findByUserAndProviderKey: SourceRepositoryService["findByUserAndProviderKey"] = (params) =>
+  const findByPrincipalAndProviderKey: SourceRepositoryService["findByPrincipalAndProviderKey"] = (
+    params
+  ) =>
     Effect.gen(function* () {
       const [row] = yield* db
         .select(selectSourceFields)
         .from(sources)
-        .where(and(eq(sources.userId, params.userId), eq(sources.providerKey, params.providerKey)))
+        .where(
+          and(
+            eq(sources.principalId, params.principalId),
+            eq(sources.providerKey, params.providerKey)
+          )
+        )
         .limit(1)
 
       if (row === undefined) {
@@ -111,9 +122,11 @@ const make = Effect.gen(function* () {
 
       const source = yield* rowToSource(row)
       return Option.some(source)
-    }).pipe(wrapSqlError("findByUserAndProviderKey"))
+    }).pipe(wrapSqlError("findByPrincipalAndProviderKey"))
 
-  const findByUserAndSourceRef: SourceRepositoryService["findByUserAndSourceRef"] = (params) =>
+  const findByPrincipalAndSourceRef: SourceRepositoryService["findByPrincipalAndSourceRef"] = (
+    params
+  ) =>
     Effect.gen(function* () {
       const [row] =
         params.sourceRef._tag === "cex"
@@ -122,7 +135,7 @@ const make = Effect.gen(function* () {
               .from(sources)
               .where(
                 and(
-                  eq(sources.userId, params.userId),
+                  eq(sources.principalId, params.principalId),
                   eq(sources.sourceableType, "cex"),
                   eq(sources.cexAccountId, params.sourceRef.cexAccountId)
                 )
@@ -134,7 +147,7 @@ const make = Effect.gen(function* () {
                 .from(sources)
                 .where(
                   and(
-                    eq(sources.userId, params.userId),
+                    eq(sources.principalId, params.principalId),
                     eq(sources.sourceableType, "onchain"),
                     eq(sources.addressId, params.sourceRef.addressId)
                   )
@@ -145,7 +158,7 @@ const make = Effect.gen(function* () {
                 .from(sources)
                 .where(
                   and(
-                    eq(sources.userId, params.userId),
+                    eq(sources.principalId, params.principalId),
                     eq(sources.sourceableType, "dex"),
                     eq(sources.addressId, params.sourceRef.addressId)
                   )
@@ -158,14 +171,14 @@ const make = Effect.gen(function* () {
 
       const source = yield* rowToSource(row)
       return Option.some(source)
-    }).pipe(wrapSqlError("findByUserAndSourceRef"))
+    }).pipe(wrapSqlError("findByPrincipalAndSourceRef"))
 
   const create: SourceRepositoryService["create"] = (source) =>
     Effect.gen(function* () {
       const now = new Date()
       const baseValues = {
         id: source.id,
-        userId: source.userId,
+        principalId: source.principalId,
         name: source.name,
         providerKey: source.providerKey ?? null,
         providerMetadata: source.providerMetadata ?? null,
@@ -200,9 +213,9 @@ const make = Effect.gen(function* () {
 
   return {
     findById,
-    findByUserId,
-    findByUserAndProviderKey,
-    findByUserAndSourceRef,
+    findByPrincipalId,
+    findByPrincipalAndProviderKey,
+    findByPrincipalAndSourceRef,
     create,
   } satisfies SourceRepositoryService
 })

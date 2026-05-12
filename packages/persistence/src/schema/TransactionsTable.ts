@@ -14,7 +14,7 @@ import {
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactionTypes } from "./TransactionTypesTable.ts"
-import { users } from "./UsersTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 
 /**
  * Canonical source-agnostic transaction envelope.
@@ -51,7 +51,9 @@ export const transactions = pgTable(
 
     metadata: jsonb("metadata"), // Provider-specific data that does not fit canonical columns.
 
-    userId: uuid("user_id").references(() => users.id),
+    principalId: uuid("principal_id")
+      .notNull()
+      .references(() => principals.id, { onDelete: "cascade" }),
 
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -73,6 +75,7 @@ export const transactions = pgTable(
       .where(sql`${table.externalId} is not null`),
 
     index("idx_transactions_source_timestamp").on(table.sourceId, table.timestamp),
+    index("idx_transactions_principal_timestamp").on(table.principalId, table.timestamp),
     index("idx_transactions_external_group").on(table.sourceId, table.externalGroupId),
     index("idx_transactions_source_provider_type").on(
       table.sourceId,

@@ -13,6 +13,7 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_SOURCE_ID,
+  TEST_PRINCIPAL_ID,
   TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   type SyncEngineRepositoryFixture,
@@ -100,14 +101,14 @@ const seedOwnedOnchainSource = ({ walletAddress }: { readonly walletAddress: str
       address: walletAddress,
       type: "bitcoin",
       name: "Owned bitcoin wallet",
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       createdAt: now,
       updatedAt: now,
     })
 
     yield* db.insert(schema.sources).values({
       id: ONCHAIN_SOURCE_ID,
-      userId: TEST_USER_ID,
+      principalId: TEST_PRINCIPAL_ID,
       name: "Owned bitcoin source",
       providerKey: "bitcoin",
       sourceableType: "onchain",
@@ -152,7 +153,7 @@ const seedProviderTransfer = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: "coinbase" },
-        userId: TEST_USER_ID,
+        principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
 
@@ -223,7 +224,7 @@ const seedOnchainReceipt = ({
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
         metadata: { provider: "bitcoin" },
-        userId: TEST_USER_ID,
+        principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
 
@@ -277,6 +278,7 @@ const seedOnchainReceipt = ({
         tokenId: null,
         notes: null,
         metadata: { provider: "bitcoin" },
+        principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transfers.id })
 
@@ -338,7 +340,7 @@ describe("TransferReconciliationServiceLive", () => {
     const summary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.reconcileTransferCandidates({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
         })
       )
@@ -417,7 +419,7 @@ describe("TransferReconciliationServiceLive", () => {
     const summary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.reconcileTransferCandidates({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
         })
       )
@@ -486,7 +488,7 @@ describe("TransferReconciliationServiceLive", () => {
     await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.reconcileTransferCandidates({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
         })
       )
@@ -495,7 +497,7 @@ describe("TransferReconciliationServiceLive", () => {
     await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.reconcileTransferCandidates({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
         })
       )
@@ -555,7 +557,7 @@ describe("TransferReconciliationServiceLive", () => {
     await runTransferReconciliationRepository(
       Effect.flatMap(TransferReconciliationRepository, (repository) =>
         repository.upsertTransferReconciliation({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           providerTransferId,
           canonicalTransferId: receipt.transferId,
           canonicalTransactionId: receipt.transactionId,
@@ -575,7 +577,7 @@ describe("TransferReconciliationServiceLive", () => {
     await runTransferReconciliationRepository(
       Effect.flatMap(TransferReconciliationRepository, (repository) =>
         repository.upsertTransferReconciliation({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           providerTransferId,
           canonicalTransferId: null,
           canonicalTransactionId: null,
@@ -672,7 +674,7 @@ describe("TransferReconciliationServiceLive", () => {
           .insert(schema.transferReconciliations)
           .values([
             {
-              userId: TEST_USER_ID,
+              principalId: TEST_PRINCIPAL_ID,
               providerTransferId: firstProviderTransferId,
               canonicalTransferId: firstReceipt.transferId,
               canonicalTransactionId: firstReceipt.transactionId,
@@ -685,7 +687,7 @@ describe("TransferReconciliationServiceLive", () => {
               updatedAt: now,
             },
             {
-              userId: TEST_USER_ID,
+              principalId: TEST_PRINCIPAL_ID,
               providerTransferId: secondProviderTransferId,
               canonicalTransferId: secondReceipt.transferId,
               canonicalTransactionId: secondReceipt.transactionId,
@@ -719,7 +721,7 @@ describe("TransferReconciliationServiceLive", () => {
             sourceId: TEST_SOURCE_ID,
             externalId: "scoped-replay-acquisition-leg",
             timestamp: new Date("2025-04-01T10:00:00.000Z"),
-            userId: TEST_USER_ID,
+            principalId: TEST_PRINCIPAL_ID,
             assetId: TEST_BTC_ASSET_ID,
             amount: "1.00000000",
             kind: "acquisition",
@@ -734,7 +736,7 @@ describe("TransferReconciliationServiceLive", () => {
         }
 
         yield* db.insert(schema.fifoLots).values({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           assetId: TEST_BTC_ASSET_ID,
           acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
@@ -751,7 +753,7 @@ describe("TransferReconciliationServiceLive", () => {
     const summary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.applyDeterministicInternalTransferCanonicalization({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           reconciliationId: firstReconciliationId,
         })
@@ -763,7 +765,7 @@ describe("TransferReconciliationServiceLive", () => {
     const secondSummary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.applyDeterministicInternalTransferCanonicalization({
-          userId: TEST_USER_ID,
+          principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
           reconciliationId: secondReconciliationId,
         })

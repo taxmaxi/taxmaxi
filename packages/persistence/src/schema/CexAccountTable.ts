@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm"
 import { index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
 import { cex } from "./CexTable.ts"
-import { users } from "./UsersTable.ts"
+import { principals } from "./PrincipalsTable.ts"
 
 /**
  * Connected exchange account credentials.
@@ -17,8 +17,8 @@ export const cexAccount = pgTable(
     cexId: uuid("cex_id")
       .references(() => cex.id, { onDelete: "cascade" })
       .notNull(),
-    userId: uuid("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
+    principalId: uuid("principal_id")
+      .references(() => principals.id, { onDelete: "cascade" })
       .notNull(),
 
     providerUserId: text("provider_user_id"), // Provider-level user identifier (e.g. Coinbase user id).
@@ -39,9 +39,9 @@ export const cexAccount = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    index("idx_cex_account_user_cex").on(table.userId, table.cexId),
-    uniqueIndex("cex_account_user_cex_provider_account_unique")
-      .on(table.userId, table.cexId, table.providerAccountId)
+    index("idx_cex_account_principal_cex").on(table.principalId, table.cexId),
+    uniqueIndex("cex_account_principal_cex_provider_account_unique")
+      .on(table.principalId, table.cexId, table.providerAccountId)
       .where(sql`${table.providerAccountId} is not null`),
   ]
 )

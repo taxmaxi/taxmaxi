@@ -22,6 +22,7 @@
     "lint": "turbo run lint",
     "format": "turbo run format",
     "type-check": "turbo run type-check",
+    "type-check:tests": "turbo run type-check:tests",
     "server:build": "turbo run build --filter=server...",
     "server:dev": "turbo run dev --filter=server...",
     "worker:build": "turbo run build --filter=worker...",

@@ -12,7 +12,7 @@ describe("SourceSyncQueuePayload", () => {
         decodePayload({
           jobId: "job-1",
           sourceId: "source-1",
-          userId: "user-1",
+          principalId: "principal-1",
           mode: "sync",
         })
       )
@@ -22,7 +22,7 @@ describe("SourceSyncQueuePayload", () => {
         decodePayload({
           jobId: "job-1",
           sourceId: "source-1",
-          userId: "user-1",
+          principalId: "principal-1",
         })
       )
     ).toBe(false)
@@ -31,7 +31,7 @@ describe("SourceSyncQueuePayload", () => {
         decodePayload({
           jobId: "job-1",
           sourceId: "source-1",
-          userId: "user-1",
+          principalId: "principal-1",
           mode: "full",
         })
       )

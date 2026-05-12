@@ -1,5 +1,5 @@
 /**
- * SourceSyncRunRepository - User-wide sync run persistence contract.
+ * SourceSyncRunRepository - Principal-wide sync run persistence contract.
  *
  * @module SourceSyncRunRepository
  */
@@ -11,12 +11,12 @@ import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
- * SyncRunStatus - Aggregate user-wide source sync run status.
+ * SyncRunStatus - Aggregate principal-wide source sync run status.
  */
 export type SyncRunStatus = "queued" | "running" | "completed" | "failed" | "partially_failed"
 
 /**
- * SyncRunItemStatus - Per-source item status within a user-wide source sync run.
+ * SyncRunItemStatus - Per-source item status within a principal-wide source sync run.
  */
 export type SyncRunItemStatus = "queued" | "running" | "completed" | "failed"
 
@@ -25,7 +25,7 @@ export type SyncRunItemStatus = "queued" | "running" | "completed" | "failed"
  */
 export interface SyncRunRecord {
   readonly id: string
-  readonly userId: string
+  readonly principalId: string
   readonly status: SyncRunStatus
   readonly requestedSourceCount: number
   readonly queuedSourceCount: number
@@ -71,7 +71,7 @@ export class SourceSyncRunRecordNotFoundError extends Schema.TaggedError<SourceS
  * CreateSourceSyncRunParams - Input for creating an aggregate run row.
  */
 export interface CreateSourceSyncRunParams {
-  readonly userId: string
+  readonly principalId: string
   readonly requestedSourceCount: number
 }
 
@@ -101,10 +101,10 @@ export interface GetSourceSyncRunRecordParams {
 }
 
 /**
- * GetVisibleSourceSyncRunParams - Input for loading a run owned by a user.
+ * GetVisibleSourceSyncRunParams - Input for loading a run owned by a principal.
  */
 export interface GetVisibleSourceSyncRunParams {
-  readonly userId: string
+  readonly principalId: string
   readonly runId: string
 }
 
@@ -120,15 +120,15 @@ export interface ListSourceSyncRunItemsParams {
  */
 export interface RefreshSourceSyncRunStatusParams {
   readonly runId: string
-  readonly userId?: string
+  readonly principalId?: string
 }
 
 /**
- * SourceSyncRunRepositoryShape - User-wide sync run repository operations.
+ * SourceSyncRunRepositoryShape - Principal-wide sync run repository operations.
  */
 export interface SourceSyncRunRepositoryShape {
   /**
-   * Create a run aggregate row for a user's current source set.
+   * Create a run aggregate row for a principal's current source set.
    */
   readonly createRun: (
     params: CreateSourceSyncRunParams
@@ -153,14 +153,14 @@ export interface SourceSyncRunRepositoryShape {
   ) => Effect.Effect<SyncRunItemRecord, SyncEngineStorageError>
 
   /**
-   * Load a run by id without checking user visibility.
+   * Load a run by id without checking principal visibility.
    */
   readonly getRun: (
     params: GetSourceSyncRunRecordParams
   ) => Effect.Effect<Option.Option<SyncRunRecord>, SyncEngineStorageError>
 
   /**
-   * Load a run only when it belongs to the provided user.
+   * Load a run only when it belongs to the provided principal.
    */
   readonly getVisibleRun: (
     params: GetVisibleSourceSyncRunParams
@@ -182,7 +182,7 @@ export interface SourceSyncRunRepositoryShape {
 }
 
 /**
- * SourceSyncRunRepository - Context tag for user-wide sync run persistence.
+ * SourceSyncRunRepository - Context tag for principal-wide sync run persistence.
  */
 export class SourceSyncRunRepository extends Context.Tag("SourceSyncRunRepository")<
   SourceSyncRunRepository,

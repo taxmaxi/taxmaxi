@@ -33,7 +33,7 @@ interface ConfigProviderOptions {
 const payload = SourceSyncQueuePayload.make({
   jobId: "job-1",
   sourceId: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   mode: "sync",
 })
 

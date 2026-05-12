@@ -77,6 +77,7 @@ const formatViolation = ({ filePath, line, column, message }: Violation): string
 const isAsyncFunctionLike = (
   node: ts.Node | undefined
 ): node is ts.ArrowFunction | ts.FunctionExpression =>
+  node !== undefined &&
   (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) &&
   node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true
 

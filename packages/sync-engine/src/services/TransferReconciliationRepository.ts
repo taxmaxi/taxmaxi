@@ -24,7 +24,7 @@ export type TransferReconciliationStatus =
  * canonical asset mapping needed for reconciliation.
  */
 export interface ProviderTransferReconciliationCandidate {
-  readonly userId: string
+  readonly principalId: string
   readonly providerTransferId: string
   readonly providerSourceId: string
   readonly providerTransactionId: string
@@ -40,7 +40,7 @@ export interface ProviderTransferReconciliationCandidate {
 }
 
 /**
- * OnchainTransferReconciliationCandidate - Canonical onchain transfer candidate owned by the user.
+ * OnchainTransferReconciliationCandidate - Canonical onchain transfer candidate owned by the principal.
  */
 export interface OnchainTransferReconciliationCandidate {
   readonly transferId: string
@@ -61,7 +61,7 @@ export interface OnchainTransferReconciliationCandidate {
  * TransferReconciliationRecordDraft - Upsert payload for one durable reconciliation row.
  */
 export interface TransferReconciliationRecordDraft {
-  readonly userId: string
+  readonly principalId: string
   readonly providerTransferId: string
   readonly canonicalTransferId: string | null
   readonly canonicalTransactionId: string | null
@@ -81,10 +81,10 @@ export interface DeterministicTransferCanonicalizationSummary {
 }
 
 /**
- * ListProviderTransfersForReconciliationParams - Scope reconciliation to one user and source.
+ * ListProviderTransfersForReconciliationParams - Scope reconciliation to one principal and source.
  */
 export interface ListProviderTransfersForReconciliationParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
 }
 
@@ -92,7 +92,7 @@ export interface ListProviderTransfersForReconciliationParams {
  * FindOnchainTransferReconciliationCandidatesParams - Candidate search inputs for one provider transfer.
  */
 export interface FindOnchainTransferReconciliationCandidatesParams {
-  readonly userId: string
+  readonly principalId: string
   readonly canonicalAssetId: string
   readonly direction: "inbound" | "outbound"
   readonly walletAddress: string
@@ -108,14 +108,14 @@ export interface FindOnchainTransferReconciliationCandidatesParams {
  */
 export interface TransferReconciliationRepositoryShape {
   /**
-   * List provider transfers for one user-owned source, including any approved canonical asset mapping.
+   * List provider transfers for one principal-owned source, including any approved canonical asset mapping.
    */
   readonly listProviderTransfersForReconciliation: (
     params: ListProviderTransfersForReconciliationParams
   ) => Effect.Effect<ReadonlyArray<ProviderTransferReconciliationCandidate>, SyncEngineStorageError>
 
   /**
-   * Find user-owned canonical onchain transfers that are plausible matches for a provider movement.
+   * Find principal-owned canonical onchain transfers that are plausible matches for a provider movement.
    */
   readonly findOnchainTransferCandidates: (
     params: FindOnchainTransferReconciliationCandidatesParams
@@ -133,7 +133,7 @@ export interface TransferReconciliationRepositoryShape {
    * legs and review rows for deterministic reconciliations belonging to one source.
    */
   readonly applyDeterministicInternalTransferCanonicalization: (params: {
-    readonly userId: string
+    readonly principalId: string
     readonly sourceId: string
     readonly reconciliationId?: string
   }) => Effect.Effect<DeterministicTransferCanonicalizationSummary, SyncEngineStorageError>

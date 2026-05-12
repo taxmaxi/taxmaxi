@@ -5,6 +5,7 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
+import { PrincipalRepository } from "@my/persistence/services"
 import { SourceSyncRunService, type SourceSyncRunDetails } from "@my/sync-engine/services"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -53,16 +54,31 @@ const toSyncRunResponse = (run: SourceSyncRunDetails): SyncRunResponse =>
 export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (handlers) =>
   Effect.gen(function* () {
     const sourceSyncRunService = yield* SourceSyncRunService
+    const principalRepository = yield* PrincipalRepository
+
+    const resolvePrincipal = Effect.gen(function* () {
+      const currentUser = yield* CurrentUser
+      const maybePrincipal = yield* principalRepository.findUserPrincipal(currentUser.userId).pipe(
+        Effect.mapError(() => toInternalServerError("Failed to resolve principal."))
+      )
+
+      if (Option.isNone(maybePrincipal)) {
+        return yield* Effect.fail(toInternalServerError("Missing user principal."))
+      }
+
+      return { currentUser, principal: maybePrincipal.value }
+    })
 
     return handlers
       .handle("startSyncRun", () =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
-          const run = yield* sourceSyncRunService.startSyncRun({ userId: currentUser.userId }).pipe(
+          const { currentUser, principal } = yield* resolvePrincipal
+          const run = yield* sourceSyncRunService.startSyncRun({ principalId: principal.id }).pipe(
             Effect.tapError((error) =>
               Effect.logError(
                 {
                   userId: currentUser.userId,
+                  principalId: principal.id,
                   errorTag: error._tag,
                 },
                 "sync-runs-api:start-failed"
@@ -82,10 +98,10 @@ export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (han
       )
       .handle("getSyncRun", ({ path }) =>
         Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
+          const { currentUser, principal } = yield* resolvePrincipal
           const run = yield* sourceSyncRunService
             .getSyncRun({
-              userId: currentUser.userId,
+              principalId: principal.id,
               runId: path.runId,
             })
             .pipe(
@@ -95,6 +111,7 @@ export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (han
                   : Effect.logError(
                       {
                         userId: currentUser.userId,
+                        principalId: principal.id,
                         runId: path.runId,
                         errorTag: error._tag,
                       },

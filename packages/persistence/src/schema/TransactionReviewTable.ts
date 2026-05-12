@@ -1,6 +1,6 @@
 import { boolean, numeric, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
+import { principals } from "./PrincipalsTable.ts"
 import { transactions } from "./TransactionsTable.ts"
-import { users } from "./UsersTable.ts"
 
 export const reviewStatusEnum = pgEnum("review_status", [
   "auto_applied",
@@ -20,9 +20,9 @@ export const transactionReviews = pgTable("transaction_reviews", {
     .references(() => transactions.id, { onDelete: "cascade" })
     .unique(),
 
-  userId: uuid("user_id")
+  principalId: uuid("principal_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => principals.id, { onDelete: "cascade" }),
 
   // Review status
   reviewStatus: reviewStatusEnum("review_status").notNull().default("needs_review"),

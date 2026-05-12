@@ -1,5 +1,5 @@
 /**
- * SourceSyncRunServiceLive - API-facing user-wide sync run orchestration.
+ * SourceSyncRunServiceLive - API-facing principal-wide sync run orchestration.
  *
  * @module SourceSyncRunServiceLive
  */
@@ -51,13 +51,13 @@ const make = Effect.gen(function* () {
 
   const recordRunItemDispatchFailure = ({
     runId,
-    userId,
+    principalId,
     sourceId,
     errorTag,
     message,
   }: {
     readonly runId: string
-    readonly userId: string
+    readonly principalId: string
     readonly sourceId: string
     readonly errorTag: string
     readonly message: string
@@ -73,7 +73,7 @@ const make = Effect.gen(function* () {
           Effect.logError(
             {
               runId,
-              userId,
+              principalId,
               sourceId,
               errorTag,
             },
@@ -85,13 +85,13 @@ const make = Effect.gen(function* () {
 
   const refreshRunDetails = ({
     runId,
-    userId,
+    principalId,
   }: {
     readonly runId: string
-    readonly userId?: string
+    readonly principalId?: string
   }): ReturnType<SourceSyncRunServiceShape["getSyncRun"]> =>
     Effect.gen(function* () {
-      const refreshParams = userId === undefined ? { runId } : { runId, userId }
+      const refreshParams = principalId === undefined ? { runId } : { runId, principalId }
       const run = yield* sourceSyncRunRepository
         .refreshRunStatus(refreshParams)
         .pipe(
@@ -104,11 +104,11 @@ const make = Effect.gen(function* () {
       return makeRunDetails({ run, items })
     })
 
-  const startSyncRun: SourceSyncRunServiceShape["startSyncRun"] = ({ userId }) =>
+  const startSyncRun: SourceSyncRunServiceShape["startSyncRun"] = ({ principalId }) =>
     Effect.gen(function* () {
-      const sources = yield* sourceRepository.listUserSourceSyncContexts({ userId })
+      const sources = yield* sourceRepository.listPrincipalSourceSyncContexts({ principalId })
       const run = yield* sourceSyncRunRepository.createRun({
-        userId,
+        principalId,
         requestedSourceCount: sources.length,
       })
 
@@ -122,7 +122,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* sourceSyncService
               .startSourceSyncJob({
-                userId,
+                principalId,
                 sourceId: source.id,
               })
               .pipe(
@@ -137,7 +137,7 @@ const make = Effect.gen(function* () {
                   SourceNotFoundError: (error) =>
                     recordRunItemDispatchFailure({
                       runId: run.id,
-                      userId,
+                      principalId,
                       sourceId: source.id,
                       errorTag: error._tag,
                       message: sourceStartFailureMessage(error),
@@ -145,7 +145,7 @@ const make = Effect.gen(function* () {
                   SourceSyncJobNotFoundError: (error) =>
                     recordRunItemDispatchFailure({
                       runId: run.id,
-                      userId,
+                      principalId,
                       sourceId: source.id,
                       errorTag: error._tag,
                       message: sourceStartFailureMessage(error),
@@ -153,7 +153,7 @@ const make = Effect.gen(function* () {
                   SourceSyncQueueError: (error) =>
                     recordRunItemDispatchFailure({
                       runId: run.id,
-                      userId,
+                      principalId,
                       sourceId: source.id,
                       errorTag: error._tag,
                       message: sourceStartFailureMessage(error),
@@ -161,7 +161,7 @@ const make = Effect.gen(function* () {
                   UnsupportedProviderError: (error) =>
                     recordRunItemDispatchFailure({
                       runId: run.id,
-                      userId,
+                      principalId,
                       sourceId: source.id,
                       errorTag: error._tag,
                       message: sourceStartFailureMessage(error),
@@ -175,18 +175,18 @@ const make = Effect.gen(function* () {
       yield* Effect.logInfo(
         {
           runId: run.id,
-          userId,
+          principalId,
           sourceCount: sources.length,
         },
         "source-sync-run:started"
       )
 
-      return yield* refreshRunDetails({ runId: run.id, userId })
-    }).pipe(sourceSyncSpan({ name: "source-sync-run.start", attributes: { userId } }))
+      return yield* refreshRunDetails({ runId: run.id, principalId })
+    }).pipe(sourceSyncSpan({ name: "source-sync-run.start", attributes: { principalId } }))
 
-  const getSyncRun: SourceSyncRunServiceShape["getSyncRun"] = ({ userId, runId }) =>
-    refreshRunDetails({ runId, userId }).pipe(
-      sourceSyncSpan({ name: "source-sync-run.get", attributes: { userId, runId } })
+  const getSyncRun: SourceSyncRunServiceShape["getSyncRun"] = ({ principalId, runId }) =>
+    refreshRunDetails({ runId, principalId }).pipe(
+      sourceSyncSpan({ name: "source-sync-run.get", attributes: { principalId, runId } })
     )
 
   return SourceSyncRunService.of({
@@ -196,6 +196,6 @@ const make = Effect.gen(function* () {
 })
 
 /**
- * SourceSyncRunServiceLive - Live user-wide source sync run orchestration layer.
+ * SourceSyncRunServiceLive - Live principal-wide source sync run orchestration layer.
  */
 export const SourceSyncRunServiceLive = Layer.effect(SourceSyncRunService, make)

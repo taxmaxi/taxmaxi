@@ -64,7 +64,7 @@ export interface SourceTransactionDraft {
   readonly providerCreatedAt: Date | null
   readonly providerUpdatedAt: Date | null
   readonly metadata: unknown
-  readonly userId: string | null
+  readonly principalId: string
 }
 
 /**
@@ -89,6 +89,7 @@ export interface SourceVenueContextDraft {
  */
 export interface SourceTransferDraft {
   readonly sourceId: string
+  readonly principalId: string
   readonly sourceRawRecordId: string | null
   readonly externalId: string | null
   readonly externalGroupId: string | null
@@ -143,7 +144,7 @@ export interface SourceTransactionLegDraft {
   readonly externalId: string | null
   readonly txHash: string | null
   readonly timestamp: Date
-  readonly userId: string | null
+  readonly principalId: string
   readonly addressId: string | null
   readonly assetId: string
   readonly amount: string
@@ -162,7 +163,7 @@ export interface SourceTransactionLegDraft {
  * SourceTransactionReviewDraft - Review row upsert payload for ambiguous records.
  */
 export interface SourceTransactionReviewDraft {
-  readonly userId: string
+  readonly principalId: string
   readonly reviewStatus: ReviewStatus
   readonly originalTypeKey: string | null
   readonly originalConfidence: string | null
@@ -186,7 +187,7 @@ export interface PersistedSourceTransaction {
   readonly timestamp: Date
   readonly providerTransactionType: string | null
   readonly metadata: unknown
-  readonly userId: string | null
+  readonly principalId: string
 }
 
 /**
@@ -246,7 +247,7 @@ export interface PersistedSourceLeg {
   readonly id: string
   readonly sourceId: string
   readonly timestamp: Date
-  readonly userId: string | null
+  readonly principalId: string
   readonly assetId: string
   readonly amount: string
   readonly kind: SourceLegKind

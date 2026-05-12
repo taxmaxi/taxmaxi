@@ -35,6 +35,7 @@ import { SessionRepositoryLive } from "./SessionRepositoryLive.ts"
 import { SourceRepositoryLive } from "./SourceRepositoryLive.ts"
 import { CexAccountRepositoryLive } from "./CexAccountRepositoryLive.ts"
 import { OAuthStateStoreLive } from "./OAuthStateStoreLive.ts"
+import { PrincipalRepositoryLive } from "./PrincipalRepositoryLive.ts"
 import { TaxCalculationServiceLive } from "./TaxCalculationServiceLive.ts"
 import { AuthServiceLive } from "./AuthServiceLive.ts"
 import { CoinbaseAuthProviderLive } from "./CoinbaseAuthProviderLive.ts"
@@ -96,6 +97,7 @@ export const RepositoriesLive = Layer.mergeAll(
   IdentityRepositoryLive,
   SessionRepositoryLive,
   OAuthStateStoreLive,
+  PrincipalRepositoryLive,
   LegalReferenceRepositoryLive,
   SourceRepositoryLive,
   CexAccountRepositoryLive,
@@ -403,7 +405,8 @@ const AuthServiceWithDeps = AuthServiceLive.pipe(
   Layer.provide(EmailVerificationRequestRepositoryLive),
   Layer.provide(IdentityRepositoryLive),
   Layer.provide(SessionRepositoryLive),
-  Layer.provide(OAuthStateStoreLive)
+  Layer.provide(OAuthStateStoreLive),
+  Layer.provide(PrincipalRepositoryLive)
 )
 
 // =============================================================================

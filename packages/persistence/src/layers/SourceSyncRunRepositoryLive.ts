@@ -119,7 +119,7 @@ const countItems = (items: ReadonlyArray<{ readonly status: SyncRunItemStatus }>
 
 const rowToRun = (row: {
   readonly id: string
-  readonly userId: string
+  readonly principalId: string
   readonly status: SyncRunStatus
   readonly requestedSourceCount: number
   readonly queuedSourceCount: number
@@ -133,7 +133,7 @@ const rowToRun = (row: {
   readonly updatedAt: Date
 }): SyncRunRecord => ({
   id: row.id,
-  userId: row.userId,
+  principalId: row.principalId,
   status: row.status,
   requestedSourceCount: row.requestedSourceCount,
   queuedSourceCount: row.queuedSourceCount,
@@ -184,7 +184,7 @@ const make = Effect.gen(function* () {
 
   const selectRunFields = {
     id: schema.syncRuns.id,
-    userId: schema.syncRuns.userId,
+    principalId: schema.syncRuns.principalId,
     status: schema.syncRuns.status,
     requestedSourceCount: schema.syncRuns.requestedSourceCount,
     queuedSourceCount: schema.syncRuns.queuedSourceCount,
@@ -266,14 +266,17 @@ const make = Effect.gen(function* () {
       return yield* rowToRunItem(item)
     })
 
-  const createRun: SourceSyncRunRepositoryShape["createRun"] = ({ userId, requestedSourceCount }) =>
+  const createRun: SourceSyncRunRepositoryShape["createRun"] = ({
+    principalId,
+    requestedSourceCount,
+  }) =>
     Effect.gen(function* () {
       const now = nowDate()
       const status = requestedSourceCount === 0 ? "completed" : "queued"
       const [run] = yield* db
         .insert(schema.syncRuns)
         .values({
-          userId,
+          principalId,
           status,
           requestedSourceCount,
           startedAt: now,
@@ -378,12 +381,12 @@ const make = Effect.gen(function* () {
   const getRun: SourceSyncRunRepositoryShape["getRun"] = ({ runId }) =>
     loadRunById({ runId, operation: "sourceSyncRunRepository.getRun.select" })
 
-  const getVisibleRun: SourceSyncRunRepositoryShape["getVisibleRun"] = ({ userId, runId }) =>
+  const getVisibleRun: SourceSyncRunRepositoryShape["getVisibleRun"] = ({ principalId, runId }) =>
     Effect.gen(function* () {
       const [run] = yield* db
         .select(selectRunFields)
         .from(schema.syncRuns)
-        .where(and(eq(schema.syncRuns.id, runId), eq(schema.syncRuns.userId, userId)))
+        .where(and(eq(schema.syncRuns.id, runId), eq(schema.syncRuns.principalId, principalId)))
         .limit(1)
         .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.getVisibleRun.select"))
 
@@ -406,14 +409,17 @@ const make = Effect.gen(function* () {
       return yield* Effect.forEach(items, rowToRunItem)
     })
 
-  const refreshRunStatus: SourceSyncRunRepositoryShape["refreshRunStatus"] = ({ runId, userId }) =>
+  const refreshRunStatus: SourceSyncRunRepositoryShape["refreshRunStatus"] = ({
+    runId,
+    principalId,
+  }) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
           const runWhere =
-            userId === undefined
+            principalId === undefined
               ? eq(schema.syncRuns.id, runId)
-              : and(eq(schema.syncRuns.id, runId), eq(schema.syncRuns.userId, userId))
+              : and(eq(schema.syncRuns.id, runId), eq(schema.syncRuns.principalId, principalId))
 
           const [lockedRun] = yield* tx
             .select(selectRunFields)
@@ -513,6 +519,6 @@ const make = Effect.gen(function* () {
 })
 
 /**
- * SourceSyncRunRepositoryLive - Live user-wide sync run repository layer.
+ * SourceSyncRunRepositoryLive - Live source owner-wide sync run repository layer.
  */
 export const SourceSyncRunRepositoryLive = Layer.effect(SourceSyncRunRepository, make)

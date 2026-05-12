@@ -169,9 +169,11 @@ const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
 
 const seedCoinbaseSource = ({
   userId,
+  principalId,
   sourceId,
 }: {
   readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
 }) =>
   Effect.gen(function* () {
@@ -181,6 +183,11 @@ const seedCoinbaseSource = ({
       id: userId,
       email: `${sourceId}@taxmaxi.test`,
       name: "Sources API Queue Test User",
+    })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
     })
 
     const coinbaseCex = yield* db
@@ -196,7 +203,7 @@ const seedCoinbaseSource = ({
       .insert(schema.cexAccount)
       .values({
         cexId: coinbaseCex.id,
-        userId,
+        principalId,
         providerUserId: `${sourceId}-provider-user`,
         providerAccountId: `${sourceId}-provider-account`,
         accessToken: "test-access-token",
@@ -216,7 +223,7 @@ const seedCoinbaseSource = ({
       providerKey: "coinbase",
       sourceableType: "cex",
       cexAccountId: createdAccount.id,
-      userId,
+      principalId,
     })
   })
 
@@ -233,8 +240,9 @@ describe("SourcesApiLive", () => {
   it.effect("starts a source sync by creating a queued job without provider execution", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
-      yield* seedCoinbaseSource({ userId, sourceId })
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const job = yield* client.sources.startSourceSyncJob({
@@ -250,7 +258,7 @@ describe("SourcesApiLive", () => {
       expect(queueEvents[0]).toMatchObject({
         jobId: job.jobId,
         sourceId,
-        userId,
+        principalId,
         mode: "sync",
       })
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
@@ -259,8 +267,9 @@ describe("SourcesApiLive", () => {
   it.effect("reads queued status from Postgres after start", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
-      yield* seedCoinbaseSource({ userId, sourceId })
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const started = yield* client.sources.startSourceSyncJob({
@@ -285,8 +294,9 @@ describe("SourcesApiLive", () => {
   it.effect("returns the same queued job for duplicate start requests", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
-      yield* seedCoinbaseSource({ userId, sourceId })
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const firstJob = yield* client.sources.startSourceSyncJob({
@@ -305,8 +315,9 @@ describe("SourcesApiLive", () => {
   it.effect("replay enqueues a replay-mode job", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
-      yield* seedCoinbaseSource({ userId, sourceId })
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const replay = yield* client.sources.replaySourceSyncJob({
@@ -325,8 +336,9 @@ describe("SourcesApiLive", () => {
   it.effect("returns an internal server error when queue enqueue fails", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
-      yield* seedCoinbaseSource({ userId, sourceId })
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const result = yield* client.sources

@@ -27,7 +27,7 @@ import {
 
 const source: SourceSyncSource = {
   id: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   providerKey: "coinbase",
   cexAccountId: "cex-account-1",
   addressId: null,
@@ -85,7 +85,7 @@ const makeExecutorLayer = ({
 }) => {
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(source)),
-    listUserSourceSyncContexts: () => Effect.succeed([source]),
+    listPrincipalSourceSyncContexts: () => Effect.succeed([source]),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -116,7 +116,7 @@ const makeExecutorLayer = ({
           return Effect.succeed({
             id: "job-1",
             sourceId: source.id,
-            userId: source.userId,
+            principalId: source.principalId,
             mode,
             status: "processing",
           })
@@ -128,7 +128,7 @@ const makeExecutorLayer = ({
         return {
           id: "job-1",
           sourceId: source.id,
-          userId: source.userId,
+          principalId: source.principalId,
           mode,
           status: "processing" as const,
         }

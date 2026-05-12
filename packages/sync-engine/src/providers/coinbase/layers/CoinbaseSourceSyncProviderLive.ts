@@ -561,20 +561,19 @@ const make = Effect.gen(function* () {
   const determineCoinbaseReview = ({
     providerTransactionType,
     resolvedTransactionType,
-    userId,
+    principalId,
   }: {
     readonly providerTransactionType: string | null
     readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
-    readonly userId: string | null
+    readonly principalId: string
   }) => {
     if (
-      userId !== null &&
       providerTransactionType === "send" &&
       resolvedTransactionType.transactionType === "internal_transfer" &&
       resolvedTransactionType.taxTreatment === "requires_additional_rule_logic"
     ) {
       return {
-        userId,
+        principalId,
         reviewStatus: "needs_review",
         originalTypeKey: resolvedTransactionType.transactionType,
         originalConfidence: null,
@@ -632,25 +631,21 @@ const make = Effect.gen(function* () {
   const buildProviderAssetMappingReview = ({
     existingReview,
     resolvedTransactionType,
-    userId,
+    principalId,
     affectedCurrencies,
   }: {
     readonly existingReview: SourceTransactionReviewDraft | null
     readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
-    readonly userId: string | null
+    readonly principalId: string
     readonly affectedCurrencies: ReadonlyArray<string>
   }): SourceTransactionReviewDraft | null => {
-    if (userId === null) {
-      return existingReview
-    }
-
     const reason =
       affectedCurrencies.length === 1
         ? `provider_asset_mapping: Coinbase provider asset mapping review is required before canonical normalization can continue for ${affectedCurrencies[0]}.`
         : `provider_asset_mapping: Coinbase provider asset mapping review is required before canonical normalization can continue for ${affectedCurrencies.join(", ")}.`
 
     return {
-      userId,
+      principalId,
       reviewStatus: "needs_review",
       originalTypeKey: existingReview?.originalTypeKey ?? resolvedTransactionType.transactionType,
       originalConfidence: existingReview?.originalConfidence ?? null,
@@ -773,7 +768,7 @@ const make = Effect.gen(function* () {
       const baseTransactionReview = determineCoinbaseReview({
         providerTransactionType: normalized.transaction.providerTransactionType,
         resolvedTransactionType,
-        userId: source.userId,
+        principalId: source.principalId,
       })
       const reviewableAssetCurrencies = primaryAssetResolution.requiresReview
         ? [normalized.primaryAssetCurrency.toUpperCase(), ...normalized.unresolvedAssetCurrencies]
@@ -785,7 +780,7 @@ const make = Effect.gen(function* () {
           : buildProviderAssetMappingReview({
               existingReview: baseTransactionReview,
               resolvedTransactionType,
-              userId: source.userId,
+              principalId: source.principalId,
               affectedCurrencies: unresolvedAssetCurrencies,
             })
 

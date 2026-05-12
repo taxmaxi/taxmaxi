@@ -12,7 +12,7 @@ import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
 import type { SourceId, Source } from "@my/core/source"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
-import type { AuthUserId } from "@my/core/authentication"
+import type { PrincipalId } from "@my/core/ownership"
 
 /**
  * CreateSourceInput - Data required to create a new source
@@ -22,7 +22,7 @@ import type { AuthUserId } from "@my/core/authentication"
  */
 export interface CreateSourceInput {
   readonly id: SourceId
-  readonly userId: Source["userId"]
+  readonly principalId: Source["principalId"]
   readonly name: Source["name"]
   readonly providerKey?: Source["providerKey"]
   readonly providerMetadata?: unknown
@@ -30,18 +30,18 @@ export interface CreateSourceInput {
 }
 
 /**
- * FindByUserAndProviderKeyParams - Input for provider-key lookup.
+ * FindByPrincipalAndProviderKeyParams - Input for provider-key lookup.
  */
-export interface FindByUserAndProviderKeyParams {
-  readonly userId: Source["userId"]
+export interface FindByPrincipalAndProviderKeyParams {
+  readonly principalId: PrincipalId
   readonly providerKey: string
 }
 
 /**
- * FindByUserAndSourceRefParams - Input for source-ref lookup.
+ * FindByPrincipalAndSourceRefParams - Input for source-ref lookup.
  */
-export interface FindByUserAndSourceRefParams {
-  readonly userId: Source["userId"]
+export interface FindByPrincipalAndSourceRefParams {
+  readonly principalId: PrincipalId
   readonly sourceRef: Source["sourceRef"]
 }
 
@@ -60,31 +60,22 @@ export interface SourceRepositoryService {
   readonly findById: (id: SourceId) => Effect.Effect<Option.Option<Source>, PersistenceError>
 
   /**
-   * Find sources by user ID
-   *
-   * @param id - The user ID to search for
-   * @returns Effect containing Option of source (None if not found)
+   * Find sources by ownership principal ID.
    */
-  readonly findByUserId: (id: AuthUserId) => Effect.Effect<Source[], PersistenceError>
+  readonly findByPrincipalId: (id: PrincipalId) => Effect.Effect<Source[], PersistenceError>
 
   /**
-   * Find a source by user owner and concrete provider key
-   *
-   * @param params - User and provider key lookup input
-   * @returns Effect containing Option of source (None if not found)
+   * Find a source by owner principal and concrete provider key.
    */
-  readonly findByUserAndProviderKey: (
-    params: FindByUserAndProviderKeyParams
+  readonly findByPrincipalAndProviderKey: (
+    params: FindByPrincipalAndProviderKeyParams
   ) => Effect.Effect<Option.Option<Source>, PersistenceError>
 
   /**
-   * Find a source by user owner and source linkage reference
-   *
-   * @param params - User and source reference lookup input
-   * @returns Effect containing Option of source (None if not found)
+   * Find a source by owner principal and source linkage reference.
    */
-  readonly findByUserAndSourceRef: (
-    params: FindByUserAndSourceRefParams
+  readonly findByPrincipalAndSourceRef: (
+    params: FindByPrincipalAndSourceRefParams
   ) => Effect.Effect<Option.Option<Source>, PersistenceError>
 
   /**

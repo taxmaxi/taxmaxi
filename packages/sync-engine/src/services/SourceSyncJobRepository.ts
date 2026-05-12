@@ -20,7 +20,7 @@ import type {
 } from "./SourceSyncModels.ts"
 
 /**
- * SourceSyncJobRecordNotVisibleError - The requested job is not visible to the user/source pair.
+ * SourceSyncJobRecordNotVisibleError - The requested job is not visible to the principal/source pair.
  */
 export class SourceSyncJobRecordNotVisibleError extends Schema.TaggedError<SourceSyncJobRecordNotVisibleError>()(
   "SourceSyncJobRecordNotVisibleError",
@@ -67,7 +67,7 @@ export class SourceSyncJobExecutionRecordPayloadError extends Schema.TaggedError
  */
 export interface CreateOrReuseSourceSyncJobParams {
   readonly sourceId: string
-  readonly userId: string
+  readonly principalId: string
   readonly mode: SourceSyncJobMode
   readonly maxAttempts: number
 }
@@ -141,7 +141,7 @@ export interface RecoverStaleSourceSyncJobParams {
  * GetSourceSyncJobRecordParams - Input for loading one visible processing job.
  */
 export interface GetSourceSyncJobRecordParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
   readonly jobId: string
 }
@@ -172,7 +172,7 @@ export interface SourceSyncJobRepositoryShape {
    */
   readonly findActiveJob: (params: {
     readonly sourceId: string
-    readonly userId: string
+    readonly principalId: string
   }) => Effect.Effect<ReadonlyArray<SourceSyncActiveJob>, SyncEngineStorageError>
 
   /**

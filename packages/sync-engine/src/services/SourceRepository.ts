@@ -11,18 +11,18 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 import type { SourceSyncSource } from "./SourceSyncModels.ts"
 
 /**
- * FindOwnedSourceSyncContextParams - Input for loading a source visible to a user.
+ * FindOwnedSourceSyncContextParams - Input for loading a source visible to a principal.
  */
 export interface FindOwnedSourceSyncContextParams {
-  readonly userId: string
+  readonly principalId: string
   readonly sourceId: string
 }
 
 /**
- * ListUserSourceSyncContextsParams - Input for listing syncable user sources.
+ * ListPrincipalSourceSyncContextsParams - Input for listing syncable principal sources.
  */
-export interface ListUserSourceSyncContextsParams {
-  readonly userId: string
+export interface ListPrincipalSourceSyncContextsParams {
+  readonly principalId: string
 }
 
 /**
@@ -30,17 +30,17 @@ export interface ListUserSourceSyncContextsParams {
  */
 export interface SourceRepositoryShape {
   /**
-   * Find a source visible to the given user and return the sync context projection.
+   * Find a source visible to the given principal and return the sync context projection.
    */
   readonly findOwnedSourceSyncContext: (
     params: FindOwnedSourceSyncContextParams
   ) => Effect.Effect<Option.Option<SourceSyncSource>, SyncEngineStorageError>
 
   /**
-   * List source sync contexts for all currently configured sources owned by a user.
+   * List source sync contexts for all currently configured sources owned by a principal.
    */
-  readonly listUserSourceSyncContexts: (
-    params: ListUserSourceSyncContextsParams
+  readonly listPrincipalSourceSyncContexts: (
+    params: ListPrincipalSourceSyncContextsParams
   ) => Effect.Effect<ReadonlyArray<SourceSyncSource>, SyncEngineStorageError>
 }
 

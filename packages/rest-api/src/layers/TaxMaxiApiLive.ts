@@ -13,6 +13,7 @@ import type {
   CexAccountRepository,
   IdentityRepository,
   OAuthStateStore,
+  PrincipalRepository,
   SessionRepository,
   SourceRepository as PersistenceSourceRepository,
   TaxCalculationService,
@@ -73,7 +74,7 @@ const CoreApiGroup = Layer.mergeAll(
   AuthSessionApiLive,
   LegalReferenceApiLive,
   SourcesApiLive,
-  SyncRunsApiLive,
+  SyncRunsApiLive
 )
 
 type TaxMaxiApiLiveContext =
@@ -83,6 +84,7 @@ type TaxMaxiApiLiveContext =
   | LegalReferenceRepository
   | OAuthStateStore
   | PasswordHasher
+  | PrincipalRepository
   | PersistenceSourceRepository
   | SessionRepository
   | SourceSyncRunService
@@ -133,5 +135,5 @@ export const TaxMaxiApiLive: Layer.Layer<
   // AuthMiddlewareLive requires TokenValidator to be provided externally
   // - For production: use SessionTokenValidatorLive (validates against database)
   // - For testing: use SimpleTokenValidatorLive (user_<id>_<role> format)
-  Layer.provide(AuthMiddlewareLive),
+  Layer.provide(AuthMiddlewareLive)
 )

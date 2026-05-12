@@ -17,44 +17,43 @@ const make = Effect.gen(function* () {
   const db = yield* drizzle
 
   const findOwnedSourceSyncContext: SourceRepositoryShape["findOwnedSourceSyncContext"] = ({
-    userId,
+    principalId,
     sourceId,
   }) =>
     Effect.gen(function* () {
       const [source] = yield* db
         .select({
           id: schema.sources.id,
-          userId: schema.sources.userId,
+          principalId: schema.sources.principalId,
           providerKey: schema.sources.providerKey,
           cexAccountId: schema.sources.cexAccountId,
           addressId: schema.sources.addressId,
         })
         .from(schema.sources)
-        .where(and(eq(schema.sources.id, sourceId), eq(schema.sources.userId, userId)))
+        .where(and(eq(schema.sources.id, sourceId), eq(schema.sources.principalId, principalId)))
         .limit(1)
         .pipe(wrapSyncEngineSqlError("syncEngineSourceRepository.findOwnedSourceSyncContext"))
 
       return Option.fromNullable(source)
     })
 
-  const listUserSourceSyncContexts: SourceRepositoryShape["listUserSourceSyncContexts"] = ({
-    userId,
-  }) =>
-    db
-      .select({
-        id: schema.sources.id,
-        userId: schema.sources.userId,
-        providerKey: schema.sources.providerKey,
-        cexAccountId: schema.sources.cexAccountId,
-        addressId: schema.sources.addressId,
-      })
-      .from(schema.sources)
-      .where(eq(schema.sources.userId, userId))
-      .pipe(wrapSyncEngineSqlError("syncEngineSourceRepository.listUserSourceSyncContexts"))
+  const listPrincipalSourceSyncContexts: SourceRepositoryShape["listPrincipalSourceSyncContexts"] =
+    ({ principalId }) =>
+      db
+        .select({
+          id: schema.sources.id,
+          principalId: schema.sources.principalId,
+          providerKey: schema.sources.providerKey,
+          cexAccountId: schema.sources.cexAccountId,
+          addressId: schema.sources.addressId,
+        })
+        .from(schema.sources)
+        .where(eq(schema.sources.principalId, principalId))
+        .pipe(wrapSyncEngineSqlError("syncEngineSourceRepository.listPrincipalSourceSyncContexts"))
 
   return SourceRepository.of({
     findOwnedSourceSyncContext,
-    listUserSourceSyncContexts,
+    listPrincipalSourceSyncContexts,
   } satisfies SourceRepositoryShape)
 })
 

@@ -42,7 +42,7 @@ interface PersistedSourceLegRecord {
   readonly id: string
   readonly sourceId: string
   readonly timestamp: Date
-  readonly userId: string | null
+  readonly principalId: string
   readonly assetId: string
   readonly amount: string
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
@@ -105,7 +105,7 @@ const buildInsufficientInventoryReview = ({
   error,
 }: {
   readonly transaction: {
-    readonly userId: string | null
+    readonly principalId: string
   }
   readonly existingReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: {
@@ -113,11 +113,7 @@ const buildInsufficientInventoryReview = ({
   }
   readonly error: SyncEngineStorageError
 }): SourceTransactionReviewDraft | null => {
-  const userId = transaction.userId ?? existingReview?.userId ?? null
-
-  if (userId === null) {
-    return existingReview
-  }
+  const principalId = transaction.principalId
 
   const inventoryReason =
     "Tax review required because the transaction disposes more inventory than the synced FIFO lots currently cover. " +
@@ -130,7 +126,7 @@ const buildInsufficientInventoryReview = ({
       : `${existingReview.categorizationReason} ${inventoryReason}`
 
   return {
-    userId,
+    principalId,
     reviewStatus: "needs_review",
     originalTypeKey: existingReview?.originalTypeKey ?? resolvedTransactionType.transactionType,
     originalConfidence: existingReview?.originalConfidence ?? null,
@@ -289,7 +285,7 @@ const make = Effect.gen(function* () {
     timestamp: schema.transactions.timestamp,
     providerTransactionType: schema.transactions.providerTransactionType,
     metadata: schema.transactions.metadata,
-    userId: schema.transactions.userId,
+    principalId: schema.transactions.principalId,
   } as const
 
   const selectPersistedVenueContextFields = {
@@ -302,6 +298,7 @@ const make = Effect.gen(function* () {
   const selectPersistedTransferFields = {
     id: schema.transfers.id,
     sourceId: schema.transfers.sourceId,
+    principalId: schema.transfers.principalId,
     sourceRawRecordId: schema.transfers.sourceRawRecordId,
     externalId: schema.transfers.externalId,
     txHash: schema.transfers.txHash,
@@ -336,7 +333,7 @@ const make = Effect.gen(function* () {
     id: schema.transactionLegs.id,
     sourceId: schema.transactionLegs.sourceId,
     timestamp: schema.transactionLegs.timestamp,
-    userId: schema.transactionLegs.userId,
+    principalId: schema.transactionLegs.principalId,
     assetId: schema.transactionLegs.assetId,
     amount: schema.transactionLegs.amount,
     kind: schema.transactionLegs.kind,
@@ -375,7 +372,7 @@ const make = Effect.gen(function* () {
             providerCreatedAt: sql.raw("excluded.provider_created_at"),
             providerUpdatedAt: sql.raw("excluded.provider_updated_at"),
             metadata: sql.raw("excluded.metadata"),
-            userId: sql.raw("excluded.user_id"),
+            principalId: sql.raw("excluded.principal_id"),
             updatedAt: now,
           },
         })
@@ -488,6 +485,7 @@ const make = Effect.gen(function* () {
               tokenId: sql.raw("excluded.token_id"),
               notes: sql.raw("excluded.notes"),
               metadata: sql.raw("excluded.metadata"),
+              principalId: sql.raw("excluded.principal_id"),
               updatedAt: now,
             },
           })
@@ -604,7 +602,7 @@ const make = Effect.gen(function* () {
               sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
               txHash: sql.raw("excluded.tx_hash"),
               timestamp: sql.raw("excluded.timestamp"),
-              userId: sql.raw("excluded.user_id"),
+              principalId: sql.raw("excluded.principal_id"),
               addressId: sql.raw("excluded.address_id"),
               assetId: sql.raw("excluded.asset_id"),
               amount: sql.raw("excluded.amount"),
@@ -675,7 +673,7 @@ const make = Effect.gen(function* () {
             .insert(schema.transactionReviews)
             .values({
               transactionId,
-              userId: transactionReview.userId,
+              principalId: transactionReview.principalId,
               reviewStatus: transactionReview.reviewStatus,
               originalTypeKey: transactionReview.originalTypeKey,
               originalConfidence: transactionReview.originalConfidence,
@@ -712,11 +710,11 @@ const make = Effect.gen(function* () {
 
   const loadOpenFifoLots = ({
     executor,
-    userId,
+    principalId,
     assetId,
   }: {
     readonly executor: SourceNormalizationExecutor
-    readonly userId: string
+    readonly principalId: string
     readonly assetId: string
   }) =>
     Effect.gen(function* () {
@@ -731,7 +729,7 @@ const make = Effect.gen(function* () {
         .from(schema.fifoLots)
         .where(
           and(
-            eq(schema.fifoLots.userId, userId),
+            eq(schema.fifoLots.principalId, principalId),
             eq(schema.fifoLots.assetId, assetId),
             gt(schema.fifoLots.remainingAmount, "0")
           )
@@ -881,7 +879,7 @@ const make = Effect.gen(function* () {
       yield* executor
         .insert(schema.fifoLots)
         .values({
-          userId: leg.userId,
+          principalId: leg.principalId,
           sourceId: leg.sourceId,
           assetId: leg.assetId,
           acquiredAt: leg.timestamp,
@@ -908,7 +906,7 @@ const make = Effect.gen(function* () {
     readonly leg: PersistedSourceLegRecord
   }) =>
     Effect.gen(function* () {
-      if (leg.kind !== "disposal" || leg.userId === null) {
+      if (leg.kind !== "disposal") {
         return
       }
 
@@ -925,7 +923,7 @@ const make = Effect.gen(function* () {
 
       const openLots = yield* loadOpenFifoLots({
         executor,
-        userId: leg.userId,
+        principalId: leg.principalId,
         assetId: leg.assetId,
       })
       const allocations = yield* buildFifoLotAllocations({

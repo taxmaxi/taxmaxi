@@ -1,5 +1,5 @@
 /**
- * TransferReconciliationServiceLive - User-scoped provider-to-onchain transfer
+ * TransferReconciliationServiceLive - Principal-scoped provider-to-onchain transfer
  * reconciliation orchestration.
  *
  * @module TransferReconciliationServiceLive
@@ -167,7 +167,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (providerTransfer.canonicalAssetId === null) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
-          userId: providerTransfer.userId,
+          principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: null,
           canonicalTransactionId: null,
@@ -188,7 +188,7 @@ const make = Effect.gen(function* () {
 
       if (walletAddress === null) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
-          userId: providerTransfer.userId,
+          principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: null,
           canonicalTransactionId: null,
@@ -208,7 +208,7 @@ const make = Effect.gen(function* () {
       const { timestampStart, timestampEnd } = toTimestampWindow(providerTransfer.timestamp)
       const broadCandidates = yield* transferReconciliationRepository.findOnchainTransferCandidates(
         {
-          userId: providerTransfer.userId,
+          principalId: providerTransfer.principalId,
           canonicalAssetId: providerTransfer.canonicalAssetId,
           direction: providerTransfer.direction,
           walletAddress,
@@ -226,7 +226,7 @@ const make = Effect.gen(function* () {
 
       if (exactAmountCandidates.length === 0) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
-          userId: providerTransfer.userId,
+          principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: null,
           canonicalTransactionId: null,
@@ -249,7 +249,7 @@ const make = Effect.gen(function* () {
 
       if (exactAmountCandidates.length > 1) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
-          userId: providerTransfer.userId,
+          principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: null,
           canonicalTransactionId: null,
@@ -277,7 +277,7 @@ const make = Effect.gen(function* () {
       }
 
       yield* transferReconciliationRepository.upsertTransferReconciliation({
-        userId: providerTransfer.userId,
+        principalId: providerTransfer.principalId,
         providerTransferId: providerTransfer.providerTransferId,
         canonicalTransferId: matchedCandidate.transferId,
         canonicalTransactionId: matchedCandidate.transactionId,
@@ -296,11 +296,11 @@ const make = Effect.gen(function* () {
     })
 
   const reconcileTransferCandidates: TransferReconciliationServiceShape["reconcileTransferCandidates"] =
-    ({ userId, sourceId }) =>
+    ({ principalId, sourceId }) =>
       Effect.gen(function* () {
         const providerTransfers =
           yield* transferReconciliationRepository.listProviderTransfersForReconciliation({
-            userId,
+            principalId,
             sourceId,
           })
 
@@ -325,7 +325,7 @@ const make = Effect.gen(function* () {
 
         yield* Effect.logInfo(
           {
-            userId,
+            principalId,
             sourceId,
             evaluatedProviderTransfers: summary.evaluatedProviderTransfers,
             pending: summary.pending,

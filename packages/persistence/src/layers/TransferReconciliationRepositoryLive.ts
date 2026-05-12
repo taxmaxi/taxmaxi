@@ -30,7 +30,7 @@ const make = Effect.gen(function* () {
   const canonicalTransactionTable = aliasedTable(schema.transactions, "canonical_transaction")
 
   const INTERNAL_TRANSFER_REASON =
-    "Deterministic provider transfer reconciled to a user-owned onchain transfer."
+    "Deterministic provider transfer reconciled to a principal-owned onchain transfer."
 
   const decodeBigDecimal = ({
     value,
@@ -69,10 +69,10 @@ const make = Effect.gen(function* () {
     )
 
   const listProviderTransfersForReconciliation: TransferReconciliationRepositoryShape["listProviderTransfersForReconciliation"] =
-    ({ userId, sourceId }: ListProviderTransfersForReconciliationParams) =>
+    ({ principalId, sourceId }: ListProviderTransfersForReconciliationParams) =>
       db
         .select({
-          userId: schema.sources.userId,
+          principalId: schema.sources.principalId,
           providerTransferId: schema.providerTransfers.id,
           providerSourceId: schema.providerTransfers.sourceId,
           providerTransactionId: schema.providerTransfers.transactionId,
@@ -97,7 +97,10 @@ const make = Effect.gen(function* () {
           )
         )
         .where(
-          and(eq(schema.sources.userId, userId), eq(schema.providerTransfers.sourceId, sourceId))
+          and(
+            eq(schema.sources.principalId, principalId),
+            eq(schema.providerTransfers.sourceId, sourceId)
+          )
         )
         .orderBy(asc(schema.providerTransfers.timestamp))
         .pipe(
@@ -114,7 +117,7 @@ const make = Effect.gen(function* () {
 
   const findOnchainTransferCandidates: TransferReconciliationRepositoryShape["findOnchainTransferCandidates"] =
     ({
-      userId,
+      principalId,
       canonicalAssetId,
       direction,
       walletAddress,
@@ -162,7 +165,7 @@ const make = Effect.gen(function* () {
         )
         .where(
           and(
-            eq(schema.sources.userId, userId),
+            eq(schema.sources.principalId, principalId),
             eq(schema.transfers.assetId, canonicalAssetId),
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
             eq(schema.addresses.address, walletAddress),
@@ -189,7 +192,7 @@ const make = Effect.gen(function* () {
 
   const upsertTransferReconciliation: TransferReconciliationRepositoryShape["upsertTransferReconciliation"] =
     ({
-      userId,
+      principalId,
       providerTransferId,
       canonicalTransferId,
       canonicalTransactionId,
@@ -204,7 +207,7 @@ const make = Effect.gen(function* () {
         yield* db
           .insert(schema.transferReconciliations)
           .values({
-            userId,
+            principalId,
             providerTransferId,
             canonicalTransferId,
             canonicalTransactionId,
@@ -219,7 +222,7 @@ const make = Effect.gen(function* () {
           .onConflictDoUpdate({
             target: schema.transferReconciliations.providerTransferId,
             set: {
-              userId: sql.raw("excluded.user_id"),
+              principalId: sql.raw("excluded.principal_id"),
               canonicalTransferId: sql.raw("excluded.canonical_transfer_id"),
               canonicalTransactionId: sql.raw("excluded.canonical_transaction_id"),
               status: sql.raw("excluded.status"),
@@ -237,7 +240,7 @@ const make = Effect.gen(function* () {
       })
 
   const applyDeterministicInternalTransferCanonicalization: TransferReconciliationRepositoryShape["applyDeterministicInternalTransferCanonicalization"] =
-    ({ userId, sourceId, reconciliationId }) =>
+    ({ principalId, sourceId, reconciliationId }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -256,12 +259,12 @@ const make = Effect.gen(function* () {
                 providerTransactionSourceRawRecordId: providerTransactionTable.sourceRawRecordId,
                 providerTransactionExternalId: providerTransactionTable.externalId,
                 providerTransactionTimestamp: providerTransactionTable.timestamp,
-                providerTransactionUserId: providerTransactionTable.userId,
+                providerTransactionPrincipalId: providerTransactionTable.principalId,
                 canonicalTransactionSourceId: canonicalTransactionTable.sourceId,
                 canonicalTransactionSourceRawRecordId: canonicalTransactionTable.sourceRawRecordId,
                 canonicalTransactionExternalId: canonicalTransactionTable.externalId,
                 canonicalTransactionTimestamp: canonicalTransactionTable.timestamp,
-                canonicalTransactionUserId: canonicalTransactionTable.userId,
+                canonicalTransactionPrincipalId: canonicalTransactionTable.principalId,
               })
               .from(schema.transferReconciliations)
               .innerJoin(
@@ -285,7 +288,7 @@ const make = Effect.gen(function* () {
               )
               .where(
                 and(
-                  eq(schema.transferReconciliations.userId, userId),
+                  eq(schema.transferReconciliations.principalId, principalId),
                   eq(schema.providerTransfers.sourceId, sourceId),
                   reconciliationId === undefined
                     ? sql`true`
@@ -521,11 +524,11 @@ const make = Effect.gen(function* () {
               })
 
             const loadOpenLots = ({
-              lotUserId,
+              lotPrincipalId,
               assetId,
               maxAcquiredAt,
             }: {
-              readonly lotUserId: string
+              readonly lotPrincipalId: string
               readonly assetId: string
               readonly maxAcquiredAt: Date
             }) =>
@@ -541,7 +544,7 @@ const make = Effect.gen(function* () {
                 .from(schema.fifoLots)
                 .where(
                   and(
-                    eq(schema.fifoLots.userId, lotUserId),
+                    eq(schema.fifoLots.principalId, lotPrincipalId),
                     eq(schema.fifoLots.assetId, assetId),
                     gt(schema.fifoLots.remainingAmount, "0"),
                     lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
@@ -556,13 +559,13 @@ const make = Effect.gen(function* () {
 
             const ensureInternalTransferDisposition = ({
               originLegId,
-              userId: lotUserId,
+              principalId: lotPrincipalId,
               assetId,
               amount,
               maxAcquiredAt,
             }: {
               readonly originLegId: string
-              readonly userId: string
+              readonly principalId: string
               readonly assetId: string
               readonly amount: string
               readonly maxAcquiredAt: Date
@@ -611,7 +614,7 @@ const make = Effect.gen(function* () {
                 }
 
                 const availableLots = yield* loadOpenLots({
-                  lotUserId,
+                  lotPrincipalId,
                   assetId,
                   maxAcquiredAt,
                 })
@@ -767,7 +770,7 @@ const make = Effect.gen(function* () {
                 .insert(schema.transactionReviews)
                 .values({
                   transactionId,
-                  userId,
+                  principalId,
                   reviewStatus: "auto_applied",
                   originalTypeKey: "internal_transfer",
                   originalConfidence: "1.00",
@@ -825,7 +828,7 @@ const make = Effect.gen(function* () {
               sourceRawRecordId,
               externalId,
               timestamp,
-              legUserId,
+              principalId,
               assetId,
               amount,
               kind,
@@ -838,7 +841,7 @@ const make = Effect.gen(function* () {
               readonly sourceRawRecordId: string | null
               readonly externalId: string
               readonly timestamp: Date
-              readonly legUserId: string | null
+              readonly principalId: string
               readonly assetId: string
               readonly amount: string
               readonly kind: "acquisition" | "disposal"
@@ -855,7 +858,7 @@ const make = Effect.gen(function* () {
                     externalId,
                     txHash: null,
                     timestamp,
-                    userId: legUserId,
+                    principalId,
                     addressId: null,
                     assetId,
                     amount,
@@ -883,7 +886,7 @@ const make = Effect.gen(function* () {
                     set: {
                       sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
                       timestamp: sql.raw("excluded.timestamp"),
-                      userId: sql.raw("excluded.user_id"),
+                      principalId: sql.raw("excluded.principal_id"),
                       assetId: sql.raw("excluded.asset_id"),
                       amount: sql.raw("excluded.amount"),
                       kind: sql.raw("excluded.kind"),
@@ -970,7 +973,7 @@ const make = Effect.gen(function* () {
                   yield* tx
                     .insert(schema.fifoLots)
                     .values({
-                      userId,
+                      principalId,
                       sourceId: destinationSourceId,
                       assetId,
                       acquiredAt: match.acquiredAt,
@@ -1026,7 +1029,7 @@ const make = Effect.gen(function* () {
                         sourceRawRecordId: row.providerTransactionSourceRawRecordId,
                         externalId: row.providerTransactionExternalId,
                         timestamp: row.providerTransactionTimestamp,
-                        userId: row.providerTransactionUserId,
+                        principalId: row.providerTransactionPrincipalId,
                       }
                     : {
                         id: canonicalTransactionId,
@@ -1034,7 +1037,7 @@ const make = Effect.gen(function* () {
                         sourceRawRecordId: row.canonicalTransactionSourceRawRecordId,
                         externalId: row.canonicalTransactionExternalId,
                         timestamp: row.canonicalTransactionTimestamp,
-                        userId: row.canonicalTransactionUserId,
+                        principalId: row.canonicalTransactionPrincipalId,
                       }
                 const destinationTransaction =
                   row.providerDirection === "outbound"
@@ -1044,7 +1047,7 @@ const make = Effect.gen(function* () {
                         sourceRawRecordId: row.canonicalTransactionSourceRawRecordId,
                         externalId: row.canonicalTransactionExternalId,
                         timestamp: row.canonicalTransactionTimestamp,
-                        userId: row.canonicalTransactionUserId,
+                        principalId: row.canonicalTransactionPrincipalId,
                       }
                     : {
                         id: row.providerTransactionId,
@@ -1052,24 +1055,8 @@ const make = Effect.gen(function* () {
                         sourceRawRecordId: row.providerTransactionSourceRawRecordId,
                         externalId: row.providerTransactionExternalId,
                         timestamp: row.providerTransactionTimestamp,
-                        userId: row.providerTransactionUserId,
+                        principalId: row.providerTransactionPrincipalId,
                       }
-
-                if (originTransaction.userId === null || destinationTransaction.userId === null) {
-                  yield* Effect.logWarning(
-                    {
-                      providerTransferId: row.providerTransferId,
-                      canonicalTransferId,
-                      canonicalTransactionId,
-                      originTransactionId: originTransaction.id,
-                      destinationTransactionId: destinationTransaction.id,
-                      originUserId: originTransaction.userId,
-                      destinationUserId: destinationTransaction.userId,
-                    },
-                    "Skipping deterministic internal transfer canonicalization because one side is missing a userId"
-                  )
-                  return false
-                }
 
                 const originExternalId = `${originTransaction.externalId ?? originTransaction.id}:internal_transfer_out`
                 const destinationExternalId = `${destinationTransaction.externalId ?? destinationTransaction.id}:internal_transfer_in`
@@ -1193,7 +1180,7 @@ const make = Effect.gen(function* () {
                   sourceRawRecordId: originTransaction.sourceRawRecordId,
                   externalId: originExternalId,
                   timestamp: originTransaction.timestamp,
-                  legUserId: originTransaction.userId,
+                  principalId: originTransaction.principalId,
                   assetId: row.assetId,
                   amount,
                   kind: "disposal",
@@ -1207,7 +1194,7 @@ const make = Effect.gen(function* () {
                   sourceRawRecordId: destinationTransaction.sourceRawRecordId,
                   externalId: destinationExternalId,
                   timestamp: destinationTransaction.timestamp,
-                  legUserId: destinationTransaction.userId,
+                  principalId: destinationTransaction.principalId,
                   assetId: row.assetId,
                   amount,
                   kind: "acquisition",
@@ -1234,7 +1221,7 @@ const make = Effect.gen(function* () {
 
                 const disposition = yield* ensureInternalTransferDisposition({
                   originLegId,
-                  userId: originTransaction.userId,
+                  principalId: originTransaction.principalId,
                   assetId: row.assetId,
                   amount,
                   maxAcquiredAt: originTransaction.timestamp,

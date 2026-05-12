@@ -50,7 +50,7 @@ const makeRepairableJob = ({
 }): SourceSyncRepairableActiveJob => ({
   id,
   sourceId: "source-1",
-  userId: "user-1",
+  principalId: "principal-1",
   mode: "sync",
   status,
   startedAt: status === "processing" ? baseUpdatedAt : null,
@@ -223,7 +223,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
     expect(enqueued[0]).toMatchObject({
       jobId: "job-pending",
       sourceId: "source-1",
-      userId: "user-1",
+      principalId: "principal-1",
       mode: "sync",
     })
     expect(attached).toEqual([
