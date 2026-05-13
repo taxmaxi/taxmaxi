@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import { Principal, PrincipalId } from "@my/core/ownership"
 import {
   AuthResult,
   AuthService,
@@ -42,6 +43,10 @@ import {
 } from "../../src/services/IdentityRepository.ts"
 import { OAuthStateStore, type OAuthStateStoreService } from "../../src/services/OAuthStateStore.ts"
 import {
+  PrincipalRepository,
+  type PrincipalRepositoryService,
+} from "../../src/services/PrincipalRepository.ts"
+import {
   SessionRepository,
   type SessionRepositoryService,
 } from "../../src/services/SessionRepository.ts"
@@ -56,6 +61,7 @@ import {
 interface HarnessState {
   readonly users: Map<string, AuthUser>
   readonly identities: Map<string, UserIdentity>
+  readonly principals: Map<string, Principal>
   readonly verificationRequests: Map<string, EmailVerificationRequest>
 }
 
@@ -314,6 +320,40 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
   }
 }
 
+const makePrincipalRepository = (state: HarnessState): PrincipalRepositoryService => ({
+  findUserPrincipal: (userId) =>
+    Effect.succeed(
+      Option.fromNullable(
+        Array.from(state.principals.values()).find((principal) => principal.userId === userId)
+      )
+    ),
+  createUserPrincipal: (userId) => {
+    const existing = Array.from(state.principals.values()).find(
+      (principal) => principal.userId === userId
+    )
+    if (existing !== undefined) {
+      return Effect.succeed(existing)
+    }
+
+    const principal = Principal.make({
+      id: PrincipalId.make(crypto.randomUUID()),
+      kind: "user",
+      userId,
+    })
+    state.principals.set(principal.id, principal)
+    return Effect.succeed(principal)
+  },
+  createAnonymousWalletPrincipal: () => {
+    const principal = Principal.make({
+      id: PrincipalId.make(crypto.randomUUID()),
+      kind: "anonymous_wallet",
+      userId: null,
+    })
+    state.principals.set(principal.id, principal)
+    return Effect.succeed(principal)
+  },
+})
+
 const makeSessionRepo = (): SessionRepositoryService => {
   const sessions = new Map<string, Session>()
 
@@ -458,6 +498,7 @@ const makeHarness = (providers: ReadonlyArray<AuthProvider>): Harness => {
   const state: HarnessState = {
     users: new Map(),
     identities: new Map(),
+    principals: new Map(),
     verificationRequests: new Map(),
   }
 
@@ -475,6 +516,7 @@ const makeHarness = (providers: ReadonlyArray<AuthProvider>): Harness => {
     Layer.succeed(EmailVerificationDeliveryService, makeEmailVerificationDeliveryService()),
     Layer.succeed(EmailVerificationRequestRepository, makeEmailVerificationRequestRepo(state)),
     Layer.succeed(IdentityRepository, makeIdentityRepo(state)),
+    Layer.succeed(PrincipalRepository, makePrincipalRepository(state)),
     Layer.succeed(SessionRepository, makeSessionRepo()),
     Layer.succeed(OAuthStateStore, makeOAuthStateStore()),
     Layer.succeed(SessionTokenGenerator, {
@@ -532,6 +574,8 @@ describe("AuthServiceLive OAuth orchestration", () => {
     expect(login.user.emailVerified).toBe(true)
     expect(login.session.id.startsWith("sess_")).toBe(true)
     expect(harness.state.users.size).toBe(1)
+    expect(harness.state.principals.size).toBe(1)
+    expect(Array.from(harness.state.principals.values())[0]?.userId).toBe(login.user.id)
     const createdGoogleIdentities = Array.from(harness.state.identities.values()).filter(
       (identity) => identity.provider === "google"
     )
@@ -561,6 +605,7 @@ describe("AuthServiceLive OAuth orchestration", () => {
     )
 
     expect(harness.state.users.size).toBe(1)
+    expect(harness.state.principals.size).toBe(1)
     const linkedIdentityCount = Array.from(harness.state.identities.values()).filter(
       (identity) => identity.userId === user.id && identity.provider === "google"
     ).length
@@ -576,6 +621,8 @@ describe("AuthServiceLive OAuth orchestration", () => {
 
     expect(user.displayName).toBe("Provided Name")
     expect(user.emailVerified).toBe(false)
+    expect(harness.state.principals.size).toBe(1)
+    expect(Array.from(harness.state.principals.values())[0]?.userId).toBe(user.id)
   })
 
   it("register infers the display name from the email local part when none is provided", async () => {

@@ -12,7 +12,8 @@ import {
   SourceId,
   type SourceRef,
 } from "@my/core/source"
-import { EntityNotFoundError, wrapSqlError } from "../errors/RepositoryError.ts"
+import { EntityNotFoundError, PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
+import { addresses } from "../schema/AddressesTable.ts"
 import { sources, type SourceRow } from "../schema/SourcesTable.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { SourceRepository, type SourceRepositoryService } from "../services/SourceRepository.ts"
@@ -173,6 +174,121 @@ const make = Effect.gen(function* () {
       return Option.some(source)
     }).pipe(wrapSqlError("findByPrincipalAndSourceRef"))
 
+  const findOnchainSourceByAddressId = ({
+    principalId,
+    addressId,
+  }: {
+    readonly principalId: string
+    readonly addressId: string
+  }) =>
+    Effect.gen(function* () {
+      const [row] = yield* db
+        .select(selectSourceFields)
+        .from(sources)
+        .where(
+          and(
+            eq(sources.principalId, principalId),
+            eq(sources.sourceableType, "onchain"),
+            eq(sources.addressId, addressId)
+          )
+        )
+        .limit(1)
+
+      if (row === undefined) {
+        return Option.none<Source>()
+      }
+
+      const source = yield* rowToSource(row)
+      return Option.some(source)
+    })
+
+  const createOrReuseOnchainSource: SourceRepositoryService["createOrReuseOnchainSource"] = ({
+    principalId,
+    chainType,
+    walletAddress,
+    name,
+  }) =>
+    Effect.gen(function* () {
+      const now = new Date()
+      const [addressRow] = yield* db
+        .insert(addresses)
+        .values({
+          address: walletAddress,
+          type: chainType,
+          name,
+          principalId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [addresses.address, addresses.principalId],
+          set: {
+            name,
+            type: chainType,
+            updatedAt: now,
+          },
+        })
+        .returning({ id: addresses.id })
+
+      if (addressRow === undefined) {
+        return yield* Effect.fail(
+          new PersistenceError({
+            operation: "sourceRepository.createOrReuseOnchainSource.address",
+            cause: "failed to create or reuse address",
+          })
+        )
+      }
+
+      const maybeExistingSource = yield* findOnchainSourceByAddressId({
+        principalId,
+        addressId: addressRow.id,
+      })
+
+      if (Option.isSome(maybeExistingSource)) {
+        return { source: maybeExistingSource.value, created: false }
+      }
+
+      const sourceId = SourceId.make(crypto.randomUUID())
+      const [created] = yield* db
+        .insert(sources)
+        .values({
+          id: sourceId,
+          principalId,
+          name,
+          providerKey: chainType,
+          providerMetadata: { chainType, walletAddress },
+          sourceableType: "onchain",
+          addressId: addressRow.id,
+          cexAccountId: null,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({
+          target: [sources.principalId, sources.addressId],
+        })
+        .returning(selectSourceFields)
+
+      if (created !== undefined) {
+        return { source: yield* rowToSource(created), created: true }
+      }
+
+      const maybeConcurrentSource = yield* findOnchainSourceByAddressId({
+        principalId,
+        addressId: addressRow.id,
+      })
+
+      if (Option.isNone(maybeConcurrentSource)) {
+        return yield* Effect.fail(
+          new PersistenceError({
+            operation: "sourceRepository.createOrReuseOnchainSource.source",
+            cause: "failed to create or reuse onchain source",
+          })
+        )
+      }
+
+      return { source: maybeConcurrentSource.value, created: false }
+    }).pipe(wrapSqlError("createOrReuseOnchainSource"))
+
   const create: SourceRepositoryService["create"] = (source) =>
     Effect.gen(function* () {
       const now = new Date()
@@ -216,6 +332,7 @@ const make = Effect.gen(function* () {
     findByPrincipalId,
     findByPrincipalAndProviderKey,
     findByPrincipalAndSourceRef,
+    createOrReuseOnchainSource,
     create,
   } satisfies SourceRepositoryService
 })

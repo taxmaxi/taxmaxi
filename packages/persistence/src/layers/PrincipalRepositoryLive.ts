@@ -6,7 +6,7 @@
 
 import { eq } from "drizzle-orm"
 import { AuthUserId } from "@my/core/authentication"
-import { PrincipalId } from "@my/core/ownership"
+import { Principal, PrincipalId } from "@my/core/ownership"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -14,7 +14,6 @@ import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   PrincipalRepository,
-  type Principal,
   type PrincipalRepositoryService,
 } from "../services/PrincipalRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
@@ -31,11 +30,12 @@ type SelectedPrincipalRow = {
   readonly userId: string | null
 }
 
-const rowToPrincipal = (row: SelectedPrincipalRow): Principal => ({
-  id: PrincipalId.make(row.id),
-  kind: row.kind,
-  userId: row.userId === null ? null : AuthUserId.make(row.userId),
-})
+const rowToPrincipal = (row: SelectedPrincipalRow): Principal =>
+  Principal.make({
+    id: PrincipalId.make(row.id),
+    kind: row.kind,
+    userId: row.userId === null ? null : AuthUserId.make(row.userId),
+  })
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle

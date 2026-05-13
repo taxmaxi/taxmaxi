@@ -13,7 +13,7 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
-import { SourceId } from "@my/core/source"
+import { parseCryptoAddress, SourceId } from "@my/core/source"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
@@ -34,6 +34,7 @@ import {
   SourceBadRequestError,
   SourceNotFoundError,
   SourceListResponse,
+  SourceCreateResponse,
 } from "../definitions/SourcesApi.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { Option } from "effect"
@@ -77,6 +78,62 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             })
           )
           return SourceListResponse.make({ sources })
+        })
+      )
+      .handle("createSource", ({ payload }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolvePrincipal
+          const parsedAddress = parseCryptoAddress(payload.walletAddress)
+          if (parsedAddress === null) {
+            return yield* Effect.fail(toBadRequestError("Invalid crypto address."))
+          }
+
+          const sourceName =
+            payload.name ?? `${parsedAddress.address.slice(0, 5)}...${parsedAddress.address.slice(-5)}`
+          const created = yield* sourceRepository
+            .createOrReuseOnchainSource({
+              principalId: principal.id,
+              chainType: parsedAddress.chainType,
+              walletAddress: parsedAddress.address,
+              name: sourceName,
+            })
+            .pipe(
+              Effect.mapError(() => toInternalServerError("Failed to create or reuse source."))
+            )
+
+          if (payload.sync !== true) {
+            return SourceCreateResponse.make({
+              source: created.source,
+              created: created.created,
+              syncJob: null,
+            })
+          }
+
+          const syncJob = yield* sourceSyncService
+            .startSourceSyncJob({
+              principalId: principal.id,
+              sourceId: created.source.id,
+            })
+            .pipe(
+              Effect.mapError((error) => {
+                switch (error._tag) {
+                  case "UnsupportedProviderError":
+                    return toBadRequestError(`Unsupported provider: ${error.provider}`)
+                  case "SourceNotFoundError":
+                    return toBadRequestError(sourceNotFoundMessage)
+                  case "SourceSyncQueueError":
+                    return toInternalServerError("Failed to enqueue source sync job.")
+                  default:
+                    return toInternalServerError("Failed to start source sync.")
+                }
+              })
+            )
+
+          return SourceCreateResponse.make({
+            source: created.source,
+            created: created.created,
+            syncJob: SourceSyncStartResponse.make(syncJob),
+          })
         })
       )
       .handle("startSourceSyncJob", ({ path }) =>

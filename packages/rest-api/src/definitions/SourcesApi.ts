@@ -47,6 +47,18 @@ export class SourceListResponse extends Schema.Class<SourceListResponse>("Source
 }) {}
 
 /**
+ * SourceCreateRequest - Request body for creating or reusing an onchain source.
+ */
+export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("SourceCreateRequest")({
+  type: Schema.Literal("onchain"),
+  walletAddress: Schema.NonEmptyTrimmedString,
+  name: Schema.optional(Schema.NonEmptyTrimmedString),
+  sync: Schema.optional(Schema.Boolean),
+  year: Schema.optional(Schema.Int.pipe(Schema.greaterThanOrEqualTo(2020))),
+  jurisdiction: Schema.optional(Schema.NonEmptyTrimmedString),
+}) {}
+
+/**
  * SourceSyncStartResponse - Started source sync job info
  */
 export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartResponse>(
@@ -56,6 +68,17 @@ export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartRespons
   jobId: Schema.String,
   status: Schema.Literal("queued", "running", "completed", "failed"),
   message: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * SourceCreateResponse - Created or reused source and optional initial sync job.
+ */
+export class SourceCreateResponse extends Schema.Class<SourceCreateResponse>(
+  "SourceCreateResponse"
+)({
+  source: Source,
+  created: Schema.Boolean,
+  syncJob: Schema.NullOr(SourceSyncStartResponse),
 }) {}
 
 /**
@@ -117,6 +140,21 @@ const listSources = HttpApiEndpoint.get("listSources", "/sources")
     OpenApi.annotations({
       summary: "List sources",
       description: "Lists all sources for the authenticated user.",
+    })
+  )
+
+/**
+ * POST /sources - Create or reuse a source for the authenticated user.
+ */
+const createSource = HttpApiEndpoint.post("createSource", "/sources")
+  .setPayload(SourceCreateRequest)
+  .addSuccess(SourceCreateResponse)
+  .addError(SourceBadRequestError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Create source",
+      description: "Creates or reuses an onchain source for the authenticated user.",
     })
   )
 
@@ -216,6 +254,7 @@ const calculateTaxForSource = HttpApiEndpoint.post(
  */
 export class SourcesApi extends HttpApiGroup.make("sources")
   .add(listSources)
+  .add(createSource)
   .add(startSourceSyncJob)
   .add(replaySourceSyncJob)
   .add(getSourceSyncJobStatus)

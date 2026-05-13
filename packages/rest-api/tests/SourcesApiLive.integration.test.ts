@@ -227,6 +227,28 @@ const seedCoinbaseSource = ({
     })
   })
 
+const seedPrincipalUser = ({
+  userId,
+  principalId,
+}: {
+  readonly userId: string
+  readonly principalId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.users).values({
+      id: userId,
+      email: `${userId}@taxmaxi.test`,
+      name: "Sources API Test User",
+    })
+    yield* db.insert(schema.principals).values({
+      id: principalId,
+      kind: "user",
+      userId,
+    })
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
@@ -236,6 +258,137 @@ describe("SourcesApiLive", () => {
     queueEvents.length = 0
     await Effect.runPromise(context.recreateTestDatabase())
   })
+
+  it.effect("creates an authenticated Solana source without starting sync", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const response = yield* client.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Demo Solana wallet",
+        },
+      })
+
+      expect(response.created).toBe(true)
+      expect(response.syncJob).toBeNull()
+      expect(response.source).toMatchObject({
+        principalId,
+        name: "Demo Solana wallet",
+        providerKey: "solana",
+      })
+      expect(response.source.sourceRef._tag).toBe("onchain")
+
+      const db = yield* drizzle
+      const storedAddresses = yield* db
+        .select({
+          address: schema.addresses.address,
+          type: schema.addresses.type,
+          principalId: schema.addresses.principalId,
+        })
+        .from(schema.addresses)
+
+      expect(storedAddresses).toEqual([
+        {
+          address: walletAddress,
+          type: "solana",
+          principalId,
+        },
+      ])
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("reuses an authenticated Solana source for the same wallet", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const first = yield* client.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Reusable wallet",
+        },
+      })
+      const second = yield* client.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Reusable wallet renamed",
+        },
+      })
+
+      expect(first.created).toBe(true)
+      expect(second.created).toBe(false)
+      expect(second.source.id).toBe(first.source.id)
+      expect(queueEvents).toHaveLength(0)
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("infers chain type when creating an authenticated source", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const walletAddress = "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const response = yield* client.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+        },
+      })
+
+      expect(response.created).toBe(true)
+      expect(response.source.providerKey).toBe("evm")
+
+      const db = yield* drizzle
+      const [storedAddress] = yield* db
+        .select({
+          address: schema.addresses.address,
+          type: schema.addresses.type,
+        })
+        .from(schema.addresses)
+
+      expect(storedAddress).toEqual({
+        address: walletAddress,
+        type: "evm",
+      })
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("rejects source creation when wallet address chain type cannot be inferred", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const result = yield* client.sources
+        .createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "not-an-address",
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("SourceBadRequestError")
+        expect(result.left.message).toBe("Invalid crypto address.")
+      }
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
 
   it.effect("starts a source sync by creating a queued job without provider execution", () =>
     Effect.gen(function* () {

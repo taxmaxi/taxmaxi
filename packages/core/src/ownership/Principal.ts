@@ -5,6 +5,7 @@
  */
 
 import * as Schema from "effect/Schema"
+import { AuthUserId } from "../authentication/AuthUserId.ts"
 
 /**
  * PrincipalId - Durable owner identifier for sync and tax data.
@@ -36,3 +37,29 @@ export const PrincipalKind = Schema.Literal("user", "anonymous_wallet").annotati
  * The PrincipalKind type.
  */
 export type PrincipalKind = typeof PrincipalKind.Type
+
+/**
+ * Principal - Durable sync/tax ownership principal.
+ */
+export class Principal extends Schema.Class<Principal>("Principal")({
+  /**
+   * Unique ownership principal identifier.
+   */
+  id: PrincipalId,
+
+  /**
+   * Principal family.
+   */
+  kind: PrincipalKind,
+
+  /**
+   * Authentication user linked to user principals. Anonymous wallet principals
+   * intentionally have no user id.
+   */
+  userId: Schema.NullOr(AuthUserId),
+}) {}
+
+/**
+ * Type guard for Principal using Schema.is.
+ */
+export const isPrincipal = Schema.is(Principal)

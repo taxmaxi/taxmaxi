@@ -15,6 +15,11 @@ import type { PersistenceError } from "../errors/RepositoryError.ts"
 import type { PrincipalId } from "@my/core/ownership"
 
 /**
+ * OnchainSourceChainType - Supported chain families for onchain source creation.
+ */
+export type OnchainSourceChainType = "evm" | "solana" | "bitcoin"
+
+/**
  * CreateSourceInput - Data required to create a new source
  *
  * Contains all fields needed for source creation. `sourceRef` is the
@@ -43,6 +48,24 @@ export interface FindByPrincipalAndProviderKeyParams {
 export interface FindByPrincipalAndSourceRefParams {
   readonly principalId: PrincipalId
   readonly sourceRef: Source["sourceRef"]
+}
+
+/**
+ * CreateOrReuseOnchainSourceParams - Input for idempotent wallet source creation.
+ */
+export interface CreateOrReuseOnchainSourceParams {
+  readonly principalId: PrincipalId
+  readonly chainType: OnchainSourceChainType
+  readonly walletAddress: string
+  readonly name: string
+}
+
+/**
+ * CreateOrReuseSourceResult - Source creation result.
+ */
+export interface CreateOrReuseSourceResult {
+  readonly source: Source
+  readonly created: boolean
 }
 
 /**
@@ -77,6 +100,13 @@ export interface SourceRepositoryService {
   readonly findByPrincipalAndSourceRef: (
     params: FindByPrincipalAndSourceRefParams
   ) => Effect.Effect<Option.Option<Source>, PersistenceError>
+
+  /**
+   * Create or reuse an onchain wallet source for an ownership principal.
+   */
+  readonly createOrReuseOnchainSource: (
+    params: CreateOrReuseOnchainSourceParams
+  ) => Effect.Effect<CreateOrReuseSourceResult, PersistenceError>
 
   /**
    * Create a new source
