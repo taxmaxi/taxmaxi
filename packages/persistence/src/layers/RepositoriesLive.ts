@@ -10,11 +10,11 @@
  * @module RepositoriesLive
  */
 
-import * as Effect from "effect/Effect"
-import * as Layer from "effect/Layer"
-import * as Option from "effect/Option"
-import * as Chunk from "effect/Chunk"
-import { FetchHttpClient } from "@effect/platform"
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Chunk from "effect/Chunk";
+import { FetchHttpClient } from "@effect/platform";
 import {
   authConfigFromEnv,
   localAuthDefaults,
@@ -26,40 +26,41 @@ import {
   SessionTokenGeneratorLive,
   SessionTokenConfigTag,
   CryptoRandomAdapterTag,
-} from "@my/core/authentication"
-import { UserRepositoryLive } from "./UserRepositoryLive.ts"
-import { EmailVerificationDeliveryServiceLive } from "./EmailVerificationDeliveryServiceLive.ts"
-import { EmailVerificationRequestRepositoryLive } from "./EmailVerificationRequestRepositoryLive.ts"
-import { IdentityRepositoryLive } from "./IdentityRepositoryLive.ts"
-import { SessionRepositoryLive } from "./SessionRepositoryLive.ts"
-import { SourceRepositoryLive } from "./SourceRepositoryLive.ts"
-import { CexAccountRepositoryLive } from "./CexAccountRepositoryLive.ts"
-import { OAuthStateStoreLive } from "./OAuthStateStoreLive.ts"
-import { PrincipalRepositoryLive } from "./PrincipalRepositoryLive.ts"
-import { TaxCalculationServiceLive } from "./TaxCalculationServiceLive.ts"
-import { AuthServiceLive } from "./AuthServiceLive.ts"
-import { CoinbaseAuthProviderLive } from "./CoinbaseAuthProviderLive.ts"
-import { GoogleAuthProviderLive } from "./GoogleAuthProviderLive.ts"
-import { LocalAuthProviderLive } from "./LocalAuthProviderLive.ts"
-import { LegalReferenceRepositoryLive } from "./LegalReferenceRepositoryLive.ts"
-import { AssetRepositoryLive } from "./AssetRepositoryLive.ts"
-import { CoinbaseCredentialRepositoryLive } from "./CoinbaseCredentialRepositoryLive.ts"
-import { ProviderAssetRepositoryLive } from "./ProviderAssetRepositoryLive.ts"
-import { ProviderReferenceRepositoryLive } from "./ProviderReferenceRepositoryLive.ts"
-import { SourceNormalizationRepositoryLive } from "./SourceNormalizationRepositoryLive.ts"
-import { SourceRawRecordRepositoryLive } from "./SourceRawRecordRepositoryLive.ts"
-import { SourceReplayRepositoryLive } from "./SourceReplayRepositoryLive.ts"
-import { SourceSyncJobRepositoryLive } from "./SourceSyncJobRepositoryLive.ts"
-import { SourceSyncRunRepositoryLive } from "./SourceSyncRunRepositoryLive.ts"
-import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.ts"
-import { SyncEngineSourceRepositoryLive } from "./SyncEngineSourceRepositoryLive.ts"
-import { TransferReconciliationRepositoryLive } from "./TransferReconciliationRepositoryLive.ts"
-import { CoinbaseAuthProvider } from "../services/CoinbaseAuthProvider.ts"
-import { CoinbaseConfigTag } from "../services/CoinbaseConfig.ts"
-import { GoogleAuthProvider } from "../services/GoogleAuthProvider.ts"
-import { GoogleConfigTag } from "../services/GoogleConfig.ts"
-import { LocalAuthProvider } from "../services/LocalAuthProvider.ts"
-import { AuthServiceConfig, SessionDurationConfig } from "../services/AuthServiceConfig.ts"
+} from "@my/core/authentication";
+import { UserRepositoryLive } from "./UserRepositoryLive.ts";
+import { EmailVerificationDeliveryServiceLive } from "./EmailVerificationDeliveryServiceLive.ts";
+import { EmailVerificationRequestRepositoryLive } from "./EmailVerificationRequestRepositoryLive.ts";
+import { IdentityRepositoryLive } from "./IdentityRepositoryLive.ts";
+import { SessionRepositoryLive } from "./SessionRepositoryLive.ts";
+import { SourceRepositoryLive } from "./SourceRepositoryLive.ts";
+import { CexAccountRepositoryLive } from "./CexAccountRepositoryLive.ts";
+import { OAuthStateStoreLive } from "./OAuthStateStoreLive.ts";
+import { PrincipalRepositoryLive } from "./PrincipalRepositoryLive.ts";
+import { PrincipalClaimRepositoryLive } from "./PrincipalClaimRepositoryLive.ts";
+import { TaxCalculationServiceLive } from "./TaxCalculationServiceLive.ts";
+import { AuthServiceLive } from "./AuthServiceLive.ts";
+import { CoinbaseAuthProviderLive } from "./CoinbaseAuthProviderLive.ts";
+import { GoogleAuthProviderLive } from "./GoogleAuthProviderLive.ts";
+import { LocalAuthProviderLive } from "./LocalAuthProviderLive.ts";
+import { LegalReferenceRepositoryLive } from "./LegalReferenceRepositoryLive.ts";
+import { AssetRepositoryLive } from "./AssetRepositoryLive.ts";
+import { CoinbaseCredentialRepositoryLive } from "./CoinbaseCredentialRepositoryLive.ts";
+import { ProviderAssetRepositoryLive } from "./ProviderAssetRepositoryLive.ts";
+import { ProviderReferenceRepositoryLive } from "./ProviderReferenceRepositoryLive.ts";
+import { SourceNormalizationRepositoryLive } from "./SourceNormalizationRepositoryLive.ts";
+import { SourceRawRecordRepositoryLive } from "./SourceRawRecordRepositoryLive.ts";
+import { SourceReplayRepositoryLive } from "./SourceReplayRepositoryLive.ts";
+import { SourceSyncJobRepositoryLive } from "./SourceSyncJobRepositoryLive.ts";
+import { SourceSyncRunRepositoryLive } from "./SourceSyncRunRepositoryLive.ts";
+import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.ts";
+import { SyncEngineSourceRepositoryLive } from "./SyncEngineSourceRepositoryLive.ts";
+import { TransferReconciliationRepositoryLive } from "./TransferReconciliationRepositoryLive.ts";
+import { CoinbaseAuthProvider } from "../services/CoinbaseAuthProvider.ts";
+import { CoinbaseConfigTag } from "../services/CoinbaseConfig.ts";
+import { GoogleAuthProvider } from "../services/GoogleAuthProvider.ts";
+import { GoogleConfigTag } from "../services/GoogleConfig.ts";
+import { LocalAuthProvider } from "../services/LocalAuthProvider.ts";
+import { AuthServiceConfig, SessionDurationConfig } from "../services/AuthServiceConfig.ts";
 
 /**
  * RepositoriesLive - Combined layer providing all repository implementations
@@ -98,6 +99,7 @@ export const RepositoriesLive = Layer.mergeAll(
   SessionRepositoryLive,
   OAuthStateStoreLive,
   PrincipalRepositoryLive,
+  PrincipalClaimRepositoryLive,
   LegalReferenceRepositoryLive,
   SourceRepositoryLive,
   CexAccountRepositoryLive,
@@ -113,8 +115,8 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceSyncRunRepositoryLive,
   SourceSyncStateRepositoryLive,
   SyncEngineSourceRepositoryLive,
-  TransferReconciliationRepositoryLive
-)
+  TransferReconciliationRepositoryLive,
+);
 
 // =============================================================================
 // Crypto Adapters for Authentication Services
@@ -129,11 +131,11 @@ export const RepositoriesLive = Layer.mergeAll(
 const WebCryptoAdapter = Layer.succeed(CryptoRandomAdapterTag, {
   getRandomBytes: (length: number) =>
     Effect.sync(() => {
-      const bytes = new Uint8Array(length)
-      crypto.getRandomValues(bytes)
-      return bytes
+      const bytes = new Uint8Array(length);
+      crypto.getRandomValues(bytes);
+      return bytes;
     }),
-})
+});
 
 /**
  * SimpleBcryptAdapter - Bcrypt adapter using the native Web Crypto API
@@ -148,13 +150,13 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
   hash: (password: string, rounds: number): Effect.Effect<string> =>
     Effect.tryPromise({
       try: async () => {
-        const encoder = new TextEncoder()
-        const data = encoder.encode(password)
-        const salt = crypto.getRandomValues(new Uint8Array(16))
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password);
+        const salt = crypto.getRandomValues(new Uint8Array(16));
         const keyMaterial = await crypto.subtle.importKey("raw", data, "PBKDF2", false, [
           "deriveBits",
-        ])
-        const iterations = Math.pow(2, rounds)
+        ]);
+        const iterations = Math.pow(2, rounds);
         const derivedBits = await crypto.subtle.deriveBits(
           {
             name: "PBKDF2",
@@ -163,16 +165,16 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
             hash: "SHA-256",
           },
           keyMaterial,
-          256
-        )
-        const hashArray = new Uint8Array(derivedBits)
+          256,
+        );
+        const hashArray = new Uint8Array(derivedBits);
         const saltHex = Array.from(salt)
           .map((b) => b.toString(16).padStart(2, "0"))
-          .join("")
+          .join("");
         const hashHex = Array.from(hashArray)
           .map((b) => b.toString(16).padStart(2, "0"))
-          .join("")
-        return `pbkdf2$${rounds}$${saltHex}$${hashHex}`
+          .join("");
+        return `pbkdf2$${rounds}$${saltHex}$${hashHex}`;
       },
       catch: (cause) => cause,
     }).pipe(Effect.orDie),
@@ -180,25 +182,25 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
     Effect.tryPromise({
       try: async () => {
         const isPbkdf2HashParts = (
-          value: ReadonlyArray<string>
+          value: ReadonlyArray<string>,
         ): value is readonly [scheme: string, rounds: string, saltHex: string, hashHex: string] =>
-          value.length === 4 && value[0] === "pbkdf2"
+          value.length === 4 && value[0] === "pbkdf2";
 
-        const parts = hash.split("$")
+        const parts = hash.split("$");
         if (!isPbkdf2HashParts(parts)) {
-          return false
+          return false;
         }
-        const [, roundsStr, saltHex, storedHashHex] = parts
-        const rounds = Number.parseInt(roundsStr, 10)
+        const [, roundsStr, saltHex, storedHashHex] = parts;
+        const rounds = Number.parseInt(roundsStr, 10);
 
-        const saltBytes = saltHex.match(/.{1,2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? []
-        const salt = new Uint8Array(saltBytes)
-        const encoder = new TextEncoder()
-        const data = encoder.encode(password)
+        const saltBytes = saltHex.match(/.{1,2}/g)?.map((byte) => Number.parseInt(byte, 16)) ?? [];
+        const salt = new Uint8Array(saltBytes);
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password);
         const keyMaterial = await crypto.subtle.importKey("raw", data, "PBKDF2", false, [
           "deriveBits",
-        ])
-        const iterations = Math.pow(2, rounds)
+        ]);
+        const iterations = Math.pow(2, rounds);
         const derivedBits = await crypto.subtle.deriveBits(
           {
             name: "PBKDF2",
@@ -207,18 +209,18 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
             hash: "SHA-256",
           },
           keyMaterial,
-          256
-        )
-        const hashArray = new Uint8Array(derivedBits)
+          256,
+        );
+        const hashArray = new Uint8Array(derivedBits);
         const computedHashHex = Array.from(hashArray)
           .map((b) => b.toString(16).padStart(2, "0"))
-          .join("")
+          .join("");
 
-        return computedHashHex === storedHashHex
+        return computedHashHex === storedHashHex;
       },
       catch: (cause) => cause,
     }).pipe(Effect.orDie),
-})
+});
 
 // =============================================================================
 // Auth Service Dependencies
@@ -229,16 +231,16 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
  */
 const SessionTokenGeneratorWithCrypto = SessionTokenGeneratorLive.pipe(
   Layer.provide(WebCryptoAdapter),
-  Layer.provide(SessionTokenConfigTag.Default)
-)
+  Layer.provide(SessionTokenConfigTag.Default),
+);
 
 /**
  * PasswordHasherWithCrypto - PasswordHasher with PBKDF2 implementation
  */
 const PasswordHasherWithCrypto = BcryptPasswordHasherLive.pipe(
   Layer.provide(SimpleBcryptAdapter),
-  Layer.provide(PasswordHasherConfigTag.Fast) // Use fast for development
-)
+  Layer.provide(PasswordHasherConfigTag.Fast), // Use fast for development
+);
 
 /**
  * LocalAuthProviderWithDeps - LocalAuthProvider with repositories and hasher
@@ -246,8 +248,8 @@ const PasswordHasherWithCrypto = BcryptPasswordHasherLive.pipe(
 const LocalAuthProviderWithDeps = LocalAuthProviderLive.pipe(
   Layer.provide(PasswordHasherWithCrypto),
   Layer.provide(UserRepositoryLive),
-  Layer.provide(IdentityRepositoryLive)
-)
+  Layer.provide(IdentityRepositoryLive),
+);
 
 /**
  * GoogleConfigFromAuthConfig - Provide Google config from auth env config
@@ -255,26 +257,26 @@ const LocalAuthProviderWithDeps = LocalAuthProviderLive.pipe(
 const GoogleConfigFromAuthConfig = Layer.effect(
   GoogleConfigTag,
   Effect.gen(function* () {
-    const authConfig = yield* authConfigFromEnv.pipe(Effect.orDie)
-    const googleConfig = authConfig.providerConfigs.google
+    const authConfig = yield* authConfigFromEnv.pipe(Effect.orDie);
+    const googleConfig = authConfig.providerConfigs.google;
 
     if (Option.isNone(googleConfig)) {
       return yield* Effect.dieMessage(
-        "Google provider enabled but AUTH_GOOGLE_CLIENT_ID / AUTH_GOOGLE_CLIENT_SECRET / AUTH_GOOGLE_REDIRECT_URI are not configured"
-      )
+        "Google provider enabled but AUTH_GOOGLE_CLIENT_ID / AUTH_GOOGLE_CLIENT_SECRET / AUTH_GOOGLE_REDIRECT_URI are not configured",
+      );
     }
 
-    return googleConfig.value
-  })
-)
+    return googleConfig.value;
+  }),
+);
 
 /**
  * GoogleAuthProviderWithDeps - GoogleAuthProvider with config and HTTP client
  */
 const GoogleAuthProviderWithDeps = GoogleAuthProviderLive.pipe(
   Layer.provide(FetchHttpClient.layer),
-  Layer.provide(GoogleConfigFromAuthConfig)
-)
+  Layer.provide(GoogleConfigFromAuthConfig),
+);
 
 /**
  * CoinbaseConfigFromAuthConfig - Provide Coinbase config from auth env config
@@ -282,26 +284,26 @@ const GoogleAuthProviderWithDeps = GoogleAuthProviderLive.pipe(
 const CoinbaseConfigFromAuthConfig = Layer.effect(
   CoinbaseConfigTag,
   Effect.gen(function* () {
-    const authConfig = yield* authConfigFromEnv.pipe(Effect.orDie)
-    const coinbaseConfig = authConfig.providerConfigs.coinbase
+    const authConfig = yield* authConfigFromEnv.pipe(Effect.orDie);
+    const coinbaseConfig = authConfig.providerConfigs.coinbase;
 
     if (Option.isNone(coinbaseConfig)) {
       return yield* Effect.dieMessage(
-        "Coinbase provider enabled but AUTH_COINBASE_CLIENT_ID / AUTH_COINBASE_CLIENT_SECRET / AUTH_COINBASE_REDIRECT_URI are not configured"
-      )
+        "Coinbase provider enabled but AUTH_COINBASE_CLIENT_ID / AUTH_COINBASE_CLIENT_SECRET / AUTH_COINBASE_REDIRECT_URI are not configured",
+      );
     }
 
-    return coinbaseConfig.value
-  })
-)
+    return coinbaseConfig.value;
+  }),
+);
 
 /**
  * CoinbaseAuthProviderWithDeps - CoinbaseAuthProvider with config and HTTP client
  */
 const CoinbaseAuthProviderWithDeps = CoinbaseAuthProviderLive.pipe(
   Layer.provide(FetchHttpClient.layer),
-  Layer.provide(CoinbaseConfigFromAuthConfig)
-)
+  Layer.provide(CoinbaseConfigFromAuthConfig),
+);
 
 /**
  * Build enabled provider instances from auth configuration
@@ -313,46 +315,46 @@ const buildEnabledProvidersFromConfig = (
   authConfig: AuthConfigData,
   localProvider: AuthProvider,
   googleProvider: Option.Option<AuthProvider>,
-  coinbaseProvider: Option.Option<AuthProvider>
+  coinbaseProvider: Option.Option<AuthProvider>,
 ) =>
   Effect.gen(function* () {
-    const providers: AuthProvider[] = []
+    const providers: AuthProvider[] = [];
 
     for (const provider of Array.from(new Set(authConfig.enabledProviders))) {
       switch (provider) {
         case "local": {
-          providers.push(localProvider)
-          break
+          providers.push(localProvider);
+          break;
         }
         case "google": {
           if (Option.isNone(googleProvider)) {
             return yield* Effect.dieMessage(
-              "Google provider is enabled but GoogleAuthProvider dependency is unavailable"
-            )
+              "Google provider is enabled but GoogleAuthProvider dependency is unavailable",
+            );
           }
-          providers.push(googleProvider.value)
-          break
+          providers.push(googleProvider.value);
+          break;
         }
         case "coinbase": {
           if (Option.isNone(coinbaseProvider)) {
             return yield* Effect.dieMessage(
-              "Coinbase provider is enabled but CoinbaseAuthProvider dependency is unavailable"
-            )
+              "Coinbase provider is enabled but CoinbaseAuthProvider dependency is unavailable",
+            );
           }
-          providers.push(coinbaseProvider.value)
-          break
+          providers.push(coinbaseProvider.value);
+          break;
         }
       }
     }
 
     if (providers.length === 0) {
       return yield* Effect.dieMessage(
-        "No authentication providers enabled. Set AUTH_ENABLED_PROVIDERS to include at least one provider"
-      )
+        "No authentication providers enabled. Set AUTH_ENABLED_PROVIDERS to include at least one provider",
+      );
     }
 
-    return providers
-  })
+    return providers;
+  });
 
 /**
  * AuthServiceConfigDefault - AuthService configuration from env
@@ -362,22 +364,22 @@ const buildEnabledProvidersFromConfig = (
 const AuthServiceConfigDefault = Layer.effect(
   AuthServiceConfig,
   Effect.gen(function* () {
-    const authConfig = yield* authConfigFromEnv.pipe(Effect.orDie)
-    const localProvider = yield* LocalAuthProvider
-    const localAuth = Option.getOrElse(authConfig.providerConfigs.local, () => localAuthDefaults)
+    const authConfig = yield* authConfigFromEnv.pipe(Effect.orDie);
+    const localProvider = yield* LocalAuthProvider;
+    const localAuth = Option.getOrElse(authConfig.providerConfigs.local, () => localAuthDefaults);
     const googleProvider = authConfig.enabledProviders.includes("google")
       ? Option.some((yield* GoogleAuthProvider) satisfies AuthProvider)
-      : Option.none<AuthProvider>()
+      : Option.none<AuthProvider>();
     const coinbaseProvider = authConfig.enabledProviders.includes("coinbase")
       ? Option.some((yield* CoinbaseAuthProvider) satisfies AuthProvider)
-      : Option.none<AuthProvider>()
+      : Option.none<AuthProvider>();
 
     const providers = yield* buildEnabledProvidersFromConfig(
       authConfig,
       localProvider,
       googleProvider,
-      coinbaseProvider
-    )
+      coinbaseProvider,
+    );
 
     return {
       providers: Chunk.fromIterable(providers),
@@ -385,13 +387,13 @@ const AuthServiceConfigDefault = Layer.effect(
       localAuth,
       autoProvisionUsers: true,
       linkIdentitiesByEmail: authConfig.autoLinkByEmail,
-    }
-  })
+    };
+  }),
 ).pipe(
   Layer.provide(LocalAuthProviderWithDeps),
   Layer.provide(GoogleAuthProviderWithDeps),
-  Layer.provide(CoinbaseAuthProviderWithDeps)
-)
+  Layer.provide(CoinbaseAuthProviderWithDeps),
+);
 
 /**
  * AuthServiceWithDeps - AuthServiceLive with all dependencies
@@ -406,8 +408,8 @@ const AuthServiceWithDeps = AuthServiceLive.pipe(
   Layer.provide(IdentityRepositoryLive),
   Layer.provide(SessionRepositoryLive),
   Layer.provide(OAuthStateStoreLive),
-  Layer.provide(PrincipalRepositoryLive)
-)
+  Layer.provide(PrincipalRepositoryLive),
+);
 
 // =============================================================================
 // Combined Layers
@@ -420,4 +422,4 @@ const AuthServiceWithDeps = AuthServiceLive.pipe(
  * - AuthService
  * - PasswordHasher
  */
-export const AuthLive = Layer.mergeAll(AuthServiceWithDeps, PasswordHasherWithCrypto)
+export const AuthLive = Layer.mergeAll(AuthServiceWithDeps, PasswordHasherWithCrypto);
