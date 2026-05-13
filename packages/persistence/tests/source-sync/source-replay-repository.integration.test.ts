@@ -11,7 +11,6 @@ import {
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
-  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   type SyncEngineRepositoryFixture,
   seedSyncEngineAssets,

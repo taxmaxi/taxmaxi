@@ -97,6 +97,18 @@ const errorMessage = (error: unknown): string => {
     return error
   }
 
+  if (error instanceof UnsupportedProviderError) {
+    return `Unsupported sync provider: ${error.provider}`
+  }
+
+  if (error instanceof SyncEngineStorageError) {
+    return error.message
+  }
+
+  if (error instanceof Error && error.message.trim() !== "") {
+    return error.message
+  }
+
   return Either.match(decodeUnknownSyncError(error), {
     onLeft: () => "Sync execution failed",
     onRight: ({ message }) => message,

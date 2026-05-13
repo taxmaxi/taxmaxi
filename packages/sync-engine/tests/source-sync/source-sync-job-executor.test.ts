@@ -74,18 +74,21 @@ const makeExecutorLayer = ({
   mode,
   failFetch = false,
   executionJobFailure,
+  sourceProviderKey = "coinbase",
   replayRawRecords = [],
   events,
 }: {
   readonly mode: SourceSyncJobMode
   readonly failFetch?: boolean
   readonly executionJobFailure?: "not-found" | "conflict" | "payload"
+  readonly sourceProviderKey?: string
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly events: Array<string>
 }) => {
+  const syncSource = { ...source, providerKey: sourceProviderKey }
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
-    findOwnedSourceSyncContext: () => Effect.succeed(Option.some(source)),
-    listPrincipalSourceSyncContexts: () => Effect.succeed([source]),
+    findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
+    listPrincipalSourceSyncContexts: () => Effect.succeed([syncSource]),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -340,6 +343,23 @@ describe("SourceSyncJobExecutor", () => {
     expect(result.message).toBe("provider unavailable")
     expect(events).toContain("failure-metadata:provider unavailable")
     expect(events).toContain("fail:provider unavailable")
+  })
+
+  it("records a readable message for unsupported sync providers", async () => {
+    const events: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(makeExecutorLayer({ mode: "sync", sourceProviderKey: "solana", events }))
+      )
+    )
+
+    expect(result.status).toBe("failed")
+    expect(result.message).toBe("Unsupported sync provider: solana")
+    expect(events).toContain("failure-metadata:Unsupported sync provider: solana")
+    expect(events).toContain("fail:Unsupported sync provider: solana")
   })
 
   it("marks retryable provider failure failed on the final attempt", async () => {

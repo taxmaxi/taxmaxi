@@ -183,6 +183,16 @@ const makeClientWithBearerToken = (token: string) =>
     })
   })
 
+const makeClientWithCookie = (cookieHeader: string) =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient.pipe(
+        HttpClient.mapRequest(HttpClientRequest.setHeader("cookie", cookieHeader))
+      ),
+    })
+  })
+
 const seedCoinbaseSource = ({
   userId,
   principalId,
@@ -383,6 +393,30 @@ describe("SourcesApiLive", () => {
       const principals = yield* db.select({ id: schema.principals.id }).from(schema.principals)
       expect(principals).toEqual([])
       expect(queueEvents).toHaveLength(0)
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("rejects source creation when an invalid session cookie is present", () =>
+    Effect.gen(function* () {
+      const client = yield* makeClientWithCookie("taxmaxi_session=not-a-valid-session")
+      const result = yield* client.sources
+        .createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+            name: "First",
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("UnauthorizedError")
+      }
+
+      const db = yield* drizzle
+      const principals = yield* db.select({ id: schema.principals.id }).from(schema.principals)
+      expect(principals).toEqual([])
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

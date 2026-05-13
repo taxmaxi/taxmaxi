@@ -7,7 +7,6 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
-  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"

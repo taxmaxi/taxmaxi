@@ -14,7 +14,6 @@ import {
   TEST_BTC_ASSET_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
-  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   type SyncEngineRepositoryFixture,
   seedSyncEngineAssets,
