@@ -167,6 +167,22 @@ const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
     })
   })
 
+const makeUnauthenticatedClient = () =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient,
+    })
+  })
+
+const makeClientWithBearerToken = (token: string) =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient.pipe(HttpClient.mapRequest(HttpClientRequest.bearerToken(token))),
+    })
+  })
+
 const seedCoinbaseSource = ({
   userId,
   principalId,
@@ -300,6 +316,73 @@ describe("SourcesApiLive", () => {
           principalId,
         },
       ])
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("creates an anonymous Solana source and starts sync without auth", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+
+      const client = yield* makeUnauthenticatedClient()
+      const response = yield* client.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Anonymous Solana wallet",
+        },
+      })
+
+      expect(response.created).toBe(true)
+      expect(response.syncJob).not.toBeNull()
+      expect(response.source).toMatchObject({
+        name: "Anonymous Solana wallet",
+        providerKey: "solana",
+      })
+
+      const db = yield* drizzle
+      const [principal] = yield* db
+        .select({
+          id: schema.principals.id,
+          kind: schema.principals.kind,
+          userId: schema.principals.userId,
+        })
+        .from(schema.principals)
+
+      expect(principal).toEqual({
+        id: response.source.principalId,
+        kind: "anonymous_wallet",
+        userId: null,
+      })
+      expect(queueEvents).toHaveLength(1)
+      expect(queueEvents[0]).toMatchObject({
+        sourceId: response.source.id,
+        principalId: response.source.principalId,
+        mode: "sync",
+      })
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("rejects source creation when invalid auth credentials are present", () =>
+    Effect.gen(function* () {
+      const client = yield* makeClientWithBearerToken("not-a-valid-token")
+      const result = yield* client.sources
+        .createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("UnauthorizedError")
+      }
+
+      const db = yield* drizzle
+      const principals = yield* db.select({ id: schema.principals.id }).from(schema.principals)
+      expect(principals).toEqual([])
+      expect(queueEvents).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

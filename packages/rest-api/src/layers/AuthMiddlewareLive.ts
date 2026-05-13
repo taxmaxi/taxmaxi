@@ -12,16 +12,29 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
+import { Headers, HttpServerRequest } from "@effect/platform"
 import { AuthUserId, SessionId, type UserRole } from "@my/core/authentication"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { SessionRepository, UserRepository } from "@my/persistence/services"
 import { UnauthorizedError } from "../definitions/ApiErrors.ts"
 import {
   AuthMiddleware,
+  OptionalCurrentUser,
   TokenValidator,
   User,
+  type OptionalCurrentUserService,
   type TokenValidatorService,
 } from "../definitions/AuthMiddleware.ts"
+
+const SESSION_COOKIE_NAME = "taxmaxi_session"
+
+const extractBearerToken = (authorization: string): Option.Option<string> => {
+  const [scheme, token] = authorization.split(" ", 2)
+  if (scheme?.toLowerCase() !== "bearer" || token === undefined || token.trim() === "") {
+    return Option.none()
+  }
+  return Option.some(token)
+}
 
 // =============================================================================
 // Middleware Implementation
@@ -64,6 +77,51 @@ export const AuthMiddlewareLive: Layer.Layer<AuthMiddleware, never, TokenValidat
           )
       },
     })
+  })
+)
+
+/**
+ * OptionalCurrentUserLive - Resolves optional request authentication for public endpoints.
+ *
+ * Missing credentials resolve to Option.none. Invalid Authorization headers,
+ * bearer tokens, or session cookies fail with UnauthorizedError.
+ */
+export const OptionalCurrentUserLive: Layer.Layer<
+  OptionalCurrentUser,
+  never,
+  TokenValidator
+> = Layer.effect(
+  OptionalCurrentUser,
+  Effect.gen(function* () {
+    const tokenValidator = yield* TokenValidator
+
+    const resolve: OptionalCurrentUserService["resolve"] = () =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const maybeAuthorization = Headers.get(request.headers, "authorization")
+        const maybeBearerToken = maybeAuthorization.pipe(Option.flatMap(extractBearerToken))
+        const maybeSessionToken = Option.fromNullable(request.cookies[SESSION_COOKIE_NAME])
+
+        if (Option.isSome(maybeAuthorization) && Option.isNone(maybeBearerToken)) {
+          return yield* Effect.fail(
+            new UnauthorizedError({ message: "Invalid authorization header" })
+          )
+        }
+
+        if (Option.isSome(maybeBearerToken)) {
+          const user = yield* tokenValidator.validate(Redacted.make(maybeBearerToken.value))
+          return Option.some(user)
+        }
+
+        if (Option.isSome(maybeSessionToken)) {
+          const user = yield* tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+          return Option.some(user)
+        }
+
+        return Option.none<User>()
+      })
+
+    return OptionalCurrentUser.of({ resolve })
   })
 )
 

@@ -13,6 +13,7 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
+import type { PrincipalId } from "@my/core/ownership"
 import { parseCryptoAddress, SourceId } from "@my/core/source"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -26,7 +27,7 @@ import {
   TaxCalculationService,
 } from "@my/persistence/services"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
-import { CurrentUser } from "../definitions/AuthMiddleware.ts"
+import { CurrentUser, OptionalCurrentUser, type User } from "../definitions/AuthMiddleware.ts"
 import {
   SourceSyncJobResponse,
   SourceSyncStartResponse,
@@ -51,24 +52,100 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
     const principalRepository = yield* PrincipalRepository
     const sourceRepository = yield* PersistenceSourceRepository
     const syncEngineSourceRepository = yield* SyncEngineSourceRepository
+    const optionalCurrentUser = yield* OptionalCurrentUser
 
-    const resolvePrincipal = Effect.gen(function* () {
+    const resolveUserPrincipal = (currentUser: User) =>
+      Effect.gen(function* () {
+        const maybePrincipal = yield* principalRepository
+          .findUserPrincipal(currentUser.userId)
+          .pipe(Effect.mapError(() => toInternalServerError("Failed to resolve principal.")))
+
+        if (Option.isNone(maybePrincipal)) {
+          return yield* Effect.fail(toInternalServerError("Missing user principal."))
+        }
+
+        return maybePrincipal.value
+      })
+
+    const resolveCurrentUserPrincipal = Effect.gen(function* () {
       const currentUser = yield* CurrentUser
-      const maybePrincipal = yield* principalRepository.findUserPrincipal(currentUser.userId).pipe(
-        Effect.mapError(() => toInternalServerError("Failed to resolve principal."))
-      )
+      return yield* resolveUserPrincipal(currentUser)
+    })
 
-      if (Option.isNone(maybePrincipal)) {
-        return yield* Effect.fail(toInternalServerError("Missing user principal."))
+    const resolveOptionalCreatePrincipal = Effect.gen(function* () {
+      const maybeCurrentUser = yield* optionalCurrentUser.resolve()
+      if (Option.isSome(maybeCurrentUser)) {
+        const principal = yield* resolveUserPrincipal(maybeCurrentUser.value)
+        return { principal, isAnonymous: false } as const
       }
 
-      return maybePrincipal.value
+      const principal = yield* principalRepository
+        .createAnonymousWalletPrincipal()
+        .pipe(Effect.mapError(() => toInternalServerError("Failed to create anonymous principal.")))
+
+      return { principal, isAnonymous: true } as const
     })
+
+    const createOnchainSource = ({
+      principalId,
+      payload,
+    }: {
+      readonly principalId: PrincipalId
+      readonly payload: {
+        readonly walletAddress: string
+        readonly name?: string | undefined
+      }
+    }) =>
+      Effect.gen(function* () {
+        const parsedAddress = parseCryptoAddress(payload.walletAddress)
+        if (parsedAddress === null) {
+          return yield* Effect.fail(toBadRequestError("Invalid crypto address."))
+        }
+
+        const sourceName =
+          payload.name ?? `${parsedAddress.address.slice(0, 5)}...${parsedAddress.address.slice(-5)}`
+
+        return yield* sourceRepository
+          .createOrReuseOnchainSource({
+            principalId,
+            chainType: parsedAddress.chainType,
+            walletAddress: parsedAddress.address,
+            name: sourceName,
+          })
+          .pipe(Effect.mapError(() => toInternalServerError("Failed to create or reuse source.")))
+      })
+
+    const startSync = ({
+      principalId,
+      sourceId,
+    }: {
+      readonly principalId: string
+      readonly sourceId: string
+    }) =>
+      sourceSyncService
+        .startSourceSyncJob({
+          principalId,
+          sourceId,
+        })
+        .pipe(
+          Effect.mapError((error) => {
+            switch (error._tag) {
+              case "UnsupportedProviderError":
+                return toBadRequestError(`Unsupported provider: ${error.provider}`)
+              case "SourceNotFoundError":
+                return toBadRequestError(sourceNotFoundMessage)
+              case "SourceSyncQueueError":
+                return toInternalServerError("Failed to enqueue source sync job.")
+              default:
+                return toInternalServerError("Failed to start source sync.")
+            }
+          })
+        )
 
     return handlers
       .handle("listSources", () =>
         Effect.gen(function* () {
-          const principal = yield* resolvePrincipal
+          const principal = yield* resolveCurrentUserPrincipal
           const sources = yield* sourceRepository.findByPrincipalId(principal.id).pipe(
             Effect.mapError((error) => {
               switch (error._tag) {
@@ -82,26 +159,14 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("createSource", ({ payload }) =>
         Effect.gen(function* () {
-          const principal = yield* resolvePrincipal
-          const parsedAddress = parseCryptoAddress(payload.walletAddress)
-          if (parsedAddress === null) {
-            return yield* Effect.fail(toBadRequestError("Invalid crypto address."))
-          }
+          const { principal, isAnonymous } = yield* resolveOptionalCreatePrincipal
+          const created = yield* createOnchainSource({
+            principalId: principal.id,
+            payload,
+          })
 
-          const sourceName =
-            payload.name ?? `${parsedAddress.address.slice(0, 5)}...${parsedAddress.address.slice(-5)}`
-          const created = yield* sourceRepository
-            .createOrReuseOnchainSource({
-              principalId: principal.id,
-              chainType: parsedAddress.chainType,
-              walletAddress: parsedAddress.address,
-              name: sourceName,
-            })
-            .pipe(
-              Effect.mapError(() => toInternalServerError("Failed to create or reuse source."))
-            )
-
-          if (payload.sync !== true) {
+          const shouldStartSync = isAnonymous || payload.sync === true
+          if (!shouldStartSync) {
             return SourceCreateResponse.make({
               source: created.source,
               created: created.created,
@@ -109,25 +174,10 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             })
           }
 
-          const syncJob = yield* sourceSyncService
-            .startSourceSyncJob({
-              principalId: principal.id,
-              sourceId: created.source.id,
-            })
-            .pipe(
-              Effect.mapError((error) => {
-                switch (error._tag) {
-                  case "UnsupportedProviderError":
-                    return toBadRequestError(`Unsupported provider: ${error.provider}`)
-                  case "SourceNotFoundError":
-                    return toBadRequestError(sourceNotFoundMessage)
-                  case "SourceSyncQueueError":
-                    return toInternalServerError("Failed to enqueue source sync job.")
-                  default:
-                    return toInternalServerError("Failed to start source sync.")
-                }
-              })
-            )
+          const syncJob = yield* startSync({
+            principalId: principal.id,
+            sourceId: created.source.id,
+          })
 
           return SourceCreateResponse.make({
             source: created.source,
@@ -138,33 +188,20 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("startSourceSyncJob", ({ path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolvePrincipal
+          const principal = yield* resolveCurrentUserPrincipal
           const startParams = {
             principalId: principal.id,
             sourceId: path.sourceId,
           }
 
-          const started = yield* sourceSyncService.startSourceSyncJob(startParams).pipe(
-            Effect.mapError((error) => {
-              switch (error._tag) {
-                case "UnsupportedProviderError":
-                  return toBadRequestError(`Unsupported provider: ${error.provider}`)
-                case "SourceNotFoundError":
-                  return toBadRequestError(sourceNotFoundMessage)
-                case "SourceSyncQueueError":
-                  return toInternalServerError("Failed to enqueue source sync job.")
-                default:
-                  return toInternalServerError("Failed to start source sync.")
-              }
-            })
-          )
+          const started = yield* startSync(startParams)
 
           return SourceSyncStartResponse.make(started)
         })
       )
       .handle("replaySourceSyncJob", ({ path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolvePrincipal
+          const principal = yield* resolveCurrentUserPrincipal
           const replayParams = {
             principalId: principal.id,
             sourceId: path.sourceId,
@@ -190,7 +227,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("getSourceSyncJobStatus", ({ path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolvePrincipal
+          const principal = yield* resolveCurrentUserPrincipal
           const job = yield* sourceSyncService
             .getSourceSyncJob({
               principalId: principal.id,
@@ -213,7 +250,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("calculateTaxForSource", ({ path, payload }) =>
         Effect.gen(function* () {
-          const principal = yield* resolvePrincipal
+          const principal = yield* resolveCurrentUserPrincipal
           const sourceId = yield* Schema.decodeUnknown(SourceId)(path.sourceId).pipe(
             Effect.mapError(() => toBadRequestError("Invalid source identifier."))
           )

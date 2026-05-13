@@ -13,7 +13,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/p
 import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 import { Source } from "@my/core/source"
-import { InternalServerError } from "./ApiErrors.ts"
+import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 
 // =============================================================================
 // Source-Specific Error Schemas (with HTTP status codes)
@@ -150,11 +150,13 @@ const createSource = HttpApiEndpoint.post("createSource", "/sources")
   .setPayload(SourceCreateRequest)
   .addSuccess(SourceCreateResponse)
   .addError(SourceBadRequestError)
+  .addError(UnauthorizedError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
       summary: "Create source",
-      description: "Creates or reuses an onchain source for the authenticated user.",
+      description:
+        "Creates or reuses an onchain source for an authenticated user, or creates an anonymous wallet source when no credentials are present.",
     })
   )
 
@@ -254,12 +256,12 @@ const calculateTaxForSource = HttpApiEndpoint.post(
  */
 export class SourcesApi extends HttpApiGroup.make("sources")
   .add(listSources)
-  .add(createSource)
   .add(startSourceSyncJob)
   .add(replaySourceSyncJob)
   .add(getSourceSyncJobStatus)
   .add(calculateTaxForSource)
-  .middleware(AuthMiddleware)
+  .middlewareEndpoints(AuthMiddleware)
+  .add(createSource)
   .prefix("/v1")
   .annotateContext(
     OpenApi.annotations({

@@ -8,8 +8,10 @@
  */
 
 import { HttpApiMiddleware, HttpApiSecurity } from "@effect/platform"
+import type * as HttpServerRequest from "@effect/platform/HttpServerRequest"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import type * as Option from "effect/Option"
 import type * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import { AuthUserId, SessionId } from "@my/core/authentication"
@@ -57,6 +59,28 @@ export class CurrentUser extends Context.Tag("@my/rest-api/AuthMiddleware/Curren
   CurrentUser,
   User
 >() {}
+
+/**
+ * OptionalCurrentUserService - Resolves an optional authenticated user for public endpoints.
+ *
+ * Missing credentials return Option.none. Present but invalid credentials fail
+ * with UnauthorizedError so public endpoints do not silently fall back to
+ * anonymous behavior when a caller sends a bad token.
+ */
+export interface OptionalCurrentUserService {
+  readonly resolve: () => Effect.Effect<
+    Option.Option<User>,
+    UnauthorizedError,
+    HttpServerRequest.HttpServerRequest
+  >
+}
+
+/**
+ * OptionalCurrentUser - Service tag for optional-auth endpoint handlers.
+ */
+export class OptionalCurrentUser extends Context.Tag(
+  "@my/rest-api/AuthMiddleware/OptionalCurrentUser"
+)<OptionalCurrentUser, OptionalCurrentUserService>() {}
 
 // =============================================================================
 // Authentication Middleware
