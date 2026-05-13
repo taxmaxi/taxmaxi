@@ -39,8 +39,12 @@ const TestPgClientLive = context.TestPgClientLive;
 
 const queuedAt = new Date("2026-01-01T00:00:00.000Z");
 const queueEvents: Array<SourceSyncQueuePayload> = [];
+const validX402PaymentHeader = "valid-test-x402-payment";
 const ClaimTokenConfigProvider = ConfigProvider.fromMap(
-  new Map([["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"]]),
+  new Map([
+    ["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"],
+    ["X402_ACCEPTED_PAYMENT_PROOF", validX402PaymentHeader],
+  ]),
 );
 
 const SourceSyncQueueTestLive = Layer.effect(
@@ -176,6 +180,16 @@ const makeUnauthenticatedClient = () =>
     const baseHttpClient = yield* HttpClient.HttpClient;
     return yield* HttpApiClient.makeWith(TaxMaxiApi, {
       httpClient: baseHttpClient,
+    });
+  });
+
+const makeUnauthenticatedClientWithPayment = () =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient;
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient.pipe(
+        HttpClient.mapRequest(HttpClientRequest.setHeader("x-payment", validX402PaymentHeader)),
+      ),
     });
   });
 
@@ -338,7 +352,7 @@ describe("SourcesApiLive", () => {
     Effect.gen(function* () {
       const walletAddress = "So11111111111111111111111111111111111111112";
 
-      const client = yield* makeUnauthenticatedClient();
+      const client = yield* makeUnauthenticatedClientWithPayment();
       const response = yield* client.sources.createSource({
         payload: {
           type: "onchain",
@@ -415,6 +429,46 @@ describe("SourcesApiLive", () => {
         principalId: response.source.principalId,
         mode: "sync",
       });
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("rejects anonymous source creation without x402 payment before side effects", () =>
+    Effect.gen(function* () {
+      const client = yield* makeUnauthenticatedClient();
+      const result = yield* client.sources
+        .createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Unpaid anonymous Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
+        .pipe(Effect.either);
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("SourcePaymentRequiredError");
+      }
+
+      const db = yield* drizzle;
+      const principals = yield* db.select({ id: schema.principals.id }).from(schema.principals);
+      const sources = yield* db.select({ id: schema.sources.id }).from(schema.sources);
+      const claims = yield* db
+        .select({ id: schema.principalClaims.id })
+        .from(schema.principalClaims);
+      const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs);
+
+      expect(principals).toEqual([]);
+      expect(sources).toEqual([]);
+      expect(claims).toEqual([]);
+      expect(jobs).toEqual([]);
+      expect(queueEvents).toHaveLength(0);
     }).pipe(
       Effect.provide(HttpLive),
       Effect.withConfigProvider(ClaimTokenConfigProvider),

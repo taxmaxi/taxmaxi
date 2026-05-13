@@ -23,9 +23,11 @@ import type { User } from "../definitions/AuthMiddleware.ts";
 import {
   SourceCreationBadRequestError,
   SourceCreationInternalError,
+  SourceCreationPaymentRequiredError,
   SourceCreationService,
   type SourceCreationServiceShape,
 } from "../services/SourceCreationService.ts";
+import { X402PaymentValidator } from "../services/X402PaymentValidator.ts";
 
 const CLI_CLAIM_TOKEN_BYTES = 32;
 const CLI_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000;
@@ -36,6 +38,8 @@ const claimTokenPepperConfig = Config.redacted("CLAIM_TOKEN_PEPPER").pipe(
 
 const toBadRequestError = (message: string) => new SourceCreationBadRequestError({ message });
 const toInternalError = (message: string) => new SourceCreationInternalError({ message });
+const toPaymentRequiredError = (message: string) =>
+  new SourceCreationPaymentRequiredError({ message });
 
 const generateClaimToken = (): string => {
   const bytes = new Uint8Array(CLI_CLAIM_TOKEN_BYTES);
@@ -65,6 +69,7 @@ export const SourceCreationServiceLive = Layer.effect(
     const principalClaimRepository = yield* PrincipalClaimRepository;
     const sourceRepository = yield* SourceRepository;
     const sourceSyncService = yield* SourceSyncService;
+    const x402PaymentValidator = yield* X402PaymentValidator;
 
     const resolveUserPrincipal = (currentUser: User) =>
       Effect.gen(function* () {
@@ -95,19 +100,14 @@ export const SourceCreationServiceLive = Layer.effect(
 
     const createOnchainSource = ({
       principalId,
-      walletAddress,
+      parsedAddress,
       name,
     }: {
       readonly principalId: PrincipalId;
-      readonly walletAddress: string;
+      readonly parsedAddress: NonNullable<ReturnType<typeof parseCryptoAddress>>;
       readonly name?: string | undefined;
     }) =>
       Effect.gen(function* () {
-        const parsedAddress = parseCryptoAddress(walletAddress);
-        if (parsedAddress === null) {
-          return yield* Effect.fail(toBadRequestError("Invalid crypto address."));
-        }
-
         const sourceName =
           name ?? `${parsedAddress.address.slice(0, 5)}...${parsedAddress.address.slice(-5)}`;
 
@@ -122,6 +122,37 @@ export const SourceCreationServiceLive = Layer.effect(
 
         return { ...created, parsedAddress };
       });
+
+    const parseWalletAddress = (walletAddress: string) =>
+      Effect.gen(function* () {
+        const parsedAddress = parseCryptoAddress(walletAddress);
+        if (parsedAddress === null) {
+          return yield* Effect.fail(toBadRequestError("Invalid crypto address."));
+        }
+
+        return parsedAddress;
+      });
+
+    const validateAnonymousPayment = ({
+      paymentHeader,
+      parsedAddress,
+      year,
+      jurisdiction,
+    }: {
+      readonly paymentHeader: Option.Option<string>;
+      readonly parsedAddress: NonNullable<ReturnType<typeof parseCryptoAddress>>;
+      readonly year: number;
+      readonly jurisdiction: string;
+    }) =>
+      x402PaymentValidator
+        .validateAnonymousSourceCreation({
+          paymentHeader,
+          chainType: parsedAddress.chainType,
+          walletAddress: parsedAddress.address,
+          year,
+          jurisdiction,
+        })
+        .pipe(Effect.mapError((error) => toPaymentRequiredError(error.message)));
 
     const loadClaimTokenPepper = Effect.gen(function* () {
       const pepper = yield* Effect.configProviderWith((provider) =>
@@ -206,12 +237,29 @@ export const SourceCreationServiceLive = Layer.effect(
           }),
         );
 
-    const createSource: SourceCreationServiceShape["createSource"] = ({ currentUser, payload }) =>
+    const createSource: SourceCreationServiceShape["createSource"] = ({
+      currentUser,
+      paymentHeader,
+      payload,
+    }) =>
       Effect.gen(function* () {
+        const parsedAddress = yield* parseWalletAddress(payload.walletAddress);
+        const year = payload.year ?? new Date().getUTCFullYear();
+        const jurisdiction = payload.jurisdiction ?? DEFAULT_CLAIM_JURISDICTION;
+
+        if (Option.isNone(currentUser)) {
+          yield* validateAnonymousPayment({
+            paymentHeader,
+            parsedAddress,
+            year,
+            jurisdiction,
+          });
+        }
+
         const { principal, isAnonymous } = yield* resolveCreatePrincipal(currentUser);
         const created = yield* createOnchainSource({
           principalId: principal.id,
-          walletAddress: payload.walletAddress,
+          parsedAddress,
           name: payload.name,
         });
 
@@ -240,8 +288,8 @@ export const SourceCreationServiceLive = Layer.effect(
               sourceId: created.source.id,
               chainType: created.parsedAddress.chainType,
               walletAddress: created.parsedAddress.address,
-              year: payload.year ?? new Date().getUTCFullYear(),
-              jurisdiction: payload.jurisdiction ?? DEFAULT_CLAIM_JURISDICTION,
+              year,
+              jurisdiction,
               pepper: maybeClaimTokenPepper.value,
             })
           : null;

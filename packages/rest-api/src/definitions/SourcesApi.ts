@@ -35,6 +35,14 @@ export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>
   HttpApiSchema.annotations({ status: 404 }),
 ) {}
 
+export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePaymentRequiredError>()(
+  "SourcePaymentRequiredError",
+  {
+    message: Schema.String,
+  },
+  HttpApiSchema.annotations({ status: 402 }),
+) {}
+
 // =============================================================================
 // Request/Response Schemas
 // =============================================================================
@@ -163,6 +171,7 @@ const createSource = HttpApiEndpoint.post("createSource", "/sources")
   .addSuccess(SourceCreateResponse)
   .addError(SourceBadRequestError)
   .addError(UnauthorizedError)
+  .addError(SourcePaymentRequiredError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({

@@ -34,6 +34,16 @@ export class SourceCreationInternalError extends Schema.TaggedError<SourceCreati
 ) {}
 
 /**
+ * SourceCreationPaymentRequiredError - Anonymous source creation requires x402 payment.
+ */
+export class SourceCreationPaymentRequiredError extends Schema.TaggedError<SourceCreationPaymentRequiredError>()(
+  "SourceCreationPaymentRequiredError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+/**
  * SourceCreationClaimMetadata - Anonymous source claim handle.
  */
 export interface SourceCreationClaimMetadata {
@@ -57,13 +67,17 @@ export interface SourceCreationResult {
  */
 export interface CreateSourceParams {
   readonly currentUser: Option.Option<User>;
+  readonly paymentHeader: Option.Option<string>;
   readonly payload: SourceCreateRequest;
 }
 
 /**
  * SourceCreationError - Typed failures from source creation orchestration.
  */
-export type SourceCreationError = SourceCreationBadRequestError | SourceCreationInternalError;
+export type SourceCreationError =
+  | SourceCreationBadRequestError
+  | SourceCreationInternalError
+  | SourceCreationPaymentRequiredError;
 
 /**
  * SourceCreationServiceShape - Optional-auth source creation use case.

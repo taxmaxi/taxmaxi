@@ -12,7 +12,7 @@
  * @module SourceApiLive
  */
 
-import { HttpApiBuilder } from "@effect/platform";
+import { Headers, HttpApiBuilder, HttpServerRequest } from "@effect/platform";
 import { SourceId } from "@my/core/source";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -36,6 +36,7 @@ import {
   SourceListResponse,
   SourceCreateResponse,
   SourceCreateClaimMetadata,
+  SourcePaymentRequiredError,
 } from "../definitions/SourcesApi.ts";
 import { InternalServerError } from "../definitions/ApiErrors.ts";
 import { Layer, Option } from "effect";
@@ -119,10 +120,12 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("createSource", ({ payload }) =>
         Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
           const currentUser = yield* optionalCurrentUser.resolve();
           const result = yield* sourceCreationService
             .createSource({
               currentUser,
+              paymentHeader: Headers.get(request.headers, "x-payment"),
               payload,
             })
             .pipe(
@@ -130,6 +133,8 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                 switch (error._tag) {
                   case "SourceCreationBadRequestError":
                     return toBadRequestError(error.message);
+                  case "SourceCreationPaymentRequiredError":
+                    return new SourcePaymentRequiredError({ message: error.message });
                   case "SourceCreationInternalError":
                     return toInternalServerError(error.message);
                 }

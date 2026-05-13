@@ -37,6 +37,7 @@ import { AuthApiLive, AuthSessionApiLive, CoinbaseCompatApiLive } from "./AuthAp
 import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts";
 import { SourcesApiLive } from "./SourcesApiLive.ts";
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts";
+import { X402PaymentValidatorLive } from "./X402PaymentValidatorLive.ts";
 
 // =============================================================================
 // Health API Implementation
@@ -137,6 +138,7 @@ export const TaxMaxiApiLive: Layer.Layer<
   // AuthMiddlewareLive requires TokenValidator to be provided externally
   // - For production: use SessionTokenValidatorLive (validates against database)
   // - For testing: use SimpleTokenValidatorLive (user_<id>_<role> format)
+  Layer.provide(X402PaymentValidatorLive),
   Layer.provide(OptionalCurrentUserLive),
   Layer.provide(AuthMiddlewareLive),
 );
