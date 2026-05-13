@@ -86,44 +86,41 @@ export const AuthMiddlewareLive: Layer.Layer<AuthMiddleware, never, TokenValidat
  * Missing credentials resolve to Option.none. Invalid Authorization headers,
  * bearer tokens, or session cookies fail with UnauthorizedError.
  */
-export const OptionalCurrentUserLive: Layer.Layer<
-  OptionalCurrentUser,
-  never,
-  TokenValidator
-> = Layer.effect(
-  OptionalCurrentUser,
-  Effect.gen(function* () {
-    const tokenValidator = yield* TokenValidator
+export const OptionalCurrentUserLive: Layer.Layer<OptionalCurrentUser, never, TokenValidator> =
+  Layer.effect(
+    OptionalCurrentUser,
+    Effect.gen(function* () {
+      const tokenValidator = yield* TokenValidator
 
-    const resolve: OptionalCurrentUserService["resolve"] = () =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest
-        const maybeAuthorization = Headers.get(request.headers, "authorization")
-        const maybeBearerToken = maybeAuthorization.pipe(Option.flatMap(extractBearerToken))
-        const maybeSessionToken = Option.fromNullable(request.cookies[SESSION_COOKIE_NAME])
+      const resolve: OptionalCurrentUserService["resolve"] = () =>
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest
+          const maybeAuthorization = Headers.get(request.headers, "authorization")
+          const maybeBearerToken = maybeAuthorization.pipe(Option.flatMap(extractBearerToken))
+          const maybeSessionToken = Option.fromNullable(request.cookies[SESSION_COOKIE_NAME])
 
-        if (Option.isSome(maybeAuthorization) && Option.isNone(maybeBearerToken)) {
-          return yield* Effect.fail(
-            new UnauthorizedError({ message: "Invalid authorization header" })
-          )
-        }
+          if (Option.isSome(maybeAuthorization) && Option.isNone(maybeBearerToken)) {
+            return yield* Effect.fail(
+              new UnauthorizedError({ message: "Invalid authorization header" })
+            )
+          }
 
-        if (Option.isSome(maybeBearerToken)) {
-          const user = yield* tokenValidator.validate(Redacted.make(maybeBearerToken.value))
-          return Option.some(user)
-        }
+          if (Option.isSome(maybeBearerToken)) {
+            const user = yield* tokenValidator.validate(Redacted.make(maybeBearerToken.value))
+            return Option.some(user)
+          }
 
-        if (Option.isSome(maybeSessionToken)) {
-          const user = yield* tokenValidator.validate(Redacted.make(maybeSessionToken.value))
-          return Option.some(user)
-        }
+          if (Option.isSome(maybeSessionToken)) {
+            const user = yield* tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            return Option.some(user)
+          }
 
-        return Option.none<User>()
-      })
+          return Option.none<User>()
+        })
 
-    return OptionalCurrentUser.of({ resolve })
-  })
-)
+      return OptionalCurrentUser.of({ resolve })
+    })
+  )
 
 // =============================================================================
 // Token Validator Implementations

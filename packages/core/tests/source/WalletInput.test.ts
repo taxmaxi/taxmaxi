@@ -12,20 +12,14 @@ import {
 describe("WalletInput", () => {
   it("detects EVM, Bitcoin, and Solana address families", () => {
     expect(detectAddressChainType("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")).toBe("evm")
-    expect(detectAddressChainType("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080")).toBe(
-      "bitcoin"
-    )
-    expect(detectAddressChainType("So11111111111111111111111111111111111111112")).toBe(
-      "solana"
-    )
+    expect(detectAddressChainType("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080")).toBe("bitcoin")
+    expect(detectAddressChainType("So11111111111111111111111111111111111111112")).toBe("solana")
     expect(detectAddressChainType("not-an-address")).toBeNull()
   })
 
   it("parses a crypto address with inferred chain type", async () => {
     const parsed = await Effect.runPromise(
-      Schema.decodeUnknown(ValidatedCryptoAddress)(
-        "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-      )
+      Schema.decodeUnknown(ValidatedCryptoAddress)("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")
     )
 
     expect(parsed).toEqual({
@@ -39,7 +33,9 @@ describe("WalletInput", () => {
   })
 
   it("parses ENS separately from direct addresses", async () => {
-    const parsed = await Effect.runPromise(Schema.decodeUnknown(ValidatedAddressOrEns)("Vitalik.eth"))
+    const parsed = await Effect.runPromise(
+      Schema.decodeUnknown(ValidatedAddressOrEns)("Vitalik.eth")
+    )
 
     expect(parsed).toEqual({
       type: "ens",

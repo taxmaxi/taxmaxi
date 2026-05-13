@@ -58,9 +58,9 @@ export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (han
 
     const resolvePrincipal = Effect.gen(function* () {
       const currentUser = yield* CurrentUser
-      const maybePrincipal = yield* principalRepository.findUserPrincipal(currentUser.userId).pipe(
-        Effect.mapError(() => toInternalServerError("Failed to resolve principal."))
-      )
+      const maybePrincipal = yield* principalRepository
+        .findUserPrincipal(currentUser.userId)
+        .pipe(Effect.mapError(() => toInternalServerError("Failed to resolve principal.")))
 
       if (Option.isNone(maybePrincipal)) {
         return yield* Effect.fail(toInternalServerError("Missing user principal."))

@@ -103,7 +103,8 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
         }
 
         const sourceName =
-          payload.name ?? `${parsedAddress.address.slice(0, 5)}...${parsedAddress.address.slice(-5)}`
+          payload.name ??
+          `${parsedAddress.address.slice(0, 5)}...${parsedAddress.address.slice(-5)}`
 
         return yield* sourceRepository
           .createOrReuseOnchainSource({

@@ -171,7 +171,11 @@ export const ValidatedCryptoAddress = Schema.transformOrFail(
       const parsed = parseCryptoAddress(address)
       if (parsed === null) {
         return Effect.fail(
-          new ParseResult.Type(ast, address, "Address validated but chain type could not be detected.")
+          new ParseResult.Type(
+            ast,
+            address,
+            "Address validated but chain type could not be detected."
+          )
         )
       }
       return Effect.succeed(parsed)
@@ -300,7 +304,9 @@ export const ValidatedAddressOrEns = Schema.transformOrFail(AddressOrEns, Addres
   decode: (input, _, ast) => {
     const parsed = parseAddressOrEns(input)
     if (parsed === null) {
-      return Effect.fail(new ParseResult.Type(ast, input, "Input validated but could not be parsed."))
+      return Effect.fail(
+        new ParseResult.Type(ast, input, "Input validated but could not be parsed.")
+      )
     }
     return Effect.succeed(parsed)
   },
