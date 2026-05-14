@@ -5,13 +5,20 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
-import { PrincipalClaimRepository } from "@my/persistence/services"
+import {
+  PrincipalClaimRepository,
+  PrincipalClaimTransferConflictError,
+  PrincipalClaimTransferStaleError,
+  isPrincipalClaimTransferConflictError,
+  isPrincipalClaimTransferStaleError,
+} from "@my/persistence/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   PrincipalClaimBadRequestError,
+  PrincipalClaimConflictError,
   PrincipalClaimNotFoundError,
   PrincipalClaimResponse,
 } from "../definitions/PrincipalsApi.ts"
@@ -21,6 +28,25 @@ import { PrincipalResolutionService } from "../services/PrincipalResolutionServi
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
+
+const mapClaimTransferError = (
+  error:
+    | PrincipalClaimTransferConflictError
+    | PrincipalClaimTransferStaleError
+    | { readonly message: string }
+) => {
+  if (isPrincipalClaimTransferConflictError(error)) {
+    return new PrincipalClaimConflictError({
+      message: "A source for this wallet already exists on the authenticated user.",
+    })
+  }
+
+  if (isPrincipalClaimTransferStaleError(error)) {
+    return new PrincipalClaimNotFoundError({ message: "Valid claim token not found." })
+  }
+
+  return toInternalServerError("Failed to claim source.")
+}
 
 const loadClaimTokenPepper = Effect.gen(function* () {
   const pepper = yield* Effect.configProviderWith((provider) =>
@@ -46,9 +72,10 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
 
     return handlers.handle("claimPrincipal", ({ payload }) =>
       Effect.gen(function* () {
-        yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
-          Effect.mapError((error) => toInternalServerError(error.message))
-        )
+        const currentUserPrincipal =
+          yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
+            Effect.mapError((error) => toInternalServerError(error.message))
+          )
 
         const pepper = yield* loadClaimTokenPepper
         const claimValueHash = hashCliClaimToken({
@@ -75,8 +102,18 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
           )
         }
 
+        const claimedSourceId = yield* principalClaimRepository
+          .claimAnonymousSourceForUser({
+            requestId: payload.requestId,
+            claimValueHash,
+            anonymousPrincipalId: maybeClaim.value.principalId,
+            userPrincipalId: currentUserPrincipal.principal.id,
+            sourceId: maybeClaim.value.sourceId,
+          })
+          .pipe(Effect.mapError(mapClaimTransferError))
+
         return PrincipalClaimResponse.make({
-          sourceId: maybeClaim.value.sourceId,
+          sourceId: claimedSourceId,
         })
       })
     )

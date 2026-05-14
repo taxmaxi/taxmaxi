@@ -17,6 +17,11 @@ import type { PrincipalClaimRow } from "../schema/PrincipalClaimsTable.ts"
 import {
   PrincipalClaimRepository,
   type PrincipalClaim,
+  PrincipalClaimTransferConflictError,
+  type PrincipalClaimTransferError,
+  PrincipalClaimTransferStaleError,
+  isPrincipalClaimTransferConflictError,
+  isPrincipalClaimTransferStaleError,
   type PrincipalClaimRepositoryService,
 } from "../services/PrincipalClaimRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
@@ -75,6 +80,31 @@ const rowToPrincipalClaim = (row: SelectedPrincipalClaimRow): Effect.Effect<Prin
       consumedAt: row.consumedAt,
     }
   })
+
+const isPrincipalClaimTransferError = (error: unknown): error is PrincipalClaimTransferError =>
+  isPrincipalClaimTransferConflictError(error) || isPrincipalClaimTransferStaleError(error)
+
+const findPrincipalClaimTransferError = (error: unknown): PrincipalClaimTransferError | null => {
+  if (isPrincipalClaimTransferError(error)) {
+    return error
+  }
+
+  if (typeof error !== "object" || error === null || !("cause" in error)) {
+    return null
+  }
+
+  return findPrincipalClaimTransferError(error.cause)
+}
+
+const wrapClaimTransferSqlError =
+  (operation: string) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, PersistenceError | PrincipalClaimTransferError, R> =>
+    Effect.mapError(effect, (cause) => {
+      const transferError = findPrincipalClaimTransferError(cause)
+      return transferError ?? new PersistenceError({ operation, cause })
+    })
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -181,9 +211,244 @@ const make = Effect.gen(function* () {
       return Option.some(claim)
     }).pipe(wrapSqlError("principalClaimRepository.findValidCliSourceClaim"))
 
+  const claimAnonymousSourceForUser: PrincipalClaimRepositoryService["claimAnonymousSourceForUser"] =
+    (params) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const now = new Date()
+            const [claimRow] = yield* tx
+              .select({
+                ...selectPrincipalClaimFields,
+                addressId: schema.addresses.id,
+              })
+              .from(schema.principalClaims)
+              .innerJoin(
+                schema.principals,
+                eq(schema.principals.id, schema.principalClaims.principalId)
+              )
+              .innerJoin(schema.sources, eq(schema.sources.id, schema.principalClaims.sourceId))
+              .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+              .where(
+                and(
+                  eq(schema.principalClaims.requestId, params.requestId),
+                  eq(schema.principalClaims.claimType, "cli_claim_token"),
+                  eq(schema.principalClaims.claimValueHash, params.claimValueHash),
+                  eq(schema.principalClaims.principalId, params.anonymousPrincipalId),
+                  eq(schema.principalClaims.sourceId, params.sourceId),
+                  isNull(schema.principalClaims.consumedAt),
+                  or(
+                    isNull(schema.principalClaims.expiresAt),
+                    gt(schema.principalClaims.expiresAt, now)
+                  ),
+                  eq(schema.principals.kind, "anonymous_wallet"),
+                  eq(schema.sources.id, params.sourceId),
+                  eq(schema.sources.principalId, params.anonymousPrincipalId),
+                  eq(schema.sources.sourceableType, "onchain"),
+                  eq(schema.addresses.principalId, params.anonymousPrincipalId),
+                  sql`${schema.addresses.type}::text = ${schema.principalClaims.chainType}`,
+                  eq(schema.addresses.address, schema.principalClaims.walletAddress)
+                )
+              )
+              .limit(1)
+
+            if (
+              claimRow === undefined ||
+              claimRow.sourceId === null ||
+              claimRow.chainType === null ||
+              claimRow.walletAddress === null ||
+              claimRow.year === null ||
+              claimRow.jurisdiction === null
+            ) {
+              return yield* Effect.fail(
+                new PrincipalClaimTransferStaleError({
+                  message: "Valid claim token not found.",
+                })
+              )
+            }
+
+            const [receiptRow] = yield* tx
+              .select({ id: schema.principalClaims.id })
+              .from(schema.principalClaims)
+              .where(
+                and(
+                  eq(schema.principalClaims.requestId, claimRow.requestId),
+                  eq(schema.principalClaims.claimType, "x402_receipt"),
+                  eq(schema.principalClaims.principalId, claimRow.principalId),
+                  eq(schema.principalClaims.sourceId, claimRow.sourceId),
+                  eq(schema.principalClaims.chainType, claimRow.chainType),
+                  eq(schema.principalClaims.walletAddress, claimRow.walletAddress),
+                  eq(schema.principalClaims.year, claimRow.year),
+                  eq(schema.principalClaims.jurisdiction, claimRow.jurisdiction),
+                  isNull(schema.principalClaims.consumedAt)
+                )
+              )
+              .limit(1)
+
+            if (receiptRow === undefined) {
+              return yield* Effect.fail(
+                new PrincipalClaimTransferStaleError({
+                  message: "Matching receipt claim not found.",
+                })
+              )
+            }
+
+            const [targetAddressRow] = yield* tx
+              .select({ id: schema.addresses.id })
+              .from(schema.addresses)
+              .where(
+                and(
+                  eq(schema.addresses.principalId, params.userPrincipalId),
+                  eq(schema.addresses.address, claimRow.walletAddress)
+                )
+              )
+              .limit(1)
+
+            if (targetAddressRow !== undefined) {
+              return yield* Effect.fail(
+                new PrincipalClaimTransferConflictError({
+                  message: "Target principal already owns the claimed wallet address.",
+                })
+              )
+            }
+
+            const movedSources = yield* tx
+              .update(schema.sources)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.sources.id, params.sourceId),
+                  eq(schema.sources.principalId, params.anonymousPrincipalId)
+                )
+              )
+              .returning({ id: schema.sources.id })
+
+            if (movedSources.length !== 1) {
+              return yield* Effect.fail(
+                new PrincipalClaimTransferStaleError({
+                  message: "Claimed source was not moved.",
+                })
+              )
+            }
+
+            const movedAddresses = yield* tx
+              .update(schema.addresses)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.addresses.id, claimRow.addressId),
+                  eq(schema.addresses.principalId, params.anonymousPrincipalId)
+                )
+              )
+              .returning({ id: schema.addresses.id })
+
+            if (movedAddresses.length !== 1) {
+              return yield* Effect.fail(
+                new PrincipalClaimTransferStaleError({
+                  message: "Claimed address was not moved.",
+                })
+              )
+            }
+
+            yield* tx
+              .update(schema.cexAccount)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(eq(schema.cexAccount.principalId, params.anonymousPrincipalId))
+
+            yield* tx
+              .update(schema.transactions)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, params.sourceId),
+                  eq(schema.transactions.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.transfers)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.transfers.sourceId, params.sourceId),
+                  eq(schema.transfers.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.transactionLegs)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.transactionLegs.sourceId, params.sourceId),
+                  eq(schema.transactionLegs.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.fifoLots)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.fifoLots.sourceId, params.sourceId),
+                  eq(schema.fifoLots.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.processingJobs)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.processingJobs.sourceId, params.sourceId),
+                  eq(schema.processingJobs.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.syncRuns)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(eq(schema.syncRuns.principalId, params.anonymousPrincipalId))
+
+            yield* tx
+              .update(schema.transactionReviews)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(eq(schema.transactionReviews.principalId, params.anonymousPrincipalId))
+
+            yield* tx
+              .update(schema.transferReconciliations)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(eq(schema.transferReconciliations.principalId, params.anonymousPrincipalId))
+
+            const consumedClaims = yield* tx
+              .update(schema.principalClaims)
+              .set({ consumedAt: now, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.principalClaims.requestId, params.requestId),
+                  eq(schema.principalClaims.principalId, params.anonymousPrincipalId),
+                  isNull(schema.principalClaims.consumedAt)
+                )
+              )
+              .returning({ id: schema.principalClaims.id })
+
+            if (consumedClaims.length < 2) {
+              return yield* Effect.fail(
+                new PrincipalClaimTransferStaleError({
+                  message: "Request claims were not consumed.",
+                })
+              )
+            }
+
+            return params.sourceId
+          })
+        )
+        .pipe(wrapClaimTransferSqlError("principalClaimRepository.claimAnonymousSourceForUser"))
+
   return PrincipalClaimRepository.of({
     create,
     findValidCliSourceClaim,
+    claimAnonymousSourceForUser,
   } satisfies PrincipalClaimRepositoryService)
 })
 

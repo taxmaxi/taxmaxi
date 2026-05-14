@@ -32,6 +32,17 @@ export class PrincipalClaimNotFoundError extends Schema.TaggedError<PrincipalCla
 ) {}
 
 /**
+ * PrincipalClaimConflictError - Claim cannot be applied without merging existing data.
+ */
+export class PrincipalClaimConflictError extends Schema.TaggedError<PrincipalClaimConflictError>()(
+  "PrincipalClaimConflictError",
+  {
+    message: Schema.String,
+  },
+  HttpApiSchema.annotations({ status: 409 })
+) {}
+
+/**
  * PrincipalClaimRequest - Claim token submitted by an authenticated user.
  */
 export class PrincipalClaimRequest extends Schema.Class<PrincipalClaimRequest>(
@@ -59,12 +70,13 @@ const claimPrincipal = HttpApiEndpoint.post("claimPrincipal", "/principals/claim
   .addSuccess(PrincipalClaimResponse)
   .addError(PrincipalClaimBadRequestError)
   .addError(PrincipalClaimNotFoundError)
+  .addError(PrincipalClaimConflictError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
       summary: "Claim principal resource",
       description:
-        "Looks up an anonymous wallet source claim token for the authenticated user. Ownership transfer is implemented by a later endpoint slice.",
+        "Validates an anonymous wallet source claim token and moves the claimed source to the authenticated user.",
     })
   )
 

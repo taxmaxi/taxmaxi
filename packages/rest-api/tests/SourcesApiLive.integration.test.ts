@@ -559,6 +559,40 @@ describe("SourcesApiLive", () => {
       })
 
       expect(claimResponse.sourceId).toBe(created.source.id)
+
+      const sources = yield* authenticatedClient.sources.listSources()
+      expect(sources.sources.map((source) => source.id)).toContain(created.source.id)
+
+      const db = yield* drizzle
+      const [storedSource] = yield* db
+        .select({
+          sourcePrincipalId: schema.sources.principalId,
+          addressPrincipalId: schema.addresses.principalId,
+        })
+        .from(schema.sources)
+        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+        .where(eq(schema.sources.id, created.source.id))
+        .limit(1)
+      expect(storedSource).toEqual({
+        sourcePrincipalId: principalId,
+        addressPrincipalId: principalId,
+      })
+
+      const jobs = yield* db
+        .select({ principalId: schema.processingJobs.principalId })
+        .from(schema.processingJobs)
+        .where(eq(schema.processingJobs.sourceId, created.source.id))
+      expect(jobs).toEqual([{ principalId }])
+
+      const claims = yield* db
+        .select({
+          claimType: schema.principalClaims.claimType,
+          consumedAt: schema.principalClaims.consumedAt,
+        })
+        .from(schema.principalClaims)
+        .where(eq(schema.principalClaims.requestId, created.claim.requestId))
+      expect(claims).toHaveLength(2)
+      expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
     }).pipe(
       Effect.provide(HttpLive),
       Effect.withConfigProvider(ClaimTokenConfigProvider),
@@ -761,6 +795,66 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("returns conflict when claiming a wallet the user already owns", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Conflicting anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      yield* authenticatedClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Existing user Solana wallet",
+        },
+      })
+
+      const result = yield* authenticatedClient.principals
+        .claimPrincipal({
+          payload: {
+            requestId: created.claim.requestId,
+            claimToken: created.claim.claimToken,
+            siwxProof: null,
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("PrincipalClaimConflictError")
+      }
+
+      const db = yield* drizzle
+      const claims = yield* db
+        .select({ consumedAt: schema.principalClaims.consumedAt })
+        .from(schema.principalClaims)
+        .where(eq(schema.principalClaims.requestId, created.claim.requestId))
+      expect(claims).toHaveLength(2)
+      expect(claims.every((claim) => claim.consumedAt === null)).toBe(true)
     }).pipe(
       Effect.provide(HttpLive),
       Effect.withConfigProvider(ClaimTokenConfigProvider),

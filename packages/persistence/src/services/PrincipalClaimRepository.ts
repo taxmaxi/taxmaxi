@@ -9,6 +9,7 @@ import type { ChainType, SourceId } from "@my/core/source"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
 /**
@@ -39,6 +40,54 @@ export interface FindValidCliSourceClaimParams {
   readonly requestId: string
   readonly claimValueHash: string
 }
+
+/**
+ * ClaimAnonymousSourceForUserParams - Atomic ownership transfer request for a validated source claim.
+ */
+export interface ClaimAnonymousSourceForUserParams {
+  readonly requestId: string
+  readonly claimValueHash: string
+  readonly anonymousPrincipalId: PrincipalId
+  readonly userPrincipalId: PrincipalId
+  readonly sourceId: SourceId
+}
+
+/**
+ * PrincipalClaimTransferConflictError - The target user already owns a conflicting source.
+ */
+export class PrincipalClaimTransferConflictError extends Schema.TaggedError<PrincipalClaimTransferConflictError>()(
+  "PrincipalClaimTransferConflictError",
+  {
+    message: Schema.String,
+  }
+) {}
+
+/**
+ * PrincipalClaimTransferStaleError - A claim transfer can no longer be applied.
+ */
+export class PrincipalClaimTransferStaleError extends Schema.TaggedError<PrincipalClaimTransferStaleError>()(
+  "PrincipalClaimTransferStaleError",
+  {
+    message: Schema.String,
+  }
+) {}
+
+/**
+ * Type guard for PrincipalClaimTransferConflictError.
+ */
+export const isPrincipalClaimTransferConflictError = Schema.is(PrincipalClaimTransferConflictError)
+
+/**
+ * Type guard for PrincipalClaimTransferStaleError.
+ */
+export const isPrincipalClaimTransferStaleError = Schema.is(PrincipalClaimTransferStaleError)
+
+/**
+ * PrincipalClaimTransferError - Expected claim transfer failure.
+ */
+export type PrincipalClaimTransferError =
+  | PrincipalClaimTransferConflictError
+  | PrincipalClaimTransferStaleError
 
 /**
  * PrincipalClaim - Persisted claim projection.
@@ -75,6 +124,13 @@ export interface PrincipalClaimRepositoryService {
   readonly findValidCliSourceClaim: (
     params: FindValidCliSourceClaimParams
   ) => Effect.Effect<Option.Option<PrincipalClaim>, PersistenceError>
+
+  /**
+   * Move a no-conflict anonymous source into a user principal and consume request claims.
+   */
+  readonly claimAnonymousSourceForUser: (
+    params: ClaimAnonymousSourceForUserParams
+  ) => Effect.Effect<SourceId, PersistenceError | PrincipalClaimTransferError>
 }
 
 /**
