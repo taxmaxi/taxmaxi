@@ -19,6 +19,10 @@
     "./layers": {
       "types": "./dist/layers/index.d.ts",
       "default": "./dist/layers/index.js"
+    },
+    "./query": {
+      "types": "./dist/query/index.d.ts",
+      "default": "./dist/query/index.js"
     }
   },
   "scripts": {

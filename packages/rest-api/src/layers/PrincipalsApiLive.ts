@@ -57,16 +57,15 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
         })
 
         const maybeClaim = yield* principalClaimRepository
-          .findByRequestTypeAndValueHash({
+          .findValidCliSourceClaim({
             requestId: payload.requestId,
-            claimType: "cli_claim_token",
             claimValueHash,
           })
-          .pipe(Effect.mapError(() => toInternalServerError("Failed to load claim token.")))
+          .pipe(Effect.mapError(() => toInternalServerError("Failed to validate claim token.")))
 
         if (Option.isNone(maybeClaim)) {
           return yield* Effect.fail(
-            new PrincipalClaimNotFoundError({ message: "Claim token not found." })
+            new PrincipalClaimNotFoundError({ message: "Valid claim token not found." })
           )
         }
 

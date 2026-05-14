@@ -33,11 +33,10 @@ export interface CreatePrincipalClaimParams {
 }
 
 /**
- * FindPrincipalClaimByRequestTypeAndValueHashParams - Lookup key for a stored claim value.
+ * FindValidCliSourceClaimParams - Lookup key for a claim-token-backed source claim.
  */
-export interface FindPrincipalClaimByRequestTypeAndValueHashParams {
+export interface FindValidCliSourceClaimParams {
   readonly requestId: string
-  readonly claimType: PrincipalClaimType
   readonly claimValueHash: string
 }
 
@@ -71,10 +70,10 @@ export interface PrincipalClaimRepositoryService {
   ) => Effect.Effect<PrincipalClaim, PersistenceError>
 
   /**
-   * Find a principal claim by request id and type/value hash pair.
+   * Find a currently valid CLI source claim for an anonymous wallet principal.
    */
-  readonly findByRequestTypeAndValueHash: (
-    params: FindPrincipalClaimByRequestTypeAndValueHashParams
+  readonly findValidCliSourceClaim: (
+    params: FindValidCliSourceClaimParams
   ) => Effect.Effect<Option.Option<PrincipalClaim>, PersistenceError>
 }
 
