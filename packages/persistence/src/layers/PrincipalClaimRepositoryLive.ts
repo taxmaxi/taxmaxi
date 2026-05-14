@@ -305,6 +305,9 @@ const make = Effect.gen(function* () {
               .limit(1)
 
             if (targetAddressRow !== undefined) {
+              // Merging a paid anonymous source into an existing user-owned wallet source is
+              // intentionally deferred until normalized and tax artifact collisions have a
+              // complete idempotency design. Keep the claim reusable by leaving it unconsumed.
               return yield* Effect.fail(
                 new PrincipalClaimTransferConflictError({
                   message: "Target principal already owns the claimed wallet address.",

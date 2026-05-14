@@ -958,7 +958,7 @@ describe("SourcesApiLive", () => {
       yield* seedPrincipalUser({ userId, principalId })
 
       const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-      yield* authenticatedClient.sources.createSource({
+      const existing = yield* authenticatedClient.sources.createSource({
         payload: {
           type: "onchain",
           walletAddress,
@@ -982,6 +982,38 @@ describe("SourcesApiLive", () => {
       }
 
       const db = yield* drizzle
+      const visibleSources = yield* authenticatedClient.sources.listSources()
+      expect(visibleSources.sources.map((source) => source.id)).toContain(existing.source.id)
+      expect(visibleSources.sources.map((source) => source.id)).not.toContain(created.source.id)
+
+      const [anonymousOwnership] = yield* db
+        .select({
+          sourcePrincipalId: schema.sources.principalId,
+          addressPrincipalId: schema.addresses.principalId,
+        })
+        .from(schema.sources)
+        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+        .where(eq(schema.sources.id, created.source.id))
+        .limit(1)
+      expect(anonymousOwnership).toEqual({
+        sourcePrincipalId: created.source.principalId,
+        addressPrincipalId: created.source.principalId,
+      })
+
+      const [existingOwnership] = yield* db
+        .select({
+          sourcePrincipalId: schema.sources.principalId,
+          addressPrincipalId: schema.addresses.principalId,
+        })
+        .from(schema.sources)
+        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+        .where(eq(schema.sources.id, existing.source.id))
+        .limit(1)
+      expect(existingOwnership).toEqual({
+        sourcePrincipalId: principalId,
+        addressPrincipalId: principalId,
+      })
+
       const claims = yield* db
         .select({ consumedAt: schema.principalClaims.consumedAt })
         .from(schema.principalClaims)
