@@ -75,9 +75,7 @@
     "dev": "tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
     "type-check:tests": "tsc -p tsconfig.tests.json",
-    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
-    "format": "oxfmt -c ../../oxfmtrc.jsonc",
-    "lint": "oxlint -c ../../oxlintrc.json"
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
     "@effect/platform": "0.96.1",
@@ -90,8 +88,6 @@
     "@my/typescript-config": "workspace:*",
     "@types/node": "~25.5.0",
     "drizzle-orm": "1.0.0-beta.13-f728631",
-    "oxfmt": "~0.43.0",
-    "oxlint": "~1.58.0",
     "typescript": "~6.0.2"
   }
 }

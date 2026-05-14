@@ -21,14 +21,28 @@
     },
     "test": {
       "cache": false,
-      "dependsOn": ["lint", "build"],
+      "dependsOn": ["//#lint", "build"],
       "persistent": true
     },
     "dev": {
       "cache": false,
       "persistent": true
     },
-    "format": {},
-    "lint": {}
+    "//#quality": {
+      "dependsOn": ["//#lint", "//#format"]
+    },
+    "//#quality:fix": {
+      "dependsOn": ["//#lint:fix", "//#format:fix"],
+      "cache": false
+    },
+    "//#format": {},
+    "//#format:fix": {
+      "dependsOn": ["//#lint:fix"],
+      "cache": false
+    },
+    "//#lint": {},
+    "//#lint:fix": {
+      "cache": false
+    }
   }
 }

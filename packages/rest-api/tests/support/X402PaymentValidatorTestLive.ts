@@ -1,16 +1,16 @@
-import type { PaymentRequired, SettleResponse } from "@x402/core/types";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
+import type { PaymentRequired, SettleResponse } from "@x402/core/types"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import {
   X402PaymentRequiredError,
   X402PaymentSettlementError,
   X402PaymentValidator,
   type X402PaymentValidatorService,
-} from "../../src/services/X402PaymentValidator.ts";
+} from "../../src/services/X402PaymentValidator.ts"
 
-const TEST_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
-const TEST_RECEIVING_WALLET = "TaxMaxiTest111111111111111111111111111111111";
+const TEST_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
+const TEST_RECEIVING_WALLET = "TaxMaxiTest111111111111111111111111111111111"
 
 const paymentRequired = (message: string): PaymentRequired => ({
   x402Version: 2,
@@ -31,16 +31,16 @@ const paymentRequired = (message: string): PaymentRequired => ({
       extra: {},
     },
   ],
-});
+})
 
 export const makeX402PaymentValidatorTestLive = ({
   failSettlement = false,
   onSettle,
   validPaymentHeader,
 }: {
-  readonly failSettlement?: boolean | undefined;
-  readonly onSettle?: ((paymentHeader: string) => void) | undefined;
-  readonly validPaymentHeader: string;
+  readonly failSettlement?: boolean | undefined
+  readonly onSettle?: ((paymentHeader: string) => void) | undefined
+  readonly validPaymentHeader: string
 }) =>
   Layer.succeed(X402PaymentValidator, {
     validateAnonymousSourceCreation: ({ paymentHeader }) =>
@@ -51,16 +51,16 @@ export const makeX402PaymentValidatorTestLive = ({
               message: "x402 payment required.",
               paymentRequired: paymentRequired("Payment required"),
               paymentRequiredHeader: "encoded-test-payment-requirements",
-            }),
-          );
+            })
+          )
         }
 
         return {
           settle: () =>
             Effect.gen(function* () {
               yield* Effect.sync(() => {
-                onSettle?.(paymentHeader.value);
-              });
+                onSettle?.(paymentHeader.value)
+              })
 
               if (failSettlement) {
                 return yield* Effect.fail(
@@ -68,8 +68,8 @@ export const makeX402PaymentValidatorTestLive = ({
                     message: "x402 payment settlement failed.",
                     paymentRequired: paymentRequired("Settlement failed"),
                     paymentRequiredHeader: "encoded-test-settlement-failure",
-                  }),
-                );
+                  })
+                )
               }
 
               return {
@@ -82,8 +82,8 @@ export const makeX402PaymentValidatorTestLive = ({
                   payer: "test-payer",
                   amount: "100000",
                 } satisfies SettleResponse,
-              };
+              }
             }),
-        };
+        }
       }),
-  } satisfies X402PaymentValidatorService);
+  } satisfies X402PaymentValidatorService)

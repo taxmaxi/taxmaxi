@@ -4,12 +4,12 @@
  * @module X402PaymentValidator
  */
 
-import type { ChainType } from "@my/core/source";
-import type { PaymentRequired, SettleResponse } from "@x402/core/types";
-import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
+import type { ChainType } from "@my/core/source"
+import type { PaymentRequired, SettleResponse } from "@x402/core/types"
+import * as Context from "effect/Context"
+import type * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 
 /**
  * X402PaymentRequiredError - The request has not supplied a valid x402 payment.
@@ -20,7 +20,7 @@ export class X402PaymentRequiredError extends Schema.TaggedError<X402PaymentRequ
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
     paymentRequiredHeader: Schema.optional(Schema.String),
-  },
+  }
 ) {}
 
 /**
@@ -32,18 +32,18 @@ export class X402PaymentSettlementError extends Schema.TaggedError<X402PaymentSe
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
     paymentRequiredHeader: Schema.optional(Schema.String),
-  },
+  }
 ) {}
 
 /**
  * ValidateX402PaymentParams - Request context bound to an anonymous paid source creation.
  */
 export interface ValidateX402PaymentParams {
-  readonly paymentHeader: Option.Option<string>;
-  readonly chainType: ChainType;
-  readonly walletAddress: string;
-  readonly year: number;
-  readonly jurisdiction: string;
+  readonly paymentHeader: Option.Option<string>
+  readonly chainType: ChainType
+  readonly walletAddress: string
+  readonly year: number
+  readonly jurisdiction: string
 }
 
 /**
@@ -53,16 +53,16 @@ export interface X402VerifiedPayment {
   /**
    * Settle the verified payment after the protected work succeeds.
    */
-  readonly settle: () => Effect.Effect<X402PaymentSettlement, X402PaymentSettlementError>;
+  readonly settle: () => Effect.Effect<X402PaymentSettlement, X402PaymentSettlementError>
 }
 
 /**
  * X402PaymentSettlement - Successful x402 settlement data used for receipt persistence.
  */
 export interface X402PaymentSettlement {
-  readonly receiptValue: string;
-  readonly paymentResponseHeader: string;
-  readonly response: SettleResponse;
+  readonly receiptValue: string
+  readonly paymentResponseHeader: string
+  readonly response: SettleResponse
 }
 
 /**
@@ -73,17 +73,17 @@ export interface X402PaymentValidatorService {
    * Validate that the supplied payment proof authorizes this anonymous source request.
    */
   readonly validateAnonymousSourceCreation: (
-    params: ValidateX402PaymentParams,
-  ) => Effect.Effect<X402VerifiedPayment, X402PaymentRequiredError>;
+    params: ValidateX402PaymentParams
+  ) => Effect.Effect<X402VerifiedPayment, X402PaymentRequiredError>
 }
 
 /**
  * BuildX402PaymentRequiredErrorParams - Data used to return a protocol-shaped 402.
  */
 export interface BuildX402PaymentRequiredErrorParams {
-  readonly message: string;
-  readonly paymentRequired?: PaymentRequired | undefined;
-  readonly paymentRequiredHeader?: string | undefined;
+  readonly message: string
+  readonly paymentRequired?: PaymentRequired | undefined
+  readonly paymentRequiredHeader?: string | undefined
 }
 
 /**

@@ -12,21 +12,21 @@
  * @module SourceApiLive
  */
 
-import { Headers, HttpApiBuilder, HttpServerRequest, HttpServerResponse } from "@effect/platform";
-import { SourceId } from "@my/core/source";
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
+import { Headers, HttpApiBuilder, HttpServerRequest, HttpServerResponse } from "@effect/platform"
+import { SourceId } from "@my/core/source"
+import * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 import {
   SourceRepository as SyncEngineSourceRepository,
   SourceSyncService,
-} from "@my/sync-engine/services";
+} from "@my/sync-engine/services"
 import {
   PrincipalRepository,
   SourceRepository as PersistenceSourceRepository,
   TaxCalculationService,
-} from "@my/persistence/services";
-import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts";
-import { CurrentUser, OptionalCurrentUser, type User } from "../definitions/AuthMiddleware.ts";
+} from "@my/persistence/services"
+import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
+import { CurrentUser, OptionalCurrentUser, type User } from "../definitions/AuthMiddleware.ts"
 import {
   SourceSyncJobResponse,
   SourceSyncStartResponse,
@@ -37,51 +37,51 @@ import {
   SourceCreateResponse,
   SourceCreateClaimMetadata,
   SourcePaymentRequiredError,
-} from "../definitions/SourcesApi.ts";
-import { InternalServerError } from "../definitions/ApiErrors.ts";
-import { Layer, Option } from "effect";
-import { SourceCreationService } from "../services/SourceCreationService.ts";
-import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts";
+} from "../definitions/SourcesApi.ts"
+import { InternalServerError } from "../definitions/ApiErrors.ts"
+import { Layer, Option } from "effect"
+import { SourceCreationService } from "../services/SourceCreationService.ts"
+import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
 
-const toBadRequestError = (message: string) => new SourceBadRequestError({ message });
+const toBadRequestError = (message: string) => new SourceBadRequestError({ message })
 const toInternalServerError = (message: string) =>
-  new InternalServerError({ requestId: Option.none(), message });
-const sourceNotFoundMessage = "No source found. Connect a source first.";
+  new InternalServerError({ requestId: Option.none(), message })
+const sourceNotFoundMessage = "No source found. Connect a source first."
 
 export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handlers) =>
   Effect.gen(function* () {
-    const taxCalculationService = yield* TaxCalculationService;
-    const sourceSyncService = yield* SourceSyncService;
-    const principalRepository = yield* PrincipalRepository;
-    const sourceRepository = yield* PersistenceSourceRepository;
-    const syncEngineSourceRepository = yield* SyncEngineSourceRepository;
-    const optionalCurrentUser = yield* OptionalCurrentUser;
-    const sourceCreationService = yield* SourceCreationService;
+    const taxCalculationService = yield* TaxCalculationService
+    const sourceSyncService = yield* SourceSyncService
+    const principalRepository = yield* PrincipalRepository
+    const sourceRepository = yield* PersistenceSourceRepository
+    const syncEngineSourceRepository = yield* SyncEngineSourceRepository
+    const optionalCurrentUser = yield* OptionalCurrentUser
+    const sourceCreationService = yield* SourceCreationService
 
     const resolveUserPrincipal = (currentUser: User) =>
       Effect.gen(function* () {
         const maybePrincipal = yield* principalRepository
           .findUserPrincipal(currentUser.userId)
-          .pipe(Effect.mapError(() => toInternalServerError("Failed to resolve principal.")));
+          .pipe(Effect.mapError(() => toInternalServerError("Failed to resolve principal.")))
 
         if (Option.isNone(maybePrincipal)) {
-          return yield* Effect.fail(toInternalServerError("Missing user principal."));
+          return yield* Effect.fail(toInternalServerError("Missing user principal."))
         }
 
-        return maybePrincipal.value;
-      });
+        return maybePrincipal.value
+      })
 
     const resolveCurrentUserPrincipal = Effect.gen(function* () {
-      const currentUser = yield* CurrentUser;
-      return yield* resolveUserPrincipal(currentUser);
-    });
+      const currentUser = yield* CurrentUser
+      return yield* resolveUserPrincipal(currentUser)
+    })
 
     const startSync = ({
       principalId,
       sourceId,
     }: {
-      readonly principalId: string;
-      readonly sourceId: string;
+      readonly principalId: string
+      readonly sourceId: string
     }) =>
       sourceSyncService
         .startSourceSyncJob({
@@ -92,72 +92,72 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           Effect.mapError((error) => {
             switch (error._tag) {
               case "UnsupportedProviderError":
-                return toBadRequestError(`Unsupported provider: ${error.provider}`);
+                return toBadRequestError(`Unsupported provider: ${error.provider}`)
               case "SourceNotFoundError":
-                return toBadRequestError(sourceNotFoundMessage);
+                return toBadRequestError(sourceNotFoundMessage)
               case "SourceSyncQueueError":
-                return toInternalServerError("Failed to enqueue source sync job.");
+                return toInternalServerError("Failed to enqueue source sync job.")
               default:
-                return toInternalServerError("Failed to start source sync.");
+                return toInternalServerError("Failed to start source sync.")
             }
-          }),
-        );
+          })
+        )
 
     return handlers
       .handle("listSources", () =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal;
+          const principal = yield* resolveCurrentUserPrincipal
           const sources = yield* sourceRepository.findByPrincipalId(principal.id).pipe(
             Effect.mapError((error) => {
               switch (error._tag) {
                 default:
-                  return toInternalServerError("Failed to list sources.");
+                  return toInternalServerError("Failed to list sources.")
               }
-            }),
-          );
-          return SourceListResponse.make({ sources });
-        }),
+            })
+          )
+          return SourceListResponse.make({ sources })
+        })
       )
       .handle("createSource", ({ payload }) =>
         Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          const currentUser = yield* optionalCurrentUser.resolve();
-          const paymentSignatureHeader = Headers.get(request.headers, "payment-signature");
-          const xPaymentHeader = Headers.get(request.headers, "x-payment");
+          const request = yield* HttpServerRequest.HttpServerRequest
+          const currentUser = yield* optionalCurrentUser.resolve()
+          const paymentSignatureHeader = Headers.get(request.headers, "payment-signature")
+          const xPaymentHeader = Headers.get(request.headers, "x-payment")
           const paymentHeader = Option.isSome(paymentSignatureHeader)
             ? paymentSignatureHeader
-            : xPaymentHeader;
+            : xPaymentHeader
           const creationResult = yield* sourceCreationService
             .createSource({
               currentUser,
               paymentHeader,
               payload,
             })
-            .pipe(Effect.either);
+            .pipe(Effect.either)
 
           if (creationResult._tag === "Left") {
             switch (creationResult.left._tag) {
               case "SourceCreationBadRequestError":
-                return yield* Effect.fail(toBadRequestError(creationResult.left.message));
+                return yield* Effect.fail(toBadRequestError(creationResult.left.message))
               case "SourceCreationInternalError":
-                return yield* Effect.fail(toInternalServerError(creationResult.left.message));
+                return yield* Effect.fail(toInternalServerError(creationResult.left.message))
               case "SourceCreationPaymentRequiredError": {
                 const error = new SourcePaymentRequiredError({
                   message: creationResult.left.message,
                   paymentRequired: creationResult.left.paymentRequired,
-                });
+                })
                 const headers =
                   creationResult.left.paymentRequiredHeader === undefined
                     ? {}
-                    : { "PAYMENT-REQUIRED": creationResult.left.paymentRequiredHeader };
+                    : { "PAYMENT-REQUIRED": creationResult.left.paymentRequiredHeader }
                 return yield* HttpServerResponse.json(error, { status: 402, headers }).pipe(
-                  Effect.orDie,
-                );
+                  Effect.orDie
+                )
               }
             }
           }
 
-          const result = creationResult.right;
+          const result = creationResult.right
 
           const claim =
             result.claim === null
@@ -166,70 +166,70 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                   requestId: result.claim.requestId,
                   claimToken: result.claim.claimToken,
                   expiresAt: result.claim.expiresAt,
-                });
+                })
 
           const syncJob =
-            result.syncJob === null ? null : SourceSyncStartResponse.make(result.syncJob);
+            result.syncJob === null ? null : SourceSyncStartResponse.make(result.syncJob)
 
           const response = SourceCreateResponse.make({
             source: result.source,
             created: result.created,
             syncJob,
             claim,
-          });
+          })
 
           if (result.paymentResponseHeader !== null) {
             return yield* HttpServerResponse.json(response, {
               status: 200,
               headers: { "PAYMENT-RESPONSE": result.paymentResponseHeader },
-            }).pipe(Effect.orDie);
+            }).pipe(Effect.orDie)
           }
 
-          return response;
-        }),
+          return response
+        })
       )
       .handle("startSourceSyncJob", ({ path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal;
+          const principal = yield* resolveCurrentUserPrincipal
           const startParams = {
             principalId: principal.id,
             sourceId: path.sourceId,
-          };
+          }
 
-          const started = yield* startSync(startParams);
+          const started = yield* startSync(startParams)
 
-          return SourceSyncStartResponse.make(started);
-        }),
+          return SourceSyncStartResponse.make(started)
+        })
       )
       .handle("replaySourceSyncJob", ({ path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal;
+          const principal = yield* resolveCurrentUserPrincipal
           const replayParams = {
             principalId: principal.id,
             sourceId: path.sourceId,
-          };
+          }
 
           const replayed = yield* sourceSyncService.replaySourceSyncJob(replayParams).pipe(
             Effect.mapError((error) => {
               switch (error._tag) {
                 case "UnsupportedProviderError":
-                  return toBadRequestError(`Unsupported provider: ${error.provider}`);
+                  return toBadRequestError(`Unsupported provider: ${error.provider}`)
                 case "SourceNotFoundError":
-                  return toBadRequestError(sourceNotFoundMessage);
+                  return toBadRequestError(sourceNotFoundMessage)
                 case "SourceSyncQueueError":
-                  return toInternalServerError("Failed to enqueue source replay job.");
+                  return toInternalServerError("Failed to enqueue source replay job.")
                 default:
-                  return toInternalServerError("Failed to replay source sync.");
+                  return toInternalServerError("Failed to replay source sync.")
               }
-            }),
-          );
+            })
+          )
 
-          return SourceSyncStartResponse.make(replayed);
-        }),
+          return SourceSyncStartResponse.make(replayed)
+        })
       )
       .handle("getSourceSyncJobStatus", ({ path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal;
+          const principal = yield* resolveCurrentUserPrincipal
           const job = yield* sourceSyncService
             .getSourceSyncJob({
               principalId: principal.id,
@@ -240,22 +240,22 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
               Effect.mapError((error) => {
                 switch (error._tag) {
                   case "SourceSyncJobNotFoundError":
-                    return new SourceNotFoundError({ message: "Sync job not found." });
+                    return new SourceNotFoundError({ message: "Sync job not found." })
                   default:
-                    return toInternalServerError("Failed to load source sync job.");
+                    return toInternalServerError("Failed to load source sync job.")
                 }
-              }),
-            );
+              })
+            )
 
-          return SourceSyncJobResponse.make(job);
-        }),
+          return SourceSyncJobResponse.make(job)
+        })
       )
       .handle("calculateTaxForSource", ({ path, payload }) =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal;
+          const principal = yield* resolveCurrentUserPrincipal
           const sourceId = yield* Schema.decodeUnknown(SourceId)(path.sourceId).pipe(
-            Effect.mapError(() => toBadRequestError("Invalid source identifier.")),
-          );
+            Effect.mapError(() => toBadRequestError("Invalid source identifier."))
+          )
           const maybeSource = yield* syncEngineSourceRepository
             .findOwnedSourceSyncContext({
               principalId: principal.id,
@@ -263,16 +263,16 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             })
             .pipe(
               Effect.mapError(() =>
-                toInternalServerError("Failed to load source for tax calculation."),
-              ),
-            );
+                toInternalServerError("Failed to load source for tax calculation.")
+              )
+            )
 
           if (Option.isNone(maybeSource)) {
             return yield* Effect.fail(
               new SourceNotFoundError({
                 message: sourceNotFoundMessage,
-              }),
-            );
+              })
+            )
           }
 
           const taxes = yield* taxCalculationService
@@ -285,27 +285,27 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
               Effect.mapError((error) => {
                 switch (error._tag) {
                   case "UnsupportedJurisdictionError":
-                    return toBadRequestError(`Unsupported jurisdiction: ${error.jurisdiction}`);
+                    return toBadRequestError(`Unsupported jurisdiction: ${error.jurisdiction}`)
                   case "TaxCalculationIncompleteDataError":
                     return toBadRequestError(
-                      `Tax summary is not ready yet: ${error.reason}. Re-run sync and try again.`,
-                    );
+                      `Tax summary is not ready yet: ${error.reason}. Re-run sync and try again.`
+                    )
                   case "TaxCalculationUnsupportedCurrencyError":
                     return toBadRequestError(
-                      `Tax summary currently supports ${error.expectedCurrency} only; found ${error.actualCurrency} in ${error.field}.`,
-                    );
+                      `Tax summary currently supports ${error.expectedCurrency} only; found ${error.actualCurrency} in ${error.field}.`
+                    )
                   case "SourceNotFoundError":
                     return new SourceNotFoundError({
                       message: sourceNotFoundMessage,
-                    });
+                    })
                   default:
-                    return toInternalServerError("Failed to compute tax summary.");
+                    return toInternalServerError("Failed to compute tax summary.")
                 }
-              }),
-            );
+              })
+            )
 
-          return TaxCalculationResponse.make(taxes);
-        }),
-      );
-  }),
-).pipe(Layer.provide(SourceCreationServiceLive));
+          return TaxCalculationResponse.make(taxes)
+        })
+      )
+  })
+).pipe(Layer.provide(SourceCreationServiceLive))

@@ -9,11 +9,11 @@
  * @module SourcesApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform";
-import * as Schema from "effect/Schema";
-import { AuthMiddleware } from "./AuthMiddleware.ts";
-import { Source } from "@my/core/source";
-import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts";
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import * as Schema from "effect/Schema"
+import { AuthMiddleware } from "./AuthMiddleware.ts"
+import { Source } from "@my/core/source"
+import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 
 // =============================================================================
 // Source-Specific Error Schemas (with HTTP status codes)
@@ -24,7 +24,7 @@ export class SourceBadRequestError extends Schema.TaggedError<SourceBadRequestEr
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 }),
+  HttpApiSchema.annotations({ status: 400 })
 ) {}
 
 export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>()(
@@ -32,7 +32,7 @@ export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 }),
+  HttpApiSchema.annotations({ status: 404 })
 ) {}
 
 export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePaymentRequiredError>()(
@@ -41,7 +41,7 @@ export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePayment
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
   },
-  HttpApiSchema.annotations({ status: 402 }),
+  HttpApiSchema.annotations({ status: 402 })
 ) {}
 
 // =============================================================================
@@ -71,7 +71,7 @@ export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("Sour
  * SourceSyncStartResponse - Started source sync job info
  */
 export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartResponse>(
-  "SourceSyncStartResponse",
+  "SourceSyncStartResponse"
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
@@ -83,7 +83,7 @@ export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartRespons
  * SourceCreateClaimMetadata - Anonymous source claim handle.
  */
 export class SourceCreateClaimMetadata extends Schema.Class<SourceCreateClaimMetadata>(
-  "SourceCreateClaimMetadata",
+  "SourceCreateClaimMetadata"
 )({
   requestId: Schema.String,
   claimToken: Schema.String,
@@ -94,7 +94,7 @@ export class SourceCreateClaimMetadata extends Schema.Class<SourceCreateClaimMet
  * SourceCreateResponse - Created or reused source and optional initial sync job.
  */
 export class SourceCreateResponse extends Schema.Class<SourceCreateResponse>(
-  "SourceCreateResponse",
+  "SourceCreateResponse"
 )({
   source: Source,
   created: Schema.Boolean,
@@ -106,7 +106,7 @@ export class SourceCreateResponse extends Schema.Class<SourceCreateResponse>(
  * SourceSyncJobResponse - Result of a source sync job
  */
 export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
-  "SourceSyncJobResponse",
+  "SourceSyncJobResponse"
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
@@ -117,17 +117,17 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
   message: Schema.NullOr(Schema.String),
 }) {}
 
-const currentTaxYear = new Date().getUTCFullYear();
+const currentTaxYear = new Date().getUTCFullYear()
 
 /**
  * TaxCalculationRequest - Request body for calculating tax of a source
  */
 export class TaxCalculationRequest extends Schema.Class<TaxCalculationRequest>(
-  "TaxCalculationRequest",
+  "TaxCalculationRequest"
 )({
   year: Schema.Int.pipe(
     Schema.greaterThanOrEqualTo(1970),
-    Schema.lessThanOrEqualTo(currentTaxYear),
+    Schema.lessThanOrEqualTo(currentTaxYear)
   ),
   jurisdiction: Schema.String,
 }) {}
@@ -136,7 +136,7 @@ export class TaxCalculationRequest extends Schema.Class<TaxCalculationRequest>(
  * TaxCalculationResponse - Tax calculation result of a source
  */
 export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>(
-  "TaxCalculationResponse",
+  "TaxCalculationResponse"
 )({
   year: Schema.Number,
   currency: Schema.String,
@@ -161,8 +161,8 @@ const listSources = HttpApiEndpoint.get("listSources", "/sources")
     OpenApi.annotations({
       summary: "List sources",
       description: "Lists all sources for the authenticated user.",
-    }),
-  );
+    })
+  )
 
 /**
  * POST /sources - Create or reuse a source for the authenticated user.
@@ -179,8 +179,8 @@ const createSource = HttpApiEndpoint.post("createSource", "/sources")
       summary: "Create source",
       description:
         "Creates or reuses an onchain source for an authenticated user, or creates an anonymous wallet source when no credentials are present.",
-    }),
-  );
+    })
+  )
 
 /**
  * POST /sources/:provider/sync - Start a source sync job
@@ -189,7 +189,7 @@ const startSourceSyncJob = HttpApiEndpoint.post("startSourceSyncJob", "/sources/
   .setPath(
     Schema.Struct({
       sourceId: Schema.String,
-    }),
+    })
   )
   .addSuccess(SourceSyncStartResponse)
   .addError(SourceBadRequestError)
@@ -198,8 +198,8 @@ const startSourceSyncJob = HttpApiEndpoint.post("startSourceSyncJob", "/sources/
     OpenApi.annotations({
       summary: "Start source sync",
       description: "Starts sync for the specified source or returns active/completed job",
-    }),
-  );
+    })
+  )
 
 /**
  * POST /sources/:sourceId/replay - Reset derived source data and replay cached raw rows
@@ -208,7 +208,7 @@ const replaySourceSyncJob = HttpApiEndpoint.post("replaySourceSyncJob", "/source
   .setPath(
     Schema.Struct({
       sourceId: Schema.String,
-    }),
+    })
   )
   .addSuccess(SourceSyncStartResponse)
   .addError(SourceBadRequestError)
@@ -218,21 +218,21 @@ const replaySourceSyncJob = HttpApiEndpoint.post("replaySourceSyncJob", "/source
       summary: "Replay source normalization",
       description:
         "Resets canonical data for the specified source and rebuilds it from cached raw provider records.",
-    }),
-  );
+    })
+  )
 
 /**
  * GET /sources/:sourceId/jobs/:jobId - Get status of a source sync job
  */
 const getSourceSyncJobStatus = HttpApiEndpoint.get(
   "getSourceSyncJobStatus",
-  "/sources/:sourceId/jobs/:jobId",
+  "/sources/:sourceId/jobs/:jobId"
 )
   .setPath(
     Schema.Struct({
       sourceId: Schema.String,
       jobId: Schema.String,
-    }),
+    })
   )
   .addSuccess(SourceSyncJobResponse)
   .addError(SourceBadRequestError)
@@ -242,20 +242,20 @@ const getSourceSyncJobStatus = HttpApiEndpoint.get(
     OpenApi.annotations({
       summary: "Get source sync job status",
       description: "Returns sync job status and counters for the authenticated user.",
-    }),
-  );
+    })
+  )
 
 /**
  * POST /sources/:sourceId/tax - Calculate tax of a source in a given jurisdiction
  */
 const calculateTaxForSource = HttpApiEndpoint.post(
   "calculateTaxForSource",
-  "/sources/:sourceId/tax",
+  "/sources/:sourceId/tax"
 )
   .setPath(
     Schema.Struct({
       sourceId: Schema.String,
-    }),
+    })
   )
   .setPayload(TaxCalculationRequest)
   .addSuccess(TaxCalculationResponse)
@@ -266,8 +266,8 @@ const calculateTaxForSource = HttpApiEndpoint.post(
     OpenApi.annotations({
       summary: "Calculate tax for source",
       description: "Calculates jurisdiction-oriented tax from normalized FIFO and income data.",
-    }),
-  );
+    })
+  )
 
 // =============================================================================
 // API Groups
@@ -289,5 +289,5 @@ export class SourcesApi extends HttpApiGroup.make("sources")
     OpenApi.annotations({
       title: "Sources",
       description: "Endpoints for syncing sources and calculating their tax",
-    }),
+    })
   ) {}

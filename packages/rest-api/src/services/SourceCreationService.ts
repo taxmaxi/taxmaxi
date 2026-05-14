@@ -4,14 +4,14 @@
  * @module SourceCreationService
  */
 
-import type { Source } from "@my/core/source";
-import type { SourceSyncJobSummary } from "@my/sync-engine/services";
-import * as Context from "effect/Context";
-import type * as Effect from "effect/Effect";
-import type * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
-import type { User } from "../definitions/AuthMiddleware.ts";
-import type { SourceCreateRequest } from "../definitions/SourcesApi.ts";
+import type { Source } from "@my/core/source"
+import type { SourceSyncJobSummary } from "@my/sync-engine/services"
+import * as Context from "effect/Context"
+import type * as Effect from "effect/Effect"
+import type * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+import type { User } from "../definitions/AuthMiddleware.ts"
+import type { SourceCreateRequest } from "../definitions/SourcesApi.ts"
 
 /**
  * SourceCreationBadRequestError - Caller supplied invalid source input.
@@ -20,7 +20,7 @@ export class SourceCreationBadRequestError extends Schema.TaggedError<SourceCrea
   "SourceCreationBadRequestError",
   {
     message: Schema.String,
-  },
+  }
 ) {}
 
 /**
@@ -30,7 +30,7 @@ export class SourceCreationInternalError extends Schema.TaggedError<SourceCreati
   "SourceCreationInternalError",
   {
     message: Schema.String,
-  },
+  }
 ) {}
 
 /**
@@ -42,36 +42,36 @@ export class SourceCreationPaymentRequiredError extends Schema.TaggedError<Sourc
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
     paymentRequiredHeader: Schema.optional(Schema.String),
-  },
+  }
 ) {}
 
 /**
  * SourceCreationClaimMetadata - Anonymous source claim handle.
  */
 export interface SourceCreationClaimMetadata {
-  readonly requestId: string;
-  readonly claimToken: string;
-  readonly expiresAt: string;
+  readonly requestId: string
+  readonly claimToken: string
+  readonly expiresAt: string
 }
 
 /**
  * SourceCreationResult - Created or reused source plus optional side effects.
  */
 export interface SourceCreationResult {
-  readonly source: Source;
-  readonly created: boolean;
-  readonly syncJob: SourceSyncJobSummary | null;
-  readonly claim: SourceCreationClaimMetadata | null;
-  readonly paymentResponseHeader: string | null;
+  readonly source: Source
+  readonly created: boolean
+  readonly syncJob: SourceSyncJobSummary | null
+  readonly claim: SourceCreationClaimMetadata | null
+  readonly paymentResponseHeader: string | null
 }
 
 /**
  * CreateSourceParams - Inputs for optional-auth source creation.
  */
 export interface CreateSourceParams {
-  readonly currentUser: Option.Option<User>;
-  readonly paymentHeader: Option.Option<string>;
-  readonly payload: SourceCreateRequest;
+  readonly currentUser: Option.Option<User>
+  readonly paymentHeader: Option.Option<string>
+  readonly payload: SourceCreateRequest
 }
 
 /**
@@ -80,7 +80,7 @@ export interface CreateSourceParams {
 export type SourceCreationError =
   | SourceCreationBadRequestError
   | SourceCreationInternalError
-  | SourceCreationPaymentRequiredError;
+  | SourceCreationPaymentRequiredError
 
 /**
  * SourceCreationServiceShape - Optional-auth source creation use case.
@@ -91,8 +91,8 @@ export interface SourceCreationServiceShape {
    * claimable source when no user is present.
    */
   readonly createSource: (
-    params: CreateSourceParams,
-  ) => Effect.Effect<SourceCreationResult, SourceCreationError>;
+    params: CreateSourceParams
+  ) => Effect.Effect<SourceCreationResult, SourceCreationError>
 }
 
 /**

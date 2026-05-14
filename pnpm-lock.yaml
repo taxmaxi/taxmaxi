@@ -20,6 +20,12 @@ importers:
       lint-staged:
         specifier: ~16.4.0
         version: 16.4.0
+      oxfmt:
+        specifier: ~0.43.0
+        version: 0.43.0
+      oxlint:
+        specifier: ~1.58.0
+        version: 1.58.0
       plop:
         specifier: ~4.0.5
         version: 4.0.5(@types/node@25.5.2)
@@ -57,12 +63,6 @@ importers:
       '@types/node':
         specifier: ~25.5.0
         version: 25.5.2
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       typescript:
         specifier: ~6.0.2
         version: 6.0.3
@@ -103,12 +103,6 @@ importers:
       dotenv-cli:
         specifier: ~11.0.0
         version: 11.0.0
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       tsx:
         specifier: ~4.21.0
         version: 4.21.0
@@ -149,12 +143,6 @@ importers:
       dotenv-cli:
         specifier: ~11.0.0
         version: 11.0.0
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       tsx:
         specifier: ~4.21.0
         version: 4.21.0
@@ -177,12 +165,6 @@ importers:
       '@types/node':
         specifier: ~25.5.0
         version: 25.5.2
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       typescript:
         specifier: ~6.0.2
         version: 6.0.3
@@ -232,12 +214,6 @@ importers:
       drizzle-kit:
         specifier: 1.0.0-beta.13-f728631
         version: 1.0.0-beta.13-f728631
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       typescript:
         specifier: ~6.0.2
         version: 6.0.3
@@ -281,12 +257,6 @@ importers:
       '@types/node':
         specifier: ~25.5.0
         version: 25.5.2
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       typescript:
         specifier: ~6.0.2
         version: 6.0.3
@@ -309,12 +279,6 @@ importers:
       '@types/node':
         specifier: ~25.5.0
         version: 25.5.2
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       typescript:
         specifier: ~6.0.2
         version: 6.0.3
@@ -346,12 +310,6 @@ importers:
       drizzle-orm:
         specifier: 1.0.0-beta.13-f728631
         version: 1.0.0-beta.13-f728631(@effect/sql-pg@0.52.1(@effect/experimental@0.60.0(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2)(ioredis@5.10.1))(@effect/platform@0.96.1(effect@3.21.2))(@effect/sql@0.51.1(@effect/experimental@0.60.0(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2)(ioredis@5.10.1))(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(effect@3.21.2))(@effect/sql@0.51.1(@effect/experimental@0.60.0(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2)(ioredis@5.10.1))(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2))(@types/mssql@9.1.11(@azure/core-client@1.10.1))(@types/pg@8.20.0)(mssql@11.0.1(@azure/core-client@1.10.1))(pg@8.20.0)
-      oxfmt:
-        specifier: ~0.43.0
-        version: 0.43.0
-      oxlint:
-        specifier: ~1.58.0
-        version: 1.58.0
       typescript:
         specifier: ~6.0.2
         version: 6.0.3
