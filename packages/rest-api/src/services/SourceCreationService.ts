@@ -40,6 +40,8 @@ export class SourceCreationPaymentRequiredError extends Schema.TaggedError<Sourc
   "SourceCreationPaymentRequiredError",
   {
     message: Schema.String,
+    paymentRequired: Schema.optional(Schema.Unknown),
+    paymentRequiredHeader: Schema.optional(Schema.String),
   },
 ) {}
 
@@ -60,6 +62,7 @@ export interface SourceCreationResult {
   readonly created: boolean;
   readonly syncJob: SourceSyncJobSummary | null;
   readonly claim: SourceCreationClaimMetadata | null;
+  readonly paymentResponseHeader: string | null;
 }
 
 /**

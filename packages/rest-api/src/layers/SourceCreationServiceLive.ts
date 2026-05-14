@@ -27,7 +27,11 @@ import {
   SourceCreationService,
   type SourceCreationServiceShape,
 } from "../services/SourceCreationService.ts";
-import { X402PaymentValidator } from "../services/X402PaymentValidator.ts";
+import {
+  X402PaymentValidator,
+  type X402PaymentSettlement,
+  type X402VerifiedPayment,
+} from "../services/X402PaymentValidator.ts";
 
 const CLI_CLAIM_TOKEN_BYTES = 32;
 const CLI_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000;
@@ -38,8 +42,15 @@ const claimTokenPepperConfig = Config.redacted("CLAIM_TOKEN_PEPPER").pipe(
 
 const toBadRequestError = (message: string) => new SourceCreationBadRequestError({ message });
 const toInternalError = (message: string) => new SourceCreationInternalError({ message });
-const toPaymentRequiredError = (message: string) =>
-  new SourceCreationPaymentRequiredError({ message });
+const toPaymentRequiredError = ({
+  message,
+  paymentRequired,
+  paymentRequiredHeader,
+}: {
+  readonly message: string;
+  readonly paymentRequired?: unknown;
+  readonly paymentRequiredHeader?: string | undefined;
+}) => new SourceCreationPaymentRequiredError({ message, paymentRequired, paymentRequiredHeader });
 
 const generateClaimToken = (): string => {
   const bytes = new Uint8Array(CLI_CLAIM_TOKEN_BYTES);
@@ -61,6 +72,9 @@ const hashClaimValue = ({
     .update("\0")
     .update(claimToken)
     .digest("hex");
+
+const hashReceiptValue = (receiptValue: string): string =>
+  createHash("sha256").update("x402_receipt").update("\0").update(receiptValue).digest("hex");
 
 export const SourceCreationServiceLive = Layer.effect(
   SourceCreationService,
@@ -143,7 +157,7 @@ export const SourceCreationServiceLive = Layer.effect(
       readonly parsedAddress: NonNullable<ReturnType<typeof parseCryptoAddress>>;
       readonly year: number;
       readonly jurisdiction: string;
-    }) =>
+    }): Effect.Effect<X402VerifiedPayment, SourceCreationPaymentRequiredError> =>
       x402PaymentValidator
         .validateAnonymousSourceCreation({
           paymentHeader,
@@ -152,7 +166,15 @@ export const SourceCreationServiceLive = Layer.effect(
           year,
           jurisdiction,
         })
-        .pipe(Effect.mapError((error) => toPaymentRequiredError(error.message)));
+        .pipe(
+          Effect.mapError((error) =>
+            toPaymentRequiredError({
+              message: error.message,
+              paymentRequired: error.paymentRequired,
+              paymentRequiredHeader: error.paymentRequiredHeader,
+            }),
+          ),
+        );
 
     const loadClaimTokenPepper = Effect.gen(function* () {
       const pepper = yield* Effect.configProviderWith((provider) =>
@@ -169,6 +191,7 @@ export const SourceCreationServiceLive = Layer.effect(
     const createCliClaim = ({
       principalId,
       sourceId,
+      requestId,
       chainType,
       walletAddress,
       year,
@@ -177,6 +200,7 @@ export const SourceCreationServiceLive = Layer.effect(
     }: {
       readonly principalId: PrincipalId;
       readonly sourceId: SourceId;
+      readonly requestId: string;
       readonly chainType: ChainType;
       readonly walletAddress: string;
       readonly year: number;
@@ -184,7 +208,6 @@ export const SourceCreationServiceLive = Layer.effect(
       readonly pepper: Redacted.Redacted<string>;
     }) =>
       Effect.gen(function* () {
-        const requestId = crypto.randomUUID();
         const claimToken = generateClaimToken();
         const expiresAt = Timestamp.addMillis(Timestamp.now(), CLI_CLAIM_TTL_MILLIS).toDate();
 
@@ -209,6 +232,40 @@ export const SourceCreationServiceLive = Layer.effect(
           expiresAt: expiresAt.toISOString(),
         };
       });
+
+    const createX402ReceiptClaim = ({
+      principalId,
+      sourceId,
+      requestId,
+      chainType,
+      walletAddress,
+      year,
+      jurisdiction,
+      settlement,
+    }: {
+      readonly principalId: PrincipalId;
+      readonly sourceId: SourceId;
+      readonly requestId: string;
+      readonly chainType: ChainType;
+      readonly walletAddress: string;
+      readonly year: number;
+      readonly jurisdiction: string;
+      readonly settlement: X402PaymentSettlement;
+    }) =>
+      principalClaimRepository
+        .create({
+          principalId,
+          sourceId,
+          requestId,
+          claimType: "x402_receipt",
+          claimValueHash: hashReceiptValue(settlement.receiptValue),
+          chainType,
+          walletAddress,
+          year,
+          jurisdiction,
+          expiresAt: null,
+        })
+        .pipe(Effect.mapError(() => toInternalError("Failed to create x402 receipt claim.")));
 
     const startSync = ({
       principalId,
@@ -247,14 +304,16 @@ export const SourceCreationServiceLive = Layer.effect(
         const year = payload.year ?? new Date().getUTCFullYear();
         const jurisdiction = payload.jurisdiction ?? DEFAULT_CLAIM_JURISDICTION;
 
-        if (Option.isNone(currentUser)) {
-          yield* validateAnonymousPayment({
-            paymentHeader,
-            parsedAddress,
-            year,
-            jurisdiction,
-          });
-        }
+        const maybeVerifiedPayment = Option.isNone(currentUser)
+          ? Option.some(
+              yield* validateAnonymousPayment({
+                paymentHeader,
+                parsedAddress,
+                year,
+                jurisdiction,
+              }),
+            )
+          : Option.none<X402VerifiedPayment>();
 
         const { principal, isAnonymous } = yield* resolveCreatePrincipal(currentUser);
         const created = yield* createOnchainSource({
@@ -270,6 +329,7 @@ export const SourceCreationServiceLive = Layer.effect(
             created: created.created,
             syncJob: null,
             claim: null,
+            paymentResponseHeader: null,
           };
         }
 
@@ -277,15 +337,46 @@ export const SourceCreationServiceLive = Layer.effect(
           ? Option.some(yield* loadClaimTokenPepper)
           : Option.none<Redacted.Redacted<string>>();
 
+        const requestId = crypto.randomUUID();
+
         const syncJob = yield* startSync({
           principalId: principal.id,
           sourceId: created.source.id,
         });
 
+        const maybeSettlement =
+          Option.isSome(maybeVerifiedPayment) && isAnonymous
+            ? Option.some(
+                yield* maybeVerifiedPayment.value.settle().pipe(
+                  Effect.mapError((error) =>
+                    toPaymentRequiredError({
+                      message: error.message,
+                      paymentRequired: error.paymentRequired,
+                      paymentRequiredHeader: error.paymentRequiredHeader,
+                    }),
+                  ),
+                ),
+              )
+            : Option.none<X402PaymentSettlement>();
+
+        if (Option.isSome(maybeSettlement)) {
+          yield* createX402ReceiptClaim({
+            principalId: principal.id,
+            sourceId: created.source.id,
+            requestId,
+            chainType: created.parsedAddress.chainType,
+            walletAddress: created.parsedAddress.address,
+            year,
+            jurisdiction,
+            settlement: maybeSettlement.value,
+          });
+        }
+
         const claim = Option.isSome(maybeClaimTokenPepper)
           ? yield* createCliClaim({
               principalId: principal.id,
               sourceId: created.source.id,
+              requestId,
               chainType: created.parsedAddress.chainType,
               walletAddress: created.parsedAddress.address,
               year,
@@ -294,11 +385,16 @@ export const SourceCreationServiceLive = Layer.effect(
             })
           : null;
 
+        const paymentResponseHeader = Option.isSome(maybeSettlement)
+          ? maybeSettlement.value.paymentResponseHeader
+          : null;
+
         return {
           source: created.source,
           created: created.created,
           syncJob,
           claim,
+          paymentResponseHeader,
         };
       });
 

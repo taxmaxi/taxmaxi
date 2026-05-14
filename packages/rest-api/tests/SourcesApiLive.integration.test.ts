@@ -1,4 +1,10 @@
-import { HttpApiBuilder, HttpApiClient, HttpClient, HttpClientRequest } from "@effect/platform";
+import {
+  Headers,
+  HttpApiBuilder,
+  HttpApiClient,
+  HttpClient,
+  HttpClientRequest,
+} from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { afterAll, beforeEach, describe, expect, it } from "@effect/vitest";
 import {
@@ -22,6 +28,8 @@ import {
 import * as Chunk from "effect/Chunk";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as EffectSchema from "effect/Schema";
 import { SourceSyncServiceLive } from "@my/sync-engine/layers";
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts";
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts";
@@ -29,8 +37,11 @@ import { schema } from "../../persistence/src/schema/index.ts";
 import { TaxCalculationService } from "../../persistence/src/services/index.ts";
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts";
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts";
+import { SourceCreateResponse, SourcePaymentRequiredError } from "../src/definitions/SourcesApi.ts";
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts";
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts";
+import { X402PaymentValidator } from "../src/services/X402PaymentValidator.ts";
+import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts";
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_rest_api_sources",
@@ -39,13 +50,22 @@ const TestPgClientLive = context.TestPgClientLive;
 
 const queuedAt = new Date("2026-01-01T00:00:00.000Z");
 const queueEvents: Array<SourceSyncQueuePayload> = [];
+const settlementEvents: Array<string> = [];
 const validX402PaymentHeader = "valid-test-x402-payment";
 const ClaimTokenConfigProvider = ConfigProvider.fromMap(
-  new Map([
-    ["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"],
-    ["X402_ACCEPTED_PAYMENT_PROOF", validX402PaymentHeader],
-  ]),
+  new Map([["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"]]),
 );
+const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
+  validPaymentHeader: validX402PaymentHeader,
+});
+const X402PaymentValidatorSettlementFailureTestLive = makeX402PaymentValidatorTestLive({
+  failSettlement: true,
+  validPaymentHeader: validX402PaymentHeader,
+});
+const X402PaymentValidatorTrackingTestLive = makeX402PaymentValidatorTestLive({
+  onSettle: (paymentHeader) => settlementEvents.push(paymentHeader),
+  validPaymentHeader: validX402PaymentHeader,
+});
 
 const SourceSyncQueueTestLive = Layer.effect(
   SourceSyncQueue,
@@ -154,9 +174,11 @@ const makePersistenceLayer = (
 
 const makeHttpLive = (
   sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>,
+  x402PaymentValidatorLayer: Layer.Layer<X402PaymentValidator> = X402PaymentValidatorTestLive,
 ) =>
   HttpApiBuilder.serve().pipe(
     Layer.provide(TaxMaxiApiLive),
+    Layer.provide(x402PaymentValidatorLayer),
     Layer.provide(SimpleTokenValidatorLive),
     Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer)),
     Layer.provideMerge(NodeHttpServer.layerTest),
@@ -164,6 +186,14 @@ const makeHttpLive = (
 
 const HttpLive = makeHttpLive(SourceSyncQueueTestLive);
 const QueueFailureHttpLive = makeHttpLive(SourceSyncQueueFailureTestLive);
+const SettlementFailureHttpLive = makeHttpLive(
+  SourceSyncQueueTestLive,
+  X402PaymentValidatorSettlementFailureTestLive,
+);
+const PaidQueueFailureHttpLive = makeHttpLive(
+  SourceSyncQueueFailureTestLive,
+  X402PaymentValidatorTrackingTestLive,
+);
 
 const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
   Effect.gen(function* () {
@@ -175,20 +205,24 @@ const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
     });
   });
 
-const makeUnauthenticatedClient = () =>
-  Effect.gen(function* () {
-    const baseHttpClient = yield* HttpClient.HttpClient;
-    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
-      httpClient: baseHttpClient,
-    });
-  });
-
 const makeUnauthenticatedClientWithPayment = () =>
   Effect.gen(function* () {
     const baseHttpClient = yield* HttpClient.HttpClient;
     return yield* HttpApiClient.makeWith(TaxMaxiApi, {
       httpClient: baseHttpClient.pipe(
         HttpClient.mapRequest(HttpClientRequest.setHeader("x-payment", validX402PaymentHeader)),
+      ),
+    });
+  });
+
+const makeUnauthenticatedClientWithInvalidPayment = () =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient;
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient.pipe(
+        HttpClient.mapRequest(
+          HttpClientRequest.setHeader("x-payment", "invalid-test-x402-payment"),
+        ),
       ),
     });
   });
@@ -209,6 +243,33 @@ const makeClientWithCookie = (cookieHeader: string) =>
         HttpClient.mapRequest(HttpClientRequest.setHeader("cookie", cookieHeader)),
       ),
     });
+  });
+
+const postRawSourceCreate = ({
+  payload,
+  paymentHeader,
+  paymentSignatureHeader,
+}: {
+  readonly payload: unknown;
+  readonly paymentHeader?: string | undefined;
+  readonly paymentSignatureHeader?: string | undefined;
+}) =>
+  Effect.gen(function* () {
+    const baseRequest = HttpClientRequest.post("/v1/sources").pipe(
+      HttpClientRequest.bodyUnsafeJson(payload),
+    );
+    const xPaymentRequest =
+      paymentHeader === undefined
+        ? baseRequest
+        : baseRequest.pipe(HttpClientRequest.setHeader("x-payment", paymentHeader));
+    const request =
+      paymentSignatureHeader === undefined
+        ? xPaymentRequest
+        : xPaymentRequest.pipe(
+            HttpClientRequest.setHeader("payment-signature", paymentSignatureHeader),
+          );
+
+    return yield* HttpClient.execute(request);
   });
 
 const seedCoinbaseSource = ({
@@ -300,6 +361,7 @@ describe("SourcesApiLive", () => {
 
   beforeEach(async () => {
     queueEvents.length = 0;
+    settlementEvents.length = 0;
     await Effect.runPromise(context.recreateTestDatabase());
   });
 
@@ -345,6 +407,10 @@ describe("SourcesApiLive", () => {
           principalId,
         },
       ]);
+      const claims = yield* db
+        .select({ claimType: schema.principalClaims.claimType })
+        .from(schema.principalClaims);
+      expect(claims).toEqual([]);
     }).pipe(Effect.provide(HttpLive), Effect.scoped),
   );
 
@@ -393,7 +459,7 @@ describe("SourcesApiLive", () => {
         kind: "anonymous_wallet",
         userId: null,
       });
-      const [claim] = yield* db
+      const claims = yield* db
         .select({
           requestId: schema.principalClaims.requestId,
           principalId: schema.principalClaims.principalId,
@@ -409,7 +475,11 @@ describe("SourcesApiLive", () => {
         })
         .from(schema.principalClaims);
 
-      expect(claim).toMatchObject({
+      expect(claims).toHaveLength(2);
+      const cliClaim = claims.find((claim) => claim.claimType === "cli_claim_token");
+      const receiptClaim = claims.find((claim) => claim.claimType === "x402_receipt");
+
+      expect(cliClaim).toMatchObject({
         requestId: response.claim.requestId,
         principalId: response.source.principalId,
         sourceId: response.source.id,
@@ -420,9 +490,23 @@ describe("SourcesApiLive", () => {
         jurisdiction: "germany",
         consumedAt: null,
       });
-      expect(claim?.claimValueHash).not.toBe(response.claim.claimToken);
-      expect(claim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u);
-      expect(claim?.expiresAt?.toISOString()).toBe(response.claim.expiresAt);
+      expect(cliClaim?.claimValueHash).not.toBe(response.claim.claimToken);
+      expect(cliClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(cliClaim?.expiresAt?.toISOString()).toBe(response.claim.expiresAt);
+      expect(receiptClaim).toMatchObject({
+        requestId: response.claim.requestId,
+        principalId: response.source.principalId,
+        sourceId: response.source.id,
+        claimType: "x402_receipt",
+        chainType: "solana",
+        walletAddress,
+        year: 2025,
+        jurisdiction: "germany",
+        expiresAt: null,
+        consumedAt: null,
+      });
+      expect(receiptClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(receiptClaim?.claimValueHash).not.toBe(validX402PaymentHeader);
       expect(queueEvents).toHaveLength(1);
       expect(queueEvents[0]).toMatchObject({
         sourceId: response.source.id,
@@ -438,13 +522,97 @@ describe("SourcesApiLive", () => {
 
   it.effect("rejects anonymous source creation without x402 payment before side effects", () =>
     Effect.gen(function* () {
-      const client = yield* makeUnauthenticatedClient();
+      const response = yield* postRawSourceCreate({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Unpaid anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      });
+      const body = yield* response.json;
+      const decodedBody = yield* EffectSchema.decodeUnknown(SourcePaymentRequiredError)(body);
+      const bodyRecord = yield* EffectSchema.decodeUnknown(
+        EffectSchema.Record({ key: EffectSchema.String, value: EffectSchema.Unknown }),
+      )(body);
+
+      expect(response.status).toBe(402);
+      expect(Headers.get(response.headers, "payment-required")).toEqual(
+        Option.some("encoded-test-payment-requirements"),
+      );
+      expect(decodedBody._tag).toBe("SourcePaymentRequiredError");
+      expect(Object.hasOwn(bodyRecord, "paymentRequiredHeader")).toBe(false);
+
+      const db = yield* drizzle;
+      const principals = yield* db.select({ id: schema.principals.id }).from(schema.principals);
+      const sources = yield* db.select({ id: schema.sources.id }).from(schema.sources);
+      const claims = yield* db
+        .select({ id: schema.principalClaims.id })
+        .from(schema.principalClaims);
+      const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs);
+
+      expect(principals).toEqual([]);
+      expect(sources).toEqual([]);
+      expect(claims).toEqual([]);
+      expect(jobs).toEqual([]);
+      expect(queueEvents).toHaveLength(0);
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("returns x402 settlement response header for paid anonymous source creation", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112";
+      const response = yield* postRawSourceCreate({
+        paymentSignatureHeader: validX402PaymentHeader,
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Anonymous paid Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      });
+      const body = yield* response.json;
+      const decodedBody = yield* EffectSchema.decodeUnknown(SourceCreateResponse)(body);
+
+      expect(response.status).toBe(200);
+      expect(Headers.get(response.headers, "payment-response")).toEqual(
+        Option.some("encoded-test-payment-response"),
+      );
+      expect(decodedBody.created).toBe(true);
+      expect(decodedBody.claim).not.toBeNull();
+      expect(decodedBody.syncJob).not.toBeNull();
+      expect(decodedBody.source).toMatchObject({
+        name: "Anonymous paid Solana wallet",
+        providerKey: "solana",
+      });
+      expect(queueEvents).toHaveLength(1);
+      expect(queueEvents[0]).toMatchObject({
+        sourceId: decodedBody.source.id,
+        principalId: decodedBody.source.principalId,
+        mode: "sync",
+      });
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("rejects anonymous source creation with invalid x402 payment before side effects", () =>
+    Effect.gen(function* () {
+      const client = yield* makeUnauthenticatedClientWithInvalidPayment();
       const result = yield* client.sources
         .createSource({
           payload: {
             type: "onchain",
             walletAddress: "So11111111111111111111111111111111111111112",
-            name: "Unpaid anonymous Solana wallet",
+            name: "Invalid paid anonymous Solana wallet",
             year: 2025,
             jurisdiction: "germany",
           },
@@ -471,6 +639,81 @@ describe("SourcesApiLive", () => {
       expect(queueEvents).toHaveLength(0);
     }).pipe(
       Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("does not persist anonymous source claims when x402 settlement fails", () =>
+    Effect.gen(function* () {
+      const response = yield* postRawSourceCreate({
+        paymentHeader: validX402PaymentHeader,
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Unsettled anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      });
+      const body = yield* response.json;
+      const decodedBody = yield* EffectSchema.decodeUnknown(SourcePaymentRequiredError)(body);
+      const bodyRecord = yield* EffectSchema.decodeUnknown(
+        EffectSchema.Record({ key: EffectSchema.String, value: EffectSchema.Unknown }),
+      )(body);
+
+      expect(response.status).toBe(402);
+      expect(decodedBody._tag).toBe("SourcePaymentRequiredError");
+      expect(decodedBody.message).toBe("x402 payment settlement failed.");
+      expect(Object.hasOwn(bodyRecord, "paymentRequiredHeader")).toBe(false);
+
+      const db = yield* drizzle;
+      const claims = yield* db
+        .select({ id: schema.principalClaims.id })
+        .from(schema.principalClaims);
+      const jobs = yield* db.select({ id: schema.processingJobs.id }).from(schema.processingJobs);
+
+      expect(claims).toEqual([]);
+      expect(jobs).toHaveLength(1);
+      expect(queueEvents).toHaveLength(1);
+    }).pipe(
+      Effect.provide(SettlementFailureHttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped,
+    ),
+  );
+
+  it.effect("does not settle x402 payment when paid anonymous sync enqueue fails", () =>
+    Effect.gen(function* () {
+      const client = yield* makeUnauthenticatedClientWithPayment();
+      const result = yield* client.sources
+        .createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Queue failure anonymous Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
+        .pipe(Effect.either);
+
+      expect(result._tag).toBe("Left");
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("InternalServerError");
+        expect(result.left.message).toBe("Failed to enqueue source sync job.");
+      }
+
+      const db = yield* drizzle;
+      const claims = yield* db
+        .select({ id: schema.principalClaims.id })
+        .from(schema.principalClaims);
+
+      expect(claims).toEqual([]);
+      expect(queueEvents).toHaveLength(0);
+      expect(settlementEvents).toEqual([]);
+    }).pipe(
+      Effect.provide(PaidQueueFailureHttpLive),
       Effect.withConfigProvider(ClaimTokenConfigProvider),
       Effect.scoped,
     ),

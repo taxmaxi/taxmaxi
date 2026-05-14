@@ -32,6 +32,9 @@
     "@my/core": "workspace:*",
     "@my/persistence": "workspace:*",
     "@my/sync-engine": "workspace:*",
+    "@x402/core": "2.12.0",
+    "@x402/evm": "2.12.0",
+    "@x402/svm": "2.12.0",
     "effect": "3.21.2"
   },
   "devDependencies": {

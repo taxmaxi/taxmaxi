@@ -39,6 +39,7 @@ export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePayment
   "SourcePaymentRequiredError",
   {
     message: Schema.String,
+    paymentRequired: Schema.optional(Schema.Unknown),
   },
   HttpApiSchema.annotations({ status: 402 }),
 ) {}

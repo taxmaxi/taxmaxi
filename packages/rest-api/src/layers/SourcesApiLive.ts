@@ -12,7 +12,7 @@
  * @module SourceApiLive
  */
 
-import { Headers, HttpApiBuilder, HttpServerRequest } from "@effect/platform";
+import { Headers, HttpApiBuilder, HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import { SourceId } from "@my/core/source";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -122,24 +122,42 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest;
           const currentUser = yield* optionalCurrentUser.resolve();
-          const result = yield* sourceCreationService
+          const paymentSignatureHeader = Headers.get(request.headers, "payment-signature");
+          const xPaymentHeader = Headers.get(request.headers, "x-payment");
+          const paymentHeader = Option.isSome(paymentSignatureHeader)
+            ? paymentSignatureHeader
+            : xPaymentHeader;
+          const creationResult = yield* sourceCreationService
             .createSource({
               currentUser,
-              paymentHeader: Headers.get(request.headers, "x-payment"),
+              paymentHeader,
               payload,
             })
-            .pipe(
-              Effect.mapError((error) => {
-                switch (error._tag) {
-                  case "SourceCreationBadRequestError":
-                    return toBadRequestError(error.message);
-                  case "SourceCreationPaymentRequiredError":
-                    return new SourcePaymentRequiredError({ message: error.message });
-                  case "SourceCreationInternalError":
-                    return toInternalServerError(error.message);
-                }
-              }),
-            );
+            .pipe(Effect.either);
+
+          if (creationResult._tag === "Left") {
+            switch (creationResult.left._tag) {
+              case "SourceCreationBadRequestError":
+                return yield* Effect.fail(toBadRequestError(creationResult.left.message));
+              case "SourceCreationInternalError":
+                return yield* Effect.fail(toInternalServerError(creationResult.left.message));
+              case "SourceCreationPaymentRequiredError": {
+                const error = new SourcePaymentRequiredError({
+                  message: creationResult.left.message,
+                  paymentRequired: creationResult.left.paymentRequired,
+                });
+                const headers =
+                  creationResult.left.paymentRequiredHeader === undefined
+                    ? {}
+                    : { "PAYMENT-REQUIRED": creationResult.left.paymentRequiredHeader };
+                return yield* HttpServerResponse.json(error, { status: 402, headers }).pipe(
+                  Effect.orDie,
+                );
+              }
+            }
+          }
+
+          const result = creationResult.right;
 
           const claim =
             result.claim === null
@@ -153,12 +171,21 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           const syncJob =
             result.syncJob === null ? null : SourceSyncStartResponse.make(result.syncJob);
 
-          return SourceCreateResponse.make({
+          const response = SourceCreateResponse.make({
             source: result.source,
             created: result.created,
             syncJob,
             claim,
           });
+
+          if (result.paymentResponseHeader !== null) {
+            return yield* HttpServerResponse.json(response, {
+              status: 200,
+              headers: { "PAYMENT-RESPONSE": result.paymentResponseHeader },
+            }).pipe(Effect.orDie);
+          }
+
+          return response;
         }),
       )
       .handle("startSourceSyncJob", ({ path }) =>
