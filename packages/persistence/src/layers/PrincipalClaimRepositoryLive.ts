@@ -4,11 +4,13 @@
  * @module PrincipalClaimRepositoryLive
  */
 
+import { and, eq } from "drizzle-orm"
 import { PrincipalId } from "@my/core/ownership"
 import type { ChainType } from "@my/core/source"
 import { SourceId } from "@my/core/source"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import type { PrincipalClaimRow } from "../schema/PrincipalClaimsTable.ts"
@@ -111,8 +113,32 @@ const make = Effect.gen(function* () {
       return yield* rowToPrincipalClaim(row)
     }).pipe(wrapSqlError("principalClaimRepository.create"))
 
+  const findByRequestTypeAndValueHash: PrincipalClaimRepositoryService["findByRequestTypeAndValueHash"] =
+    (params) =>
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select(selectPrincipalClaimFields)
+          .from(schema.principalClaims)
+          .where(
+            and(
+              eq(schema.principalClaims.requestId, params.requestId),
+              eq(schema.principalClaims.claimType, params.claimType),
+              eq(schema.principalClaims.claimValueHash, params.claimValueHash)
+            )
+          )
+          .limit(1)
+
+        if (row === undefined) {
+          return Option.none<PrincipalClaim>()
+        }
+
+        const claim = yield* rowToPrincipalClaim(row)
+        return Option.some(claim)
+      }).pipe(wrapSqlError("principalClaimRepository.findByRequestTypeAndValueHash"))
+
   return PrincipalClaimRepository.of({
     create,
+    findByRequestTypeAndValueHash,
   } satisfies PrincipalClaimRepositoryService)
 })
 

@@ -21,12 +21,11 @@ import {
   SourceSyncService,
 } from "@my/sync-engine/services"
 import {
-  PrincipalRepository,
   SourceRepository as PersistenceSourceRepository,
   TaxCalculationService,
 } from "@my/persistence/services"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
-import { CurrentUser, OptionalCurrentUser, type User } from "../definitions/AuthMiddleware.ts"
+import { OptionalCurrentUser } from "../definitions/AuthMiddleware.ts"
 import {
   SourceSyncJobResponse,
   SourceSyncStartResponse,
@@ -41,6 +40,7 @@ import {
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { Layer, Option } from "effect"
 import { SourceCreationService } from "../services/SourceCreationService.ts"
+import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
 
 const toBadRequestError = (message: string) => new SourceBadRequestError({ message })
@@ -52,28 +52,17 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
   Effect.gen(function* () {
     const taxCalculationService = yield* TaxCalculationService
     const sourceSyncService = yield* SourceSyncService
-    const principalRepository = yield* PrincipalRepository
     const sourceRepository = yield* PersistenceSourceRepository
     const syncEngineSourceRepository = yield* SyncEngineSourceRepository
     const optionalCurrentUser = yield* OptionalCurrentUser
     const sourceCreationService = yield* SourceCreationService
-
-    const resolveUserPrincipal = (currentUser: User) =>
-      Effect.gen(function* () {
-        const maybePrincipal = yield* principalRepository
-          .findUserPrincipal(currentUser.userId)
-          .pipe(Effect.mapError(() => toInternalServerError("Failed to resolve principal.")))
-
-        if (Option.isNone(maybePrincipal)) {
-          return yield* Effect.fail(toInternalServerError("Missing user principal."))
-        }
-
-        return maybePrincipal.value
-      })
+    const principalResolutionService = yield* PrincipalResolutionService
 
     const resolveCurrentUserPrincipal = Effect.gen(function* () {
-      const currentUser = yield* CurrentUser
-      return yield* resolveUserPrincipal(currentUser)
+      const { principal } = yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
+        Effect.mapError((error) => toInternalServerError(error.message))
+      )
+      return principal
     })
 
     const startSync = ({

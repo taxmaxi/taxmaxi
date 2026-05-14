@@ -13,13 +13,14 @@ import {
 } from "@my/persistence/services"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { createHash } from "node:crypto"
-import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { Option } from "effect"
 import * as Redacted from "effect/Redacted"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import { claimTokenPepperConfig, hashCliClaimToken } from "../helpers/ClaimTokenHash.ts"
 import type { User } from "../definitions/AuthMiddleware.ts"
+import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 import {
   SourceCreationBadRequestError,
   SourceCreationInternalError,
@@ -36,9 +37,6 @@ import {
 const CLI_CLAIM_TOKEN_BYTES = 32
 const CLI_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
 const DEFAULT_CLAIM_JURISDICTION = "germany"
-const claimTokenPepperConfig = Config.redacted("CLAIM_TOKEN_PEPPER").pipe(
-  Config.withDefault(Redacted.make(""))
-)
 
 const toBadRequestError = (message: string) => new SourceCreationBadRequestError({ message })
 const toInternalError = (message: string) => new SourceCreationInternalError({ message })
@@ -58,21 +56,6 @@ const generateClaimToken = (): string => {
   return Buffer.from(bytes).toString("base64url")
 }
 
-const hashClaimValue = ({
-  claimToken,
-  pepper,
-}: {
-  readonly claimToken: string
-  readonly pepper: Redacted.Redacted<string>
-}): string =>
-  createHash("sha256")
-    .update("cli_claim_token")
-    .update("\0")
-    .update(Redacted.value(pepper))
-    .update("\0")
-    .update(claimToken)
-    .digest("hex")
-
 const hashReceiptValue = (receiptValue: string): string =>
   createHash("sha256").update("x402_receipt").update("\0").update(receiptValue).digest("hex")
 
@@ -84,24 +67,14 @@ export const SourceCreationServiceLive = Layer.effect(
     const sourceRepository = yield* SourceRepository
     const sourceSyncService = yield* SourceSyncService
     const x402PaymentValidator = yield* X402PaymentValidator
-
-    const resolveUserPrincipal = (currentUser: User) =>
-      Effect.gen(function* () {
-        const maybePrincipal = yield* principalRepository
-          .findUserPrincipal(currentUser.userId)
-          .pipe(Effect.mapError(() => toInternalError("Failed to resolve principal.")))
-
-        if (Option.isNone(maybePrincipal)) {
-          return yield* Effect.fail(toInternalError("Missing user principal."))
-        }
-
-        return maybePrincipal.value
-      })
+    const principalResolutionService = yield* PrincipalResolutionService
 
     const resolveCreatePrincipal = (currentUser: Option.Option<User>) =>
       Effect.gen(function* () {
         if (Option.isSome(currentUser)) {
-          const principal = yield* resolveUserPrincipal(currentUser.value)
+          const principal = yield* principalResolutionService
+            .resolveUserPrincipal(currentUser.value)
+            .pipe(Effect.mapError((error) => toInternalError(error.message)))
           return { principal, isAnonymous: false } as const
         }
 
@@ -217,7 +190,7 @@ export const SourceCreationServiceLive = Layer.effect(
             sourceId,
             requestId,
             claimType: "cli_claim_token",
-            claimValueHash: hashClaimValue({ claimToken, pepper }),
+            claimValueHash: hashCliClaimToken({ claimToken, pepper }),
             chainType,
             walletAddress,
             year,

@@ -8,6 +8,7 @@ import type { PrincipalId } from "@my/core/ownership"
 import type { ChainType, SourceId } from "@my/core/source"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import type * as Option from "effect/Option"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
 /**
@@ -29,6 +30,15 @@ export interface CreatePrincipalClaimParams {
   readonly year: number | null
   readonly jurisdiction: string | null
   readonly expiresAt: Date | null
+}
+
+/**
+ * FindPrincipalClaimByRequestTypeAndValueHashParams - Lookup key for a stored claim value.
+ */
+export interface FindPrincipalClaimByRequestTypeAndValueHashParams {
+  readonly requestId: string
+  readonly claimType: PrincipalClaimType
+  readonly claimValueHash: string
 }
 
 /**
@@ -59,6 +69,13 @@ export interface PrincipalClaimRepositoryService {
   readonly create: (
     params: CreatePrincipalClaimParams
   ) => Effect.Effect<PrincipalClaim, PersistenceError>
+
+  /**
+   * Find a principal claim by request id and type/value hash pair.
+   */
+  readonly findByRequestTypeAndValueHash: (
+    params: FindPrincipalClaimByRequestTypeAndValueHashParams
+  ) => Effect.Effect<Option.Option<PrincipalClaim>, PersistenceError>
 }
 
 /**

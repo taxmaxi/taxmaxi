@@ -11,6 +11,7 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "@effect/platfor
 import * as Schema from "effect/Schema"
 import { AuthApi, AuthSessionApi, CoinbaseCompatApi } from "./AuthApi.ts"
 import { LegalReferenceApi } from "./LegalReferenceApi.ts"
+import { PrincipalsApi } from "./PrincipalsApi.ts"
 import { SourcesApi } from "./SourcesApi.ts"
 import { SyncRunsApi } from "./SyncRunsApi.ts"
 
@@ -78,6 +79,7 @@ export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(AuthSessionApi)
   .add(CoinbaseCompatApi)
   .add(LegalReferenceApi)
+  .add(PrincipalsApi)
   .add(SourcesApi)
   .add(SyncRunsApi)
   .annotateContext(

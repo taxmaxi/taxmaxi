@@ -215,6 +215,14 @@ const makeUnauthenticatedClientWithPayment = () =>
     })
   })
 
+const makeUnauthenticatedClient = () =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient,
+    })
+  })
+
 const makeUnauthenticatedClientWithInvalidPayment = () =>
   Effect.gen(function* () {
     const baseHttpClient = yield* HttpClient.HttpClient
@@ -516,6 +524,93 @@ describe("SourcesApiLive", () => {
       Effect.withConfigProvider(ClaimTokenConfigProvider),
       Effect.scoped
     )
+  )
+
+  it.effect("finds an anonymous source claim by authenticated CLI claim token", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Claimable anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        },
+      })
+
+      expect(claimResponse.sourceId).toBe(created.source.id)
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("returns not found for an unknown authenticated CLI claim token", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const result = yield* authenticatedClient.principals
+        .claimPrincipal({
+          payload: {
+            requestId: crypto.randomUUID(),
+            claimToken: "unknown-claim-token",
+            siwxProof: null,
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("requires authentication for CLI claim token lookup", () =>
+    Effect.gen(function* () {
+      const client = yield* makeUnauthenticatedClient()
+      const result = yield* client.principals
+        .claimPrincipal({
+          payload: {
+            requestId: crypto.randomUUID(),
+            claimToken: "unknown-claim-token",
+            siwxProof: null,
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("UnauthorizedError")
+      }
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects anonymous source creation without x402 payment before side effects", () =>

@@ -5,19 +5,18 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
-import { PrincipalRepository } from "@my/persistence/services"
 import { SourceSyncRunService, type SourceSyncRunDetails } from "@my/sync-engine/services"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
-import { CurrentUser } from "../definitions/AuthMiddleware.ts"
 import {
   SyncRunItemResponse,
   SyncRunNotFoundError,
   SyncRunResponse,
 } from "../definitions/SyncRunsApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
+import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -54,20 +53,11 @@ const toSyncRunResponse = (run: SourceSyncRunDetails): SyncRunResponse =>
 export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (handlers) =>
   Effect.gen(function* () {
     const sourceSyncRunService = yield* SourceSyncRunService
-    const principalRepository = yield* PrincipalRepository
+    const principalResolutionService = yield* PrincipalResolutionService
 
-    const resolvePrincipal = Effect.gen(function* () {
-      const currentUser = yield* CurrentUser
-      const maybePrincipal = yield* principalRepository
-        .findUserPrincipal(currentUser.userId)
-        .pipe(Effect.mapError(() => toInternalServerError("Failed to resolve principal.")))
-
-      if (Option.isNone(maybePrincipal)) {
-        return yield* Effect.fail(toInternalServerError("Missing user principal."))
-      }
-
-      return { currentUser, principal: maybePrincipal.value }
-    })
+    const resolvePrincipal = principalResolutionService.resolveCurrentUserPrincipal.pipe(
+      Effect.mapError((error) => toInternalServerError(error.message))
+    )
 
     return handlers
       .handle("startSyncRun", () =>

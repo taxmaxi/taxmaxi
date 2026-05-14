@@ -35,6 +35,8 @@ import { TokenValidator } from "../definitions/AuthMiddleware.ts"
 import { AuthMiddlewareLive, OptionalCurrentUserLive } from "./AuthMiddlewareLive.ts"
 import { AuthApiLive, AuthSessionApiLive, CoinbaseCompatApiLive } from "./AuthApiLive.ts"
 import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
+import { PrincipalResolutionServiceLive } from "./PrincipalResolutionServiceLive.ts"
+import { PrincipalsApiLive } from "./PrincipalsApiLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
@@ -75,9 +77,10 @@ const CoreApiGroup = Layer.mergeAll(
   CoinbaseCompatApiLive,
   AuthSessionApiLive,
   LegalReferenceApiLive,
+  PrincipalsApiLive,
   SourcesApiLive,
   SyncRunsApiLive
-)
+).pipe(Layer.provide(PrincipalResolutionServiceLive))
 
 type TaxMaxiApiLiveContext =
   | AuthService
