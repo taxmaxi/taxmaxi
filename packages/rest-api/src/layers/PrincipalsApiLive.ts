@@ -23,7 +23,7 @@ import {
   PrincipalClaimResponse,
 } from "../definitions/PrincipalsApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
-import { claimTokenPepperConfig, hashCliClaimToken } from "../helpers/ClaimTokenHash.ts"
+import { claimTokenPepperConfig, hashAnonymousSourceClaimToken } from "../helpers/ClaimTokenHash.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 
 const toInternalServerError = (message: string) =>
@@ -78,13 +78,13 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
           )
 
         const pepper = yield* loadClaimTokenPepper
-        const claimValueHash = hashCliClaimToken({
+        const claimValueHash = hashAnonymousSourceClaimToken({
           claimToken: payload.claimToken,
           pepper,
         })
 
         const maybeClaim = yield* principalClaimRepository
-          .findValidCliSourceClaim({
+          .findValidAnonymousSourceClaim({
             requestId: payload.requestId,
             claimValueHash,
           })

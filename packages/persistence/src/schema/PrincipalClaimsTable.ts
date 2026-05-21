@@ -16,7 +16,7 @@ import { sources } from "./SourcesTable.ts"
 export const principalClaimTypeEnum = pgEnum("principal_claim_type", [
   "x402_receipt",
   "siwx_wallet",
-  "cli_claim_token",
+  "anonymous_source_claim_token",
 ])
 
 /**
@@ -49,7 +49,7 @@ export const principalClaims = pgTable(
     index("idx_principal_claims_source_id").on(table.sourceId),
     check(
       "principal_claims_wallet_resource_fields",
-      sql`${table.claimType} not in ('siwx_wallet', 'cli_claim_token') or (${table.sourceId} is not null and ${table.chainType} is not null and ${table.walletAddress} is not null and ${table.year} is not null and ${table.jurisdiction} is not null)`
+      sql`${table.claimType} not in ('siwx_wallet', 'anonymous_source_claim_token') or (${table.sourceId} is not null and ${table.chainType} is not null and ${table.walletAddress} is not null and ${table.year} is not null and ${table.jurisdiction} is not null)`
     ),
   ]
 )

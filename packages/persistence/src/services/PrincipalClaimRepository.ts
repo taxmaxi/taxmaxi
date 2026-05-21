@@ -15,7 +15,7 @@ import type { PersistenceError } from "../errors/RepositoryError.ts"
 /**
  * PrincipalClaimType - Stored proof or entitlement claim family.
  */
-export type PrincipalClaimType = "x402_receipt" | "siwx_wallet" | "cli_claim_token"
+export type PrincipalClaimType = "x402_receipt" | "siwx_wallet" | "anonymous_source_claim_token"
 
 /**
  * CreatePrincipalClaimParams - Data required to persist a principal claim.
@@ -34,9 +34,9 @@ export interface CreatePrincipalClaimParams {
 }
 
 /**
- * FindValidCliSourceClaimParams - Lookup key for a claim-token-backed source claim.
+ * FindValidAnonymousSourceClaimParams - Lookup key for a claim-token-backed source claim.
  */
-export interface FindValidCliSourceClaimParams {
+export interface FindValidAnonymousSourceClaimParams {
   readonly requestId: string
   readonly claimValueHash: string
 }
@@ -119,10 +119,10 @@ export interface PrincipalClaimRepositoryService {
   ) => Effect.Effect<PrincipalClaim, PersistenceError>
 
   /**
-   * Find a currently valid CLI source claim for an anonymous wallet principal.
+   * Find a currently valid anonymous source claim for an anonymous wallet principal.
    */
-  readonly findValidCliSourceClaim: (
-    params: FindValidCliSourceClaimParams
+  readonly findValidAnonymousSourceClaim: (
+    params: FindValidAnonymousSourceClaimParams
   ) => Effect.Effect<Option.Option<PrincipalClaim>, PersistenceError>
 
   /**
