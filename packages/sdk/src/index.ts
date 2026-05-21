@@ -51,6 +51,8 @@ export type { TaxMaxiFieldError } from "./errors.ts"
 export type {
   CalculateTaxInput,
   Source,
+  SourceCreate,
+  SourceCreateInput,
   SourceIdInput,
   SourceList,
   SourcesEffectResource,
@@ -111,7 +113,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   static fromBrowserSession(options: TaxMaxiBrowserSessionOptions = {}): TaxMaxi {
     return TaxMaxi.fromEffectClientOptions({
       ...options,
-      credentials: "include",
+      credentials: options.credentials ?? "include",
     })
   }
 

@@ -28,6 +28,7 @@ export interface TaxMaxiEffectClientOptions {
 
 export interface TaxMaxiBrowserSessionOptions {
   readonly baseUrl?: string | URL
+  readonly credentials?: TaxMaxiRequestCredentials
   readonly fetch?: typeof globalThis.fetch
   readonly headers?: TaxMaxiHeadersProvider
 }

@@ -1,3 +1,4 @@
+import { useTaxMaxiX402Client } from "#/integrations/taxmaxi/useTaxMaxi"
 import type { WalletConnector } from "@solana/client"
 import { useWalletConnection } from "@solana/react-hooks"
 import { createFileRoute } from "@tanstack/react-router"
@@ -7,6 +8,7 @@ export const Route = createFileRoute("/")({ component: App })
 
 function App() {
   const walletConnection = useWalletConnection()
+  const taxMaxiX402Client = useTaxMaxiX402Client()
 
   const handleConnect = useCallback(
     async (connector: WalletConnector) => {
@@ -18,6 +20,22 @@ function App() {
     },
     [walletConnection]
   )
+
+  const handleCalculateTax = useCallback(async () => {
+    try {
+      const walletAddress = walletConnection.wallet?.account.address
+      if (!walletAddress) {
+        throw new Error("Wallet address not found")
+      }
+      await taxMaxiX402Client?.sources.create({
+        type: "onchain",
+        walletAddress,
+        name: walletConnection.wallet.connector.name,
+      })
+    } catch (error) {
+      console.error(error)
+    }
+  }, [walletConnection])
 
   return (
     <main className="page-wrap px-4 pb-8 pt-14">
@@ -48,17 +66,25 @@ function App() {
             ))}
           </div>
         ) : (
-          <div>
+          <div className="space-y-4">
             <p className="text-sm text-[var(--sea-ink-soft)]">
               Connected to {walletConnection.currentConnector?.name}:{" "}
               {walletConnection.wallet?.account.address}
             </p>
-            <button
-              className="flex items-center gap-2 rounded-full border border-[rgba(50,143,151,0.3)] bg-[rgba(79,184,178,0.14)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] no-underline transition hover:-translate-y-0.5 hover:bg-[rgba(79,184,178,0.24)]"
-              onClick={() => walletConnection.disconnect()}
-            >
-              disconnect
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                className="flex items-center gap-2 rounded-full border border-[rgba(50,143,151,0.3)] bg-[rgba(79,184,178,0.14)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] no-underline transition hover:-translate-y-0.5 hover:bg-[rgba(79,184,178,0.24)]"
+                onClick={handleCalculateTax}
+              >
+                Calculate tax
+              </button>
+              <button
+                className="flex items-center gap-2 rounded-full border border-[rgba(50,143,151,0.3)] bg-[rgba(79,184,178,0.14)] px-5 py-2.5 text-sm font-semibold text-[var(--lagoon-deep)] no-underline transition hover:-translate-y-0.5 hover:bg-[rgba(79,184,178,0.24)]"
+                onClick={walletConnection.disconnect}
+              >
+                disconnect
+              </button>
+            </div>
           </div>
         )}
       </section>

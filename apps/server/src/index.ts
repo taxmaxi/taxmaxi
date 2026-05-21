@@ -56,6 +56,7 @@ const CorsLive = HttpApiBuilder.middleware(
     return HttpMiddleware.cors({
       allowedOrigins: environment === "development" ? [DEFAULT_FRONTEND_URL] : [frontendUrl],
       credentials: true,
+      exposedHeaders: ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
     })
   })
 )

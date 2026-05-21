@@ -28,6 +28,29 @@ const sourceListResponseBody = JSON.stringify({
   sources: [],
 })
 
+const sourceCreateResponseBody = JSON.stringify({
+  source: {
+    id: "00000000-0000-4000-8000-000000000001",
+    principalId: "00000000-0000-4000-8000-000000000002",
+    name: "Demo Solana wallet",
+    providerKey: "solana",
+    sourceRef: {
+      _tag: "onchain",
+      addressId: "00000000-0000-4000-8000-000000000003",
+    },
+    createdAt: {
+      epochMillis: 1_767_225_600_000,
+    },
+  },
+  created: true,
+  syncJob: null,
+  claim: {
+    requestId: "00000000-0000-4000-8000-000000000004",
+    claimToken: "claim-token",
+    expiresAt: "2026-01-01T00:00:00.000Z",
+  },
+})
+
 const toHeaderRecord = (headers: FetchInit["headers"]): TaxMaxiHeaders => {
   const record: Record<string, string> = {}
 
@@ -187,6 +210,56 @@ describe("TaxMaxi Promise client", () => {
         headers: expect.objectContaining({
           authorization: "Bearer tm_test_phase_2",
         }),
+        url: "https://sdk.example.test/v1/sources",
+      }),
+    ])
+  })
+
+  it("creates paid anonymous sources through the injected fetch implementation", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const taxmaxi = TaxMaxi.fromBrowserSession({
+      baseUrl: "https://sdk.example.test",
+      fetch: makeFetch(capturedRequests, sourceCreateResponseBody),
+    })
+
+    await expect(
+      taxmaxi.sources.create({
+        type: "onchain",
+        walletAddress: "So11111111111111111111111111111111111111112",
+        name: "Demo Solana wallet",
+      })
+    ).resolves.toMatchObject({
+      created: true,
+      source: {
+        name: "Demo Solana wallet",
+        providerKey: "solana",
+      },
+    })
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        credentials: "include",
+        url: "https://sdk.example.test/v1/sources",
+      }),
+    ])
+  })
+
+  it("allows browser session callers to omit ambient credentials", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const taxmaxi = TaxMaxi.fromBrowserSession({
+      baseUrl: "https://sdk.example.test",
+      credentials: "omit",
+      fetch: makeFetch(capturedRequests, sourceCreateResponseBody),
+    })
+
+    await taxmaxi.sources.create({
+      type: "onchain",
+      walletAddress: "So11111111111111111111111111111111111111112",
+    })
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        credentials: "omit",
         url: "https://sdk.example.test/v1/sources",
       }),
     ])

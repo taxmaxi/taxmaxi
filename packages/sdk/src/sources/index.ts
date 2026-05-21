@@ -1,4 +1,6 @@
 import type {
+  SourceCreateRequest,
+  SourceCreateResponse,
   SourceListResponse,
   SourceSyncJobResponse,
   SourceSyncStartResponse,
@@ -9,6 +11,8 @@ import * as Effect from "effect/Effect"
 import type { TaxMaxiEffectClient } from "../client.ts"
 
 export type Source = SourceListResponse["sources"][number]
+export type SourceCreateInput = SourceCreateRequest
+export type SourceCreate = SourceCreateResponse
 export type SourceList = SourceListResponse
 export type SourceSyncStart = SourceSyncStartResponse
 export type SourceSyncJob = SourceSyncJobResponse
@@ -26,6 +30,7 @@ export type CalculateTaxInput = SourceIdInput & TaxCalculationRequest
 
 export type SourcesEffectResource = {
   readonly list: () => Effect.Effect<SourceList, unknown, never>
+  readonly create: (input: SourceCreateInput) => Effect.Effect<SourceCreate, unknown, never>
   readonly startSync: (input: SourceIdInput) => Effect.Effect<SourceSyncStart, unknown, never>
   readonly replaySync: (input: SourceIdInput) => Effect.Effect<SourceSyncStart, unknown, never>
   readonly getSyncJob: (input: SourceSyncJobInput) => Effect.Effect<SourceSyncJob, unknown, never>
@@ -34,6 +39,7 @@ export type SourcesEffectResource = {
 
 export type SourcesPromiseResource = {
   readonly list: () => Promise<SourceList>
+  readonly create: (input: SourceCreateInput) => Promise<SourceCreate>
   readonly startSync: (input: SourceIdInput) => Promise<SourceSyncStart>
   readonly replaySync: (input: SourceIdInput) => Promise<SourceSyncStart>
   readonly getSyncJob: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
@@ -44,6 +50,12 @@ export const makeSourcesEffectResource = (
   client: Effect.Effect<TaxMaxiEffectClient, never>
 ): SourcesEffectResource => ({
   list: () => Effect.flatMap(client, (resolved) => resolved.sources.listSources(undefined)),
+  create: (input) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.sources.createSource({
+        payload: input,
+      })
+    ),
   startSync: ({ sourceId }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.sources.startSourceSyncJob({
@@ -88,6 +100,7 @@ export const makeSourcesPromiseResource = (
   run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
 ): SourcesPromiseResource => ({
   list: () => run(effect.list()),
+  create: (input) => run(effect.create(input)),
   startSync: (input) => run(effect.startSync(input)),
   replaySync: (input) => run(effect.replaySync(input)),
   getSyncJob: (input) => run(effect.getSyncJob(input)),
