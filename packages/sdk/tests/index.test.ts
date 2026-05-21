@@ -6,6 +6,7 @@ import {
   TaxMaxiError,
   makeTaxMaxiHttpClientTransform,
   normalizeBaseUrl,
+  toTaxMaxiError,
   type TaxMaxiHeaders,
 } from "../src/index.ts"
 
@@ -44,6 +45,7 @@ const sourceCreateResponseBody = JSON.stringify({
   },
   created: true,
   syncJob: null,
+  syncUnavailable: null,
   claim: {
     requestId: "00000000-0000-4000-8000-000000000004",
     claimToken: "claim-token",
@@ -301,6 +303,22 @@ describe("TaxMaxi Promise client", () => {
     }
 
     expect.unreachable("Expected TaxMaxiError")
+  })
+
+  it("preserves API error tags and stable codes with x402 guidance", () => {
+    const error = toTaxMaxiError({
+      _tag: "SourcePaymentRequiredError",
+      code: "x402_payment_verification_failed",
+      message: "transaction_simulation_failed",
+      requestId: "req_123",
+    })
+
+    expect(error).toBeInstanceOf(TaxMaxiError)
+    expect(error._tag).toBe("SourcePaymentRequiredError")
+    expect(error.code).toBe("x402_payment_verification_failed")
+    expect(error.requestId).toBe("req_123")
+    expect(error.message).toContain("payer devnet USDC/SOL balance")
+    expect(error.message).toContain("receiver token account")
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {

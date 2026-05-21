@@ -22,6 +22,7 @@ import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 export class SourceBadRequestError extends Schema.TaggedError<SourceBadRequestError>()(
   "SourceBadRequestError",
   {
+    code: Schema.optional(Schema.String),
     message: Schema.String,
   },
   HttpApiSchema.annotations({ status: 400 })
@@ -38,6 +39,7 @@ export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>
 export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePaymentRequiredError>()(
   "SourcePaymentRequiredError",
   {
+    code: Schema.optional(Schema.String),
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
   },
@@ -91,7 +93,17 @@ export class SourceCreateClaimMetadata extends Schema.Class<SourceCreateClaimMet
 }) {}
 
 /**
- * SourceCreateResponse - Created or reused source and optional initial sync job.
+ * SourceSyncUnavailableResponse - Source was created, but initial sync is unavailable.
+ */
+export class SourceSyncUnavailableResponse extends Schema.Class<SourceSyncUnavailableResponse>(
+  "SourceSyncUnavailableResponse"
+)({
+  code: Schema.Literal("source_sync_provider_unsupported"),
+  message: Schema.String,
+}) {}
+
+/**
+ * SourceCreateResponse - Created or reused source and optional initial sync job/unavailability.
  */
 export class SourceCreateResponse extends Schema.Class<SourceCreateResponse>(
   "SourceCreateResponse"
@@ -99,6 +111,7 @@ export class SourceCreateResponse extends Schema.Class<SourceCreateResponse>(
   source: Source,
   created: Schema.Boolean,
   syncJob: Schema.NullOr(SourceSyncStartResponse),
+  syncUnavailable: Schema.NullOr(SourceSyncUnavailableResponse),
   claim: Schema.NullOr(SourceCreateClaimMetadata),
 }) {}
 

@@ -52,6 +52,11 @@ const TestPgClientLive = context.TestPgClientLive
 const queuedAt = new Date("2026-01-01T00:00:00.000Z")
 const queueEvents: Array<SourceSyncQueuePayload> = []
 const settlementEvents: Array<string> = []
+const sourceSyncStartEvents: Array<{
+  readonly sourceId: string
+  readonly principalId: string
+  readonly provider: string | null
+}> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const ClaimTokenConfigProvider = ConfigProvider.fromMap(
   new Map([["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"]])
@@ -106,6 +111,38 @@ const SourceSyncQueueFailureTestLive = Layer.succeed(SourceSyncQueue, {
         cause: "queue unavailable",
       })
     ),
+})
+
+const SourceSyncQueueTrackingFailureTestLive = Layer.succeed(SourceSyncQueue, {
+  enqueueSourceSyncJob: (payload) =>
+    Effect.sync(() => {
+      sourceSyncStartEvents.push({
+        sourceId: payload.sourceId,
+        principalId: payload.principalId,
+        provider: "solana",
+      })
+    }).pipe(
+      Effect.zipRight(
+        Effect.fail(
+          new SourceSyncQueueError({
+            operation: "test.enqueueSourceSyncJob",
+            cause: "queue unavailable",
+          })
+        )
+      )
+    ),
+})
+
+const SourceSyncQueueUntrackedFailureTestLive = Layer.succeed(SourceSyncQueue, {
+  enqueueSourceSyncJob: () =>
+    Effect.gen(function* () {
+      return yield* Effect.fail(
+        new SourceSyncQueueError({
+          operation: "test.enqueueSourceSyncJob",
+          cause: "queue unavailable",
+        })
+      )
+    }),
 })
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
@@ -187,12 +224,16 @@ const makeHttpLive = (
 
 const HttpLive = makeHttpLive(SourceSyncQueueTestLive)
 const QueueFailureHttpLive = makeHttpLive(SourceSyncQueueFailureTestLive)
+const PaidUnsupportedSyncHttpLive = makeHttpLive(
+  SourceSyncQueueTrackingFailureTestLive,
+  X402PaymentValidatorTrackingTestLive
+)
 const SettlementFailureHttpLive = makeHttpLive(
   SourceSyncQueueTestLive,
   X402PaymentValidatorSettlementFailureTestLive
 )
 const PaidQueueFailureHttpLive = makeHttpLive(
-  SourceSyncQueueFailureTestLive,
+  SourceSyncQueueUntrackedFailureTestLive,
   X402PaymentValidatorTrackingTestLive
 )
 
@@ -369,6 +410,7 @@ describe("SourcesApiLive", () => {
   beforeEach(async () => {
     queueEvents.length = 0
     settlementEvents.length = 0
+    sourceSyncStartEvents.length = 0
     await Effect.runPromise(context.recreateTestDatabase())
   })
 
@@ -390,6 +432,7 @@ describe("SourcesApiLive", () => {
 
       expect(response.created).toBe(true)
       expect(response.syncJob).toBeNull()
+      expect(response.syncUnavailable).toBeNull()
       expect(response.claim).toBeNull()
       expect(response.source).toMatchObject({
         principalId,
@@ -438,6 +481,7 @@ describe("SourcesApiLive", () => {
 
       expect(response.created).toBe(true)
       expect(response.syncJob).not.toBeNull()
+      expect(response.syncUnavailable).toBeNull()
       expect(response.claim).not.toBeNull()
       expect(response.source).toMatchObject({
         name: "Anonymous Solana wallet",
@@ -1142,6 +1186,7 @@ describe("SourcesApiLive", () => {
       expect(decodedBody.created).toBe(true)
       expect(decodedBody.claim).not.toBeNull()
       expect(decodedBody.syncJob).not.toBeNull()
+      expect(decodedBody.syncUnavailable).toBeNull()
       expect(decodedBody.source).toMatchObject({
         name: "Anonymous paid Solana wallet",
         providerKey: "solana",
@@ -1257,6 +1302,9 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("InternalServerError")
         expect(result.left.message).toBe("Failed to enqueue source sync job.")
+        if (result.left._tag === "InternalServerError") {
+          expect(result.left.code).toBe("source_sync_enqueue_failed")
+        }
       }
 
       const db = yield* drizzle
@@ -1272,6 +1320,44 @@ describe("SourcesApiLive", () => {
       Effect.withConfigProvider(ClaimTokenConfigProvider),
       Effect.scoped
     )
+  )
+
+  it.effect(
+    "returns source success with syncUnavailable when paid anonymous sync provider is unsupported",
+    () =>
+      Effect.gen(function* () {
+        const client = yield* makeUnauthenticatedClientWithPayment()
+        const response = yield* client.sources.createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Unsupported sync anonymous Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
+
+        expect(response.created).toBe(true)
+        expect(response.source.providerKey).toBe("solana")
+        expect(response.syncJob).toBeNull()
+        expect(response.syncUnavailable).toEqual({
+          code: "source_sync_provider_unsupported",
+          message: "Unsupported provider: solana",
+        })
+        expect(response.claim).not.toBeNull()
+        expect(sourceSyncStartEvents).toEqual([
+          {
+            sourceId: response.source.id,
+            principalId: response.source.principalId,
+            provider: "solana",
+          },
+        ])
+        expect(settlementEvents).toEqual([validX402PaymentHeader])
+      }).pipe(
+        Effect.provide(PaidUnsupportedSyncHttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
   )
 
   it.effect("rejects source creation when invalid auth credentials are present", () =>

@@ -11,6 +11,7 @@ export type TaxMaxiFieldError = {
 
 export class TaxMaxiError extends Error {
   readonly status: number
+  readonly _tag: string | undefined
   readonly code: string | undefined
   readonly requestId: string | undefined
   readonly fieldErrors: ReadonlyArray<TaxMaxiFieldError>
@@ -22,6 +23,7 @@ export class TaxMaxiError extends Error {
     message,
     requestId,
     status,
+    tag,
   }: {
     readonly cause?: unknown
     readonly code?: string | undefined
@@ -29,10 +31,12 @@ export class TaxMaxiError extends Error {
     readonly message: string
     readonly requestId?: string | undefined
     readonly status: number
+    readonly tag?: string | undefined
   }) {
     super(message, { cause })
     this.name = "TaxMaxiError"
     this.status = status
+    this._tag = tag
     this.code = code
     this.requestId = requestId
     this.fieldErrors = fieldErrors
@@ -51,14 +55,46 @@ type SchemaConstructor = {
 const hasSchemaAst = (value: unknown): value is SchemaConstructor =>
   typeof value === "object" && value !== null && "ast" in value
 
-const getErrorCode = (error: unknown): string | undefined => {
+const getErrorTag = (error: unknown): string | undefined => {
   const record = getErrorRecord(error)
   return typeof record?._tag === "string" ? record._tag : undefined
 }
 
+const getApiErrorCode = (error: unknown): string | undefined => getStringProperty(error, "code")
+
 const getStringProperty = (error: unknown, property: string): string | undefined => {
   const value = getErrorRecord(error)?.[property]
   return typeof value === "string" && value !== "" ? value : undefined
+}
+
+const getActionableMessage = ({
+  code,
+  error,
+  fallbackMessage,
+}: {
+  readonly code?: string | undefined
+  readonly error: unknown
+  readonly fallbackMessage: string
+}): string => {
+  const causeMessage = getCauseMessage(getErrorRecord(error)?.cause)
+  const lowLevelReason = causeMessage ?? fallbackMessage
+
+  if (
+    code === "transaction_simulation_failed" ||
+    lowLevelReason === "transaction_simulation_failed"
+  ) {
+    return "Payment transaction simulation failed. Check the payer devnet USDC/SOL balance, payer token account, receiver token account, and selected network."
+  }
+
+  if (code === "x402_payment_required") {
+    return "Payment is required for this request. Retry with a valid x402 payment header."
+  }
+
+  if (code === "x402_payment_settlement_failed") {
+    return "The payment was signed but could not be settled. Check facilitator/network status and retry or contact support with the request id."
+  }
+
+  return fallbackMessage
 }
 
 const getCauseMessage = (cause: unknown): string | undefined => {
@@ -106,7 +142,7 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
 
       return new TaxMaxiError({
         cause: error,
-        code: getErrorCode(error),
+        code: getErrorTag(error),
         message:
           causeMessage === undefined
             ? "Could not reach the TaxMaxi API."
@@ -117,7 +153,7 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
 
     return new TaxMaxiError({
       cause: error,
-      code: getErrorCode(error),
+      code: getErrorTag(error),
       message:
         error.reason === "StatusCode"
           ? "TaxMaxi API request failed."
@@ -162,16 +198,21 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
     })
   }
 
-  const code = getErrorCode(error)
+  const tag = getErrorTag(error)
+  const apiCode = getApiErrorCode(error)
+  const code = apiCode ?? tag
 
   if (code !== undefined) {
+    const fallbackMessage = getStringProperty(error, "message") ?? "TaxMaxi API request failed."
+
     return new TaxMaxiError({
       cause: error,
       code,
       fieldErrors: getFieldErrors(error),
-      message: getStringProperty(error, "message") ?? "TaxMaxi API request failed.",
+      message: getActionableMessage({ code, error, fallbackMessage }),
       requestId: getStringProperty(error, "requestId"),
       status: getAnnotatedErrorStatus(error) ?? 500,
+      tag,
     })
   }
 

@@ -6,6 +6,7 @@
 
 import type { PrincipalId } from "@my/core/ownership"
 import { parseCryptoAddress, SourceId, type ChainType } from "@my/core/source"
+import type { SourceSyncJobSummary } from "@my/sync-engine/services"
 import {
   PrincipalClaimRepository,
   PrincipalRepository,
@@ -26,6 +27,8 @@ import {
   SourceCreationInternalError,
   SourceCreationPaymentRequiredError,
   SourceCreationService,
+  type SourceCreationErrorCode,
+  type SourceCreationSyncUnavailable,
   type SourceCreationServiceShape,
 } from "../services/SourceCreationService.ts"
 import {
@@ -37,18 +40,33 @@ import {
 const CLI_CLAIM_TOKEN_BYTES = 32
 const CLI_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
 const DEFAULT_CLAIM_JURISDICTION = "germany"
+const SUPPORTED_SYNC_PROVIDERS = new Set(["coinbase"])
 
-const toBadRequestError = (message: string) => new SourceCreationBadRequestError({ message })
-const toInternalError = (message: string) => new SourceCreationInternalError({ message })
+type SourceSyncStartResult =
+  | { readonly _tag: "SyncJob"; readonly syncJob: SourceSyncJobSummary }
+  | { readonly _tag: "SyncUnavailable"; readonly syncUnavailable: SourceCreationSyncUnavailable }
+
+const toBadRequestError = (message: string, code?: SourceCreationErrorCode | undefined) =>
+  new SourceCreationBadRequestError({ code, message })
+const toInternalError = (message: string, code?: SourceCreationErrorCode | undefined) =>
+  new SourceCreationInternalError({ code, message })
 const toPaymentRequiredError = ({
+  code,
   message,
   paymentRequired,
   paymentRequiredHeader,
 }: {
+  readonly code: SourceCreationErrorCode
   readonly message: string
   readonly paymentRequired?: unknown
   readonly paymentRequiredHeader?: string | undefined
-}) => new SourceCreationPaymentRequiredError({ message, paymentRequired, paymentRequiredHeader })
+}) =>
+  new SourceCreationPaymentRequiredError({
+    code,
+    message,
+    paymentRequired,
+    paymentRequiredHeader,
+  })
 
 const generateClaimToken = (): string => {
   const bytes = new Uint8Array(CLI_CLAIM_TOKEN_BYTES)
@@ -58,6 +76,9 @@ const generateClaimToken = (): string => {
 
 const hashReceiptValue = (receiptValue: string): string =>
   createHash("sha256").update("x402_receipt").update("\0").update(receiptValue).digest("hex")
+
+const isSupportedSyncProvider = (provider: string | null): boolean =>
+  provider !== null && SUPPORTED_SYNC_PROVIDERS.has(provider)
 
 export const SourceCreationServiceLive = Layer.effect(
   SourceCreationService,
@@ -105,7 +126,11 @@ export const SourceCreationServiceLive = Layer.effect(
             walletAddress: parsedAddress.address,
             name: sourceName,
           })
-          .pipe(Effect.mapError(() => toInternalError("Failed to create or reuse source.")))
+          .pipe(
+            Effect.mapError(() =>
+              toInternalError("Failed to create or reuse source.", "source_creation_failed")
+            )
+          )
 
         return { ...created, parsedAddress }
       })
@@ -114,7 +139,9 @@ export const SourceCreationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const parsedAddress = parseCryptoAddress(walletAddress)
         if (parsedAddress === null) {
-          return yield* Effect.fail(toBadRequestError("Invalid crypto address."))
+          return yield* Effect.fail(
+            toBadRequestError("Invalid crypto address.", "invalid_wallet_address")
+          )
         }
 
         return parsedAddress
@@ -142,6 +169,9 @@ export const SourceCreationServiceLive = Layer.effect(
         .pipe(
           Effect.mapError((error) =>
             toPaymentRequiredError({
+              code: Option.isNone(paymentHeader)
+                ? "x402_payment_required"
+                : "x402_payment_verification_failed",
               message: error.message,
               paymentRequired: error.paymentRequired,
               paymentRequiredHeader: error.paymentRequiredHeader,
@@ -238,34 +268,87 @@ export const SourceCreationServiceLive = Layer.effect(
           jurisdiction,
           expiresAt: null,
         })
-        .pipe(Effect.mapError(() => toInternalError("Failed to create x402 receipt claim.")))
+        .pipe(
+          Effect.mapError(() =>
+            toInternalError(
+              "Failed to create x402 receipt claim.",
+              "x402_receipt_claim_persistence_failed"
+            )
+          )
+        )
 
     const startSync = ({
       principalId,
       sourceId,
+      provider,
     }: {
       readonly principalId: string
       readonly sourceId: string
+      readonly provider: string | null
     }) =>
-      sourceSyncService
-        .startSourceSyncJob({
-          principalId,
-          sourceId,
-        })
-        .pipe(
+      Effect.gen(function* () {
+        if (!isSupportedSyncProvider(provider)) {
+          yield* Effect.logError(
+            {
+              operation: "sourceSyncService.startSourceSyncJob",
+              provider: provider ?? "unknown",
+              mode: "sync",
+              sourceId,
+              principalId,
+              cause: "sync provider unsupported for source creation",
+            },
+            "source-creation:sync-unavailable"
+          )
+
+          return {
+            _tag: "SyncUnavailable",
+            syncUnavailable: {
+              code: "source_sync_provider_unsupported",
+              message: `Unsupported provider: ${provider ?? "unknown"}`,
+            },
+          } satisfies SourceSyncStartResult
+        }
+
+        return yield* sourceSyncService.startSourceSyncJob({ principalId, sourceId }).pipe(
+          Effect.map((syncJob) => ({ _tag: "SyncJob", syncJob }) satisfies SourceSyncStartResult),
+          Effect.catchTag("UnsupportedProviderError", (error) =>
+            Effect.gen(function* () {
+              yield* Effect.logError(
+                {
+                  operation: "sourceSyncService.startSourceSyncJob",
+                  provider: error.provider,
+                  mode: "sync",
+                  sourceId,
+                  principalId,
+                  cause: error,
+                },
+                "source-creation:sync-unavailable"
+              )
+
+              return {
+                _tag: "SyncUnavailable",
+                syncUnavailable: {
+                  code: "source_sync_provider_unsupported",
+                  message: `Unsupported provider: ${error.provider}`,
+                },
+              } satisfies SourceSyncStartResult
+            })
+          ),
           Effect.mapError((error) => {
             switch (error._tag) {
-              case "UnsupportedProviderError":
-                return toBadRequestError(`Unsupported provider: ${error.provider}`)
               case "SourceNotFoundError":
                 return toBadRequestError("No source found. Connect a source first.")
               case "SourceSyncQueueError":
-                return toInternalError("Failed to enqueue source sync job.")
+                return toInternalError(
+                  "Failed to enqueue source sync job.",
+                  "source_sync_enqueue_failed"
+                )
               default:
                 return toInternalError("Failed to start source sync.")
             }
           })
         )
+      })
 
     const createSource: SourceCreationServiceShape["createSource"] = ({
       currentUser,
@@ -301,6 +384,7 @@ export const SourceCreationServiceLive = Layer.effect(
             source: created.source,
             created: created.created,
             syncJob: null,
+            syncUnavailable: null,
             claim: null,
             paymentResponseHeader: null,
           }
@@ -312,9 +396,10 @@ export const SourceCreationServiceLive = Layer.effect(
 
         const requestId = crypto.randomUUID()
 
-        const syncJob = yield* startSync({
+        const syncResult = yield* startSync({
           principalId: principal.id,
           sourceId: created.source.id,
+          provider: created.source.providerKey,
         })
 
         const maybeSettlement =
@@ -323,6 +408,7 @@ export const SourceCreationServiceLive = Layer.effect(
                 yield* maybeVerifiedPayment.value.settle().pipe(
                   Effect.mapError((error) =>
                     toPaymentRequiredError({
+                      code: "x402_payment_settlement_failed",
                       message: error.message,
                       paymentRequired: error.paymentRequired,
                       paymentRequiredHeader: error.paymentRequiredHeader,
@@ -365,7 +451,9 @@ export const SourceCreationServiceLive = Layer.effect(
         return {
           source: created.source,
           created: created.created,
-          syncJob,
+          syncJob: syncResult._tag === "SyncJob" ? syncResult.syncJob : null,
+          syncUnavailable:
+            syncResult._tag === "SyncUnavailable" ? syncResult.syncUnavailable : null,
           claim,
           paymentResponseHeader,
         }
