@@ -2,5 +2,5 @@
   "$schema": "./node_modules/oxfmt/configuration-schema.json",
   "semi": false,
   "trailingComma": "es5",
-  "ignorePatterns": ["**/dist/**", "**/migrations/**", "**/drizzle/meta/**"],
+  "ignorePatterns": ["**/dist/**", "**/migrations/**", "**/drizzle/meta/**", "**/routeTree.gen.ts"],
 }

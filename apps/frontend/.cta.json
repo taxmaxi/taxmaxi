@@ -1,0 +1,24 @@
+{
+  "projectName": "frontend",
+  "mode": "file-router",
+  "typescript": true,
+  "packageManager": "pnpm",
+  "includeExamples": true,
+  "tailwind": true,
+  "addOnOptions": {},
+  "envVarValues": {},
+  "git": false,
+  "install": true,
+  "routerOnly": false,
+  "version": 1,
+  "framework": "react",
+  "chosenAddOns": [
+    "cloudflare",
+    "sentry",
+    "posthog",
+    "table",
+    "shadcn",
+    "compiler",
+    "tanstack-query"
+  ]
+}
