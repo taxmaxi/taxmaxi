@@ -18,7 +18,7 @@ import * as Layer from "effect/Layer"
 import { Option } from "effect"
 import * as Redacted from "effect/Redacted"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
-import { claimTokenPepperConfig, hashCliClaimToken } from "../helpers/ClaimTokenHash.ts"
+import { claimTokenPepperConfig, hashAnonymousSourceClaimToken } from "../helpers/ClaimTokenHash.ts"
 import type { User } from "../definitions/AuthMiddleware.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 import {
@@ -34,8 +34,8 @@ import {
   type X402VerifiedPayment,
 } from "../services/X402PaymentValidator.ts"
 
-const CLI_CLAIM_TOKEN_BYTES = 32
-const CLI_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
+const ANONYMOUS_SOURCE_CLAIM_TOKEN_BYTES = 32
+const ANONYMOUS_SOURCE_CLAIM_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
 const DEFAULT_CLAIM_JURISDICTION = "germany"
 
 const toBadRequestError = (message: string) => new SourceCreationBadRequestError({ message })
@@ -51,7 +51,7 @@ const toPaymentRequiredError = ({
 }) => new SourceCreationPaymentRequiredError({ message, paymentRequired, paymentRequiredHeader })
 
 const generateClaimToken = (): string => {
-  const bytes = new Uint8Array(CLI_CLAIM_TOKEN_BYTES)
+  const bytes = new Uint8Array(ANONYMOUS_SOURCE_CLAIM_TOKEN_BYTES)
   crypto.getRandomValues(bytes)
   return Buffer.from(bytes).toString("base64url")
 }
@@ -161,7 +161,7 @@ export const SourceCreationServiceLive = Layer.effect(
       return pepper
     })
 
-    const createCliClaim = ({
+    const createAnonymousSourceClaim = ({
       principalId,
       sourceId,
       requestId,
@@ -182,15 +182,18 @@ export const SourceCreationServiceLive = Layer.effect(
     }) =>
       Effect.gen(function* () {
         const claimToken = generateClaimToken()
-        const expiresAt = Timestamp.addMillis(Timestamp.now(), CLI_CLAIM_TTL_MILLIS).toDate()
+        const expiresAt = Timestamp.addMillis(
+          Timestamp.now(),
+          ANONYMOUS_SOURCE_CLAIM_TTL_MILLIS
+        ).toDate()
 
         yield* principalClaimRepository
           .create({
             principalId,
             sourceId,
             requestId,
-            claimType: "cli_claim_token",
-            claimValueHash: hashCliClaimToken({ claimToken, pepper }),
+            claimType: "anonymous_source_claim_token",
+            claimValueHash: hashAnonymousSourceClaimToken({ claimToken, pepper }),
             chainType,
             walletAddress,
             year,
@@ -346,7 +349,7 @@ export const SourceCreationServiceLive = Layer.effect(
         }
 
         const claim = Option.isSome(maybeClaimTokenPepper)
-          ? yield* createCliClaim({
+          ? yield* createAnonymousSourceClaim({
               principalId: principal.id,
               sourceId: created.source.id,
               requestId,

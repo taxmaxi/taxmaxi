@@ -483,23 +483,25 @@ describe("SourcesApiLive", () => {
         .from(schema.principalClaims)
 
       expect(claims).toHaveLength(2)
-      const cliClaim = claims.find((claim) => claim.claimType === "cli_claim_token")
+      const anonymousSourceClaim = claims.find(
+        (claim) => claim.claimType === "anonymous_source_claim_token"
+      )
       const receiptClaim = claims.find((claim) => claim.claimType === "x402_receipt")
 
-      expect(cliClaim).toMatchObject({
+      expect(anonymousSourceClaim).toMatchObject({
         requestId: response.claim.requestId,
         principalId: response.source.principalId,
         sourceId: response.source.id,
-        claimType: "cli_claim_token",
+        claimType: "anonymous_source_claim_token",
         chainType: "solana",
         walletAddress,
         year: 2025,
         jurisdiction: "germany",
         consumedAt: null,
       })
-      expect(cliClaim?.claimValueHash).not.toBe(response.claim.claimToken)
-      expect(cliClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u)
-      expect(cliClaim?.expiresAt?.toISOString()).toBe(response.claim.expiresAt)
+      expect(anonymousSourceClaim?.claimValueHash).not.toBe(response.claim.claimToken)
+      expect(anonymousSourceClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u)
+      expect(anonymousSourceClaim?.expiresAt?.toISOString()).toBe(response.claim.expiresAt)
       expect(receiptClaim).toMatchObject({
         requestId: response.claim.requestId,
         principalId: response.source.principalId,
@@ -527,7 +529,7 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect("finds an anonymous source claim by authenticated CLI claim token", () =>
+  it.effect("finds an anonymous source claim by authenticated anonymous source claim token", () =>
     Effect.gen(function* () {
       const walletAddress = "So11111111111111111111111111111111111111112"
       const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
@@ -600,68 +602,70 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect("rejects replaying a CLI claim token after a successful ownership move", () =>
-    Effect.gen(function* () {
-      const walletAddress = "So11111111111111111111111111111111111111112"
-      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
-      const created = yield* anonymousClient.sources.createSource({
-        payload: {
-          type: "onchain",
-          walletAddress,
-          name: "Replay protected anonymous Solana wallet",
-          year: 2025,
-          jurisdiction: "germany",
-        },
-      })
+  it.effect(
+    "rejects replaying a anonymous source claim token after a successful ownership move",
+    () =>
+      Effect.gen(function* () {
+        const walletAddress = "So11111111111111111111111111111111111111112"
+        const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+        const created = yield* anonymousClient.sources.createSource({
+          payload: {
+            type: "onchain",
+            walletAddress,
+            name: "Replay protected anonymous Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
 
-      if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
-      }
+        if (created.claim === null) {
+          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        }
 
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      yield* seedPrincipalUser({ userId, principalId })
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        yield* seedPrincipalUser({ userId, principalId })
 
-      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-      const claimPayload = {
-        requestId: created.claim.requestId,
-        claimToken: created.claim.claimToken,
-        siwxProof: null,
-      }
+        const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+        const claimPayload = {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        }
 
-      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
-        payload: claimPayload,
-      })
-      expect(claimResponse.sourceId).toBe(created.source.id)
+        const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+          payload: claimPayload,
+        })
+        expect(claimResponse.sourceId).toBe(created.source.id)
 
-      const replayResult = yield* authenticatedClient.principals
-        .claimPrincipal({ payload: claimPayload })
-        .pipe(Effect.either)
+        const replayResult = yield* authenticatedClient.principals
+          .claimPrincipal({ payload: claimPayload })
+          .pipe(Effect.either)
 
-      expect(replayResult._tag).toBe("Left")
-      if (replayResult._tag === "Left") {
-        expect(replayResult.left._tag).toBe("PrincipalClaimNotFoundError")
-      }
+        expect(replayResult._tag).toBe("Left")
+        if (replayResult._tag === "Left") {
+          expect(replayResult.left._tag).toBe("PrincipalClaimNotFoundError")
+        }
 
-      const db = yield* drizzle
-      const [storedSource] = yield* db
-        .select({ principalId: schema.sources.principalId })
-        .from(schema.sources)
-        .where(eq(schema.sources.id, created.source.id))
-        .limit(1)
-      expect(storedSource).toEqual({ principalId })
+        const db = yield* drizzle
+        const [storedSource] = yield* db
+          .select({ principalId: schema.sources.principalId })
+          .from(schema.sources)
+          .where(eq(schema.sources.id, created.source.id))
+          .limit(1)
+        expect(storedSource).toEqual({ principalId })
 
-      const claims = yield* db
-        .select({ consumedAt: schema.principalClaims.consumedAt })
-        .from(schema.principalClaims)
-        .where(eq(schema.principalClaims.requestId, created.claim.requestId))
-      expect(claims).toHaveLength(2)
-      expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+        const claims = yield* db
+          .select({ consumedAt: schema.principalClaims.consumedAt })
+          .from(schema.principalClaims)
+          .where(eq(schema.principalClaims.requestId, created.claim.requestId))
+        expect(claims).toHaveLength(2)
+        expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
+      }).pipe(
+        Effect.provide(HttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
   )
 
   it.effect(
@@ -733,7 +737,7 @@ describe("SourcesApiLive", () => {
       )
   )
 
-  it.effect("rejects an expired authenticated CLI claim token", () =>
+  it.effect("rejects an expired authenticated anonymous source claim token", () =>
     Effect.gen(function* () {
       const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
       const created = yield* anonymousClient.sources.createSource({
@@ -781,7 +785,7 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect("rejects an already consumed authenticated CLI claim token", () =>
+  it.effect("rejects an already consumed authenticated anonymous source claim token", () =>
     Effect.gen(function* () {
       const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
       const created = yield* anonymousClient.sources.createSource({
@@ -805,7 +809,7 @@ describe("SourcesApiLive", () => {
         .where(
           and(
             eq(schema.principalClaims.requestId, created.claim.requestId),
-            eq(schema.principalClaims.claimType, "cli_claim_token")
+            eq(schema.principalClaims.claimType, "anonymous_source_claim_token")
           )
         )
 
@@ -835,104 +839,108 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect("rejects a CLI claim token that is no longer owned by an anonymous principal", () =>
-    Effect.gen(function* () {
-      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
-      const created = yield* anonymousClient.sources.createSource({
-        payload: {
-          type: "onchain",
-          walletAddress: "So11111111111111111111111111111111111111112",
-          name: "User principal claim Solana wallet",
-          year: 2025,
-          jurisdiction: "germany",
-        },
-      })
-
-      if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
-      }
-
-      const claimedUserId = crypto.randomUUID()
-      const db = yield* drizzle
-      yield* db.insert(schema.users).values({
-        id: claimedUserId,
-        email: `${claimedUserId}@taxmaxi.test`,
-        name: "Already Claimed Test User",
-      })
-      yield* db.update(schema.principals).set({ kind: "user", userId: claimedUserId })
-
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      yield* seedPrincipalUser({ userId, principalId })
-
-      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-      const result = yield* authenticatedClient.principals
-        .claimPrincipal({
+  it.effect(
+    "rejects a anonymous source claim token that is no longer owned by an anonymous principal",
+    () =>
+      Effect.gen(function* () {
+        const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+        const created = yield* anonymousClient.sources.createSource({
           payload: {
-            requestId: created.claim.requestId,
-            claimToken: created.claim.claimToken,
-            siwxProof: null,
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "User principal claim Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
           },
         })
-        .pipe(Effect.either)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
-      }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+        if (created.claim === null) {
+          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        }
+
+        const claimedUserId = crypto.randomUUID()
+        const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: claimedUserId,
+          email: `${claimedUserId}@taxmaxi.test`,
+          name: "Already Claimed Test User",
+        })
+        yield* db.update(schema.principals).set({ kind: "user", userId: claimedUserId })
+
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        yield* seedPrincipalUser({ userId, principalId })
+
+        const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+        const result = yield* authenticatedClient.principals
+          .claimPrincipal({
+            payload: {
+              requestId: created.claim.requestId,
+              claimToken: created.claim.claimToken,
+              siwxProof: null,
+            },
+          })
+          .pipe(Effect.either)
+
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+        }
+      }).pipe(
+        Effect.provide(HttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
   )
 
-  it.effect("rejects a CLI claim token whose wallet context no longer matches its source", () =>
-    Effect.gen(function* () {
-      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
-      const created = yield* anonymousClient.sources.createSource({
-        payload: {
-          type: "onchain",
-          walletAddress: "So11111111111111111111111111111111111111112",
-          name: "Mismatched wallet claim Solana wallet",
-          year: 2025,
-          jurisdiction: "germany",
-        },
-      })
-
-      if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
-      }
-
-      const db = yield* drizzle
-      yield* db
-        .update(schema.addresses)
-        .set({ address: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E" })
-
-      const userId = crypto.randomUUID()
-      const principalId = crypto.randomUUID()
-      yield* seedPrincipalUser({ userId, principalId })
-
-      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-      const result = yield* authenticatedClient.principals
-        .claimPrincipal({
+  it.effect(
+    "rejects a anonymous source claim token whose wallet context no longer matches its source",
+    () =>
+      Effect.gen(function* () {
+        const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+        const created = yield* anonymousClient.sources.createSource({
           payload: {
-            requestId: created.claim.requestId,
-            claimToken: created.claim.claimToken,
-            siwxProof: null,
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Mismatched wallet claim Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
           },
         })
-        .pipe(Effect.either)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
-      }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+        if (created.claim === null) {
+          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        }
+
+        const db = yield* drizzle
+        yield* db
+          .update(schema.addresses)
+          .set({ address: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E" })
+
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        yield* seedPrincipalUser({ userId, principalId })
+
+        const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+        const result = yield* authenticatedClient.principals
+          .claimPrincipal({
+            payload: {
+              requestId: created.claim.requestId,
+              claimToken: created.claim.claimToken,
+              siwxProof: null,
+            },
+          })
+          .pipe(Effect.either)
+
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+        }
+      }).pipe(
+        Effect.provide(HttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
   )
 
   it.effect("returns conflict when claiming a wallet the user already owns", () =>
@@ -1027,7 +1035,7 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect("returns not found for an unknown authenticated CLI claim token", () =>
+  it.effect("returns not found for an unknown authenticated anonymous source claim token", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()
       const principalId = crypto.randomUUID()
@@ -1055,7 +1063,7 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect("requires authentication for CLI claim token lookup", () =>
+  it.effect("requires authentication for anonymous source claim token lookup", () =>
     Effect.gen(function* () {
       const client = yield* makeUnauthenticatedClient()
       const result = yield* client.principals

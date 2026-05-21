@@ -143,73 +143,78 @@ const make = Effect.gen(function* () {
       return yield* rowToPrincipalClaim(row)
     }).pipe(wrapSqlError("principalClaimRepository.create"))
 
-  const findValidCliSourceClaim: PrincipalClaimRepositoryService["findValidCliSourceClaim"] = (
-    params
-  ) =>
-    Effect.gen(function* () {
-      const now = new Date()
-      const [row] = yield* db
-        .select(selectPrincipalClaimFields)
-        .from(schema.principalClaims)
-        .innerJoin(schema.principals, eq(schema.principals.id, schema.principalClaims.principalId))
-        .innerJoin(schema.sources, eq(schema.sources.id, schema.principalClaims.sourceId))
-        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
-        .where(
-          and(
-            eq(schema.principalClaims.requestId, params.requestId),
-            eq(schema.principalClaims.claimType, "cli_claim_token"),
-            eq(schema.principalClaims.claimValueHash, params.claimValueHash),
-            isNull(schema.principalClaims.consumedAt),
-            or(isNull(schema.principalClaims.expiresAt), gt(schema.principalClaims.expiresAt, now)),
-            eq(schema.principals.kind, "anonymous_wallet"),
-            eq(schema.sources.principalId, schema.principalClaims.principalId),
-            eq(schema.addresses.principalId, schema.principalClaims.principalId),
-            eq(schema.sources.sourceableType, "onchain"),
-            sql`${schema.addresses.type}::text = ${schema.principalClaims.chainType}`,
-            eq(schema.addresses.address, schema.principalClaims.walletAddress)
+  const findValidAnonymousSourceClaim: PrincipalClaimRepositoryService["findValidAnonymousSourceClaim"] =
+    (params) =>
+      Effect.gen(function* () {
+        const now = new Date()
+        const [row] = yield* db
+          .select(selectPrincipalClaimFields)
+          .from(schema.principalClaims)
+          .innerJoin(
+            schema.principals,
+            eq(schema.principals.id, schema.principalClaims.principalId)
           )
-        )
-        .limit(1)
-
-      if (row === undefined) {
-        return Option.none<PrincipalClaim>()
-      }
-
-      if (
-        row.sourceId === null ||
-        row.chainType === null ||
-        row.walletAddress === null ||
-        row.year === null ||
-        row.jurisdiction === null
-      ) {
-        return Option.none<PrincipalClaim>()
-      }
-
-      const [receiptRow] = yield* db
-        .select({ id: schema.principalClaims.id })
-        .from(schema.principalClaims)
-        .where(
-          and(
-            eq(schema.principalClaims.requestId, row.requestId),
-            eq(schema.principalClaims.claimType, "x402_receipt"),
-            eq(schema.principalClaims.principalId, row.principalId),
-            eq(schema.principalClaims.sourceId, row.sourceId),
-            eq(schema.principalClaims.chainType, row.chainType),
-            eq(schema.principalClaims.walletAddress, row.walletAddress),
-            eq(schema.principalClaims.year, row.year),
-            eq(schema.principalClaims.jurisdiction, row.jurisdiction),
-            isNull(schema.principalClaims.consumedAt)
+          .innerJoin(schema.sources, eq(schema.sources.id, schema.principalClaims.sourceId))
+          .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+          .where(
+            and(
+              eq(schema.principalClaims.requestId, params.requestId),
+              eq(schema.principalClaims.claimType, "anonymous_source_claim_token"),
+              eq(schema.principalClaims.claimValueHash, params.claimValueHash),
+              isNull(schema.principalClaims.consumedAt),
+              or(
+                isNull(schema.principalClaims.expiresAt),
+                gt(schema.principalClaims.expiresAt, now)
+              ),
+              eq(schema.principals.kind, "anonymous_wallet"),
+              eq(schema.sources.principalId, schema.principalClaims.principalId),
+              eq(schema.addresses.principalId, schema.principalClaims.principalId),
+              eq(schema.sources.sourceableType, "onchain"),
+              sql`${schema.addresses.type}::text = ${schema.principalClaims.chainType}`,
+              eq(schema.addresses.address, schema.principalClaims.walletAddress)
+            )
           )
-        )
-        .limit(1)
+          .limit(1)
 
-      if (receiptRow === undefined) {
-        return Option.none<PrincipalClaim>()
-      }
+        if (row === undefined) {
+          return Option.none<PrincipalClaim>()
+        }
 
-      const claim = yield* rowToPrincipalClaim(row)
-      return Option.some(claim)
-    }).pipe(wrapSqlError("principalClaimRepository.findValidCliSourceClaim"))
+        if (
+          row.sourceId === null ||
+          row.chainType === null ||
+          row.walletAddress === null ||
+          row.year === null ||
+          row.jurisdiction === null
+        ) {
+          return Option.none<PrincipalClaim>()
+        }
+
+        const [receiptRow] = yield* db
+          .select({ id: schema.principalClaims.id })
+          .from(schema.principalClaims)
+          .where(
+            and(
+              eq(schema.principalClaims.requestId, row.requestId),
+              eq(schema.principalClaims.claimType, "x402_receipt"),
+              eq(schema.principalClaims.principalId, row.principalId),
+              eq(schema.principalClaims.sourceId, row.sourceId),
+              eq(schema.principalClaims.chainType, row.chainType),
+              eq(schema.principalClaims.walletAddress, row.walletAddress),
+              eq(schema.principalClaims.year, row.year),
+              eq(schema.principalClaims.jurisdiction, row.jurisdiction),
+              isNull(schema.principalClaims.consumedAt)
+            )
+          )
+          .limit(1)
+
+        if (receiptRow === undefined) {
+          return Option.none<PrincipalClaim>()
+        }
+
+        const claim = yield* rowToPrincipalClaim(row)
+        return Option.some(claim)
+      }).pipe(wrapSqlError("principalClaimRepository.findValidAnonymousSourceClaim"))
 
   const claimAnonymousSourceForUser: PrincipalClaimRepositoryService["claimAnonymousSourceForUser"] =
     (params) =>
@@ -232,7 +237,7 @@ const make = Effect.gen(function* () {
               .where(
                 and(
                   eq(schema.principalClaims.requestId, params.requestId),
-                  eq(schema.principalClaims.claimType, "cli_claim_token"),
+                  eq(schema.principalClaims.claimType, "anonymous_source_claim_token"),
                   eq(schema.principalClaims.claimValueHash, params.claimValueHash),
                   eq(schema.principalClaims.principalId, params.anonymousPrincipalId),
                   eq(schema.principalClaims.sourceId, params.sourceId),
@@ -450,7 +455,7 @@ const make = Effect.gen(function* () {
 
   return PrincipalClaimRepository.of({
     create,
-    findValidCliSourceClaim,
+    findValidAnonymousSourceClaim,
     claimAnonymousSourceForUser,
   } satisfies PrincipalClaimRepositoryService)
 })
