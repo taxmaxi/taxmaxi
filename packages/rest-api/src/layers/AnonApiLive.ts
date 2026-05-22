@@ -123,11 +123,17 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
       const request = yield* HttpServerRequest.HttpServerRequest
       const token = request.cookies[ANON_SESSION_COOKIE_NAME]
       if (token === undefined || token.trim() === "") {
+        yield* clearCookie({ name: ANON_SESSION_COOKIE_NAME, baseCookieOptions })
         return yield* Effect.fail(new UnauthorizedError({ message: "Anon session required." }))
       }
-      return yield* anonSessionService
-        .verifySessionToken(token)
-        .pipe(Effect.mapError(() => new UnauthorizedError({ message: "Anon session required." })))
+      return yield* anonSessionService.verifySessionToken(token).pipe(
+        Effect.catchAll(() =>
+          Effect.gen(function* () {
+            yield* clearCookie({ name: ANON_SESSION_COOKIE_NAME, baseCookieOptions })
+            return yield* Effect.fail(new UnauthorizedError({ message: "Anon session required." }))
+          })
+        )
+      )
     })
 
     const findSource = (sourceId: string) =>
