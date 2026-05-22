@@ -28,9 +28,11 @@ import {
   QuestionLegalReferencesResponse,
   TransactionTypeLegalReferencesResponse,
 } from "../src/definitions/LegalReferenceApi.ts"
+import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
+import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
 const ACTIVE_DE_RULESET_VERSION = "de-crypto-income-tax-v2025-03-06"
 const DE_CITATION_KEY_PATTERN = /^DE\.BMF\.2025-03-06\.RN[0-9A-Z]+$/
@@ -107,6 +109,8 @@ const PersistenceLayer = Layer.mergeAll(
 
 const HttpLive = HttpApiBuilder.serve().pipe(
   Layer.provide(TaxMaxiApiLive),
+  Layer.provide(AnonSessionServiceLive),
+  Layer.provide(SIWXProofVerifierTestLive),
   Layer.provide(X402PaymentValidatorTestLive),
   Layer.provide(SimpleTokenValidatorLive),
   Layer.provideMerge(PersistenceLayer),

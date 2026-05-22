@@ -26,9 +26,11 @@ import { schema } from "../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
+import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
+import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_rest_api_sync_runs",
@@ -134,6 +136,8 @@ const PersistenceLayer = Layer.mergeAll(
 
 const HttpLive = HttpApiBuilder.serve().pipe(
   Layer.provide(TaxMaxiApiLive),
+  Layer.provide(AnonSessionServiceLive),
+  Layer.provide(SIWXProofVerifierTestLive),
   Layer.provide(X402PaymentValidatorTestLive),
   Layer.provide(SimpleTokenValidatorLive),
   Layer.provideMerge(PersistenceLayer),

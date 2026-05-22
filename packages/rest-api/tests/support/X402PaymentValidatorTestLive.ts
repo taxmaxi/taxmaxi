@@ -11,6 +11,7 @@ import {
 
 const TEST_NETWORK = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
 const TEST_RECEIVING_WALLET = "TaxMaxiTest111111111111111111111111111111111"
+export const TEST_PAYER_WALLET = "Payer111111111111111111111111111111111111"
 
 const paymentRequired = (message: string): PaymentRequired => ({
   x402Version: 2,
@@ -42,48 +43,56 @@ export const makeX402PaymentValidatorTestLive = ({
   readonly onSettle?: ((paymentHeader: string) => void) | undefined
   readonly validPaymentHeader: string
 }) =>
-  Layer.succeed(X402PaymentValidator, {
-    validateAnonymousSourceCreation: ({ paymentHeader }) =>
-      Effect.gen(function* () {
-        if (Option.isNone(paymentHeader) || paymentHeader.value !== validPaymentHeader) {
-          return yield* Effect.fail(
-            new X402PaymentRequiredError({
-              message: "x402 payment required.",
-              paymentRequired: paymentRequired("Payment required"),
-              paymentRequiredHeader: "encoded-test-payment-requirements",
-            })
-          )
-        }
+  Layer.sync(X402PaymentValidator, () => {
+    let settlementCount = 0
 
-        return {
-          settle: () =>
-            Effect.gen(function* () {
-              yield* Effect.sync(() => {
-                onSettle?.(paymentHeader.value)
+    return X402PaymentValidator.of({
+      validateAnonymousSourceCreation: ({ paymentHeader }) =>
+        Effect.gen(function* () {
+          if (Option.isNone(paymentHeader) || paymentHeader.value !== validPaymentHeader) {
+            return yield* Effect.fail(
+              new X402PaymentRequiredError({
+                message: "x402 payment required.",
+                paymentRequired: paymentRequired("Payment required"),
+                paymentRequiredHeader: "encoded-test-payment-requirements",
               })
+            )
+          }
 
-              if (failSettlement) {
-                return yield* Effect.fail(
-                  new X402PaymentSettlementError({
-                    message: "x402 payment settlement failed.",
-                    paymentRequired: paymentRequired("Settlement failed"),
-                    paymentRequiredHeader: "encoded-test-settlement-failure",
-                  })
-                )
-              }
+          return {
+            settle: () =>
+              Effect.gen(function* () {
+                yield* Effect.sync(() => {
+                  onSettle?.(paymentHeader.value)
+                })
 
-              return {
-                receiptValue: `${TEST_NETWORK}:test-settlement-${paymentHeader.value}`,
-                paymentResponseHeader: "encoded-test-payment-response",
-                response: {
-                  success: true,
-                  transaction: `test-settlement-${paymentHeader.value}`,
-                  network: TEST_NETWORK,
-                  payer: "test-payer",
-                  amount: "100000",
-                } satisfies SettleResponse,
-              }
-            }),
-        }
-      }),
-  } satisfies X402PaymentValidatorService)
+                if (failSettlement) {
+                  return yield* Effect.fail(
+                    new X402PaymentSettlementError({
+                      message: "x402 payment settlement failed.",
+                      paymentRequired: paymentRequired("Settlement failed"),
+                      paymentRequiredHeader: "encoded-test-settlement-failure",
+                    })
+                  )
+                }
+
+                settlementCount += 1
+                const transaction = `test-settlement-${paymentHeader.value}-${settlementCount}`
+                return {
+                  receiptValue: `${TEST_NETWORK}:${transaction}`,
+                  paymentResponseHeader: "encoded-test-payment-response",
+                  response: {
+                    success: true,
+                    transaction,
+                    network: TEST_NETWORK,
+                    payer: TEST_PAYER_WALLET,
+                    amount: "100000",
+                  } satisfies SettleResponse,
+                  payerChainType: "solana",
+                  payerWalletAddress: TEST_PAYER_WALLET,
+                }
+              }),
+          }
+        }),
+    } satisfies X402PaymentValidatorService)
+  })
