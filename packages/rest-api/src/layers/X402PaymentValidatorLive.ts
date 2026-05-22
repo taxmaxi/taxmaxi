@@ -242,17 +242,16 @@ const chainTypeFromNetwork = (network: string): ChainType | null => {
 const payerIdentityFromSettlement = (
   settlement: SettleResponse
 ): Effect.Effect<
-  { readonly payerChainType: ChainType; readonly payerWalletAddress: string },
+  { readonly payerChainType: ChainType | null; readonly payerWalletAddress: string | null },
   X402PaymentSettlementError
 > => {
   const payer = typeof settlement.payer === "string" ? settlement.payer.trim() : ""
   const chainType = chainTypeFromNetwork(settlement.network)
   if (payer === "" || chainType === null) {
-    return Effect.fail(
-      buildSettlementError({
-        message: "x402 settlement did not include a supported payer wallet identity.",
-      })
-    )
+    return Effect.succeed({
+      payerChainType: null,
+      payerWalletAddress: null,
+    })
   }
 
   const parsedPayer = parseCryptoAddress(payer)

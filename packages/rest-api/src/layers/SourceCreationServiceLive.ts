@@ -437,12 +437,15 @@ export const SourceCreationServiceLive = Layer.effect(
           ? maybeSettlement.value.paymentResponseHeader
           : null
 
-        const resultAnonPayerSession = Option.isSome(maybeSettlement)
-          ? {
-              payerChainType: maybeSettlement.value.payerChainType,
-              payerWalletAddress: maybeSettlement.value.payerWalletAddress,
-            }
-          : null
+        const resultAnonPayerSession =
+          Option.isSome(maybeSettlement) &&
+          maybeSettlement.value.payerChainType !== null &&
+          maybeSettlement.value.payerWalletAddress !== null
+            ? {
+                payerChainType: maybeSettlement.value.payerChainType,
+                payerWalletAddress: maybeSettlement.value.payerWalletAddress,
+              }
+            : null
 
         return {
           source: created.source,

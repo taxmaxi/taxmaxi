@@ -36,10 +36,12 @@ const paymentRequired = (message: string): PaymentRequired => ({
 
 export const makeX402PaymentValidatorTestLive = ({
   failSettlement = false,
+  includePayerIdentity = true,
   onSettle,
   validPaymentHeader,
 }: {
   readonly failSettlement?: boolean | undefined
+  readonly includePayerIdentity?: boolean | undefined
   readonly onSettle?: ((paymentHeader: string) => void) | undefined
   readonly validPaymentHeader: string
 }) =>
@@ -85,11 +87,11 @@ export const makeX402PaymentValidatorTestLive = ({
                     success: true,
                     transaction,
                     network: TEST_NETWORK,
-                    payer: TEST_PAYER_WALLET,
+                    payer: includePayerIdentity ? TEST_PAYER_WALLET : "",
                     amount: "100000",
                   } satisfies SettleResponse,
-                  payerChainType: "solana",
-                  payerWalletAddress: TEST_PAYER_WALLET,
+                  payerChainType: includePayerIdentity ? "solana" : null,
+                  payerWalletAddress: includePayerIdentity ? TEST_PAYER_WALLET : null,
                 }
               }),
           }

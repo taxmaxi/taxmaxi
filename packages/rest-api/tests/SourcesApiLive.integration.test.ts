@@ -76,6 +76,10 @@ const X402PaymentValidatorTrackingTestLive = makeX402PaymentValidatorTestLive({
   onSettle: (paymentHeader) => settlementEvents.push(paymentHeader),
   validPaymentHeader: validX402PaymentHeader,
 })
+const X402PaymentValidatorWithoutPayerIdentityTestLive = makeX402PaymentValidatorTestLive({
+  includePayerIdentity: false,
+  validPaymentHeader: validX402PaymentHeader,
+})
 
 const SourceSyncQueueTestLive = Layer.effect(
   SourceSyncQueue,
@@ -201,6 +205,10 @@ const QueueFailureHttpLive = makeHttpLive(SourceSyncQueueFailureTestLive)
 const SettlementFailureHttpLive = makeHttpLive(
   SourceSyncQueueTestLive,
   X402PaymentValidatorSettlementFailureTestLive
+)
+const NoPayerIdentityHttpLive = makeHttpLive(
+  SourceSyncQueueTestLive,
+  X402PaymentValidatorWithoutPayerIdentityTestLive
 )
 const PaidQueueFailureHttpLive = makeHttpLive(
   SourceSyncQueueFailureTestLive,
@@ -591,6 +599,71 @@ describe("SourcesApiLive", () => {
       Effect.withConfigProvider(ClaimTokenConfigProvider),
       Effect.scoped
     )
+  )
+
+  it.effect(
+    "creates an anonymous paid source without anon session when payer identity is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const walletAddress = "So11111111111111111111111111111111111111112"
+
+        const response = yield* postRawSourceCreate({
+          paymentHeader: validX402PaymentHeader,
+          payload: {
+            type: "onchain",
+            walletAddress,
+            name: "Anonymous source without payer identity",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
+        const body = yield* response.json
+        const decodedBody = yield* EffectSchema.decodeUnknown(SourceCreateResponse)(body)
+
+        expect(response.status).toBe(200)
+        expect(Headers.get(response.headers, "payment-response")).toEqual(
+          Option.some("encoded-test-payment-response")
+        )
+        expect(Headers.get(response.headers, "set-cookie")).toEqual(Option.none())
+        expect(decodedBody.created).toBe(true)
+        expect(decodedBody.syncJob).not.toBeNull()
+        expect(decodedBody.claim).not.toBeNull()
+
+        if (decodedBody.claim === null) {
+          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        }
+
+        const db = yield* drizzle
+        const claims = yield* db
+          .select({
+            requestId: schema.principalClaims.requestId,
+            claimType: schema.principalClaims.claimType,
+            payerChainType: schema.principalClaims.payerChainType,
+            payerWalletAddress: schema.principalClaims.payerWalletAddress,
+          })
+          .from(schema.principalClaims)
+          .where(eq(schema.principalClaims.requestId, decodedBody.claim.requestId))
+
+        expect(claims).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              claimType: "cli_claim_token",
+              payerChainType: null,
+              payerWalletAddress: null,
+            }),
+            expect.objectContaining({
+              claimType: "x402_receipt",
+              payerChainType: null,
+              payerWalletAddress: null,
+            }),
+          ])
+        )
+        expect(queueEvents).toHaveLength(1)
+      }).pipe(
+        Effect.provide(NoPayerIdentityHttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
   )
 
   it.effect("finds an anonymous source claim by authenticated CLI claim token", () =>
