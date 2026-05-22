@@ -801,6 +801,64 @@ describe("SourcesApiLive", () => {
     )
   )
 
+  it.effect("lists and reads anonymous paid source sync jobs by payer-wallet SIWX", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Anon sync status wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null || created.syncJob === null) {
+        return yield* Effect.dieMessage(
+          "Anonymous source creation did not return claim metadata and sync job"
+        )
+      }
+
+      const sessionCookie = yield* createAnonSessionCookie()
+      const anonSessionClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+      )
+
+      const listed = yield* anonSessionClient.anon.listAnonSourceJobs({
+        path: { sourceId: created.source.id },
+      })
+      expect(listed.jobs).toEqual([
+        expect.objectContaining({
+          sourceId: created.source.id,
+          jobId: created.syncJob.jobId,
+          status: "queued",
+          importedRecords: null,
+          normalizedRecords: null,
+          failedRecords: null,
+        }),
+      ])
+
+      const job = yield* anonSessionClient.anon.getAnonSourceJob({
+        path: {
+          sourceId: created.source.id,
+          jobId: created.syncJob.jobId,
+        },
+      })
+      expect(job).toEqual(
+        expect.objectContaining({
+          sourceId: created.source.id,
+          jobId: created.syncJob.jobId,
+          status: "queued",
+        })
+      )
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
   it.effect("reuses an existing anonymous paid source when the payer session is active", () =>
     Effect.gen(function* () {
       const walletAddress = "So11111111111111111111111111111111111111112"
