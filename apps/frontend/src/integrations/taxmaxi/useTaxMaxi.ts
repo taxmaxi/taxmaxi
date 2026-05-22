@@ -1,6 +1,18 @@
 import { useWalletConnection } from "@solana/react-hooks"
 import { useMemo } from "react"
+import { TaxMaxi } from "taxmaxi"
 import { createTaxMaxiX402Client } from "./client"
+
+const TAXMAXI_API_BASE_URL = "http://localhost:4000"
+
+export const useTaxMaxiBrowserClient = () =>
+  useMemo(
+    () =>
+      TaxMaxi.fromBrowserSession({
+        baseUrl: TAXMAXI_API_BASE_URL,
+      }),
+    []
+  )
 
 export const useTaxMaxiX402Client = () => {
   const walletConnection = useWalletConnection()
@@ -10,7 +22,7 @@ export const useTaxMaxiX402Client = () => {
       walletConnection.wallet === undefined
         ? null
         : createTaxMaxiX402Client(walletConnection.wallet, {
-            baseUrl: "http://localhost:4000",
+            baseUrl: TAXMAXI_API_BASE_URL,
           }),
     [walletConnection.wallet]
   )

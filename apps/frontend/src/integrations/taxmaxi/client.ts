@@ -11,6 +11,6 @@ export const createTaxMaxiX402Client = (
 ): TaxMaxi =>
   TaxMaxi.fromBrowserSession({
     ...options,
-    credentials: options.credentials ?? "omit",
+    credentials: options.credentials ?? "include",
     fetch: createFetchWithPayment(wallet, options.fetch),
   })
