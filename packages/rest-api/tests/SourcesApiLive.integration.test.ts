@@ -63,7 +63,10 @@ const queueEvents: Array<SourceSyncQueuePayload> = []
 const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const ClaimTokenConfigProvider = ConfigProvider.fromMap(
-  new Map([["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"]])
+  new Map([
+    ["ANON_SESSION_SECRET", "test-anon-session-secret"],
+    ["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"],
+  ])
 )
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: validX402PaymentHeader,

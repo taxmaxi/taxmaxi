@@ -1,11 +1,11 @@
-import { useTaxMaxiBrowserClient, useTaxMaxiX402Client } from "#/integrations/taxmaxi/useTaxMaxi"
-import { createAnonSessionSiwxProof } from "#/integrations/taxmaxi/siwx"
+import { useAnonPaidSources } from "#/integrations/taxmaxi/useAnonPaidSources"
+import { useTaxMaxiX402Client } from "#/integrations/taxmaxi/useTaxMaxi"
 import type { WalletConnector } from "@solana/client"
 import { useWalletConnection } from "@solana/react-hooks"
 import { createFileRoute } from "@tanstack/react-router"
 import { CheckCircle2, KeyRound, Link2, Loader2, RefreshCcw, Wallet } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
-import { TaxMaxiError, type AnonSourceHandle, type SourceCreate } from "taxmaxi"
+import { useCallback, useState } from "react"
+import { type AnonSourceHandle, type AnonSourceSyncJob, type SourceCreate } from "taxmaxi"
 
 export const Route = createFileRoute("/")({ component: App })
 
@@ -18,25 +18,121 @@ const secondaryButtonClassName =
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : "Something went wrong. Try again."
 
-const isUnauthorizedError = (error: unknown): boolean =>
-  error instanceof TaxMaxiError && error.status === 401
-
 const formatDate = (value: string): string =>
   new Intl.DateTimeFormat("en", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value))
 
+const formatNullableCount = (value: number | null): string => (value === null ? "-" : `${value}`)
+
+const getLatestJob = (jobs: readonly AnonSourceSyncJob[]): AnonSourceSyncJob | null =>
+  jobs[0] ?? null
+
+const statusClassName = (status: AnonSourceSyncJob["status"]): string => {
+  switch (status) {
+    case "completed":
+      return "border-[color-mix(in_oklab,var(--palm)_42%,transparent)] bg-[color-mix(in_oklab,var(--palm)_10%,transparent)] text-[var(--palm)]"
+    case "failed":
+      return "border-[color-mix(in_oklab,var(--destructive)_42%,transparent)] bg-[color-mix(in_oklab,var(--destructive)_10%,transparent)] text-[var(--destructive)]"
+    case "running":
+      return "border-[rgba(50,143,151,0.34)] bg-[rgba(79,184,178,0.14)] text-[var(--lagoon-deep)]"
+    case "queued":
+      return "border-[var(--line)] bg-[var(--surface)] text-[var(--sea-ink-soft)]"
+  }
+}
+
+function SourceCard({
+  isLoadingJobs,
+  jobs,
+  source,
+}: {
+  readonly isLoadingJobs: boolean
+  readonly jobs: readonly AnonSourceSyncJob[]
+  readonly source: AnonSourceHandle
+}) {
+  const latestJob = getLatestJob(jobs)
+
+  return (
+    <article className="rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-[var(--sea-ink)]">{source.chainType} wallet</p>
+          <p className="mt-1 break-all font-mono text-xs text-[var(--sea-ink-soft)]">
+            {source.walletAddress}
+          </p>
+        </div>
+        <p className="rounded-full border border-[var(--line)] px-3 py-1 text-xs font-semibold text-[var(--sea-ink-soft)]">
+          {source.jurisdiction} {source.year}
+        </p>
+      </div>
+      <p className="mt-3 break-all font-mono text-xs text-[var(--sea-ink-soft)]">
+        request {source.requestId}
+      </p>
+
+      <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-semibold text-[var(--sea-ink)]">Sync progress</p>
+          {latestJob === null ? (
+            <span className="inline-flex min-h-7 items-center rounded-full border border-[var(--line)] px-3 text-xs font-semibold text-[var(--sea-ink-soft)]">
+              {isLoadingJobs ? "Loading" : "No job"}
+            </span>
+          ) : (
+            <span
+              className={`inline-flex min-h-7 items-center rounded-full border px-3 text-xs font-semibold ${statusClassName(latestJob.status)}`}
+            >
+              {latestJob.status}
+            </span>
+          )}
+        </div>
+
+        {latestJob === null ? (
+          <div className="mt-3 h-2 rounded-full bg-[var(--line)]" />
+        ) : (
+          <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
+            <div>
+              <dt className="text-[var(--sea-ink-soft)]">Imported</dt>
+              <dd className="mt-1 font-mono font-semibold text-[var(--sea-ink)]">
+                {formatNullableCount(latestJob.importedRecords)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[var(--sea-ink-soft)]">Normalized</dt>
+              <dd className="mt-1 font-mono font-semibold text-[var(--sea-ink)]">
+                {formatNullableCount(latestJob.normalizedRecords)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-[var(--sea-ink-soft)]">Failed</dt>
+              <dd className="mt-1 font-mono font-semibold text-[var(--sea-ink)]">
+                {formatNullableCount(latestJob.failedRecords)}
+              </dd>
+            </div>
+          </dl>
+        )}
+
+        {latestJob?.message === null || latestJob === null ? null : (
+          <p className="mt-3 text-xs text-[var(--sea-ink-soft)]">{latestJob.message}</p>
+        )}
+      </div>
+    </article>
+  )
+}
+
 function App() {
   const walletConnection = useWalletConnection()
-  const taxMaxiBrowserClient = useTaxMaxiBrowserClient()
   const taxMaxiX402Client = useTaxMaxiX402Client()
+  const {
+    error: anonSourcesError,
+    isLoadingJobs,
+    isLoadingSources,
+    load: loadAnonPaidSources,
+    sourceJobsById,
+    sources: anonSources,
+  } = useAnonPaidSources({ wallet: walletConnection.wallet })
   const [fallbackClaim, setFallbackClaim] = useState<SourceCreate["claim"]>(null)
-  const [claimableSources, setClaimableSources] = useState<readonly AnonSourceHandle[]>([])
   const [isCreatingSource, setIsCreatingSource] = useState(false)
-  const [isLoadingClaimableSources, setIsLoadingClaimableSources] = useState(false)
   const [createSourceMessage, setCreateSourceMessage] = useState<string | null>(null)
-  const [claimableSourcesError, setClaimableSourcesError] = useState<string | null>(null)
 
   const handleConnect = useCallback(
     async (connector: WalletConnector) => {
@@ -67,69 +163,22 @@ function App() {
         name: walletConnection.wallet.connector.name,
       })
       setFallbackClaim(response.claim)
-      const anonSources = await taxMaxiX402Client.anon.sources.list()
-      setClaimableSources(anonSources.sources)
+      const loaded = await loadAnonPaidSources({ restoreWithWallet: false, showLoading: true })
       setCreateSourceMessage(
-        response.claim === null
+        loaded.sourceCount > 0
           ? "Source created. Anonymous session is active in this browser."
-          : "Source created. Anonymous session is active; keep the CLI claim token only as a fallback."
+          : "Source created. Use the CLI claim token to recover this paid source."
       )
     } catch (error) {
       setCreateSourceMessage(getErrorMessage(error))
     } finally {
       setIsCreatingSource(false)
     }
-  }, [taxMaxiX402Client, walletConnection])
-
-  const loadClaimableSources = useCallback(
-    async ({ restoreWithWallet }: { readonly restoreWithWallet: boolean }) => {
-      setClaimableSourcesError(null)
-      try {
-        setIsLoadingClaimableSources(true)
-        const response = await taxMaxiBrowserClient.anon.sources
-          .list()
-          .catch(async (error: unknown) => {
-            if (!isUnauthorizedError(error)) {
-              throw error
-            }
-
-            if (!restoreWithWallet) {
-              return { sources: [] }
-            }
-
-            if (walletConnection.wallet === undefined) {
-              throw new Error("Connect the payer wallet first.")
-            }
-
-            const challenge = await taxMaxiBrowserClient.anon.session.challenge()
-            const siwxProof = await createAnonSessionSiwxProof({
-              nonce: challenge.nonce,
-              wallet: walletConnection.wallet,
-            })
-            await taxMaxiBrowserClient.anon.session.create({
-              siwxProof,
-            })
-            return taxMaxiBrowserClient.anon.sources.list()
-          })
-        setClaimableSources(response.sources)
-      } catch (error) {
-        setClaimableSources([])
-        setClaimableSourcesError(getErrorMessage(error))
-      } finally {
-        setIsLoadingClaimableSources(false)
-      }
-    },
-    [taxMaxiBrowserClient, walletConnection.wallet]
-  )
-
-  useEffect(() => {
-    void loadClaimableSources({ restoreWithWallet: false })
-  }, [loadClaimableSources])
+  }, [loadAnonPaidSources, taxMaxiX402Client, walletConnection])
 
   const handleListClaimableSources = useCallback(async () => {
-    setClaimableSourcesError(null)
-    await loadClaimableSources({ restoreWithWallet: true })
-  }, [loadClaimableSources])
+    await loadAnonPaidSources({ restoreWithWallet: true, showLoading: true })
+  }, [loadAnonPaidSources])
 
   const walletAddress = walletConnection.wallet?.account.address
 
@@ -212,11 +261,11 @@ function App() {
             </div>
             <button
               className={secondaryButtonClassName}
-              disabled={isLoadingClaimableSources}
+              disabled={isLoadingSources}
               onClick={handleListClaimableSources}
               type="button"
             >
-              {isLoadingClaimableSources ? (
+              {isLoadingSources ? (
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
               ) : (
                 <RefreshCcw className="h-4 w-4" aria-hidden="true" />
@@ -225,7 +274,7 @@ function App() {
             </button>
           </div>
 
-          {isLoadingClaimableSources ? (
+          {isLoadingSources ? (
             <div className="space-y-3" aria-busy="true">
               {[0, 1, 2].map((item) => (
                 <div
@@ -234,14 +283,14 @@ function App() {
                 />
               ))}
             </div>
-          ) : claimableSourcesError !== null ? (
+          ) : anonSourcesError !== null ? (
             <div className="rounded-xl border border-[color-mix(in_oklab,var(--destructive)_34%,transparent)] bg-[color-mix(in_oklab,var(--destructive)_8%,transparent)] p-4">
               <p className="text-sm font-semibold text-[var(--sea-ink)]">
                 Could not load claimable sources
               </p>
-              <p className="mt-1 text-sm text-[var(--sea-ink-soft)]">{claimableSourcesError}</p>
+              <p className="mt-1 text-sm text-[var(--sea-ink-soft)]">{anonSourcesError}</p>
             </div>
-          ) : claimableSources.length === 0 ? (
+          ) : anonSources.length === 0 ? (
             <div className="rounded-xl border border-dashed border-[var(--line)] p-6 text-center">
               <Link2
                 className="mx-auto mb-3 h-8 w-8 text-[var(--lagoon-deep)]"
@@ -254,28 +303,13 @@ function App() {
             </div>
           ) : (
             <div className="space-y-3">
-              {claimableSources.map((source) => (
-                <article
-                  className="rounded-xl border border-[var(--line)] bg-[var(--surface-strong)] p-4"
+              {anonSources.map((source) => (
+                <SourceCard
+                  isLoadingJobs={isLoadingJobs}
+                  jobs={sourceJobsById[source.sourceId] ?? []}
                   key={`${source.requestId}-${source.sourceId}`}
-                >
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-[var(--sea-ink)]">
-                        {source.chainType} wallet
-                      </p>
-                      <p className="mt-1 font-mono text-xs text-[var(--sea-ink-soft)]">
-                        {source.walletAddress}
-                      </p>
-                    </div>
-                    <p className="rounded-full border border-[var(--line)] px-3 py-1 text-xs font-semibold text-[var(--sea-ink-soft)]">
-                      {source.jurisdiction} {source.year}
-                    </p>
-                  </div>
-                  <p className="mt-3 font-mono text-xs text-[var(--sea-ink-soft)]">
-                    request {source.requestId}
-                  </p>
-                </article>
+                  source={source}
+                />
               ))}
             </div>
           )}
