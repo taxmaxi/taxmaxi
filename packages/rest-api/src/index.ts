@@ -1,4 +1,6 @@
 export { TaxMaxiApiLive } from "./layers/TaxMaxiApiLive.ts"
 export { SessionTokenValidatorLive } from "./layers/AuthApiLive.ts"
+export { AnonSessionServiceLive } from "./layers/AnonSessionServiceLive.ts"
 export { X402PaymentValidatorLive } from "./layers/X402PaymentValidatorLive.ts"
+export { SIWXProofVerifierLive } from "./layers/SIWXProofVerifierLive.ts"
 export { ServeWithUserFriendlyErrorsLive } from "./layers/ServeWithUserFriendlyErrorsLive.ts"
