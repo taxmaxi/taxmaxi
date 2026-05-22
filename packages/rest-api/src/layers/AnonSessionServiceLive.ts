@@ -20,9 +20,7 @@ import {
 const SESSION_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
 const CHALLENGE_TTL_MILLIS = 10 * 60 * 1000
 
-const anonSessionSecretConfig = Config.redacted("ANON_SESSION_SECRET").pipe(
-  Config.withDefault(Redacted.make("development-anon-session-secret"))
-)
+const anonSessionSecretConfig = Config.redacted("ANON_SESSION_SECRET")
 
 const AnonSessionPayload = Schema.Struct({
   kind: Schema.Literal("anon_session"),
