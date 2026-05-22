@@ -12,9 +12,16 @@
  * @module SourceApiLive
  */
 
-import { Headers, HttpApiBuilder, HttpServerRequest, HttpServerResponse } from "@effect/platform"
+import {
+  Headers,
+  HttpApiBuilder,
+  HttpApp,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "@effect/platform"
 import { SourceId } from "@my/core/source"
 import * as Effect from "effect/Effect"
+import * as Config from "effect/Config"
 import * as Schema from "effect/Schema"
 import {
   SourceRepository as SyncEngineSourceRepository,
@@ -40,13 +47,21 @@ import {
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { Layer, Option } from "effect"
 import { SourceCreationService } from "../services/SourceCreationService.ts"
+import { AnonSessionService } from "../services/AnonSessionService.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
+import { ANON_SESSION_COOKIE_MAX_AGE, ANON_SESSION_COOKIE_NAME } from "./AnonApiLive.ts"
 
 const toBadRequestError = (message: string) => new SourceBadRequestError({ message })
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 const sourceNotFoundMessage = "No source found. Connect a source first."
+const cookieOptionsForEnv = (environment: string) => ({
+  httpOnly: true,
+  secure: environment === "production",
+  sameSite: "lax" as const,
+  path: "/",
+})
 
 export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handlers) =>
   Effect.gen(function* () {
@@ -56,7 +71,26 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
     const syncEngineSourceRepository = yield* SyncEngineSourceRepository
     const optionalCurrentUser = yield* OptionalCurrentUser
     const sourceCreationService = yield* SourceCreationService
+    const anonSessionService = yield* AnonSessionService
     const principalResolutionService = yield* PrincipalResolutionService
+    const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
+    const anonSessionCookieOptions = cookieOptionsForEnv(environment)
+
+    const resolveOptionalAnonPayerSession = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const token = request.cookies[ANON_SESSION_COOKIE_NAME]
+      if (token === undefined || token.trim() === "") {
+        return Option.none<{
+          readonly payerChainType: "evm" | "solana" | "bitcoin"
+          readonly payerWalletAddress: string
+        }>()
+      }
+
+      return yield* anonSessionService.verifySessionToken(token).pipe(
+        Effect.map(Option.some),
+        Effect.catchAll(() => Effect.succeed(Option.none()))
+      )
+    })
 
     const resolveCurrentUserPrincipal = Effect.gen(function* () {
       const { principal } = yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
@@ -111,6 +145,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
         Effect.gen(function* () {
           const request = yield* HttpServerRequest.HttpServerRequest
           const currentUser = yield* optionalCurrentUser.resolve()
+          const anonPayerSession = yield* resolveOptionalAnonPayerSession
           const paymentSignatureHeader = Headers.get(request.headers, "payment-signature")
           const xPaymentHeader = Headers.get(request.headers, "x-payment")
           const paymentHeader = Option.isSome(paymentSignatureHeader)
@@ -119,6 +154,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           const creationResult = yield* sourceCreationService
             .createSource({
               currentUser,
+              anonPayerSession,
               paymentHeader,
               payload,
             })
@@ -147,6 +183,21 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           }
 
           const result = creationResult.right
+
+          if (result.anonPayerSession !== null) {
+            const anonSessionToken = yield* anonSessionService
+              .createSessionToken(result.anonPayerSession)
+              .pipe(Effect.mapError(() => toInternalServerError("Failed to create anon session.")))
+
+            yield* HttpApp.appendPreResponseHandler((_req, response) =>
+              Effect.orDie(
+                HttpServerResponse.setCookie(response, ANON_SESSION_COOKIE_NAME, anonSessionToken, {
+                  ...anonSessionCookieOptions,
+                  maxAge: ANON_SESSION_COOKIE_MAX_AGE,
+                })
+              )
+            )
+          }
 
           const claim =
             result.claim === null

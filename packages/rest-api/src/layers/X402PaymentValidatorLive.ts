@@ -15,6 +15,7 @@ import {
 } from "@x402/core/http"
 import { x402ResourceServer } from "@x402/core/server"
 import type { Network, PaymentRequired, SettleResponse } from "@x402/core/types"
+import { parseCryptoAddress, type ChainType } from "@my/core/source"
 import { registerExactEvmScheme } from "@x402/evm/exact/server"
 import { registerExactSvmScheme } from "@x402/svm/exact/server"
 import * as Config from "effect/Config"
@@ -232,6 +233,43 @@ const toSettlementError = (result: {
 const receiptValueFromSettlement = (settlement: SettleResponse): string =>
   `${settlement.network}:${settlement.transaction}`
 
+const chainTypeFromNetwork = (network: string): ChainType | null => {
+  if (network.startsWith("eip155:")) return "evm"
+  if (network.startsWith("solana:")) return "solana"
+  return null
+}
+
+const payerIdentityFromSettlement = (
+  settlement: SettleResponse
+): Effect.Effect<
+  { readonly payerChainType: ChainType; readonly payerWalletAddress: string },
+  X402PaymentSettlementError
+> => {
+  const payer = typeof settlement.payer === "string" ? settlement.payer.trim() : ""
+  const chainType = chainTypeFromNetwork(settlement.network)
+  if (payer === "" || chainType === null) {
+    return Effect.fail(
+      buildSettlementError({
+        message: "x402 settlement did not include a supported payer wallet identity.",
+      })
+    )
+  }
+
+  const parsedPayer = parseCryptoAddress(payer)
+  if (parsedPayer === null || parsedPayer.chainType !== chainType) {
+    return Effect.fail(
+      buildSettlementError({
+        message: "x402 settlement payer wallet identity is invalid.",
+      })
+    )
+  }
+
+  return Effect.succeed({
+    payerChainType: parsedPayer.chainType,
+    payerWalletAddress: parsedPayer.address,
+  })
+}
+
 const make = Effect.gen(function* () {
   const facilitatorUrl = yield* x402Config.facilitatorUrl
   const acceptedNetworks = yield* splitNetworks(yield* x402Config.acceptedNetworks)
@@ -413,10 +451,13 @@ const make = Effect.gen(function* () {
                     return yield* Effect.fail(yield* toSettlementError(settlement))
                   }
 
+                  const payerIdentity = yield* payerIdentityFromSettlement(settlement)
+
                   return {
                     receiptValue: receiptValueFromSettlement(settlement),
                     paymentResponseHeader: encodePaymentResponseHeader(settlement),
                     response: settlement,
+                    ...payerIdentity,
                   } satisfies X402PaymentSettlement
                 }),
             }

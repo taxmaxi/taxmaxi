@@ -62,6 +62,8 @@ export interface X402VerifiedPayment {
 export interface X402PaymentSettlement {
   readonly receiptValue: string
   readonly paymentResponseHeader: string
+  readonly payerChainType: ChainType
+  readonly payerWalletAddress: string
   readonly response: SettleResponse
 }
 
