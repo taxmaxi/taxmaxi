@@ -64,7 +64,7 @@ const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const ClaimTokenConfigProvider = ConfigProvider.fromMap(
   new Map([
-    ["ANON_SESSION_SECRET", "test-anon-session-secret"],
+    ["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"],
     ["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"],
   ])
 )

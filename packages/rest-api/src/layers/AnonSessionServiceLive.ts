@@ -19,8 +19,27 @@ import {
 
 const SESSION_TTL_MILLIS = 30 * 24 * 60 * 60 * 1000
 const CHALLENGE_TTL_MILLIS = 10 * 60 * 1000
+const MIN_ANON_SESSION_SECRET_LENGTH = 32
+const MIN_ANON_SESSION_SECRET_UNIQUE_CHARACTERS = 12
+const ANON_SESSION_SECRET_PLACEHOLDERS = new Set(["<generated-secret>"])
+const ANON_SESSION_SECRET_ERROR_MESSAGE =
+  "ANON_SESSION_SECRET must be a high-entropy value with at least 32 non-whitespace characters; generate it with openssl rand -base64 32"
 
-const anonSessionSecretConfig = Config.redacted("ANON_SESSION_SECRET")
+const isValidAnonSessionSecret = (secret: Redacted.Redacted<string>): boolean => {
+  const value = Redacted.value(secret)
+  if (value.length < MIN_ANON_SESSION_SECRET_LENGTH) return false
+  if (new Set(value).size < MIN_ANON_SESSION_SECRET_UNIQUE_CHARACTERS) return false
+  if (ANON_SESSION_SECRET_PLACEHOLDERS.has(value.toLowerCase())) return false
+  return true
+}
+
+const anonSessionSecretConfig = Config.redacted("ANON_SESSION_SECRET").pipe(
+  Config.map((secret) => Redacted.make(Redacted.value(secret).trim())),
+  Config.validate({
+    message: ANON_SESSION_SECRET_ERROR_MESSAGE,
+    validation: isValidAnonSessionSecret,
+  })
+)
 
 const AnonSessionPayload = Schema.Struct({
   kind: Schema.Literal("anon_session"),
