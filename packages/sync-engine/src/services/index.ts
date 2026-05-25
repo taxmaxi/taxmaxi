@@ -1,3 +1,4 @@
+export * from "./ActivityClassificationService.ts"
 export * from "./AssetRepository.ts"
 export * from "./ProviderAssetRepository.ts"
 export * from "./ProviderReferenceRepository.ts"
