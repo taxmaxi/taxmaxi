@@ -14,6 +14,7 @@ import {
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
+import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
@@ -226,7 +227,10 @@ const CoinbaseSourceSyncProviderWithDepsLive = CoinbaseSourceSyncProviderLive.pi
 const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationServiceLive),
   Layer.provide(
-    SourceProviderRegistryLive.pipe(Layer.provide(CoinbaseSourceSyncProviderWithDepsLive))
+    SourceProviderRegistryLive.pipe(
+      Layer.provide(CoinbaseSourceSyncProviderWithDepsLive),
+      Layer.provide(HeliusSolanaSourceSyncProviderLive)
+    )
   ),
   Layer.provide(CoinbaseSourceSyncProviderWithDepsLive)
 )

@@ -489,11 +489,23 @@ describe("SourcesApiLive", () => {
       expect(response.source).toMatchObject({
         principalId,
         name: "Demo Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       })
       expect(response.source.sourceRef._tag).toBe("onchain")
 
       const db = yield* drizzle
+      const [storedSource] = yield* db
+        .select({
+          providerKey: schema.sources.providerKey,
+          providerMetadata: schema.sources.providerMetadata,
+        })
+        .from(schema.sources)
+
+      expect(storedSource).toEqual({
+        providerKey: "helius-solana",
+        providerMetadata: { chainType: "solana", walletAddress },
+      })
+
       const storedAddresses = yield* db
         .select({
           address: schema.addresses.address,
@@ -536,7 +548,7 @@ describe("SourcesApiLive", () => {
       expect(response.claim).not.toBeNull()
       expect(response.source).toMatchObject({
         name: "Anonymous Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       })
       if (response.claim === null) {
         return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
@@ -1833,7 +1845,7 @@ describe("SourcesApiLive", () => {
       expect(decodedBody.syncJob).not.toBeNull()
       expect(decodedBody.source).toMatchObject({
         name: "Anonymous paid Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       })
       expect(queueEvents).toHaveLength(1)
       expect(queueEvents[0]).toMatchObject({
@@ -2037,6 +2049,8 @@ describe("SourcesApiLive", () => {
       expect(first.created).toBe(true)
       expect(second.created).toBe(false)
       expect(second.source.id).toBe(first.source.id)
+      expect(first.source.providerKey).toBe("helius-solana")
+      expect(second.source.providerKey).toBe("helius-solana")
       expect(queueEvents).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )

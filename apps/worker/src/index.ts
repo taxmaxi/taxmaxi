@@ -14,6 +14,7 @@ import {
   CoinbaseSourceSyncProviderLive,
   CoinbaseSyncClientLive,
 } from "@my/sync-engine/providers/coinbase/layers"
+import { HeliusSolanaSourceSyncProviderLive } from "@my/sync-engine/providers/helius-solana/layers"
 import { WorkerBullMqSourceSyncConsumerLive } from "./layers/WorkerBullMqSourceSyncConsumerLive.ts"
 import { WorkerHealthServerLive } from "./layers/WorkerHealthServerLive.ts"
 import { WorkerSourceSyncStartupRepairLive } from "./layers/WorkerSourceSyncStartupRepairLive.ts"
@@ -38,7 +39,8 @@ const CoinbaseSourceSyncProviderRuntimeLive = CoinbaseSourceSyncProviderLive.pip
 )
 
 const SourceProviderRegistryRuntimeLive = SourceProviderRegistryLive.pipe(
-  Layer.provide(CoinbaseSourceSyncProviderRuntimeLive)
+  Layer.provide(CoinbaseSourceSyncProviderRuntimeLive),
+  Layer.provide(HeliusSolanaSourceSyncProviderLive)
 )
 
 const TransferReconciliationRuntimeLive = TransferReconciliationServiceLive.pipe(

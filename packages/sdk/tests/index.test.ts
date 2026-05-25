@@ -35,7 +35,7 @@ const sourceCreateResponseBody = JSON.stringify({
     id: "00000000-0000-4000-8000-000000000001",
     principalId: "00000000-0000-4000-8000-000000000002",
     name: "Demo Solana wallet",
-    providerKey: "solana",
+    providerKey: "helius-solana",
     sourceRef: {
       _tag: "onchain",
       addressId: "00000000-0000-4000-8000-000000000003",
@@ -250,7 +250,7 @@ describe("TaxMaxi Promise client", () => {
       created: true,
       source: {
         name: "Demo Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       },
     })
 

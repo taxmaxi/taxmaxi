@@ -267,6 +267,8 @@ const makeExecutorLayer = ({
       switch (providerKey) {
         case "coinbase":
           return Effect.succeed(makeCoinbaseModule())
+        case "helius-solana":
+          return Effect.succeed(makeStubModule())
         case "stub-chain":
           return Effect.succeed(makeStubModule())
         default:
@@ -374,6 +376,49 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("complete:1:1")
   })
 
+  it("routes Solana production sources through the Helius provider key", async () => {
+    const events: Array<string> = []
+    const fetchedProviderRecord = ProviderRawRecord.make({
+      providerKey: "helius-solana",
+      recordType: "helius_solana_transaction",
+      externalRecordId: "solana-signature-1",
+      externalAccountId: null,
+      externalParentId: null,
+      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+      payload: { signature: "solana-signature-1" },
+    })
+    const checkpointRawRecord: SourceRawRecord = {
+      ...replayRawRecord,
+      id: "raw-solana-1",
+      provider: "helius-solana",
+      recordType: "helius_solana_transaction",
+      externalRecordId: "solana-signature-1",
+      payload: { signature: "solana-signature-1" },
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            sourceProviderKey: "helius-solana",
+            fetchedProviderRecords: [fetchedProviderRecord],
+            checkpointRawRecords: [checkpointRawRecord],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events).toContain("stub:fetch-raw-batch")
+    expect(events).toContain("stub:normalize:helius-solana:helius_solana_transaction")
+    expect(events).toContain("complete:1:1")
+  })
+
   it("runs replay mode with cached raw rows and marks the job completed", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
@@ -448,14 +493,16 @@ describe("SourceSyncJobExecutor", () => {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
-        Effect.provide(makeExecutorLayer({ mode: "sync", sourceProviderKey: "solana", events }))
+        Effect.provide(
+          makeExecutorLayer({ mode: "sync", sourceProviderKey: "unknown-provider", events })
+        )
       )
     )
 
     expect(result.status).toBe("failed")
-    expect(result.message).toBe("Unsupported sync provider: solana")
-    expect(events).toContain("failure-metadata:Unsupported sync provider: solana")
-    expect(events).toContain("fail:Unsupported sync provider: solana")
+    expect(result.message).toBe("Unsupported sync provider: unknown-provider")
+    expect(events).toContain("failure-metadata:Unsupported sync provider: unknown-provider")
+    expect(events).toContain("fail:Unsupported sync provider: unknown-provider")
   })
 
   it("marks retryable provider failure failed on the final attempt", async () => {
