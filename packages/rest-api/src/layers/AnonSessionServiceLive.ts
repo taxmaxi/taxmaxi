@@ -57,6 +57,11 @@ const AnonChallengePayload = Schema.Struct({
 const tokenError = (message: string) => new AnonSessionTokenError({ message })
 const JsonPayload = Schema.parseJson()
 
+const currentTimeMillis = Effect.map(
+  Effect.clockWith((clock) => clock.currentTimeMillis),
+  (millis) => Number(millis)
+)
+
 const base64UrlEncode = (value: string): string => Buffer.from(value).toString("base64url")
 
 const base64UrlDecode = (value: string): Effect.Effect<string, AnonSessionTokenError> =>
@@ -131,11 +136,14 @@ const make = Effect.gen(function* () {
     })
 
   const createSessionToken: AnonSessionServiceShape["createSessionToken"] = (subject) =>
-    createSignedToken({
-      kind: "anon_session",
-      payerChainType: subject.payerChainType,
-      payerWalletAddress: subject.payerWalletAddress,
-      expiresAt: Date.now() + SESSION_TTL_MILLIS,
+    Effect.gen(function* () {
+      const now = yield* currentTimeMillis
+      return yield* createSignedToken({
+        kind: "anon_session",
+        payerChainType: subject.payerChainType,
+        payerWalletAddress: subject.payerWalletAddress,
+        expiresAt: now + SESSION_TTL_MILLIS,
+      })
     })
 
   const verifySessionToken: AnonSessionServiceShape["verifySessionToken"] = (token) =>
@@ -144,7 +152,8 @@ const make = Effect.gen(function* () {
       const session = yield* Schema.decodeUnknown(AnonSessionPayload)(payload).pipe(
         Effect.mapError(() => tokenError("Invalid anon session token."))
       )
-      if (session.expiresAt <= Date.now()) {
+      const now = yield* currentTimeMillis
+      if (session.expiresAt <= now) {
         return yield* Effect.fail(tokenError("Anon session expired."))
       }
       return {
@@ -156,7 +165,8 @@ const make = Effect.gen(function* () {
   const createChallenge: AnonSessionServiceShape["createChallenge"] = () =>
     Effect.gen(function* () {
       const nonce = crypto.randomUUID()
-      const expiresAt = Date.now() + CHALLENGE_TTL_MILLIS
+      const now = yield* currentTimeMillis
+      const expiresAt = now + CHALLENGE_TTL_MILLIS
       const token = yield* createSignedToken({
         kind: "anon_challenge",
         nonce,
@@ -171,7 +181,8 @@ const make = Effect.gen(function* () {
       const challenge = yield* Schema.decodeUnknown(AnonChallengePayload)(payload).pipe(
         Effect.mapError(() => tokenError("Invalid anon session challenge."))
       )
-      if (challenge.expiresAt <= Date.now()) {
+      const now = yield* currentTimeMillis
+      if (challenge.expiresAt <= now) {
         return yield* Effect.fail(tokenError("Anon session challenge expired."))
       }
       return challenge.nonce
