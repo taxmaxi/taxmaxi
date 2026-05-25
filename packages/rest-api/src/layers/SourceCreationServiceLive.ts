@@ -10,6 +10,7 @@ import {
   PrincipalClaimRepository,
   PrincipalRepository,
   SourceRepository,
+  type AnonymousSourceEntitlement,
 } from "@my/persistence/services"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { createHash } from "node:crypto"
@@ -120,6 +121,45 @@ export const SourceCreationServiceLive = Layer.effect(
         return parsedAddress
       })
 
+    const findExistingAnonymousPaidSource = ({
+      anonPayerSession,
+      chainType,
+      walletAddress,
+      year,
+      jurisdiction,
+    }: {
+      readonly anonPayerSession: Option.Option<{
+        readonly payerChainType: ChainType
+        readonly payerWalletAddress: string
+      }>
+      readonly chainType: ChainType
+      readonly walletAddress: string
+      readonly year: number
+      readonly jurisdiction: string
+    }) =>
+      Effect.gen(function* () {
+        if (Option.isNone(anonPayerSession)) {
+          return Option.none<AnonymousSourceEntitlement>()
+        }
+
+        const entitlements = yield* principalClaimRepository
+          .findAnonymousSourceEntitlementsByPayer({
+            payerChainType: anonPayerSession.value.payerChainType,
+            payerWalletAddress: anonPayerSession.value.payerWalletAddress,
+          })
+          .pipe(Effect.mapError(() => toInternalError("Failed to list anonymous sources.")))
+
+        return Option.fromNullable(
+          entitlements.find(
+            (entitlement) =>
+              entitlement.chainType === chainType &&
+              entitlement.walletAddress === walletAddress &&
+              entitlement.year === year &&
+              entitlement.jurisdiction === jurisdiction
+          )
+        )
+      })
+
     const validateAnonymousPayment = ({
       paymentHeader,
       parsedAddress,
@@ -193,6 +233,8 @@ export const SourceCreationServiceLive = Layer.effect(
             claimValueHash: hashCliClaimToken({ claimToken, pepper }),
             chainType,
             walletAddress,
+            payerChainType: null,
+            payerWalletAddress: null,
             year,
             jurisdiction,
             expiresAt,
@@ -234,6 +276,8 @@ export const SourceCreationServiceLive = Layer.effect(
           claimValueHash: hashReceiptValue(settlement.receiptValue),
           chainType,
           walletAddress,
+          payerChainType: settlement.payerChainType,
+          payerWalletAddress: settlement.payerWalletAddress,
           year,
           jurisdiction,
           expiresAt: null,
@@ -268,6 +312,7 @@ export const SourceCreationServiceLive = Layer.effect(
         )
 
     const createSource: SourceCreationServiceShape["createSource"] = ({
+      anonPayerSession,
       currentUser,
       paymentHeader,
       payload,
@@ -276,6 +321,35 @@ export const SourceCreationServiceLive = Layer.effect(
         const parsedAddress = yield* parseWalletAddress(payload.walletAddress)
         const year = payload.year ?? new Date().getUTCFullYear()
         const jurisdiction = payload.jurisdiction ?? DEFAULT_CLAIM_JURISDICTION
+        const maybeExistingAnonymousSource: Option.Option<AnonymousSourceEntitlement> =
+          Option.isNone(currentUser)
+            ? yield* findExistingAnonymousPaidSource({
+                anonPayerSession,
+                chainType: parsedAddress.chainType,
+                walletAddress: parsedAddress.address,
+                year,
+                jurisdiction,
+              })
+            : Option.none()
+
+        if (Option.isSome(maybeExistingAnonymousSource)) {
+          const maybeSource = yield* sourceRepository
+            .findById(maybeExistingAnonymousSource.value.sourceId)
+            .pipe(Effect.mapError(() => toInternalError("Failed to load anonymous source.")))
+
+          if (Option.isNone(maybeSource)) {
+            return yield* Effect.fail(toInternalError("Anonymous source not found."))
+          }
+
+          return {
+            source: maybeSource.value,
+            created: false,
+            syncJob: null,
+            claim: null,
+            paymentResponseHeader: null,
+            anonPayerSession: Option.getOrNull(anonPayerSession),
+          }
+        }
 
         const maybeVerifiedPayment = Option.isNone(currentUser)
           ? Option.some(
@@ -303,6 +377,7 @@ export const SourceCreationServiceLive = Layer.effect(
             syncJob: null,
             claim: null,
             paymentResponseHeader: null,
+            anonPayerSession: null,
           }
         }
 
@@ -362,12 +437,23 @@ export const SourceCreationServiceLive = Layer.effect(
           ? maybeSettlement.value.paymentResponseHeader
           : null
 
+        const resultAnonPayerSession =
+          Option.isSome(maybeSettlement) &&
+          maybeSettlement.value.payerChainType !== null &&
+          maybeSettlement.value.payerWalletAddress !== null
+            ? {
+                payerChainType: maybeSettlement.value.payerChainType,
+                payerWalletAddress: maybeSettlement.value.payerWalletAddress,
+              }
+            : null
+
         return {
           source: created.source,
           created: created.created,
           syncJob,
           claim,
           paymentResponseHeader,
+          anonPayerSession: resultAnonPayerSession,
         }
       })
 

@@ -32,9 +32,11 @@ import {
 import { EmailVerificationDeliveryService } from "../../persistence/src/services/EmailVerificationDeliveryService.ts"
 import { LocalAuthProvider } from "../../persistence/src/services/LocalAuthProvider.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
+import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { SessionTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
+import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_rest_api_auth",
@@ -161,6 +163,8 @@ const makeAuthHandler = () => {
 
   const { handler, dispose } = HttpApiBuilder.toWebHandler(
     TaxMaxiApiLive.pipe(
+      Layer.provide(AnonSessionServiceLive),
+      Layer.provide(SIWXProofVerifierTestLive),
       Layer.provide(X402PaymentValidatorTestLive),
       Layer.provide(SessionTokenValidatorLive),
       Layer.provide(AuthServiceTestLive),

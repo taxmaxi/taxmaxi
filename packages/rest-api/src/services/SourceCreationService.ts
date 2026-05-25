@@ -5,6 +5,7 @@
  */
 
 import type { Source } from "@my/core/source"
+import type { AnonPayerSessionSubject } from "./AnonSessionService.ts"
 import type { SourceSyncJobSummary } from "@my/sync-engine/services"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
@@ -63,6 +64,7 @@ export interface SourceCreationResult {
   readonly syncJob: SourceSyncJobSummary | null
   readonly claim: SourceCreationClaimMetadata | null
   readonly paymentResponseHeader: string | null
+  readonly anonPayerSession: AnonPayerSessionSubject | null
 }
 
 /**
@@ -70,6 +72,7 @@ export interface SourceCreationResult {
  */
 export interface CreateSourceParams {
   readonly currentUser: Option.Option<User>
+  readonly anonPayerSession: Option.Option<AnonPayerSessionSubject>
   readonly paymentHeader: Option.Option<string>
   readonly payload: SourceCreateRequest
 }

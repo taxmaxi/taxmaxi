@@ -51,6 +51,22 @@ const sourceCreateResponseBody = JSON.stringify({
   },
 })
 
+const anonSourceJobResponse = {
+  sourceId: "00000000-0000-4000-8000-000000000001",
+  jobId: "00000000-0000-4000-8000-000000000005",
+  status: "queued",
+  importedRecords: null,
+  normalizedRecords: null,
+  failedRecords: null,
+  message: null,
+}
+
+const anonSourceJobsResponseBody = JSON.stringify({
+  jobs: [anonSourceJobResponse],
+})
+
+const anonSourceJobResponseBody = JSON.stringify(anonSourceJobResponse)
+
 const toHeaderRecord = (headers: FetchInit["headers"]): TaxMaxiHeaders => {
   const record: Record<string, string> = {}
 
@@ -240,6 +256,53 @@ describe("TaxMaxi Promise client", () => {
       expect.objectContaining({
         credentials: "include",
         url: "https://sdk.example.test/v1/sources",
+      }),
+    ])
+  })
+
+  it("plumbs anonymous source sync-status methods through browser sessions", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const responseBodies = [anonSourceJobsResponseBody, anonSourceJobResponseBody]
+    const taxmaxi = TaxMaxi.fromBrowserSession({
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? anonSourceJobResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(
+      taxmaxi.anon.sources.listJobs({
+        sourceId: anonSourceJobResponse.sourceId,
+      })
+    ).resolves.toEqual({
+      jobs: [anonSourceJobResponse],
+    })
+    await expect(
+      taxmaxi.anon.sources.getJob({
+        sourceId: anonSourceJobResponse.sourceId,
+        jobId: anonSourceJobResponse.jobId,
+      })
+    ).resolves.toEqual(anonSourceJobResponse)
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        credentials: "include",
+        url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs",
+      }),
+      expect.objectContaining({
+        credentials: "include",
+        url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs/00000000-0000-4000-8000-000000000005",
       }),
     ])
   })

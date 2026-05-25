@@ -10,6 +10,7 @@
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "@effect/platform"
 import * as Schema from "effect/Schema"
 import { AuthApi, AuthSessionApi, CoinbaseCompatApi } from "./AuthApi.ts"
+import { AnonApi } from "./AnonApi.ts"
 import { LegalReferenceApi } from "./LegalReferenceApi.ts"
 import { PrincipalsApi } from "./PrincipalsApi.ts"
 import { SourcesApi } from "./SourcesApi.ts"
@@ -75,6 +76,7 @@ export class HealthApi extends HttpApiGroup.make("health")
  */
 export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(HealthApi)
+  .add(AnonApi)
   .add(AuthApi)
   .add(AuthSessionApi)
   .add(CoinbaseCompatApi)

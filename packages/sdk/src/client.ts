@@ -73,6 +73,7 @@ type TaxMaxiApiFullClient =
     : never
 
 type TaxMaxiPublicGroup =
+  | "anon"
   | "auth"
   | "authSession"
   | "coinbaseCompat"
@@ -86,6 +87,7 @@ export type TaxMaxiEffectClient = Pick<
 >
 
 const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClient => ({
+  anon: client.anon,
   auth: client.auth,
   authSession: client.authSession,
   coinbaseCompat: client.coinbaseCompat,

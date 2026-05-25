@@ -49,7 +49,7 @@ export class PrincipalClaimRequest extends Schema.Class<PrincipalClaimRequest>(
   "PrincipalClaimRequest"
 )({
   requestId: Schema.UUID,
-  claimToken: Schema.NonEmptyTrimmedString,
+  claimToken: Schema.NullOr(Schema.NonEmptyTrimmedString),
   siwxProof: Schema.NullOr(Schema.Unknown),
 }) {}
 
@@ -76,7 +76,7 @@ const claimPrincipal = HttpApiEndpoint.post("claimPrincipal", "/principals/claim
     OpenApi.annotations({
       summary: "Claim principal resource",
       description:
-        "Validates an anonymous wallet source claim token and moves the claimed source to the authenticated user.",
+        "Validates an anonymous wallet source claim token or payer-wallet SIWX proof and moves the claimed source to the authenticated user.",
     })
   )
 

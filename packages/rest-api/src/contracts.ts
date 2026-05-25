@@ -1,5 +1,7 @@
 export { TaxMaxiApi } from "./definitions/TaxMaxiApi.ts"
+export * from "./definitions/AnonApi.ts"
 export * from "./definitions/AuthApi.ts"
 export * from "./definitions/ApiErrors.ts"
 export * from "./definitions/LegalReferenceApi.ts"
+export * from "./definitions/PrincipalsApi.ts"
 export * from "./definitions/SourcesApi.ts"

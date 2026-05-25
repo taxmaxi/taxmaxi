@@ -15,7 +15,13 @@ import {
   TransferReconciliationServiceLive,
 } from "@my/sync-engine/layers"
 import { AuthLive, PgClientLive, RepositoriesLive } from "@my/persistence/layers"
-import { SessionTokenValidatorLive, TaxMaxiApiLive, X402PaymentValidatorLive } from "@my/rest-api"
+import {
+  AnonSessionServiceLive,
+  SessionTokenValidatorLive,
+  SIWXProofVerifierLive,
+  TaxMaxiApiLive,
+  X402PaymentValidatorLive,
+} from "@my/rest-api"
 import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueLive.ts"
 
 const port = 4000
@@ -91,6 +97,8 @@ const ServerLive = HttpApiBuilder.serve().pipe(
   Layer.provide(HttpApiSwagger.layer()),
   Layer.provide(HttpApiBuilder.middlewareOpenApi({ path: "/openapi.json" })),
   Layer.provide(TaxMaxiApiLive),
+  Layer.provide(AnonSessionServiceLive),
+  Layer.provide(SIWXProofVerifierLive),
   Layer.provide(X402PaymentValidatorLive),
   Layer.provide(SessionTokenValidatorLive),
   Layer.provide(ApplicationLive),
