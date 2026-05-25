@@ -7,11 +7,11 @@
   },
   "scripts": {
     "dev": "dotenv -e .env.local -- sh -c \"NODE_OPTIONS='--import ./instrument.server.mjs' vite dev --port 3000\"",
-    "build": "vite build && cp instrument.server.mjs .output/server",
+    "build": "vite build && cp instrument.server.mjs dist/server",
     "preview": "vite preview",
     "test": "vitest run",
     "deploy": "pnpm run build && wrangler deploy",
-    "start": "node --import ./.output/server/instrument.server.mjs .output/server/index.mjs"
+    "start": "node --import ./dist/server/instrument.server.mjs dist/server/index.mjs"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.26.0",
