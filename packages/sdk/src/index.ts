@@ -52,7 +52,7 @@ export type {
   AuthPromiseResource,
   CurrentUserResponse,
 } from "./auth/index.ts"
-export { TaxMaxiError, toTaxMaxiError } from "./errors.ts"
+export { TaxMaxiError, isTaxMaxiUnauthorizedError, toTaxMaxiError } from "./errors.ts"
 export type { TaxMaxiFieldError } from "./errors.ts"
 export type {
   AnonEffectResource,

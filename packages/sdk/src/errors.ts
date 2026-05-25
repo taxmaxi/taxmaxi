@@ -95,6 +95,38 @@ const getAnnotatedErrorStatus = (error: unknown): number | undefined => {
   return HttpApiSchema.getStatusErrorAST(error.constructor.ast)
 }
 
+const getErrorStatusFromCode = (code: string | undefined): number | undefined => {
+  if (code === undefined) {
+    return undefined
+  }
+
+  if (code.includes("UnauthorizedError")) {
+    return 401
+  }
+
+  if (code.includes("ForbiddenError")) {
+    return 403
+  }
+
+  if (
+    code.includes("BadRequestError") ||
+    code.includes("ValidationError") ||
+    code.includes("ParseError")
+  ) {
+    return 400
+  }
+
+  if (code.includes("NotFoundError")) {
+    return 404
+  }
+
+  return undefined
+}
+
+export const isTaxMaxiUnauthorizedError = (error: unknown): error is TaxMaxiError =>
+  error instanceof TaxMaxiError &&
+  (error.status === 401 || getErrorStatusFromCode(error.code) === 401)
+
 export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
   if (error instanceof TaxMaxiError) {
     return error
@@ -171,7 +203,7 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
       fieldErrors: getFieldErrors(error),
       message: getStringProperty(error, "message") ?? "TaxMaxi API request failed.",
       requestId: getStringProperty(error, "requestId"),
-      status: getAnnotatedErrorStatus(error) ?? 500,
+      status: getAnnotatedErrorStatus(error) ?? getErrorStatusFromCode(code) ?? 500,
     })
   }
 

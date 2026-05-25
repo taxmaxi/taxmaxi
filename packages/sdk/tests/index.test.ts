@@ -4,8 +4,10 @@ import {
   DEFAULT_BASE_URL,
   TaxMaxi,
   TaxMaxiError,
+  isTaxMaxiUnauthorizedError,
   makeTaxMaxiHttpClientTransform,
   normalizeBaseUrl,
+  toTaxMaxiError,
   type TaxMaxiHeaders,
 } from "../src/index.ts"
 
@@ -364,6 +366,29 @@ describe("TaxMaxi Promise client", () => {
     }
 
     expect.unreachable("Expected TaxMaxiError")
+  })
+
+  it("preserves UnauthorizedError status when Effect wraps the API error code", () => {
+    const error = toTaxMaxiError({
+      _tag: "(FiberFailure) UnauthorizedError",
+      message: "Anon session required.",
+    })
+
+    expect(error).toBeInstanceOf(TaxMaxiError)
+    expect(error.code).toBe("(FiberFailure) UnauthorizedError")
+    expect(error.message).toBe("Anon session required.")
+    expect(error.status).toBe(401)
+    expect(isTaxMaxiUnauthorizedError(error)).toBe(true)
+  })
+
+  it("recognizes wrapped UnauthorizedError codes even if status was mis-normalized", () => {
+    const error = new TaxMaxiError({
+      code: "(FiberFailure) UnauthorizedError",
+      message: "Anon session required.",
+      status: 500,
+    })
+
+    expect(isTaxMaxiUnauthorizedError(error)).toBe(true)
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {
