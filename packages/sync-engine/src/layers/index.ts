@@ -1,3 +1,4 @@
+export * from "./ActivityClassificationServiceLive.ts"
 export * from "./SourceSyncServiceLive.ts"
 export * from "./SourceSyncJobExecutorLive.ts"
 export * from "./SourceSyncRunServiceLive.ts"
