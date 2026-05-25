@@ -274,6 +274,26 @@ const makeClientWithCookie = (cookieHeader: string) =>
     })
   })
 
+const makeClientWithBearerTokenAndCookie = ({
+  cookieHeader,
+  token,
+}: {
+  readonly cookieHeader: string
+  readonly token: string
+}) =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient.pipe(
+        HttpClient.mapRequest((request) =>
+          HttpClientRequest.bearerToken(token)(
+            HttpClientRequest.setHeader("cookie", cookieHeader)(request)
+          )
+        )
+      ),
+    })
+  })
+
 const extractCookieValue = (headers: Headers.Headers, name: string): string => {
   const setCookie = Headers.get(headers, "set-cookie")
   if (Option.isNone(setCookie)) {
@@ -297,7 +317,11 @@ const AnonSessionChallengeBody = EffectSchema.Struct({
   expiresAt: EffectSchema.String,
 })
 
-const createAnonSessionCookie = () =>
+const createAnonSessionCookie = ({
+  walletAddress = TEST_PAYER_WALLET,
+}: {
+  readonly walletAddress?: string
+} = {}) =>
   Effect.gen(function* () {
     const challengeResponse = yield* HttpClient.execute(
       HttpClientRequest.post("/v1/anon/session/challenge")
@@ -310,7 +334,7 @@ const createAnonSessionCookie = () =>
     const challenge = yield* EffectSchema.decodeUnknown(AnonSessionChallengeBody)(challengeJson)
     const siwxProof = makeTestSiwxProof({
       chainType: "solana",
-      walletAddress: TEST_PAYER_WALLET,
+      walletAddress,
       nonce: challenge.nonce,
     })
 
@@ -772,7 +796,7 @@ describe("SourcesApiLive", () => {
       const anonSessionClient = yield* makeClientWithCookie(
         `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
       )
-      const response = yield* anonSessionClient.anon.listAnonSources(undefined)
+      const response = yield* anonSessionClient.anon.listAnonSources()
 
       expect(response.sources).toEqual(
         expect.arrayContaining([
@@ -852,6 +876,203 @@ describe("SourcesApiLive", () => {
           status: "queued",
         })
       )
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("returns one anonymous paid source only for the matching payer wallet", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Payer-scoped anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null || created.syncJob === null) {
+        return yield* Effect.dieMessage(
+          "Anonymous source creation did not return claim metadata and sync job"
+        )
+      }
+
+      const matchingSessionCookie = yield* createAnonSessionCookie()
+      const matchingPayerClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${matchingSessionCookie}`
+      )
+      const source = yield* matchingPayerClient.anon.getAnonSource({
+        path: { sourceId: created.source.id },
+      })
+      expect(source).toMatchObject({
+        sourceId: created.source.id,
+        requestId: created.claim.requestId,
+        walletAddress: "So11111111111111111111111111111111111111112",
+      })
+
+      const otherSessionCookie = yield* createAnonSessionCookie({
+        walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+      })
+      const otherPayerClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${otherSessionCookie}`
+      )
+      const otherList = yield* otherPayerClient.anon.listAnonSources()
+      expect(otherList.sources.map((visibleSource) => visibleSource.sourceId)).not.toContain(
+        created.source.id
+      )
+
+      const otherSourceResult = yield* otherPayerClient.anon
+        .getAnonSource({ path: { sourceId: created.source.id } })
+        .pipe(Effect.either)
+      const otherJobsResult = yield* otherPayerClient.anon
+        .listAnonSourceJobs({ path: { sourceId: created.source.id } })
+        .pipe(Effect.either)
+      const otherJobResult = yield* otherPayerClient.anon
+        .getAnonSourceJob({
+          path: { sourceId: created.source.id, jobId: created.syncJob.jobId },
+        })
+        .pipe(Effect.either)
+
+      for (const result of [otherSourceResult, otherJobsResult, otherJobResult]) {
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("AnonNotFoundError")
+        }
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect(
+    "keeps authenticated and anonymous source collections separate when both cookies exist",
+    () =>
+      Effect.gen(function* () {
+        const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+        const anonymousCreated = yield* anonymousClient.sources.createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Separated anonymous Solana wallet",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
+
+        if (anonymousCreated.claim === null) {
+          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        }
+
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        yield* seedPrincipalUser({ userId, principalId })
+
+        const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+        const authenticatedCreated = yield* authenticatedClient.sources.createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+            name: "Separated authenticated Solana wallet",
+          },
+        })
+
+        const sessionCookie = yield* createAnonSessionCookie()
+        const combinedClient = yield* makeClientWithBearerTokenAndCookie({
+          cookieHeader: `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`,
+          token: `user_${userId}_admin`,
+        })
+
+        const authenticatedSources = yield* combinedClient.sources.listSources()
+        expect(authenticatedSources.sources.map((source) => source.id)).toContain(
+          authenticatedCreated.source.id
+        )
+        expect(authenticatedSources.sources.map((source) => source.id)).not.toContain(
+          anonymousCreated.source.id
+        )
+
+        const anonymousSources = yield* combinedClient.anon.listAnonSources()
+        expect(anonymousSources.sources.map((source) => source.sourceId)).toContain(
+          anonymousCreated.source.id
+        )
+        expect(anonymousSources.sources.map((source) => source.sourceId)).not.toContain(
+          authenticatedCreated.source.id
+        )
+
+        const anonOnlyClient = yield* makeClientWithCookie(
+          `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+        )
+        const authenticatedApiResult = yield* anonOnlyClient.sources
+          .listSources()
+          .pipe(Effect.either)
+        expect(authenticatedApiResult._tag).toBe("Left")
+        if (authenticatedApiResult._tag === "Left") {
+          expect(authenticatedApiResult.left._tag).toBe("UnauthorizedError")
+        }
+      }).pipe(
+        Effect.provide(HttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
+  )
+
+  it.effect("removes claimed sources from anonymous payer-session access", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Claim transfer removes anon access",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const sessionCookie = yield* createAnonSessionCookie()
+      const anonSessionClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+      )
+      const beforeClaim = yield* anonSessionClient.anon.listAnonSources()
+      expect(beforeClaim.sources.map((source) => source.sourceId)).toContain(created.source.id)
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        },
+      })
+      expect(claimResponse.sourceId).toBe(created.source.id)
+
+      const authenticatedSources = yield* authenticatedClient.sources.listSources()
+      expect(authenticatedSources.sources.map((source) => source.id)).toContain(created.source.id)
+
+      const afterClaim = yield* anonSessionClient.anon.listAnonSources()
+      expect(afterClaim.sources.map((source) => source.sourceId)).not.toContain(created.source.id)
+
+      const sourceResult = yield* anonSessionClient.anon
+        .getAnonSource({ path: { sourceId: created.source.id } })
+        .pipe(Effect.either)
+      expect(sourceResult._tag).toBe("Left")
+      if (sourceResult._tag === "Left") {
+        expect(sourceResult.left._tag).toBe("AnonNotFoundError")
+      }
     }).pipe(
       Effect.provide(HttpLive),
       Effect.withConfigProvider(ClaimTokenConfigProvider),
