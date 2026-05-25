@@ -29,7 +29,7 @@ export const sources = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
 
     name: text("name").notNull(),
-    providerKey: text("provider_key"), // Concrete adapter key: etherscan, coinbase, bitcoin-rpc, hyperliquid.
+    providerKey: text("provider_key"), // Concrete adapter key: helius-solana, etherscan, coinbase, bitcoin-rpc.
     providerMetadata: jsonb("provider_metadata"), // Provider-specific source config and hints.
     lastSyncedAt: timestamp("last_synced_at"), // Last successful sync timestamp for this source.
 

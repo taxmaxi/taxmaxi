@@ -68,6 +68,18 @@
     "./providers/coinbase/services/CoinbaseLegDerivationService": {
       "types": "./dist/providers/coinbase/services/CoinbaseLegDerivationService.d.ts",
       "default": "./dist/providers/coinbase/services/CoinbaseLegDerivationService.js"
+    },
+    "./providers/helius-solana": {
+      "types": "./dist/providers/helius-solana/index.d.ts",
+      "default": "./dist/providers/helius-solana/index.js"
+    },
+    "./providers/helius-solana/layers": {
+      "types": "./dist/providers/helius-solana/layers/index.d.ts",
+      "default": "./dist/providers/helius-solana/layers/index.js"
+    },
+    "./providers/helius-solana/services": {
+      "types": "./dist/providers/helius-solana/services/index.d.ts",
+      "default": "./dist/providers/helius-solana/services/index.js"
     }
   },
   "scripts": {

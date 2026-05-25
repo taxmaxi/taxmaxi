@@ -115,7 +115,7 @@ export class Source extends Schema.Class<Source>("Source")({
   }),
 
   /**
-   * Concrete provider key (for example: etherscan, coinbase, bitcoin-rpc)
+   * Concrete provider key (for example: helius-solana, etherscan, coinbase, bitcoin-rpc)
    */
   providerKey: Schema.NullOr(Schema.NonEmptyTrimmedString).annotations({
     title: "Provider Key",

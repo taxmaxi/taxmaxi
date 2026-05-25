@@ -16,7 +16,11 @@ import { EntityNotFoundError, PersistenceError, wrapSqlError } from "../errors/R
 import { addresses } from "../schema/AddressesTable.ts"
 import { sources, type SourceRow } from "../schema/SourcesTable.ts"
 import { drizzle } from "./PgClientLive.ts"
-import { SourceRepository, type SourceRepositoryService } from "../services/SourceRepository.ts"
+import {
+  SourceRepository,
+  type OnchainSourceChainType,
+  type SourceRepositoryService,
+} from "../services/SourceRepository.ts"
 
 type SelectedSourceRow = Pick<
   SourceRow,
@@ -29,6 +33,16 @@ type SelectedSourceRow = Pick<
   | "cexAccountId"
   | "createdAt"
 >
+
+const providerKeyForOnchainSource = (chainType: OnchainSourceChainType): string => {
+  switch (chainType) {
+    case "solana":
+      return "helius-solana"
+    case "evm":
+    case "bitcoin":
+      return chainType
+  }
+}
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -249,13 +263,14 @@ const make = Effect.gen(function* () {
       }
 
       const sourceId = SourceId.make(crypto.randomUUID())
+      const providerKey = providerKeyForOnchainSource(chainType)
       const [created] = yield* db
         .insert(sources)
         .values({
           id: sourceId,
           principalId,
           name,
-          providerKey: chainType,
+          providerKey,
           providerMetadata: { chainType, walletAddress },
           sourceableType: "onchain",
           addressId: addressRow.id,
