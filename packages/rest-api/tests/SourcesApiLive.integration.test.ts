@@ -1826,6 +1826,8 @@ describe("SourcesApiLive", () => {
       expect(Headers.get(response.headers, "payment-response")).toEqual(
         Option.some("encoded-test-payment-response")
       )
+      const anonSessionCookie = extractCookieValue(response.headers, ANON_SESSION_COOKIE_NAME)
+      expect(anonSessionCookie).not.toBe("")
       expect(decodedBody.created).toBe(true)
       expect(decodedBody.claim).not.toBeNull()
       expect(decodedBody.syncJob).not.toBeNull()
