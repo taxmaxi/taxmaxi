@@ -7,15 +7,12 @@ import {
   type Query,
 } from "@tanstack/react-query"
 import { useCallback, useMemo } from "react"
-import { TaxMaxiError, type AnonSourceSyncJob } from "taxmaxi"
+import { isTaxMaxiUnauthorizedError, type AnonSourceSyncJob } from "taxmaxi"
 import { createAnonSessionSiwxProof } from "./siwx"
 import { useTaxMaxiBrowserClient } from "./useTaxMaxi"
 
 const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : "Something went wrong. Try again."
-
-const isUnauthorizedError = (error: unknown): boolean =>
-  error instanceof TaxMaxiError && error.status === 401
 
 const latestJob = (jobs: readonly AnonSourceSyncJob[]): AnonSourceSyncJob | null => jobs[0] ?? null
 
@@ -62,7 +59,7 @@ export const useAnonPaidSources = ({ wallet }: { readonly wallet: WalletSession 
       try {
         return await taxMaxiBrowserClient.anon.sources.list()
       } catch (caught) {
-        if (!isUnauthorizedError(caught)) {
+        if (!isTaxMaxiUnauthorizedError(caught)) {
           throw caught
         }
 
@@ -92,6 +89,7 @@ export const useAnonPaidSources = ({ wallet }: { readonly wallet: WalletSession 
     queryKey: anonSourcesQueryKey,
     queryFn: () => listWithOptionalRestore({ restoreWithWallet: false }),
     enabled: isBrowser,
+    retry: false,
   })
 
   const restoreSources = useMutation({
