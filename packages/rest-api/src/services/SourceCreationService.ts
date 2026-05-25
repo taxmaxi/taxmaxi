@@ -14,12 +14,28 @@ import * as Schema from "effect/Schema"
 import type { User } from "../definitions/AuthMiddleware.ts"
 import type { SourceCreateRequest } from "../definitions/SourcesApi.ts"
 
+export type SourceCreationErrorCode =
+  | "invalid_wallet_address"
+  | "x402_payment_required"
+  | "x402_payment_verification_failed"
+  | "x402_payment_settlement_failed"
+  | "x402_receipt_claim_persistence_failed"
+  | "source_creation_failed"
+  | "source_sync_enqueue_failed"
+  | "source_sync_provider_unsupported"
+
+export interface SourceCreationSyncUnavailable {
+  readonly code: Extract<SourceCreationErrorCode, "source_sync_provider_unsupported">
+  readonly message: string
+}
+
 /**
  * SourceCreationBadRequestError - Caller supplied invalid source input.
  */
 export class SourceCreationBadRequestError extends Schema.TaggedError<SourceCreationBadRequestError>()(
   "SourceCreationBadRequestError",
   {
+    code: Schema.optional(Schema.String),
     message: Schema.String,
   }
 ) {}
@@ -30,6 +46,7 @@ export class SourceCreationBadRequestError extends Schema.TaggedError<SourceCrea
 export class SourceCreationInternalError extends Schema.TaggedError<SourceCreationInternalError>()(
   "SourceCreationInternalError",
   {
+    code: Schema.optional(Schema.String),
     message: Schema.String,
   }
 ) {}
@@ -40,6 +57,7 @@ export class SourceCreationInternalError extends Schema.TaggedError<SourceCreati
 export class SourceCreationPaymentRequiredError extends Schema.TaggedError<SourceCreationPaymentRequiredError>()(
   "SourceCreationPaymentRequiredError",
   {
+    code: Schema.String,
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
     paymentRequiredHeader: Schema.optional(Schema.String),
@@ -62,6 +80,7 @@ export interface SourceCreationResult {
   readonly source: Source
   readonly created: boolean
   readonly syncJob: SourceSyncJobSummary | null
+  readonly syncUnavailable: SourceCreationSyncUnavailable | null
   readonly claim: SourceCreationClaimMetadata | null
   readonly paymentResponseHeader: string | null
   readonly anonPayerSession: AnonPayerSessionSubject | null

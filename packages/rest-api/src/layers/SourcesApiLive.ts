@@ -42,6 +42,7 @@ import {
   SourceListResponse,
   SourceCreateResponse,
   SourceCreateClaimMetadata,
+  SourceSyncUnavailableResponse,
   SourcePaymentRequiredError,
 } from "../definitions/SourcesApi.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
@@ -52,9 +53,10 @@ import { PrincipalResolutionService } from "../services/PrincipalResolutionServi
 import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
 import { ANON_SESSION_COOKIE_MAX_AGE, ANON_SESSION_COOKIE_NAME } from "./AnonApiLive.ts"
 
-const toBadRequestError = (message: string) => new SourceBadRequestError({ message })
-const toInternalServerError = (message: string) =>
-  new InternalServerError({ requestId: Option.none(), message })
+const toBadRequestError = (message: string, code?: string | undefined) =>
+  new SourceBadRequestError({ code, message })
+const toInternalServerError = (message: string, code?: string | undefined) =>
+  new InternalServerError({ code, requestId: Option.none(), message })
 const sourceNotFoundMessage = "No source found. Connect a source first."
 const cookieOptionsForEnv = (environment: string) => ({
   httpOnly: true,
@@ -163,11 +165,16 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           if (creationResult._tag === "Left") {
             switch (creationResult.left._tag) {
               case "SourceCreationBadRequestError":
-                return yield* Effect.fail(toBadRequestError(creationResult.left.message))
+                return yield* Effect.fail(
+                  toBadRequestError(creationResult.left.message, creationResult.left.code)
+                )
               case "SourceCreationInternalError":
-                return yield* Effect.fail(toInternalServerError(creationResult.left.message))
+                return yield* Effect.fail(
+                  toInternalServerError(creationResult.left.message, creationResult.left.code)
+                )
               case "SourceCreationPaymentRequiredError": {
                 const error = new SourcePaymentRequiredError({
+                  code: creationResult.left.code,
                   message: creationResult.left.message,
                   paymentRequired: creationResult.left.paymentRequired,
                 })
@@ -210,11 +217,16 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
 
           const syncJob =
             result.syncJob === null ? null : SourceSyncStartResponse.make(result.syncJob)
+          const syncUnavailable =
+            result.syncUnavailable === null
+              ? null
+              : SourceSyncUnavailableResponse.make(result.syncUnavailable)
 
           const response = SourceCreateResponse.make({
             source: result.source,
             created: result.created,
             syncJob,
+            syncUnavailable,
             claim,
           })
 

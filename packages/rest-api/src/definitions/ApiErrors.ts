@@ -73,6 +73,7 @@ export const isForbiddenError = Schema.is(ForbiddenError)
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
   {
+    code: Schema.optional(Schema.String),
     message: Schema.propertySignature(Schema.String).pipe(
       Schema.withConstructorDefault(() => "An unexpected error occurred")
     ),
