@@ -20,7 +20,7 @@ import {
   SourceSyncProviderFailureError,
   UnsupportedSyncProviderError,
   type FetchProviderRawBatchParams,
-} from "../../../services/SourceSyncProvider.ts"
+} from "../../../shared/SourceProviderRawBatch.ts"
 import { CoinbaseLegDerivationService } from "../services/CoinbaseLegDerivationService.ts"
 import {
   CoinbaseRecordNormalizationError,

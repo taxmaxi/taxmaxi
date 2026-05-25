@@ -2,11 +2,16 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { describe, expect, it } from "vitest"
-import { CoinbaseSourceSyncProvider } from "@my/sync-engine/providers/coinbase"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import {
   FetchProviderRawBatchResult,
+  ProviderRawRecord,
+  SourceSyncProviderFailureError,
+  UnsupportedSyncProviderError,
+} from "../../src/shared/SourceProviderRawBatch.ts"
+import {
   SourceNormalizationRepository,
+  SourceProviderRegistry,
   SourceRawRecordRepository,
   SourceReplayRepository,
   SourceRepository,
@@ -15,15 +20,14 @@ import {
   SourceSyncJobExecutionRecordPayloadError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
-  SourceSyncProvider,
-  SourceSyncProviderFailureError,
   SourceSyncStateRepository,
   TransferReconciliationService,
   type SourceSyncExecutionState,
   type SourceSyncJobMode,
   type SourceRawRecord,
   type SourceSyncSource,
-} from "@my/sync-engine/services"
+  type SourceProviderModuleShape,
+} from "../../src/services/index.ts"
 
 const source: SourceSyncSource = {
   id: "source-1",
@@ -75,6 +79,8 @@ const makeExecutorLayer = ({
   failFetch = false,
   executionJobFailure,
   sourceProviderKey = "coinbase",
+  fetchedProviderRecords = [],
+  checkpointRawRecords = [],
   replayRawRecords = [],
   events,
 }: {
@@ -82,6 +88,8 @@ const makeExecutorLayer = ({
   readonly failFetch?: boolean
   readonly executionJobFailure?: "not-found" | "conflict" | "payload"
   readonly sourceProviderKey?: string
+  readonly fetchedProviderRecords?: ReadonlyArray<ProviderRawRecord>
+  readonly checkpointRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly events: Array<string>
 }) => {
@@ -175,7 +183,7 @@ const makeExecutorLayer = ({
   const SourceRawRecordRepositoryTestLive = Layer.succeed(SourceRawRecordRepository, {
     upsertRawBatch: ({ records }) =>
       Effect.succeed({
-        rawRecords: [],
+        rawRecords: checkpointRawRecords,
         checkpointExternalId: records[0]?.externalRecordId ?? null,
         checkpointRawRecordId: null,
       }),
@@ -190,7 +198,7 @@ const makeExecutorLayer = ({
       Effect.dieMessage("resetNormalizationStateForSource should not be called"),
   })
 
-  const SourceSyncProviderTestLive = Layer.succeed(SourceSyncProvider, {
+  const makeCoinbaseModule = (): SourceProviderModuleShape => ({
     fetchRawBatch: () =>
       failFetch
         ? Effect.fail(
@@ -202,16 +210,12 @@ const makeExecutorLayer = ({
           )
         : Effect.succeed(
             FetchProviderRawBatchResult.make({
-              records: [],
+              records: fetchedProviderRecords,
               cursorPayload: null,
               highWatermark: null,
               done: true,
             })
           ),
-  })
-
-  const CoinbaseSourceSyncProviderTestLive = Layer.succeed(CoinbaseSourceSyncProvider, {
-    fetchRawBatch: () => Effect.dieMessage("coinbase fetchRawBatch should not be called"),
     refreshReferenceData: () =>
       Effect.succeed({
         transactionTypeCatalogCount: 0,
@@ -219,9 +223,56 @@ const makeExecutorLayer = ({
         defaultTransactionMappingCount: 0,
         defaultProviderAssetMappingCount: 0,
       }),
-    loadNormalizationLookups: () => Effect.succeed({ blockchainIdByName: new Map() }),
-    prepareNormalization: () => Effect.dieMessage("prepareNormalization should not be called"),
-    deriveLegs: () => Effect.dieMessage("deriveLegs should not be called"),
+    makeRawRecordNormalizer: () =>
+      Effect.succeed(({ sourceRecord }) => {
+        events.push(`normalize:${sourceRecord.provider}:${sourceRecord.recordType}`)
+        return Effect.succeed({ kind: "skipped" } as const)
+      }),
+  })
+
+  const makeStubModule = (): SourceProviderModuleShape => ({
+    fetchRawBatch: () =>
+      Effect.sync(() => {
+        events.push("stub:fetch-raw-batch")
+        return FetchProviderRawBatchResult.make({
+          records: fetchedProviderRecords,
+          cursorPayload: null,
+          highWatermark: null,
+          done: true,
+        })
+      }),
+    refreshReferenceData: () =>
+      Effect.sync(() => {
+        events.push("stub:refresh-reference-data")
+        return {
+          transactionTypeCatalogCount: 0,
+          providerAssetCatalogCount: 0,
+          defaultTransactionMappingCount: 0,
+          defaultProviderAssetMappingCount: 0,
+        }
+      }),
+    makeRawRecordNormalizer: () =>
+      Effect.sync(() => {
+        events.push("stub:make-normalizer")
+        return ({ source, sourceRecord }) =>
+          Effect.sync(() => {
+            events.push(`stub:normalize:${source.providerKey}:${sourceRecord.recordType}`)
+            return { kind: "skipped" } as const
+          })
+      }),
+  })
+
+  const SourceProviderRegistryTestLive = Layer.succeed(SourceProviderRegistry, {
+    resolveProviderModule: ({ providerKey }) => {
+      switch (providerKey) {
+        case "coinbase":
+          return Effect.succeed(makeCoinbaseModule())
+        case "stub-chain":
+          return Effect.succeed(makeStubModule())
+        default:
+          return Effect.fail(new UnsupportedSyncProviderError({ providerKey }))
+      }
+    },
   })
 
   const SourceReplayRepositoryTestLive = Layer.succeed(SourceReplayRepository, {
@@ -253,8 +304,7 @@ const makeExecutorLayer = ({
     Layer.provide(SourceSyncJobRepositoryTestLive),
     Layer.provide(SourceSyncStateRepositoryTestLive),
     Layer.provide(SourceRawRecordRepositoryTestLive),
-    Layer.provide(SourceSyncProviderTestLive),
-    Layer.provide(CoinbaseSourceSyncProviderTestLive),
+    Layer.provide(SourceProviderRegistryTestLive),
     Layer.provide(SourceReplayRepositoryTestLive),
     Layer.provide(SourceNormalizationRepositoryTestLive),
     Layer.provide(TransferReconciliationServiceTestLive)
@@ -276,6 +326,52 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("heartbeat:source-sync-inline-executor")
     expect(events).toContain("progress:0:done")
     expect(events).toContain("complete:0:0")
+  })
+
+  it("runs a non-Coinbase provider module through fetch and normalization hooks", async () => {
+    const events: Array<string> = []
+    const fetchedProviderRecord = ProviderRawRecord.make({
+      providerKey: "stub-chain",
+      recordType: "stub_transaction",
+      externalRecordId: "stub-tx-1",
+      externalAccountId: null,
+      externalParentId: null,
+      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+      payload: { id: "stub-tx-1" },
+    })
+    const checkpointRawRecord: SourceRawRecord = {
+      ...replayRawRecord,
+      id: "raw-stub-1",
+      provider: "stub-chain",
+      recordType: "stub_transaction",
+      externalRecordId: "stub-tx-1",
+      payload: { id: "stub-tx-1" },
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            sourceProviderKey: "stub-chain",
+            fetchedProviderRecords: [fetchedProviderRecord],
+            checkpointRawRecords: [checkpointRawRecord],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events).toContain("stub:fetch-raw-batch")
+    expect(events).toContain("stub:refresh-reference-data")
+    expect(events).toContain("stub:make-normalizer")
+    expect(events).toContain("stub:normalize:stub-chain:stub_transaction")
+    expect(events).toContain("mark-raw-normalized")
+    expect(events).toContain("complete:1:1")
   })
 
   it("runs replay mode with cached raw rows and marks the job completed", async () => {

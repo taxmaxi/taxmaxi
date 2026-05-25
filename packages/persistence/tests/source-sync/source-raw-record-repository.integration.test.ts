@@ -9,7 +9,8 @@ import {
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
-import { ProviderRawRecord, SourceRawRecordRepository } from "@my/sync-engine/services"
+import { ProviderRawRecord } from "@my/sync-engine/shared"
+import { SourceRawRecordRepository } from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_source_raw_record_repo",

@@ -1,13 +1,11 @@
 /**
- * SourceSyncProvider - Provider-agnostic durable raw-ingestion contract.
+ * SourceProviderRawBatch - Shared raw provider ingestion data contracts.
  *
- * @module SourceSyncProvider
+ * @module SourceProviderRawBatch
  */
 
-import * as Context from "effect/Context"
-import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
+import { SyncEngineStorageError } from "../services/SyncEngineStorageError.ts"
 
 /**
  * ProviderRawRecord - Source/provider record normalized for raw cache persistence.
@@ -89,20 +87,3 @@ export type SourceSyncProviderError =
   | SourceSyncCursorDecodeError
   | SourceSyncProviderFailureError
   | SyncEngineStorageError
-
-/**
- * SourceSyncProviderShape - Provider-agnostic ingestion batch interface.
- */
-export interface SourceSyncProviderShape {
-  readonly fetchRawBatch: (
-    params: FetchProviderRawBatchParams
-  ) => Effect.Effect<FetchProviderRawBatchResult, SourceSyncProviderError>
-}
-
-/**
- * SourceSyncProvider - Context tag for provider ingestion adapters.
- */
-export class SourceSyncProvider extends Context.Tag("SourceSyncProvider")<
-  SourceSyncProvider,
-  SourceSyncProviderShape
->() {}

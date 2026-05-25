@@ -3,7 +3,7 @@ import { Layer } from "effect"
 import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   SourceSyncJobExecutorLive,
-  SourceSyncProviderLive,
+  SourceProviderRegistryLive,
   TransferReconciliationServiceLive,
 } from "@my/sync-engine/layers"
 import {
@@ -37,7 +37,7 @@ const CoinbaseSourceSyncProviderRuntimeLive = CoinbaseSourceSyncProviderLive.pip
   Layer.provide(RepositoriesLive)
 )
 
-const SourceSyncProviderRuntimeLive = SourceSyncProviderLive.pipe(
+const SourceProviderRegistryRuntimeLive = SourceProviderRegistryLive.pipe(
   Layer.provide(CoinbaseSourceSyncProviderRuntimeLive)
 )
 
@@ -47,8 +47,7 @@ const TransferReconciliationRuntimeLive = TransferReconciliationServiceLive.pipe
 
 const SourceSyncJobExecutorRuntimeLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationRuntimeLive),
-  Layer.provide(SourceSyncProviderRuntimeLive),
-  Layer.provide(CoinbaseSourceSyncProviderRuntimeLive),
+  Layer.provide(SourceProviderRegistryRuntimeLive),
   Layer.provide(RepositoriesLive)
 )
 

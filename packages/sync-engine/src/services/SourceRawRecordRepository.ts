@@ -7,7 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
-import type { ProviderRawRecord } from "./SourceSyncProvider.ts"
+import type { ProviderRawRecord } from "../shared/SourceProviderRawBatch.ts"
 import type { SourceRawRecord, SourceSyncCheckpoint } from "./SourceSyncModels.ts"
 
 /**

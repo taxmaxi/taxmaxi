@@ -13,11 +13,8 @@ import {
 } from "@my/sync-engine/providers/coinbase"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
-import {
-  SourceSyncService,
-  SourceSyncProvider,
-  type SourceSyncProviderShape,
-} from "@my/sync-engine/services"
+import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
+import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -25,7 +22,7 @@ import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLi
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
-import { FetchProviderRawBatchResult, ProviderRawRecord } from "@my/sync-engine/services"
+import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
@@ -133,22 +130,31 @@ const syncRecords = [
   }),
 ] as const
 
-const SourceSyncProviderTestLive = Layer.succeed(SourceSyncProvider, {
-  fetchRawBatch: () =>
-    Effect.succeed(
-      FetchProviderRawBatchResult.make({
-        records: syncRecords,
-        cursorPayload: { step: "done" },
-        highWatermark: new Date("2025-06-01T09:00:02.000Z"),
-        done: true,
-      })
-    ),
-} satisfies SourceSyncProviderShape)
-
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
-  fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
-  fetchTransactionsPage: () =>
-    Effect.dieMessage("CoinbaseSyncClient test stub: fetchTransactionsPage"),
+  fetchAccountsPage: () =>
+    Effect.succeed({
+      records: syncRecords
+        .filter((record) => record.recordType === "coinbase_account")
+        .map((record) => ({
+          id: record.externalRecordId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
+  fetchTransactionsPage: ({ accountId }) =>
+    Effect.succeed({
+      records: syncRecords
+        .filter((record) => record.recordType === "coinbase_transaction")
+        .map((record) => ({
+          id: record.externalRecordId,
+          accountId: record.externalAccountId ?? accountId,
+          parentId: record.externalParentId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
   fetchFiatCurrencies: () =>
     Effect.succeed([
       {
@@ -219,7 +225,9 @@ const CoinbaseSourceSyncProviderWithDepsLive = CoinbaseSourceSyncProviderLive.pi
 
 const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationServiceLive),
-  Layer.provide(SourceSyncProviderTestLive),
+  Layer.provide(
+    SourceProviderRegistryLive.pipe(Layer.provide(CoinbaseSourceSyncProviderWithDepsLive))
+  ),
   Layer.provide(CoinbaseSourceSyncProviderWithDepsLive)
 )
 

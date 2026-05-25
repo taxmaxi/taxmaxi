@@ -23,7 +23,7 @@ import {
   FetchProviderRawBatchParams,
   FetchProviderRawBatchResult,
   type SourceSyncProviderError,
-} from "../../../services/SourceSyncProvider.ts"
+} from "../../../shared/SourceProviderRawBatch.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
 import type { CoinbaseLegDerivationError } from "./CoinbaseLegDerivationService.ts"
 import type { CoinbaseRecordNormalizationError } from "./CoinbaseRecordNormalizer.ts"

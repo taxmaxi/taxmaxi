@@ -21,13 +21,13 @@
       "types": "./dist/layers/index.d.ts",
       "default": "./dist/layers/index.js"
     },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "default": "./dist/shared/index.js"
+    },
     "./services/SourceSyncService": {
       "types": "./dist/services/SourceSyncService.d.ts",
       "default": "./dist/services/SourceSyncService.js"
-    },
-    "./services/SourceSyncProvider": {
-      "types": "./dist/services/SourceSyncProvider.d.ts",
-      "default": "./dist/services/SourceSyncProvider.js"
     },
     "./providers/coinbase": {
       "types": "./dist/providers/coinbase/index.d.ts",

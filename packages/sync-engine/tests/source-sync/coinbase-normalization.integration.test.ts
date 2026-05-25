@@ -14,11 +14,8 @@ import {
 } from "@my/sync-engine/providers/coinbase"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
-import {
-  SourceSyncService,
-  SourceSyncProvider,
-  type SourceSyncProviderShape,
-} from "@my/sync-engine/services"
+import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
+import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -27,7 +24,7 @@ import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
-import { FetchProviderRawBatchResult, ProviderRawRecord } from "@my/sync-engine/services"
+import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
@@ -56,13 +53,6 @@ const makeCoinbaseRecord = ({
     occurredAt,
     payload,
   })
-
-const maxOccurredAt = (records: ReadonlyArray<ProviderRawRecord>): Date =>
-  records.reduce(
-    (latest, record) =>
-      record.occurredAt.getTime() > latest.getTime() ? record.occurredAt : latest,
-    records[0]?.occurredAt ?? new Date("1970-01-01T00:00:00.000Z")
-  )
 
 const defaultSyncRecords = [
   makeCoinbaseRecord({
@@ -281,22 +271,31 @@ let activeSyncRecords: ReadonlyArray<ProviderRawRecord> = defaultSyncRecords
 let activeFiatCurrencies: ReadonlyArray<CoinbaseFiatCurrencyRecord> = defaultFiatCurrencies
 let activeCryptoCurrencies: ReadonlyArray<CoinbaseCryptoCurrencyRecord> = defaultCryptoCurrencies
 
-const SourceSyncProviderTestLive = Layer.succeed(SourceSyncProvider, {
-  fetchRawBatch: () =>
-    Effect.succeed(
-      FetchProviderRawBatchResult.make({
-        records: activeSyncRecords,
-        cursorPayload: { step: "done" },
-        highWatermark: maxOccurredAt(activeSyncRecords),
-        done: true,
-      })
-    ),
-} satisfies SourceSyncProviderShape)
-
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
-  fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
-  fetchTransactionsPage: () =>
-    Effect.dieMessage("CoinbaseSyncClient test stub: fetchTransactionsPage"),
+  fetchAccountsPage: () =>
+    Effect.succeed({
+      records: activeSyncRecords
+        .filter((record) => record.recordType === "coinbase_account")
+        .map((record) => ({
+          id: record.externalRecordId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
+  fetchTransactionsPage: ({ accountId }) =>
+    Effect.succeed({
+      records: activeSyncRecords
+        .filter((record) => record.recordType === "coinbase_transaction")
+        .map((record) => ({
+          id: record.externalRecordId,
+          accountId: record.externalAccountId ?? accountId,
+          parentId: record.externalParentId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
   fetchFiatCurrencies: () => Effect.succeed(activeFiatCurrencies),
   fetchCryptoCurrencies: () => Effect.succeed(activeCryptoCurrencies),
 })
@@ -325,7 +324,9 @@ const CoinbaseSourceSyncProviderWithDepsLive = CoinbaseSourceSyncProviderLive.pi
 
 const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationServiceLive),
-  Layer.provide(SourceSyncProviderTestLive),
+  Layer.provide(
+    SourceProviderRegistryLive.pipe(Layer.provide(CoinbaseSourceSyncProviderWithDepsLive))
+  ),
   Layer.provide(CoinbaseSourceSyncProviderWithDepsLive)
 )
 
