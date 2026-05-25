@@ -1,6 +1,6 @@
 TaxMaxi is an open-source crypto tax API. The API follows RESTful principles and its docs can be found under https://api.taxmaxi.com/openapi.json. You can also install the CLI with `npm i -g tax`, via which you can calculate crypto taxes right from your terminal. The first supported jurisdiction is Germany.
 
-The public product surface is CLI/API first. Do not add a web frontend, CMS, billing system, admin console, or marketing site unless explicitly requested.
+The public product surface is CLI/API first with a web app that shows off the API's capabilities. Do not add a CMS, billing system, admin console, or marketing site unless explicitly requested.
 
 ## Launch Status
 
