@@ -34,7 +34,13 @@ import {
   HeliusSolanaSyncClient,
   type HeliusSolanaSyncClientError,
 } from "../services/HeliusSolanaSyncClient.ts"
+import { HeliusSolanaAssetResolutionService } from "../services/HeliusSolanaAssetResolutionService.ts"
+import {
+  HeliusSolanaAssetResolutionServiceLive,
+  toHeliusSolanaReferenceDataRefreshResult,
+} from "./HeliusSolanaAssetResolutionServiceLive.ts"
 import { HeliusSolanaSyncClientLive } from "./HeliusSolanaSyncClientLive.ts"
+import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
 
 const HELIUS_SOLANA_NORMALIZATION_MESSAGE = "Helius Solana normalization is not implemented yet."
 
@@ -359,161 +365,193 @@ const normalizationNotImplemented = (cause: unknown) =>
 const isRetryableFailure = (error: SourceSyncProviderError): boolean =>
   error._tag === "SourceSyncProviderFailureError" && error.retryable
 
-const make = Effect.gen(function* () {
-  const heliusSyncClient = yield* HeliusSolanaSyncClient
+const toReferenceRefreshStorageError = (cause: unknown): SyncEngineStorageError =>
+  cause instanceof SyncEngineStorageError
+    ? cause
+    : new SyncEngineStorageError({
+        operation: "heliusSolanaSourceSyncProvider.refreshReferenceData",
+        cause,
+      })
 
-  const fetchHeliusRawBatch = ({
-    sourceId,
-    walletAddress,
-    cursorPayload,
-    resumeHighWatermark,
-    resumeCheckpointExternalId,
-    pageSize,
-  }: {
-    readonly sourceId: string
-    readonly walletAddress: string | null
-    readonly cursorPayload: unknown
-    readonly resumeHighWatermark: Date | null
-    readonly resumeCheckpointExternalId: string | null
-    readonly pageSize: number
-  }) =>
-    Effect.gen(function* () {
-      const cursor = yield* decodeCursorPayload(cursorPayload).pipe(
-        Effect.mapError(toSharedCursorDecodeError)
-      )
+const make = ({
+  refreshReferenceData,
+}: {
+  readonly refreshReferenceData: HeliusSolanaSourceSyncProviderShape["refreshReferenceData"]
+}) =>
+  Effect.gen(function* () {
+    const heliusSyncClient = yield* HeliusSolanaSyncClient
 
-      if (walletAddress === null || walletAddress.trim() === "") {
-        return yield* Effect.fail(
-          new SourceSyncProviderFailureError({
-            providerKey: HELIUS_SOLANA_PROVIDER_KEY,
-            message: `Helius Solana source ${sourceId} has no wallet address`,
-            retryable: false,
-          })
+    const fetchHeliusRawBatch = ({
+      sourceId,
+      walletAddress,
+      cursorPayload,
+      resumeHighWatermark,
+      resumeCheckpointExternalId,
+      pageSize,
+    }: {
+      readonly sourceId: string
+      readonly walletAddress: string | null
+      readonly cursorPayload: unknown
+      readonly resumeHighWatermark: Date | null
+      readonly resumeCheckpointExternalId: string | null
+      readonly pageSize: number
+    }) =>
+      Effect.gen(function* () {
+        const cursor = yield* decodeCursorPayload(cursorPayload).pipe(
+          Effect.mapError(toSharedCursorDecodeError)
         )
+
+        if (walletAddress === null || walletAddress.trim() === "") {
+          return yield* Effect.fail(
+            new SourceSyncProviderFailureError({
+              providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+              message: `Helius Solana source ${sourceId} has no wallet address`,
+              retryable: false,
+            })
+          )
+        }
+
+        const page = yield* heliusSyncClient
+          .fetchTransactionsForAddress({
+            walletAddress,
+            config: {
+              limit: pageSize,
+              paginationToken: cursor.paginationToken,
+              transactionDetails: "full",
+              sortOrder: "desc",
+              filters: {
+                status: "any",
+                tokenAccounts: "balanceChanged",
+              },
+            },
+          })
+          .pipe(Effect.mapError(toProviderFailureError))
+
+        const decodedPage = yield* decodeTransactionsPage(page).pipe(
+          Effect.mapError(toProviderFailureError)
+        )
+        const entries = yield* Effect.forEach(decodedPage.data, decodeTransactionEntry).pipe(
+          Effect.mapError(toProviderFailureError)
+        )
+        const records = entries.map((entry) => makeRawRecord({ walletAddress, entry }))
+        const activeResumeHighWatermark = cursor.resumeHighWatermark ?? resumeHighWatermark
+        const activeResumeCheckpointExternalId =
+          cursor.resumeCheckpointExternalId ?? resumeCheckpointExternalId
+        const isIncrementalBoundaryScan =
+          activeResumeHighWatermark !== null &&
+          (cursor.resumeBoundaryActive || cursor.paginationToken === null)
+        const boundaryScan = isIncrementalBoundaryScan
+          ? scanIncrementalBoundary({
+              records,
+              resumeHighWatermark: activeResumeHighWatermark,
+              resumeCheckpointExternalId: activeResumeCheckpointExternalId,
+            })
+          : {
+              records,
+              reachedBoundary: false,
+            }
+        const filteredRecords = boundaryScan.records
+        const nextCursor = makeNextCursorPayload({
+          paginationToken: decodedPage.paginationToken,
+          isIncrementalBoundaryScan,
+          reachedBoundary: boundaryScan.reachedBoundary,
+          resumeHighWatermark: activeResumeHighWatermark,
+          resumeCheckpointExternalId: activeResumeCheckpointExternalId,
+        })
+
+        yield* Effect.logInfo(
+          {
+            sourceId,
+            provider: HELIUS_SOLANA_PROVIDER_KEY,
+            pageSize,
+            hasPaginationToken: cursor.paginationToken !== null,
+            resumeBoundaryActive: isIncrementalBoundaryScan,
+            reachedResumeBoundary: boundaryScan.reachedBoundary,
+            recordCount: filteredRecords.length,
+            retryable: false,
+          },
+          "helius-solana:raw-batch"
+        )
+
+        return FetchProviderRawBatchResult.make({
+          records: filteredRecords,
+          cursorPayload: encodeCursorPayload(nextCursor),
+          highWatermark: maxOccurredAt(filteredRecords),
+          done: boundaryScan.reachedBoundary || decodedPage.paginationToken === null,
+        })
+      })
+
+    const fetchRawBatch: HeliusSolanaSourceSyncProviderShape["fetchRawBatch"] = (
+      params: FetchProviderRawBatchParams
+    ) => {
+      if (params.providerKey !== HELIUS_SOLANA_PROVIDER_KEY) {
+        return Effect.fail(new UnsupportedSyncProviderError({ providerKey: params.providerKey }))
       }
 
-      const page = yield* heliusSyncClient
-        .fetchTransactionsForAddress({
-          walletAddress,
-          config: {
-            limit: pageSize,
-            paginationToken: cursor.paginationToken,
-            transactionDetails: "full",
-            sortOrder: "desc",
-            filters: {
-              status: "any",
-              tokenAccounts: "balanceChanged",
+      return fetchHeliusRawBatch({
+        sourceId: params.sourceId,
+        walletAddress: params.walletAddress,
+        cursorPayload: params.cursorPayload,
+        resumeHighWatermark: params.resumeHighWatermark,
+        resumeCheckpointExternalId: params.resumeCheckpointExternalId,
+        pageSize: params.pageSize,
+      }).pipe(
+        Effect.tapError((error) =>
+          Effect.logError(
+            {
+              sourceId: params.sourceId,
+              provider: HELIUS_SOLANA_PROVIDER_KEY,
+              pageSize: params.pageSize,
+              hasPaginationToken:
+                params.cursorPayload !== null && params.cursorPayload !== undefined,
+              recordCount: 0,
+              retryable: isRetryableFailure(error),
             },
-          },
-        })
-        .pipe(Effect.mapError(toProviderFailureError))
-
-      const decodedPage = yield* decodeTransactionsPage(page).pipe(
-        Effect.mapError(toProviderFailureError)
-      )
-      const entries = yield* Effect.forEach(decodedPage.data, decodeTransactionEntry).pipe(
-        Effect.mapError(toProviderFailureError)
-      )
-      const records = entries.map((entry) => makeRawRecord({ walletAddress, entry }))
-      const activeResumeHighWatermark = cursor.resumeHighWatermark ?? resumeHighWatermark
-      const activeResumeCheckpointExternalId =
-        cursor.resumeCheckpointExternalId ?? resumeCheckpointExternalId
-      const isIncrementalBoundaryScan =
-        activeResumeHighWatermark !== null &&
-        (cursor.resumeBoundaryActive || cursor.paginationToken === null)
-      const boundaryScan = isIncrementalBoundaryScan
-        ? scanIncrementalBoundary({
-            records,
-            resumeHighWatermark: activeResumeHighWatermark,
-            resumeCheckpointExternalId: activeResumeCheckpointExternalId,
-          })
-        : {
-            records,
-            reachedBoundary: false,
-          }
-      const filteredRecords = boundaryScan.records
-      const nextCursor = makeNextCursorPayload({
-        paginationToken: decodedPage.paginationToken,
-        isIncrementalBoundaryScan,
-        reachedBoundary: boundaryScan.reachedBoundary,
-        resumeHighWatermark: activeResumeHighWatermark,
-        resumeCheckpointExternalId: activeResumeCheckpointExternalId,
-      })
-
-      yield* Effect.logInfo(
-        {
-          sourceId,
-          provider: HELIUS_SOLANA_PROVIDER_KEY,
-          pageSize,
-          hasPaginationToken: cursor.paginationToken !== null,
-          resumeBoundaryActive: isIncrementalBoundaryScan,
-          reachedResumeBoundary: boundaryScan.reachedBoundary,
-          recordCount: filteredRecords.length,
-          retryable: false,
-        },
-        "helius-solana:raw-batch"
-      )
-
-      return FetchProviderRawBatchResult.make({
-        records: filteredRecords,
-        cursorPayload: encodeCursorPayload(nextCursor),
-        highWatermark: maxOccurredAt(filteredRecords),
-        done: boundaryScan.reachedBoundary || decodedPage.paginationToken === null,
-      })
-    })
-
-  const fetchRawBatch: HeliusSolanaSourceSyncProviderShape["fetchRawBatch"] = (
-    params: FetchProviderRawBatchParams
-  ) => {
-    if (params.providerKey !== HELIUS_SOLANA_PROVIDER_KEY) {
-      return Effect.fail(new UnsupportedSyncProviderError({ providerKey: params.providerKey }))
-    }
-
-    return fetchHeliusRawBatch({
-      sourceId: params.sourceId,
-      walletAddress: params.walletAddress,
-      cursorPayload: params.cursorPayload,
-      resumeHighWatermark: params.resumeHighWatermark,
-      resumeCheckpointExternalId: params.resumeCheckpointExternalId,
-      pageSize: params.pageSize,
-    }).pipe(
-      Effect.tapError((error) =>
-        Effect.logError(
-          {
-            sourceId: params.sourceId,
-            provider: HELIUS_SOLANA_PROVIDER_KEY,
-            pageSize: params.pageSize,
-            hasPaginationToken: params.cursorPayload !== null && params.cursorPayload !== undefined,
-            recordCount: 0,
-            retryable: isRetryableFailure(error),
-          },
-          "helius-solana:raw-batch-failed"
+            "helius-solana:raw-batch-failed"
+          )
         )
       )
-    )
-  }
+    }
 
-  return HeliusSolanaSourceSyncProvider.of({
-    fetchRawBatch,
-    refreshReferenceData: () => Effect.succeed(emptyReferenceDataRefresh),
-    loadNormalizationLookups: () => Effect.succeed(normalizationLookups),
-    prepareNormalization: ({ source, sourceRecord, lookups }) =>
-      Effect.fail(
-        normalizationNotImplemented({
-          sourceId: source.id,
-          providerKey: lookups.providerKey,
-          recordType: sourceRecord.recordType,
-          externalRecordId: sourceRecord.externalRecordId,
-        })
-      ),
-    deriveLegs: ({ transaction }) =>
-      Effect.fail(
-        normalizationNotImplemented({
-          transactionId: transaction.id,
-          externalId: transaction.externalId,
-        })
-      ),
-  } satisfies HeliusSolanaSourceSyncProviderShape)
+    return HeliusSolanaSourceSyncProvider.of({
+      fetchRawBatch,
+      refreshReferenceData,
+      loadNormalizationLookups: () => Effect.succeed(normalizationLookups),
+      prepareNormalization: ({ source, sourceRecord, lookups }) =>
+        Effect.fail(
+          normalizationNotImplemented({
+            sourceId: source.id,
+            providerKey: lookups.providerKey,
+            recordType: sourceRecord.recordType,
+            externalRecordId: sourceRecord.externalRecordId,
+          })
+        ),
+      deriveLegs: ({ transaction }) =>
+        Effect.fail(
+          normalizationNotImplemented({
+            transactionId: transaction.id,
+            externalId: transaction.externalId,
+          })
+        ),
+    } satisfies HeliusSolanaSourceSyncProviderShape)
+  })
+
+const makeWithEmptyReferenceData = make({
+  refreshReferenceData: () => Effect.succeed(emptyReferenceDataRefresh),
+})
+
+const makeWithAssetResolutionReferenceData = Effect.gen(function* () {
+  const assetResolutionService = yield* HeliusSolanaAssetResolutionService
+
+  return yield* make({
+    refreshReferenceData: () =>
+      assetResolutionService
+        .ensureDefaultMappings()
+        .pipe(
+          Effect.map(toHeliusSolanaReferenceDataRefreshResult),
+          Effect.mapError(toReferenceRefreshStorageError)
+        ),
+  })
 })
 
 /**
@@ -523,10 +561,21 @@ export const HeliusSolanaSourceSyncProviderFromClientLive: Layer.Layer<
   HeliusSolanaSourceSyncProvider,
   never,
   HeliusSolanaSyncClient
-> = Layer.effect(HeliusSolanaSourceSyncProvider, make)
+> = Layer.effect(HeliusSolanaSourceSyncProvider, makeWithEmptyReferenceData)
+
+/**
+ * HeliusSolanaSourceSyncProviderFromClientAndAssetResolutionLive - Injectable Helius provider with asset reference refresh.
+ */
+export const HeliusSolanaSourceSyncProviderFromClientAndAssetResolutionLive = Layer.effect(
+  HeliusSolanaSourceSyncProvider,
+  makeWithAssetResolutionReferenceData
+)
 
 /**
  * HeliusSolanaSourceSyncProviderLive - Production Helius Solana provider layer.
  */
-export const HeliusSolanaSourceSyncProviderLive: Layer.Layer<HeliusSolanaSourceSyncProvider> =
-  HeliusSolanaSourceSyncProviderFromClientLive.pipe(Layer.provide(HeliusSolanaSyncClientLive))
+export const HeliusSolanaSourceSyncProviderLive =
+  HeliusSolanaSourceSyncProviderFromClientAndAssetResolutionLive.pipe(
+    Layer.provide(HeliusSolanaAssetResolutionServiceLive),
+    Layer.provide(HeliusSolanaSyncClientLive)
+  )

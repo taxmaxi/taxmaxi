@@ -8,7 +8,7 @@
  * @module seed/SolanaReferenceData
  */
 
-import { and, eq, inArray, ne } from "drizzle-orm"
+import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { drizzle } from "../layers/PgClientLive.ts"
 import { schema } from "../schema/index.ts"
@@ -51,6 +51,37 @@ const blockchains = [
     explorerUrl: "https://explorer.solana.com",
     logoUrl: null,
     coingeckoPlatformId: "solana",
+  },
+] as const
+
+const solanaNativeAsset = {
+  contractAddress: null,
+  name: "Solana",
+  symbol: "SOL",
+  decimals: 9,
+  type: "native",
+  logoUrl: null,
+  isSpam: false,
+} as const
+
+const solanaTokenAssets = [
+  {
+    contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    name: "USD Coin",
+    symbol: "USDC",
+    decimals: 6,
+    type: "token",
+    logoUrl: null,
+    isSpam: false,
+  },
+  {
+    contractAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    name: "Tether USD",
+    symbol: "USDT",
+    decimals: 6,
+    type: "token",
+    logoUrl: null,
+    isSpam: false,
   },
 ] as const
 
@@ -991,6 +1022,72 @@ export const seedSolanaReferenceData = Effect.gen(function* () {
       }))
     )
     .onConflictDoNothing({ target: schema.blockchains.name })
+
+  const [solanaBlockchain] = yield* db
+    .select({ id: schema.blockchains.id })
+    .from(schema.blockchains)
+    .where(eq(schema.blockchains.name, "solana"))
+    .limit(1)
+
+  if (solanaBlockchain === undefined) {
+    return yield* Effect.dieMessage("Missing solana blockchain after seeding blockchains")
+  }
+
+  const [existingNativeSolAsset] = yield* db
+    .select({ id: schema.assets.id })
+    .from(schema.assets)
+    .where(
+      and(
+        eq(schema.assets.blockchainId, solanaBlockchain.id),
+        eq(schema.assets.symbol, solanaNativeAsset.symbol),
+        eq(schema.assets.type, solanaNativeAsset.type),
+        isNull(schema.assets.contractAddress)
+      )
+    )
+    .limit(1)
+
+  if (existingNativeSolAsset === undefined) {
+    yield* db.insert(schema.assets).values({
+      ...solanaNativeAsset,
+      blockchainId: solanaBlockchain.id,
+      createdAt: seedTimestamp,
+      updatedAt: seedTimestamp,
+    })
+  } else {
+    yield* db
+      .update(schema.assets)
+      .set({
+        name: solanaNativeAsset.name,
+        decimals: solanaNativeAsset.decimals,
+        logoUrl: solanaNativeAsset.logoUrl,
+        isSpam: solanaNativeAsset.isSpam,
+        updatedAt: seedTimestamp,
+      })
+      .where(eq(schema.assets.id, existingNativeSolAsset.id))
+  }
+
+  yield* db
+    .insert(schema.assets)
+    .values(
+      solanaTokenAssets.map((asset) => ({
+        ...asset,
+        blockchainId: solanaBlockchain.id,
+        createdAt: seedTimestamp,
+        updatedAt: seedTimestamp,
+      }))
+    )
+    .onConflictDoUpdate({
+      target: [schema.assets.blockchainId, schema.assets.contractAddress],
+      set: {
+        name: sql.raw("excluded.name"),
+        symbol: sql.raw("excluded.symbol"),
+        decimals: sql.raw("excluded.decimals"),
+        logoUrl: sql.raw("excluded.logo_url"),
+        type: sql.raw("excluded.type"),
+        isSpam: sql.raw("excluded.is_spam"),
+        updatedAt: seedTimestamp,
+      },
+    })
 
   yield* db
     .insert(schema.cex)

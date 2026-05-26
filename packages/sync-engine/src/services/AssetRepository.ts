@@ -44,6 +44,22 @@ export interface AssetRepositoryShape {
   }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
 
   /**
+   * Load the native asset for one blockchain by blockchain name and symbol.
+   */
+  readonly findNativeAssetForBlockchain: (params: {
+    readonly blockchainName: string
+    readonly symbol: string
+  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+
+  /**
+   * Load a token/NFT asset by blockchain name and mint/contract address.
+   */
+  readonly findAssetByBlockchainAndContractAddress: (params: {
+    readonly blockchainName: string
+    readonly contractAddress: string
+  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+
+  /**
    * Load all blockchains used for provider network-name resolution.
    */
   readonly listBlockchains: () => Effect.Effect<

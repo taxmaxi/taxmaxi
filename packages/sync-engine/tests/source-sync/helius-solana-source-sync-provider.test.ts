@@ -74,6 +74,7 @@ const makeProviderLayer = ({
         HeliusSolanaSyncClient,
         HeliusSolanaSyncClient.of({
           fetchTransactionsForAddress,
+          fetchAssetBatch: () => Effect.dieMessage("fetchAssetBatch should not be called"),
         })
       )
     )
