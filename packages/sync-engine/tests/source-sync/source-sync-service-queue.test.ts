@@ -22,6 +22,7 @@ const source: SourceSyncSource = {
   providerKey: "coinbase",
   cexAccountId: "cex-account-1",
   addressId: null,
+  walletAddress: null,
 }
 
 const unusedJobLifecycleMethods = {

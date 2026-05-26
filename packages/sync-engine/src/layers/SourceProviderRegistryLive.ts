@@ -14,6 +14,7 @@ import {
 import {
   type HeliusSolanaRecoverableNormalizationError,
   HELIUS_SOLANA_PROVIDER_KEY,
+  HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL,
   HeliusSolanaSourceSyncProvider,
   type HeliusSolanaSourceSyncProviderShape,
 } from "../providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts"
@@ -126,6 +127,10 @@ const makeHeliusSolanaProviderModule = (
         (lookups): SourceProviderRawRecordNormalizer =>
           ({ source, sourceRecord }) =>
             Effect.gen(function* () {
+              if (sourceRecord.recordType !== HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL) {
+                return { kind: "skipped" } as const
+              }
+
               const prepared = yield* heliusSolanaSourceSyncProvider
                 .prepareNormalization({
                   source,

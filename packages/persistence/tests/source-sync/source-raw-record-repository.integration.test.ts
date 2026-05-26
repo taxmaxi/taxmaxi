@@ -142,4 +142,69 @@ describe("SourceRawRecordRepositoryLive", () => {
     expect(rows.every((row) => row.normalizedAt === null)).toBe(true)
     expect(rows.every((row) => row.normalizationError === null)).toBe(true)
   })
+
+  it("updates duplicate Solana signatures instead of inserting another raw row", async () => {
+    const signature = "solana-signature-1"
+    const firstWrite = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({
+          sourceId: TEST_SOURCE_ID,
+          records: [
+            ProviderRawRecord.make({
+              providerKey: "helius-solana",
+              recordType: "solana_transaction_full",
+              externalRecordId: signature,
+              externalAccountId: "So11111111111111111111111111111111111111112",
+              externalParentId: null,
+              occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+              payload: { transaction: { signatures: [signature] }, version: 1 },
+            }),
+          ],
+        })
+      )
+    )
+    const secondWrite = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({
+          sourceId: TEST_SOURCE_ID,
+          records: [
+            ProviderRawRecord.make({
+              providerKey: "helius-solana",
+              recordType: "solana_transaction_full",
+              externalRecordId: signature,
+              externalAccountId: "So11111111111111111111111111111111111111112",
+              externalParentId: null,
+              occurredAt: new Date("2025-01-01T00:01:00.000Z"),
+              payload: { transaction: { signatures: [signature] }, version: 2 },
+            }),
+          ],
+        })
+      )
+    )
+
+    expect(firstWrite.rawRecords).toHaveLength(1)
+    expect(secondWrite.rawRecords).toHaveLength(1)
+    expect(secondWrite.rawRecords[0]?.id).toBe(firstWrite.rawRecords[0]?.id)
+
+    const rows = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            externalRecordId: schema.sourceRecordsRaw.externalRecordId,
+            occurredAt: schema.sourceRecordsRaw.occurredAt,
+            payload: schema.sourceRecordsRaw.payload,
+          })
+          .from(schema.sourceRecordsRaw)
+          .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      externalRecordId: signature,
+      payload: { transaction: { signatures: [signature] }, version: 2 },
+    })
+    expect(rows[0]?.occurredAt.toISOString()).toBe("2025-01-01T00:01:00.000Z")
+  })
 })

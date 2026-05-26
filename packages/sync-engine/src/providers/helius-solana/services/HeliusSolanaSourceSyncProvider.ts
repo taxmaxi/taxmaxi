@@ -33,6 +33,11 @@ import type {
 export const HELIUS_SOLANA_PROVIDER_KEY = "helius-solana"
 
 /**
+ * Stable raw record type for full Solana transactions returned by Helius.
+ */
+export const HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL = "solana_transaction_full"
+
+/**
  * HeliusSolanaReferenceDataRefreshResult - Helius-owned reference refresh summary.
  */
 export interface HeliusSolanaReferenceDataRefreshResult {
@@ -85,6 +90,28 @@ export interface DeriveHeliusSolanaProviderLegsParams {
  */
 export class HeliusSolanaNormalizationNotImplementedError extends Schema.TaggedError<HeliusSolanaNormalizationNotImplementedError>()(
   "HeliusSolanaNormalizationNotImplementedError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  }
+) {}
+
+/**
+ * HeliusSolanaCursorDecodeError - Persisted Helius pagination cursor is malformed.
+ */
+export class HeliusSolanaCursorDecodeError extends Schema.TaggedError<HeliusSolanaCursorDecodeError>()(
+  "HeliusSolanaCursorDecodeError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  }
+) {}
+
+/**
+ * HeliusSolanaPayloadDecodeError - Helius returned a malformed transaction page.
+ */
+export class HeliusSolanaPayloadDecodeError extends Schema.TaggedError<HeliusSolanaPayloadDecodeError>()(
+  "HeliusSolanaPayloadDecodeError",
   {
     message: Schema.String,
     cause: Schema.optional(Schema.Unknown),

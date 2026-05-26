@@ -374,6 +374,7 @@ const make = Effect.gen(function* () {
                 FetchProviderRawBatchParams.make({
                   providerKey: provider,
                   sourceId: source.id,
+                  walletAddress: source.walletAddress,
                   cursorPayload: loop.execution.cursorPayload,
                   resumeHighWatermark,
                   resumeCheckpointExternalId,

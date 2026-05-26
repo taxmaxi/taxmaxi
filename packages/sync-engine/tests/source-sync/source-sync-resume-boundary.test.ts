@@ -156,6 +156,7 @@ describe("source sync resume boundary", () => {
         provider.fetchRawBatch({
           providerKey: "coinbase",
           sourceId: "source-1",
+          walletAddress: null,
           cursorPayload: {
             accountCursor: null,
             pendingAccounts: [],
@@ -186,6 +187,7 @@ describe("source sync resume boundary", () => {
         provider.fetchRawBatch({
           providerKey: "coinbase",
           sourceId: "source-1",
+          walletAddress: null,
           cursorPayload: firstBatch.cursorPayload,
           resumeHighWatermark: watermark,
           resumeCheckpointExternalId: "checkpoint-1",
