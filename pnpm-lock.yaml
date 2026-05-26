@@ -457,6 +457,9 @@ importers:
       effect:
         specifier: 3.21.2
         version: 3.21.2
+      helius-sdk:
+        specifier: 2.2.2
+        version: 2.2.2(typescript@6.0.3)
     devDependencies:
       '@effect/sql':
         specifier: 0.51.1
@@ -4812,6 +4815,9 @@ packages:
   hasown@2.0.3:
     resolution: {integrity: sha512-ej4AhfhfL2Q2zpMmLo7U1Uv9+PyhIZpgQLGT1F9miIGmiCJIoCgSmczFdrc97mWT4kVY72KA+WnnhJ5pghSvSg==}
     engines: {node: '>= 0.4'}
+
+  helius-sdk@2.2.2:
+    resolution: {integrity: sha512-T7H9fJOYAB9HUZomDQ47EnKYPE//SgweZz4PbWF6q0Y1/jA0J+7xY15kFpZLJHyAGd4AXXxDCSISRdABmpCjfQ==}
 
   homedir-polyfill@1.0.3:
     resolution: {integrity: sha512-eSmmWE5bZTK2Nou4g0AI3zZ9rswp7GRKoKXS1BLUkvPviOqs4YTN1djQIqrXy9k5gEtdLPy86JjRwsNM9tnDcA==}
@@ -10457,6 +10463,21 @@ snapshots:
   hasown@2.0.3:
     dependencies:
       function-bind: 1.1.2
+
+  helius-sdk@2.2.2(typescript@6.0.3):
+    dependencies:
+      '@solana-program/compute-budget': 0.11.0(@solana/kit@5.5.1(typescript@6.0.3))
+      '@solana-program/stake': 0.5.0(@solana/kit@5.5.1(typescript@6.0.3))
+      '@solana-program/system': 0.10.0(@solana/kit@5.5.1(typescript@6.0.3))
+      '@solana-program/token': 0.9.0(@solana/kit@5.5.1(typescript@6.0.3))
+      '@solana/kit': 5.5.1(typescript@6.0.3)
+      bs58: 6.0.0
+      tslib: 2.8.1
+    transitivePeerDependencies:
+      - bufferutil
+      - fastestsmallesttextencoderdecoder
+      - typescript
+      - utf-8-validate
 
   homedir-polyfill@1.0.3:
     dependencies:

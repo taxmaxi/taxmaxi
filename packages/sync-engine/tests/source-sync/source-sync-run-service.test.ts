@@ -25,6 +25,7 @@ const coinbaseSource: SourceSyncSource = {
   providerKey: "coinbase",
   cexAccountId: "cex-1",
   addressId: null,
+  walletAddress: null,
 }
 
 const bitcoinSource: SourceSyncSource = {
@@ -33,6 +34,7 @@ const bitcoinSource: SourceSyncSource = {
   providerKey: "bitcoin",
   cexAccountId: null,
   addressId: "address-1",
+  walletAddress: "bc1qsource2",
 }
 
 const sources: ReadonlyArray<SourceSyncSource> = [coinbaseSource, bitcoinSource]

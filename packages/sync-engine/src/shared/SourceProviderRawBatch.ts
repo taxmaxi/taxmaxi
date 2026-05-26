@@ -28,6 +28,7 @@ export class FetchProviderRawBatchParams extends Schema.Class<FetchProviderRawBa
 )({
   providerKey: Schema.String,
   sourceId: Schema.String,
+  walletAddress: Schema.NullOr(Schema.String),
   cursorPayload: Schema.Unknown,
   resumeHighWatermark: Schema.NullOr(Schema.DateFromSelf),
   resumeCheckpointExternalId: Schema.NullOr(Schema.String),

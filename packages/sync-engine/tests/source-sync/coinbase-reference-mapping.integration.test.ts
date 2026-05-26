@@ -2,19 +2,17 @@ import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import {
-  CoinbaseLegDerivationServiceLive,
-  CoinbaseRecordNormalizerLive,
-  CoinbaseReferenceDataServiceLive,
-  CoinbaseReferenceMappingServiceLive,
-  CoinbaseReferenceMappingService,
-  CoinbaseSourceSyncProviderLive,
-  CoinbaseSyncClient,
-} from "@my/sync-engine/providers/coinbase"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
+import { CoinbaseLegDerivationServiceLive } from "../../src/providers/coinbase/layers/CoinbaseLegDerivationServiceLive.ts"
+import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
+import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceDataServiceLive.ts"
+import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceMappingServiceLive.ts"
+import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
+import { CoinbaseReferenceMappingService } from "../../src/providers/coinbase/services/CoinbaseReferenceMappingService.ts"
+import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
@@ -241,6 +239,7 @@ const SourceSyncLayer = SourceSyncServiceLive.pipe(
 )
 
 const TestLayer = SourceSyncLayer.pipe(
+  Layer.provideMerge(CoinbaseSourceSyncProviderWithDepsLive),
   Layer.provideMerge(RepositoriesLive),
   Layer.provideMerge(TestPgClientLive)
 )
