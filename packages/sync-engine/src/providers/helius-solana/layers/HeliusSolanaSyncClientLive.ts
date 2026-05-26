@@ -185,6 +185,24 @@ const make = HeliusSolanaSyncClient.of({
         catch: toHeliusClientError,
       })
     }),
+  fetchAssetBatch: ({ mintAddresses }) =>
+    Effect.gen(function* () {
+      const apiKey = yield* loadApiKey
+      const helius = createHelius({ apiKey, network: "mainnet" })
+
+      return yield* Effect.tryPromise({
+        try: () =>
+          helius.getAssetBatch({
+            ids: [...mintAddresses],
+            options: {
+              showFungible: true,
+              showUnverifiedCollections: true,
+              showCollectionMetadata: true,
+            },
+          }),
+        catch: toHeliusClientError,
+      })
+    }),
 } satisfies HeliusSolanaSyncClientShape)
 
 /**

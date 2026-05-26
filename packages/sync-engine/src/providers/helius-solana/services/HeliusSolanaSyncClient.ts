@@ -31,6 +31,13 @@ export interface FetchHeliusSolanaTransactionsForAddressParams {
 }
 
 /**
+ * FetchHeliusSolanaAssetBatchParams - One DAS batch asset metadata request.
+ */
+export interface FetchHeliusSolanaAssetBatchParams {
+  readonly mintAddresses: ReadonlyArray<string>
+}
+
+/**
  * HeliusSolanaAuthError - Helius credentials are missing or rejected.
  */
 export class HeliusSolanaAuthError extends Schema.TaggedError<HeliusSolanaAuthError>()(
@@ -63,6 +70,10 @@ export type HeliusSolanaSyncClientError = HeliusSolanaAuthError | HeliusSolanaPr
 export interface HeliusSolanaSyncClientShape {
   readonly fetchTransactionsForAddress: (
     params: FetchHeliusSolanaTransactionsForAddressParams
+  ) => Effect.Effect<unknown, HeliusSolanaSyncClientError>
+
+  readonly fetchAssetBatch: (
+    params: FetchHeliusSolanaAssetBatchParams
   ) => Effect.Effect<unknown, HeliusSolanaSyncClientError>
 }
 
