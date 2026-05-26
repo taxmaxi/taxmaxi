@@ -1,11 +1,18 @@
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
 import { HeliusSolanaSourceSyncProviderFromClientLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
+import { ActivityClassificationServiceLive } from "../../src/layers/ActivityClassificationServiceLive.ts"
 import {
   HELIUS_SOLANA_PROVIDER_KEY,
   HeliusSolanaSourceSyncProvider,
 } from "../../src/providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts"
+import {
+  HeliusSolanaAssetResolutionService,
+  type HeliusSolanaResolvedAsset,
+} from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import {
   HeliusSolanaAuthError,
   HeliusSolanaProviderError,
@@ -13,9 +20,16 @@ import {
   type FetchHeliusSolanaTransactionsForAddressParams,
   type HeliusSolanaSyncClientShape,
 } from "../../src/providers/helius-solana/services/HeliusSolanaSyncClient.ts"
+import {
+  ActivityClassificationService,
+  ActivityFacts,
+} from "../../src/services/ActivityClassificationService.ts"
+import { AssetRepository } from "../../src/services/AssetRepository.ts"
+import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
 import { FetchProviderRawBatchParams } from "../../src/shared/SourceProviderRawBatch.ts"
 
 const WALLET_ADDRESS = "So11111111111111111111111111111111111111112"
+const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 const makeFetchParams = ({
   providerKey = HELIUS_SOLANA_PROVIDER_KEY,
@@ -63,18 +77,124 @@ const makeHeliusTransaction = ({
   blockTime,
 })
 
+const makeSource = (): SourceSyncSource => ({
+  id: "source-solana-1",
+  principalId: "principal-solana-1",
+  providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+  cexAccountId: null,
+  addressId: "address-solana-1",
+  walletAddress: WALLET_ADDRESS,
+})
+
+const makeRawRecord = ({ payload }: { readonly payload: unknown }): SourceRawRecord => ({
+  id: "raw-solana-1",
+  sourceId: "source-solana-1",
+  provider: HELIUS_SOLANA_PROVIDER_KEY,
+  recordType: "solana_transaction_full",
+  externalAccountId: WALLET_ADDRESS,
+  externalRecordId: "signature-normalized",
+  externalParentId: null,
+  occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+  payload,
+  importedAt: new Date("2025-01-01T00:00:00.000Z"),
+  normalizedAt: null,
+  normalizationError: null,
+  createdAt: new Date("2025-01-01T00:00:00.000Z"),
+  updatedAt: new Date("2025-01-01T00:00:00.000Z"),
+})
+
 const makeProviderLayer = ({
   fetchTransactionsForAddress,
+  fetchTransfersForAddress = () =>
+    Effect.succeed({
+      data: [],
+      pagination: {
+        hasMore: false,
+        nextCursor: null,
+      },
+    }),
 }: {
   readonly fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"]
+  readonly fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
 }) =>
   HeliusSolanaSourceSyncProviderFromClientLive.pipe(
+    Layer.provide(
+      Layer.succeed(
+        AssetRepository,
+        AssetRepository.of({
+          findAssetById: () => Effect.succeed(Option.none()),
+          findAssetBySymbol: () => Effect.succeed(Option.none()),
+          findNativeAssetForBlockchain: () => Effect.succeed(Option.none()),
+          findAssetByBlockchainAndContractAddress: () => Effect.succeed(Option.none()),
+          listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
+        })
+      )
+    ),
+    Layer.provide(
+      Layer.succeed(
+        HeliusSolanaAssetResolutionService,
+        HeliusSolanaAssetResolutionService.of({
+          ensureDefaultMappings: () =>
+            Effect.succeed({
+              providerAssetCatalogCount: 0,
+              defaultProviderAssetMappingCount: 0,
+            }),
+          resolveAsset: () =>
+            Effect.succeed({
+              kind: "canonical",
+              assetKind: "native",
+              mintAddress: null,
+              providerAssetRowId: "provider-asset-sol",
+              providerAssetId: null,
+              naturalKey: "native:SOL",
+              currencyCode: "SOL",
+              name: "Solana",
+              decimals: 9,
+              tokenProgram: null,
+              nftHint: false,
+              mappingStatus: "approved",
+              mappingKind: "asset",
+              canonicalAssetId: "asset-sol",
+              canonicalAssetSymbol: "SOL",
+              canonicalFiatCurrency: null,
+            } satisfies HeliusSolanaResolvedAsset),
+          resolveAssets: ({ assets }) =>
+            Effect.succeed(
+              assets.flatMap((asset) =>
+                asset.mintAddress === null
+                  ? []
+                  : [
+                      {
+                        kind: "canonical",
+                        assetKind: "token",
+                        mintAddress: asset.mintAddress,
+                        providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                        providerAssetId: asset.mintAddress,
+                        naturalKey: `spl:${asset.mintAddress}`,
+                        currencyCode: "USDC",
+                        name: "USD Coin",
+                        decimals: 6,
+                        tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                        nftHint: false,
+                        mappingStatus: "approved",
+                        mappingKind: "asset",
+                        canonicalAssetId: "asset-usdc",
+                        canonicalAssetSymbol: "USDC",
+                        canonicalFiatCurrency: null,
+                      } satisfies HeliusSolanaResolvedAsset,
+                    ]
+              )
+            ),
+        })
+      )
+    ),
     Layer.provide(
       Layer.succeed(
         HeliusSolanaSyncClient,
         HeliusSolanaSyncClient.of({
           fetchTransactionsForAddress,
           fetchAssetBatch: () => Effect.dieMessage("fetchAssetBatch should not be called"),
+          fetchTransfersForAddress,
         })
       )
     )
@@ -82,9 +202,18 @@ const makeProviderLayer = ({
 
 const runProvider = <A, E>(
   effect: Effect.Effect<A, E, HeliusSolanaSourceSyncProvider>,
-  fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"]
+  fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"],
+  fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
 ) =>
-  Effect.runPromise(effect.pipe(Effect.provide(makeProviderLayer({ fetchTransactionsForAddress }))))
+  Effect.runPromise(
+    effect.pipe(
+      Effect.provide(
+        fetchTransfersForAddress === undefined
+          ? makeProviderLayer({ fetchTransactionsForAddress })
+          : makeProviderLayer({ fetchTransactionsForAddress, fetchTransfersForAddress })
+      )
+    )
+  )
 
 describe("HeliusSolanaSourceSyncProviderLive", () => {
   it("imports paginated full Solana transactions including failed transactions", async () => {
@@ -450,6 +579,642 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       })
       expect(result.left.message).toContain("signature-null-block-time")
       expect(result.left.message).toContain("missing blockTime")
+    }
+  })
+
+  it("normalizes SOL balance deltas and transaction fees from full transaction metadata", async () => {
+    const payload = {
+      slot: 123,
+      transactionIndex: 4,
+      transaction: {
+        signatures: ["signature-normalized"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [{ programId: "11111111111111111111111111111111", program: "system" }],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_499_995_000, 500_000_000],
+      },
+      blockTime: 1_735_689_600,
+      type: "TRANSFER",
+      source: "SYSTEM_PROGRAM",
+      description: "Transfer 0.5 SOL",
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result.transaction.externalId).toBe("signature-normalized")
+    expect(result.transaction.providerStatus).toBe("succeeded")
+    expect(result.onchainContext).toMatchObject({
+      chainTxId: "signature-normalized",
+      blockHeight: "123",
+      positionInBlock: "4",
+      feeAmount: "5000",
+      isError: false,
+    })
+    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5", "0.000005"])
+    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native", "fee"])
+    expect(result.providerTransfers).toHaveLength(2)
+    expect(result.transactionReview).toBeNull()
+  })
+
+  it("does not record Solana fees when the wallet is not the fee payer", async () => {
+    const payload = {
+      slot: 123,
+      transactionIndex: 5,
+      transaction: {
+        signatures: ["signature-inbound-fee-paid-by-sender"],
+        message: {
+          accountKeys: [
+            { pubkey: "counterparty-address", signer: true },
+            { pubkey: WALLET_ADDRESS, signer: false },
+          ],
+          instructions: [{ programId: "11111111111111111111111111111111", program: "system" }],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [1_000_000_000, 2_000_000_000],
+        postBalances: [499_995_000, 2_500_000_000],
+      },
+      blockTime: 1_735_689_600,
+      type: "TRANSFER",
+      source: "SYSTEM_PROGRAM",
+      description: "Transfer 0.5 SOL",
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native"])
+    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5"])
+    expect(result.providerTransfers).toHaveLength(1)
+    expect(result.providerTransfers[0]).toMatchObject({
+      fromAddress: "counterparty-address",
+      toAddress: WALLET_ADDRESS,
+      providerAssetId: "provider-asset-sol",
+    })
+    expect(result.transactionReview).toBeNull()
+  })
+
+  it("uses the first string account key as the Solana fee payer", async () => {
+    const payload = {
+      slot: 123,
+      transactionIndex: 6,
+      transaction: {
+        signatures: ["signature-string-account-keys"],
+        message: {
+          accountKeys: ["counterparty-address", WALLET_ADDRESS],
+          instructions: [{ programId: "11111111111111111111111111111111", program: "system" }],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [1_000_000_000, 2_000_000_000],
+        postBalances: [499_995_000, 2_500_000_000],
+      },
+      blockTime: 1_735_689_600,
+      type: "TRANSFER",
+      source: "SYSTEM_PROGRAM",
+      description: "Transfer 0.5 SOL",
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native"])
+    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5"])
+    expect(result.providerTransfers).toHaveLength(1)
+    const metadata = Schema.decodeUnknownSync(Schema.Struct({ activityFacts: ActivityFacts }))(
+      result.transaction.metadata
+    )
+    expect(metadata.activityFacts.onchain?.feePayer).toBe("counterparty-address")
+    expect(result.transactionReview).toBeNull()
+  })
+
+  it("normalizes failed Solana transactions to fee-only data with review state", async () => {
+    const payload = {
+      slot: 124,
+      transactionIndex: 0,
+      transaction: {
+        signatures: ["signature-failed-normalized"],
+        message: {
+          accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: { InstructionError: [1, "Custom"] },
+        fee: 5_000,
+        preBalances: [2_000_000_000],
+        postBalances: [1_999_995_000],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result.transaction.providerStatus).toBe("failed")
+    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["fee"])
+    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.000005"])
+    expect(result.onchainContext?.isError).toBe(true)
+    expect(result.transactionReview?.matchedLayer).toBe("solana_failed_transaction")
+  })
+
+  it("marks successful Solana transactions without deterministic classification for review", async () => {
+    const payload = {
+      slot: 125,
+      transactionIndex: 1,
+      transaction: {
+        signatures: ["signature-unknown-successful"],
+        message: {
+          accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
+          instructions: [{ programId: "unknown-program", program: "unknown" }],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 0,
+        preBalances: [2_000_000_000],
+        postBalances: [2_000_000_000],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+      type: "UNKNOWN",
+      source: "UNKNOWN_PROGRAM",
+      description: "Unknown successful transaction",
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result.feeTransfers).toHaveLength(0)
+    expect(result.providerTransfers).toHaveLength(0)
+    expect(result.transactionReview).toMatchObject({
+      matchedLayer: "solana_unknown_activity",
+      needsReview: true,
+    })
+  })
+
+  it("prefers parsed SPL token transfer evidence when present", async () => {
+    const payload = {
+      slot: 125,
+      transactionIndex: 1,
+      transaction: {
+        signatures: ["signature-spl-normalized"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_999_995_000, 0],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+      tokenTransfers: [
+        {
+          mint: USDC_MINT,
+          tokenAmount: 12.5,
+          fromUserAccount: "counterparty-address",
+          toUserAccount: WALLET_ADDRESS,
+        },
+      ],
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () =>
+        Effect.succeed({
+          data: [
+            {
+              signature: "signature-spl-normalized",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-address",
+              mint: USDC_MINT,
+              symbol: "USDC",
+              amount: 12.5,
+              amountRaw: "12500000",
+              decimals: 6,
+            },
+          ],
+          pagination: {
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({
+      amount: "12.5",
+      type: "spl",
+      fromAddress: "counterparty-address",
+      toAddress: WALLET_ADDRESS,
+    })
+    expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "parsed_transfer" })
+    expect(splTransfer?.metadata).toMatchObject({
+      supplementalTransferRow: {
+        signature: "signature-spl-normalized",
+        amountRaw: "12500000",
+      },
+    })
+    expect(result.providerTransfers.map((transfer) => transfer.externalId)).toEqual([
+      "signature-spl-normalized:provider:fee:1",
+      "signature-spl-normalized:provider:principal:1",
+    ])
+    const splProviderTransfer = result.providerTransfers.find(
+      (transfer) => transfer.providerAssetId === `provider-asset-${USDC_MINT}`
+    )
+    expect(splProviderTransfer?.metadata).toMatchObject({
+      evidenceKind: "parsed_transfer",
+      supplementalTransferRow: {
+        signature: "signature-spl-normalized",
+        amountRaw: "12500000",
+      },
+    })
+    expect(new Set(result.providerTransfers.map((transfer) => transfer.externalId)).size).toBe(
+      result.providerTransfers.length
+    )
+
+    const metadata = Schema.decodeUnknownSync(Schema.Struct({ activityFacts: ActivityFacts }))(
+      result.transaction.metadata
+    )
+    const classification = await Effect.runPromise(
+      Effect.gen(function* () {
+        const classifier = yield* ActivityClassificationService
+        return yield* classifier.classifyActivity({ facts: metadata.activityFacts })
+      }).pipe(Effect.provide(ActivityClassificationServiceLive))
+    )
+    expect(classification.evidence).toEqual(metadata.activityFacts.evidence)
+  })
+
+  it("uses wallet transfer rows as SPL evidence when full transaction SPL evidence is absent", async () => {
+    const payload = {
+      slot: 126,
+      transactionIndex: 2,
+      transaction: {
+        signatures: ["signature-transfer-row-normalized"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_999_995_000, 0],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () =>
+        Effect.succeed({
+          data: [
+            {
+              signature: "signature-transfer-row-normalized",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-address",
+              mint: USDC_MINT,
+              symbol: "USDC",
+              amount: 12.5,
+              amountRaw: "12500000",
+              decimals: 6,
+            },
+          ],
+          pagination: {
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({
+      amount: "12.5",
+      type: "spl",
+      fromAddress: "counterparty-address",
+      toAddress: WALLET_ADDRESS,
+    })
+    expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "transfer_row" })
+    expect(result.transactionReview).toBeNull()
+  })
+
+  it("falls back to token balance deltas for SPL movements", async () => {
+    const payload = {
+      slot: 127,
+      transactionIndex: 3,
+      transaction: {
+        signatures: ["signature-token-balance-normalized"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
+    expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
+  })
+
+  it("marks contradictory transfer-row evidence for review without overriding full transaction evidence", async () => {
+    const payload = {
+      slot: 128,
+      transactionIndex: 4,
+      transaction: {
+        signatures: ["signature-contradictory-transfer-row"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () =>
+        Effect.succeed({
+          data: [
+            {
+              signature: "signature-contradictory-transfer-row",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-address",
+              mint: USDC_MINT,
+              symbol: "USDC",
+              amount: 99,
+              amountRaw: "99000000",
+              decimals: 6,
+            },
+          ],
+          pagination: {
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
+    expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
+    expect(result.transactionReview?.matchedLayer).toBe("solana_transfer_evidence")
+  })
+
+  it("represents token account close rent refunds without inventing SPL value", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: ["signature-close-account-rent-refund"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "closed-token-account", signer: false },
+          ],
+          instructions: [
+            {
+              program: "spl-token",
+              programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+              parsed: { type: "closeAccount" },
+            },
+          ],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 2_039_280],
+        postBalances: [2_002_034_280, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 1,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const rentTransfer = result.feeTransfers.find((transfer) => transfer.notes !== null)
+    const splTransfers = result.feeTransfers.filter((transfer) => transfer.type === "spl")
+    expect(rentTransfer).toMatchObject({
+      amount: "0.00203928",
+      type: "native",
+      notes: "Solana account close or rent refund balance effect",
+    })
+    expect(rentTransfer?.metadata).toMatchObject({ role: "rent" })
+    expect(splTransfers).toHaveLength(0)
+  })
+
+  it("returns a recoverable decode failure for malformed cached Solana payloads", async () => {
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider
+          .prepareNormalization({
+            source: makeSource(),
+            sourceRecord: makeRawRecord({ payload: { malformed: true } }),
+            lookups,
+          })
+          .pipe(Effect.either)
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
     }
   })
 })

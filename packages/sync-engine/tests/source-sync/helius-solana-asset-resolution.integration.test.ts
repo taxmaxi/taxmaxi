@@ -149,6 +149,8 @@ const HeliusSolanaAssetResolutionTestLive = (
           fetchTransactionsForAddress: () =>
             Effect.dieMessage("fetchTransactionsForAddress should not be called"),
           fetchAssetBatch,
+          fetchTransfersForAddress: () =>
+            Effect.dieMessage("fetchTransfersForAddress should not be called"),
         })
       )
     )

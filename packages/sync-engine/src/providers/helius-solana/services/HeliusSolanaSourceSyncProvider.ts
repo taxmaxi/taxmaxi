@@ -18,6 +18,7 @@ import type {
   SourceTransactionReviewDraft,
   SourceTransferDraft,
   SourceVenueContextDraft,
+  SourceOnchainContextDraft,
 } from "../../../services/SourceNormalizationRepository.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../../services/SourceSyncModels.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
@@ -52,6 +53,7 @@ export interface HeliusSolanaReferenceDataRefreshResult {
  */
 export interface HeliusSolanaNormalizationLookups {
   readonly providerKey: typeof HELIUS_SOLANA_PROVIDER_KEY
+  readonly solanaBlockchainId: string | null
 }
 
 /**
@@ -69,6 +71,7 @@ export interface PrepareHeliusSolanaNormalizationParams {
 export interface PreparedHeliusSolanaNormalization {
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
+  readonly onchainContext: SourceOnchainContextDraft | null
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
@@ -90,6 +93,28 @@ export interface DeriveHeliusSolanaProviderLegsParams {
  */
 export class HeliusSolanaNormalizationNotImplementedError extends Schema.TaggedError<HeliusSolanaNormalizationNotImplementedError>()(
   "HeliusSolanaNormalizationNotImplementedError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  }
+) {}
+
+/**
+ * HeliusSolanaNormalizationDecodeError - Cached Solana full transaction payload is malformed.
+ */
+export class HeliusSolanaNormalizationDecodeError extends Schema.TaggedError<HeliusSolanaNormalizationDecodeError>()(
+  "HeliusSolanaNormalizationDecodeError",
+  {
+    message: Schema.String,
+    cause: Schema.optional(Schema.Unknown),
+  }
+) {}
+
+/**
+ * HeliusSolanaNormalizationReferenceError - Required local Solana reference data is missing.
+ */
+export class HeliusSolanaNormalizationReferenceError extends Schema.TaggedError<HeliusSolanaNormalizationReferenceError>()(
+  "HeliusSolanaNormalizationReferenceError",
   {
     message: Schema.String,
     cause: Schema.optional(Schema.Unknown),
@@ -121,7 +146,10 @@ export class HeliusSolanaPayloadDecodeError extends Schema.TaggedError<HeliusSol
 /**
  * HeliusSolanaRecoverableNormalizationError - Helius errors that fail one raw row without aborting the job.
  */
-export type HeliusSolanaRecoverableNormalizationError = HeliusSolanaNormalizationNotImplementedError
+export type HeliusSolanaRecoverableNormalizationError =
+  | HeliusSolanaNormalizationNotImplementedError
+  | HeliusSolanaNormalizationDecodeError
+  | HeliusSolanaNormalizationReferenceError
 
 /**
  * HeliusSolanaSourceSyncProviderShape - Helius provider surface consumed by the registry adapter.

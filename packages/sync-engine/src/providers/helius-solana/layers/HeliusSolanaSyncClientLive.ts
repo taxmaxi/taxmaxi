@@ -6,6 +6,7 @@
 
 import { createHelius } from "helius-sdk"
 import type { GetTransactionsForAddressConfigFull } from "helius-sdk/types/types"
+import type { GetTransfersRequest } from "helius-sdk/wallet/types"
 import * as Config from "effect/Config"
 import * as Either from "effect/Either"
 import * as Effect from "effect/Effect"
@@ -200,6 +201,27 @@ const make = HeliusSolanaSyncClient.of({
               showCollectionMetadata: true,
             },
           }),
+        catch: toHeliusClientError,
+      })
+    }),
+  fetchTransfersForAddress: ({ walletAddress, limit, cursor }) =>
+    Effect.gen(function* () {
+      const apiKey = yield* loadApiKey
+      const helius = createHelius({ apiKey, network: "mainnet" })
+      const request: GetTransfersRequest =
+        cursor === null
+          ? {
+              wallet: walletAddress,
+              limit,
+            }
+          : {
+              wallet: walletAddress,
+              limit,
+              cursor,
+            }
+
+      return yield* Effect.tryPromise({
+        try: () => helius.wallet.getTransfers(request),
         catch: toHeliusClientError,
       })
     }),

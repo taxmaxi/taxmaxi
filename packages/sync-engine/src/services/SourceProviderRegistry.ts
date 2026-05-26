@@ -11,6 +11,7 @@ import type { ResolvedProviderTransactionTypeMapping } from "./ProviderReference
 import type {
   PersistNormalizedSourceArtifactsContext,
   SourceProviderTransferDraft,
+  SourceOnchainContextDraft,
   SourceTransactionDraft,
   SourceTransactionLegDraft,
   SourceTransactionReviewDraft,
@@ -72,6 +73,7 @@ export interface SourceProviderPreparedNormalization {
   readonly kind: "prepared"
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
+  readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null

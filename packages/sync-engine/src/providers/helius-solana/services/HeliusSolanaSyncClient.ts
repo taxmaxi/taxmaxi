@@ -38,6 +38,15 @@ export interface FetchHeliusSolanaAssetBatchParams {
 }
 
 /**
+ * FetchHeliusSolanaTransfersForAddressParams - One Wallet API transfer evidence request.
+ */
+export interface FetchHeliusSolanaTransfersForAddressParams {
+  readonly walletAddress: string
+  readonly limit: number
+  readonly cursor: string | null
+}
+
+/**
  * HeliusSolanaAuthError - Helius credentials are missing or rejected.
  */
 export class HeliusSolanaAuthError extends Schema.TaggedError<HeliusSolanaAuthError>()(
@@ -74,6 +83,10 @@ export interface HeliusSolanaSyncClientShape {
 
   readonly fetchAssetBatch: (
     params: FetchHeliusSolanaAssetBatchParams
+  ) => Effect.Effect<unknown, HeliusSolanaSyncClientError>
+
+  readonly fetchTransfersForAddress: (
+    params: FetchHeliusSolanaTransfersForAddressParams
   ) => Effect.Effect<unknown, HeliusSolanaSyncClientError>
 }
 
