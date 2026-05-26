@@ -811,6 +811,21 @@ const make = Effect.gen(function* () {
           .fetchAssetBatch({ mintAddresses })
           .pipe(Effect.flatMap(decodeDasAssetBatch))
 
+  const shouldRefreshProviderAssetFromDas = (
+    providerAsset: ProviderAssetRecord
+  ): Effect.Effect<boolean, SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      if (hasHeliusDasPayload(providerAsset)) {
+        return false
+      }
+
+      const mapping = yield* loadProviderAssetMapping({
+        providerAssetRowId: providerAsset.id,
+      })
+
+      return mapping?.mappingStatus !== "approved"
+    })
+
   const ensureProviderAssetForReference = ({
     reference,
     dasAssets,
@@ -871,7 +886,12 @@ const make = Effect.gen(function* () {
           }
 
           const existing = yield* loadProviderAssetForReference(reference)
-          return existing === null || !hasHeliusDasPayload(existing) ? reference.mintAddress : null
+          if (existing === null) {
+            return reference.mintAddress
+          }
+
+          const shouldRefresh = yield* shouldRefreshProviderAssetFromDas(existing)
+          return shouldRefresh ? reference.mintAddress : null
         })
       )
       const distinctMissingMintAddresses = Array.from(

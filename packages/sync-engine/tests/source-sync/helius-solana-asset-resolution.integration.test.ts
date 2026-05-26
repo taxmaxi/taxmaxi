@@ -244,20 +244,17 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
 
     const result = await runAssetService(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        Effect.gen(function* () {
-          yield* service.ensureDefaultMappings()
-          return yield* service.resolveAssets({
-            assets: [
-              {
-                kind: "spl",
-                mintAddress: SOLANA_USDC_MINT,
-              },
-              {
-                kind: "spl",
-                mintAddress: SOLANA_USDT_MINT,
-              },
-            ],
-          })
+        service.resolveAssets({
+          assets: [
+            {
+              kind: "spl",
+              mintAddress: SOLANA_USDC_MINT,
+            },
+            {
+              kind: "spl",
+              mintAddress: SOLANA_USDT_MINT,
+            },
+          ],
         })
       ),
       ({ mintAddresses }) =>
@@ -306,6 +303,44 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       source: "helius_das_get_asset_batch",
       tokenProgram: TOKEN_PROGRAM,
       nftHint: false,
+    })
+  })
+
+  it("resolves approved built-in SPL mappings without refreshing non-DAS provider metadata", async () => {
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        Effect.gen(function* () {
+          yield* service.ensureDefaultMappings()
+
+          return yield* service.resolveAsset({
+            kind: "spl",
+            mintAddress: SOLANA_USDC_MINT,
+          })
+        })
+      ),
+      () => Effect.dieMessage("DAS should not be called for approved cached mapping")
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      assetKind: "token",
+      mintAddress: SOLANA_USDC_MINT,
+      currencyCode: "USDC",
+      decimals: 6,
+      tokenProgram: null,
+      mappingStatus: "approved",
+      canonicalAssetId: USDC_ASSET_ID,
+      canonicalAssetSymbol: "USDC",
+    })
+
+    const usdcState = await context.runPg(
+      fetchProviderAssetState({
+        mintAddress: SOLANA_USDC_MINT,
+      })
+    )
+
+    expect(usdcState?.rawProviderPayload).toMatchObject({
+      source: "taxmaxi_builtin_solana_asset_mapping",
     })
   })
 
