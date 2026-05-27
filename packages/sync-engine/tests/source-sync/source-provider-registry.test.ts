@@ -13,6 +13,35 @@ import {
   FetchProviderRawBatchResult,
   ProviderRawRecord,
 } from "../../src/shared/SourceProviderRawBatch.ts"
+import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
+
+const SOLANA_WALLET_ADDRESS = "So11111111111111111111111111111111111111112"
+
+const source: SourceSyncSource = {
+  id: "source-solana-1",
+  principalId: "principal-solana-1",
+  providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+  cexAccountId: null,
+  addressId: "address-solana-1",
+  walletAddress: SOLANA_WALLET_ADDRESS,
+}
+
+const sourceRecord: SourceRawRecord = {
+  id: "raw-solana-1",
+  sourceId: source.id,
+  provider: HELIUS_SOLANA_PROVIDER_KEY,
+  recordType: "solana_transaction_full",
+  externalAccountId: source.walletAddress,
+  externalRecordId: "solana-signature-1",
+  externalParentId: null,
+  occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+  payload: { transaction: { signatures: ["solana-signature-1"] } },
+  importedAt: new Date("2026-01-01T00:00:00.000Z"),
+  normalizedAt: null,
+  normalizationError: null,
+  createdAt: new Date("2026-01-01T00:00:00.000Z"),
+  updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+}
 
 const CoinbaseSourceSyncProviderTestLive = Layer.succeed(
   CoinbaseSourceSyncProvider,
@@ -57,9 +86,75 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
         defaultTransactionMappingCount: 0,
         defaultProviderAssetMappingCount: 0,
       }),
-    loadNormalizationLookups: () => Effect.succeed({ providerKey: HELIUS_SOLANA_PROVIDER_KEY }),
+    loadNormalizationLookups: () =>
+      Effect.succeed({
+        providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+        solanaBlockchainId: "solana-blockchain-id",
+      }),
     prepareNormalization: () =>
-      Effect.dieMessage("Helius prepareNormalization should not be called"),
+      Effect.succeed({
+        transaction: {
+          sourceId: source.id,
+          sourceRawRecordId: sourceRecord.id,
+          externalId: "solana-signature-1",
+          externalGroupId: "solana-signature-1",
+          timestamp: new Date("2026-01-01T00:00:00.000Z"),
+          transactionType: null,
+          providerTransactionType: "unknown",
+          providerStatus: "succeeded",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          providerUpdatedAt: null,
+          metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
+          principalId: source.principalId,
+        },
+        venueContext: {
+          venueType: "dex",
+          cexAccountId: null,
+          externalAccountId: SOLANA_WALLET_ADDRESS,
+          externalOrderId: null,
+          externalFillId: null,
+          side: null,
+          instrument: null,
+          fillPrice: null,
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
+        },
+        onchainContext: {
+          blockchainId: "solana-blockchain-id",
+          addressId: "address-solana-1",
+          chainTxId: "solana-signature-1",
+          blockHeight: "123",
+          blockHash: null,
+          positionInBlock: "4",
+          fromAddress: SOLANA_WALLET_ADDRESS,
+          toAddress: SOLANA_WALLET_ADDRESS,
+          gasUsed: null,
+          gasPrice: null,
+          feeAmount: "5000",
+          feeAssetId: "asset-sol",
+          feeCostBasisAmount: null,
+          feeCostBasisCurrency: null,
+          isError: false,
+          functionName: "unknown",
+          metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
+        },
+        providerTransfers: [],
+        feeTransfers: [],
+        transactionReview: null,
+        resolvedTransactionType: {
+          providerTransactionType: "unknown",
+          transactionType: null,
+          inventoryEffect: "unknown",
+          taxTreatment: "requires_additional_rule_logic",
+          resolutionStrategy: "no_leg",
+          pairedRecordRequired: false,
+          mappingStatus: "pending_review",
+        },
+        legDerivationStrategy: "skip",
+      }),
     deriveLegs: () => Effect.dieMessage("Helius deriveLegs should not be called"),
   })
 )
@@ -92,5 +187,25 @@ describe("SourceProviderRegistryLive", () => {
 
     expect(result.records.map((record) => record.externalRecordId)).toEqual(["solana-signature-1"])
     expect(result.done).toBe(true)
+  })
+
+  it("forwards Helius onchain context through prepared normalization", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const registry = yield* SourceProviderRegistry
+        const provider = yield* registry.resolveProviderModule({ providerKey: "helius-solana" })
+        const normalize = yield* provider.makeRawRecordNormalizer()
+        return yield* normalize({ source, sourceRecord })
+      }).pipe(Effect.provide(RegistryLive))
+    )
+
+    expect(result.kind).toBe("prepared")
+    if (result.kind === "prepared") {
+      expect(result.onchainContext).toMatchObject({
+        chainTxId: "solana-signature-1",
+        blockHeight: "123",
+        positionInBlock: "4",
+      })
+    }
   })
 })

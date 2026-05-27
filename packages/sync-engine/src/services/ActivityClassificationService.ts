@@ -45,6 +45,7 @@ export const ActivityEvidenceKind = Schema.Literal(
   "provider_payload",
   "balance_delta",
   "token_balance_delta",
+  "parsed_transfer",
   "instruction",
   "event",
   "utxo_pattern",

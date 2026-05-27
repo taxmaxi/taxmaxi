@@ -85,6 +85,30 @@ export interface SourceVenueContextDraft {
 }
 
 /**
+ * SourceOnchainContextDraft - Chain-specific transaction context persisted next
+ * to the canonical transaction envelope.
+ */
+export interface SourceOnchainContextDraft {
+  readonly blockchainId: string
+  readonly addressId: string
+  readonly chainTxId: string
+  readonly blockHeight: string | null
+  readonly blockHash: string | null
+  readonly positionInBlock: string | null
+  readonly fromAddress: string
+  readonly toAddress: string | null
+  readonly gasUsed: string | null
+  readonly gasPrice: string | null
+  readonly feeAmount: string | null
+  readonly feeAssetId: string | null
+  readonly feeCostBasisAmount: string | null
+  readonly feeCostBasisCurrency: string | null
+  readonly isError: boolean
+  readonly functionName: string | null
+  readonly metadata: unknown
+}
+
+/**
  * SourceTransferDraft - Canonical transfer upsert payload.
  */
 export interface SourceTransferDraft {
@@ -283,6 +307,7 @@ export interface PersistNormalizedSourceArtifactsContext {
 export interface PersistNormalizedSourceArtifactsParamsBase {
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
+  readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
