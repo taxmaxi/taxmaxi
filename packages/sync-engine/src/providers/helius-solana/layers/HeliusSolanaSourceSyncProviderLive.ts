@@ -9,6 +9,7 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as ParseResult from "effect/ParseResult"
 import * as Schema from "effect/Schema"
 import {
   ActivityEvidence,
@@ -142,9 +143,28 @@ const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   }),
 })
 
+const HeliusSolanaDecimalStringSchema = Schema.transformOrFail(
+  Schema.Union(Schema.String, Schema.Number),
+  Schema.String,
+  {
+    strict: true,
+    decode: (value, _, ast) => {
+      const amount = typeof value === "number" ? String(value) : value.trim()
+      return Option.match(BigDecimal.fromString(amount), {
+        onNone: () =>
+          Effect.fail(
+            new ParseResult.Type(ast, value, "Expected a decimal token amount string or number.")
+          ),
+        onSome: () => Effect.succeed(amount),
+      })
+    },
+    encode: (value) => Effect.succeed(value),
+  }
+)
+
 const HeliusSolanaParsedTokenTransferSchema = Schema.Struct({
   mint: Schema.optional(Schema.String),
-  tokenAmount: Schema.optional(Schema.Union(Schema.Number, Schema.NumberFromString)),
+  tokenAmount: Schema.optional(HeliusSolanaDecimalStringSchema),
   fromUserAccount: Schema.optional(Schema.String),
   toUserAccount: Schema.optional(Schema.String),
   fromTokenAccount: Schema.optional(Schema.String),
@@ -582,6 +602,33 @@ const decimalToRawTokenAmount = ({
     onNone: () => amount,
     onSome: (decimal) => BigDecimal.scale(decimal, decimals).value.toString(),
   })
+
+const isDecimalZero = (amount: string): boolean =>
+  Option.match(BigDecimal.fromString(amount), {
+    onNone: () => false,
+    onSome: BigDecimal.isZero,
+  })
+
+const parsedTokenAmountToMovementAmount = ({
+  amount,
+  decimals,
+}: {
+  readonly amount: string
+  readonly decimals: number | null
+}) => {
+  if (decimals === null) {
+    return {
+      amount,
+      rawUnits: amount,
+    }
+  }
+
+  const rawUnits = decimalToRawTokenAmount({ amount, decimals })
+  return {
+    amount: rawTokenAmountToDecimal({ amount: rawUnits, decimals }),
+    rawUnits,
+  }
+}
 
 const subtractBigIntStrings = (left: string, right: string): bigint => BigInt(left) - BigInt(right)
 
@@ -1255,7 +1302,7 @@ const make = ({
       transfers.flatMap((transfer, index) => {
         const mint = transfer.mint
         const tokenAmount = transfer.tokenAmount
-        if (mint === undefined || tokenAmount === undefined || tokenAmount === 0) {
+        if (mint === undefined || tokenAmount === undefined || isDecimalZero(tokenAmount)) {
           return []
         }
 
@@ -1275,18 +1322,16 @@ const make = ({
         if (direction === null) {
           return []
         }
+        const movementAmount = parsedTokenAmountToMovementAmount({
+          amount: tokenAmount,
+          decimals: asset.decimals,
+        })
 
         return [
           {
             asset,
-            amount: String(tokenAmount),
-            rawUnits:
-              asset.decimals === null
-                ? String(tokenAmount)
-                : decimalToRawTokenAmount({
-                    amount: String(tokenAmount),
-                    decimals: asset.decimals,
-                  }),
+            amount: movementAmount.amount,
+            rawUnits: movementAmount.rawUnits,
             direction,
             fromAddress: fromAddress ?? "solana:unknown_sender",
             toAddress: toAddress ?? "solana:unknown_recipient",

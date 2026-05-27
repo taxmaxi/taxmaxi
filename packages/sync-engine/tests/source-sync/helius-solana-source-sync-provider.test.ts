@@ -951,6 +951,63 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(classification.evidence).toEqual(metadata.activityFacts.evidence)
   })
 
+  it("preserves parsed SPL token transfer decimal strings when balance deltas are absent", async () => {
+    const payload = {
+      slot: 125,
+      transactionIndex: 1,
+      transaction: {
+        signatures: ["signature-parsed-string-amount"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_999_995_000, 0],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+      tokenTransfers: [
+        {
+          mint: USDC_MINT,
+          tokenAmount: "123456789012.123456",
+          fromUserAccount: "counterparty-address",
+          toUserAccount: WALLET_ADDRESS,
+        },
+      ],
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({
+      amount: "123456789012.123456",
+      type: "spl",
+    })
+    expect(splTransfer?.metadata).toMatchObject({
+      evidenceKind: "parsed_transfer",
+      rawUnits: "123456789012123456",
+    })
+  })
+
   it("uses wallet transfer rows as SPL evidence when full transaction SPL evidence is absent", async () => {
     const payload = {
       slot: 126,
