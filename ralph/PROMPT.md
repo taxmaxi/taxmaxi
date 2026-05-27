@@ -28,21 +28,6 @@ The loop script runs verification commands locally after each completed iteratio
 
 {{CI_ERRORS}}
 
-## TaxMaxi Context
-
-TaxMaxi is an open-source crypto tax API. The public product surface is CLI/API first, with a web app that demonstrates API capabilities. Do not add a CMS, billing system, admin console, or marketing site unless the story explicitly requires it.
-
-Important surfaces:
-
-- `apps/cli`: installable `tax` CLI and future TUI entrypoint.
-- `apps/server`: hosted REST API used by the CLI.
-- `apps/worker`: BullMQ/Redis worker for sync and classification jobs.
-- `packages/core`: domain contracts and framework-light core types.
-- `packages/persistence`: schema, SQL, repository contracts, and live layers.
-- `packages/rest-api`: HTTP API definitions and handlers.
-- `packages/sync-engine`: provider sync, Solana classification, Helius integration, replay/resume logic.
-- `packages/sdk`: JS SDK API client.
-
 ## Source Issue Compatibility
 
 Stories may be generated from GitHub issues created by these local skills:
@@ -60,24 +45,13 @@ Treat the current story JSON as the executable slice and the `source` metadata a
 
 Keep changes small and focused. If the story is broad, build the smallest behavior-preserving slice that satisfies the acceptance criteria. Do not expand into adjacent stories.
 
-### Architecture
-
-Follow existing TaxMaxi boundaries:
-
-- Keep `packages/core/**` free from adapter and infrastructure imports.
-- Keep persistence service files contract-only; put implementations in `packages/persistence/src/layers/**`.
-- Keep REST definitions in `packages/rest-api/src/definitions/**` and handlers in `packages/rest-api/src/layers/**`.
-- Keep provider-specific sync logic in `packages/sync-engine/src/providers/**`.
-- Decode external or unknown payloads with `effect/Schema`.
-- Do not use `any` or non-null assertions.
-
 ### Verification
 
 Before signaling completion:
 
 1. Run the story's `verification` commands from the story JSON.
 2. Run any narrower tests needed for confidence while developing.
-3. Ensure the relevant global checks are clean: `pnpm run type-check`, `pnpm run lint`, and `pnpm run test`.
+3. Ensure the relevant global checks from `AGENTS.md` are clean.
 
 Do not signal `STORY_COMPLETE` if checks fail. Fix failures first. The script will re-run story and global verification after you finish; failures are fed into the next iteration.
 
