@@ -1,0 +1,80 @@
+name: PR
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+
+    env:
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: taxmaxi
+      QUEUE_REDIS_URL: redis://localhost:6379
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start test services
+        run: docker compose up -d db redis
+
+      - name: Wait for test services
+        run: |
+          for attempt in {1..30}; do
+            if docker compose exec -T db pg_isready -U postgres -d taxmaxi >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker compose exec -T db pg_isready -U postgres -d taxmaxi
+
+          for attempt in {1..30}; do
+            if [ "$(docker compose exec -T redis redis-cli ping 2>/dev/null)" = "PONG" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(docker compose exec -T redis redis-cli ping)" = "PONG"
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format check
+        run: pnpm run format
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Type check
+        run: pnpm run type-check
+
+      - name: Test type check
+        run: pnpm run type-check:tests
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Stop test services
+        if: always()
+        run: docker compose down --volumes
