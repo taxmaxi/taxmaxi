@@ -161,50 +161,51 @@ const makeProviderLayer = ({
             } satisfies HeliusSolanaResolvedAsset),
           resolveAssets: ({ assets }) =>
             Effect.succeed(
-              assets.flatMap((asset) =>
-                asset.mintAddress === null
-                  ? []
-                  : asset.mintAddress === WRAPPED_SOL_MINT
-                    ? [
-                        {
-                          kind: "canonical",
-                          assetKind: "native",
-                          mintAddress: null,
-                          providerAssetRowId: "provider-asset-sol",
-                          providerAssetId: null,
-                          naturalKey: "native:SOL",
-                          currencyCode: "SOL",
-                          name: "Solana",
-                          decimals: 9,
-                          tokenProgram: null,
-                          nftHint: false,
-                          mappingStatus: "approved",
-                          mappingKind: "asset",
-                          canonicalAssetId: "asset-sol",
-                          canonicalAssetSymbol: "SOL",
-                          canonicalFiatCurrency: null,
-                        } satisfies HeliusSolanaResolvedAsset,
-                      ]
-                    : [
-                        {
-                          kind: "canonical",
-                          assetKind: "token",
-                          mintAddress: asset.mintAddress,
-                          providerAssetRowId: `provider-asset-${asset.mintAddress}`,
-                          providerAssetId: asset.mintAddress,
-                          naturalKey: `spl:${asset.mintAddress}`,
-                          currencyCode: "USDC",
-                          name: "USD Coin",
-                          decimals: 6,
-                          tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                          nftHint: false,
-                          mappingStatus: "approved",
-                          mappingKind: "asset",
-                          canonicalAssetId: "asset-usdc",
-                          canonicalAssetSymbol: "USDC",
-                          canonicalFiatCurrency: null,
-                        } satisfies HeliusSolanaResolvedAsset,
-                      ]
+              assets.flatMap(
+                (asset): ReadonlyArray<HeliusSolanaResolvedAsset> =>
+                  asset.mintAddress === null
+                    ? []
+                    : asset.mintAddress === WRAPPED_SOL_MINT
+                      ? [
+                          {
+                            kind: "canonical",
+                            assetKind: "native",
+                            mintAddress: null,
+                            providerAssetRowId: "provider-asset-sol",
+                            providerAssetId: null,
+                            naturalKey: "native:SOL",
+                            currencyCode: "SOL",
+                            name: "Solana",
+                            decimals: 9,
+                            tokenProgram: null,
+                            nftHint: false,
+                            mappingStatus: "approved",
+                            mappingKind: "asset",
+                            canonicalAssetId: "asset-sol",
+                            canonicalAssetSymbol: "SOL",
+                            canonicalFiatCurrency: null,
+                          } satisfies HeliusSolanaResolvedAsset,
+                        ]
+                      : [
+                          {
+                            kind: "canonical",
+                            assetKind: "token",
+                            mintAddress: asset.mintAddress,
+                            providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                            providerAssetId: asset.mintAddress,
+                            naturalKey: `spl:${asset.mintAddress}`,
+                            currencyCode: "USDC",
+                            name: "USD Coin",
+                            decimals: 6,
+                            tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                            nftHint: false,
+                            mappingStatus: "approved",
+                            mappingKind: "asset",
+                            canonicalAssetId: "asset-usdc",
+                            canonicalAssetSymbol: "USDC",
+                            canonicalFiatCurrency: null,
+                          } satisfies HeliusSolanaResolvedAsset,
+                        ]
               )
             ),
         })
@@ -1143,9 +1144,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
     const wrappedSolTransfer = result.feeTransfers.find(
       (transfer) =>
-        transfer.assetId === "asset-sol" &&
-        transfer.metadata !== null &&
-        transfer.metadata.role === "principal"
+        transfer.assetId === "asset-sol" && transfer.type === "native" && transfer.amount === "1.25"
     )
     expect(wrappedSolTransfer).toMatchObject({
       amount: "1.25",
