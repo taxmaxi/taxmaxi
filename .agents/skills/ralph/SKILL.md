@@ -21,10 +21,16 @@ Do not rely on transient chat context as the source of truth. Materialize the Gi
 Preferred flow:
 
 1. Fetch the source issue with `gh issue view <number-or-url> --comments --json number,title,body,url,labels,state,comments`.
-2. Write or update `ralph/intake.md` with the issue metadata, detected template, parsed sections, constraints, and verification expectations.
-3. Read `ralph/prd.json`.
-4. Generate or update Ralph stories from `ralph/intake.md`.
-5. Write `ralph/prd.json` and summarize the changes.
+2. If the source issue names a parent issue, fetch that parent issue and sibling issue titles:
+   - Parse the source issue's `Parent` section, or any explicit issue reference described as the parent, into a parent issue number or URL.
+   - Fetch the parent issue with `gh issue view <parent-number-or-url> --json number,title,body,url,labels,state`.
+   - Find related sibling issues that mention the same parent issue with `gh issue list --state all --search "<parent-issue-url-or-#number> in:body" --json number,title,url,state`.
+   - Record sibling issue titles only; full sibling issue bodies are not needed.
+   - Exclude the source issue itself from siblings.
+3. Write or update `ralph/intake.md` with the issue metadata, detected template, parsed sections, parent issue context, sibling issue titles, constraints, and verification expectations.
+4. Read `ralph/prd.json`.
+5. Generate or update Ralph stories from `ralph/intake.md`.
+6. Write `ralph/prd.json` and summarize the changes.
 
 ## Supported Source Issue Templates
 
@@ -130,6 +136,14 @@ What should not be implemented.
 
 GitHub issue blockers and Ralph story blockers.
 
+## Parent Context
+
+Parent issue summary if the source issue has one.
+
+## Related Future Issues
+
+Sibling issue titles that mention the same parent issue. Use these only as planning context for work expected in future issues; do not create Ralph stories for siblings unless the user explicitly asks.
+
 ## Verification Expectations
 
 Package-scoped commands and any specific tests implied by the issue.
@@ -167,6 +181,9 @@ Every story in `ralph/prd.json` must match this shape:
 
 1. Read `ralph/prd.json` to understand existing stories, ID prefixes, source issue references, and metadata.
 2. Read or create `ralph/intake.md` from the source issue.
+   - If the source issue has a parent issue, include a concise parent summary in `Parent Context`.
+   - Include titles of sibling issues that mention the same parent issue in `Related Future Issues`.
+   - Use sibling issue titles to avoid over-scoping the current story into work that has already been split into future tickets.
 3. If the PRD still contains the example story (`EX-001` / `Example story title`), remove it when adding real stories.
 4. Update PRD metadata:
    - `title`: short name for the imported issue or issue group.
