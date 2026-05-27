@@ -29,6 +29,7 @@ import type { SourceRawRecord, SourceSyncSource } from "../../src/services/Sourc
 import { FetchProviderRawBatchParams } from "../../src/shared/SourceProviderRawBatch.ts"
 
 const WALLET_ADDRESS = "So11111111111111111111111111111111111111112"
+const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 const makeFetchParams = ({
@@ -163,26 +164,47 @@ const makeProviderLayer = ({
               assets.flatMap((asset) =>
                 asset.mintAddress === null
                   ? []
-                  : [
-                      {
-                        kind: "canonical",
-                        assetKind: "token",
-                        mintAddress: asset.mintAddress,
-                        providerAssetRowId: `provider-asset-${asset.mintAddress}`,
-                        providerAssetId: asset.mintAddress,
-                        naturalKey: `spl:${asset.mintAddress}`,
-                        currencyCode: "USDC",
-                        name: "USD Coin",
-                        decimals: 6,
-                        tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                        nftHint: false,
-                        mappingStatus: "approved",
-                        mappingKind: "asset",
-                        canonicalAssetId: "asset-usdc",
-                        canonicalAssetSymbol: "USDC",
-                        canonicalFiatCurrency: null,
-                      } satisfies HeliusSolanaResolvedAsset,
-                    ]
+                  : asset.mintAddress === WRAPPED_SOL_MINT
+                    ? [
+                        {
+                          kind: "canonical",
+                          assetKind: "native",
+                          mintAddress: null,
+                          providerAssetRowId: "provider-asset-sol",
+                          providerAssetId: null,
+                          naturalKey: "native:SOL",
+                          currencyCode: "SOL",
+                          name: "Solana",
+                          decimals: 9,
+                          tokenProgram: null,
+                          nftHint: false,
+                          mappingStatus: "approved",
+                          mappingKind: "asset",
+                          canonicalAssetId: "asset-sol",
+                          canonicalAssetSymbol: "SOL",
+                          canonicalFiatCurrency: null,
+                        } satisfies HeliusSolanaResolvedAsset,
+                      ]
+                    : [
+                        {
+                          kind: "canonical",
+                          assetKind: "token",
+                          mintAddress: asset.mintAddress,
+                          providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                          providerAssetId: asset.mintAddress,
+                          naturalKey: `spl:${asset.mintAddress}`,
+                          currencyCode: "USDC",
+                          name: "USD Coin",
+                          decimals: 6,
+                          tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                          nftHint: false,
+                          mappingStatus: "approved",
+                          mappingKind: "asset",
+                          canonicalAssetId: "asset-usdc",
+                          canonicalAssetSymbol: "USDC",
+                          canonicalFiatCurrency: null,
+                        } satisfies HeliusSolanaResolvedAsset,
+                      ]
               )
             ),
         })
@@ -997,6 +1019,145 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(result.transactionReview).toBeNull()
   })
 
+  it("uses wallet transfer row raw units for exact display amounts", async () => {
+    const payload = {
+      slot: 126,
+      transactionIndex: 2,
+      transaction: {
+        signatures: ["signature-transfer-row-raw-amount"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_999_995_000, 0],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () =>
+        Effect.succeed({
+          data: [
+            {
+              signature: "signature-transfer-row-raw-amount",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-address",
+              mint: USDC_MINT,
+              symbol: "USDC",
+              amount: 1.2345678901234567,
+              amountRaw: "1234567890123456789",
+              decimals: 18,
+            },
+          ],
+          pagination: {
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({
+      amount: "1.234567890123456789",
+      type: "spl",
+    })
+    expect(splTransfer?.metadata).toMatchObject({
+      evidenceKind: "transfer_row",
+      rawUnits: "1234567890123456789",
+    })
+  })
+
+  it("normalizes wrapped SOL token balance movements as native SOL", async () => {
+    const payload = {
+      slot: 126,
+      transactionIndex: 2,
+      transaction: {
+        signatures: ["signature-wrapped-sol-balance"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-wsol-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: WRAPPED_SOL_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 9 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: WRAPPED_SOL_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "1250000000", decimals: 9 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const wrappedSolTransfer = result.feeTransfers.find(
+      (transfer) =>
+        transfer.assetId === "asset-sol" &&
+        transfer.metadata !== null &&
+        transfer.metadata.role === "principal"
+    )
+    expect(wrappedSolTransfer).toMatchObject({
+      amount: "1.25",
+      type: "native",
+      assetId: "asset-sol",
+    })
+    expect(wrappedSolTransfer?.metadata).toMatchObject({
+      evidenceKind: "token_balance_delta",
+      rawUnits: "1250000000",
+    })
+  })
+
   it("falls back to token balance deltas for SPL movements", async () => {
     const payload = {
       slot: 127,
@@ -1053,6 +1214,78 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
     expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
     expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
+  })
+
+  it("prefers exact token balance deltas over parsed SPL token summaries", async () => {
+    const payload = {
+      slot: 127,
+      transactionIndex: 3,
+      transaction: {
+        signatures: ["signature-token-balance-over-parsed"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 18 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "1234567890123456789", decimals: 18 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+      tokenTransfers: [
+        {
+          mint: USDC_MINT,
+          tokenAmount: 1.2345678901234567,
+          fromUserAccount: "counterparty-address",
+          toUserAccount: WALLET_ADDRESS,
+        },
+      ],
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    expect(splTransfer).toMatchObject({
+      amount: "1.234567890123456789",
+      type: "spl",
+    })
+    expect(splTransfer?.metadata).toMatchObject({
+      evidenceKind: "token_balance_delta",
+      rawUnits: "1234567890123456789",
+    })
   })
 
   it("marks contradictory transfer-row evidence for review without overriding full transaction evidence", async () => {
@@ -1194,6 +1427,78 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     })
     expect(rentTransfer?.metadata).toMatchObject({ role: "rent" })
     expect(splTransfers).toHaveLength(0)
+  })
+
+  it("detects token account close rent refunds from inner instructions", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: ["signature-inner-close-account-rent-refund"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "closed-token-account", signer: false },
+          ],
+          instructions: [
+            {
+              program: "defi-program",
+              programId: "defi-program-id",
+              parsed: { type: "swap" },
+            },
+          ],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 2_039_280],
+        postBalances: [2_002_034_280, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 1,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [],
+        innerInstructions: [
+          {
+            index: 0,
+            instructions: [
+              {
+                program: "spl-token",
+                programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                parsed: { type: "closeAccount" },
+              },
+            ],
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const rentTransfer = result.feeTransfers.find((transfer) => transfer.notes !== null)
+    expect(rentTransfer).toMatchObject({
+      amount: "0.00203928",
+      type: "native",
+      notes: "Solana account close or rent refund balance effect",
+    })
+    expect(rentTransfer?.metadata).toMatchObject({ role: "rent" })
   })
 
   it("returns a recoverable decode failure for malformed cached Solana payloads", async () => {

@@ -121,6 +121,11 @@ const HeliusSolanaInstructionSchema = Schema.Struct({
   parsed: Schema.optional(Schema.Unknown),
 })
 
+const HeliusSolanaInnerInstructionsSchema = Schema.Struct({
+  index: Schema.Number,
+  instructions: Schema.Array(HeliusSolanaInstructionSchema),
+})
+
 const HeliusSolanaCloseAccountParsedInstructionSchema = Schema.Struct({
   type: Schema.Literal("closeAccount"),
 })
@@ -184,6 +189,7 @@ const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
       postBalances: Schema.optional(Schema.Array(Schema.Number)),
       preTokenBalances: Schema.optional(Schema.Array(HeliusSolanaTokenBalanceSchema)),
       postTokenBalances: Schema.optional(Schema.Array(HeliusSolanaTokenBalanceSchema)),
+      innerInstructions: Schema.optional(Schema.Array(HeliusSolanaInnerInstructionsSchema)),
     })
   ),
   blockTime: Schema.NullOr(Schema.Number),
@@ -652,12 +658,15 @@ const isTokenProgramInstruction = (instruction: HeliusSolanaInstruction): boolea
   (instruction.program !== undefined && SOLANA_TOKEN_PROGRAM_NAMES.has(instruction.program)) ||
   (instruction.programId !== undefined && SOLANA_TOKEN_PROGRAM_IDS.has(instruction.programId))
 
+const isTokenAccountCloseInstruction = (instruction: HeliusSolanaInstruction): boolean =>
+  isTokenProgramInstruction(instruction) &&
+  Option.isSome(decodeCloseAccountParsedInstruction(instruction.parsed))
+
 const hasTokenAccountCloseInstruction = (payload: HeliusSolanaFullTransactionPayload): boolean =>
-  (payload.transaction.message.instructions ?? []).some(
-    (instruction) =>
-      isTokenProgramInstruction(instruction) &&
-      Option.isSome(decodeCloseAccountParsedInstruction(instruction.parsed))
-  )
+  [
+    ...(payload.transaction.message.instructions ?? []),
+    ...(payload.meta?.innerInstructions ?? []).flatMap((entry) => entry.instructions),
+  ].some(isTokenAccountCloseInstruction)
 
 const buildTransferDraft = ({
   source,
@@ -823,15 +832,17 @@ const collectSplTokenMints = ({
       ),
       ...walletTransferEvidence.map((transfer) => transfer.mint),
     ])
-  ).filter((mint) => mint !== SOLANA_WRAPPED_NATIVE_MINT)
+  )
 
 const mapAssetsByMint = (
+  requestedMints: ReadonlyArray<string>,
   resolvedTokens: ReadonlyArray<HeliusSolanaResolvedAsset>
 ): ReadonlyMap<string, HeliusSolanaResolvedAsset> =>
   new Map(
-    resolvedTokens.flatMap((asset) =>
-      asset.mintAddress === null ? [] : [[asset.mintAddress, asset]]
-    )
+    requestedMints.flatMap((mintAddress, index) => {
+      const asset = resolvedTokens[index]
+      return asset === undefined ? [] : [[mintAddress, asset]]
+    })
   )
 
 const make = ({
@@ -1299,7 +1310,7 @@ const make = ({
       readonly offset: number
     }): ReadonlyArray<SolanaBalanceMovement> =>
       transfers.flatMap((transfer, index) => {
-        if (transfer.mint === SOLANA_WRAPPED_NATIVE_MINT || transfer.amount === 0) {
+        if (transfer.amountRaw === "0") {
           return []
         }
 
@@ -1309,7 +1320,10 @@ const make = ({
         }
 
         const direction = transfer.direction === "in" ? "inbound" : "outbound"
-        const amount = String(transfer.amount)
+        const amount = rawTokenAmountToDecimal({
+          amount: transfer.amountRaw,
+          decimals: transfer.decimals,
+        })
 
         return [
           {
@@ -1508,12 +1522,12 @@ const make = ({
       readonly tokenBalanceSplMovements: ReadonlyArray<SolanaBalanceMovement>
       readonly transferRowSplMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<SolanaBalanceMovement> => {
-      if (parsedSplMovements.length > 0) {
-        return parsedSplMovements
-      }
-
       if (tokenBalanceSplMovements.length > 0) {
         return tokenBalanceSplMovements
+      }
+
+      if (parsedSplMovements.length > 0) {
+        return parsedSplMovements
       }
 
       return transferRowSplMovements
@@ -1528,17 +1542,17 @@ const make = ({
       readonly tokenBalanceSplMovements: ReadonlyArray<SolanaBalanceMovement>
       readonly transferRowSplMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<MovementContradiction> => {
-      if (parsedSplMovements.length > 0) {
-        return findTransferRowContradictions({
-          transferRows: transferRowSplMovements,
-          authoritativeMovements: parsedSplMovements,
-        })
-      }
-
       if (tokenBalanceSplMovements.length > 0) {
         return findTransferRowContradictions({
           transferRows: transferRowSplMovements,
           authoritativeMovements: tokenBalanceSplMovements,
+        })
+      }
+
+      if (parsedSplMovements.length > 0) {
+        return findTransferRowContradictions({
+          transferRows: transferRowSplMovements,
+          authoritativeMovements: parsedSplMovements,
         })
       }
 
@@ -1786,7 +1800,7 @@ const make = ({
               )
             )
 
-          const assetsByMint = mapAssetsByMint(resolvedTokens)
+          const assetsByMint = mapAssetsByMint(tokenMints, resolvedTokens)
 
           const solMovements = buildSolMovements({
             payload,
