@@ -54,6 +54,8 @@ htmlcov/
 
 # Ralph loop output
 .ralph/
+ralph/.output/
+ralph/intake.md
 
 # Application logs
 .logs/
