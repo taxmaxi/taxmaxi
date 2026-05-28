@@ -26,6 +26,7 @@ export interface SourceSyncSource {
   readonly providerKey: string | null
   readonly cexAccountId: string | null
   readonly addressId: string | null
+  readonly walletAddress: string | null
 }
 
 /**

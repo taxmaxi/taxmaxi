@@ -11,6 +11,7 @@ import {
 } from "../../src/shared/SourceProviderRawBatch.ts"
 import {
   SourceNormalizationRepository,
+  SourceProviderRecoverableNormalizationError,
   SourceProviderRegistry,
   SourceRawRecordRepository,
   SourceReplayRepository,
@@ -35,6 +36,7 @@ const source: SourceSyncSource = {
   providerKey: "coinbase",
   cexAccountId: "cex-account-1",
   addressId: null,
+  walletAddress: null,
 }
 
 const initialExecution: SourceSyncExecutionState = {
@@ -93,7 +95,14 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly events: Array<string>
 }) => {
-  const syncSource = { ...source, providerKey: sourceProviderKey }
+  const syncSource = {
+    ...source,
+    providerKey: sourceProviderKey,
+    walletAddress:
+      sourceProviderKey === "helius-solana"
+        ? "So11111111111111111111111111111111111111112"
+        : source.walletAddress,
+  }
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
     listPrincipalSourceSyncContexts: () => Effect.succeed([syncSource]),
@@ -157,6 +166,7 @@ const makeExecutorLayer = ({
     completeJob: ({ state }) =>
       Effect.sync(() => {
         events.push(`complete:${state.importedRecords}:${state.normalizedRecords}`)
+        events.push(`failed:${state.failedRecords}`)
       }),
     failJob: ({ message }) =>
       Effect.sync(() => {
@@ -193,7 +203,10 @@ const makeExecutorLayer = ({
       Effect.sync(() => {
         events.push("mark-raw-normalized")
       }),
-    markRawRecordFailed: () => Effect.dieMessage("markRawRecordFailed should not be called"),
+    markRawRecordFailed: ({ message }) =>
+      Effect.sync(() => {
+        events.push(`mark-raw-failed:${message}`)
+      }),
     resetNormalizationStateForSource: () =>
       Effect.dieMessage("resetNormalizationStateForSource should not be called"),
   })
@@ -262,13 +275,53 @@ const makeExecutorLayer = ({
       }),
   })
 
+  const makeHeliusModule = (): SourceProviderModuleShape => ({
+    fetchRawBatch: () =>
+      Effect.sync(() => {
+        events.push("helius:fetch-raw-batch")
+        return FetchProviderRawBatchResult.make({
+          records: fetchedProviderRecords,
+          cursorPayload: { paginationToken: null },
+          highWatermark: null,
+          done: true,
+        })
+      }),
+    refreshReferenceData: () =>
+      Effect.sync(() => {
+        events.push("helius:refresh-reference-data")
+        return {
+          transactionTypeCatalogCount: 0,
+          providerAssetCatalogCount: 0,
+          defaultTransactionMappingCount: 0,
+          defaultProviderAssetMappingCount: 0,
+        }
+      }),
+    makeRawRecordNormalizer: () =>
+      Effect.sync(() => {
+        events.push("helius:make-normalizer")
+        return ({ source, sourceRecord }) =>
+          Effect.sync(() => {
+            events.push(`helius:normalize:${source.providerKey}:${sourceRecord.recordType}`)
+          }).pipe(
+            Effect.flatMap(() =>
+              Effect.fail(
+                new SourceProviderRecoverableNormalizationError({
+                  providerKey: "helius-solana",
+                  message: "Helius Solana normalization is not implemented yet.",
+                })
+              )
+            )
+          )
+      }),
+  })
+
   const SourceProviderRegistryTestLive = Layer.succeed(SourceProviderRegistry, {
     resolveProviderModule: ({ providerKey }) => {
       switch (providerKey) {
         case "coinbase":
           return Effect.succeed(makeCoinbaseModule())
         case "helius-solana":
-          return Effect.succeed(makeStubModule())
+          return Effect.succeed(makeHeliusModule())
         case "stub-chain":
           return Effect.succeed(makeStubModule())
         default:
@@ -380,20 +433,21 @@ describe("SourceSyncJobExecutor", () => {
     const events: Array<string> = []
     const fetchedProviderRecord = ProviderRawRecord.make({
       providerKey: "helius-solana",
-      recordType: "helius_solana_transaction",
+      recordType: "solana_transaction_full",
       externalRecordId: "solana-signature-1",
-      externalAccountId: null,
+      externalAccountId: "So11111111111111111111111111111111111111112",
       externalParentId: null,
       occurredAt: new Date("2026-01-01T00:00:00.000Z"),
-      payload: { signature: "solana-signature-1" },
+      payload: { transaction: { signatures: ["solana-signature-1"] } },
     })
     const checkpointRawRecord: SourceRawRecord = {
       ...replayRawRecord,
       id: "raw-solana-1",
       provider: "helius-solana",
-      recordType: "helius_solana_transaction",
+      recordType: "solana_transaction_full",
       externalRecordId: "solana-signature-1",
-      payload: { signature: "solana-signature-1" },
+      externalAccountId: "So11111111111111111111111111111111111111112",
+      payload: { transaction: { signatures: ["solana-signature-1"] } },
     }
 
     const result = await Effect.runPromise(
@@ -414,9 +468,11 @@ describe("SourceSyncJobExecutor", () => {
     )
 
     expect(result.status).toBe("completed")
-    expect(events).toContain("stub:fetch-raw-batch")
-    expect(events).toContain("stub:normalize:helius-solana:helius_solana_transaction")
-    expect(events).toContain("complete:1:1")
+    expect(events).toContain("helius:fetch-raw-batch")
+    expect(events).toContain("helius:normalize:helius-solana:solana_transaction_full")
+    expect(events).toContain("mark-raw-failed:Helius Solana normalization is not implemented yet.")
+    expect(events).toContain("complete:1:0")
+    expect(events).toContain("failed:1")
   })
 
   it("runs replay mode with cached raw rows and marks the job completed", async () => {

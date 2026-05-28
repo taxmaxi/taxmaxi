@@ -170,6 +170,7 @@ const buildCoinbaseSource = ({
   providerKey: "coinbase",
   cexAccountId,
   addressId: null,
+  walletAddress: null,
 })
 
 const buildSeededRawRecord = ({

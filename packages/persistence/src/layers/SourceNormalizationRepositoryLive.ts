@@ -21,6 +21,7 @@ import {
   type PersistNormalizedSourceArtifactsParams,
   type PersistNormalizedSourceArtifactsResult,
   type PersistedSourceProviderTransfer,
+  type SourceOnchainContextDraft,
   SourceNormalizationRepository,
   type SourceProviderTransferDraft,
   type SourceTransactionDraft,
@@ -443,6 +444,75 @@ const make = Effect.gen(function* () {
         fillPrice: persisted.fillPrice === null ? null : String(persisted.fillPrice),
       }
     })
+
+  const upsertOnchainContext = ({
+    executor,
+    transactionId,
+    onchainContext,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+    readonly onchainContext: SourceOnchainContextDraft | null | undefined
+  }) =>
+    onchainContext === null || onchainContext === undefined
+      ? executor
+          .delete(schema.transactionOnchainContext)
+          .where(eq(schema.transactionOnchainContext.transactionId, transactionId))
+          .pipe(
+            wrapSyncEngineSqlError("sourceNormalizationRepository.upsertOnchainContext.delete"),
+            Effect.asVoid
+          )
+      : Effect.gen(function* () {
+          const now = nowDate()
+          yield* executor
+            .insert(schema.transactionOnchainContext)
+            .values({
+              transactionId,
+              blockchainId: onchainContext.blockchainId,
+              addressId: onchainContext.addressId,
+              chainTxId: onchainContext.chainTxId,
+              blockHeight: onchainContext.blockHeight,
+              blockHash: onchainContext.blockHash,
+              positionInBlock: onchainContext.positionInBlock,
+              fromAddress: onchainContext.fromAddress,
+              toAddress: onchainContext.toAddress,
+              gasUsed: onchainContext.gasUsed,
+              gasPrice: onchainContext.gasPrice,
+              feeAmount: onchainContext.feeAmount,
+              feeAssetId: onchainContext.feeAssetId,
+              feeCostBasisAmount: onchainContext.feeCostBasisAmount,
+              feeCostBasisCurrency: onchainContext.feeCostBasisCurrency,
+              isError: onchainContext.isError,
+              functionName: onchainContext.functionName,
+              metadata: onchainContext.metadata,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: schema.transactionOnchainContext.transactionId,
+              set: {
+                blockchainId: sql.raw("excluded.blockchain_id"),
+                addressId: sql.raw("excluded.address_id"),
+                chainTxId: sql.raw("excluded.tx_hash"),
+                blockHeight: sql.raw("excluded.block_number"),
+                blockHash: sql.raw("excluded.block_hash"),
+                positionInBlock: sql.raw("excluded.position_in_block"),
+                fromAddress: sql.raw("excluded.from_address"),
+                toAddress: sql.raw("excluded.to_address"),
+                gasUsed: sql.raw("excluded.gas_used"),
+                gasPrice: sql.raw("excluded.gas_price"),
+                feeAmount: sql.raw("excluded.gas_fee_in_native"),
+                feeAssetId: sql.raw("excluded.fee_asset_id"),
+                feeCostBasisAmount: sql.raw("excluded.gas_fee_cost_basis_amount"),
+                feeCostBasisCurrency: sql.raw("excluded.gas_fee_cost_basis_currency"),
+                isError: sql.raw("excluded.is_error"),
+                functionName: sql.raw("excluded.function_name"),
+                metadata: sql.raw("excluded.metadata"),
+                updatedAt: now,
+              },
+            })
+            .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertOnchainContext"))
+        })
 
   const upsertFeeTransfers = ({
     executor,
@@ -998,6 +1068,11 @@ const make = Effect.gen(function* () {
               ...params.venueContext,
               transactionId: persistedTransaction.id,
             },
+          })
+          yield* upsertOnchainContext({
+            executor: tx,
+            transactionId: persistedTransaction.id,
+            onchainContext: params.onchainContext,
           })
           const persistedProviderTransfers = yield* upsertProviderTransfers({
             executor: tx,

@@ -223,6 +223,7 @@ const make = Effect.gen(function* () {
       yield* sourceNormalizationRepository.persistNormalizedArtifacts({
         transaction: normalization.transaction,
         venueContext: normalization.venueContext,
+        onchainContext: normalization.onchainContext,
         providerTransfers: normalization.providerTransfers,
         feeTransfers: normalization.feeTransfers,
         transactionReview: normalization.transactionReview,
@@ -374,6 +375,7 @@ const make = Effect.gen(function* () {
                 FetchProviderRawBatchParams.make({
                   providerKey: provider,
                   sourceId: source.id,
+                  walletAddress: source.walletAddress,
                   cursorPayload: loop.execution.cursorPayload,
                   resumeHighWatermark,
                   resumeCheckpointExternalId,

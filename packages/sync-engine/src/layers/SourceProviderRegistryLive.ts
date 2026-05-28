@@ -14,6 +14,7 @@ import {
 import {
   type HeliusSolanaRecoverableNormalizationError,
   HELIUS_SOLANA_PROVIDER_KEY,
+  HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL,
   HeliusSolanaSourceSyncProvider,
   type HeliusSolanaSourceSyncProviderShape,
 } from "../providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts"
@@ -93,6 +94,7 @@ const makeCoinbaseProviderModule = (
                 kind: "prepared",
                 transaction: prepared.transaction,
                 venueContext: prepared.venueContext,
+                onchainContext: null,
                 providerTransfers: prepared.providerTransfers,
                 feeTransfers: prepared.feeTransfers,
                 transactionReview: prepared.transactionReview,
@@ -126,6 +128,10 @@ const makeHeliusSolanaProviderModule = (
         (lookups): SourceProviderRawRecordNormalizer =>
           ({ source, sourceRecord }) =>
             Effect.gen(function* () {
+              if (sourceRecord.recordType !== HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL) {
+                return { kind: "skipped" } as const
+              }
+
               const prepared = yield* heliusSolanaSourceSyncProvider
                 .prepareNormalization({
                   source,
@@ -138,6 +144,7 @@ const makeHeliusSolanaProviderModule = (
                 kind: "prepared",
                 transaction: prepared.transaction,
                 venueContext: prepared.venueContext,
+                onchainContext: prepared.onchainContext,
                 providerTransfers: prepared.providerTransfers,
                 feeTransfers: prepared.feeTransfers,
                 transactionReview: prepared.transactionReview,

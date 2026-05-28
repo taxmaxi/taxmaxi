@@ -22,12 +22,19 @@
     "editor.defaultFormatter": "charliermarsh.ruff"
   },
   "files.watcherExclude": {
-    "**/routeTree.gen.ts": true
+    "**/routeTree.gen.ts": true,
+    "repos/**": true
   },
   "search.exclude": {
-    "**/routeTree.gen.ts": true
+    "**/routeTree.gen.ts": true,
+    "repos/**": true
   },
   "files.readonlyInclude": {
     "**/routeTree.gen.ts": true
+  },
+  "typescript.preferences.autoImportFileExcludePatterns": ["repos/**"],
+  "javascript.preferences.autoImportFileExcludePatterns": ["repos/**"],
+  "files.exclude": {
+    "repos/**": true
   }
 }

@@ -28,8 +28,16 @@ const make = Effect.gen(function* () {
           providerKey: schema.sources.providerKey,
           cexAccountId: schema.sources.cexAccountId,
           addressId: schema.sources.addressId,
+          walletAddress: schema.addresses.address,
         })
         .from(schema.sources)
+        .leftJoin(
+          schema.addresses,
+          and(
+            eq(schema.addresses.id, schema.sources.addressId),
+            eq(schema.addresses.principalId, schema.sources.principalId)
+          )
+        )
         .where(and(eq(schema.sources.id, sourceId), eq(schema.sources.principalId, principalId)))
         .limit(1)
         .pipe(wrapSyncEngineSqlError("syncEngineSourceRepository.findOwnedSourceSyncContext"))
@@ -46,8 +54,16 @@ const make = Effect.gen(function* () {
           providerKey: schema.sources.providerKey,
           cexAccountId: schema.sources.cexAccountId,
           addressId: schema.sources.addressId,
+          walletAddress: schema.addresses.address,
         })
         .from(schema.sources)
+        .leftJoin(
+          schema.addresses,
+          and(
+            eq(schema.addresses.id, schema.sources.addressId),
+            eq(schema.addresses.principalId, schema.sources.principalId)
+          )
+        )
         .where(eq(schema.sources.principalId, principalId))
         .pipe(wrapSyncEngineSqlError("syncEngineSourceRepository.listPrincipalSourceSyncContexts"))
 
