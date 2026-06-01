@@ -22,6 +22,7 @@ jobs:
       PGPORT: 5432
       PGDATABASE: taxmaxi
       QUEUE_REDIS_URL: redis://localhost:6379
+      ANON_SESSION_SECRET: ${{ secrets.ANON_SESSION_SECRET }}
 
     steps:
       - name: Checkout
