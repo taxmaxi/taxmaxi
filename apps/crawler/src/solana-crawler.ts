@@ -3,7 +3,7 @@ import { FileSystem, Path } from "@effect/platform"
 import { Console, Effect, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
-import { CrawlerCommandError } from "./CrawlerCommandError.ts"
+import { CrawlerCommandError } from "./errors.ts"
 
 export const SOLANA_PRIORITY_MAP_FILE_NAME = "solana-priority-map.json"
 export const SOLANA_PRIORITY_REPORT_FILE_NAME = "solana-priority-report.md"
