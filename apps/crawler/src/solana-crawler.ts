@@ -293,10 +293,12 @@ const trimNonEmpty = (value: string): string | null => {
 
 const normalizeStringValues = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
   Array.from(
-    new Set(values.flatMap((value) => {
-      const trimmed = trimNonEmpty(value)
-      return trimmed === null ? [] : [trimmed]
-    }))
+    new Set(
+      values.flatMap((value) => {
+        const trimmed = trimNonEmpty(value)
+        return trimmed === null ? [] : [trimmed]
+      })
+    )
   )
 
 const resolveBehaviorSamplingInput = ({

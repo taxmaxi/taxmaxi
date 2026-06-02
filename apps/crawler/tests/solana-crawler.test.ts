@@ -19,7 +19,8 @@ import {
 } from "../src/solana-crawler.ts"
 
 const unusedSamplerClientLive = SolanaBehaviorSamplerClientTestLive({
-  fetchTransactionBySignature: () => Effect.dieMessage("fetchTransactionBySignature should not run"),
+  fetchTransactionBySignature: () =>
+    Effect.dieMessage("fetchTransactionBySignature should not run"),
   fetchFinalizedBlock: () => Effect.dieMessage("fetchFinalizedBlock should not run"),
 })
 

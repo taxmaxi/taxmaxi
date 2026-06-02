@@ -168,9 +168,7 @@ export class SolanaBehaviorSamplerClient extends Context.Tag("SolanaBehaviorSamp
   SolanaBehaviorSamplerClientShape
 >() {}
 
-const accountKeyAddress = (
-  accountKey: typeof AccountKeySchema.Type | undefined
-): string | null => {
+const accountKeyAddress = (accountKey: typeof AccountKeySchema.Type | undefined): string | null => {
   if (accountKey === undefined) {
     return null
   }
@@ -323,7 +321,10 @@ const decodeFinalizedBlockPayloadEither = Schema.decodeUnknownEither(FinalizedBl
 
 const blockTransactions = (
   payload: unknown
-): Effect.Effect<ReadonlyArray<typeof TransactionPayloadSchema.Type>, SolanaBehaviorPayloadDecodeError> => {
+): Effect.Effect<
+  ReadonlyArray<typeof TransactionPayloadSchema.Type>,
+  SolanaBehaviorPayloadDecodeError
+> => {
   const decoded = decodeFinalizedBlockPayloadEither(payload)
 
   return Either.isLeft(decoded)
@@ -421,11 +422,7 @@ export const buildSolanaBehaviorSamplesArtifact = ({
 }: {
   readonly generatedAt: string
   readonly sampling: SolanaBehaviorSamplingInput
-}): Effect.Effect<
-  SolanaBehaviorSamplesArtifact,
-  never,
-  SolanaBehaviorSamplerClient
-> =>
+}): Effect.Effect<SolanaBehaviorSamplesArtifact, never, SolanaBehaviorSamplerClient> =>
   Effect.gen(function* () {
     const client = yield* SolanaBehaviorSamplerClient
     const samples: Array<SolanaBehaviorSample> = []

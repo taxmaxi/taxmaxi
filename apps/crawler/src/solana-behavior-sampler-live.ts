@@ -90,12 +90,16 @@ const executeJsonRpc = ({
       const body: unknown = await response.json()
 
       if (!response.ok) {
-        throw toClientError(`Solana RPC ${method} failed (${response.status}): ${stringifyUnknown(body)}`)
+        throw toClientError(
+          `Solana RPC ${method} failed (${response.status}): ${stringifyUnknown(body)}`
+        )
       }
 
       const decoded = decodeJsonRpcResponseEither(body)
       if (Either.isLeft(decoded)) {
-        throw toClientError(`Solana RPC ${method} returned malformed JSON-RPC: ${decoded.left.message}`)
+        throw toClientError(
+          `Solana RPC ${method} returned malformed JSON-RPC: ${decoded.left.message}`
+        )
       }
 
       if (decoded.right.error !== undefined) {
@@ -156,15 +160,19 @@ export const SolanaBehaviorSamplerClientLive: Layer.Layer<SolanaBehaviorSamplerC
         Effect.gen(function* () {
           const apiKey = yield* readApiKey
           const configuredRpcUrl = yield* readOptionalRpcUrl
-          return yield* makeClient(apiKey, configuredRpcUrl ?? heliusRpcUrl(apiKey))
-            .fetchTransactionBySignature(params)
+          return yield* makeClient(
+            apiKey,
+            configuredRpcUrl ?? heliusRpcUrl(apiKey)
+          ).fetchTransactionBySignature(params)
         }),
       fetchFinalizedBlock: (params) =>
         Effect.gen(function* () {
           const apiKey = yield* readApiKey
           const configuredRpcUrl = yield* readOptionalRpcUrl
-          return yield* makeClient(apiKey, configuredRpcUrl ?? heliusRpcUrl(apiKey))
-            .fetchFinalizedBlock(params)
+          return yield* makeClient(
+            apiKey,
+            configuredRpcUrl ?? heliusRpcUrl(apiKey)
+          ).fetchFinalizedBlock(params)
         }),
     })
   )
