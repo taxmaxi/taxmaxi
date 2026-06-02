@@ -65,12 +65,14 @@ main() {
   fi
 
   require_command mise
-  require_command pnpm
 
   cd "$SCRIPT_DIR"
 
   log "Trusting mise configuration"
   mise trust
+
+  log "Installing mise-managed tools"
+  mise install
 
   if [[ -n "${CODEX_WORKTREE_PATH:-}" || -n "${CODEX_SOURCE_TREE_PATH:-}" ]]; then
     log "Codex worktree context"
@@ -82,17 +84,17 @@ main() {
   print_env_status "worker" "$SCRIPT_DIR/apps/worker/.env" "TaxMaxi Worker Dev"
 
   log "Installing dependencies"
-  pnpm install
+  mise x -- pnpm install
 
   if [[ "${RUN_CHECKS:-0}" == "1" ]]; then
     log "Type checking workspace"
-    pnpm run type-check
+    mise x -- pnpm run type-check
 
     log "Linting workspace"
-    pnpm run lint
+    mise x -- pnpm run lint
 
     log "Running tests"
-    pnpm run test
+    mise x -- pnpm run test
   fi
 
   printf '\nSetup complete.\n'

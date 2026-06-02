@@ -16,6 +16,7 @@ export default defineConfig({
         test: {
           include: [
             "packages/**/tests/**/*.test.ts",
+            "apps/crawler/tests/**/*.test.ts",
             "apps/server/tests/**/*.test.ts",
             "apps/worker/tests/**/*.test.ts",
           ],
