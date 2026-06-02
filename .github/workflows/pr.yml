@@ -18,10 +18,11 @@ jobs:
     env:
       PGUSER: postgres
       PGPASSWORD: postgres
-      PGHOST: localhost
+      PGHOST: 127.0.0.1
       PGPORT: 5432
       PGDATABASE: taxmaxi
-      QUEUE_REDIS_URL: redis://localhost:6379
+      QUEUE_REDIS_URL: redis://127.0.0.1:6379
+      ANON_SESSION_SECRET: test-anon-session-secret-32-bytes-long
 
     steps:
       - name: Checkout
@@ -75,8 +76,11 @@ jobs:
       - name: Test type check
         run: pnpm run type-check:tests
 
-      - name: Test
-        run: pnpm run test
+      - name: Test unit
+        run: pnpm run test --project=unit
+
+      - name: Test integration
+        run: pnpm run test --project=integration
 
       - name: Stop test services
         if: always()
