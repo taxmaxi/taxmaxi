@@ -32,18 +32,26 @@ Keep these production-shaped surfaces intact:
 
 ## Build/Lint/Test Commands
 
+### Toolchain
+
+Use `mise` for all Node/package-manager commands in this repo.
+
+- Run package scripts as `mise x -- pnpm ...`
+- Do not call `pnpm`, `npm`, `node`, `oxlint`, `oxfmt`, `vitest`, or `tsc` directly unless explicitly requested.
+- This avoids PATH drift and native binding/code-signature failures from tools launched outside the mise environment.
+
 ### Development
 
-Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `pnpm --filter @my/rest-api run type-check` or `pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists.
+Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `mise x -- pnpm --filter @my/rest-api run type-check` or `mise x -- pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists.
 
 ### Testing
 
 ```bash
-pnpm run test                                    # Run all tests
-pnpm run test transactions.test.ts               # Run single test file
-pnpm run test --project=unit                     # Run only unit tests
-pnpm run test --project=integration              # Run only integration tests
-pnpm run test -t "test name"                     # Run tests matching name
+mise x -- pnpm run test                                    # Run all tests
+mise x -- pnpm run test transactions.test.ts               # Run single test file
+mise x -- pnpm run test --project=unit                     # Run only unit tests
+mise x -- pnpm run test --project=integration              # Run only integration tests
+mise x -- pnpm run test -t "test name"                     # Run tests matching name
 ```
 
 Test files use naming conventions:
@@ -54,17 +62,17 @@ Test files use naming conventions:
 ### Code Quality
 
 ```bash
-pnpm run lint              # Run oxlint across all packages
-pnpm run format            # Run oxfmt across all packages
-pnpm run type-check        # TypeScript type checking
+mise x -- pnpm run lint              # Run oxlint across all packages
+mise x -- pnpm run format            # Run oxfmt across all packages
+mise x -- pnpm run type-check        # TypeScript type checking
 ```
 
 ### Database
 
 ```bash
-pnpm --filter @my/persistence run build
-pnpm --filter @my/persistence run migration:generate
-pnpm --filter @my/persistence run migration:run
+mise x -- pnpm --filter @my/persistence run build
+mise x -- pnpm --filter @my/persistence run migration:generate
+mise x -- pnpm --filter @my/persistence run migration:run
 ```
 
 Preserve useful seed data by rewriting it into clean new seed migrations instead of restoring the old migration chain.
