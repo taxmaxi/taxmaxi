@@ -1,0 +1,147 @@
+name: Build and Push Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/docker-images.yml
+      - apps/server/**
+      - apps/worker/**
+      - packages/core/**
+      - packages/persistence/**
+      - packages/rest-api/**
+      - packages/sync-engine/**
+      - packages/typescript-config/**
+      - apps/server/Dockerfile
+      - apps/worker/Dockerfile
+      - .dockerignore
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - turbo.json
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  SERVER_IMAGE: ghcr.io/taxmaxi/server
+  WORKER_IMAGE: ghcr.io/taxmaxi/worker
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.filter.outputs.server }}
+      worker: ${{ steps.filter.outputs.worker }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            server:
+              - '.github/workflows/docker-images.yml'
+              - 'apps/server/**'
+              - 'apps/server/Dockerfile'
+              - 'packages/core/**'
+              - 'packages/persistence/**'
+              - 'packages/rest-api/**'
+              - 'packages/sync-engine/**'
+              - 'packages/typescript-config/**'
+              - '.dockerignore'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+            worker:
+              - '.github/workflows/docker-images.yml'
+              - 'apps/worker/**'
+              - 'apps/worker/Dockerfile'
+              - 'packages/core/**'
+              - 'packages/persistence/**'
+              - 'packages/sync-engine/**'
+              - 'packages/typescript-config/**'
+              - '.dockerignore'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+
+  server:
+    name: Build server image
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.SERVER_IMAGE }}:main
+            ${{ env.SERVER_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,scope=server,mode=max
+
+  worker:
+    name: Build worker image
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/worker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.WORKER_IMAGE }}:main
+            ${{ env.WORKER_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=worker
+          cache-to: type=gha,scope=worker,mode=max
