@@ -4,9 +4,16 @@ import { Console, Effect, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
 import { CrawlerCommandError } from "./errors.ts"
+import {
+  buildSolanaBehaviorSamplesArtifact,
+  SolanaBehaviorSamplerClient,
+  SolanaBehaviorSamplesArtifact,
+  type SolanaBehaviorSamplingInput,
+} from "./solana-behavior-sampler.ts"
 
 export const SOLANA_PRIORITY_MAP_FILE_NAME = "solana-priority-map.json"
 export const SOLANA_PRIORITY_REPORT_FILE_NAME = "solana-priority-report.md"
+export const SOLANA_BEHAVIOR_SAMPLES_FILE_NAME = "solana-behavior-samples.json"
 export const DEFAULT_SOLANA_REFERENCE_DATA_DIR =
   "packages/sync-engine/src/providers/helius-solana/reference-data"
 
@@ -37,7 +44,9 @@ const CrawlSolanaJsonSummary = Schema.Struct({
   stage: Schema.Literal("crawl_solana_completed"),
   priorityMapPath: Schema.String,
   reportPath: Schema.String,
+  behaviorSamplesPath: Schema.optional(Schema.String),
   entries: Schema.Number,
+  samples: Schema.optional(Schema.Number),
 })
 
 export type CrawlSolanaOptions = {
@@ -46,12 +55,19 @@ export type CrawlSolanaOptions = {
   readonly top: number
   readonly out: Option.Option<string>
   readonly json: boolean
+  readonly signatures: ReadonlyArray<string>
+  readonly programs: ReadonlyArray<string>
+  readonly fromSlot: Option.Option<number>
+  readonly toSlot: Option.Option<number>
+  readonly sampleLimit: number
 }
 
 export type CrawlSolanaResult = {
   readonly priorityMapPath: string
   readonly reportPath: string
   readonly priorityMap: SolanaPriorityMapArtifact
+  readonly behaviorSamplesPath: string | null
+  readonly behaviorSamples: SolanaBehaviorSamplesArtifact | null
 }
 
 const fromYearOption = Options.integer("from-year").pipe(
@@ -78,12 +94,42 @@ const jsonOption = Options.boolean("json").pipe(
   Options.withDescription("Output machine-readable JSON")
 )
 
+const signatureOption = Options.text("signature").pipe(
+  Options.repeated,
+  Options.withDescription("Transaction signature to sample")
+)
+
+const programOption = Options.text("program").pipe(
+  Options.repeated,
+  Options.withDescription("Program id to include when slot-range sampling")
+)
+
+const fromSlotOption = Options.integer("from-slot").pipe(
+  Options.optional,
+  Options.withDescription("First finalized slot to sample")
+)
+
+const toSlotOption = Options.integer("to-slot").pipe(
+  Options.optional,
+  Options.withDescription("Last finalized slot to sample")
+)
+
+const sampleLimitOption = Options.integer("sample-limit").pipe(
+  Options.withDefault(100),
+  Options.withDescription("Maximum behavior samples to emit")
+)
+
 export const crawlSolanaOptions = Options.all({
   fromYear: fromYearOption,
   toYear: toYearOption,
   top: topOption,
   out: outOption,
   json: jsonOption,
+  signatures: signatureOption,
+  programs: programOption,
+  fromSlot: fromSlotOption,
+  toSlot: toSlotOption,
+  sampleLimit: sampleLimitOption,
 })
 
 const resolveDefaultOutputDirectory = Config.string(SOLANA_REFERENCE_DATA_DIR_ENV_VAR).pipe(
@@ -119,6 +165,30 @@ const validateTop = (top: number) =>
     ? Effect.fail(
         new CrawlerCommandError({
           message: "`--top` must be zero or greater.",
+        })
+      )
+    : Effect.void
+
+const validateSampleLimit = (sampleLimit: number) =>
+  sampleLimit < 0
+    ? Effect.fail(
+        new CrawlerCommandError({
+          message: "`--sample-limit` must be zero or greater.",
+        })
+      )
+    : Effect.void
+
+const validateSlotRange = ({
+  fromSlot,
+  toSlot,
+}: {
+  readonly fromSlot: number
+  readonly toSlot: number
+}) =>
+  fromSlot > toSlot
+    ? Effect.fail(
+        new CrawlerCommandError({
+          message: "`--from-slot` must be less than or equal to `--to-slot`.",
         })
       )
     : Effect.void
@@ -178,6 +248,16 @@ const encodeJsonSummary = (summary: typeof CrawlSolanaJsonSummary.Type) =>
     )
   )
 
+const encodeBehaviorSamples = (artifact: SolanaBehaviorSamplesArtifact) =>
+  Schema.encode(Schema.parseJson(SolanaBehaviorSamplesArtifact))(artifact).pipe(
+    Effect.mapError(
+      () =>
+        new CrawlerCommandError({
+          message: "Failed to encode Solana behavior samples artifact.",
+        })
+    )
+  )
+
 const readDefaultOutputDirectory = Effect.configProviderWith((provider) =>
   provider.load(resolveDefaultOutputDirectory)
 ).pipe(
@@ -206,19 +286,99 @@ const resolveOutputDirectory = (
     },
   })
 
+const trimNonEmpty = (value: string): string | null => {
+  const trimmed = value.trim()
+  return trimmed === "" ? null : trimmed
+}
+
+const normalizeStringValues = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
+  Array.from(
+    new Set(values.flatMap((value) => {
+      const trimmed = trimNonEmpty(value)
+      return trimmed === null ? [] : [trimmed]
+    }))
+  )
+
+const resolveBehaviorSamplingInput = ({
+  signatures,
+  programs,
+  fromSlot,
+  toSlot,
+  sampleLimit,
+}: {
+  readonly signatures: ReadonlyArray<string>
+  readonly programs: ReadonlyArray<string>
+  readonly fromSlot: Option.Option<number>
+  readonly toSlot: Option.Option<number>
+  readonly sampleLimit: number
+}): Effect.Effect<SolanaBehaviorSamplingInput | null, CrawlerCommandError> =>
+  Effect.gen(function* () {
+    yield* validateSampleLimit(sampleLimit)
+
+    const normalizedSignatures = normalizeStringValues(signatures)
+    const normalizedPrograms = normalizeStringValues(programs)
+    const maybeFromSlot = Option.getOrNull(fromSlot)
+    const maybeToSlot = Option.getOrNull(toSlot)
+
+    if (maybeFromSlot === null && maybeToSlot !== null) {
+      return yield* new CrawlerCommandError({
+        message: "`--to-slot` requires `--from-slot`.",
+      })
+    }
+
+    if (maybeFromSlot !== null && maybeToSlot === null) {
+      return yield* new CrawlerCommandError({
+        message: "`--from-slot` requires `--to-slot`.",
+      })
+    }
+
+    const slotRange =
+      maybeFromSlot === null || maybeToSlot === null
+        ? null
+        : {
+            fromSlot: maybeFromSlot,
+            toSlot: maybeToSlot,
+          }
+
+    if (slotRange !== null) {
+      yield* validateSlotRange(slotRange)
+    }
+
+    return normalizedSignatures.length === 0 && slotRange === null
+      ? null
+      : {
+          signatures: [...normalizedSignatures],
+          programs: [...normalizedPrograms],
+          slotRange,
+          sampleLimit,
+        }
+  })
+
 export const crawlSolanaProgram = ({
   fromYear,
   toYear,
   top,
   out,
   json,
+  signatures,
+  programs,
+  fromSlot,
+  toSlot,
+  sampleLimit,
 }: CrawlSolanaOptions): Effect.Effect<
   CrawlSolanaResult,
   CrawlerCommandError,
-  FileSystem.FileSystem | Path.Path
+  FileSystem.FileSystem | Path.Path | SolanaBehaviorSamplerClient
 > =>
   Effect.gen(function* () {
     yield* validateTop(top)
+    const behaviorSamplingInput = yield* resolveBehaviorSamplingInput({
+      signatures,
+      programs,
+      fromSlot,
+      toSlot,
+      sampleLimit,
+    })
 
     const currentYear = new Date().getUTCFullYear()
     const resolvedFromYear = Option.getOrElse(fromYear, () => currentYear)
@@ -230,6 +390,7 @@ export const crawlSolanaProgram = ({
     const outputDirectory = yield* resolveOutputDirectory(out)
     const priorityMapPath = path.join(outputDirectory, SOLANA_PRIORITY_MAP_FILE_NAME)
     const reportPath = path.join(outputDirectory, SOLANA_PRIORITY_REPORT_FILE_NAME)
+    const behaviorSamplesPath = path.join(outputDirectory, SOLANA_BEHAVIOR_SAMPLES_FILE_NAME)
     const generatedAt = yield* nowIsoString
     const priorityMap = makeEmptySolanaPriorityMap({
       fromYear: resolvedFromYear,
@@ -239,6 +400,15 @@ export const crawlSolanaProgram = ({
     })
     const encodedPriorityMap = yield* encodePriorityMap(priorityMap)
     const report = makeSolanaPriorityReport(priorityMap)
+    const behaviorSamples =
+      behaviorSamplingInput === null
+        ? null
+        : yield* buildSolanaBehaviorSamplesArtifact({
+            generatedAt,
+            sampling: behaviorSamplingInput,
+          })
+    const encodedBehaviorSamples =
+      behaviorSamples === null ? null : yield* encodeBehaviorSamples(behaviorSamples)
 
     yield* fs.makeDirectory(outputDirectory, { recursive: true }).pipe(
       Effect.mapError(
@@ -264,6 +434,16 @@ export const crawlSolanaProgram = ({
           })
       )
     )
+    if (encodedBehaviorSamples !== null) {
+      yield* fs.writeFileString(behaviorSamplesPath, `${encodedBehaviorSamples}\n`).pipe(
+        Effect.mapError(
+          () =>
+            new CrawlerCommandError({
+              message: "Failed to write Solana behavior samples artifact.",
+            })
+        )
+      )
+    }
 
     if (json) {
       yield* Console.log(
@@ -271,18 +451,29 @@ export const crawlSolanaProgram = ({
           stage: "crawl_solana_completed",
           priorityMapPath,
           reportPath,
+          ...(behaviorSamples === null
+            ? {}
+            : {
+                behaviorSamplesPath,
+                samples: behaviorSamples.samples.length,
+              }),
           entries: priorityMap.entries.length,
         })
       )
     } else {
       yield* Console.log(`Wrote ${priorityMapPath}`)
       yield* Console.log(`Wrote ${reportPath}`)
+      if (behaviorSamples !== null) {
+        yield* Console.log(`Wrote ${behaviorSamplesPath}`)
+      }
     }
 
     return {
       priorityMapPath,
       reportPath,
       priorityMap,
+      behaviorSamplesPath: behaviorSamples === null ? null : behaviorSamplesPath,
+      behaviorSamples,
     }
   })
 
@@ -294,6 +485,11 @@ export const crawlSolanaCommand = Command.make(
     top: topOption,
     out: outOption,
     json: jsonOption,
+    signatures: signatureOption,
+    programs: programOption,
+    fromSlot: fromSlotOption,
+    toSlot: toSlotOption,
+    sampleLimit: sampleLimitOption,
   },
   crawlSolanaProgram
-).pipe(Command.withDescription("Crawl mocked Solana data sources and emit priority artifacts"))
+).pipe(Command.withDescription("Crawl Solana data sources and emit priority artifacts"))

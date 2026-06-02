@@ -81,6 +81,9 @@ importers:
       effect:
         specifier: 3.21.2
         version: 3.21.2
+      helius-sdk:
+        specifier: 2.2.2
+        version: 2.2.2(typescript@6.0.3)
     devDependencies:
       '@my/typescript-config':
         specifier: workspace:*
