@@ -3,7 +3,10 @@
 import { Command } from "@effect/cli"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
 import { Console, Effect, Layer } from "effect"
-import { CrawlerCommandError, crawlSolanaCommand } from "./solana-crawler.ts"
+import { CrawlerCommandError } from "./CrawlerCommandError.ts"
+import { crawlSolanaCommand } from "./solana-crawler.ts"
+
+export { CrawlerCommandError } from "./CrawlerCommandError.ts"
 
 const crawlCommand = Command.make("crawl", {}).pipe(
   Command.withDescription("Crawler commands"),

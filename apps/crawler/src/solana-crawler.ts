@@ -3,6 +3,7 @@ import { FileSystem, Path } from "@effect/platform"
 import { Console, Effect, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
+import { CrawlerCommandError } from "./CrawlerCommandError.ts"
 
 export const SOLANA_PRIORITY_MAP_FILE_NAME = "solana-priority-map.json"
 export const SOLANA_PRIORITY_REPORT_FILE_NAME = "solana-priority-report.md"
@@ -10,13 +11,6 @@ export const DEFAULT_SOLANA_REFERENCE_DATA_DIR =
   "packages/sync-engine/src/providers/helius-solana/reference-data"
 
 const SOLANA_REFERENCE_DATA_DIR_ENV_VAR = "CRAWLER_SOLANA_REFERENCE_DATA_DIR"
-
-export class CrawlerCommandError extends Schema.TaggedError<CrawlerCommandError>()(
-  "CrawlerCommandError",
-  {
-    message: Schema.String,
-  }
-) {}
 
 export const SolanaPriorityMapArtifact = Schema.Struct({
   schemaVersion: Schema.Literal(1),
