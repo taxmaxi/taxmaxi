@@ -303,8 +303,3 @@ export const crawlSolanaCommand = Command.make(
   },
   crawlSolanaProgram
 ).pipe(Command.withDescription("Crawl mocked Solana data sources and emit priority artifacts"))
-
-export const crawlCommand = Command.make("crawl", {}).pipe(
-  Command.withDescription("Crawler commands"),
-  Command.withSubcommands([crawlSolanaCommand])
-)

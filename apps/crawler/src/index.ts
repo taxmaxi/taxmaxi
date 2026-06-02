@@ -3,9 +3,14 @@
 import { Command } from "@effect/cli"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
 import { Console, Effect, Layer } from "effect"
-import { crawlCommand, CrawlerCommandError } from "./solana-crawler.ts"
+import { CrawlerCommandError, crawlSolanaCommand } from "./solana-crawler.ts"
 
-const command = Command.make("tax-crawler", {}).pipe(Command.withSubcommands([crawlCommand]))
+const crawlCommand = Command.make("crawl", {}).pipe(
+  Command.withDescription("Crawler commands"),
+  Command.withSubcommands([crawlSolanaCommand])
+)
+
+const command = Command.make("crawler", {}).pipe(Command.withSubcommands([crawlCommand]))
 
 const cli = Command.run(command, { name: "TaxMaxi crawler", version: "0.0.0" })
 

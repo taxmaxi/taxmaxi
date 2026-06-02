@@ -2,7 +2,7 @@
   "name": "crawler",
   "private": true,
   "bin": {
-    "tax-crawler": "dist/index.js"
+    "crawler": "dist/index.js"
   },
   "type": "module",
   "scripts": {
