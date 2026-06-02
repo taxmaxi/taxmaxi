@@ -1,0 +1,25 @@
+{
+  "name": "crawler",
+  "private": true,
+  "bin": {
+    "tax-crawler": "dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch --preserveWatchOutput",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@effect/cli": "0.75.1",
+    "@effect/platform": "0.96.1",
+    "@effect/platform-node": "0.106.0",
+    "effect": "3.21.2"
+  },
+  "devDependencies": {
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "typescript": "~6.0.2"
+  }
+}
