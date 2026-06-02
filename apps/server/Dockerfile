@@ -1,20 +1,20 @@
 FROM node:lts-slim AS base
 ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
+ENV PATH="$PNPM_HOME/bin:$PATH"
 RUN corepack enable
 
 FROM base AS pruner
 LABEL stage=intermediate
 WORKDIR /app
-RUN pnpm add --global turbo
+COPY package.json ./
 COPY . .
-RUN turbo prune --scope=server --docker
+RUN pnpm dlx turbo prune --scope=server --docker
 
 FROM base AS builder
 LABEL stage=intermediate
 WORKDIR /app
 COPY --from=pruner /app/out/json/ .
-RUN pnpm install
+RUN pnpm install --frozen-lockfile
 COPY --from=pruner /app/out/full/ .
 RUN pnpm run build --filter=server...
 

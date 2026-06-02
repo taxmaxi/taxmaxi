@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - .github/workflows/docker-images.yml
+      - .github/workflows/build-and-push-images.yml
       - apps/server/**
       - apps/worker/**
       - packages/core/**
@@ -51,7 +51,7 @@ jobs:
         with:
           filters: |
             server:
-              - '.github/workflows/docker-images.yml'
+              - '.github/workflows/build-and-push-images.yml'
               - 'apps/server/**'
               - 'apps/server/Dockerfile'
               - 'packages/core/**'
@@ -65,7 +65,7 @@ jobs:
               - 'pnpm-workspace.yaml'
               - 'turbo.json'
             worker:
-              - '.github/workflows/docker-images.yml'
+              - '.github/workflows/build-and-push-images.yml'
               - 'apps/worker/**'
               - 'apps/worker/Dockerfile'
               - 'packages/core/**'
