@@ -15,6 +15,8 @@ const TokenAmountSchema = Schema.Struct({
   uiAmountString: Schema.optional(Schema.String),
 })
 
+const RpcIntegerSchema = Schema.Union(Schema.Number, Schema.BigIntFromSelf)
+
 const TokenBalanceSchema = Schema.Struct({
   accountIndex: Schema.Number,
   mint: Schema.String,
@@ -50,8 +52,8 @@ const TransactionBodySchema = Schema.Struct({
 const TransactionMetaSchema = Schema.NullOr(
   Schema.Struct({
     err: Schema.NullOr(Schema.Unknown),
-    preBalances: Schema.optional(Schema.Array(Schema.Number)),
-    postBalances: Schema.optional(Schema.Array(Schema.Number)),
+    preBalances: Schema.optional(Schema.Array(RpcIntegerSchema)),
+    postBalances: Schema.optional(Schema.Array(RpcIntegerSchema)),
     preTokenBalances: Schema.optional(Schema.Array(TokenBalanceSchema)),
     postTokenBalances: Schema.optional(Schema.Array(TokenBalanceSchema)),
     innerInstructions: Schema.optional(Schema.Array(InnerInstructionsSchema)),
@@ -59,7 +61,7 @@ const TransactionMetaSchema = Schema.NullOr(
 )
 
 const TransactionPayloadSchema = Schema.Struct({
-  slot: Schema.optional(Schema.Number),
+  slot: Schema.optional(RpcIntegerSchema),
   signature: Schema.optional(Schema.String),
   type: Schema.optional(Schema.String),
   source: Schema.optional(Schema.String),
@@ -213,16 +215,32 @@ const parseIntegerString = ({
     ? Effect.succeed(BigInt(value))
     : Effect.fail(toPayloadDecodeError(`Invalid Solana transaction payload ${path}: ${value}`))
 
-const parseIntegerNumber = ({
+const parseIntegerValue = ({
   value,
   path,
 }: {
-  readonly value: number
+  readonly value: typeof RpcIntegerSchema.Type
   readonly path: string
 }): Effect.Effect<bigint, SolanaBehaviorPayloadDecodeError> =>
-  Number.isInteger(value)
-    ? Effect.succeed(BigInt(value))
-    : Effect.fail(toPayloadDecodeError(`Invalid Solana transaction payload ${path}: ${value}`))
+  typeof value === "bigint"
+    ? Effect.succeed(value)
+    : Number.isInteger(value)
+      ? Effect.succeed(BigInt(value))
+      : Effect.fail(toPayloadDecodeError(`Invalid Solana transaction payload ${path}: ${value}`))
+
+const optionalSlotNumber = (
+  value: typeof RpcIntegerSchema.Type | undefined,
+  fallback: number | null
+): Effect.Effect<number | null, SolanaBehaviorPayloadDecodeError> => {
+  if (value === undefined) {
+    return Effect.succeed(fallback)
+  }
+
+  const slotNumber = typeof value === "bigint" ? Number(value) : value
+  return Number.isSafeInteger(slotNumber)
+    ? Effect.succeed(slotNumber)
+    : Effect.fail(toPayloadDecodeError(`Invalid Solana transaction payload slot: ${String(value)}`))
+}
 
 const invokedProgramIdsFromPayload = (
   payload: typeof TransactionPayloadSchema.Type
@@ -252,11 +270,11 @@ const nativeBalanceDeltasFromPayload = (
     Array.from({ length: maxLength }, (_, accountIndex) => accountIndex),
     (accountIndex) =>
       Effect.gen(function* () {
-        const preLamports = yield* parseIntegerNumber({
+        const preLamports = yield* parseIntegerValue({
           value: preBalances[accountIndex] ?? 0,
           path: `preBalances[${accountIndex}]`,
         })
-        const postLamports = yield* parseIntegerNumber({
+        const postLamports = yield* parseIntegerValue({
           value: postBalances[accountIndex] ?? 0,
           path: `postBalances[${accountIndex}]`,
         })
@@ -364,10 +382,11 @@ export const extractSolanaBehaviorSample = ({
 
     const nativeBalanceDeltas = yield* nativeBalanceDeltasFromPayload(transaction)
     const tokenBalanceDeltas = yield* tokenBalanceDeltasFromPayload(transaction)
+    const resolvedSlot = yield* optionalSlotNumber(transaction.slot, slot)
 
     return {
       signature,
-      slot: transaction.slot ?? slot,
+      slot: resolvedSlot,
       status: statusFromPayloadMeta(transaction.meta),
       invokedProgramIds: [...invokedProgramIdsFromPayload(transaction)],
       nativeBalanceDeltas: [...nativeBalanceDeltas],

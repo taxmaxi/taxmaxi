@@ -179,7 +179,7 @@ describe("solana crawler", () => {
       extractSolanaBehaviorSample({
         slot: null,
         payload: {
-          slot: 42,
+          slot: 42n,
           signature: "fixture-signature",
           type: "SWAP",
           source: "RAYDIUM",
@@ -192,8 +192,8 @@ describe("solana crawler", () => {
           },
           meta: {
             err: null,
-            preBalances: [2_000_000_000, 0],
-            postBalances: [1_499_995_000, 500_000_000],
+            preBalances: [2_000_000_000n, 0],
+            postBalances: [1_499_995_000n, 500_000_000],
             preTokenBalances: [
               {
                 accountIndex: 0,
