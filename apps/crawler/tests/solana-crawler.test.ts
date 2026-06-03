@@ -295,31 +295,27 @@ describe("solana crawler", () => {
         Effect.succeed({
           transactions: [
             {
+              meta: {
+                err: null,
+                preBalances: [10],
+                postBalances: [15],
+              },
               transaction: {
-                slot,
-                signature: `slot-${slot}-match`,
-                transaction: {
-                  signatures: [`slot-${slot}-match`],
-                  message: {
-                    accountKeys: ["slot-account"],
-                    instructions: [{ programId: "program-1" }],
-                  },
+                signatures: [`slot-${slot}-match`],
+                message: {
+                  accountKeys: ["slot-account"],
+                  instructions: [{ programId: "program-1" }],
                 },
-                meta: { err: null },
               },
             },
             {
+              meta: { err: null },
               transaction: {
-                slot,
-                signature: `slot-${slot}-ignored`,
-                transaction: {
-                  signatures: [`slot-${slot}-ignored`],
-                  message: {
-                    accountKeys: ["slot-account"],
-                    instructions: [{ programId: "program-2" }],
-                  },
+                signatures: [`slot-${slot}-ignored`],
+                message: {
+                  accountKeys: ["slot-account"],
+                  instructions: [{ programId: "program-2" }],
                 },
-                meta: { err: null },
               },
             },
           ],
@@ -357,6 +353,16 @@ describe("solana crawler", () => {
     expect(result.behaviorSamples?.samples.map((sample) => sample.signature)).toEqual([
       "direct-signature",
       "slot-10-match",
+    ])
+    expect(result.behaviorSamples?.samples[1]?.status).toEqual({ ok: true, error: null })
+    expect(result.behaviorSamples?.samples[1]?.nativeBalanceDeltas).toEqual([
+      {
+        accountIndex: 0,
+        account: "slot-account",
+        preLamports: "10",
+        postLamports: "15",
+        deltaLamports: "5",
+      },
     ])
     await expect(
       runEffect(Schema.decodeUnknown(SolanaBehaviorSamplesArtifact)(result.behaviorSamples))

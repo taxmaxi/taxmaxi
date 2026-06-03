@@ -34,32 +34,32 @@ const InnerInstructionsSchema = Schema.Struct({
   instructions: Schema.Array(InstructionSchema),
 })
 
+const TransactionBodySchema = Schema.Struct({
+  signatures: Schema.optional(Schema.Array(Schema.String)),
+  message: Schema.Struct({
+    accountKeys: Schema.optional(Schema.Array(AccountKeySchema)),
+    instructions: Schema.optional(Schema.Array(InstructionSchema)),
+  }),
+})
+
+const TransactionMetaSchema = Schema.NullOr(
+  Schema.Struct({
+    err: Schema.NullOr(Schema.Unknown),
+    preBalances: Schema.optional(Schema.Array(Schema.Number)),
+    postBalances: Schema.optional(Schema.Array(Schema.Number)),
+    preTokenBalances: Schema.optional(Schema.Array(TokenBalanceSchema)),
+    postTokenBalances: Schema.optional(Schema.Array(TokenBalanceSchema)),
+    innerInstructions: Schema.optional(Schema.Array(InnerInstructionsSchema)),
+  })
+)
+
 const TransactionPayloadSchema = Schema.Struct({
   slot: Schema.optional(Schema.Number),
   signature: Schema.optional(Schema.String),
   type: Schema.optional(Schema.String),
   source: Schema.optional(Schema.String),
-  transaction: Schema.optional(
-    Schema.Struct({
-      signatures: Schema.optional(Schema.Array(Schema.String)),
-      message: Schema.Struct({
-        accountKeys: Schema.optional(Schema.Array(AccountKeySchema)),
-        instructions: Schema.optional(Schema.Array(InstructionSchema)),
-      }),
-    })
-  ),
-  meta: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        err: Schema.NullOr(Schema.Unknown),
-        preBalances: Schema.optional(Schema.Array(Schema.Number)),
-        postBalances: Schema.optional(Schema.Array(Schema.Number)),
-        preTokenBalances: Schema.optional(Schema.Array(TokenBalanceSchema)),
-        postTokenBalances: Schema.optional(Schema.Array(TokenBalanceSchema)),
-        innerInstructions: Schema.optional(Schema.Array(InnerInstructionsSchema)),
-      })
-    )
-  ),
+  transaction: Schema.optional(TransactionBodySchema),
+  meta: Schema.optional(TransactionMetaSchema),
 })
 
 const decodeTransactionPayloadEither = Schema.decodeUnknownEither(TransactionPayloadSchema)
@@ -310,7 +310,8 @@ export const extractSolanaBehaviorSample = ({
 }
 
 const BlockTransactionEntrySchema = Schema.Struct({
-  transaction: TransactionPayloadSchema,
+  meta: Schema.optional(TransactionMetaSchema),
+  transaction: TransactionBodySchema,
 })
 
 const FinalizedBlockPayloadSchema = Schema.Struct({
@@ -333,7 +334,13 @@ const blockTransactions = (
           message: `Invalid Solana block payload: ${decoded.left.message}`,
         })
       )
-    : Effect.succeed(decoded.right.transactions.map((entry) => entry.transaction))
+    : Effect.succeed(
+        decoded.right.transactions.map((entry) =>
+          entry.meta === undefined
+            ? { transaction: entry.transaction }
+            : { transaction: entry.transaction, meta: entry.meta }
+        )
+      )
 }
 
 const sampleMatchesPrograms = (
