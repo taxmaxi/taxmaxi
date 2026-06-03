@@ -9,7 +9,8 @@
     "build": "tsc",
     "dev": "tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
-    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo"
+    "type-check:tests": "tsc -p tsconfig.tests.json",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
     "@effect/cli": "0.75.1",
