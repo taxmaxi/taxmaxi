@@ -1,3 +1,8 @@
+/**
+ * Live Helius/RPC client for the Solana behavior sampler.
+ *
+ * @module
+ */
 import { signature } from "@solana/keys"
 import { createHelius } from "helius-sdk"
 import * as Config from "effect/Config"
@@ -56,11 +61,13 @@ const readOptionalRpcUrl = SOLANA_RPC_URL_CONFIG.pipe(
 
 const DEFAULT_HELIUS_RPC_BASE_URL = "https://mainnet.helius-rpc.com/"
 
+/** Runtime configuration for the Solana behavior sampler RPC client. */
 export interface SolanaBehaviorSamplerClientConfig {
   readonly apiKey: string | null
   readonly rpcUrl: string
 }
 
+/** Reads sampler client configuration from Effect Config. */
 export const readSolanaBehaviorSamplerClientConfig: Effect.Effect<
   SolanaBehaviorSamplerClientConfig,
   SolanaBehaviorSamplerClientError
@@ -122,6 +129,7 @@ const makeClient = ({
   }
 }
 
+/** Live sampler client layer backed by Helius SDK RPC calls. */
 export const SolanaBehaviorSamplerClientLive: Layer.Layer<SolanaBehaviorSamplerClient> =
   Layer.succeed(
     SolanaBehaviorSamplerClient,

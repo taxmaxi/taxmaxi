@@ -278,6 +278,28 @@ describe("solana crawler", () => {
     expect(result.slot).toBe(7)
   })
 
+  it("marks missing transaction metadata as unknown status evidence", async () => {
+    const result = await Effect.runPromise(
+      extractSolanaBehaviorSample({
+        slot: 7,
+        payload: {
+          transaction: {
+            signatures: ["missing-meta-signature"],
+            message: {
+              accountKeys: [],
+              instructions: [{ programId: "program-1" }],
+            },
+          },
+        },
+      })
+    )
+
+    expect(result.status).toEqual({
+      ok: false,
+      error: "missing transaction metadata",
+    })
+  })
+
   it("treats missing balance deltas as empty evidence", async () => {
     const result = await Effect.runPromise(
       extractSolanaBehaviorSample({
@@ -322,6 +344,68 @@ describe("solana crawler", () => {
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
       expect(result.cause.toString()).toContain("SolanaBehaviorPayloadDecodeError")
+    }
+  })
+
+  it("fails malformed token amount evidence with a tagged decode error", async () => {
+    const result = await Effect.runPromiseExit(
+      extractSolanaBehaviorSample({
+        slot: null,
+        payload: {
+          transaction: {
+            signatures: ["malformed-token-amount"],
+            message: {
+              accountKeys: [],
+              instructions: [],
+            },
+          },
+          meta: {
+            err: null,
+            preTokenBalances: [
+              {
+                accountIndex: 0,
+                mint: "mint-1",
+                uiTokenAmount: { amount: "not-an-integer", decimals: 2 },
+              },
+            ],
+            postTokenBalances: [],
+          },
+        },
+      })
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("SolanaBehaviorPayloadDecodeError")
+      expect(result.cause.toString()).toContain("not-an-integer")
+    }
+  })
+
+  it("fails non-integer lamport evidence with a tagged decode error", async () => {
+    const result = await Effect.runPromiseExit(
+      extractSolanaBehaviorSample({
+        slot: null,
+        payload: {
+          transaction: {
+            signatures: ["non-integer-lamports"],
+            message: {
+              accountKeys: ["account-1"],
+              instructions: [],
+            },
+          },
+          meta: {
+            err: null,
+            preBalances: [1.5],
+            postBalances: [2],
+          },
+        },
+      })
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("SolanaBehaviorPayloadDecodeError")
+      expect(result.cause.toString()).toContain("preBalances[0]")
     }
   })
 
