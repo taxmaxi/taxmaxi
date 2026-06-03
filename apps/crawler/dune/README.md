@@ -96,26 +96,31 @@ instruction is tax-relevant or that a classifier is correct.
 
 ## Suggested Workflow
 
-1. Discover candidate protocols:
-   - Run `solana-dex-project-priority.sql` first for swap coverage.
-   - Run `solana-token-transfer-program-candidates.sql` for non-DEX programs
-     that still move user balances.
-2. Triage candidates:
-   - Use volume, user reach, `tax_relevance_hint`, and `review_priority` to
-     decide which programs deserve manual review.
-   - Use `solana-program-label-lookup.sql` only to understand likely program
-     identity and instruction surface. Treat its hints as metadata, not
-     classification evidence.
-3. Validate behavior:
+Dune is an upstream evidence pipeline for the TaxMaxi protocol classification
+registry. It is not the registry itself, and query output should not directly
+create approved mappings.
+
+1. Run `solana-dex-project-priority.sql` weekly or monthly to produce `swap`
+   registry candidates from curated `dex_solana.trades` data.
+2. Run `solana-token-transfer-program-candidates.sql` to produce a human review
+   queue for non-DEX programs. Treat `tax_relevance_hint` and
+   `review_priority` as triage fields, not approval decisions.
+3. For each candidate, collect review evidence:
+   - Use `solana-program-label-lookup.sql` to inspect likely program identity,
+     namespaces, instruction names, aliases, and discriminator hints.
    - Use `solana-dex-project-sample-transactions.sql` for swap projects.
    - Use `solana-program-sample-transactions.sql` for program-id candidates.
-   - Parse sampled `tx_id` values through Helius/TaxMaxi and inspect user
-     balance deltas, fees, and instruction context.
-4. Implement coverage:
-   - Add or update the TaxMaxi protocol registry only after sampled
-     transactions confirm a repeatable tax-relevant behavior.
-   - Build classifiers from parsed transaction behavior, not from Dune labels
-     alone.
+4. Approve into the TaxMaxi protocol registry only after checking
+   representative Helius/TaxMaxi-normalized transactions. Inspect user balance
+   deltas, fees, instruction context, and whether the behavior is repeatable.
+5. Persist Dune evidence alongside any registry proposal or mapping decision:
+   `query_id`, `period`, `retrieved_at`, source table, rank, volume, user
+   counts, candidate program ids, labels, and sample transaction ids.
+
+The Dune dashboard is useful for discovery and review coordination, but it must
+be run or scheduled explicitly. Dune dashboards are not refreshed automatically
+unless configured in Dune. See
+https://docs.dune.com/web-app/dashboards.
 
 ## Cost Notes
 
@@ -125,3 +130,11 @@ instruction is tax-relevant or that a classifier is correct.
 - Use larger engines only for intentional backfills or broad discovery.
 - For repeated historical analysis, materialize monthly summaries instead of
   repeatedly scanning raw transaction tables.
+
+## Dune Query IDs:
+
+solana-dex-project-priority.sql: https://dune.com/queries/7647495
+solana-dex-project-sample-transactions.sql: https://dune.com/queries/7648044
+solana-token-transfer-program-candidates.sql: https://dune.com/queries/7648079
+solana-program-sample-transactions.sql: https://dune.com/queries/7648230
+solana-program-label-lookup.sql: https://dune.com/queries/7648242
