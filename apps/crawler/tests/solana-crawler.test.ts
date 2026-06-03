@@ -18,6 +18,7 @@ import {
   SOLANA_PRIORITY_REPORT_FILE_NAME,
   SolanaPriorityMapArtifact,
 } from "../src/solana-crawler.ts"
+import { readSolanaBehaviorSamplerClientConfig } from "../src/solana-behavior-sampler-live.ts"
 
 const unusedSamplerClientLive = SolanaBehaviorSamplerClientTestLive({
   fetchTransactionBySignature: () =>
@@ -44,6 +45,34 @@ const parseOptions = (args: ReadonlyArray<string>) =>
   )
 
 describe("solana crawler", () => {
+  it("uses a configured Solana RPC URL without requiring a Helius API key", async () => {
+    const result = await Effect.runPromise(
+      readSolanaBehaviorSamplerClientConfig.pipe(
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["SOLANA_RPC_URL", "http://127.0.0.1:8899"]]))
+        )
+      )
+    )
+
+    expect(result).toEqual({
+      apiKey: null,
+      rpcUrl: "http://127.0.0.1:8899",
+    })
+  })
+
+  it("requires a Helius API key when no Solana RPC URL is configured", async () => {
+    const result = await Effect.runPromiseExit(
+      readSolanaBehaviorSamplerClientConfig.pipe(
+        Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("HELIUS_API_KEY is not configured")
+    }
+  })
+
   it("parses crawl solana options", async () => {
     const result = await runEffect(
       parseOptions([

@@ -44,6 +44,31 @@ const readOptionalRpcUrl = SOLANA_RPC_URL_CONFIG.pipe(
 
 const DEFAULT_HELIUS_RPC_BASE_URL = "https://mainnet.helius-rpc.com/"
 
+export interface SolanaBehaviorSamplerClientConfig {
+  readonly apiKey: string | null
+  readonly rpcUrl: string
+}
+
+export const readSolanaBehaviorSamplerClientConfig: Effect.Effect<
+  SolanaBehaviorSamplerClientConfig,
+  SolanaBehaviorSamplerClientError
+> = Effect.gen(function* () {
+  const configuredRpcUrl = yield* readOptionalRpcUrl
+
+  if (configuredRpcUrl !== null) {
+    return {
+      apiKey: null,
+      rpcUrl: configuredRpcUrl,
+    } satisfies SolanaBehaviorSamplerClientConfig
+  }
+
+  const apiKey = yield* readApiKey
+  return {
+    apiKey,
+    rpcUrl: DEFAULT_HELIUS_RPC_BASE_URL,
+  } satisfies SolanaBehaviorSamplerClientConfig
+})
+
 const sdkError = (method: string, cause: unknown): SolanaBehaviorSamplerClientError =>
   toClientError(`Solana RPC ${method} request failed: ${stringifyUnknown(cause)}`)
 
@@ -90,21 +115,13 @@ export const SolanaBehaviorSamplerClientLive: Layer.Layer<SolanaBehaviorSamplerC
     SolanaBehaviorSamplerClient.of({
       fetchTransactionBySignature: (params) =>
         Effect.gen(function* () {
-          const apiKey = yield* readApiKey
-          const configuredRpcUrl = yield* readOptionalRpcUrl
-          return yield* makeClient({
-            apiKey: configuredRpcUrl === null ? apiKey : null,
-            rpcUrl: configuredRpcUrl ?? DEFAULT_HELIUS_RPC_BASE_URL,
-          }).fetchTransactionBySignature(params)
+          const config = yield* readSolanaBehaviorSamplerClientConfig
+          return yield* makeClient(config).fetchTransactionBySignature(params)
         }),
       fetchFinalizedBlock: (params) =>
         Effect.gen(function* () {
-          const apiKey = yield* readApiKey
-          const configuredRpcUrl = yield* readOptionalRpcUrl
-          return yield* makeClient({
-            apiKey: configuredRpcUrl === null ? apiKey : null,
-            rpcUrl: configuredRpcUrl ?? DEFAULT_HELIUS_RPC_BASE_URL,
-          }).fetchFinalizedBlock(params)
+          const config = yield* readSolanaBehaviorSamplerClientConfig
+          return yield* makeClient(config).fetchFinalizedBlock(params)
         }),
     })
   )
