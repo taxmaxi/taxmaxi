@@ -68,7 +68,7 @@ transfer_programs AS (
       'SysvarS1otHistory11111111111111111111111111',
       'SysvarStakeHistory1111111111111111111111111',
       'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-      'TokenzQdBNbLqP5VEhdkAS6EPF5ok4h9Qo2EKbSjeM',
+      'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
       'Vote111111111111111111111111111111111111111',
       'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s'
     )
