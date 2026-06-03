@@ -60,6 +60,26 @@ describe("solana crawler", () => {
     })
   })
 
+  it("uses the Helius API key with a configured Solana RPC URL when both are provided", async () => {
+    const result = await Effect.runPromise(
+      readSolanaBehaviorSamplerClientConfig.pipe(
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(
+            new Map([
+              ["SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/"],
+              ["HELIUS_API_KEY", "helius-key"],
+            ])
+          )
+        )
+      )
+    )
+
+    expect(result).toEqual({
+      apiKey: "helius-key",
+      rpcUrl: "https://mainnet.helius-rpc.com/",
+    })
+  })
+
   it("requires a Helius API key when no Solana RPC URL is configured", async () => {
     const result = await Effect.runPromiseExit(
       readSolanaBehaviorSamplerClientConfig.pipe(

@@ -35,6 +35,18 @@ const readApiKey = HELIUS_API_KEY_CONFIG.pipe(
   })
 )
 
+const readOptionalApiKey = Config.option(HELIUS_API_KEY_CONFIG).pipe(
+  Effect.mapError(() => toClientError("Failed to read HELIUS_API_KEY")),
+  Effect.map((maybeApiKey) => {
+    if (maybeApiKey._tag === "None") {
+      return null
+    }
+
+    const trimmed = Redacted.value(maybeApiKey.value).trim()
+    return trimmed === "" ? null : trimmed
+  })
+)
+
 const readOptionalRpcUrl = SOLANA_RPC_URL_CONFIG.pipe(
   Effect.mapError(() => toClientError("Failed to read SOLANA_RPC_URL")),
   Effect.map((maybeUrl) =>
@@ -56,8 +68,9 @@ export const readSolanaBehaviorSamplerClientConfig: Effect.Effect<
   const configuredRpcUrl = yield* readOptionalRpcUrl
 
   if (configuredRpcUrl !== null) {
+    const apiKey = yield* readOptionalApiKey
     return {
-      apiKey: null,
+      apiKey,
       rpcUrl: configuredRpcUrl,
     } satisfies SolanaBehaviorSamplerClientConfig
   }
