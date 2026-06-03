@@ -1,4 +1,4 @@
-import { ConfigProvider, Effect, Layer } from "effect"
+import { ConfigProvider, Effect, Layer, Schema } from "effect"
 import { UnrecoverableError } from "bullmq"
 import { describe, expect, it } from "vitest"
 import {
@@ -19,6 +19,16 @@ import {
   type SourceSyncJobSummary,
   SourceSyncJobRetryableExecutionError,
 } from "@my/sync-engine/services"
+
+class WorkerTestPromiseRejectionError extends Schema.TaggedError<WorkerTestPromiseRejectionError>()(
+  "WorkerTestPromiseRejectionError",
+  {
+    cause: Schema.Unknown,
+  }
+) {}
+
+const toPromiseRejectionError = (cause: unknown): WorkerTestPromiseRejectionError =>
+  new WorkerTestPromiseRejectionError({ cause })
 
 const syncPayload = SourceSyncQueuePayload.make({
   jobId: "job-1",
@@ -94,19 +104,24 @@ const runWithConsumer = <A>({
   Effect.runPromise(
     Effect.scoped(
       effect.pipe(
-        Effect.provide(makeWorkerBullMqSourceSyncConsumerLive({ acquireWorker })),
-        Effect.provide(Layer.succeed(SourceSyncJobExecutor, executor)),
         Effect.provide(
-          Layer.succeed(WorkerSourceSyncStartupRepair, {
-            repair: Effect.succeed({
-              scannedJobs: 0,
-              requeuedPending: 0,
-              failedProcessing: 0,
-              skippedJobs: 0,
-              erroredJobs: 0,
-              stoppedAfterErrors: false,
-            }),
-          })
+          makeWorkerBullMqSourceSyncConsumerLive({ acquireWorker }).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                Layer.succeed(SourceSyncJobExecutor, executor),
+                Layer.succeed(WorkerSourceSyncStartupRepair, {
+                  repair: Effect.succeed({
+                    scannedJobs: 0,
+                    requeuedPending: 0,
+                    failedProcessing: 0,
+                    skippedJobs: 0,
+                    erroredJobs: 0,
+                    stoppedAfterErrors: false,
+                  }),
+                })
+              )
+            )
+          )
         ),
         Effect.withConfigProvider(makeConfigProvider(configOverrides))
       )
@@ -137,9 +152,12 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         if (processor === null) {
           return yield* Effect.dieMessage("Processor was not acquired")
         }
+        const acquiredProcessor = processor
 
-        yield* Effect.promise(() => processor(makeJob({ data: syncPayload })))
-        yield* Effect.promise(() => processor(makeJob({ data: replayPayload, attemptsMade: 1 })))
+        yield* Effect.promise(() => acquiredProcessor(makeJob({ data: syncPayload })))
+        yield* Effect.promise(() =>
+          acquiredProcessor(makeJob({ data: replayPayload, attemptsMade: 1 }))
+        )
       }),
     })
 
@@ -193,15 +211,16 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         if (processor === null) {
           return yield* Effect.dieMessage("Processor was not acquired")
         }
+        const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
-          try: () => processor(makeJob({ data: { jobId: "job-1" } })),
-          catch: (cause) => cause,
+          try: () => acquiredProcessor(makeJob({ data: { jobId: "job-1" } })),
+          catch: toPromiseRejectionError,
         }).pipe(Effect.either)
 
         expect(result._tag).toBe("Left")
         if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(UnrecoverableError)
+          expect(result.left.cause).toBeInstanceOf(UnrecoverableError)
         }
       }),
     })
@@ -234,18 +253,19 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         if (processor === null) {
           return yield* Effect.dieMessage("Processor was not acquired")
         }
+        const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
-          try: () => processor(makeJob({ data: syncPayload })),
-          catch: (cause) => cause,
+          try: () => acquiredProcessor(makeJob({ data: syncPayload })),
+          catch: toPromiseRejectionError,
         }).pipe(Effect.either)
 
         expect(result._tag).toBe("Left")
         if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(Error)
-          expect(result.left).not.toBeInstanceOf(UnrecoverableError)
-          if (result.left instanceof Error) {
-            expect(result.left.message).toContain("provider unavailable")
+          expect(result.left.cause).toBeInstanceOf(Error)
+          expect(result.left.cause).not.toBeInstanceOf(UnrecoverableError)
+          if (result.left.cause instanceof Error) {
+            expect(result.left.cause.message).toContain("provider unavailable")
           }
         }
       }),
@@ -270,15 +290,16 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         if (processor === null) {
           return yield* Effect.dieMessage("Processor was not acquired")
         }
+        const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
-          try: () => processor(makeJob({ data: syncPayload })),
-          catch: (cause) => cause,
+          try: () => acquiredProcessor(makeJob({ data: syncPayload })),
+          catch: toPromiseRejectionError,
         }).pipe(Effect.either)
 
         expect(result._tag).toBe("Left")
         if (result._tag === "Left") {
-          expect(result.left).toBeInstanceOf(UnrecoverableError)
+          expect(result.left.cause).toBeInstanceOf(UnrecoverableError)
         }
       }),
     })
