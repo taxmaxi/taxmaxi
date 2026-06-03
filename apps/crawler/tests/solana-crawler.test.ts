@@ -14,11 +14,19 @@ import {
   crawlSolanaProgram,
   SOLANA_BEHAVIOR_SAMPLES_FILE_NAME,
   DEFAULT_SOLANA_REFERENCE_DATA_DIR,
+  SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME,
   SOLANA_PRIORITY_MAP_FILE_NAME,
   SOLANA_PRIORITY_REPORT_FILE_NAME,
   SolanaPriorityMapArtifact,
 } from "../src/solana-crawler.ts"
 import { readSolanaBehaviorSamplerClientConfig } from "../src/solana-behavior-sampler-live.ts"
+import {
+  SolanaDuneProgramRankingClient,
+  SolanaDuneProgramRankingClientTestLive,
+  SolanaDuneProgramRankingError,
+  SolanaDuneProgramRankingsArtifact,
+} from "../src/solana-dune-program-ranking.ts"
+import { readSolanaDuneApiKey } from "../src/solana-dune-program-ranking-live.ts"
 
 const unusedSamplerClientLive = SolanaBehaviorSamplerClientTestLive({
   fetchTransactionBySignature: () =>
@@ -26,11 +34,21 @@ const unusedSamplerClientLive = SolanaBehaviorSamplerClientTestLive({
   fetchFinalizedBlock: () => Effect.dieMessage("fetchFinalizedBlock should not run"),
 })
 
+const unusedDuneClientLive = SolanaDuneProgramRankingClientTestLive({
+  executeQuery: () => Effect.dieMessage("executeQuery should not run"),
+})
+
 const runEffect = <A, E>(
-  effect: Effect.Effect<A, E, NodeContext.NodeContext | SolanaBehaviorSamplerClient>
+  effect: Effect.Effect<
+    A,
+    E,
+    NodeContext.NodeContext | SolanaBehaviorSamplerClient | SolanaDuneProgramRankingClient
+  >
 ): Promise<A> =>
   effect.pipe(
-    Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive)),
+    Effect.provide(
+      Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, unusedDuneClientLive)
+    ),
     Effect.runPromise
   )
 
@@ -93,6 +111,29 @@ describe("solana crawler", () => {
     }
   })
 
+  it("reads a non-empty Dune API key from Effect Config", async () => {
+    const result = await Effect.runPromise(
+      readSolanaDuneApiKey.pipe(
+        Effect.withConfigProvider(ConfigProvider.fromMap(new Map([["DUNE_API_KEY", " dune-key "]])))
+      )
+    )
+
+    expect(result).toBe("dune-key")
+  })
+
+  it("requires a non-empty Dune API key", async () => {
+    const result = await Effect.runPromiseExit(
+      readSolanaDuneApiKey.pipe(
+        Effect.withConfigProvider(ConfigProvider.fromMap(new Map([["DUNE_API_KEY", " "]])))
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("DUNE_API_KEY is empty")
+    }
+  })
+
   it("parses crawl solana options", async () => {
     const result = await runEffect(
       parseOptions([
@@ -117,6 +158,9 @@ describe("solana crawler", () => {
         "12",
         "--sample-limit",
         "7",
+        "--dune",
+        "--dune-period",
+        "quarter",
       ])
     )
 
@@ -131,6 +175,8 @@ describe("solana crawler", () => {
     expect(Option.getOrNull(result.parsed.fromSlot)).toBe(10)
     expect(Option.getOrNull(result.parsed.toSlot)).toBe(12)
     expect(result.parsed.sampleLimit).toBe(7)
+    expect(result.parsed.dune).toBe(true)
+    expect(result.parsed.dunePeriod).toBe("quarter")
   })
 
   it("writes empty Solana priority artifacts with the default reference-data output", async () => {
@@ -147,6 +193,8 @@ describe("solana crawler", () => {
         fromSlot: Option.none(),
         toSlot: Option.none(),
         sampleLimit: 100,
+        dune: false,
+        dunePeriod: "year",
       }).pipe(
         Effect.withConfigProvider(
           ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
@@ -169,6 +217,8 @@ describe("solana crawler", () => {
     })
     expect(result.behaviorSamplesPath).toBeNull()
     expect(result.behaviorSamples).toBeNull()
+    expect(result.duneProgramRankingsPath).toBeNull()
+    expect(result.duneProgramRankings).toBeNull()
     await expect(
       runEffect(Schema.decodeUnknown(SolanaPriorityMapArtifact)(result.priorityMap))
     ).resolves.toEqual(result.priorityMap)
@@ -467,11 +517,13 @@ describe("solana crawler", () => {
       fromSlot: Option.some(10),
       toSlot: Option.some(10),
       sampleLimit: 10,
+      dune: false,
+      dunePeriod: "year",
     }).pipe(
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, samplerClientLive)),
+      Effect.provide(Layer.mergeAll(NodeContext.layer, samplerClientLive, unusedDuneClientLive)),
       Effect.runPromise
     )
 
@@ -501,6 +553,351 @@ describe("solana crawler", () => {
     await expect(
       runEffect(Schema.decodeUnknown(SolanaBehaviorSamplesArtifact)(result.behaviorSamples))
     ).resolves.toEqual(result.behaviorSamples)
+  })
+
+  it("writes Dune ranking artifacts using decoded saved-query rows", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const duneClientLive = SolanaDuneProgramRankingClientTestLive({
+      executeQuery: ({ parameters, query }) => {
+        if (query.kind === "program-sample-transactions") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                { tx_id: `${parameters.program_id}-sample-1` },
+                { tx_id: `${parameters.program_id}-sample-2` },
+              ],
+            },
+          })
+        }
+
+        if (query.kind === "dex-project-priority") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                {
+                  project: "jupiter",
+                  period: "2024-01-01 to 2025-01-01",
+                  retrieved_at: "2026-01-01T00:00:00Z",
+                  approx_unique_traders: "2",
+                  approx_trade_transactions: "3",
+                  trade_rows: "5",
+                  canonical_program_ids: ["JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"],
+                },
+              ],
+            },
+          })
+        }
+
+        return Effect.succeed({
+          state: "QUERY_STATE_COMPLETED",
+          result: {
+            rows: [
+              {
+                program_id: "ProgramCandidate111111111111111111111111111",
+                period: "2024-01-01 to 2025-01-01",
+                retrieved_at: "2026-01-01T00:00:00Z",
+                approx_signers: 7,
+                approx_transfer_transactions: "11",
+                transfer_rows: 13,
+              },
+            ],
+          },
+        })
+      },
+    })
+
+    const result = await crawlSolanaProgram({
+      fromYear: Option.some(2024),
+      toYear: Option.some(2024),
+      top: 10,
+      out: Option.none(),
+      json: true,
+      signatures: [],
+      programs: [],
+      fromSlot: Option.none(),
+      toSlot: Option.none(),
+      sampleLimit: 100,
+      dune: true,
+      dunePeriod: "year",
+    }).pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
+      ),
+      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.runPromise
+    )
+
+    expect(result.duneProgramRankingsPath).toBe(
+      `${outputDirectory}/${SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME}`
+    )
+    expect(result.priorityMap.source).toBe("dune")
+    expect(result.priorityMap.entries.map((entry) => entry.key)).toEqual([
+      "ProgramCandidate111111111111111111111111111",
+      "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+    ])
+    expect(result.duneProgramRankings?.queries).toEqual([
+      {
+        queryId: 7647495,
+        queryName: "solana-dex-project-priority",
+        periodGranularity: "year",
+        version: 1,
+        kind: "dex-project-priority",
+      },
+      {
+        queryId: 7648079,
+        queryName: "solana-token-transfer-program-candidates",
+        periodGranularity: "year",
+        version: 1,
+        kind: "token-transfer-program-candidates",
+      },
+      {
+        queryId: 7648230,
+        queryName: "solana-program-sample-transactions",
+        periodGranularity: "year",
+        version: 1,
+        kind: "program-sample-transactions",
+      },
+    ])
+    expect(result.duneProgramRankings?.entries[0]).toMatchObject({
+      programId: "ProgramCandidate111111111111111111111111111",
+      period: "2024-01-01 to 2025-01-01",
+      invocationCount: 13,
+      uniqueSignerCount: 7,
+      transactionCount: 11,
+      sampleSignatures: [
+        "ProgramCandidate111111111111111111111111111-sample-1",
+        "ProgramCandidate111111111111111111111111111-sample-2",
+      ],
+      queryId: 7648079,
+      queryName: "solana-token-transfer-program-candidates",
+      periodGranularity: "year",
+      queryVersion: 1,
+      retrievedAt: "2026-01-01T00:00:00Z",
+    })
+    await expect(
+      runEffect(Schema.decodeUnknown(SolanaDuneProgramRankingsArtifact)(result.duneProgramRankings))
+    ).resolves.toEqual(result.duneProgramRankings)
+  })
+
+  it("uses quarter Dune periods and records quarter granularity", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const rankingCalls: Array<{
+      readonly kind: string
+      readonly parameters: Readonly<Record<string, string>>
+    }> = []
+    const duneClientLive = SolanaDuneProgramRankingClientTestLive({
+      executeQuery: ({ parameters, query }) => {
+        if (query.kind === "program-sample-transactions") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: { rows: [{ tx_id: "quarter-sample-signature" }] },
+          })
+        }
+
+        rankingCalls.push({ kind: query.kind, parameters })
+
+        if (query.kind === "dex-project-priority") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                {
+                  project: "jupiter",
+                  period: `${parameters.start_date} to ${parameters.end_date}`,
+                  retrieved_at: "2026-01-01T00:00:00Z",
+                  approx_unique_traders: 1,
+                  approx_trade_transactions: 1,
+                  trade_rows: 2,
+                  canonical_program_ids: ["QuarterProgram1111111111111111111111111111"],
+                },
+              ],
+            },
+          })
+        }
+
+        return Effect.succeed({
+          state: "QUERY_STATE_COMPLETED",
+          result: {
+            rows: [
+              {
+                program_id: "QuarterTransfer111111111111111111111111111",
+                period: `${parameters.start_date} to ${parameters.end_date}`,
+                retrieved_at: "2026-01-01T00:00:00Z",
+                approx_signers: 1,
+                approx_transfer_transactions: 1,
+                transfer_rows: 1,
+              },
+            ],
+          },
+        })
+      },
+    })
+
+    const result = await crawlSolanaProgram({
+      fromYear: Option.some(2024),
+      toYear: Option.some(2024),
+      top: 1,
+      out: Option.none(),
+      json: true,
+      signatures: [],
+      programs: [],
+      fromSlot: Option.none(),
+      toSlot: Option.none(),
+      sampleLimit: 100,
+      dune: true,
+      dunePeriod: "quarter",
+    }).pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
+      ),
+      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.runPromise
+    )
+
+    expect(result.duneProgramRankings?.queries.map((query) => query.periodGranularity)).toEqual([
+      "quarter",
+      "quarter",
+      "quarter",
+    ])
+    expect(result.duneProgramRankings?.entries[0]).toMatchObject({
+      period: "2024-01-01 to 2024-04-01",
+      periodGranularity: "quarter",
+      sampleSignatures: ["quarter-sample-signature"],
+    })
+    expect(rankingCalls.map((call) => call.parameters)).toEqual([
+      { start_date: "2024-01-01", end_date: "2024-04-01" },
+      { start_date: "2024-04-01", end_date: "2024-07-01" },
+      { start_date: "2024-07-01", end_date: "2024-10-01" },
+      { start_date: "2024-10-01", end_date: "2025-01-01" },
+      { start_date: "2024-01-01", end_date: "2024-04-01" },
+      { start_date: "2024-04-01", end_date: "2024-07-01" },
+      { start_date: "2024-07-01", end_date: "2024-10-01" },
+      { start_date: "2024-10-01", end_date: "2025-01-01" },
+    ])
+  })
+
+  it("fails Dune ranking when a saved query returns no rows", async () => {
+    const result = await Effect.runPromiseExit(
+      crawlSolanaProgram({
+        fromYear: Option.some(2024),
+        toYear: Option.some(2024),
+        top: 10,
+        out: Option.none(),
+        json: true,
+        signatures: [],
+        programs: [],
+        fromSlot: Option.none(),
+        toSlot: Option.none(),
+        sampleLimit: 100,
+        dune: true,
+        dunePeriod: "year",
+      }).pipe(
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", "/tmp/unused"]]))
+        ),
+        Effect.provide(
+          Layer.mergeAll(
+            NodeContext.layer,
+            unusedSamplerClientLive,
+            SolanaDuneProgramRankingClientTestLive({
+              executeQuery: () =>
+                Effect.succeed({ state: "QUERY_STATE_COMPLETED", result: { rows: [] } }),
+            })
+          )
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("returned no rows")
+    }
+  })
+
+  it("fails Dune ranking when rows are malformed", async () => {
+    const result = await Effect.runPromiseExit(
+      crawlSolanaProgram({
+        fromYear: Option.some(2024),
+        toYear: Option.some(2024),
+        top: 10,
+        out: Option.none(),
+        json: true,
+        signatures: [],
+        programs: [],
+        fromSlot: Option.none(),
+        toSlot: Option.none(),
+        sampleLimit: 100,
+        dune: true,
+        dunePeriod: "year",
+      }).pipe(
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", "/tmp/unused"]]))
+        ),
+        Effect.provide(
+          Layer.mergeAll(
+            NodeContext.layer,
+            unusedSamplerClientLive,
+            SolanaDuneProgramRankingClientTestLive({
+              executeQuery: () =>
+                Effect.succeed({
+                  state: "QUERY_STATE_COMPLETED",
+                  result: { rows: [{ program_id: 123 }] },
+                }),
+            })
+          )
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("Failed to decode Dune rows")
+    }
+  })
+
+  it("maps Dune API failures to structured crawler errors", async () => {
+    const result = await Effect.runPromiseExit(
+      crawlSolanaProgram({
+        fromYear: Option.some(2024),
+        toYear: Option.some(2024),
+        top: 10,
+        out: Option.none(),
+        json: true,
+        signatures: [],
+        programs: [],
+        fromSlot: Option.none(),
+        toSlot: Option.none(),
+        sampleLimit: 100,
+        dune: true,
+        dunePeriod: "year",
+      }).pipe(
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", "/tmp/unused"]]))
+        ),
+        Effect.provide(
+          Layer.mergeAll(
+            NodeContext.layer,
+            unusedSamplerClientLive,
+            SolanaDuneProgramRankingClientTestLive({
+              executeQuery: ({ query }) =>
+                Effect.fail(
+                  new SolanaDuneProgramRankingError({
+                    message: "Dune API request failed (500): unavailable",
+                    queryId: query.queryId,
+                  })
+                ),
+            })
+          )
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain("Dune API request failed")
+    }
   })
 
   it("keeps the checked-in default output under Solana sync-engine reference data", () => {
