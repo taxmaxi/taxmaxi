@@ -87,6 +87,26 @@ const makeRepositoryLayer = ({
       Effect.dieMessage("listRepairableActiveJobs should not be called"),
   } satisfies SourceSyncJobRepositoryShape)
 
+const makeProducerLayer = ({
+  queue,
+  attached,
+  attachQueueMetadata,
+}: {
+  readonly queue: BullMqSourceSyncQueue
+  readonly attached: Array<AttachSourceSyncQueueMetadataParams>
+  readonly attachQueueMetadata?: SourceSyncJobRepositoryShape["attachQueueMetadata"]
+}) =>
+  makeApiBullMqSourceSyncQueueLive({
+    acquireQueue: () => Effect.succeed(queue),
+  }).pipe(
+    Layer.provideMerge(
+      makeRepositoryLayer({
+        attached,
+        ...(attachQueueMetadata === undefined ? {} : { attachQueueMetadata }),
+      })
+    )
+  )
+
 const runWithProducer = <A, E>({
   effect,
   queue,
@@ -104,11 +124,12 @@ const runWithProducer = <A, E>({
     Effect.scoped(
       effect.pipe(
         Effect.provide(
-          makeApiBullMqSourceSyncQueueLive({
-            acquireQueue: () => Effect.succeed(queue),
+          makeProducerLayer({
+            queue,
+            attached,
+            ...(attachQueueMetadata === undefined ? {} : { attachQueueMetadata }),
           })
         ),
-        Effect.provide(makeRepositoryLayer({ attached, attachQueueMetadata })),
         Effect.withConfigProvider(makeConfigProvider(configOverrides))
       )
     )
@@ -199,15 +220,18 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
 
     const queue: BullMqSourceSyncQueue = {
       add: () => Promise.resolve({ id: payload.jobId }),
-      close: Effect.gen(function* () {
+      close: Effect.sync(() => {
         closeCount += 1
-        return yield* Effect.fail(
-          new SourceSyncQueueError({
-            operation: "test.close",
-            cause: new Error("close failed"),
-          })
+      }).pipe(
+        Effect.zipRight(
+          Effect.fail(
+            new SourceSyncQueueError({
+              operation: "test.close",
+              cause: new Error("close failed"),
+            })
+          )
         )
-      }),
+      ),
     }
 
     await runWithProducer({
@@ -305,9 +329,8 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
 
       const result = await Effect.runPromise(
         Effect.scoped(
-          Effect.gen(function* () {
-            yield* SourceSyncQueue
-          }).pipe(
+          SourceSyncQueue.pipe(
+            Effect.asVoid,
             Effect.provide(
               makeApiBullMqSourceSyncQueueLive({
                 acquireQueue: (config) =>
@@ -315,9 +338,8 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
                     acquiredConfig = config
                     return queue
                   }),
-              })
+              }).pipe(Layer.provideMerge(makeRepositoryLayer({ attached })))
             ),
-            Effect.provide(makeRepositoryLayer({ attached })),
             Effect.withConfigProvider(makeConfigProvider(configOverrides)),
             Effect.either
           )
@@ -349,9 +371,8 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
 
     const result = await Effect.runPromise(
       Effect.scoped(
-        Effect.gen(function* () {
-          yield* SourceSyncQueue
-        }).pipe(
+        SourceSyncQueue.pipe(
+          Effect.asVoid,
           Effect.provide(
             makeApiBullMqSourceSyncQueueLive({
               acquireQueue: (config) =>
@@ -359,9 +380,8 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
                   acquiredConfig = config
                   return queue
                 }),
-            })
+            }).pipe(Layer.provideMerge(makeRepositoryLayer({ attached })))
           ),
-          Effect.provide(makeRepositoryLayer({ attached })),
           Effect.withConfigProvider(
             makeConfigProvider({
               overrides: {

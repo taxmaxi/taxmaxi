@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { ConfigProvider, Effect, Layer, Option, Schema } from "effect"
 import {
   extractSolanaBehaviorSample,
+  SolanaBehaviorSamplerClient,
   SolanaBehaviorSamplerClientTestLive,
   SolanaBehaviorSamplesArtifact,
 } from "../src/solana-behavior-sampler.ts"
@@ -25,7 +26,7 @@ const unusedSamplerClientLive = SolanaBehaviorSamplerClientTestLive({
 })
 
 const runEffect = <A, E>(
-  effect: Effect.Effect<A, E, NodeContext.NodeContext | never>
+  effect: Effect.Effect<A, E, NodeContext.NodeContext | SolanaBehaviorSamplerClient>
 ): Promise<A> =>
   effect.pipe(
     Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive)),

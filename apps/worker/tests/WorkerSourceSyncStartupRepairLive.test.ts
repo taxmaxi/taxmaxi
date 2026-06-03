@@ -188,18 +188,19 @@ const runRepair = ({
           makeWorkerSourceSyncStartupRepairLive({
             acquireQueue: (_config: WorkerSourceSyncStartupRepairConfig) =>
               Effect.succeed(makeQueue(enqueued, queueOptions)),
-          })
-        ),
-        Effect.provide(
-          makeRepositoryLayer({
-            repairableJobs,
-            attached,
-            recovered,
-            attachFailureJobId,
-            attachFailureKind,
-            recoverFailureJobId,
-            recoverFailureKind,
-          })
+          }).pipe(
+            Layer.provideMerge(
+              makeRepositoryLayer({
+                repairableJobs,
+                attached,
+                recovered,
+                ...(attachFailureJobId === undefined ? {} : { attachFailureJobId }),
+                ...(attachFailureKind === undefined ? {} : { attachFailureKind }),
+                ...(recoverFailureJobId === undefined ? {} : { recoverFailureJobId }),
+                ...(recoverFailureKind === undefined ? {} : { recoverFailureKind }),
+              })
+            )
+          )
         ),
         Effect.withConfigProvider(makeConfigProvider(configOverrides))
       )
