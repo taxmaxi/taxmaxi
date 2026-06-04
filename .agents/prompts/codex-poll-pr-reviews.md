@@ -30,11 +30,17 @@ Behavior:
 4. Decide action.
    - If new actionable Codex review comments exist and pass count < 3: run a fresh Codex review-fix session using `.agents/prompts/codex-address-review.md`.
    - If new actionable Codex review comments exist and pass count >= 3: stop and notify the maintainer on Telegram with remaining comments and suggested manual next steps.
+   - If Codex posts a top-level no-issue response for the current head SHA, for example `Codex Review: Didn't find any major issues`, and checks are green or acceptable: treat the Codex review as complete and send the human-review Telegram message using `.agents/prompts/human-review-notification.md`.
    - If no actionable Codex comments remain and checks are green or acceptable: send the human-review Telegram message using `.agents/prompts/human-review-notification.md`.
    - If checks are pending: do nothing unless they have been pending unusually long.
    - If checks failed: diagnose whether failures are related to the PR. For v1, notify/record rather than auto-fixing CI unless explicitly enabled.
 
-5. Safety rules.
+5. Duplicate-review guard.
+   - Do not post or trigger another `@codex review` after Codex has already posted a no-issue response for the current head SHA.
+   - Do not require a formal PR review object when the connector has already posted a no-issue top-level comment after the relevant push/review trigger.
+   - Request another Codex review only if a new commit is pushed, the existing Codex response is stale/ambiguous, checks fail after the response, new actionable feedback appears, or the maintainer explicitly asks.
+
+6. Safety rules.
    - Do not merge PRs.
    - Do not close issues.
    - Do not add readiness labels.
@@ -42,6 +48,6 @@ Behavior:
    - Do not run Codex on unrelated external PRs.
    - Prefer doing nothing over acting on ambiguous state.
 
-6. Human notification.
+7. Human notification.
    - Send to `<configured Telegram target>` only when ready, stuck after 3 passes, or blocked by human decision.
    - Include exact test instructions: CLI commands, API endpoints/Postman steps, expected results, and checks already run.

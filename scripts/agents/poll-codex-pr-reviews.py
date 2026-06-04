@@ -28,6 +28,9 @@ NON_ACTIONABLE_CODEX_PHRASES = (
     "connect to github",
     "codex cloud/settings/connectors",
     "to use codex here",
+    "didn't find any major issues",
+    "did not find any major issues",
+    "what shall we delve into next",
 )
 
 
@@ -105,6 +108,7 @@ def actionable_review_items(
     reviews: list[dict[str, Any]],
     inline_comments: list[dict[str, Any]],
     issue_comments: list[dict[str, Any]],
+    head_sha: str,
 ) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
 
@@ -112,6 +116,9 @@ def actionable_review_items(
         author = user_login(review, "user", "login")
         body = str(review.get("body") or "").strip()
         state = str(review.get("state") or "").upper()
+        commit_id = str(review.get("commit_id") or "")
+        if head_sha and commit_id and commit_id != head_sha:
+            continue
         if looks_like_codex_author(author) and state in {"CHANGES_REQUESTED", "COMMENTED"} and body and not looks_non_actionable_codex_body(body):
             items.append(
                 {
@@ -125,6 +132,9 @@ def actionable_review_items(
     for comment in inline_comments:
         author = user_login(comment, "user", "login")
         body = str(comment.get("body") or "").strip()
+        commit_id = str(comment.get("commit_id") or "")
+        if head_sha and commit_id and commit_id != head_sha:
+            continue
         if looks_like_codex_author(author) and body and not looks_non_actionable_codex_body(body):
             path = str(comment.get("path") or "")
             line = comment.get("line") or comment.get("original_line") or "?"
@@ -245,7 +255,7 @@ def main() -> int:
         if not isinstance(issue_comments, list):
             issue_comments = []
 
-        actionable = actionable_review_items(reviews, inline_comments, issue_comments)
+        actionable = actionable_review_items(reviews, inline_comments, issue_comments, head_sha)
         check_status = checks_summary(number)
         pass_count = int(pr_state.get("fix_pass_count") or 0)
 
