@@ -43,8 +43,10 @@ const DuneProgramSampleTransactionRow = Schema.Struct({
   tx_id: Schema.String,
 })
 
-const DUNE_QUERY_VERSION = 1
+const DUNE_DEX_PROJECT_PRIORITY_QUERY_VERSION = 1
+const DUNE_TOKEN_TRANSFER_PROGRAM_CANDIDATES_QUERY_VERSION = 2
 const DUNE_SAMPLE_QUERY_VERSION = 1
+export const DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS = 1
 
 export const SolanaDunePeriodGranularity = Schema.Literal("year", "quarter")
 export type SolanaDunePeriodGranularity = typeof SolanaDunePeriodGranularity.Type
@@ -68,13 +70,13 @@ const SOLANA_DUNE_PROGRAM_RANKING_QUERY_TEMPLATES: ReadonlyArray<
   {
     queryId: 7_647_495,
     queryName: "solana-dex-project-priority",
-    version: DUNE_QUERY_VERSION,
+    version: DUNE_DEX_PROJECT_PRIORITY_QUERY_VERSION,
     kind: "dex-project-priority",
   },
   {
     queryId: 7_648_079,
     queryName: "solana-token-transfer-program-candidates",
-    version: DUNE_QUERY_VERSION,
+    version: DUNE_TOKEN_TRANSFER_PROGRAM_CANDIDATES_QUERY_VERSION,
     kind: "token-transfer-program-candidates",
   },
 ]
@@ -122,6 +124,7 @@ export const SolanaDuneProgramRankingsArtifact = Schema.Struct({
     toYear: Schema.Number,
   }),
   top: Schema.Number,
+  executionWindowDays: Schema.Number,
   queries: Schema.Array(SolanaDuneQueryConfig),
   entries: Schema.Array(SolanaDuneProgramRankingRecord),
 })
@@ -137,6 +140,12 @@ export class SolanaDuneProgramRankingError extends Schema.TaggedError<SolanaDune
 
 type SolanaDuneRankingPeriod = {
   readonly label: string
+  readonly startDate: string
+  readonly endDate: string
+}
+
+type SolanaDuneRankingExecutionWindow = {
+  readonly period: SolanaDuneRankingPeriod
   readonly startDate: string
   readonly endDate: string
 }
@@ -265,6 +274,60 @@ const periodsForGranularity = ({
     ? yearPeriods({ fromYear, toYear })
     : quarterPeriods({ generatedAt, fromYear, toYear })
 
+const formattedPeriodRange = (period: SolanaDuneRankingPeriod): string =>
+  `${period.startDate} to ${period.endDate}`
+
+const addUtcDays = (date: string, days: number): string => {
+  const parsed = new Date(`${date}T00:00:00.000Z`)
+  parsed.setUTCDate(parsed.getUTCDate() + days)
+  return parsed.toISOString().slice(0, 10)
+}
+
+const splitPeriodIntoExecutionWindows = ({
+  executionWindowDays,
+  period,
+}: {
+  readonly executionWindowDays: number
+  readonly period: SolanaDuneRankingPeriod
+}): ReadonlyArray<SolanaDuneRankingExecutionWindow> => {
+  const windows: Array<SolanaDuneRankingExecutionWindow> = []
+  let startDate = period.startDate
+
+  while (startDate < period.endDate) {
+    const nextDate = addUtcDays(startDate, executionWindowDays)
+    const endDate = nextDate < period.endDate ? nextDate : period.endDate
+    windows.push({
+      period,
+      startDate,
+      endDate,
+    })
+    startDate = endDate
+  }
+
+  return windows
+}
+
+const validateExecutionWindowDays = (
+  executionWindowDays: number
+): Effect.Effect<number, SolanaDuneProgramRankingError> =>
+  Number.isSafeInteger(executionWindowDays) && executionWindowDays > 0
+    ? Effect.succeed(executionWindowDays)
+    : Effect.fail(
+        new SolanaDuneProgramRankingError({
+          message: "`duneWindowDays` must be a positive safe integer",
+        })
+      )
+
+const sampleWindowForPeriod = (
+  period: SolanaDuneRankingPeriod
+): SolanaDuneProgramRankingRecordWithSampleWindow["sampleWindow"] => {
+  const oneDayEndDate = addUtcDays(period.startDate, 1)
+  return {
+    startDate: period.startDate,
+    endDate: oneDayEndDate < period.endDate ? oneDayEndDate : period.endDate,
+  }
+}
+
 const resultRows = (
   response: unknown,
   query: SolanaDuneQueryConfig,
@@ -330,11 +393,13 @@ const mapDexProjectRows = ({
       if (programId === undefined) {
         return []
       }
+      const sampleWindow = sampleWindowForPeriod(period)
+      const recordPeriod = formattedPeriodRange(period)
 
       return [
         {
           programId,
-          period: row.period,
+          period: recordPeriod,
           invocationCount,
           uniqueSignerCount,
           transactionCount,
@@ -344,10 +409,7 @@ const mapDexProjectRows = ({
           periodGranularity: query.periodGranularity,
           queryVersion: query.version,
           retrievedAt: row.retrieved_at,
-          sampleWindow: {
-            startDate: period.startDate,
-            endDate: period.endDate,
-          },
+          sampleWindow,
         } satisfies SolanaDuneProgramRankingRecordWithSampleWindow,
       ]
     })
@@ -382,10 +444,12 @@ const mapTokenTransferRows = ({
         query,
         field: "approx_signers",
       })
+      const sampleWindow = sampleWindowForPeriod(period)
+      const recordPeriod = formattedPeriodRange(period)
 
       return {
         programId: row.program_id,
-        period: row.period,
+        period: recordPeriod,
         invocationCount,
         uniqueSignerCount,
         transactionCount,
@@ -395,10 +459,7 @@ const mapTokenTransferRows = ({
         periodGranularity: query.periodGranularity,
         queryVersion: query.version,
         retrievedAt: row.retrieved_at,
-        sampleWindow: {
-          startDate: period.startDate,
-          endDate: period.endDate,
-        },
+        sampleWindow,
       } satisfies SolanaDuneProgramRankingRecordWithSampleWindow
     })
   )
@@ -537,7 +598,9 @@ export const buildSolanaDuneProgramRankingsArtifact = ({
   periodGranularity = "year",
   toYear,
   top,
+  executionWindowDays = DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS,
 }: {
+  readonly executionWindowDays?: number
   readonly generatedAt: string
   readonly fromYear: number
   readonly periodGranularity?: SolanaDunePeriodGranularity
@@ -550,19 +613,27 @@ export const buildSolanaDuneProgramRankingsArtifact = ({
 > =>
   Effect.gen(function* () {
     const client = yield* SolanaDuneProgramRankingClient
+    const validExecutionWindowDays = yield* validateExecutionWindowDays(executionWindowDays)
     const periods = periodsForGranularity({ generatedAt, fromYear, periodGranularity, toYear })
     const queries = solanaDuneProgramRankingQueriesForPeriod(periodGranularity)
-    const queryPeriods = queries.flatMap((query) => periods.map((period) => ({ query, period })))
-    const entries = yield* Effect.forEach(queryPeriods, ({ query, period }) =>
+    const queryWindows = queries.flatMap((query) =>
+      periods.flatMap((period) =>
+        splitPeriodIntoExecutionWindows({
+          executionWindowDays: validExecutionWindowDays,
+          period,
+        }).map((executionWindow) => ({ query, executionWindow }))
+      )
+    )
+    const entries = yield* Effect.forEach(queryWindows, ({ query, executionWindow }) =>
       Effect.gen(function* () {
         const response = yield* client.executeQuery({
           query,
           parameters: {
-            start_date: period.startDate,
-            end_date: period.endDate,
+            start_date: executionWindow.startDate,
+            end_date: executionWindow.endDate,
           },
         })
-        return yield* recordsFromQueryResponse({ period, query, response })
+        return yield* recordsFromQueryResponse({ period: executionWindow.period, query, response })
       })
     ).pipe(Effect.map((records) => records.flat()))
 
@@ -584,6 +655,7 @@ export const buildSolanaDuneProgramRankingsArtifact = ({
       generatedAt,
       window: { fromYear, toYear },
       top,
+      executionWindowDays: validExecutionWindowDays,
       queries: [...queries, sampleQueryForPeriod(periodGranularity)],
       entries: entriesWithSamples,
     }
