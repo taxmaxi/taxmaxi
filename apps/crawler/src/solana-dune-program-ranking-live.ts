@@ -19,6 +19,9 @@ import {
 const DUNE_API_URL = "https://api.dune.com/api/v1"
 const DUNE_API_KEY_CONFIG = Config.redacted("DUNE_API_KEY")
 const DUNE_EXECUTION_POLL_LIMIT = 180
+const DUNE_EXECUTION_POLL_INTERVAL = "5 seconds"
+const DUNE_RATE_LIMIT_RETRY_LIMIT = 4
+const DUNE_RATE_LIMIT_DEFAULT_RETRY_DELAY_SECONDS = 30
 
 const DuneExecuteResponse = Schema.Struct({
   execution_id: Schema.String,
@@ -52,6 +55,18 @@ const toDuneError = ({
     ...(queryId === undefined ? {} : { queryId }),
   })
 
+const duneRateLimitRetryDelaySeconds = (
+  headers: HttpClientResponse.HttpClientResponse["headers"]
+): number | null => {
+  const retryAfter = headers["retry-after"]
+  if (retryAfter === undefined) {
+    return null
+  }
+
+  const parsedRetryAfter = Number.parseFloat(retryAfter)
+  return Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0 ? parsedRetryAfter : null
+}
+
 export const readSolanaDuneApiKey: Effect.Effect<string, SolanaDuneProgramRankingError> =
   DUNE_API_KEY_CONFIG.pipe(
     Effect.map(Redacted.value),
@@ -84,6 +99,27 @@ const executeAndDecode = <A, I>({
   readonly schema: Schema.Schema<A, I>
   readonly queryId: number
 }): Effect.Effect<A, SolanaDuneProgramRankingError> =>
+  executeAndDecodeWithRetries({
+    client,
+    request,
+    schema,
+    queryId,
+    remainingRateLimitRetries: DUNE_RATE_LIMIT_RETRY_LIMIT,
+  })
+
+const executeAndDecodeWithRetries = <A, I>({
+  client,
+  request,
+  schema,
+  queryId,
+  remainingRateLimitRetries,
+}: {
+  readonly client: HttpClient.HttpClient
+  readonly request: HttpClientRequest.HttpClientRequest
+  readonly schema: Schema.Schema<A, I>
+  readonly queryId: number
+  readonly remainingRateLimitRetries: number
+}): Effect.Effect<A, SolanaDuneProgramRankingError> =>
   Effect.gen(function* () {
     const response = yield* client.execute(request).pipe(
       Effect.mapError((error) =>
@@ -95,6 +131,23 @@ const executeAndDecode = <A, I>({
     )
     if (response.status < 200 || response.status >= 300) {
       const body = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
+      const retryDelaySeconds =
+        duneRateLimitRetryDelaySeconds(response.headers) ??
+        DUNE_RATE_LIMIT_DEFAULT_RETRY_DELAY_SECONDS
+      if (response.status === 429 && remainingRateLimitRetries > 0) {
+        yield* Effect.logInfo(
+          { queryId, retryDelaySeconds, remainingRateLimitRetries },
+          "Dune API rate limited; retrying"
+        )
+        yield* Effect.sleep(`${retryDelaySeconds} seconds`)
+        return yield* executeAndDecodeWithRetries({
+          client,
+          request,
+          schema,
+          queryId,
+          remainingRateLimitRetries: remainingRateLimitRetries - 1,
+        })
+      }
       return yield* toDuneError({
         queryId,
         message: `Dune API request failed (${response.status}): ${body}`,
@@ -221,7 +274,7 @@ const waitForExecutionResult = ({
       })
     }
 
-    yield* Effect.sleep("1 second")
+    yield* Effect.sleep(DUNE_EXECUTION_POLL_INTERVAL)
     return yield* waitForExecutionResult({
       client,
       apiKey,
