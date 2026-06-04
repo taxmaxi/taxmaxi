@@ -466,8 +466,13 @@ const reportFixtureIds = {
   sellTransactionId: "00000000-0000-0000-0000-000000046102",
   acquisitionLegId: "00000000-0000-0000-0000-000000046201",
   disposalLegId: "00000000-0000-0000-0000-000000046202",
+  feeTransactionId: "00000000-0000-0000-0000-000000046203",
+  feeLegId: "00000000-0000-0000-0000-000000046204",
+  internalTransferTransactionId: "00000000-0000-0000-0000-000000046205",
+  internalTransferLegId: "00000000-0000-0000-0000-000000046206",
   taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
   taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
+  internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
 } as const
 
 const seedSourceReportRows = ({
@@ -585,6 +590,98 @@ const seedSourceReportRows = ({
         gainLoss: "0",
       },
     ])
+  })
+
+const seedSourceReportTaxTreatmentRows = ({
+  principalId,
+  sourceId,
+}: {
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.transactions).values([
+      {
+        id: reportFixtureIds.feeTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-fee-1",
+        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+        transactionType: "gas_fee",
+        providerTransactionType: "fee",
+        providerStatus: "completed",
+        providerDescription: "Network fee",
+      },
+      {
+        id: reportFixtureIds.internalTransferTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-1",
+        timestamp: new Date("2025-04-11T12:00:00.000Z"),
+        transactionType: "sell_fiat",
+        providerTransactionType: "send",
+        providerStatus: "completed",
+        providerDescription: "Internal transfer out",
+      },
+    ])
+
+    yield* db.insert(schema.transactionLegs).values([
+      {
+        id: reportFixtureIds.feeLegId,
+        sourceId,
+        principalId,
+        externalId: "report-fee-1:fee",
+        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.01",
+        kind: "fee",
+        provenance: "deterministic",
+        derivationRule: "gas_fee",
+        transactionId: reportFixtureIds.feeTransactionId,
+        fiatAmount: "2",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: reportFixtureIds.internalTransferLegId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-1:internal_transfer_out",
+        timestamp: new Date("2025-04-11T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.1",
+        kind: "disposal",
+        provenance: "deterministic",
+        derivationRule: "internal_transfer_out",
+        transactionId: reportFixtureIds.internalTransferTransactionId,
+        fiatAmount: "500",
+        fiatCurrency: "EUR",
+      },
+    ])
+
+    yield* db.insert(schema.fifoLots).values({
+      id: reportFixtureIds.internalTransferFifoLotId,
+      sourceId,
+      principalId,
+      assetId: TEST_BTC_ASSET_ID,
+      acquiredAt: new Date("2025-04-01T12:00:00.000Z"),
+      originalAmount: "0.1",
+      remainingAmount: "0",
+      costBasisPerToken: "5000",
+      costBasisCurrency: "EUR",
+      sourceLegId: reportFixtureIds.acquisitionLegId,
+      sourceLegSequence: 2,
+    })
+
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId: reportFixtureIds.internalTransferLegId,
+      fifoLotId: reportFixtureIds.internalTransferFifoLotId,
+      matchedAmount: "0.1",
+      costBasis: "500",
+      proceeds: "500",
+      gainLoss: "0",
+    })
   })
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -726,6 +823,60 @@ describe("SourcesApiLive", () => {
       })
       expect(fifoLots.fifoLots).toEqual([])
     }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect(
+    "labels deductible fees and internal transfer disposals without taxable treatment",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        yield* seedSyncEngineAssets({
+          baseBlockchainId: fixture.baseBlockchainId,
+          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+        })
+        yield* seedSourceReportRows({
+          principalId: fixture.principalId,
+          sourceId: fixture.sourceId,
+        })
+        yield* seedSourceReportTaxTreatmentRows({
+          principalId: fixture.principalId,
+          sourceId: fixture.sourceId,
+        })
+
+        const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+        const taxEvents = yield* client.sources.listSourceTaxEvents({
+          path: { sourceId: fixture.sourceId },
+          urlParams: { limit: 10 },
+        })
+        const feeEvent = taxEvents.taxEvents.find(
+          (event) => event.legId === reportFixtureIds.feeLegId
+        )
+        const internalTransferEvent = taxEvents.taxEvents.find(
+          (event) => event.legId === reportFixtureIds.internalTransferLegId
+        )
+
+        expect(feeEvent).toMatchObject({
+          kind: "fee",
+          taxableTreatment: "deductible",
+        })
+        expect(internalTransferEvent).toMatchObject({
+          kind: "disposal",
+          derivationRule: "internal_transfer_out",
+          taxableTreatment: "non_taxable",
+        })
+
+        const explanation = yield* client.sources.explainSourceDisposal({
+          path: {
+            sourceId: fixture.sourceId,
+            legId: reportFixtureIds.internalTransferLegId,
+          },
+        })
+        expect(explanation).toMatchObject({
+          disposalLegId: reportFixtureIds.internalTransferLegId,
+          taxableTreatment: "non_taxable",
+        })
+        expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual(["non_taxable"])
+      }).pipe(Effect.provide(HttpLive))
   )
 
   it.effect("creates an authenticated Solana source without starting sync", () =>

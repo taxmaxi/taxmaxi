@@ -53,7 +53,13 @@ export interface SourceReportPageParams extends SourceReportScope {
   readonly limit: number
 }
 
-export type SourceReportTaxableTreatment = "taxable" | "tax_free" | "unknown" | "mixed"
+export type SourceReportTaxableTreatment =
+  | "taxable"
+  | "tax_free"
+  | "deductible"
+  | "non_taxable"
+  | "unknown"
+  | "mixed"
 
 export interface SourceReportPage<T> {
   readonly items: ReadonlyArray<T>

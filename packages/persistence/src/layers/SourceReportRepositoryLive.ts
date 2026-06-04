@@ -119,6 +119,15 @@ const combineTaxableTreatments = (
   return "mixed"
 }
 
+const disposalTaxableTreatment = ({
+  derivationRule,
+  treatments,
+}: {
+  readonly derivationRule: string | null
+  readonly treatments: ReadonlyArray<SourceReportTaxableTreatment>
+}): SourceReportTaxableTreatment =>
+  derivationRule === "internal_transfer_out" ? "non_taxable" : combineTaxableTreatments(treatments)
+
 const makeCursor = ({ timestamp, id }: CursorParts): string => `${timestamp.toISOString()}|${id}`
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -733,10 +742,15 @@ const make = Effect.gen(function* () {
             gainLoss: matches.length === 0 ? null : formatDecimal(gainLoss),
             taxableTreatment:
               row.kind === "disposal"
-                ? combineTaxableTreatments(treatments)
-                : row.kind === "income" || row.kind === "fee"
+                ? disposalTaxableTreatment({
+                    derivationRule: row.derivationRule,
+                    treatments,
+                  })
+                : row.kind === "income"
                   ? "taxable"
-                  : "unknown",
+                  : row.kind === "fee"
+                    ? "deductible"
+                    : "unknown",
             provenance: row.provenance,
             derivationRule: row.derivationRule,
           } satisfies SourceTaxEventRow
@@ -965,10 +979,13 @@ const make = Effect.gen(function* () {
           costBasis: formatDecimal(rowCostBasis),
           proceeds: formatDecimal(rowProceeds),
           gainLoss: formatDecimal(rowGainLoss),
-          taxableTreatment: taxableTreatmentForDates({
-            acquiredAt: row.acquiredAt,
-            disposedAt: leg.timestamp,
-          }),
+          taxableTreatment:
+            leg.derivationRule === "internal_transfer_out"
+              ? "non_taxable"
+              : taxableTreatmentForDates({
+                  acquiredAt: row.acquiredAt,
+                  disposedAt: leg.timestamp,
+                }),
         })
       }
       const amount = yield* decodeDecimal({
@@ -993,7 +1010,10 @@ const make = Effect.gen(function* () {
         gainLoss: formatDecimal(gainLoss),
         acquiredAt: isoOrNull(firstAcquiredAt),
         disposedAt: leg.timestamp.toISOString(),
-        taxableTreatment: combineTaxableTreatments(matchedLots.map((lot) => lot.taxableTreatment)),
+        taxableTreatment: disposalTaxableTreatment({
+          derivationRule: leg.derivationRule,
+          treatments: matchedLots.map((lot) => lot.taxableTreatment),
+        }),
         provenance: leg.provenance,
         derivationRule: leg.derivationRule,
         matchedLots,

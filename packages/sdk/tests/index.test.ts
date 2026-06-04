@@ -53,6 +53,81 @@ const sourceCreateResponseBody = JSON.stringify({
   },
 })
 
+const sourceResponse = {
+  id: "00000000-0000-4000-8000-000000000001",
+  principalId: "00000000-0000-4000-8000-000000000002",
+  name: "Demo Solana wallet",
+  providerKey: "helius-solana",
+  sourceRef: {
+    _tag: "onchain",
+    addressId: "00000000-0000-4000-8000-000000000003",
+  },
+  createdAt: {
+    epochMillis: 1_767_225_600_000,
+  },
+} as const
+
+const sourceOverviewResponseBody = JSON.stringify({
+  source: sourceResponse,
+  latestSync: {
+    status: null,
+    mode: null,
+    queuedAt: null,
+    startedAt: null,
+    completedAt: null,
+    lastSyncedAt: null,
+    lastErrorMessage: null,
+    importedRecords: null,
+    normalizedRecords: null,
+    failedRecords: null,
+  },
+  totals: {
+    transactionCount: 0,
+    legCount: 0,
+    assetCount: 0,
+    fifoLotCount: 0,
+    disposalCount: 0,
+    incomeCount: 0,
+    feeCount: 0,
+    realizedGainLoss: "0",
+    incomeTotal: "0",
+    currency: null,
+  },
+})
+
+const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })
+const emptySourceTransactionsResponseBody = JSON.stringify({
+  transactions: [],
+  page: { nextCursor: null, hasMore: false },
+})
+const emptySourceTaxEventsResponseBody = JSON.stringify({
+  taxEvents: [],
+  page: { nextCursor: null, hasMore: false },
+})
+const emptySourceFifoLotsResponseBody = JSON.stringify({
+  fifoLots: [],
+  page: { nextCursor: null, hasMore: false },
+})
+const sourceDisposalExplanationResponseBody = JSON.stringify({
+  disposalLegId: "00000000-0000-4000-8000-000000000006",
+  transactionId: "00000000-0000-4000-8000-000000000007",
+  asset: {
+    assetId: "00000000-0000-4000-8000-000000000008",
+    symbol: "BTC",
+    name: "Bitcoin",
+  },
+  amount: "0.1",
+  proceeds: "500",
+  costBasis: "500",
+  gainLoss: "0",
+  acquiredAt: "2025-01-01T00:00:00.000Z",
+  disposedAt: "2025-02-01T00:00:00.000Z",
+  taxableTreatment: "non_taxable",
+  provenance: "deterministic",
+  derivationRule: "internal_transfer_out",
+  matchedLots: [],
+})
+
 const anonSourceJobResponse = {
   sourceId: "00000000-0000-4000-8000-000000000001",
   jobId: "00000000-0000-4000-8000-000000000005",
@@ -305,6 +380,66 @@ describe("TaxMaxi Promise client", () => {
       expect.objectContaining({
         credentials: "include",
         url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs/00000000-0000-4000-8000-000000000005",
+      }),
+    ])
+  })
+
+  it("plumbs source report endpoints through the public sources resource", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const sourceId = "00000000-0000-4000-8000-000000000001"
+    const legId = "00000000-0000-4000-8000-000000000006"
+    const responseBodies = [
+      sourceOverviewResponseBody,
+      emptySourceAssetPnlResponseBody,
+      emptySourceTransactionsResponseBody,
+      emptySourceTaxEventsResponseBody,
+      emptySourceFifoLotsResponseBody,
+      sourceDisposalExplanationResponseBody,
+    ]
+    const taxmaxi = new TaxMaxi({
+      apiKey: "tm_report",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? emptySourceAssetPnlResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    await taxmaxi.sources.getOverview({ sourceId })
+    await taxmaxi.sources.listAssetPnl({ sourceId })
+    await taxmaxi.sources.listTransactions({ sourceId, limit: 25 })
+    await taxmaxi.sources.listTaxEvents({ sourceId, cursor: "cursor-value", limit: 10 })
+    await taxmaxi.sources.listFifoLots({ sourceId })
+    await taxmaxi.sources.explainDisposal({ sourceId, legId })
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/overview",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/assets/pnl",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/transactions?limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/tax-events?cursor=cursor-value&limit=10",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/fifo-lots",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
       }),
     ])
   })
