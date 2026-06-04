@@ -45,11 +45,21 @@ import {
   SourceCreateClaimMetadata,
   SourcePaymentRequiredError,
   SourceAssetPnlResponse,
+  SourceAssetPnlRow,
   SourceDisposalExplanationResponse,
+  SourceDisposalMatchedLot,
+  SourceFifoLotDisposalSummary,
   SourceFifoLotsResponse,
+  SourceFifoLotRow,
   SourceOverviewResponse,
   SourceReportPageInfo,
+  SourceReportAsset,
+  SourceReportSyncStatus,
+  SourceReportTotals,
   SourceTaxEventsResponse,
+  SourceTaxEventRow,
+  SourceTransactionMovement,
+  SourceTransactionRow,
   SourceTransactionsResponse,
 } from "../definitions/SourcesApi.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
@@ -170,6 +180,12 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             return toInternalServerError(message)
         }
       }
+
+    const reportAsset = (asset: {
+      readonly assetId: string
+      readonly symbol: string
+      readonly name: string
+    }) => SourceReportAsset.make(asset)
 
     return handlers
       .handle("listSources", () =>
@@ -400,7 +416,11 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .getOverview(scope)
             .pipe(Effect.mapError(mapReportError("Failed to load source overview.")))
 
-          return SourceOverviewResponse.make(overview)
+          return SourceOverviewResponse.make({
+            source: overview.source,
+            latestSync: SourceReportSyncStatus.make(overview.latestSync),
+            totals: SourceReportTotals.make(overview.totals),
+          })
         })
       )
       .handle("listSourceAssetPnl", ({ path }) =>
@@ -411,7 +431,14 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .listAssetPnl(scope)
             .pipe(Effect.mapError(mapReportError("Failed to load source asset P&L.")))
 
-          return SourceAssetPnlResponse.make({ assets })
+          return SourceAssetPnlResponse.make({
+            assets: assets.map((row) =>
+              SourceAssetPnlRow.make({
+                ...row,
+                asset: reportAsset(row.asset),
+              })
+            ),
+          })
         })
       )
       .handle("listSourceTransactions", ({ path, urlParams }) =>
@@ -423,7 +450,17 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .pipe(Effect.mapError(mapReportError("Failed to load source transactions.")))
 
           return SourceTransactionsResponse.make({
-            transactions: page.items,
+            transactions: page.items.map((row) =>
+              SourceTransactionRow.make({
+                ...row,
+                movements: row.movements.map((movement) =>
+                  SourceTransactionMovement.make({
+                    ...movement,
+                    asset: reportAsset(movement.asset),
+                  })
+                ),
+              })
+            ),
             page: SourceReportPageInfo.make({
               nextCursor: page.nextCursor,
               hasMore: page.hasMore,
@@ -440,7 +477,12 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .pipe(Effect.mapError(mapReportError("Failed to load source tax events.")))
 
           return SourceTaxEventsResponse.make({
-            taxEvents: page.items,
+            taxEvents: page.items.map((row) =>
+              SourceTaxEventRow.make({
+                ...row,
+                asset: reportAsset(row.asset),
+              })
+            ),
             page: SourceReportPageInfo.make({
               nextCursor: page.nextCursor,
               hasMore: page.hasMore,
@@ -457,7 +499,15 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .pipe(Effect.mapError(mapReportError("Failed to load source FIFO lots.")))
 
           return SourceFifoLotsResponse.make({
-            fifoLots: page.items,
+            fifoLots: page.items.map((row) =>
+              SourceFifoLotRow.make({
+                ...row,
+                asset: reportAsset(row.asset),
+                disposalMatches: row.disposalMatches.map((match) =>
+                  SourceFifoLotDisposalSummary.make(match)
+                ),
+              })
+            ),
             page: SourceReportPageInfo.make({
               nextCursor: page.nextCursor,
               hasMore: page.hasMore,
@@ -473,7 +523,16 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             .explainDisposal({ ...scope, legId: path.legId })
             .pipe(Effect.mapError(mapReportError("Failed to explain source disposal.")))
 
-          return SourceDisposalExplanationResponse.make(explanation)
+          return SourceDisposalExplanationResponse.make({
+            ...explanation,
+            asset: reportAsset(explanation.asset),
+            matchedLots: explanation.matchedLots.map((lot) =>
+              SourceDisposalMatchedLot.make({
+                ...lot,
+                asset: reportAsset(lot.asset),
+              })
+            ),
+          })
         })
       )
   })
