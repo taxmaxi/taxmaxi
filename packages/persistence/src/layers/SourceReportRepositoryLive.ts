@@ -803,30 +803,66 @@ const make = Effect.gen(function* () {
               .pipe(wrapSqlError("sourceReportRepository.listFifoLots.matches"))
       const matchesByLot = new Map<string, ReadonlyArray<SourceFifoLotDisposalSummary>>()
       for (const lotId of lotIds) {
-        matchesByLot.set(
-          lotId,
-          matchRows
-            .filter((row) => row.lotId === lotId)
-            .map((row) => ({
-              disposalLegId: row.disposalLegId,
-              matchedAmount: String(row.matchedAmount),
-              proceeds: String(row.proceeds),
-              costBasis: String(row.costBasis),
-              gainLoss: String(row.gainLoss),
-            }))
+        const disposalMatches = yield* Effect.forEach(
+          matchRows.filter((row) => row.lotId === lotId),
+          (row) =>
+            Effect.gen(function* () {
+              const matchedAmount = yield* decodeDecimal({
+                operation: "sourceReportRepository.listFifoLots.matchedAmount",
+                value: row.matchedAmount,
+              })
+              const proceeds = yield* decodeDecimal({
+                operation: "sourceReportRepository.listFifoLots.proceeds",
+                value: row.proceeds,
+              })
+              const costBasis = yield* decodeDecimal({
+                operation: "sourceReportRepository.listFifoLots.costBasis",
+                value: row.costBasis,
+              })
+              const gainLoss = yield* decodeDecimal({
+                operation: "sourceReportRepository.listFifoLots.gainLoss",
+                value: row.gainLoss,
+              })
+
+              return {
+                disposalLegId: row.disposalLegId,
+                matchedAmount: formatDecimal(matchedAmount),
+                proceeds: formatDecimal(proceeds),
+                costBasis: formatDecimal(costBasis),
+                gainLoss: formatDecimal(gainLoss),
+              } satisfies SourceFifoLotDisposalSummary
+            })
         )
+
+        matchesByLot.set(lotId, disposalMatches)
       }
-      const items = rows.map(
-        (row): SourceFifoLotRow => ({
-          lotId: row.lotId,
-          asset: assetFromRow(row),
-          acquiredAt: row.acquiredAt.toISOString(),
-          originalAmount: String(row.originalAmount),
-          remainingAmount: String(row.remainingAmount),
-          costBasisPerToken: String(row.costBasisPerToken),
-          costBasisCurrency: row.costBasisCurrency,
-          sourceLegId: row.sourceLegId,
-          disposalMatches: matchesByLot.get(row.lotId) ?? [],
+
+      const items = yield* Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const originalAmount = yield* decodeDecimal({
+            operation: "sourceReportRepository.listFifoLots.originalAmount",
+            value: row.originalAmount,
+          })
+          const remainingAmount = yield* decodeDecimal({
+            operation: "sourceReportRepository.listFifoLots.remainingAmount",
+            value: row.remainingAmount,
+          })
+          const costBasisPerToken = yield* decodeDecimal({
+            operation: "sourceReportRepository.listFifoLots.costBasisPerToken",
+            value: row.costBasisPerToken,
+          })
+
+          return {
+            lotId: row.lotId,
+            asset: assetFromRow(row),
+            acquiredAt: row.acquiredAt.toISOString(),
+            originalAmount: formatDecimal(originalAmount),
+            remainingAmount: formatDecimal(remainingAmount),
+            costBasisPerToken: formatDecimal(costBasisPerToken),
+            costBasisCurrency: row.costBasisCurrency,
+            sourceLegId: row.sourceLegId,
+            disposalMatches: matchesByLot.get(row.lotId) ?? [],
+          } satisfies SourceFifoLotRow
         })
       )
       return makePage({
@@ -910,6 +946,10 @@ const make = Effect.gen(function* () {
           operation: "sourceReportRepository.explainDisposal.gainLoss",
           value: row.gainLoss,
         })
+        const matchedAmount = yield* decodeDecimal({
+          operation: "sourceReportRepository.explainDisposal.matchedAmount",
+          value: row.matchedAmount,
+        })
         costBasis = BigDecimal.sum(costBasis, rowCostBasis)
         proceeds = BigDecimal.sum(proceeds, rowProceeds)
         gainLoss = BigDecimal.sum(gainLoss, rowGainLoss)
@@ -921,28 +961,34 @@ const make = Effect.gen(function* () {
           lotId: row.lotId,
           asset: assetFromRow(row),
           acquiredAt: row.acquiredAt.toISOString(),
-          matchedAmount: String(row.matchedAmount),
-          costBasis: String(row.costBasis),
-          proceeds: String(row.proceeds),
-          gainLoss: String(row.gainLoss),
+          matchedAmount: formatDecimal(matchedAmount),
+          costBasis: formatDecimal(rowCostBasis),
+          proceeds: formatDecimal(rowProceeds),
+          gainLoss: formatDecimal(rowGainLoss),
           taxableTreatment: taxableTreatmentForDates({
             acquiredAt: row.acquiredAt,
             disposedAt: leg.timestamp,
           }),
         })
       }
+      const amount = yield* decodeDecimal({
+        operation: "sourceReportRepository.explainDisposal.amount",
+        value: leg.amount,
+      })
+      const fiatAmount = yield* optionalDecimal({
+        operation: "sourceReportRepository.explainDisposal.fiatAmount",
+        value: leg.fiatAmount,
+      })
 
       return {
         disposalLegId: leg.legId,
         transactionId: leg.transactionId,
         asset: assetFromRow(leg),
-        amount: String(leg.amount),
-        proceeds:
-          leg.fiatAmount === null
-            ? matches.length === 0
-              ? null
-              : formatDecimal(proceeds)
-            : String(leg.fiatAmount),
+        amount: formatDecimal(amount),
+        proceeds: Option.match(fiatAmount, {
+          onNone: () => (matches.length === 0 ? null : formatDecimal(proceeds)),
+          onSome: formatDecimal,
+        }),
         costBasis: formatDecimal(costBasis),
         gainLoss: formatDecimal(gainLoss),
         acquiredAt: isoOrNull(firstAcquiredAt),
