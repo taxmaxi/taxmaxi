@@ -456,22 +456,23 @@ export const crawlSolanaProgram = ({
       SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME
     )
     const generatedAt = yield* nowIsoString
-    const duneProgramRankings = dune
-      ? yield* buildSolanaDuneProgramRankingsArtifact({
-          generatedAt,
-          fromYear: resolvedFromYear,
-          periodGranularity: dunePeriod,
-          toYear: resolvedToYear,
-          top,
-        }).pipe(
-          Effect.mapError(
-            (error) =>
-              new CrawlerCommandError({
-                message: error.message,
-              })
+    const duneProgramRankings =
+      dune && top > 0
+        ? yield* buildSolanaDuneProgramRankingsArtifact({
+            generatedAt,
+            fromYear: resolvedFromYear,
+            periodGranularity: dunePeriod,
+            toYear: resolvedToYear,
+            top,
+          }).pipe(
+            Effect.mapError(
+              (error) =>
+                new CrawlerCommandError({
+                  message: error.message,
+                })
+            )
           )
-        )
-      : null
+        : null
     const priorityMap =
       duneProgramRankings === null
         ? makeEmptySolanaPriorityMap({

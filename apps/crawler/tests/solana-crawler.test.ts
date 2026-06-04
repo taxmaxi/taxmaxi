@@ -224,6 +224,36 @@ describe("solana crawler", () => {
     ).resolves.toEqual(result.priorityMap)
   })
 
+  it("skips Dune queries when top is zero", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const result = await crawlSolanaProgram({
+      fromYear: Option.some(2024),
+      toYear: Option.some(2024),
+      top: 0,
+      out: Option.none(),
+      json: true,
+      signatures: [],
+      programs: [],
+      fromSlot: Option.none(),
+      toSlot: Option.none(),
+      sampleLimit: 100,
+      dune: true,
+      dunePeriod: "year",
+    }).pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
+      ),
+      Effect.provide(
+        Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, unusedDuneClientLive)
+      ),
+      Effect.runPromise
+    )
+
+    expect(result.priorityMap.entries).toEqual([])
+    expect(result.duneProgramRankings).toBeNull()
+    expect(result.duneProgramRankingsPath).toBeNull()
+  })
+
   it("extracts successful behavior evidence from a transaction payload", async () => {
     const result = await Effect.runPromise(
       extractSolanaBehaviorSample({
@@ -776,6 +806,90 @@ describe("solana crawler", () => {
       { start_date: "2024-07-01", end_date: "2024-10-01" },
       { start_date: "2024-10-01", end_date: "2025-01-01" },
     ])
+  })
+
+  it("aggregates duplicate Dune programs before applying top", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const sampleCalls: string[] = []
+    const duneClientLive = SolanaDuneProgramRankingClientTestLive({
+      executeQuery: ({ parameters, query }) => {
+        if (query.kind === "program-sample-transactions") {
+          sampleCalls.push(parameters.program_id ?? "")
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: { rows: [{ tx_id: `${parameters.program_id}-sample` }] },
+          })
+        }
+
+        if (query.kind === "dex-project-priority") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                {
+                  project: "shared",
+                  period: `${parameters.start_date} to ${parameters.end_date}`,
+                  retrieved_at: "2026-01-01T00:00:00Z",
+                  approx_unique_traders: 1,
+                  approx_trade_transactions: 1,
+                  trade_rows: 2,
+                  canonical_program_ids: ["SharedProgram11111111111111111111111111111"],
+                },
+              ],
+            },
+          })
+        }
+
+        const transferRows = parameters.start_date === "2024-01-01" ? 7 : 0
+        return Effect.succeed({
+          state: "QUERY_STATE_COMPLETED",
+          result: {
+            rows: [
+              {
+                program_id: "UniqueProgram11111111111111111111111111111",
+                period: `${parameters.start_date} to ${parameters.end_date}`,
+                retrieved_at: "2026-01-01T00:00:00Z",
+                approx_signers: transferRows === 0 ? 0 : 1,
+                approx_transfer_transactions: transferRows === 0 ? 0 : 1,
+                transfer_rows: transferRows,
+              },
+            ],
+          },
+        })
+      },
+    })
+
+    const result = await crawlSolanaProgram({
+      fromYear: Option.some(2024),
+      toYear: Option.some(2024),
+      top: 1,
+      out: Option.none(),
+      json: true,
+      signatures: [],
+      programs: [],
+      fromSlot: Option.none(),
+      toSlot: Option.none(),
+      sampleLimit: 100,
+      dune: true,
+      dunePeriod: "quarter",
+    }).pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
+      ),
+      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.runPromise
+    )
+
+    expect(result.priorityMap.entries.map((entry) => entry.key)).toEqual([
+      "SharedProgram11111111111111111111111111111",
+    ])
+    expect(result.duneProgramRankings?.entries[0]).toMatchObject({
+      programId: "SharedProgram11111111111111111111111111111",
+      invocationCount: 8,
+      uniqueSignerCount: 4,
+      transactionCount: 4,
+    })
+    expect(sampleCalls).toEqual(["SharedProgram11111111111111111111111111111"])
   })
 
   it("fails Dune ranking when a saved query returns no rows", async () => {

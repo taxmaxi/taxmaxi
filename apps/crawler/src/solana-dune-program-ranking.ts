@@ -444,6 +444,41 @@ const sampleSignaturesFromQueryResponse = ({
     return decodedRows.map((row) => row.tx_id)
   })
 
+const aggregateProgramRankingEntries = (
+  entries: ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow>
+): ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow> => {
+  const entriesByProgramId = new Map<string, SolanaDuneProgramRankingRecordWithSampleWindow>()
+
+  for (const entry of entries) {
+    const existing = entriesByProgramId.get(entry.programId)
+    if (existing === undefined) {
+      entriesByProgramId.set(entry.programId, entry)
+      continue
+    }
+
+    const representativeEntry =
+      entry.invocationCount > existing.invocationCount ||
+      (entry.invocationCount === existing.invocationCount && entry.period < existing.period)
+        ? entry
+        : existing
+
+    entriesByProgramId.set(entry.programId, {
+      ...representativeEntry,
+      invocationCount: existing.invocationCount + entry.invocationCount,
+      uniqueSignerCount:
+        existing.uniqueSignerCount === null && entry.uniqueSignerCount === null
+          ? null
+          : (existing.uniqueSignerCount ?? 0) + (entry.uniqueSignerCount ?? 0),
+      transactionCount:
+        existing.transactionCount === null && entry.transactionCount === null
+          ? null
+          : (existing.transactionCount ?? 0) + (entry.transactionCount ?? 0),
+    })
+  }
+
+  return [...entriesByProgramId.values()]
+}
+
 const populateSampleSignatures = ({
   entries,
   periodGranularity,
@@ -523,7 +558,7 @@ export const buildSolanaDuneProgramRankingsArtifact = ({
       })
     ).pipe(Effect.map((records) => records.flat()))
 
-    const topEntries = [...entries]
+    const topEntries = [...aggregateProgramRankingEntries(entries)]
       .sort((left, right) => {
         const countDelta = right.invocationCount - left.invocationCount
         return countDelta === 0 ? left.programId.localeCompare(right.programId) : countDelta

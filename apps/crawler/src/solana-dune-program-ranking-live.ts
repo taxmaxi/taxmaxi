@@ -18,7 +18,7 @@ import {
 
 const DUNE_API_URL = "https://api.dune.com/api/v1"
 const DUNE_API_KEY_CONFIG = Config.redacted("DUNE_API_KEY")
-const DUNE_EXECUTION_POLL_LIMIT = 60
+const DUNE_EXECUTION_POLL_LIMIT = 180
 
 const DuneExecuteResponse = Schema.Struct({
   execution_id: Schema.String,
