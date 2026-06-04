@@ -225,13 +225,17 @@ const yearPeriods = ({
   })
 
 const quarterPeriods = ({
+  generatedAt,
   fromYear,
   toYear,
 }: {
+  readonly generatedAt: string
   readonly fromYear: number
   readonly toYear: number
-}): ReadonlyArray<SolanaDuneRankingPeriod> =>
-  Array.from({ length: (toYear - fromYear + 1) * 4 }, (_value, index) => {
+}): ReadonlyArray<SolanaDuneRankingPeriod> => {
+  const currentDate = generatedAt.slice(0, 10)
+
+  return Array.from({ length: (toYear - fromYear + 1) * 4 }, (_value, index) => {
     const year = fromYear + Math.floor(index / 4)
     const quarterIndex = index % 4
     const startMonth = quarterIndex * 3 + 1
@@ -243,20 +247,23 @@ const quarterPeriods = ({
       startDate: `${year}-${String(startMonth).padStart(2, "0")}-01`,
       endDate: `${endYear}-${String(endMonth).padStart(2, "0")}-01`,
     }
-  })
+  }).filter((period) => period.startDate <= currentDate)
+}
 
 const periodsForGranularity = ({
+  generatedAt,
   fromYear,
   periodGranularity,
   toYear,
 }: {
+  readonly generatedAt: string
   readonly fromYear: number
   readonly periodGranularity: SolanaDunePeriodGranularity
   readonly toYear: number
 }): ReadonlyArray<SolanaDuneRankingPeriod> =>
   periodGranularity === "year"
     ? yearPeriods({ fromYear, toYear })
-    : quarterPeriods({ fromYear, toYear })
+    : quarterPeriods({ generatedAt, fromYear, toYear })
 
 const resultRows = (
   response: unknown,
@@ -316,9 +323,16 @@ const mapDexProjectRows = ({
         field: "approx_unique_traders",
       })
       const programIds = row.canonical_program_ids ?? []
+      if (programIds.length !== 1) {
+        return []
+      }
+      const [programId] = programIds
+      if (programId === undefined) {
+        return []
+      }
 
-      return programIds.map(
-        (programId): SolanaDuneProgramRankingRecordWithSampleWindow => ({
+      return [
+        {
           programId,
           period: row.period,
           invocationCount,
@@ -334,8 +348,8 @@ const mapDexProjectRows = ({
             startDate: period.startDate,
             endDate: period.endDate,
           },
-        })
-      )
+        } satisfies SolanaDuneProgramRankingRecordWithSampleWindow,
+      ]
     })
   ).pipe(Effect.map((records) => records.flat()))
 
@@ -465,14 +479,8 @@ const aggregateProgramRankingEntries = (
     entriesByProgramId.set(entry.programId, {
       ...representativeEntry,
       invocationCount: existing.invocationCount + entry.invocationCount,
-      uniqueSignerCount:
-        existing.uniqueSignerCount === null && entry.uniqueSignerCount === null
-          ? null
-          : (existing.uniqueSignerCount ?? 0) + (entry.uniqueSignerCount ?? 0),
-      transactionCount:
-        existing.transactionCount === null && entry.transactionCount === null
-          ? null
-          : (existing.transactionCount ?? 0) + (entry.transactionCount ?? 0),
+      uniqueSignerCount: null,
+      transactionCount: null,
     })
   }
 
@@ -542,7 +550,7 @@ export const buildSolanaDuneProgramRankingsArtifact = ({
 > =>
   Effect.gen(function* () {
     const client = yield* SolanaDuneProgramRankingClient
-    const periods = periodsForGranularity({ fromYear, periodGranularity, toYear })
+    const periods = periodsForGranularity({ generatedAt, fromYear, periodGranularity, toYear })
     const queries = solanaDuneProgramRankingQueriesForPeriod(periodGranularity)
     const queryPeriods = queries.flatMap((query) => periods.map((period) => ({ query, period })))
     const entries = yield* Effect.forEach(queryPeriods, ({ query, period }) =>

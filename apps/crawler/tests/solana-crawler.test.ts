@@ -21,6 +21,7 @@ import {
 } from "../src/solana-crawler.ts"
 import { readSolanaBehaviorSamplerClientConfig } from "../src/solana-behavior-sampler-live.ts"
 import {
+  buildSolanaDuneProgramRankingsArtifact,
   SolanaDuneProgramRankingClient,
   SolanaDuneProgramRankingClientTestLive,
   SolanaDuneProgramRankingError,
@@ -711,6 +712,86 @@ describe("solana crawler", () => {
     ).resolves.toEqual(result.duneProgramRankings)
   })
 
+  it("skips DEX project rows that map project totals to multiple programs", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const duneClientLive = SolanaDuneProgramRankingClientTestLive({
+      executeQuery: ({ parameters, query }) => {
+        if (query.kind === "program-sample-transactions") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: { rows: [{ tx_id: `${parameters.program_id}-sample` }] },
+          })
+        }
+
+        if (query.kind === "dex-project-priority") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                {
+                  project: "multi-program-dex",
+                  period: "2024-01-01 to 2025-01-01",
+                  retrieved_at: "2026-01-01T00:00:00Z",
+                  approx_unique_traders: 100,
+                  approx_trade_transactions: 100,
+                  trade_rows: 100,
+                  canonical_program_ids: [
+                    "DexProgram11111111111111111111111111111111",
+                    "DexProgram22222222222222222222222222222222",
+                  ],
+                },
+              ],
+            },
+          })
+        }
+
+        return Effect.succeed({
+          state: "QUERY_STATE_COMPLETED",
+          result: {
+            rows: [
+              {
+                program_id: "TransferProgram111111111111111111111111111",
+                period: "2024-01-01 to 2025-01-01",
+                retrieved_at: "2026-01-01T00:00:00Z",
+                approx_signers: 3,
+                approx_transfer_transactions: 4,
+                transfer_rows: 5,
+              },
+            ],
+          },
+        })
+      },
+    })
+
+    const result = await crawlSolanaProgram({
+      fromYear: Option.some(2024),
+      toYear: Option.some(2024),
+      top: 10,
+      out: Option.none(),
+      json: true,
+      signatures: [],
+      programs: [],
+      fromSlot: Option.none(),
+      toSlot: Option.none(),
+      sampleLimit: 100,
+      dune: true,
+      dunePeriod: "year",
+    }).pipe(
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
+      ),
+      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.runPromise
+    )
+
+    expect(result.priorityMap.entries.map((entry) => entry.key)).toEqual([
+      "TransferProgram111111111111111111111111111",
+    ])
+    expect(result.duneProgramRankings?.entries.map((entry) => entry.programId)).toEqual([
+      "TransferProgram111111111111111111111111111",
+    ])
+  })
+
   it("uses quarter Dune periods and records quarter granularity", async () => {
     const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
     const rankingCalls: Array<{
@@ -808,6 +889,73 @@ describe("solana crawler", () => {
     ])
   })
 
+  it("skips future quarter Dune ranking windows", async () => {
+    const rankingCalls: Array<Readonly<Record<string, string>>> = []
+    const duneClientLive = SolanaDuneProgramRankingClientTestLive({
+      executeQuery: ({ parameters, query }) => {
+        if (query.kind === "program-sample-transactions") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: { rows: [{ tx_id: "sample-signature" }] },
+          })
+        }
+
+        rankingCalls.push(parameters)
+
+        if (query.kind === "dex-project-priority") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                {
+                  project: "jupiter",
+                  period: `${parameters.start_date} to ${parameters.end_date}`,
+                  retrieved_at: "2024-05-15T00:00:00Z",
+                  approx_unique_traders: 1,
+                  approx_trade_transactions: 1,
+                  trade_rows: 1,
+                  canonical_program_ids: ["QuarterDex111111111111111111111111111111"],
+                },
+              ],
+            },
+          })
+        }
+
+        return Effect.succeed({
+          state: "QUERY_STATE_COMPLETED",
+          result: {
+            rows: [
+              {
+                program_id: "QuarterTransfer111111111111111111111111111",
+                period: `${parameters.start_date} to ${parameters.end_date}`,
+                retrieved_at: "2024-05-15T00:00:00Z",
+                approx_signers: 1,
+                approx_transfer_transactions: 1,
+                transfer_rows: 1,
+              },
+            ],
+          },
+        })
+      },
+    })
+
+    const result = await buildSolanaDuneProgramRankingsArtifact({
+      generatedAt: "2024-05-15T00:00:00Z",
+      fromYear: 2024,
+      toYear: 2024,
+      periodGranularity: "quarter",
+      top: 1,
+    }).pipe(Effect.provide(duneClientLive), Effect.runPromise)
+
+    expect(result.entries[0]?.periodGranularity).toBe("quarter")
+    expect(rankingCalls).toEqual([
+      { start_date: "2024-01-01", end_date: "2024-04-01" },
+      { start_date: "2024-04-01", end_date: "2024-07-01" },
+      { start_date: "2024-01-01", end_date: "2024-04-01" },
+      { start_date: "2024-04-01", end_date: "2024-07-01" },
+    ])
+  })
+
   it("aggregates duplicate Dune programs before applying top", async () => {
     const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
     const sampleCalls: string[] = []
@@ -886,8 +1034,8 @@ describe("solana crawler", () => {
     expect(result.duneProgramRankings?.entries[0]).toMatchObject({
       programId: "SharedProgram11111111111111111111111111111",
       invocationCount: 8,
-      uniqueSignerCount: 4,
-      transactionCount: 4,
+      uniqueSignerCount: null,
+      transactionCount: null,
     })
     expect(sampleCalls).toEqual(["SharedProgram11111111111111111111111111111"])
   })
