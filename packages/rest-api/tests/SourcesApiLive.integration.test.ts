@@ -37,6 +37,11 @@ import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.
 import { schema } from "../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
+import {
+  seedSyncEngineAssets,
+  seedSyncEngineRepositoryFixture,
+  TEST_BTC_ASSET_ID,
+} from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
 import { ANON_CHALLENGE_COOKIE_NAME, ANON_SESSION_COOKIE_NAME } from "../src/layers/AnonApiLive.ts"
 import { SourceCreateResponse, SourcePaymentRequiredError } from "../src/definitions/SourcesApi.ts"
@@ -456,6 +461,105 @@ const seedPrincipalUser = ({
     })
   })
 
+const reportFixtureIds = {
+  buyTransactionId: "00000000-0000-0000-0000-000000046101",
+  sellTransactionId: "00000000-0000-0000-0000-000000046102",
+  acquisitionLegId: "00000000-0000-0000-0000-000000046201",
+  disposalLegId: "00000000-0000-0000-0000-000000046202",
+  fifoLotId: "00000000-0000-0000-0000-000000046301",
+} as const
+
+const seedSourceReportRows = ({
+  principalId,
+  sourceId,
+}: {
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.transactions).values([
+      {
+        id: reportFixtureIds.buyTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-buy-1",
+        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        transactionType: "trade",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerDescription: "Buy BTC",
+      },
+      {
+        id: reportFixtureIds.sellTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-sell-1",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        transactionType: "trade",
+        providerTransactionType: "sell",
+        providerStatus: "completed",
+        providerDescription: "Sell BTC",
+      },
+    ])
+
+    yield* db.insert(schema.transactionLegs).values([
+      {
+        id: reportFixtureIds.acquisitionLegId,
+        sourceId,
+        principalId,
+        externalId: "report-buy-1:btc",
+        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "1",
+        kind: "acquisition",
+        provenance: "deterministic",
+        derivationRule: "test_fixture_buy",
+        transactionId: reportFixtureIds.buyTransactionId,
+        fiatAmount: "10000",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: reportFixtureIds.disposalLegId,
+        sourceId,
+        principalId,
+        externalId: "report-sell-1:btc",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.4",
+        kind: "disposal",
+        provenance: "deterministic",
+        derivationRule: "test_fixture_sell",
+        transactionId: reportFixtureIds.sellTransactionId,
+        fiatAmount: "6000",
+        fiatCurrency: "EUR",
+      },
+    ])
+
+    yield* db.insert(schema.fifoLots).values({
+      id: reportFixtureIds.fifoLotId,
+      sourceId,
+      principalId,
+      assetId: TEST_BTC_ASSET_ID,
+      acquiredAt: new Date("2025-01-10T12:00:00.000Z"),
+      originalAmount: "1",
+      remainingAmount: "0.6",
+      costBasisPerToken: "10000",
+      costBasisCurrency: "EUR",
+      sourceLegId: reportFixtureIds.acquisitionLegId,
+    })
+
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId: reportFixtureIds.disposalLegId,
+      fifoLotId: reportFixtureIds.fifoLotId,
+      matchedAmount: "0.4",
+      costBasis: "4000",
+      proceeds: "6000",
+      gainLoss: "2000",
+    })
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
@@ -466,6 +570,132 @@ describe("SourcesApiLive", () => {
     settlementEvents.length = 0
     await Effect.runPromise(context.recreateTestDatabase())
   })
+
+  it.effect("returns source-generic report read projections for a populated source", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(overview.source.id).toBe(fixture.sourceId)
+      expect(overview.source.providerKey).toBe("coinbase")
+      expect(overview.totals.transactionCount).toBe(2)
+      expect(overview.totals.disposalCount).toBe(1)
+      expect(overview.totals.realizedGainLoss).toBe("2000")
+
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets).toHaveLength(1)
+      expect(assetPnl.assets[0]).toMatchObject({
+        acquiredAmount: "1",
+        disposedAmount: "0.4",
+        openAmount: "0.6",
+        proceeds: "6000",
+        realizedGainLoss: "2000",
+        currency: "EUR",
+      })
+
+      const transactions = yield* client.sources.listSourceTransactions({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 1 },
+      })
+      expect(transactions.transactions).toHaveLength(1)
+      expect(transactions.transactions[0]?.transactionId).toBe(reportFixtureIds.sellTransactionId)
+      expect(transactions.transactions[0]?.movements[0]?.kind).toBe("disposal")
+      expect(transactions.page.hasMore).toBe(true)
+      expect(transactions.page.nextCursor).not.toBeNull()
+
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(taxEvents.taxEvents.map((event) => event.kind)).toEqual(["disposal", "acquisition"])
+      expect(taxEvents.taxEvents[0]).toMatchObject({
+        legId: reportFixtureIds.disposalLegId,
+        costBasis: "4000",
+        proceeds: "6000",
+        gainLoss: "2000",
+        taxableTreatment: "taxable",
+      })
+
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(fifoLots.fifoLots).toHaveLength(1)
+      expect(fifoLots.fifoLots[0]).toMatchObject({
+        lotId: reportFixtureIds.fifoLotId,
+        originalAmount: "1",
+        remainingAmount: "0.6",
+      })
+      expect(fifoLots.fifoLots[0]?.disposalMatches[0]).toMatchObject({
+        disposalLegId: reportFixtureIds.disposalLegId,
+        matchedAmount: "0.4",
+      })
+
+      const explanation = yield* client.sources.explainSourceDisposal({
+        path: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
+      })
+      expect(explanation).toMatchObject({
+        disposalLegId: reportFixtureIds.disposalLegId,
+        amount: "0.4",
+        proceeds: "6000",
+        costBasis: "4000",
+        gainLoss: "2000",
+        taxableTreatment: "taxable",
+      })
+      expect(explanation.matchedLots).toHaveLength(1)
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("returns empty source report lists for a source with no canonical rows", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(overview.totals.transactionCount).toBe(0)
+      expect(overview.totals.assetCount).toBe(0)
+
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets).toEqual([])
+
+      const transactions = yield* client.sources.listSourceTransactions({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(transactions.transactions).toEqual([])
+      expect(transactions.page).toMatchObject({ hasMore: false, nextCursor: null })
+
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(taxEvents.taxEvents).toEqual([])
+
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(fifoLots.fifoLots).toEqual([])
+    }).pipe(Effect.provide(HttpLive))
+  )
 
   it.effect("creates an authenticated Solana source without starting sync", () =>
     Effect.gen(function* () {

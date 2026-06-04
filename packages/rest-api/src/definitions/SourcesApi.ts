@@ -146,6 +146,228 @@ export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>
   incomeTotal: Schema.Number,
 }) {}
 
+const SourceReportCursor = Schema.NullOr(Schema.String)
+const SourceReportAmount = Schema.String
+const SourceReportTaxableTreatment = Schema.Literal("taxable", "tax_free", "unknown")
+
+/**
+ * SourceReportPageParams - Stable cursor pagination parameters for report lists.
+ */
+export const SourceReportPageParams = Schema.Struct({
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(100)
+    )
+  ),
+})
+
+/**
+ * SourceReportAsset - Asset descriptor used by source report rows.
+ */
+export class SourceReportAsset extends Schema.Class<SourceReportAsset>("SourceReportAsset")({
+  assetId: Schema.String,
+  symbol: Schema.String,
+  name: Schema.String,
+}) {}
+
+/**
+ * SourceReportPageInfo - Cursor pagination metadata.
+ */
+export class SourceReportPageInfo extends Schema.Class<SourceReportPageInfo>(
+  "SourceReportPageInfo"
+)({
+  nextCursor: SourceReportCursor,
+  hasMore: Schema.Boolean,
+}) {}
+
+/**
+ * SourceReportSyncStatus - Latest source sync metadata.
+ */
+export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>(
+  "SourceReportSyncStatus"
+)({
+  status: Schema.NullOr(Schema.Literal("pending", "processing", "completed", "failed")),
+  mode: Schema.NullOr(Schema.Literal("sync", "replay")),
+  queuedAt: Schema.NullOr(Schema.String),
+  startedAt: Schema.NullOr(Schema.String),
+  completedAt: Schema.NullOr(Schema.String),
+  lastSyncedAt: Schema.NullOr(Schema.String),
+  lastErrorMessage: Schema.NullOr(Schema.String),
+  importedRecords: Schema.NullOr(Schema.Number),
+  normalizedRecords: Schema.NullOr(Schema.Number),
+  failedRecords: Schema.NullOr(Schema.Number),
+}) {}
+
+/**
+ * SourceReportTotals - High-level source report counters and totals.
+ */
+export class SourceReportTotals extends Schema.Class<SourceReportTotals>("SourceReportTotals")({
+  transactionCount: Schema.Number,
+  legCount: Schema.Number,
+  assetCount: Schema.Number,
+  fifoLotCount: Schema.Number,
+  disposalCount: Schema.Number,
+  incomeCount: Schema.Number,
+  feeCount: Schema.Number,
+  realizedGainLoss: SourceReportAmount,
+  incomeTotal: SourceReportAmount,
+  currency: Schema.NullOr(Schema.String),
+}) {}
+
+/**
+ * SourceOverviewResponse - Source metadata plus report counters.
+ */
+export class SourceOverviewResponse extends Schema.Class<SourceOverviewResponse>(
+  "SourceOverviewResponse"
+)({
+  source: Source,
+  latestSync: SourceReportSyncStatus,
+  totals: SourceReportTotals,
+}) {}
+
+/**
+ * SourceAssetPnlRow - Per-asset P&L report row.
+ */
+export class SourceAssetPnlRow extends Schema.Class<SourceAssetPnlRow>("SourceAssetPnlRow")({
+  asset: SourceReportAsset,
+  acquiredAmount: SourceReportAmount,
+  disposedAmount: SourceReportAmount,
+  openAmount: SourceReportAmount,
+  costBasis: SourceReportAmount,
+  proceeds: SourceReportAmount,
+  realizedGainLoss: SourceReportAmount,
+  currency: Schema.NullOr(Schema.String),
+}) {}
+
+export class SourceAssetPnlResponse extends Schema.Class<SourceAssetPnlResponse>(
+  "SourceAssetPnlResponse"
+)({
+  assets: Schema.Array(SourceAssetPnlRow),
+}) {}
+
+/**
+ * SourceTransactionMovement - Asset movement nested under a transaction row.
+ */
+export class SourceTransactionMovement extends Schema.Class<SourceTransactionMovement>(
+  "SourceTransactionMovement"
+)({
+  legId: Schema.String,
+  asset: SourceReportAsset,
+  kind: Schema.Literal("acquisition", "disposal", "income", "fee"),
+  amount: SourceReportAmount,
+  fiatAmount: Schema.NullOr(SourceReportAmount),
+  fiatCurrency: Schema.NullOr(Schema.String),
+  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
+  derivationRule: Schema.NullOr(Schema.String),
+}) {}
+
+export class SourceTransactionRow extends Schema.Class<SourceTransactionRow>(
+  "SourceTransactionRow"
+)({
+  transactionId: Schema.String,
+  timestamp: Schema.String,
+  externalId: Schema.NullOr(Schema.String),
+  externalGroupId: Schema.NullOr(Schema.String),
+  transactionType: Schema.NullOr(Schema.String),
+  providerTransactionType: Schema.NullOr(Schema.String),
+  providerStatus: Schema.NullOr(Schema.String),
+  providerDescription: Schema.NullOr(Schema.String),
+  movements: Schema.Array(SourceTransactionMovement),
+}) {}
+
+export class SourceTransactionsResponse extends Schema.Class<SourceTransactionsResponse>(
+  "SourceTransactionsResponse"
+)({
+  transactions: Schema.Array(SourceTransactionRow),
+  page: SourceReportPageInfo,
+}) {}
+
+export class SourceTaxEventRow extends Schema.Class<SourceTaxEventRow>("SourceTaxEventRow")({
+  legId: Schema.String,
+  transactionId: Schema.NullOr(Schema.String),
+  timestamp: Schema.String,
+  kind: Schema.Literal("acquisition", "disposal", "income", "fee"),
+  asset: SourceReportAsset,
+  amount: SourceReportAmount,
+  fiatAmount: Schema.NullOr(SourceReportAmount),
+  fiatCurrency: Schema.NullOr(Schema.String),
+  costBasis: Schema.NullOr(SourceReportAmount),
+  proceeds: Schema.NullOr(SourceReportAmount),
+  gainLoss: Schema.NullOr(SourceReportAmount),
+  taxableTreatment: SourceReportTaxableTreatment,
+  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
+  derivationRule: Schema.NullOr(Schema.String),
+}) {}
+
+export class SourceTaxEventsResponse extends Schema.Class<SourceTaxEventsResponse>(
+  "SourceTaxEventsResponse"
+)({
+  taxEvents: Schema.Array(SourceTaxEventRow),
+  page: SourceReportPageInfo,
+}) {}
+
+export class SourceFifoLotDisposalSummary extends Schema.Class<SourceFifoLotDisposalSummary>(
+  "SourceFifoLotDisposalSummary"
+)({
+  disposalLegId: Schema.String,
+  matchedAmount: SourceReportAmount,
+  proceeds: SourceReportAmount,
+  costBasis: SourceReportAmount,
+  gainLoss: SourceReportAmount,
+}) {}
+
+export class SourceFifoLotRow extends Schema.Class<SourceFifoLotRow>("SourceFifoLotRow")({
+  lotId: Schema.String,
+  asset: SourceReportAsset,
+  acquiredAt: Schema.String,
+  originalAmount: SourceReportAmount,
+  remainingAmount: SourceReportAmount,
+  costBasisPerToken: SourceReportAmount,
+  costBasisCurrency: Schema.String,
+  sourceLegId: Schema.String,
+  disposalMatches: Schema.Array(SourceFifoLotDisposalSummary),
+}) {}
+
+export class SourceFifoLotsResponse extends Schema.Class<SourceFifoLotsResponse>(
+  "SourceFifoLotsResponse"
+)({
+  fifoLots: Schema.Array(SourceFifoLotRow),
+  page: SourceReportPageInfo,
+}) {}
+
+export class SourceDisposalMatchedLot extends Schema.Class<SourceDisposalMatchedLot>(
+  "SourceDisposalMatchedLot"
+)({
+  lotId: Schema.String,
+  asset: SourceReportAsset,
+  acquiredAt: Schema.String,
+  matchedAmount: SourceReportAmount,
+  costBasis: SourceReportAmount,
+  proceeds: SourceReportAmount,
+  gainLoss: SourceReportAmount,
+}) {}
+
+export class SourceDisposalExplanationResponse extends Schema.Class<SourceDisposalExplanationResponse>(
+  "SourceDisposalExplanationResponse"
+)({
+  disposalLegId: Schema.String,
+  transactionId: Schema.NullOr(Schema.String),
+  asset: SourceReportAsset,
+  amount: SourceReportAmount,
+  proceeds: Schema.NullOr(SourceReportAmount),
+  costBasis: SourceReportAmount,
+  gainLoss: SourceReportAmount,
+  acquiredAt: Schema.NullOr(Schema.String),
+  disposedAt: Schema.String,
+  taxableTreatment: SourceReportTaxableTreatment,
+  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
+  derivationRule: Schema.NullOr(Schema.String),
+  matchedLots: Schema.Array(SourceDisposalMatchedLot),
+}) {}
+
 // =============================================================================
 // Protected API Endpoints
 // =============================================================================
@@ -269,6 +491,99 @@ const calculateTaxForSource = HttpApiEndpoint.post(
     })
   )
 
+const getSourceOverview = HttpApiEndpoint.get("getSourceOverview", "/sources/:sourceId/overview")
+  .setPath(Schema.Struct({ sourceId: Schema.String }))
+  .addSuccess(SourceOverviewResponse)
+  .addError(SourceBadRequestError)
+  .addError(SourceNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Get source overview",
+      description: "Returns source metadata, latest sync status, and report counters.",
+    })
+  )
+
+const listSourceAssetPnl = HttpApiEndpoint.get(
+  "listSourceAssetPnl",
+  "/sources/:sourceId/assets/pnl"
+)
+  .setPath(Schema.Struct({ sourceId: Schema.String }))
+  .addSuccess(SourceAssetPnlResponse)
+  .addError(SourceBadRequestError)
+  .addError(SourceNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List source asset P&L",
+      description: "Returns source-scoped per-asset inventory and realized P&L rows.",
+    })
+  )
+
+const listSourceTransactions = HttpApiEndpoint.get(
+  "listSourceTransactions",
+  "/sources/:sourceId/transactions"
+)
+  .setPath(Schema.Struct({ sourceId: Schema.String }))
+  .setUrlParams(SourceReportPageParams)
+  .addSuccess(SourceTransactionsResponse)
+  .addError(SourceBadRequestError)
+  .addError(SourceNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List source transactions",
+      description: "Returns paginated source-scoped normalized transaction rows.",
+    })
+  )
+
+const listSourceTaxEvents = HttpApiEndpoint.get(
+  "listSourceTaxEvents",
+  "/sources/:sourceId/tax-events"
+)
+  .setPath(Schema.Struct({ sourceId: Schema.String }))
+  .setUrlParams(SourceReportPageParams)
+  .addSuccess(SourceTaxEventsResponse)
+  .addError(SourceBadRequestError)
+  .addError(SourceNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List source tax events",
+      description: "Returns paginated tax-visible read projections from canonical rows.",
+    })
+  )
+
+const listSourceFifoLots = HttpApiEndpoint.get("listSourceFifoLots", "/sources/:sourceId/fifo-lots")
+  .setPath(Schema.Struct({ sourceId: Schema.String }))
+  .setUrlParams(SourceReportPageParams)
+  .addSuccess(SourceFifoLotsResponse)
+  .addError(SourceBadRequestError)
+  .addError(SourceNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List source FIFO lots",
+      description: "Returns paginated source-scoped FIFO lots and disposal match summaries.",
+    })
+  )
+
+const explainSourceDisposal = HttpApiEndpoint.get(
+  "explainSourceDisposal",
+  "/sources/:sourceId/disposals/:legId/explanation"
+)
+  .setPath(Schema.Struct({ sourceId: Schema.String, legId: Schema.String }))
+  .addSuccess(SourceDisposalExplanationResponse)
+  .addError(SourceBadRequestError)
+  .addError(SourceNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Explain source disposal",
+      description: "Returns deterministic FIFO derivation details for a disposal leg.",
+    })
+  )
+
 // =============================================================================
 // API Groups
 // =============================================================================
@@ -282,6 +597,12 @@ export class SourcesApi extends HttpApiGroup.make("sources")
   .add(replaySourceSyncJob)
   .add(getSourceSyncJobStatus)
   .add(calculateTaxForSource)
+  .add(getSourceOverview)
+  .add(listSourceAssetPnl)
+  .add(listSourceTransactions)
+  .add(listSourceTaxEvents)
+  .add(listSourceFifoLots)
+  .add(explainSourceDisposal)
   .middlewareEndpoints(AuthMiddleware)
   .add(createSource)
   .prefix("/v1")

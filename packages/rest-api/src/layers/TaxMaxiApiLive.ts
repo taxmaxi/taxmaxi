@@ -17,6 +17,7 @@ import type {
   PrincipalRepository,
   SessionRepository,
   SourceRepository as PersistenceSourceRepository,
+  SourceReportRepository,
   TaxCalculationService,
   UserRepository,
 } from "@my/persistence/services"
@@ -99,6 +100,7 @@ type TaxMaxiApiLiveContext =
   | PersistenceSourceRepository
   | SessionRepository
   | SIWXProofVerifier
+  | SourceReportRepository
   | SourceSyncRunService
   | SourceSyncService
   | SyncEngineSourceRepository
