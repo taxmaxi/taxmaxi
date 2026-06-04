@@ -685,7 +685,7 @@ describe("solana crawler", () => {
         queryId: 7648079,
         queryName: "solana-token-transfer-program-candidates",
         periodGranularity: "year",
-        version: 2,
+        version: 1,
         kind: "token-transfer-program-candidates",
       },
       {
@@ -709,7 +709,7 @@ describe("solana crawler", () => {
       queryId: 7648079,
       queryName: "solana-token-transfer-program-candidates",
       periodGranularity: "year",
-      queryVersion: 2,
+      queryVersion: 1,
       retrievedAt: "2026-01-01T00:00:00Z",
     })
     await expect(

@@ -43,8 +43,7 @@ const DuneProgramSampleTransactionRow = Schema.Struct({
   tx_id: Schema.String,
 })
 
-const DUNE_DEX_PROJECT_PRIORITY_QUERY_VERSION = 1
-const DUNE_TOKEN_TRANSFER_PROGRAM_CANDIDATES_QUERY_VERSION = 2
+const DUNE_QUERY_VERSION = 1
 const DUNE_SAMPLE_QUERY_VERSION = 1
 export const DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS = 1
 
@@ -70,13 +69,13 @@ const SOLANA_DUNE_PROGRAM_RANKING_QUERY_TEMPLATES: ReadonlyArray<
   {
     queryId: 7_647_495,
     queryName: "solana-dex-project-priority",
-    version: DUNE_DEX_PROJECT_PRIORITY_QUERY_VERSION,
+    version: DUNE_QUERY_VERSION,
     kind: "dex-project-priority",
   },
   {
     queryId: 7_648_079,
     queryName: "solana-token-transfer-program-candidates",
-    version: DUNE_TOKEN_TRANSFER_PROGRAM_CANDIDATES_QUERY_VERSION,
+    version: DUNE_QUERY_VERSION,
     kind: "token-transfer-program-candidates",
   },
 ]
