@@ -22,6 +22,7 @@ import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema, type SourceRow } from "../schema/index.ts"
+import { decodeSourceSyncJobProgressSnapshot } from "./SyncEngineRepositorySupport.ts"
 import {
   SourceReportInvalidCursorError,
   SourceReportRepository,
@@ -36,6 +37,7 @@ import {
   type SourceReportRepositoryService,
   type SourceReportScope,
   type SourceReportSyncStatus,
+  type SourceReportTaxableTreatment,
   type SourceReportTotals,
   type SourceTaxEventRow,
   type SourceTransactionMovement,
@@ -97,14 +99,30 @@ const taxableTreatmentForDates = ({
 }: {
   readonly acquiredAt: Date | null
   readonly disposedAt: Date
-}): "taxable" | "tax_free" | "unknown" => {
+}): SourceReportTaxableTreatment => {
   if (acquiredAt === null) {
     return "unknown"
   }
   return disposedAt.getTime() >= holdingPeriodEnd(acquiredAt).getTime() ? "tax_free" : "taxable"
 }
 
+const combineTaxableTreatments = (
+  treatments: ReadonlyArray<SourceReportTaxableTreatment>
+): SourceReportTaxableTreatment => {
+  const unique = new Set(treatments)
+  if (unique.size === 0) {
+    return "unknown"
+  }
+  if (unique.size === 1) {
+    return treatments[0] ?? "unknown"
+  }
+  return "mixed"
+}
+
 const makeCursor = ({ timestamp, id }: CursorParts): string => `${timestamp.toISOString()}|${id}`
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const isUuid = (value: string): boolean => uuidPattern.test(value)
 
 const parseCursor = (cursor: string | null) =>
   Effect.gen(function* () {
@@ -120,7 +138,7 @@ const parseCursor = (cursor: string | null) =>
     }
 
     const timestamp = new Date(timestampPart)
-    if (Number.isNaN(timestamp.getTime()) || idPart.trim() === "") {
+    if (Number.isNaN(timestamp.getTime()) || !isUuid(idPart)) {
       return yield* Effect.fail(new SourceReportInvalidCursorError({ cursor }))
     }
 
@@ -256,6 +274,7 @@ const make = Effect.gen(function* () {
           queuedAt: schema.processingJobs.queuedAt,
           startedAt: schema.processingJobs.startedAt,
           completedAt: schema.processingJobs.completedAt,
+          progressDetails: schema.processingJobs.progressDetails,
         })
         .from(schema.processingJobs)
         .where(eq(schema.processingJobs.sourceId, sourceId))
@@ -273,6 +292,8 @@ const make = Effect.gen(function* () {
         .limit(1)
         .pipe(wrapSqlError("sourceReportRepository.loadLatestSync.state"))
 
+      const progress = yield* decodeSourceSyncJobProgressSnapshot(job?.progressDetails ?? null)
+
       return {
         status: job?.status ?? null,
         mode: job?.mode ?? null,
@@ -281,9 +302,9 @@ const make = Effect.gen(function* () {
         completedAt: isoOrNull(job?.completedAt ?? null),
         lastSyncedAt: isoOrNull(state?.lastSyncedAt ?? null),
         lastErrorMessage: state?.lastErrorMessage ?? null,
-        importedRecords: null,
-        normalizedRecords: null,
-        failedRecords: null,
+        importedRecords: progress?.importedRecords ?? null,
+        normalizedRecords: progress?.normalizedRecords ?? null,
+        failedRecords: progress?.failedRecords ?? null,
       } satisfies SourceReportSyncStatus
     })
 
@@ -315,6 +336,7 @@ const make = Effect.gen(function* () {
         .select({
           gainLoss: schema.disposalMatches.gainLoss,
           proceeds: schema.disposalMatches.proceeds,
+          proceedsCurrency: schema.transactionLegs.fiatCurrency,
         })
         .from(schema.disposalMatches)
         .innerJoin(
@@ -325,16 +347,17 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceReportRepository.getOverview.matches"))
 
       let realizedGainLoss = zeroDecimal()
+      let currency: string | null = null
       for (const row of matchRows) {
         const amount = yield* decodeDecimal({
           operation: "sourceReportRepository.getOverview.gainLoss",
           value: row.gainLoss,
         })
         realizedGainLoss = BigDecimal.sum(realizedGainLoss, amount)
+        currency = emptyCurrency(currency, row.proceedsCurrency)
       }
 
       let incomeTotal = zeroDecimal()
-      let currency: string | null = null
       const assetIds = new Set<string>()
       let disposalCount = 0
       let incomeCount = 0
@@ -673,7 +696,7 @@ const make = Effect.gen(function* () {
           let costBasis = zeroDecimal()
           let proceeds = zeroDecimal()
           let gainLoss = zeroDecimal()
-          let acquiredAt: Date | null = null
+          const treatments: Array<SourceReportTaxableTreatment> = []
           const matches = matchRows.filter((match) => match.disposalLegId === row.legId)
           for (const match of matches) {
             const matchCostBasis = yield* decodeDecimal({
@@ -691,10 +714,9 @@ const make = Effect.gen(function* () {
             costBasis = BigDecimal.sum(costBasis, matchCostBasis)
             proceeds = BigDecimal.sum(proceeds, matchProceeds)
             gainLoss = BigDecimal.sum(gainLoss, matchGainLoss)
-            acquiredAt =
-              acquiredAt === null || match.acquiredAt.getTime() < acquiredAt.getTime()
-                ? match.acquiredAt
-                : acquiredAt
+            treatments.push(
+              taxableTreatmentForDates({ acquiredAt: match.acquiredAt, disposedAt: row.timestamp })
+            )
           }
 
           return {
@@ -711,7 +733,7 @@ const make = Effect.gen(function* () {
             gainLoss: matches.length === 0 ? null : formatDecimal(gainLoss),
             taxableTreatment:
               row.kind === "disposal"
-                ? taxableTreatmentForDates({ acquiredAt, disposedAt: row.timestamp })
+                ? combineTaxableTreatments(treatments)
                 : row.kind === "income" || row.kind === "fee"
                   ? "taxable"
                   : "unknown",
@@ -816,6 +838,10 @@ const make = Effect.gen(function* () {
 
   const explainDisposal: SourceReportRepositoryService["explainDisposal"] = (params) =>
     Effect.gen(function* () {
+      if (!isUuid(params.legId)) {
+        return yield* Effect.fail(new SourceReportInvalidCursorError({ cursor: params.legId }))
+      }
+
       yield* loadOwnedSource(params)
       const [leg] = yield* db
         .select({
@@ -899,6 +925,10 @@ const make = Effect.gen(function* () {
           costBasis: String(row.costBasis),
           proceeds: String(row.proceeds),
           gainLoss: String(row.gainLoss),
+          taxableTreatment: taxableTreatmentForDates({
+            acquiredAt: row.acquiredAt,
+            disposedAt: leg.timestamp,
+          }),
         })
       }
 
@@ -917,10 +947,7 @@ const make = Effect.gen(function* () {
         gainLoss: formatDecimal(gainLoss),
         acquiredAt: isoOrNull(firstAcquiredAt),
         disposedAt: leg.timestamp.toISOString(),
-        taxableTreatment: taxableTreatmentForDates({
-          acquiredAt: firstAcquiredAt,
-          disposedAt: leg.timestamp,
-        }),
+        taxableTreatment: combineTaxableTreatments(matchedLots.map((lot) => lot.taxableTreatment)),
         provenance: leg.provenance,
         derivationRule: leg.derivationRule,
         matchedLots,

@@ -148,7 +148,7 @@ export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>
 
 const SourceReportCursor = Schema.NullOr(Schema.String)
 const SourceReportAmount = Schema.String
-const SourceReportTaxableTreatment = Schema.Literal("taxable", "tax_free", "unknown")
+const SourceReportTaxableTreatment = Schema.Literal("taxable", "tax_free", "unknown", "mixed")
 
 /**
  * SourceReportPageParams - Stable cursor pagination parameters for report lists.
@@ -348,6 +348,7 @@ export class SourceDisposalMatchedLot extends Schema.Class<SourceDisposalMatched
   costBasis: SourceReportAmount,
   proceeds: SourceReportAmount,
   gainLoss: SourceReportAmount,
+  taxableTreatment: SourceReportTaxableTreatment,
 }) {}
 
 export class SourceDisposalExplanationResponse extends Schema.Class<SourceDisposalExplanationResponse>(

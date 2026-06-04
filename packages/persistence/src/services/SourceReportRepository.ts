@@ -53,6 +53,8 @@ export interface SourceReportPageParams extends SourceReportScope {
   readonly limit: number
 }
 
+export type SourceReportTaxableTreatment = "taxable" | "tax_free" | "unknown" | "mixed"
+
 export interface SourceReportPage<T> {
   readonly items: ReadonlyArray<T>
   readonly nextCursor: string | null
@@ -143,7 +145,7 @@ export interface SourceTaxEventRow {
   readonly costBasis: string | null
   readonly proceeds: string | null
   readonly gainLoss: string | null
-  readonly taxableTreatment: "taxable" | "tax_free" | "unknown"
+  readonly taxableTreatment: SourceReportTaxableTreatment
   readonly provenance: "deterministic" | "rule" | "ai" | "manual"
   readonly derivationRule: string | null
 }
@@ -176,6 +178,7 @@ export interface SourceDisposalMatchedLot {
   readonly costBasis: string
   readonly proceeds: string
   readonly gainLoss: string
+  readonly taxableTreatment: SourceReportTaxableTreatment
 }
 
 export interface SourceDisposalExplanation {
@@ -188,7 +191,7 @@ export interface SourceDisposalExplanation {
   readonly gainLoss: string
   readonly acquiredAt: string | null
   readonly disposedAt: string
-  readonly taxableTreatment: "taxable" | "tax_free" | "unknown"
+  readonly taxableTreatment: SourceReportTaxableTreatment
   readonly provenance: "deterministic" | "rule" | "ai" | "manual"
   readonly derivationRule: string | null
   readonly matchedLots: ReadonlyArray<SourceDisposalMatchedLot>

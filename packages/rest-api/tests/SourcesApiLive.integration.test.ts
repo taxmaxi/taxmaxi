@@ -466,7 +466,8 @@ const reportFixtureIds = {
   sellTransactionId: "00000000-0000-0000-0000-000000046102",
   acquisitionLegId: "00000000-0000-0000-0000-000000046201",
   disposalLegId: "00000000-0000-0000-0000-000000046202",
-  fifoLotId: "00000000-0000-0000-0000-000000046301",
+  taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
+  taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
 } as const
 
 const seedSourceReportRows = ({
@@ -486,7 +487,7 @@ const seedSourceReportRows = ({
         principalId,
         externalId: "report-buy-1",
         timestamp: new Date("2025-01-10T12:00:00.000Z"),
-        transactionType: "trade",
+        transactionType: "buy_fiat",
         providerTransactionType: "buy",
         providerStatus: "completed",
         providerDescription: "Buy BTC",
@@ -497,7 +498,7 @@ const seedSourceReportRows = ({
         principalId,
         externalId: "report-sell-1",
         timestamp: new Date("2025-03-10T12:00:00.000Z"),
-        transactionType: "trade",
+        transactionType: "sell_fiat",
         providerTransactionType: "sell",
         providerStatus: "completed",
         providerDescription: "Sell BTC",
@@ -537,27 +538,53 @@ const seedSourceReportRows = ({
       },
     ])
 
-    yield* db.insert(schema.fifoLots).values({
-      id: reportFixtureIds.fifoLotId,
-      sourceId,
-      principalId,
-      assetId: TEST_BTC_ASSET_ID,
-      acquiredAt: new Date("2025-01-10T12:00:00.000Z"),
-      originalAmount: "1",
-      remainingAmount: "0.6",
-      costBasisPerToken: "10000",
-      costBasisCurrency: "EUR",
-      sourceLegId: reportFixtureIds.acquisitionLegId,
-    })
+    yield* db.insert(schema.fifoLots).values([
+      {
+        id: reportFixtureIds.taxFreeFifoLotId,
+        sourceId,
+        principalId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2023-01-10T12:00:00.000Z"),
+        originalAmount: "0.2",
+        remainingAmount: "0",
+        costBasisPerToken: "5000",
+        costBasisCurrency: "EUR",
+        sourceLegId: reportFixtureIds.acquisitionLegId,
+        sourceLegSequence: 0,
+      },
+      {
+        id: reportFixtureIds.taxableFifoLotId,
+        sourceId,
+        principalId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-10T12:00:00.000Z"),
+        originalAmount: "0.8",
+        remainingAmount: "0.6",
+        costBasisPerToken: "15000",
+        costBasisCurrency: "EUR",
+        sourceLegId: reportFixtureIds.acquisitionLegId,
+        sourceLegSequence: 1,
+      },
+    ])
 
-    yield* db.insert(schema.disposalMatches).values({
-      disposalLegId: reportFixtureIds.disposalLegId,
-      fifoLotId: reportFixtureIds.fifoLotId,
-      matchedAmount: "0.4",
-      costBasis: "4000",
-      proceeds: "6000",
-      gainLoss: "2000",
-    })
+    yield* db.insert(schema.disposalMatches).values([
+      {
+        disposalLegId: reportFixtureIds.disposalLegId,
+        fifoLotId: reportFixtureIds.taxFreeFifoLotId,
+        matchedAmount: "0.2",
+        costBasis: "1000",
+        proceeds: "3000",
+        gainLoss: "2000",
+      },
+      {
+        disposalLegId: reportFixtureIds.disposalLegId,
+        fifoLotId: reportFixtureIds.taxableFifoLotId,
+        matchedAmount: "0.2",
+        costBasis: "3000",
+        proceeds: "3000",
+        gainLoss: "0",
+      },
+    ])
   })
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -627,22 +654,22 @@ describe("SourcesApiLive", () => {
         costBasis: "4000",
         proceeds: "6000",
         gainLoss: "2000",
-        taxableTreatment: "taxable",
+        taxableTreatment: "mixed",
       })
 
       const fifoLots = yield* client.sources.listSourceFifoLots({
         path: { sourceId: fixture.sourceId },
         urlParams: { limit: 10 },
       })
-      expect(fifoLots.fifoLots).toHaveLength(1)
+      expect(fifoLots.fifoLots).toHaveLength(2)
       expect(fifoLots.fifoLots[0]).toMatchObject({
-        lotId: reportFixtureIds.fifoLotId,
-        originalAmount: "1",
-        remainingAmount: "0.6",
+        lotId: reportFixtureIds.taxFreeFifoLotId,
+        originalAmount: "0.2",
+        remainingAmount: "0",
       })
       expect(fifoLots.fifoLots[0]?.disposalMatches[0]).toMatchObject({
         disposalLegId: reportFixtureIds.disposalLegId,
-        matchedAmount: "0.4",
+        matchedAmount: "0.2",
       })
 
       const explanation = yield* client.sources.explainSourceDisposal({
@@ -654,9 +681,13 @@ describe("SourcesApiLive", () => {
         proceeds: "6000",
         costBasis: "4000",
         gainLoss: "2000",
-        taxableTreatment: "taxable",
+        taxableTreatment: "mixed",
       })
-      expect(explanation.matchedLots).toHaveLength(1)
+      expect(explanation.matchedLots).toHaveLength(2)
+      expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual([
+        "tax_free",
+        "taxable",
+      ])
     }).pipe(Effect.provide(HttpLive))
   )
 
