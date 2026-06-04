@@ -12,6 +12,7 @@ import {
 } from "./solana-behavior-sampler.ts"
 import {
   buildSolanaDuneProgramRankingsArtifact,
+  DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS,
   SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME,
   SolanaDuneProgramRankingClient,
   SolanaDuneProgramRankingsArtifact,
@@ -72,6 +73,7 @@ export type CrawlSolanaOptions = {
   readonly sampleLimit: number
   readonly dune: boolean
   readonly dunePeriod: SolanaDunePeriodGranularity
+  readonly duneWindowDays?: number
 }
 
 export type CrawlSolanaResult = {
@@ -142,6 +144,11 @@ const dunePeriodOption = Options.choice("dune-period", ["year", "quarter"] as co
   Options.withDescription("Period granularity for saved Dune ranking queries")
 )
 
+const duneWindowDaysOption = Options.integer("dune-window-days").pipe(
+  Options.withDefault(DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS),
+  Options.withDescription("Maximum date-window size for each saved Dune ranking query execution")
+)
+
 export const crawlSolanaOptions = Options.all({
   fromYear: fromYearOption,
   toYear: toYearOption,
@@ -155,6 +162,7 @@ export const crawlSolanaOptions = Options.all({
   sampleLimit: sampleLimitOption,
   dune: duneOption,
   dunePeriod: dunePeriodOption,
+  duneWindowDays: duneWindowDaysOption,
 })
 
 const resolveDefaultOutputDirectory = Config.string(SOLANA_REFERENCE_DATA_DIR_ENV_VAR).pipe(
@@ -199,6 +207,15 @@ const validateSampleLimit = (sampleLimit: number) =>
     ? Effect.fail(
         new CrawlerCommandError({
           message: "`--sample-limit` must be zero or greater.",
+        })
+      )
+    : Effect.void
+
+const validateDuneWindowDays = (duneWindowDays: number) =>
+  !Number.isSafeInteger(duneWindowDays) || duneWindowDays <= 0
+    ? Effect.fail(
+        new CrawlerCommandError({
+          message: "`--dune-window-days` must be a positive safe integer.",
         })
       )
     : Effect.void
@@ -425,6 +442,7 @@ export const crawlSolanaProgram = ({
   sampleLimit,
   dune,
   dunePeriod,
+  duneWindowDays = DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS,
 }: CrawlSolanaOptions): Effect.Effect<
   CrawlSolanaResult,
   CrawlerCommandError,
@@ -432,6 +450,7 @@ export const crawlSolanaProgram = ({
 > =>
   Effect.gen(function* () {
     yield* validateTop(top)
+    yield* validateDuneWindowDays(duneWindowDays)
     const behaviorSamplingInput = yield* resolveBehaviorSamplingInput({
       signatures,
       programs,
@@ -460,6 +479,7 @@ export const crawlSolanaProgram = ({
       dune && top > 0
         ? yield* buildSolanaDuneProgramRankingsArtifact({
             generatedAt,
+            executionWindowDays: duneWindowDays,
             fromYear: resolvedFromYear,
             periodGranularity: dunePeriod,
             toYear: resolvedToYear,
@@ -598,6 +618,7 @@ export const crawlSolanaCommand = Command.make(
     sampleLimit: sampleLimitOption,
     dune: duneOption,
     dunePeriod: dunePeriodOption,
+    duneWindowDays: duneWindowDaysOption,
   },
   crawlSolanaProgram
 ).pipe(Command.withDescription("Crawl Solana data sources and emit priority artifacts"))

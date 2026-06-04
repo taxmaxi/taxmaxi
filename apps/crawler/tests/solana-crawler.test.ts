@@ -162,6 +162,8 @@ describe("solana crawler", () => {
         "--dune",
         "--dune-period",
         "quarter",
+        "--dune-window-days",
+        "3",
       ])
     )
 
@@ -178,6 +180,7 @@ describe("solana crawler", () => {
     expect(result.parsed.sampleLimit).toBe(7)
     expect(result.parsed.dune).toBe(true)
     expect(result.parsed.dunePeriod).toBe("quarter")
+    expect(result.parsed.duneWindowDays).toBe(3)
   })
 
   it("writes empty Solana priority artifacts with the default reference-data output", async () => {
@@ -240,6 +243,7 @@ describe("solana crawler", () => {
       sampleLimit: 100,
       dune: true,
       dunePeriod: "year",
+      duneWindowDays: 366,
     }).pipe(
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
@@ -652,6 +656,7 @@ describe("solana crawler", () => {
       sampleLimit: 100,
       dune: true,
       dunePeriod: "year",
+      duneWindowDays: 366,
     }).pipe(
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
@@ -680,7 +685,7 @@ describe("solana crawler", () => {
         queryId: 7648079,
         queryName: "solana-token-transfer-program-candidates",
         periodGranularity: "year",
-        version: 1,
+        version: 2,
         kind: "token-transfer-program-candidates",
       },
       {
@@ -704,7 +709,7 @@ describe("solana crawler", () => {
       queryId: 7648079,
       queryName: "solana-token-transfer-program-candidates",
       periodGranularity: "year",
-      queryVersion: 1,
+      queryVersion: 2,
       retrievedAt: "2026-01-01T00:00:00Z",
     })
     await expect(
@@ -776,6 +781,7 @@ describe("solana crawler", () => {
       sampleLimit: 100,
       dune: true,
       dunePeriod: "year",
+      duneWindowDays: 366,
     }).pipe(
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
@@ -792,15 +798,132 @@ describe("solana crawler", () => {
     ])
   })
 
+  it("splits Dune periods into execution windows and stitches duplicate programs", async () => {
+    const rankingCalls: Array<{
+      readonly kind: string
+      readonly parameters: Readonly<Record<string, string>>
+    }> = []
+    const sampleCalls: Array<Readonly<Record<string, string>>> = []
+    const duneClientLive = SolanaDuneProgramRankingClientTestLive({
+      executeQuery: ({ parameters, query }) => {
+        if (query.kind === "program-sample-transactions") {
+          sampleCalls.push(parameters)
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: { rows: [{ tx_id: "stitched-sample-signature" }] },
+          })
+        }
+
+        rankingCalls.push({ kind: query.kind, parameters })
+
+        if (query.kind === "dex-project-priority") {
+          return Effect.succeed({
+            state: "QUERY_STATE_COMPLETED",
+            result: {
+              rows: [
+                {
+                  project: "multi-program-dex",
+                  period: `${parameters.start_date} to ${parameters.end_date}`,
+                  retrieved_at: "2026-01-01T00:00:00Z",
+                  approx_unique_traders: 1,
+                  approx_trade_transactions: 1,
+                  trade_rows: 1,
+                  canonical_program_ids: [
+                    "DexProgram11111111111111111111111111111111",
+                    "DexProgram22222222222222222222222222222222",
+                  ],
+                },
+              ],
+            },
+          })
+        }
+
+        const transferRowsByStartDate = new Map([
+          ["2024-01-01", 1],
+          ["2024-02-01", 2],
+          ["2024-03-03", 3],
+        ])
+        return Effect.succeed({
+          state: "QUERY_STATE_COMPLETED",
+          result: {
+            rows: [
+              {
+                program_id: "StitchedTransfer111111111111111111111111",
+                period: `${parameters.start_date} to ${parameters.end_date}`,
+                retrieved_at: "2026-01-01T00:00:00Z",
+                approx_signers: 1,
+                approx_transfer_transactions: 1,
+                transfer_rows: transferRowsByStartDate.get(parameters.start_date ?? "") ?? 0,
+              },
+            ],
+          },
+        })
+      },
+    })
+
+    const result = await buildSolanaDuneProgramRankingsArtifact({
+      generatedAt: "2024-01-01T00:00:00.000Z",
+      executionWindowDays: 31,
+      fromYear: 2024,
+      periodGranularity: "quarter",
+      toYear: 2024,
+      top: 1,
+    }).pipe(Effect.provide(duneClientLive), Effect.runPromise)
+
+    expect(rankingCalls).toEqual([
+      {
+        kind: "dex-project-priority",
+        parameters: { start_date: "2024-01-01", end_date: "2024-02-01" },
+      },
+      {
+        kind: "dex-project-priority",
+        parameters: { start_date: "2024-02-01", end_date: "2024-03-03" },
+      },
+      {
+        kind: "dex-project-priority",
+        parameters: { start_date: "2024-03-03", end_date: "2024-04-01" },
+      },
+      {
+        kind: "token-transfer-program-candidates",
+        parameters: { start_date: "2024-01-01", end_date: "2024-02-01" },
+      },
+      {
+        kind: "token-transfer-program-candidates",
+        parameters: { start_date: "2024-02-01", end_date: "2024-03-03" },
+      },
+      {
+        kind: "token-transfer-program-candidates",
+        parameters: { start_date: "2024-03-03", end_date: "2024-04-01" },
+      },
+    ])
+    expect(result.entries[0]).toMatchObject({
+      programId: "StitchedTransfer111111111111111111111111",
+      period: "2024-01-01 to 2024-04-01",
+      invocationCount: 6,
+      uniqueSignerCount: null,
+      transactionCount: null,
+      sampleSignatures: ["stitched-sample-signature"],
+    })
+    expect(sampleCalls).toEqual([
+      {
+        program_id: "StitchedTransfer111111111111111111111111",
+        start_date: "2024-01-01",
+        end_date: "2024-01-02",
+      },
+    ])
+  })
+
   it("uses quarter Dune periods and records quarter granularity", async () => {
     const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
     const rankingCalls: Array<{
       readonly kind: string
       readonly parameters: Readonly<Record<string, string>>
     }> = []
+    const sampleCalls: Array<Readonly<Record<string, string>>> = []
     const duneClientLive = SolanaDuneProgramRankingClientTestLive({
       executeQuery: ({ parameters, query }) => {
         if (query.kind === "program-sample-transactions") {
+          sampleCalls.push(parameters)
           return Effect.succeed({
             state: "QUERY_STATE_COMPLETED",
             result: { rows: [{ tx_id: "quarter-sample-signature" }] },
@@ -859,6 +982,7 @@ describe("solana crawler", () => {
       sampleLimit: 100,
       dune: true,
       dunePeriod: "quarter",
+      duneWindowDays: 92,
     }).pipe(
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
@@ -886,6 +1010,13 @@ describe("solana crawler", () => {
       { start_date: "2024-04-01", end_date: "2024-07-01" },
       { start_date: "2024-07-01", end_date: "2024-10-01" },
       { start_date: "2024-10-01", end_date: "2025-01-01" },
+    ])
+    expect(sampleCalls).toEqual([
+      {
+        program_id: "QuarterProgram1111111111111111111111111111",
+        start_date: "2024-01-01",
+        end_date: "2024-01-02",
+      },
     ])
   })
 
@@ -944,6 +1075,7 @@ describe("solana crawler", () => {
       fromYear: 2024,
       toYear: 2024,
       periodGranularity: "quarter",
+      executionWindowDays: 92,
       top: 1,
     }).pipe(Effect.provide(duneClientLive), Effect.runPromise)
 
@@ -1020,6 +1152,7 @@ describe("solana crawler", () => {
       sampleLimit: 100,
       dune: true,
       dunePeriod: "quarter",
+      duneWindowDays: 92,
     }).pipe(
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
@@ -1055,6 +1188,7 @@ describe("solana crawler", () => {
         sampleLimit: 100,
         dune: true,
         dunePeriod: "year",
+        duneWindowDays: 366,
       }).pipe(
         Effect.withConfigProvider(
           ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", "/tmp/unused"]]))
@@ -1093,6 +1227,7 @@ describe("solana crawler", () => {
         sampleLimit: 100,
         dune: true,
         dunePeriod: "year",
+        duneWindowDays: 366,
       }).pipe(
         Effect.withConfigProvider(
           ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", "/tmp/unused"]]))
@@ -1134,6 +1269,7 @@ describe("solana crawler", () => {
         sampleLimit: 100,
         dune: true,
         dunePeriod: "year",
+        duneWindowDays: 366,
       }).pipe(
         Effect.withConfigProvider(
           ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", "/tmp/unused"]]))
