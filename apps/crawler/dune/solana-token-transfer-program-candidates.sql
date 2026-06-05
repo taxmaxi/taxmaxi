@@ -7,6 +7,10 @@
 -- Parameters:
 --   start_date - inclusive date, for example 2024-01-01
 --   end_date   - exclusive date, for example 2024-02-01
+--
+-- The transfer scan uses TABLESAMPLE SYSTEM (5), then scales activity metrics
+-- by 20. This keeps the query usable for broad monthly discovery windows where
+-- an exact full-table distinct aggregation exceeds Dune resource limits.
 
 WITH parameters AS (
   SELECT
@@ -24,23 +28,20 @@ dex_programs AS (
     AND dex_trades.project_program_id IS NOT NULL
 ),
 
-transfer_programs AS (
+sampled_transfer_programs AS (
   SELECT
-    transfers.outer_executing_account AS program_id,
-    transfers.tx_id,
-    transfers.tx_signer,
-    transfers.from_owner,
-    transfers.to_owner,
-    transfers.amount_usd
-  FROM tokens_solana.transfers AS transfers
+    outer_executing_account AS program_id,
+    tx_id,
+    tx_signer,
+    from_owner,
+    to_owner,
+    amount_usd
+  FROM tokens_solana.transfers TABLESAMPLE SYSTEM (5)
   CROSS JOIN parameters
-  LEFT JOIN dex_programs
-    ON transfers.outer_executing_account = dex_programs.program_id
-  WHERE transfers.block_date >= parameters.start_date
-    AND transfers.block_date < parameters.end_date
-    AND transfers.outer_executing_account IS NOT NULL
-    AND dex_programs.program_id IS NULL
-    AND transfers.outer_executing_account NOT IN (
+  WHERE block_date >= parameters.start_date
+    AND block_date < parameters.end_date
+    AND outer_executing_account IS NOT NULL
+    AND outer_executing_account NOT IN (
       '11111111111111111111111111111111',
       'AddressLookupTab1e1111111111111111111111111',
       'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
@@ -77,14 +78,32 @@ transfer_programs AS (
 program_usage AS (
   SELECT
     program_id,
-    approx_distinct(tx_id) AS approx_transfer_transactions,
-    approx_distinct(tx_signer) AS approx_signers,
-    approx_distinct(from_owner) AS approx_from_owners,
-    approx_distinct(to_owner) AS approx_to_owners,
-    COUNT(*) AS transfer_rows,
-    COALESCE(SUM(amount_usd), 0) AS transfer_volume_usd
-  FROM transfer_programs
+    -- Scaled sampled estimates. The query is for candidate discovery, not
+    -- exact reporting, so stable relative ordering is more useful than exact
+    -- full-month cardinality under Dune resource limits.
+    CAST(approx_distinct(tx_id, 0.05) * 20 AS bigint) AS approx_transfer_transactions,
+    CAST(approx_distinct(tx_signer, 0.05) * 20 AS bigint) AS approx_signers,
+    CAST(approx_distinct(from_owner, 0.05) * 20 AS bigint) AS approx_from_owners,
+    CAST(approx_distinct(to_owner, 0.05) * 20 AS bigint) AS approx_to_owners,
+    COUNT(*) * 20 AS transfer_rows,
+    COALESCE(SUM(amount_usd) * 20, 0) AS transfer_volume_usd
+  FROM sampled_transfer_programs
   GROUP BY program_id
+),
+
+non_dex_program_usage AS (
+  SELECT
+    program_usage.program_id,
+    program_usage.approx_transfer_transactions,
+    program_usage.approx_signers,
+    program_usage.approx_from_owners,
+    program_usage.approx_to_owners,
+    program_usage.transfer_rows,
+    program_usage.transfer_volume_usd
+  FROM program_usage
+  LEFT JOIN dex_programs
+    ON program_usage.program_id = dex_programs.program_id
+  WHERE dex_programs.program_id IS NULL
 ),
 
 program_labels AS (
@@ -95,15 +114,15 @@ program_labels AS (
     ARRAY_AGG(DISTINCT discriminators.namespace)
       FILTER (WHERE discriminators.namespace IS NOT NULL) AS namespaces
   FROM solana.discriminators AS discriminators
-  INNER JOIN program_usage
-    ON program_usage.program_id = discriminators.program_id
+  INNER JOIN non_dex_program_usage
+    ON non_dex_program_usage.program_id = discriminators.program_id
   WHERE discriminators.program_id IS NOT NULL
   GROUP BY discriminators.program_id
 ),
 
 labeled_programs AS (
   SELECT
-    program_usage.program_id,
+    non_dex_program_usage.program_id,
     program_labels.program_names,
     program_labels.namespaces,
     LOWER(
@@ -111,15 +130,15 @@ labeled_programs AS (
         || ','
         || COALESCE(ARRAY_JOIN(program_labels.namespaces, ','), '')
     ) AS label_text,
-    program_usage.approx_signers,
-    program_usage.approx_transfer_transactions,
-    program_usage.approx_from_owners,
-    program_usage.approx_to_owners,
-    program_usage.transfer_rows,
-    program_usage.transfer_volume_usd
-  FROM program_usage
+    non_dex_program_usage.approx_signers,
+    non_dex_program_usage.approx_transfer_transactions,
+    non_dex_program_usage.approx_from_owners,
+    non_dex_program_usage.approx_to_owners,
+    non_dex_program_usage.transfer_rows,
+    non_dex_program_usage.transfer_volume_usd
+  FROM non_dex_program_usage
   LEFT JOIN program_labels
-    ON program_usage.program_id = program_labels.program_id
+    ON non_dex_program_usage.program_id = program_labels.program_id
 ),
 
 classified_programs AS (
@@ -175,15 +194,8 @@ candidate_programs AS (
   WHERE NOT is_curated_swap_protocol
 ),
 
-ranked_programs AS (
+top_candidate_programs AS (
   SELECT
-    ROW_NUMBER() OVER (
-      ORDER BY
-        candidate_programs.approx_signers DESC,
-        candidate_programs.approx_transfer_transactions DESC,
-        candidate_programs.transfer_volume_usd DESC,
-        candidate_programs.program_id
-    ) AS rank,
     candidate_programs.*
   FROM candidate_programs
   ORDER BY
@@ -192,6 +204,19 @@ ranked_programs AS (
     transfer_volume_usd DESC,
     program_id
   LIMIT 100
+),
+
+ranked_programs AS (
+  SELECT
+    ROW_NUMBER() OVER (
+      ORDER BY
+        top_candidate_programs.approx_signers DESC,
+        top_candidate_programs.approx_transfer_transactions DESC,
+        top_candidate_programs.transfer_volume_usd DESC,
+        top_candidate_programs.program_id
+    ) AS rank,
+    top_candidate_programs.*
+  FROM top_candidate_programs
 )
 
 SELECT
