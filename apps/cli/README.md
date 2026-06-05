@@ -41,6 +41,15 @@ npm install -g tax
 tax coinbase
 ```
 
+## Onchain wallet sync
+
+After connecting once, you can also pass an onchain wallet address directly. The API infers the chain and provider, so a Solana address is created as a `helius-solana` source and synced with the saved CLI session:
+
+```bash
+tax coinbase connect
+tax <solana-wallet-address>
+```
+
 ## Coinbase workflow
 
 `tax coinbase` runs three steps in sequence:
