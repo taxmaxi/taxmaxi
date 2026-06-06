@@ -11,11 +11,11 @@ import {
   type SolanaBehaviorSamplingInput,
 } from "./solana-behavior-sampler.ts"
 import {
-  buildSolanaDuneProgramRankingsArtifact,
+  buildSolanaDuneRankingsFile,
   DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS,
   SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME,
   SolanaDuneProgramRankingClient,
-  SolanaDuneProgramRankingsArtifact,
+  SolanaDuneRankingsFile,
   type SolanaDunePeriodGranularity,
 } from "./solana-dune-program-ranking.ts"
 
@@ -83,7 +83,7 @@ export type CrawlSolanaResult = {
   readonly behaviorSamplesPath: string | null
   readonly behaviorSamples: SolanaBehaviorSamplesArtifact | null
   readonly duneProgramRankingsPath: string | null
-  readonly duneProgramRankings: SolanaDuneProgramRankingsArtifact | null
+  readonly duneProgramRankings: SolanaDuneRankingsFile | null
 }
 
 const fromYearOption = Options.integer("from-year").pipe(
@@ -275,7 +275,7 @@ const makeSolanaPriorityReport = (artifact: SolanaPriorityMapArtifact): string =
 const makeDuneSolanaPriorityMap = ({
   duneProgramRankings,
 }: {
-  readonly duneProgramRankings: SolanaDuneProgramRankingsArtifact
+  readonly duneProgramRankings: SolanaDuneRankingsFile
 }): SolanaPriorityMapArtifact => ({
   schemaVersion: 1,
   chain: "solana",
@@ -321,12 +321,12 @@ const encodeBehaviorSamples = (artifact: SolanaBehaviorSamplesArtifact) =>
     )
   )
 
-const encodeDuneProgramRankings = (artifact: SolanaDuneProgramRankingsArtifact) =>
-  Schema.encode(Schema.parseJson(SolanaDuneProgramRankingsArtifact))(artifact).pipe(
+const encodeDuneProgramRankings = (rankingsFile: SolanaDuneRankingsFile) =>
+  Schema.encode(Schema.parseJson(SolanaDuneRankingsFile))(rankingsFile).pipe(
     Effect.mapError(
       () =>
         new CrawlerCommandError({
-          message: "Failed to encode Solana Dune program rankings artifact.",
+          message: "Failed to encode Solana Dune rankings file.",
         })
     )
   )
@@ -477,7 +477,7 @@ export const crawlSolanaProgram = ({
     const generatedAt = yield* nowIsoString
     const duneProgramRankings =
       dune && top > 0
-        ? yield* buildSolanaDuneProgramRankingsArtifact({
+        ? yield* buildSolanaDuneRankingsFile({
             generatedAt,
             executionWindowDays: duneWindowDays,
             fromYear: resolvedFromYear,
@@ -555,7 +555,7 @@ export const crawlSolanaProgram = ({
         Effect.mapError(
           () =>
             new CrawlerCommandError({
-              message: "Failed to write Solana Dune program rankings artifact.",
+              message: "Failed to write Solana Dune rankings file.",
             })
         )
       )

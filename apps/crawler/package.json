@@ -19,6 +19,7 @@
     "@effect/cli": "0.75.1",
     "@effect/platform": "0.96.1",
     "@effect/platform-node": "0.106.0",
+    "@my/sync-engine": "workspace:*",
     "@solana/keys": "5.5.1",
     "effect": "3.21.2",
     "helius-sdk": "2.2.2"

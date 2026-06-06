@@ -7,6 +7,19 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
+import {
+  SolanaDunePeriodGranularity,
+  SolanaDuneRankingEntry,
+  SolanaDuneRankingsFile,
+  SolanaDuneQueryConfig,
+} from "@my/sync-engine/providers/helius-solana"
+
+export {
+  SolanaDunePeriodGranularity,
+  SolanaDuneRankingEntry,
+  SolanaDuneRankingsFile,
+  SolanaDuneQueryConfig,
+} from "@my/sync-engine/providers/helius-solana"
 
 export const SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME = "solana-dune-program-rankings.json"
 
@@ -47,22 +60,6 @@ const DUNE_QUERY_VERSION = 1
 const DUNE_SAMPLE_QUERY_VERSION = 1
 export const DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS = 1
 
-export const SolanaDunePeriodGranularity = Schema.Literal("year", "quarter")
-export type SolanaDunePeriodGranularity = typeof SolanaDunePeriodGranularity.Type
-
-export const SolanaDuneQueryConfig = Schema.Struct({
-  queryId: Schema.Number,
-  queryName: Schema.String,
-  periodGranularity: SolanaDunePeriodGranularity,
-  version: Schema.Number,
-  kind: Schema.Literal(
-    "dex-project-priority",
-    "token-transfer-program-candidates",
-    "program-sample-transactions"
-  ),
-})
-export type SolanaDuneQueryConfig = typeof SolanaDuneQueryConfig.Type
-
 const SOLANA_DUNE_PROGRAM_RANKING_QUERY_TEMPLATES: ReadonlyArray<
   Omit<SolanaDuneQueryConfig, "periodGranularity">
 > = [
@@ -98,37 +95,6 @@ export const solanaDuneProgramRankingQueriesForPeriod = (
 
 export const SOLANA_DUNE_PROGRAM_RANKING_QUERIES = solanaDuneProgramRankingQueriesForPeriod("year")
 
-export const SolanaDuneProgramRankingRecord = Schema.Struct({
-  programId: Schema.String,
-  period: Schema.String,
-  invocationCount: Schema.Number,
-  uniqueSignerCount: Schema.NullOr(Schema.Number),
-  transactionCount: Schema.NullOr(Schema.Number),
-  sampleSignatures: Schema.Array(Schema.String),
-  queryId: Schema.Number,
-  queryName: Schema.String,
-  periodGranularity: SolanaDunePeriodGranularity,
-  queryVersion: Schema.Number,
-  retrievedAt: Schema.String,
-})
-export type SolanaDuneProgramRankingRecord = typeof SolanaDuneProgramRankingRecord.Type
-
-export const SolanaDuneProgramRankingsArtifact = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  chain: Schema.Literal("solana"),
-  source: Schema.Literal("dune"),
-  generatedAt: Schema.String,
-  window: Schema.Struct({
-    fromYear: Schema.Number,
-    toYear: Schema.Number,
-  }),
-  top: Schema.Number,
-  executionWindowDays: Schema.Number,
-  queries: Schema.Array(SolanaDuneQueryConfig),
-  entries: Schema.Array(SolanaDuneProgramRankingRecord),
-})
-export type SolanaDuneProgramRankingsArtifact = typeof SolanaDuneProgramRankingsArtifact.Type
-
 export class SolanaDuneProgramRankingError extends Schema.TaggedError<SolanaDuneProgramRankingError>()(
   "SolanaDuneProgramRankingError",
   {
@@ -149,7 +115,7 @@ type SolanaDuneRankingExecutionWindow = {
   readonly endDate: string
 }
 
-type SolanaDuneProgramRankingRecordWithSampleWindow = SolanaDuneProgramRankingRecord & {
+type SolanaDuneRankingEntryWithSampleWindow = SolanaDuneRankingEntry & {
   readonly sampleWindow: {
     readonly startDate: string
     readonly endDate: string
@@ -319,7 +285,7 @@ const validateExecutionWindowDays = (
 
 const sampleWindowForPeriod = (
   period: SolanaDuneRankingPeriod
-): SolanaDuneProgramRankingRecordWithSampleWindow["sampleWindow"] => {
+): SolanaDuneRankingEntryWithSampleWindow["sampleWindow"] => {
   const oneDayEndDate = addUtcDays(period.startDate, 1)
   return {
     startDate: period.startDate,
@@ -364,7 +330,7 @@ const mapDexProjectRows = ({
   readonly query: SolanaDuneQueryConfig
   readonly rows: ReadonlyArray<typeof DuneDexProjectPriorityRow.Type>
 }): Effect.Effect<
-  ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow>,
+  ReadonlyArray<SolanaDuneRankingEntryWithSampleWindow>,
   SolanaDuneProgramRankingError
 > =>
   Effect.forEach(rows, (row) =>
@@ -409,7 +375,7 @@ const mapDexProjectRows = ({
           queryVersion: query.version,
           retrievedAt: row.retrieved_at,
           sampleWindow,
-        } satisfies SolanaDuneProgramRankingRecordWithSampleWindow,
+        } satisfies SolanaDuneRankingEntryWithSampleWindow,
       ]
     })
   ).pipe(Effect.map((records) => records.flat()))
@@ -423,7 +389,7 @@ const mapTokenTransferRows = ({
   readonly query: SolanaDuneQueryConfig
   readonly rows: ReadonlyArray<typeof DuneTokenTransferProgramCandidateRow.Type>
 }): Effect.Effect<
-  ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow>,
+  ReadonlyArray<SolanaDuneRankingEntryWithSampleWindow>,
   SolanaDuneProgramRankingError
 > =>
   Effect.forEach(rows, (row) =>
@@ -459,7 +425,7 @@ const mapTokenTransferRows = ({
         queryVersion: query.version,
         retrievedAt: row.retrieved_at,
         sampleWindow,
-      } satisfies SolanaDuneProgramRankingRecordWithSampleWindow
+      } satisfies SolanaDuneRankingEntryWithSampleWindow
     })
   )
 
@@ -472,7 +438,7 @@ const recordsFromQueryResponse = ({
   readonly query: SolanaDuneQueryConfig
   readonly response: unknown
 }): Effect.Effect<
-  ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow>,
+  ReadonlyArray<SolanaDuneRankingEntryWithSampleWindow>,
   SolanaDuneProgramRankingError
 > =>
   Effect.gen(function* () {
@@ -492,6 +458,14 @@ const recordsFromQueryResponse = ({
           queryError({
             query,
             message: "Sample transaction query cannot produce ranking records",
+          })
+        )
+      }
+      default: {
+        return yield* Effect.fail(
+          queryError({
+            query,
+            message: `Unsupported Dune ranking query kind ${query.kind}`,
           })
         )
       }
@@ -519,9 +493,9 @@ const sampleSignaturesFromQueryResponse = ({
   })
 
 const aggregateProgramRankingEntries = (
-  entries: ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow>
-): ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow> => {
-  const entriesByProgramId = new Map<string, SolanaDuneProgramRankingRecordWithSampleWindow>()
+  entries: ReadonlyArray<SolanaDuneRankingEntryWithSampleWindow>
+): ReadonlyArray<SolanaDuneRankingEntryWithSampleWindow> => {
+  const entriesByProgramId = new Map<string, SolanaDuneRankingEntryWithSampleWindow>()
 
   for (const entry of entries) {
     const existing = entriesByProgramId.get(entry.programId)
@@ -551,10 +525,10 @@ const populateSampleSignatures = ({
   entries,
   periodGranularity,
 }: {
-  readonly entries: ReadonlyArray<SolanaDuneProgramRankingRecordWithSampleWindow>
+  readonly entries: ReadonlyArray<SolanaDuneRankingEntryWithSampleWindow>
   readonly periodGranularity: SolanaDunePeriodGranularity
 }): Effect.Effect<
-  ReadonlyArray<SolanaDuneProgramRankingRecord>,
+  ReadonlyArray<SolanaDuneRankingEntry>,
   SolanaDuneProgramRankingError,
   SolanaDuneProgramRankingClient
 > =>
@@ -591,7 +565,7 @@ const populateSampleSignatures = ({
     )
   })
 
-export const buildSolanaDuneProgramRankingsArtifact = ({
+export const buildSolanaDuneRankingsFile = ({
   generatedAt,
   fromYear,
   periodGranularity = "year",
@@ -606,7 +580,7 @@ export const buildSolanaDuneProgramRankingsArtifact = ({
   readonly toYear: number
   readonly top: number
 }): Effect.Effect<
-  SolanaDuneProgramRankingsArtifact,
+  SolanaDuneRankingsFile,
   SolanaDuneProgramRankingError,
   SolanaDuneProgramRankingClient
 > =>

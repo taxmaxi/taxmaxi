@@ -9,6 +9,10 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
 import { ProtocolCandidateRepository, SyncEngineStorageError } from "@my/sync-engine/services"
+import {
+  importSolanaDuneRankingsFile,
+  SolanaDuneRankingsFileImportError,
+} from "@my/sync-engine/providers/helius-solana"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_protocol_candidate_repo",
@@ -176,6 +180,141 @@ describe("ProtocolCandidateRepositoryLive", () => {
       queryVersion: 1,
     })
     expect(providerMappingCountAfter).toBe(providerMappingCountBefore)
+  })
+
+  it("imports a Solana Dune rankings file as candidates and observations", async () => {
+    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const rankingsFile = {
+      schemaVersion: 1,
+      chain: "solana",
+      source: "dune",
+      generatedAt: "2026-06-01T10:30:00.000Z",
+      window: { fromYear: 2024, toYear: 2024 },
+      top: 10,
+      executionWindowDays: 1,
+      queries: [
+        {
+          queryId: 7_647_495,
+          queryName: "solana-dex-project-priority",
+          periodGranularity: "year",
+          version: 1,
+          kind: "dex-project-priority",
+        },
+      ],
+      entries: [
+        {
+          programId: "dex-only-program",
+          period: "2024-01-01 to 2025-01-01",
+          invocationCount: 12_345,
+          uniqueSignerCount: 456,
+          transactionCount: 789,
+          sampleSignatures: ["sample-signature-1", "sample-signature-2"],
+          queryId: 7_647_495,
+          queryName: "solana-dex-project-priority",
+          periodGranularity: "year",
+          queryVersion: 1,
+          retrievedAt: "2026-06-01T10:00:00.000Z",
+        },
+      ],
+    }
+
+    const result = await runRepository(
+      importSolanaDuneRankingsFile({ file: rankingsFile, blockchainId: solanaBlockchainId })
+    )
+
+    const rows = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({
+            id: schema.protocolCandidates.id,
+            subjectKind: schema.protocolCandidates.subjectKind,
+            subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+            protocolNameHint: schema.protocolCandidates.protocolNameHint,
+            categoryHint: schema.protocolCandidates.categoryHint,
+            mappingStatus: schema.protocolCandidates.mappingStatus,
+          })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "dex-only-program"))
+          .limit(1)
+
+        if (candidate === undefined) {
+          return yield* Effect.dieMessage("Expected imported protocol candidate")
+        }
+
+        const [observation] = yield* db
+          .select({
+            id: schema.protocolCandidateObservations.id,
+            observedWindowStart: schema.protocolCandidateObservations.observedWindowStart,
+            observedWindowEnd: schema.protocolCandidateObservations.observedWindowEnd,
+            interactionCount: schema.protocolCandidateObservations.interactionCount,
+            transactionCount: schema.protocolCandidateObservations.transactionCount,
+            uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+            sampleTransactionHashes: schema.protocolCandidateObservations.sampleTransactionHashes,
+            retrievedAt: schema.protocolCandidateObservations.retrievedAt,
+            rawPayload: schema.protocolCandidateObservations.rawPayload,
+          })
+          .from(schema.protocolCandidateObservations)
+          .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+          .limit(1)
+
+        if (observation === undefined) {
+          return yield* Effect.dieMessage("Expected imported protocol candidate observation")
+        }
+
+        const [duneObservation] = yield* db
+          .select({
+            queryId: schema.duneProtocolCandidateObservations.queryId,
+            queryName: schema.duneProtocolCandidateObservations.queryName,
+            queryVersion: schema.duneProtocolCandidateObservations.queryVersion,
+          })
+          .from(schema.duneProtocolCandidateObservations)
+          .where(eq(schema.duneProtocolCandidateObservations.observationId, observation.id))
+          .limit(1)
+
+        if (duneObservation === undefined) {
+          return yield* Effect.dieMessage("Expected imported Dune observation metadata")
+        }
+
+        return { candidate, observation, duneObservation }
+      })
+    )
+
+    expect(result.observationCount).toBe(1)
+    expect(result.candidates).toHaveLength(1)
+    expect(rows.candidate).toMatchObject({
+      subjectKind: "program",
+      subjectIdentifier: "dex-only-program",
+      protocolNameHint: null,
+      categoryHint: null,
+      mappingStatus: "pending_review",
+    })
+    expect(rows.observation).toMatchObject({
+      observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
+      interactionCount: "12345",
+      transactionCount: "789",
+      uniqueActorCount: "456",
+      sampleTransactionHashes: ["sample-signature-1", "sample-signature-2"],
+      retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+    })
+    expect(rows.observation.rawPayload).toMatchObject({
+      programId: "dex-only-program",
+      period: "2024-01-01 to 2025-01-01",
+      invocationCount: 12_345,
+      uniqueSignerCount: 456,
+      transactionCount: 789,
+      sampleSignatures: ["sample-signature-1", "sample-signature-2"],
+      queryId: 7_647_495,
+      queryName: "solana-dex-project-priority",
+      queryVersion: 1,
+      retrievedAt: "2026-06-01T10:00:00.000Z",
+    })
+    expect(rows.duneObservation).toMatchObject({
+      queryId: 7_647_495,
+      queryName: "solana-dex-project-priority",
+      queryVersion: 1,
+    })
   })
 
   it("updates existing candidates and observations on re-import without resetting review status", async () => {
@@ -378,5 +517,65 @@ describe("ProtocolCandidateRepositoryLive", () => {
       observationCount: 0,
       duneObservationCount: 0,
     })
+  })
+
+  it("rejects malformed Solana Dune rankings files with a structured error", async () => {
+    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const rankingsFile = {
+      schemaVersion: 1,
+      chain: "solana",
+      source: "dune",
+      generatedAt: "2026-06-01T10:30:00.000Z",
+      window: { fromYear: 2024, toYear: 2024 },
+      top: 10,
+      executionWindowDays: 1,
+      queries: [],
+      entries: [
+        {
+          programId: "malformed-period-program",
+          period: "2024",
+          invocationCount: 1,
+          uniqueSignerCount: null,
+          transactionCount: null,
+          sampleSignatures: [],
+          queryId: 7_647_495,
+          queryName: "solana-dex-project-priority",
+          periodGranularity: "year",
+          queryVersion: 1,
+          retrievedAt: "2026-06-01T10:00:00.000Z",
+        },
+      ],
+    }
+
+    const importResult = await runRepository(
+      Effect.either(
+        importSolanaDuneRankingsFile({ file: rankingsFile, blockchainId: solanaBlockchainId })
+      )
+    )
+
+    const rows = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidateCountRow] = yield* db
+          .select({ value: count(schema.protocolCandidates.id) })
+          .from(schema.protocolCandidates)
+        const [observationCountRow] = yield* db
+          .select({ value: count(schema.protocolCandidateObservations.id) })
+          .from(schema.protocolCandidateObservations)
+
+        return {
+          candidateCount: candidateCountRow?.value ?? 0,
+          observationCount: observationCountRow?.value ?? 0,
+        }
+      })
+    )
+
+    expect(importResult._tag).toBe("Left")
+    if (importResult._tag === "Right") {
+      expect.fail("Expected malformed Solana Dune rankings file import to fail")
+    }
+    expect(importResult.left).toBeInstanceOf(SolanaDuneRankingsFileImportError)
+    expect(importResult.left.message).toContain("Invalid period")
+    expect(rows).toEqual({ candidateCount: 0, observationCount: 0 })
   })
 })

@@ -21,11 +21,11 @@ import {
 } from "../src/solana-crawler.ts"
 import { readSolanaBehaviorSamplerClientConfig } from "../src/solana-behavior-sampler-live.ts"
 import {
-  buildSolanaDuneProgramRankingsArtifact,
+  buildSolanaDuneRankingsFile,
   SolanaDuneProgramRankingClient,
   SolanaDuneProgramRankingClientTestLive,
   SolanaDuneProgramRankingError,
-  SolanaDuneProgramRankingsArtifact,
+  SolanaDuneRankingsFile,
 } from "../src/solana-dune-program-ranking.ts"
 import { readSolanaDuneApiKey } from "../src/solana-dune-program-ranking-live.ts"
 
@@ -590,7 +590,7 @@ describe("solana crawler", () => {
     ).resolves.toEqual(result.behaviorSamples)
   })
 
-  it("writes Dune ranking artifacts using decoded saved-query rows", async () => {
+  it("writes Dune rankings files using decoded saved-query rows", async () => {
     const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
     const duneClientLive = SolanaDuneProgramRankingClientTestLive({
       executeQuery: ({ parameters, query }) => {
@@ -713,7 +713,7 @@ describe("solana crawler", () => {
       retrievedAt: "2026-01-01T00:00:00Z",
     })
     await expect(
-      runEffect(Schema.decodeUnknown(SolanaDuneProgramRankingsArtifact)(result.duneProgramRankings))
+      runEffect(Schema.decodeUnknown(SolanaDuneRankingsFile)(result.duneProgramRankings))
     ).resolves.toEqual(result.duneProgramRankings)
   })
 
@@ -861,7 +861,7 @@ describe("solana crawler", () => {
       },
     })
 
-    const result = await buildSolanaDuneProgramRankingsArtifact({
+    const result = await buildSolanaDuneRankingsFile({
       generatedAt: "2024-01-01T00:00:00.000Z",
       executionWindowDays: 31,
       fromYear: 2024,
@@ -1070,7 +1070,7 @@ describe("solana crawler", () => {
       },
     })
 
-    const result = await buildSolanaDuneProgramRankingsArtifact({
+    const result = await buildSolanaDuneRankingsFile({
       generatedAt: "2024-05-15T00:00:00Z",
       fromYear: 2024,
       toYear: 2024,
