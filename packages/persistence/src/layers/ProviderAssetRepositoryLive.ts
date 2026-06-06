@@ -342,6 +342,68 @@ const make = Effect.gen(function* () {
         return Option.fromNullable(row)
       })
 
+  const providerAssetReviewProjection = {
+    id: schema.providerAssets.id,
+    provider: schema.providerAssets.provider,
+    providerAssetId: schema.providerAssets.providerAssetId,
+    naturalKey: schema.providerAssets.naturalKey,
+    currencyCode: schema.providerAssets.currencyCode,
+    name: schema.providerAssets.name,
+    exponent: schema.providerAssets.exponent,
+    providerType: schema.providerAssets.providerType,
+    rawProviderPayload: schema.providerAssets.rawProviderPayload,
+    discoveredAt: schema.providerAssets.discoveredAt,
+    retrievedAt: schema.providerAssets.retrievedAt,
+    mappingKind: schema.providerAssetMappings.mappingKind,
+    canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+    canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+    canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
+    mappingStatus: schema.providerAssetMappings.mappingStatus,
+    reviewerNotes: schema.providerAssetMappings.reviewerNotes,
+    sourceNotes: schema.providerAssetMappings.sourceNotes,
+  } as const
+
+  const findProviderAssetReviewById: ProviderAssetRepositoryShape["findProviderAssetReviewById"] =
+    ({ providerAssetRowId }) =>
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select(providerAssetReviewProjection)
+          .from(schema.providerAssets)
+          .leftJoin(
+            schema.providerAssetMappings,
+            eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+          )
+          .where(eq(schema.providerAssets.id, providerAssetRowId))
+          .limit(1)
+          .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetReviewById"))
+
+        return Option.fromNullable(row)
+      })
+
+  const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
+    providerKey,
+    mappingStatus,
+    limit,
+  }) =>
+    db
+      .select(providerAssetReviewProjection)
+      .from(schema.providerAssets)
+      .innerJoin(
+        schema.providerAssetMappings,
+        eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+      )
+      .where(
+        providerKey === null
+          ? eq(schema.providerAssetMappings.mappingStatus, mappingStatus)
+          : and(
+              eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
+              eq(schema.providerAssets.provider, providerKey)
+            )
+      )
+      .orderBy(schema.providerAssets.provider, schema.providerAssets.currencyCode)
+      .limit(limit)
+      .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews"))
+
   const findProviderAssetMapping: ProviderAssetRepositoryShape["findProviderAssetMapping"] = ({
     providerAssetRowId,
   }) =>
@@ -371,6 +433,8 @@ const make = Effect.gen(function* () {
     findProviderAssetByProviderAssetId,
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,
+    findProviderAssetReviewById,
+    listProviderAssetReviews,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })

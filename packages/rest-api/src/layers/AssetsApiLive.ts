@@ -1,0 +1,115 @@
+/**
+ * AssetsApiLive - Live implementation of asset review endpoints.
+ *
+ * @module AssetsApiLive
+ */
+
+import { HttpApiBuilder } from "@effect/platform"
+import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
+import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
+import { ForbiddenError, InternalServerError } from "../definitions/ApiErrors.ts"
+import {
+  AssetBadRequestError,
+  AssetCanonicalizationEvidenceResponse,
+  AssetCanonicalizationResponse,
+  AssetNotFoundError,
+  CanonicalAssetResponse,
+  ProviderAssetReviewListResponse,
+  ProviderAssetReviewRow,
+} from "../definitions/AssetsApi.ts"
+import { CurrentUser } from "../definitions/AuthMiddleware.ts"
+import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
+import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
+
+const defaultLimit = 50
+
+const toInternalServerError = (message: string) =>
+  new InternalServerError({ requestId: Option.none(), message })
+
+const requireAdmin = Effect.gen(function* () {
+  const currentUser = yield* CurrentUser
+  if (currentUser.role !== "admin") {
+    return yield* Effect.fail(
+      new ForbiddenError({
+        message: "Admin role required.",
+        resource: Option.some("assets"),
+        action: Option.some("review"),
+      })
+    )
+  }
+  return currentUser
+})
+
+const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
+  ProviderAssetReviewRow.make({
+    id: row.id,
+    provider: row.provider,
+    providerAssetId: row.providerAssetId,
+    naturalKey: row.naturalKey,
+    currencyCode: row.currencyCode,
+    name: row.name,
+    exponent: row.exponent,
+    providerType: row.providerType,
+    mappingKind: row.mappingKind,
+    canonicalAssetId: row.canonicalAssetId,
+    canonicalAssetSymbol: row.canonicalAssetSymbol,
+    canonicalFiatCurrency: row.canonicalFiatCurrency,
+    mappingStatus: row.mappingStatus,
+    reviewerNotes: row.reviewerNotes,
+    sourceNotes: row.sourceNotes,
+  })
+
+export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>
+  Effect.gen(function* () {
+    const providerAssetRepository = yield* ProviderAssetRepository
+    const assetCanonicalizationService = yield* AssetCanonicalizationService
+
+    return handlers
+      .handle("listProviderAssetReviews", ({ urlParams }) =>
+        Effect.gen(function* () {
+          yield* requireAdmin
+          const providerAssets = yield* providerAssetRepository
+            .listProviderAssetReviews({
+              providerKey: urlParams.provider ?? null,
+              mappingStatus: urlParams.status ?? "pending_review",
+              limit: urlParams.limit ?? defaultLimit,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to list provider assets.")))
+
+          return ProviderAssetReviewListResponse.make({
+            providerAssets: providerAssets.map(toProviderAssetReviewRow),
+          })
+        })
+      )
+      .handle("canonicalizeProviderAssetFromCoinGecko", ({ path, payload }) =>
+        Effect.gen(function* () {
+          yield* requireAdmin
+          const result = yield* assetCanonicalizationService
+            .canonicalizeProviderAssetFromCoinGecko({
+              providerAssetRowId: path.providerAssetRowId,
+              reviewerNotes: payload.reviewerNotes ?? null,
+            })
+            .pipe(
+              Effect.mapError((error) => {
+                switch (error._tag) {
+                  case "AssetCanonicalizationBadRequestError":
+                  case "AssetCanonicalizationProviderError":
+                    return new AssetBadRequestError({ message: error.message })
+                  case "AssetCanonicalizationNotFoundError":
+                    return new AssetNotFoundError({ message: error.message })
+                  case "AssetCanonicalizationInternalError":
+                    return toInternalServerError(error.message)
+                }
+              })
+            )
+
+          return AssetCanonicalizationResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            canonicalAsset: CanonicalAssetResponse.make(result.canonicalAsset),
+            evidence: AssetCanonicalizationEvidenceResponse.make(result.evidence),
+          })
+        })
+      )
+  })
+)

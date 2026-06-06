@@ -1,6 +1,6 @@
 CREATE TYPE "address_type" AS ENUM('evm', 'solana', 'bitcoin');--> statement-breakpoint
 CREATE TYPE "asset_type" AS ENUM('native', 'token', 'nft');--> statement-breakpoint
-CREATE TYPE "chain_type" AS ENUM('evm', 'solana', 'bitcoin');--> statement-breakpoint
+CREATE TYPE "chain_type" AS ENUM('evm', 'solana', 'bitcoin', 'cardano', 'other');--> statement-breakpoint
 CREATE TYPE "auth_provider_type" AS ENUM('local', 'google', 'coinbase');--> statement-breakpoint
 CREATE TYPE "oauth_intent" AS ENUM('login', 'link');--> statement-breakpoint
 CREATE TYPE "oauth_state_status" AS ENUM('pending', 'completed', 'failed');--> statement-breakpoint

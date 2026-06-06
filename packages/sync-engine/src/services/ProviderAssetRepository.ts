@@ -76,6 +76,19 @@ export interface ResolvedProviderAssetMapping {
 }
 
 /**
+ * ProviderAssetReviewRecord - Provider asset plus current review mapping state.
+ */
+export interface ProviderAssetReviewRecord extends ProviderAssetRecord {
+  readonly mappingKind: ProviderAssetMappingKind | null
+  readonly canonicalAssetId: string | null
+  readonly canonicalAssetSymbol: string | null
+  readonly canonicalFiatCurrency: string | null
+  readonly mappingStatus: ProviderAssetMappingStatus | null
+  readonly reviewerNotes: string | null
+  readonly sourceNotes: string | null
+}
+
+/**
  * ProviderAssetRepositoryShape - Provider asset persistence and lookup operations.
  */
 export interface ProviderAssetRepositoryShape {
@@ -143,6 +156,22 @@ export interface ProviderAssetRepositoryShape {
     readonly providerKey: string
     readonly currencyCode: string
   }) => Effect.Effect<Option.Option<ProviderAssetRecord>, SyncEngineStorageError>
+
+  /**
+   * Load one provider asset row with its mapping review state.
+   */
+  readonly findProviderAssetReviewById: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<Option.Option<ProviderAssetReviewRecord>, SyncEngineStorageError>
+
+  /**
+   * List provider asset rows that need mapping review.
+   */
+  readonly listProviderAssetReviews: (params: {
+    readonly providerKey: string | null
+    readonly mappingStatus: ProviderAssetMappingStatus
+    readonly limit: number
+  }) => Effect.Effect<ReadonlyArray<ProviderAssetReviewRecord>, SyncEngineStorageError>
 
   /**
    * Load the current mapping for one provider asset.

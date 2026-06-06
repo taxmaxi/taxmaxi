@@ -23,6 +23,8 @@ import type {
 } from "@my/persistence/services"
 import type {
   SourceRepository as SyncEngineSourceRepository,
+  AssetRepository,
+  ProviderAssetRepository,
   SourceSyncRunService,
   SourceSyncService,
   TransferReconciliationService,
@@ -39,6 +41,8 @@ import { AnonApiLive } from "./AnonApiLive.ts"
 import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
 import { PrincipalResolutionServiceLive } from "./PrincipalResolutionServiceLive.ts"
 import { PrincipalsApiLive } from "./PrincipalsApiLive.ts"
+import { AssetsApiLive } from "./AssetsApiLive.ts"
+import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationServiceLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
@@ -83,6 +87,7 @@ const CoreApiGroup = Layer.mergeAll(
   LegalReferenceApiLive,
   AnonApiLive,
   PrincipalsApiLive,
+  AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive
 ).pipe(Layer.provide(PrincipalResolutionServiceLive))
@@ -100,6 +105,8 @@ type TaxMaxiApiLiveContext =
   | PersistenceSourceRepository
   | SessionRepository
   | SIWXProofVerifier
+  | AssetRepository
+  | ProviderAssetRepository
   | SourceReportRepository
   | SourceSyncRunService
   | SourceSyncService

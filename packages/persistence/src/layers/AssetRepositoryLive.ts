@@ -10,7 +10,11 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
-import { AssetRepository, type AssetRepositoryShape } from "@my/sync-engine/services"
+import {
+  AssetRepository,
+  type AssetRepositoryShape,
+  SyncEngineStorageError,
+} from "@my/sync-engine/services"
 import { wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 
 const make = Effect.gen(function* () {
@@ -103,12 +107,157 @@ const make = Effect.gen(function* () {
       .from(schema.blockchains)
       .pipe(wrapSyncEngineSqlError("assetRepository.listBlockchains"))
 
+  const upsertCanonicalAsset: AssetRepositoryShape["upsertCanonicalAsset"] = ({
+    blockchain,
+    asset,
+  }) =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const now = new Date()
+
+          yield* tx
+            .insert(schema.blockchains)
+            .values({
+              name: blockchain.name,
+              chainType: blockchain.chainType,
+              chainId: blockchain.chainId,
+              nativeAssetSymbol: blockchain.nativeAssetSymbol,
+              explorerUrl: blockchain.explorerUrl,
+              logoUrl: blockchain.logoUrl,
+              coingeckoPlatformId: blockchain.coingeckoPlatformId,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: schema.blockchains.name,
+              set: {
+                chainType: sql.raw("excluded.chain_type"),
+                chainId: sql.raw("excluded.chain_id"),
+                nativeAssetSymbol: sql.raw("excluded.native_asset_symbol"),
+                explorerUrl: sql.raw("excluded.explorer_url"),
+                logoUrl: sql.raw("excluded.logo_url"),
+                coingeckoPlatformId: sql.raw("excluded.coingecko_platform_id"),
+                updatedAt: now,
+              },
+            })
+            .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.blockchain"))
+
+          const [persistedBlockchain] = yield* tx
+            .select({
+              id: schema.blockchains.id,
+              name: schema.blockchains.name,
+            })
+            .from(schema.blockchains)
+            .where(eq(schema.blockchains.name, blockchain.name))
+            .limit(1)
+            .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.loadBlockchain"))
+
+          if (persistedBlockchain === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "assetRepository.upsertCanonicalAsset.loadBlockchain",
+                cause: {
+                  blockchainName: blockchain.name,
+                  message: "Canonical blockchain was not available after upsert.",
+                },
+              })
+            )
+          }
+
+          const assetFilter =
+            asset.contractAddress === null
+              ? and(
+                  eq(schema.assets.blockchainId, persistedBlockchain.id),
+                  eq(sql<string>`upper(${schema.assets.symbol})`, asset.symbol.toUpperCase()),
+                  eq(schema.assets.type, asset.type),
+                  isNull(schema.assets.contractAddress)
+                )
+              : and(
+                  eq(schema.assets.blockchainId, persistedBlockchain.id),
+                  eq(schema.assets.contractAddress, asset.contractAddress)
+                )
+
+          const [existingAsset] = yield* tx
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(assetFilter)
+            .limit(1)
+            .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.findAsset"))
+
+          const assetValues = {
+            blockchainId: persistedBlockchain.id,
+            contractAddress: asset.contractAddress,
+            name: asset.name,
+            symbol: asset.symbol.toUpperCase(),
+            decimals: asset.decimals,
+            logoUrl: asset.logoUrl,
+            type: asset.type,
+            isSpam: asset.isSpam,
+            updatedAt: now,
+          } as const
+
+          const [persistedAsset] =
+            existingAsset === undefined
+              ? yield* tx
+                  .insert(schema.assets)
+                  .values({
+                    ...assetValues,
+                    createdAt: now,
+                  })
+                  .returning({
+                    id: schema.assets.id,
+                    blockchainId: schema.assets.blockchainId,
+                    name: schema.assets.name,
+                    symbol: schema.assets.symbol,
+                    decimals: schema.assets.decimals,
+                    contractAddress: schema.assets.contractAddress,
+                    type: schema.assets.type,
+                  })
+                  .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.insertAsset"))
+              : yield* tx
+                  .update(schema.assets)
+                  .set(assetValues)
+                  .where(eq(schema.assets.id, existingAsset.id))
+                  .returning({
+                    id: schema.assets.id,
+                    blockchainId: schema.assets.blockchainId,
+                    name: schema.assets.name,
+                    symbol: schema.assets.symbol,
+                    decimals: schema.assets.decimals,
+                    contractAddress: schema.assets.contractAddress,
+                    type: schema.assets.type,
+                  })
+                  .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.updateAsset"))
+
+          if (persistedAsset === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "assetRepository.upsertCanonicalAsset.persistAsset",
+                cause: {
+                  assetSymbol: asset.symbol,
+                  blockchainName: blockchain.name,
+                  message: "Canonical asset was not available after upsert.",
+                },
+              })
+            )
+          }
+
+          return {
+            ...persistedAsset,
+            blockchainName: persistedBlockchain.name,
+          }
+        })
+      )
+      .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset"))
+
   return AssetRepository.of({
     findAssetById,
     findAssetBySymbol,
     findNativeAssetForBlockchain,
     findAssetByBlockchainAndContractAddress,
     listBlockchains,
+    upsertCanonicalAsset,
   } satisfies AssetRepositoryShape)
 })
 

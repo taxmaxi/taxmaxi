@@ -1,6 +1,6 @@
 import { integer, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
 
-export const chainTypeEnum = pgEnum("chain_type", ["evm", "solana", "bitcoin"])
+export const chainTypeEnum = pgEnum("chain_type", ["evm", "solana", "bitcoin", "cardano", "other"])
 
 export type ChainType = (typeof chainTypeEnum.enumValues)[number]
 
