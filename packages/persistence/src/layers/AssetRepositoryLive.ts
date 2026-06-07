@@ -13,9 +13,19 @@ import { schema } from "../schema/index.ts"
 import {
   AssetRepository,
   type AssetRepositoryShape,
+  type SyncEngineChainType,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
 import { wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
+
+const normalizeContractAddress = ({
+  chainType,
+  contractAddress,
+}: {
+  readonly chainType: SyncEngineChainType
+  readonly contractAddress: string | null
+}): string | null =>
+  chainType === "evm" && contractAddress !== null ? contractAddress.toLowerCase() : contractAddress
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -162,18 +172,27 @@ const make = Effect.gen(function* () {
             )
           }
 
+          const contractAddress = normalizeContractAddress({
+            chainType: blockchain.chainType,
+            contractAddress: asset.contractAddress,
+          })
           const assetFilter =
-            asset.contractAddress === null
+            contractAddress === null
               ? and(
                   eq(schema.assets.blockchainId, persistedBlockchain.id),
                   eq(sql<string>`upper(${schema.assets.symbol})`, asset.symbol.toUpperCase()),
                   eq(schema.assets.type, asset.type),
                   isNull(schema.assets.contractAddress)
                 )
-              : and(
-                  eq(schema.assets.blockchainId, persistedBlockchain.id),
-                  eq(schema.assets.contractAddress, asset.contractAddress)
-                )
+              : blockchain.chainType === "evm"
+                ? and(
+                    eq(schema.assets.blockchainId, persistedBlockchain.id),
+                    eq(sql<string>`lower(${schema.assets.contractAddress})`, contractAddress)
+                  )
+                : and(
+                    eq(schema.assets.blockchainId, persistedBlockchain.id),
+                    eq(schema.assets.contractAddress, contractAddress)
+                  )
 
           const [existingAsset] = yield* tx
             .select({ id: schema.assets.id })
@@ -184,22 +203,32 @@ const make = Effect.gen(function* () {
 
           const assetValues = {
             blockchainId: persistedBlockchain.id,
-            contractAddress: asset.contractAddress,
+            contractAddress,
             name: asset.name,
             symbol: asset.symbol.toUpperCase(),
             decimals: asset.decimals,
-            logoUrl: asset.logoUrl,
             type: asset.type,
             isSpam: asset.isSpam,
             updatedAt: now,
           } as const
+          const assetInsertValues = {
+            ...assetValues,
+            logoUrl: asset.logoUrl,
+          } as const
+          const assetUpdateValues =
+            asset.logoUrl === null
+              ? assetValues
+              : {
+                  ...assetValues,
+                  logoUrl: asset.logoUrl,
+                }
 
           const [persistedAsset] =
             existingAsset === undefined
               ? yield* tx
                   .insert(schema.assets)
                   .values({
-                    ...assetValues,
+                    ...assetInsertValues,
                     createdAt: now,
                   })
                   .returning({
@@ -214,7 +243,7 @@ const make = Effect.gen(function* () {
                   .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.insertAsset"))
               : yield* tx
                   .update(schema.assets)
-                  .set(assetValues)
+                  .set(assetUpdateValues)
                   .where(eq(schema.assets.id, existingAsset.id))
                   .returning({
                     id: schema.assets.id,

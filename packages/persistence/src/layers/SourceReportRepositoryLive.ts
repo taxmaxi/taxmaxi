@@ -67,7 +67,7 @@ interface AssetAccumulator {
   acquiredAmount: BigDecimal.BigDecimal
   disposedAmount: BigDecimal.BigDecimal
   openAmount: BigDecimal.BigDecimal
-  costBasis: BigDecimal.BigDecimal
+  openCostBasis: BigDecimal.BigDecimal
   proceeds: BigDecimal.BigDecimal
   realizedGainLoss: BigDecimal.BigDecimal
   currency: string | null
@@ -418,6 +418,7 @@ const make = Effect.gen(function* () {
           name: schema.assets.name,
           kind: schema.transactionLegs.kind,
           amount: schema.transactionLegs.amount,
+          derivationRule: schema.transactionLegs.derivationRule,
         })
         .from(schema.transactionLegs)
         .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
@@ -443,9 +444,9 @@ const make = Effect.gen(function* () {
           symbol: schema.assets.symbol,
           name: schema.assets.name,
           proceeds: schema.disposalMatches.proceeds,
-          costBasis: schema.disposalMatches.costBasis,
           gainLoss: schema.disposalMatches.gainLoss,
           fiatCurrency: schema.transactionLegs.fiatCurrency,
+          derivationRule: schema.transactionLegs.derivationRule,
         })
         .from(schema.disposalMatches)
         .innerJoin(
@@ -467,7 +468,7 @@ const make = Effect.gen(function* () {
           acquiredAmount: zeroDecimal(),
           disposedAmount: zeroDecimal(),
           openAmount: zeroDecimal(),
-          costBasis: zeroDecimal(),
+          openCostBasis: zeroDecimal(),
           proceeds: zeroDecimal(),
           realizedGainLoss: zeroDecimal(),
           currency: null,
@@ -485,7 +486,7 @@ const make = Effect.gen(function* () {
         if (row.kind === "acquisition" || row.kind === "income") {
           accumulator.acquiredAmount = BigDecimal.sum(accumulator.acquiredAmount, amount)
         }
-        if (row.kind === "disposal") {
+        if (row.kind === "disposal" && row.derivationRule !== "internal_transfer_out") {
           accumulator.disposedAmount = BigDecimal.sum(
             accumulator.disposedAmount,
             BigDecimal.abs(amount)
@@ -504,22 +505,21 @@ const make = Effect.gen(function* () {
           value: row.costBasisPerToken,
         })
         accumulator.openAmount = BigDecimal.sum(accumulator.openAmount, remainingAmount)
-        accumulator.costBasis = BigDecimal.sum(
-          accumulator.costBasis,
+        accumulator.openCostBasis = BigDecimal.sum(
+          accumulator.openCostBasis,
           BigDecimal.round(BigDecimal.multiply(remainingAmount, costBasisPerToken), { scale: 8 })
         )
         accumulator.currency = emptyCurrency(accumulator.currency, row.costBasisCurrency)
       }
 
       for (const row of matchRows) {
+        if (row.derivationRule === "internal_transfer_out") {
+          continue
+        }
         const accumulator = getAccumulator(assetFromRow(row))
         const proceeds = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.proceeds",
           value: row.proceeds,
-        })
-        const costBasis = yield* decodeDecimal({
-          operation: "sourceReportRepository.listAssetPnl.matchCostBasis",
-          value: row.costBasis,
         })
         const gainLoss = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.gainLoss",
@@ -527,7 +527,6 @@ const make = Effect.gen(function* () {
         })
         accumulator.proceeds = BigDecimal.sum(accumulator.proceeds, proceeds)
         accumulator.realizedGainLoss = BigDecimal.sum(accumulator.realizedGainLoss, gainLoss)
-        accumulator.costBasis = BigDecimal.sum(accumulator.costBasis, costBasis)
         accumulator.currency = emptyCurrency(accumulator.currency, row.fiatCurrency)
       }
 
@@ -539,7 +538,7 @@ const make = Effect.gen(function* () {
             acquiredAmount: formatDecimal(row.acquiredAmount),
             disposedAmount: formatDecimal(row.disposedAmount),
             openAmount: formatDecimal(row.openAmount),
-            costBasis: formatDecimal(row.costBasis),
+            costBasis: formatDecimal(row.openCostBasis),
             proceeds: formatDecimal(row.proceeds),
             realizedGainLoss: formatDecimal(row.realizedGainLoss),
             currency: row.currency,

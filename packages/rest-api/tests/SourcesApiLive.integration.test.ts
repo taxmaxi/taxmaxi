@@ -726,6 +726,7 @@ describe("SourcesApiLive", () => {
         acquiredAmount: "1",
         disposedAmount: "0.4",
         openAmount: "0.6",
+        costBasis: "9000",
         proceeds: "6000",
         realizedGainLoss: "2000",
         currency: "EUR",
@@ -863,6 +864,16 @@ describe("SourcesApiLive", () => {
           kind: "disposal",
           derivationRule: "internal_transfer_out",
           taxableTreatment: "non_taxable",
+        })
+        const assetPnl = yield* client.sources.listSourceAssetPnl({
+          path: { sourceId: fixture.sourceId },
+        })
+        expect(assetPnl.assets[0]).toMatchObject({
+          disposedAmount: "0.4",
+          openAmount: "0.6",
+          costBasis: "9000",
+          proceeds: "6000",
+          realizedGainLoss: "2000",
         })
 
         const explanation = yield* client.sources.explainSourceDisposal({

@@ -237,6 +237,9 @@ export class SourceOverviewResponse extends Schema.Class<SourceOverviewResponse>
 
 /**
  * SourceAssetPnlRow - Per-asset P&L report row.
+ *
+ * The costBasis field reports the remaining open-position basis, while proceeds
+ * and realizedGainLoss report realized disposal totals.
  */
 export class SourceAssetPnlRow extends Schema.Class<SourceAssetPnlRow>("SourceAssetPnlRow")({
   asset: SourceReportAsset,
