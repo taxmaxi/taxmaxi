@@ -25,7 +25,15 @@ await Effect.runPromise(context.recreateTestDatabase())
 const runRepository = <A, E>(effect: Effect.Effect<A, E, ProtocolCandidateRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ProtocolCandidateRepositoryLive }))
 
-const requireSolanaBlockchainId = Effect.gen(function* () {
+const expectDefined = <A>(value: A | undefined, message: string): A => {
+  expect(value, message).toBeDefined()
+  if (value === undefined) {
+    throw new Error(message)
+  }
+  return value
+}
+
+const findSolanaBlockchainId = Effect.gen(function* () {
   const db = yield* drizzle
   const [blockchain] = yield* db
     .select({ id: schema.blockchains.id })
@@ -33,12 +41,11 @@ const requireSolanaBlockchainId = Effect.gen(function* () {
     .where(eq(schema.blockchains.name, "solana"))
     .limit(1)
 
-  if (blockchain === undefined) {
-    return yield* Effect.dieMessage("Missing solana blockchain fixture")
-  }
-
-  return blockchain.id
+  return blockchain?.id
 })
+
+const requireSolanaBlockchainId = async () =>
+  expectDefined(await runPg(findSolanaBlockchainId), "Missing solana blockchain fixture")
 
 describe("ProtocolCandidateRepositoryLive", () => {
   beforeEach(async () => {
@@ -51,7 +58,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("imports Dune observations as candidates and observation rows", async () => {
-    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const solanaBlockchainId = await requireSolanaBlockchainId()
     const providerMappingCountBefore = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -104,42 +111,37 @@ describe("ProtocolCandidateRepositoryLive", () => {
           .from(schema.protocolCandidates)
           .limit(1)
 
-        if (candidate === undefined) {
-          return yield* Effect.dieMessage("Expected protocol candidate")
-        }
+        const [observation] =
+          candidate === undefined
+            ? []
+            : yield* db
+                .select({
+                  id: schema.protocolCandidateObservations.id,
+                  onchainDataSource: schema.protocolCandidateObservations.onchainDataSource,
+                  onchainDataSourceObservationKey:
+                    schema.protocolCandidateObservations.onchainDataSourceObservationKey,
+                  interactionCount: schema.protocolCandidateObservations.interactionCount,
+                  transactionCount: schema.protocolCandidateObservations.transactionCount,
+                  uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  sampleTransactionHashes:
+                    schema.protocolCandidateObservations.sampleTransactionHashes,
+                })
+                .from(schema.protocolCandidateObservations)
+                .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                .limit(1)
 
-        const [observation] = yield* db
-          .select({
-            id: schema.protocolCandidateObservations.id,
-            onchainDataSource: schema.protocolCandidateObservations.onchainDataSource,
-            onchainDataSourceObservationKey:
-              schema.protocolCandidateObservations.onchainDataSourceObservationKey,
-            interactionCount: schema.protocolCandidateObservations.interactionCount,
-            transactionCount: schema.protocolCandidateObservations.transactionCount,
-            uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
-            sampleTransactionHashes: schema.protocolCandidateObservations.sampleTransactionHashes,
-          })
-          .from(schema.protocolCandidateObservations)
-          .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
-          .limit(1)
-
-        if (observation === undefined) {
-          return yield* Effect.dieMessage("Expected protocol candidate observation")
-        }
-
-        const [duneObservation] = yield* db
-          .select({
-            queryId: schema.duneProtocolCandidateObservations.queryId,
-            queryName: schema.duneProtocolCandidateObservations.queryName,
-            queryVersion: schema.duneProtocolCandidateObservations.queryVersion,
-          })
-          .from(schema.duneProtocolCandidateObservations)
-          .where(eq(schema.duneProtocolCandidateObservations.observationId, observation.id))
-          .limit(1)
-
-        if (duneObservation === undefined) {
-          return yield* Effect.dieMessage("Expected Dune observation metadata")
-        }
+        const [duneObservation] =
+          observation === undefined
+            ? []
+            : yield* db
+                .select({
+                  queryId: schema.duneProtocolCandidateObservations.queryId,
+                  queryName: schema.duneProtocolCandidateObservations.queryName,
+                  queryVersion: schema.duneProtocolCandidateObservations.queryVersion,
+                })
+                .from(schema.duneProtocolCandidateObservations)
+                .where(eq(schema.duneProtocolCandidateObservations.observationId, observation.id))
+                .limit(1)
 
         return {
           candidate,
@@ -160,22 +162,28 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     expect(result.observationCount).toBe(1)
     expect(result.candidates).toHaveLength(1)
-    expect(rows.candidate).toMatchObject({
+    const candidate = expectDefined(rows.candidate, "Expected protocol candidate")
+    const observation = expectDefined(rows.observation, "Expected protocol candidate observation")
+    const duneObservation = expectDefined(
+      rows.duneObservation,
+      "Expected Dune observation metadata"
+    )
+    expect(candidate).toMatchObject({
       subjectKind: "program",
       subjectIdentifier: "dune-program-1",
       protocolNameHint: "Example DEX",
       categoryHint: "dex",
       mappingStatus: "pending_review",
     })
-    expect(rows.observation).toMatchObject({
+    expect(observation).toMatchObject({
       onchainDataSource: "dune",
       interactionCount: "1000",
       transactionCount: "800",
       uniqueActorCount: "250",
       sampleTransactionHashes: ["signature-1", "signature-2"],
     })
-    expect(rows.observation.onchainDataSourceObservationKey).toContain("7647495:1:")
-    expect(rows.duneObservation).toMatchObject({
+    expect(observation.onchainDataSourceObservationKey).toContain("7647495:1:")
+    expect(duneObservation).toMatchObject({
       queryId: 7_647_495,
       queryName: "solana-dex-project-priority",
       queryVersion: 1,
@@ -184,7 +192,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("imports a Solana Dune rankings file as candidates and observations", async () => {
-    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const solanaBlockchainId = await requireSolanaBlockchainId()
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
@@ -239,43 +247,38 @@ describe("ProtocolCandidateRepositoryLive", () => {
           .where(eq(schema.protocolCandidates.subjectIdentifier, "dex-only-program"))
           .limit(1)
 
-        if (candidate === undefined) {
-          return yield* Effect.dieMessage("Expected imported protocol candidate")
-        }
+        const [observation] =
+          candidate === undefined
+            ? []
+            : yield* db
+                .select({
+                  id: schema.protocolCandidateObservations.id,
+                  observedWindowStart: schema.protocolCandidateObservations.observedWindowStart,
+                  observedWindowEnd: schema.protocolCandidateObservations.observedWindowEnd,
+                  interactionCount: schema.protocolCandidateObservations.interactionCount,
+                  transactionCount: schema.protocolCandidateObservations.transactionCount,
+                  uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  sampleTransactionHashes:
+                    schema.protocolCandidateObservations.sampleTransactionHashes,
+                  retrievedAt: schema.protocolCandidateObservations.retrievedAt,
+                  rawPayload: schema.protocolCandidateObservations.rawPayload,
+                })
+                .from(schema.protocolCandidateObservations)
+                .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                .limit(1)
 
-        const [observation] = yield* db
-          .select({
-            id: schema.protocolCandidateObservations.id,
-            observedWindowStart: schema.protocolCandidateObservations.observedWindowStart,
-            observedWindowEnd: schema.protocolCandidateObservations.observedWindowEnd,
-            interactionCount: schema.protocolCandidateObservations.interactionCount,
-            transactionCount: schema.protocolCandidateObservations.transactionCount,
-            uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
-            sampleTransactionHashes: schema.protocolCandidateObservations.sampleTransactionHashes,
-            retrievedAt: schema.protocolCandidateObservations.retrievedAt,
-            rawPayload: schema.protocolCandidateObservations.rawPayload,
-          })
-          .from(schema.protocolCandidateObservations)
-          .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
-          .limit(1)
-
-        if (observation === undefined) {
-          return yield* Effect.dieMessage("Expected imported protocol candidate observation")
-        }
-
-        const [duneObservation] = yield* db
-          .select({
-            queryId: schema.duneProtocolCandidateObservations.queryId,
-            queryName: schema.duneProtocolCandidateObservations.queryName,
-            queryVersion: schema.duneProtocolCandidateObservations.queryVersion,
-          })
-          .from(schema.duneProtocolCandidateObservations)
-          .where(eq(schema.duneProtocolCandidateObservations.observationId, observation.id))
-          .limit(1)
-
-        if (duneObservation === undefined) {
-          return yield* Effect.dieMessage("Expected imported Dune observation metadata")
-        }
+        const [duneObservation] =
+          observation === undefined
+            ? []
+            : yield* db
+                .select({
+                  queryId: schema.duneProtocolCandidateObservations.queryId,
+                  queryName: schema.duneProtocolCandidateObservations.queryName,
+                  queryVersion: schema.duneProtocolCandidateObservations.queryVersion,
+                })
+                .from(schema.duneProtocolCandidateObservations)
+                .where(eq(schema.duneProtocolCandidateObservations.observationId, observation.id))
+                .limit(1)
 
         return { candidate, observation, duneObservation }
       })
@@ -283,14 +286,23 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     expect(result.observationCount).toBe(1)
     expect(result.candidates).toHaveLength(1)
-    expect(rows.candidate).toMatchObject({
+    const candidate = expectDefined(rows.candidate, "Expected imported protocol candidate")
+    const observation = expectDefined(
+      rows.observation,
+      "Expected imported protocol candidate observation"
+    )
+    const duneObservation = expectDefined(
+      rows.duneObservation,
+      "Expected imported Dune observation metadata"
+    )
+    expect(candidate).toMatchObject({
       subjectKind: "program",
       subjectIdentifier: "dex-only-program",
       protocolNameHint: null,
       categoryHint: null,
       mappingStatus: "pending_review",
     })
-    expect(rows.observation).toMatchObject({
+    expect(observation).toMatchObject({
       observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
       observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
       interactionCount: "12345",
@@ -299,7 +311,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       sampleTransactionHashes: ["sample-signature-1", "sample-signature-2"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
     })
-    expect(rows.observation.rawPayload).toMatchObject({
+    expect(observation.rawPayload).toMatchObject({
       programId: "dex-only-program",
       period: "2024-01-01 to 2025-01-01",
       invocationCount: 12_345,
@@ -311,7 +323,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       queryVersion: 1,
       retrievedAt: "2026-06-01T10:00:00.000Z",
     })
-    expect(rows.duneObservation).toMatchObject({
+    expect(duneObservation).toMatchObject({
       queryId: 7_647_495,
       queryName: "solana-dex-project-priority",
       queryVersion: 1,
@@ -319,7 +331,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("updates existing candidates and observations on re-import without resetting review status", async () => {
-    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const solanaBlockchainId = await requireSolanaBlockchainId()
     const observation = {
       blockchainId: solanaBlockchainId,
       subjectKind: "program" as const,
@@ -394,24 +406,20 @@ describe("ProtocolCandidateRepositoryLive", () => {
           .where(eq(schema.protocolCandidates.subjectIdentifier, "dune-program-2"))
           .limit(1)
 
-        if (candidate === undefined) {
-          return yield* Effect.dieMessage("Expected protocol candidate")
-        }
-
-        const [candidateObservation] = yield* db
-          .select({
-            interactionCount: schema.protocolCandidateObservations.interactionCount,
-            transactionCount: schema.protocolCandidateObservations.transactionCount,
-            uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
-            sampleTransactionHashes: schema.protocolCandidateObservations.sampleTransactionHashes,
-          })
-          .from(schema.protocolCandidateObservations)
-          .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
-          .limit(1)
-
-        if (candidateObservation === undefined) {
-          return yield* Effect.dieMessage("Expected protocol candidate observation")
-        }
+        const [candidateObservation] =
+          candidate === undefined
+            ? []
+            : yield* db
+                .select({
+                  interactionCount: schema.protocolCandidateObservations.interactionCount,
+                  transactionCount: schema.protocolCandidateObservations.transactionCount,
+                  uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  sampleTransactionHashes:
+                    schema.protocolCandidateObservations.sampleTransactionHashes,
+                })
+                .from(schema.protocolCandidateObservations)
+                .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                .limit(1)
 
         return {
           candidateCount: candidateCountRow?.value ?? 0,
@@ -424,12 +432,17 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     expect(rows.candidateCount).toBe(1)
     expect(rows.observationCount).toBe(1)
-    expect(rows.candidate).toMatchObject({
+    const updatedCandidate = expectDefined(rows.candidate, "Expected protocol candidate")
+    const candidateObservation = expectDefined(
+      rows.candidateObservation,
+      "Expected protocol candidate observation"
+    )
+    expect(updatedCandidate).toMatchObject({
       protocolNameHint: "Review Me",
       mappingStatus: "approved",
       lastSeenAt: new Date("2026-06-02T10:00:00.000Z"),
     })
-    expect(rows.candidateObservation).toMatchObject({
+    expect(candidateObservation).toMatchObject({
       interactionCount: "250",
       transactionCount: "200",
       uniqueActorCount: "90",
@@ -438,7 +451,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("rejects malformed batches without importing partial rows", async () => {
-    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const solanaBlockchainId = await requireSolanaBlockchainId()
 
     const importResult = await runRepository(
       Effect.either(
@@ -521,7 +534,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("rejects malformed Solana Dune rankings files with a structured error", async () => {
-    const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
+    const solanaBlockchainId = await requireSolanaBlockchainId()
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
