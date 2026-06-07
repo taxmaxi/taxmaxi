@@ -7,6 +7,7 @@ import {
   CanonicalAssetResponse,
   ProviderAssetReviewRow,
 } from "../src/definitions/AssetsApi.ts"
+import { deriveNativeAssetDecimals } from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 describe("AssetsApi schemas", () => {
@@ -66,5 +67,32 @@ describe("AssetsApi schemas", () => {
       native_coin_id: "cardano",
       chain_identifier: null,
     })
+  })
+
+  it("derives native chain decimals without using provider display precision", () => {
+    const ethereumPlatform = coinGeckoAssetPlatformSnapshot.find(
+      (platform) => platform.id === "ethereum"
+    )
+    const cardanoPlatform = coinGeckoAssetPlatformSnapshot.find(
+      (platform) => platform.id === "cardano"
+    )
+
+    expect(ethereumPlatform).toBeDefined()
+    expect(cardanoPlatform).toBeDefined()
+
+    if (ethereumPlatform !== undefined && cardanoPlatform !== undefined) {
+      expect(
+        deriveNativeAssetDecimals({
+          coinId: "ethereum",
+          platform: ethereumPlatform,
+        })
+      ).toBe(18)
+      expect(
+        deriveNativeAssetDecimals({
+          coinId: "cardano",
+          platform: cardanoPlatform,
+        })
+      ).toBe(6)
+    }
   })
 })

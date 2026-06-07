@@ -64,7 +64,7 @@ const CoinGeckoAssetPlatform = Schema.Struct({
 
 type CoinGeckoSearchCoin = typeof CoinGeckoSearchCoin.Type
 type CoinGeckoCoin = typeof CoinGeckoCoin.Type
-type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
+export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 
 const normalize = (value: string) => value.trim().toLowerCase()
 
@@ -79,6 +79,18 @@ const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
   cardano: "ADA",
   binancecoin: "BNB",
   "avalanche-2": "AVAX",
+}
+
+const nativeAssetDecimalsByCoinGeckoId: Readonly<Record<string, number>> = {
+  bitcoin: 8,
+  ethereum: 18,
+  weth: 18,
+  solana: 9,
+  cardano: 6,
+  binancecoin: 18,
+  wbnb: 18,
+  "avalanche-2": 18,
+  "matic-network": 18,
 }
 
 const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
@@ -105,6 +117,40 @@ const deriveChainType = (platform: CoinGeckoAssetPlatform): SyncEngineChainType 
     return "cardano"
   }
   return platform.chain_identifier === null ? "other" : "evm"
+}
+
+export const deriveNativeAssetDecimals = ({
+  coinId,
+  platform,
+}: {
+  readonly coinId: string
+  readonly platform: CoinGeckoAssetPlatform
+}): number | null => {
+  const coinDecimals = nativeAssetDecimalsByCoinGeckoId[coinId]
+  if (coinDecimals !== undefined) {
+    return coinDecimals
+  }
+
+  if (platform.native_coin_id !== null) {
+    const platformNativeCoinDecimals = nativeAssetDecimalsByCoinGeckoId[platform.native_coin_id]
+    if (platformNativeCoinDecimals !== undefined) {
+      return platformNativeCoinDecimals
+    }
+  }
+
+  const chainType = deriveChainType(platform)
+  switch (chainType) {
+    case "bitcoin":
+      return 8
+    case "cardano":
+      return 6
+    case "evm":
+      return 18
+    case "solana":
+      return 9
+    case "other":
+      return null
+  }
 }
 
 const decodeJson =
@@ -191,12 +237,12 @@ const selectCoin = ({
 
 const buildNativeCanonicalDrafts = ({
   coin,
+  decimals,
   platform,
-  providerAsset,
 }: {
   readonly coin: CoinGeckoCoin
+  readonly decimals: number
   readonly platform: CoinGeckoAssetPlatform
-  readonly providerAsset: ProviderAssetReviewRecord
 }): {
   readonly blockchain: CanonicalBlockchainDraft
   readonly asset: CanonicalAssetDraft
@@ -214,7 +260,7 @@ const buildNativeCanonicalDrafts = ({
     contractAddress: null,
     name: coin.name,
     symbol: upperSymbol(coin.symbol),
-    decimals: providerAsset.exponent ?? 0,
+    decimals,
     logoUrl: null,
     type: "native",
     isSpam: false,
@@ -331,11 +377,23 @@ const make = Effect.gen(function* () {
       const nativePlatform = selectNativePlatform({ coinId: coin.id, assetPlatforms })
 
       if (nativePlatform !== null) {
+        const nativeDecimals = deriveNativeAssetDecimals({
+          coinId: coin.id,
+          platform: nativePlatform,
+        })
+        if (nativeDecimals === null) {
+          return yield* Effect.fail(
+            makeBadRequest(
+              `CoinGecko did not identify native asset decimals for ${providerAsset.currencyCode}; manual review is required.`
+            )
+          )
+        }
+
         return {
           ...buildNativeCanonicalDrafts({
             coin,
+            decimals: nativeDecimals,
             platform: nativePlatform,
-            providerAsset,
           }),
           evidence: {
             source: "coingecko" as const,
