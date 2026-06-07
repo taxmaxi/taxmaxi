@@ -116,7 +116,9 @@ const validateObservation = (observation: DuneProtocolCandidateObservationDraft)
     }
   })
 
-const makeDuneSourceObservationKey = (observation: DuneProtocolCandidateObservationDraft): string =>
+const makeDuneOnchainDataSourceObservationKey = (
+  observation: DuneProtocolCandidateObservationDraft
+): string =>
   [
     observation.queryId,
     observation.queryVersion,
@@ -266,13 +268,14 @@ const make = Effect.gen(function* () {
                   return
                 }
 
-                const sourceObservationKey = makeDuneSourceObservationKey(observation)
+                const onchainDataSourceObservationKey =
+                  makeDuneOnchainDataSourceObservationKey(observation)
                 const [persistedObservation] = yield* tx
                   .insert(schema.protocolCandidateObservations)
                   .values({
                     candidateId: candidate.id,
-                    source: "dune",
-                    sourceObservationKey,
+                    onchainDataSource: "dune",
+                    onchainDataSourceObservationKey,
                     observedWindowStart: observation.observedWindowStart,
                     observedWindowEnd: observation.observedWindowEnd,
                     interactionCount: String(observation.interactionCount),
@@ -286,8 +289,8 @@ const make = Effect.gen(function* () {
                   .onConflictDoUpdate({
                     target: [
                       schema.protocolCandidateObservations.candidateId,
-                      schema.protocolCandidateObservations.source,
-                      schema.protocolCandidateObservations.sourceObservationKey,
+                      schema.protocolCandidateObservations.onchainDataSource,
+                      schema.protocolCandidateObservations.onchainDataSourceObservationKey,
                     ],
                     set: {
                       observedWindowStart: sql.raw("excluded.observed_window_start"),

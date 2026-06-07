@@ -1,4 +1,4 @@
-CREATE TYPE "protocol_candidate_observation_source" AS ENUM('dune');--> statement-breakpoint
+CREATE TYPE "protocol_candidate_observation_onchain_data_source" AS ENUM('dune');--> statement-breakpoint
 CREATE TABLE "dune_protocol_candidate_observations" (
 	"observation_id" uuid PRIMARY KEY,
 	"query_id" integer NOT NULL,
@@ -9,8 +9,8 @@ CREATE TABLE "dune_protocol_candidate_observations" (
 CREATE TABLE "protocol_candidate_observations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"candidate_id" uuid NOT NULL,
-	"source" "protocol_candidate_observation_source" NOT NULL,
-	"source_observation_key" text NOT NULL,
+	"onchain_data_source" "protocol_candidate_observation_onchain_data_source" NOT NULL,
+	"onchain_data_source_observation_key" text NOT NULL,
 	"observed_window_start" timestamp NOT NULL,
 	"observed_window_end" timestamp NOT NULL,
 	"interaction_count" numeric(78,0) NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE "protocol_candidates" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX "protocol_candidate_observations_source_period_unique" ON "protocol_candidate_observations" ("candidate_id","source","source_observation_key");--> statement-breakpoint
+CREATE UNIQUE INDEX "protocol_candidate_observations_onchain_data_source_period_unique" ON "protocol_candidate_observations" ("candidate_id","onchain_data_source","onchain_data_source_observation_key");--> statement-breakpoint
 CREATE INDEX "idx_protocol_candidate_observations_candidate" ON "protocol_candidate_observations" ("candidate_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "protocol_candidates_blockchain_subject_unique" ON "protocol_candidates" ("blockchain_id","subject_kind","subject_identifier");--> statement-breakpoint
 CREATE INDEX "idx_protocol_candidates_mapping_status" ON "protocol_candidates" ("mapping_status");--> statement-breakpoint

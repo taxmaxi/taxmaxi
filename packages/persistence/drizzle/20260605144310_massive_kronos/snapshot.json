@@ -66,7 +66,7 @@
     },
     {
       "values": ["dune"],
-      "name": "protocol_candidate_observation_source",
+      "name": "protocol_candidate_observation_onchain_data_source",
       "entityType": "enums",
       "schema": "public"
     },
@@ -3311,14 +3311,14 @@
       "table": "protocol_candidate_observations"
     },
     {
-      "type": "protocol_candidate_observation_source",
+      "type": "protocol_candidate_observation_onchain_data_source",
       "typeSchema": "public",
       "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "source",
+      "name": "onchain_data_source",
       "entityType": "columns",
       "schema": "public",
       "table": "protocol_candidate_observations"
@@ -3331,7 +3331,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "source_observation_key",
+      "name": "onchain_data_source_observation_key",
       "entityType": "columns",
       "schema": "public",
       "table": "protocol_candidate_observations"
@@ -8142,14 +8142,14 @@
           "opclass": null
         },
         {
-          "value": "source",
+          "value": "onchain_data_source",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
           "opclass": null
         },
         {
-          "value": "source_observation_key",
+          "value": "onchain_data_source_observation_key",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -8161,7 +8161,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "protocol_candidate_observations_source_period_unique",
+      "name": "protocol_candidate_observations_onchain_data_source_period_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "protocol_candidate_observations"

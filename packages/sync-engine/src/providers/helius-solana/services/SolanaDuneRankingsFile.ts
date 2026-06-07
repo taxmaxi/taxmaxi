@@ -47,7 +47,7 @@ export type SolanaDuneRankingEntry = typeof SolanaDuneRankingEntry.Type
 export const SolanaDuneRankingsFile = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   chain: Schema.Literal("solana"),
-  source: Schema.Literal("dune"),
+  onchainDataSource: Schema.Literal("dune"),
   generatedAt: Schema.String,
   window: Schema.Struct({
     fromYear: Schema.Number,

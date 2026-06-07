@@ -119,7 +119,7 @@ export type { PrincipalInsert, PrincipalRow } from "./PrincipalsTable.ts"
 export type {
   ProtocolCandidateObservationInsert,
   ProtocolCandidateObservationRow,
-  ProtocolCandidateObservationSource,
+  ProtocolCandidateObservationOnchainDataSource,
 } from "./ProtocolCandidateObservationsTable.ts"
 export type { ProtocolCandidateInsert, ProtocolCandidateRow } from "./ProtocolCandidatesTable.ts"
 export type {

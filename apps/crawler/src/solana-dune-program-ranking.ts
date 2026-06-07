@@ -624,7 +624,7 @@ export const buildSolanaDuneRankingsFile = ({
     return {
       schemaVersion: 1,
       chain: "solana",
-      source: "dune",
+      onchainDataSource: "dune",
       generatedAt,
       window: { fromYear, toYear },
       top,

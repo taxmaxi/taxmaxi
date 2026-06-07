@@ -111,8 +111,9 @@ describe("ProtocolCandidateRepositoryLive", () => {
         const [observation] = yield* db
           .select({
             id: schema.protocolCandidateObservations.id,
-            source: schema.protocolCandidateObservations.source,
-            sourceObservationKey: schema.protocolCandidateObservations.sourceObservationKey,
+            onchainDataSource: schema.protocolCandidateObservations.onchainDataSource,
+            onchainDataSourceObservationKey:
+              schema.protocolCandidateObservations.onchainDataSourceObservationKey,
             interactionCount: schema.protocolCandidateObservations.interactionCount,
             transactionCount: schema.protocolCandidateObservations.transactionCount,
             uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
@@ -167,13 +168,13 @@ describe("ProtocolCandidateRepositoryLive", () => {
       mappingStatus: "pending_review",
     })
     expect(rows.observation).toMatchObject({
-      source: "dune",
+      onchainDataSource: "dune",
       interactionCount: "1000",
       transactionCount: "800",
       uniqueActorCount: "250",
       sampleTransactionHashes: ["signature-1", "signature-2"],
     })
-    expect(rows.observation.sourceObservationKey).toContain("7647495:1:")
+    expect(rows.observation.onchainDataSourceObservationKey).toContain("7647495:1:")
     expect(rows.duneObservation).toMatchObject({
       queryId: 7_647_495,
       queryName: "solana-dex-project-priority",
@@ -187,7 +188,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
-      source: "dune",
+      onchainDataSource: "dune",
       generatedAt: "2026-06-01T10:30:00.000Z",
       window: { fromYear: 2024, toYear: 2024 },
       top: 10,
@@ -524,7 +525,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
-      source: "dune",
+      onchainDataSource: "dune",
       generatedAt: "2026-06-01T10:30:00.000Z",
       window: { fromYear: 2024, toYear: 2024 },
       top: 10,
