@@ -128,6 +128,13 @@ const disposalTaxableTreatment = ({
 }): SourceReportTaxableTreatment =>
   derivationRule === "internal_transfer_out" ? "non_taxable" : combineTaxableTreatments(treatments)
 
+const acquisitionTaxableTreatment = ({
+  derivationRule,
+}: {
+  readonly derivationRule: string | null
+}): SourceReportTaxableTreatment =>
+  derivationRule === "internal_transfer_in" ? "non_taxable" : "unknown"
+
 const makeCursor = ({ timestamp, id }: CursorParts): string => `${timestamp.toISOString()}|${id}`
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -749,7 +756,7 @@ const make = Effect.gen(function* () {
                   ? "taxable"
                   : row.kind === "fee"
                     ? "deductible"
-                    : "unknown",
+                    : acquisitionTaxableTreatment({ derivationRule: row.derivationRule }),
             provenance: row.provenance,
             derivationRule: row.derivationRule,
           } satisfies SourceTaxEventRow

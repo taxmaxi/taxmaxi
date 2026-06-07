@@ -93,6 +93,17 @@ const nativeAssetDecimalsByCoinGeckoId: Readonly<Record<string, number>> = {
   "matic-network": 18,
 }
 
+const nativeAssetPlatformOverridesByCoinGeckoId: Readonly<Record<string, CoinGeckoAssetPlatform>> =
+  {
+    bitcoin: {
+      id: "bitcoin",
+      chain_identifier: null,
+      name: "Bitcoin",
+      shortname: "BTC",
+      native_coin_id: "bitcoin",
+    },
+  }
+
 const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
   if (platform.native_coin_id !== null) {
     const symbol = nativeAssetSymbolsByCoinGeckoId[platform.native_coin_id]
@@ -169,7 +180,7 @@ const makeBadRequest = (message: string) => new AssetCanonicalizationBadRequestE
 
 const makeProviderError = (message: string) => new AssetCanonicalizationProviderError({ message })
 
-const selectNativePlatform = ({
+export const selectNativePlatform = ({
   coinId,
   assetPlatforms,
 }: {
@@ -193,6 +204,11 @@ const selectNativePlatform = ({
   const nativePlatform = nativePlatforms[0]
   if (nativePlatforms.length === 1 && nativePlatform !== undefined) {
     return nativePlatform
+  }
+
+  const overridePlatform = nativeAssetPlatformOverridesByCoinGeckoId[coinId]
+  if (overridePlatform !== undefined) {
+    return overridePlatform
   }
 
   return null

@@ -470,6 +470,8 @@ const reportFixtureIds = {
   feeLegId: "00000000-0000-0000-0000-000000046204",
   internalTransferTransactionId: "00000000-0000-0000-0000-000000046205",
   internalTransferLegId: "00000000-0000-0000-0000-000000046206",
+  internalTransferInTransactionId: "00000000-0000-0000-0000-000000046207",
+  internalTransferInLegId: "00000000-0000-0000-0000-000000046208",
   taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
   taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
   internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
@@ -625,6 +627,17 @@ const seedSourceReportTaxTreatmentRows = ({
         providerStatus: "completed",
         providerDescription: "Internal transfer out",
       },
+      {
+        id: reportFixtureIds.internalTransferInTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-2",
+        timestamp: new Date("2025-04-12T12:00:00.000Z"),
+        transactionType: "buy_fiat",
+        providerTransactionType: "receive",
+        providerStatus: "completed",
+        providerDescription: "Internal transfer in",
+      },
     ])
 
     yield* db.insert(schema.transactionLegs).values([
@@ -655,6 +668,21 @@ const seedSourceReportTaxTreatmentRows = ({
         provenance: "deterministic",
         derivationRule: "internal_transfer_out",
         transactionId: reportFixtureIds.internalTransferTransactionId,
+        fiatAmount: "500",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: reportFixtureIds.internalTransferInLegId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-2:internal_transfer_in",
+        timestamp: new Date("2025-04-12T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.1",
+        kind: "acquisition",
+        provenance: "deterministic",
+        derivationRule: "internal_transfer_in",
+        transactionId: reportFixtureIds.internalTransferInTransactionId,
         fiatAmount: "500",
         fiatCurrency: "EUR",
       },
@@ -855,6 +883,9 @@ describe("SourcesApiLive", () => {
         const internalTransferEvent = taxEvents.taxEvents.find(
           (event) => event.legId === reportFixtureIds.internalTransferLegId
         )
+        const internalTransferInEvent = taxEvents.taxEvents.find(
+          (event) => event.legId === reportFixtureIds.internalTransferInLegId
+        )
 
         expect(feeEvent).toMatchObject({
           kind: "fee",
@@ -863,6 +894,11 @@ describe("SourcesApiLive", () => {
         expect(internalTransferEvent).toMatchObject({
           kind: "disposal",
           derivationRule: "internal_transfer_out",
+          taxableTreatment: "non_taxable",
+        })
+        expect(internalTransferInEvent).toMatchObject({
+          kind: "acquisition",
+          derivationRule: "internal_transfer_in",
           taxableTreatment: "non_taxable",
         })
         const assetPnl = yield* client.sources.listSourceAssetPnl({

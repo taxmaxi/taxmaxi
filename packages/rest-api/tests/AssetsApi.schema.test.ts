@@ -7,7 +7,10 @@ import {
   CanonicalAssetResponse,
   ProviderAssetReviewRow,
 } from "../src/definitions/AssetsApi.ts"
-import { deriveNativeAssetDecimals } from "../src/layers/AssetCanonicalizationServiceLive.ts"
+import {
+  deriveNativeAssetDecimals,
+  selectNativePlatform,
+} from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 describe("AssetsApi schemas", () => {
@@ -94,5 +97,19 @@ describe("AssetsApi schemas", () => {
         })
       ).toBe(6)
     }
+  })
+
+  it("selects native Bitcoin without treating related platforms as ambiguity", () => {
+    const bitcoinPlatform = selectNativePlatform({
+      coinId: "bitcoin",
+      assetPlatforms: coinGeckoAssetPlatformSnapshot,
+    })
+
+    expect(bitcoinPlatform).toMatchObject({
+      id: "bitcoin",
+      name: "Bitcoin",
+      native_coin_id: "bitcoin",
+      chain_identifier: null,
+    })
   })
 })
