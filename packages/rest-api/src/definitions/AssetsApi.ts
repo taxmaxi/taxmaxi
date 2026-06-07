@@ -123,7 +123,7 @@ const canonicalizeProviderAssetFromCoinGecko = HttpApiEndpoint.post(
 )
   .setPath(
     Schema.Struct({
-      providerAssetRowId: Schema.String,
+      providerAssetRowId: Schema.UUID,
     })
   )
   .setPayload(AssetCanonicalizationRequest)

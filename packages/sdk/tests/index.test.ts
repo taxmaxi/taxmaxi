@@ -10,6 +10,7 @@ import {
   toTaxMaxiError,
   type TaxMaxiHeaders,
 } from "../src/index.ts"
+import { TaxMaxiInternal } from "../src/internal.ts"
 
 type FetchInput = Parameters<typeof globalThis.fetch>[0]
 type FetchInit = NonNullable<Parameters<typeof globalThis.fetch>[1]>
@@ -96,6 +97,45 @@ const sourceOverviewResponseBody = JSON.stringify({
 })
 
 const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })
+const emptyProviderAssetReviewsResponseBody = JSON.stringify({ providerAssets: [] })
+const assetCanonicalizationResponseBody = JSON.stringify({
+  providerAsset: {
+    id: "00000000-0000-4000-8000-000000000009",
+    provider: "coinbase",
+    providerAssetId: "63062039-7afb-56ff-8e19-5e3215dc404a",
+    naturalKey: null,
+    currencyCode: "ADA",
+    name: "Cardano",
+    exponent: 6,
+    providerType: "crypto",
+    mappingKind: "asset",
+    canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+    canonicalAssetSymbol: "ADA",
+    canonicalFiatCurrency: null,
+    mappingStatus: "approved",
+    reviewerNotes: "Looks correct.",
+    sourceNotes: "Approved with CoinGecko asset/platform metadata.",
+  },
+  canonicalAsset: {
+    id: "00000000-0000-4000-8000-000000000010",
+    blockchainId: "00000000-0000-4000-8000-000000000011",
+    blockchainName: "cardano",
+    name: "Cardano",
+    symbol: "ADA",
+    decimals: 6,
+    contractAddress: null,
+    type: "native",
+  },
+  evidence: {
+    source: "coingecko",
+    coinId: "cardano",
+    coinName: "Cardano",
+    coinSymbol: "ADA",
+    platformId: "cardano",
+    platformName: "Cardano",
+    contractAddress: null,
+  },
+})
 const emptySourceTransactionsResponseBody = JSON.stringify({
   transactions: [],
   page: { nextCursor: null, hasMore: false },
@@ -440,6 +480,61 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
+      }),
+    ])
+  })
+
+  it("plumbs asset review endpoints through the internal assets resource", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const providerAssetRowId = "00000000-0000-4000-8000-000000000009"
+    const responseBodies = [
+      emptyProviderAssetReviewsResponseBody,
+      assetCanonicalizationResponseBody,
+    ]
+    const taxmaxi = new TaxMaxiInternal({
+      apiKey: "tm_assets",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? emptyProviderAssetReviewsResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(
+      taxmaxi.assets.listProviderAssetReviews({
+        provider: "coinbase",
+        status: "pending_review",
+        limit: 25,
+      })
+    ).resolves.toEqual({ providerAssets: [] })
+    await expect(
+      taxmaxi.assets.canonicalizeProviderAssetFromCoinGecko({
+        providerAssetRowId,
+        reviewerNotes: "Looks correct.",
+      })
+    ).resolves.toMatchObject({
+      providerAsset: {
+        canonicalAssetSymbol: "ADA",
+        mappingStatus: "approved",
+      },
+    })
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize/coingecko",
       }),
     ])
   })

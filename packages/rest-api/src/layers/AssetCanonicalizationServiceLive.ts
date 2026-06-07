@@ -72,6 +72,27 @@ const upperSymbol = (value: string) => value.trim().toUpperCase()
 
 const isNonEmptyString = (value: string) => value.trim() !== ""
 
+const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
+  bitcoin: "BTC",
+  ethereum: "ETH",
+  solana: "SOL",
+  cardano: "ADA",
+  binancecoin: "BNB",
+  "avalanche-2": "AVAX",
+}
+
+const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
+  if (platform.native_coin_id !== null) {
+    const symbol = nativeAssetSymbolsByCoinGeckoId[platform.native_coin_id]
+    if (symbol !== undefined) {
+      return symbol
+    }
+  }
+
+  const fallback = platform.shortname ?? platform.name
+  return upperSymbol(fallback)
+}
+
 const deriveChainType = (platform: CoinGeckoAssetPlatform): SyncEngineChainType => {
   const haystack = `${platform.id} ${platform.name}`.toLowerCase()
   if (haystack.includes("solana")) {
@@ -220,7 +241,7 @@ const buildTokenCanonicalDrafts = ({
       name: platform.id,
       chainType: deriveChainType(platform),
       chainId: platform.chain_identifier,
-      nativeAssetSymbol: platform.shortname ?? platform.name,
+      nativeAssetSymbol: deriveNativeAssetSymbol(platform),
       explorerUrl: null,
       logoUrl: null,
       coingeckoPlatformId: platform.id,
@@ -451,8 +472,27 @@ const make = Effect.gen(function* () {
             )
           )
 
+        const approvedProviderAsset = yield* providerAssetRepository
+          .findProviderAssetReviewById({ providerAssetRowId })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to load approved provider asset mapping.",
+                })
+            )
+          )
+
+        if (Option.isNone(approvedProviderAsset)) {
+          return yield* Effect.fail(
+            new AssetCanonicalizationInternalError({
+              message: "Approved provider asset mapping was not available after update.",
+            })
+          )
+        }
+
         return {
-          providerAsset: providerAsset.value,
+          providerAsset: approvedProviderAsset.value,
           canonicalAsset,
           evidence: resolved.evidence,
         }

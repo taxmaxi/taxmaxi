@@ -134,9 +134,6 @@ const make = Effect.gen(function* () {
               set: {
                 chainType: sql.raw("excluded.chain_type"),
                 chainId: sql.raw("excluded.chain_id"),
-                nativeAssetSymbol: sql.raw("excluded.native_asset_symbol"),
-                explorerUrl: sql.raw("excluded.explorer_url"),
-                logoUrl: sql.raw("excluded.logo_url"),
                 coingeckoPlatformId: sql.raw("excluded.coingecko_platform_id"),
                 updatedAt: now,
               },
