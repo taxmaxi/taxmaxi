@@ -25,14 +25,6 @@ await Effect.runPromise(context.recreateTestDatabase())
 const runRepository = <A, E>(effect: Effect.Effect<A, E, ProtocolCandidateRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ProtocolCandidateRepositoryLive }))
 
-const expectDefined = <A>(value: A | undefined, message: string): A => {
-  expect(value, message).toBeDefined()
-  if (value === undefined) {
-    throw new Error(message)
-  }
-  return value
-}
-
 const findSolanaBlockchainId = Effect.gen(function* () {
   const db = yield* drizzle
   const [blockchain] = yield* db
@@ -43,9 +35,6 @@ const findSolanaBlockchainId = Effect.gen(function* () {
 
   return blockchain?.id
 })
-
-const requireSolanaBlockchainId = async () =>
-  expectDefined(await runPg(findSolanaBlockchainId), "Missing solana blockchain fixture")
 
 describe("ProtocolCandidateRepositoryLive", () => {
   beforeEach(async () => {
@@ -58,7 +47,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("imports Dune observations as candidates and observation rows", async () => {
-    const solanaBlockchainId = await requireSolanaBlockchainId()
+    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
+    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
+    if (solanaBlockchainId === undefined) {
+      return
+    }
     const providerMappingCountBefore = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -162,28 +155,22 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     expect(result.observationCount).toBe(1)
     expect(result.candidates).toHaveLength(1)
-    const candidate = expectDefined(rows.candidate, "Expected protocol candidate")
-    const observation = expectDefined(rows.observation, "Expected protocol candidate observation")
-    const duneObservation = expectDefined(
-      rows.duneObservation,
-      "Expected Dune observation metadata"
-    )
-    expect(candidate).toMatchObject({
+    expect(rows.candidate, "Expected protocol candidate").toMatchObject({
       subjectKind: "program",
       subjectIdentifier: "dune-program-1",
       protocolNameHint: "Example DEX",
       categoryHint: "dex",
       mappingStatus: "pending_review",
     })
-    expect(observation).toMatchObject({
+    expect(rows.observation, "Expected protocol candidate observation").toMatchObject({
       onchainDataSource: "dune",
       interactionCount: "1000",
       transactionCount: "800",
       uniqueActorCount: "250",
       sampleTransactionHashes: ["signature-1", "signature-2"],
     })
-    expect(observation.onchainDataSourceObservationKey).toContain("7647495:1:")
-    expect(duneObservation).toMatchObject({
+    expect(rows.observation?.onchainDataSourceObservationKey).toContain("7647495:1:")
+    expect(rows.duneObservation, "Expected Dune observation metadata").toMatchObject({
       queryId: 7_647_495,
       queryName: "solana-dex-project-priority",
       queryVersion: 1,
@@ -192,7 +179,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("imports a Solana Dune rankings file as candidates and observations", async () => {
-    const solanaBlockchainId = await requireSolanaBlockchainId()
+    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
+    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
+    if (solanaBlockchainId === undefined) {
+      return
+    }
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
@@ -286,23 +277,14 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     expect(result.observationCount).toBe(1)
     expect(result.candidates).toHaveLength(1)
-    const candidate = expectDefined(rows.candidate, "Expected imported protocol candidate")
-    const observation = expectDefined(
-      rows.observation,
-      "Expected imported protocol candidate observation"
-    )
-    const duneObservation = expectDefined(
-      rows.duneObservation,
-      "Expected imported Dune observation metadata"
-    )
-    expect(candidate).toMatchObject({
+    expect(rows.candidate, "Expected imported protocol candidate").toMatchObject({
       subjectKind: "program",
       subjectIdentifier: "dex-only-program",
       protocolNameHint: null,
       categoryHint: null,
       mappingStatus: "pending_review",
     })
-    expect(observation).toMatchObject({
+    expect(rows.observation, "Expected imported protocol candidate observation").toMatchObject({
       observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
       observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
       interactionCount: "12345",
@@ -311,7 +293,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       sampleTransactionHashes: ["sample-signature-1", "sample-signature-2"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
     })
-    expect(observation.rawPayload).toMatchObject({
+    expect(rows.observation?.rawPayload).toMatchObject({
       programId: "dex-only-program",
       period: "2024-01-01 to 2025-01-01",
       invocationCount: 12_345,
@@ -323,7 +305,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       queryVersion: 1,
       retrievedAt: "2026-06-01T10:00:00.000Z",
     })
-    expect(duneObservation).toMatchObject({
+    expect(rows.duneObservation, "Expected imported Dune observation metadata").toMatchObject({
       queryId: 7_647_495,
       queryName: "solana-dex-project-priority",
       queryVersion: 1,
@@ -331,7 +313,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("updates existing candidates and observations on re-import without resetting review status", async () => {
-    const solanaBlockchainId = await requireSolanaBlockchainId()
+    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
+    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
+    if (solanaBlockchainId === undefined) {
+      return
+    }
     const observation = {
       blockchainId: solanaBlockchainId,
       subjectKind: "program" as const,
@@ -432,17 +418,12 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     expect(rows.candidateCount).toBe(1)
     expect(rows.observationCount).toBe(1)
-    const updatedCandidate = expectDefined(rows.candidate, "Expected protocol candidate")
-    const candidateObservation = expectDefined(
-      rows.candidateObservation,
-      "Expected protocol candidate observation"
-    )
-    expect(updatedCandidate).toMatchObject({
+    expect(rows.candidate, "Expected protocol candidate").toMatchObject({
       protocolNameHint: "Review Me",
       mappingStatus: "approved",
       lastSeenAt: new Date("2026-06-02T10:00:00.000Z"),
     })
-    expect(candidateObservation).toMatchObject({
+    expect(rows.candidateObservation, "Expected protocol candidate observation").toMatchObject({
       interactionCount: "250",
       transactionCount: "200",
       uniqueActorCount: "90",
@@ -451,7 +432,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("rejects malformed batches without importing partial rows", async () => {
-    const solanaBlockchainId = await requireSolanaBlockchainId()
+    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
+    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
+    if (solanaBlockchainId === undefined) {
+      return
+    }
 
     const importResult = await runRepository(
       Effect.either(
@@ -534,7 +519,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("rejects malformed Solana Dune rankings files with a structured error", async () => {
-    const solanaBlockchainId = await requireSolanaBlockchainId()
+    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
+    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
+    if (solanaBlockchainId === undefined) {
+      return
+    }
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
