@@ -50,7 +50,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
-  it("imports Dune observations as candidates, measurements, and Dune metadata", async () => {
+  it("imports Dune observations as candidates and observation rows", async () => {
     const solanaBlockchainId = await runPg(requireSolanaBlockchainId)
     const providerMappingCountBefore = await runPg(
       Effect.gen(function* () {
