@@ -490,7 +490,10 @@ const make = Effect.gen(function* () {
           operation: "sourceReportRepository.listAssetPnl.legAmount",
           value: row.amount,
         })
-        if (row.kind === "acquisition" || row.kind === "income") {
+        if (
+          (row.kind === "acquisition" || row.kind === "income") &&
+          row.derivationRule !== "internal_transfer_in"
+        ) {
           accumulator.acquiredAmount = BigDecimal.sum(accumulator.acquiredAmount, amount)
         }
         if (row.kind === "disposal" && row.derivationRule !== "internal_transfer_out") {

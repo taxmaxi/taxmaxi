@@ -49,6 +49,10 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   "ProviderAssetReviewListResponse"
 )({
   providerAssets: Schema.Array(ProviderAssetReviewRow),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
 }) {}
 
 export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicalizationRequest>(
@@ -93,6 +97,7 @@ export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicaliz
 const ProviderAssetReviewQuery = Schema.Struct({
   provider: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Literal("pending_review", "approved", "rejected")),
+  cursor: Schema.optional(Schema.UUID),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),

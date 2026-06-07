@@ -25,6 +25,7 @@ export type AssetCanonicalization = AssetCanonicalizationResponse
 export type ProviderAssetReviewListInput = {
   readonly provider?: string
   readonly status?: "approved" | "pending_review" | "rejected"
+  readonly cursor?: string | null
   readonly limit?: number
 }
 
@@ -55,6 +56,7 @@ export const makeAssetsEffectResource = (
         urlParams: {
           provider: input?.provider,
           status: input?.status,
+          cursor: input?.cursor ?? undefined,
           limit: input?.limit,
         },
       })

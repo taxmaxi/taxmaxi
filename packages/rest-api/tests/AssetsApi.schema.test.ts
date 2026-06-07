@@ -5,6 +5,7 @@ import {
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
   CanonicalAssetResponse,
+  ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
 } from "../src/definitions/AssetsApi.ts"
 import {
@@ -55,6 +56,20 @@ describe("AssetsApi schemas", () => {
     })
 
     const encoded = Schema.encodeEither(AssetCanonicalizationResponse)(response)
+
+    expect(Either.isRight(encoded)).toBe(true)
+  })
+
+  it("encodes provider asset review list pagination metadata", () => {
+    const response = ProviderAssetReviewListResponse.make({
+      providerAssets: [],
+      page: {
+        nextCursor: "11111111-1111-4111-8111-111111111111",
+        hasMore: true,
+      },
+    })
+
+    const encoded = Schema.encodeEither(ProviderAssetReviewListResponse)(response)
 
     expect(Either.isRight(encoded)).toBe(true)
   })

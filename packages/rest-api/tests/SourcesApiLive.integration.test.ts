@@ -905,6 +905,7 @@ describe("SourcesApiLive", () => {
           path: { sourceId: fixture.sourceId },
         })
         expect(assetPnl.assets[0]).toMatchObject({
+          acquiredAmount: "1",
           disposedAmount: "0.4",
           openAmount: "0.6",
           costBasis: "9000",

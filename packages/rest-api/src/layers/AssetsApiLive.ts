@@ -73,12 +73,21 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             .listProviderAssetReviews({
               providerKey: urlParams.provider ?? null,
               mappingStatus: urlParams.status ?? "pending_review",
-              limit: urlParams.limit ?? defaultLimit,
+              cursorProviderAssetRowId: urlParams.cursor ?? null,
+              limit: (urlParams.limit ?? defaultLimit) + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list provider assets.")))
+          const limit = urlParams.limit ?? defaultLimit
+          const visibleProviderAssets = providerAssets.slice(0, limit)
+          const lastProviderAsset = visibleProviderAssets.at(-1)
+          const hasMore = providerAssets.length > limit
 
           return ProviderAssetReviewListResponse.make({
-            providerAssets: providerAssets.map(toProviderAssetReviewRow),
+            providerAssets: visibleProviderAssets.map(toProviderAssetReviewRow),
+            page: {
+              nextCursor: hasMore && lastProviderAsset !== undefined ? lastProviderAsset.id : null,
+              hasMore,
+            },
           })
         })
       )
