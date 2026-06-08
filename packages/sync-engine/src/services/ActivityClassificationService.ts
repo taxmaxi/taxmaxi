@@ -150,12 +150,12 @@ export class ActivityOnchainEntrypointFacts extends Schema.Class<ActivityOnchain
 }) {}
 
 /**
- * ActivityOnchainFacts - Onchain context shared by Solana, EVM, Bitcoin, and future chains.
+ * ActivityOnchainFacts - Onchain context shared by chains.
  */
 export class ActivityOnchainFacts extends Schema.Class<ActivityOnchainFacts>(
   "ActivityOnchainFacts"
 )({
-  chainType: Schema.Literal("solana", "evm", "bitcoin", "unknown"),
+  chainType: Schema.String,
   blockchainId: Schema.NullOr(Schema.String),
   txHash: Schema.NullOr(Schema.String),
   blockNumber: Schema.NullOr(Schema.String),

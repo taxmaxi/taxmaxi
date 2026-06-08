@@ -26,16 +26,11 @@ export interface SyncEngineBlockchain {
 }
 
 /**
- * SyncEngineChainType - Broad chain family used for canonical blockchain rows.
- */
-export type SyncEngineChainType = "evm" | "solana" | "bitcoin" | "cardano" | "other"
-
-/**
  * CanonicalBlockchainDraft - Blockchain reference data to create or refresh.
  */
 export interface CanonicalBlockchainDraft {
   readonly name: string
-  readonly chainType: SyncEngineChainType
+  readonly chainType: string
   readonly chainId: number | null
   readonly nativeAssetSymbol: string
   readonly explorerUrl: string | null

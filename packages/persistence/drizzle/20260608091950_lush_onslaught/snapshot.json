@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "9f40c3bf-cf10-474f-b862-f462e57ccd3c",
+  "id": "50080c77-164e-402b-bac4-90b6c7fc054e",
   "prevIds": ["26fa1050-b065-4755-9e12-5ff03a70159d"],
   "ddl": [
     {
@@ -13,12 +13,6 @@
     {
       "values": ["native", "token", "nft"],
       "name": "asset_type",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["evm", "solana", "bitcoin", "cardano", "other"],
-      "name": "chain_type",
       "entityType": "enums",
       "schema": "public"
     },
@@ -817,8 +811,8 @@
       "table": "blockchains"
     },
     {
-      "type": "chain_type",
-      "typeSchema": "public",
+      "type": "text",
+      "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
       "default": null,

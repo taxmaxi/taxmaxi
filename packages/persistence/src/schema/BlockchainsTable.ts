@@ -1,13 +1,9 @@
-import { integer, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
-
-export const chainTypeEnum = pgEnum("chain_type", ["evm", "solana", "bitcoin", "cardano", "other"])
-
-export type ChainType = (typeof chainTypeEnum.enumValues)[number]
+import { integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
 
 export const blockchains = pgTable("blockchains", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull().unique(),
-  chainType: chainTypeEnum("chain_type").notNull(),
+  chainType: text("chain_type").notNull(), // e.g. evm, solana, bitcoin
   chainId: integer("chain_id"), // Nullable, primarily for EVM chains
   nativeAssetSymbol: text("native_asset_symbol").notNull(),
   explorerUrl: text("explorer_url"),

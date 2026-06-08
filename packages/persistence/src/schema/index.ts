@@ -79,7 +79,7 @@ export const schema = {
 export type { Address } from "./AddressesTable.ts"
 export type { AssetPrice, AssetPriceInsert } from "./AssetPricesTable.ts"
 export type { Asset, AssetInsert, AssetType } from "./AssetsTable.ts"
-export type { Blockchain, BlockchainInsert, ChainType } from "./BlockchainsTable.ts"
+export type { Blockchain, BlockchainInsert } from "./BlockchainsTable.ts"
 export type { Cex, CexInsert } from "./CexTable.ts"
 export type { CexAccount, CexAccountInsert } from "./CexAccountTable.ts"
 export type { DisposalMatch, DisposalMatchInsert } from "./DisposalMatchesTable.ts"

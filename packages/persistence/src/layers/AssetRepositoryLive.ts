@@ -13,7 +13,6 @@ import { schema } from "../schema/index.ts"
 import {
   AssetRepository,
   type AssetRepositoryShape,
-  type SyncEngineChainType,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
 import { wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
@@ -22,7 +21,7 @@ const normalizeContractAddress = ({
   chainType,
   contractAddress,
 }: {
-  readonly chainType: SyncEngineChainType
+  readonly chainType: string
   readonly contractAddress: string | null
 }): string | null =>
   chainType === "evm" && contractAddress !== null ? contractAddress.toLowerCase() : contractAddress
