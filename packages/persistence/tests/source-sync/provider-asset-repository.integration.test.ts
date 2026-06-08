@@ -289,20 +289,20 @@ describe("ProviderAssetRepositoryLive", () => {
         )
       )
 
-      expect(firstPage.map((row) => row.currencyCode)).toEqual(["ADA", "ETH"])
+      expect(firstPage.map((row) => row.providerAsset.currencyCode)).toEqual(["ADA", "ETH"])
 
       const secondPage = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
-            cursorProviderAssetRowId: firstPage[1]?.id ?? null,
+            cursorProviderAssetRowId: firstPage[1]?.providerAsset.id ?? null,
             limit: 2,
           })
         )
       )
 
-      expect(secondPage.map((row) => row.currencyCode)).toEqual(["SOL"])
+      expect(secondPage.map((row) => row.providerAsset.currencyCode)).toEqual(["SOL"])
     })
 
     it("keeps reviewed natural-key mappings preferred when a stable provider asset id arrives later", async () => {
