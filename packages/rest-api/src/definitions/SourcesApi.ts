@@ -12,6 +12,7 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
 import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
+import { ReportReviewReasonCode } from "@my/core/report"
 import { Source } from "@my/core/source"
 import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 
@@ -209,6 +210,27 @@ export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>
 }) {}
 
 /**
+ * SourceReportReviewSummary - Report health state for frontend and SDK consumers.
+ */
+export class SourceReportReviewIssue extends Schema.Class<SourceReportReviewIssue>(
+  "SourceReportReviewIssue"
+)({
+  code: ReportReviewReasonCode,
+  count: Schema.Number,
+  blocking: Schema.Boolean,
+  summary: Schema.String,
+}) {}
+
+export class SourceReportReviewSummary extends Schema.Class<SourceReportReviewSummary>(
+  "SourceReportReviewSummary"
+)({
+  status: Schema.Literal("ok", "needs_review"),
+  needsReviewCount: Schema.Number,
+  blockingIssueCount: Schema.Number,
+  issues: Schema.Array(SourceReportReviewIssue),
+}) {}
+
+/**
  * SourceReportTotals - High-level source report counters and totals.
  */
 export class SourceReportTotals extends Schema.Class<SourceReportTotals>("SourceReportTotals")({
@@ -233,6 +255,7 @@ export class SourceOverviewResponse extends Schema.Class<SourceOverviewResponse>
   source: Source,
   latestSync: SourceReportSyncStatus,
   totals: SourceReportTotals,
+  review: SourceReportReviewSummary,
 }) {}
 
 /**
@@ -250,6 +273,7 @@ export class SourceAssetPnlRow extends Schema.Class<SourceAssetPnlRow>("SourceAs
   proceeds: SourceReportAmount,
   realizedGainLoss: SourceReportAmount,
   currency: Schema.NullOr(Schema.String),
+  review: SourceReportReviewSummary,
 }) {}
 
 export class SourceAssetPnlResponse extends Schema.Class<SourceAssetPnlResponse>(

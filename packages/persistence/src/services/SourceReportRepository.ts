@@ -4,6 +4,7 @@
  * @module SourceReportRepository
  */
 
+import type { ReportReviewReasonCode } from "@my/core/report"
 import type { Source } from "@my/core/source"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
@@ -80,6 +81,20 @@ export interface SourceReportSyncStatus {
   readonly failedRecords: number | null
 }
 
+export interface SourceReportReviewIssue {
+  readonly code: ReportReviewReasonCode
+  readonly count: number
+  readonly blocking: boolean
+  readonly summary: string
+}
+
+export interface SourceReportReviewSummary {
+  readonly status: "ok" | "needs_review"
+  readonly needsReviewCount: number
+  readonly blockingIssueCount: number
+  readonly issues: ReadonlyArray<SourceReportReviewIssue>
+}
+
 export interface SourceReportTotals {
   readonly transactionCount: number
   readonly legCount: number
@@ -97,6 +112,7 @@ export interface SourceOverviewReport {
   readonly source: Source
   readonly latestSync: SourceReportSyncStatus
   readonly totals: SourceReportTotals
+  readonly review: SourceReportReviewSummary
 }
 
 export interface SourceReportAsset {
@@ -114,6 +130,7 @@ export interface SourceAssetPnlRow {
   readonly proceeds: string
   readonly realizedGainLoss: string
   readonly currency: string | null
+  readonly review: SourceReportReviewSummary
 }
 
 export interface SourceTransactionMovement {

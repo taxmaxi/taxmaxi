@@ -52,6 +52,8 @@ import {
   SourceFifoLotsResponse,
   SourceFifoLotRow,
   SourceOverviewResponse,
+  SourceReportReviewIssue,
+  SourceReportReviewSummary,
   SourceReportSyncStatus,
   SourceReportTotals,
   SourceReportAsset,
@@ -64,6 +66,7 @@ import {
 } from "../definitions/SourcesApi.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { Layer, Option } from "effect"
+import type { ReportReviewReasonCode } from "@my/core/report"
 import { SourceCreationService } from "../services/SourceCreationService.ts"
 import { AnonSessionService } from "../services/AnonSessionService.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
@@ -186,6 +189,22 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       readonly symbol: string
       readonly name: string
     }) => SourceReportAsset.make(asset)
+
+    const reportReviewSummary = (review: {
+      readonly status: "ok" | "needs_review"
+      readonly needsReviewCount: number
+      readonly blockingIssueCount: number
+      readonly issues: ReadonlyArray<{
+        readonly code: ReportReviewReasonCode
+        readonly count: number
+        readonly blocking: boolean
+        readonly summary: string
+      }>
+    }) =>
+      SourceReportReviewSummary.make({
+        ...review,
+        issues: review.issues.map((issue) => SourceReportReviewIssue.make(issue)),
+      })
 
     return handlers
       .handle("listSources", () =>
@@ -420,6 +439,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             source: overview.source,
             latestSync: SourceReportSyncStatus.make(overview.latestSync),
             totals: SourceReportTotals.make(overview.totals),
+            review: reportReviewSummary(overview.review),
           })
         })
       )
@@ -436,6 +456,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
               SourceAssetPnlRow.make({
                 ...row,
                 asset: reportAsset(row.asset),
+                review: reportReviewSummary(row.review),
               })
             ),
           })

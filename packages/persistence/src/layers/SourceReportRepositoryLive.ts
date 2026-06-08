@@ -6,6 +6,7 @@
 
 import { and, asc, count, desc, eq, gt, inArray, lt, or } from "drizzle-orm"
 import { PrincipalId } from "@my/core/ownership"
+import { REPORT_REVIEW_REASON_CODES, type ReportReviewReasonCode } from "@my/core/report"
 import { Timestamp } from "@my/core/shared/values/Timestamp"
 import {
   CexSourceRef,
@@ -35,6 +36,8 @@ import {
   type SourceReportAsset,
   type SourceReportPage,
   type SourceReportRepositoryService,
+  type SourceReportReviewIssue,
+  type SourceReportReviewSummary,
   type SourceReportScope,
   type SourceReportSyncStatus,
   type SourceReportTaxableTreatment,
@@ -71,6 +74,12 @@ interface AssetAccumulator {
   proceeds: BigDecimal.BigDecimal
   realizedGainLoss: BigDecimal.BigDecimal
   currency: string | null
+}
+
+interface ReviewProjectionRow {
+  readonly reviewId: string
+  readonly matchedLayer: string | null
+  readonly assetId: string | null
 }
 
 const zeroDecimal = (): BigDecimal.BigDecimal => BigDecimal.fromBigInt(0n)
@@ -117,6 +126,79 @@ const combineTaxableTreatments = (
     return treatments[0] ?? "unknown"
   }
   return "mixed"
+}
+
+const pluralize = (count: number, singular: string, plural: string): string =>
+  count === 1 ? singular : plural
+
+type SourceReportReviewIssueDefinition = {
+  readonly matchedLayer: string
+  readonly blocking: boolean
+  readonly summary: (count: number) => string
+}
+
+const sourceReportReviewIssueDefinitions: Record<
+  ReportReviewReasonCode,
+  SourceReportReviewIssueDefinition
+> = {
+  fifo_inventory_shortfall: {
+    matchedLayer: "fifo_inventory",
+    blocking: true,
+    summary: (count: number) =>
+      `${count} ${pluralize(
+        count,
+        "disposal",
+        "disposals"
+      )} cannot be matched to available FIFO inventory.`,
+  },
+} as const
+
+const summarizeReviewRows = (
+  rows: ReadonlyArray<ReviewProjectionRow>
+): SourceReportReviewSummary => {
+  const reviewIds = new Set(rows.map((row) => row.reviewId))
+  const issues = REPORT_REVIEW_REASON_CODES.flatMap(
+    (code): ReadonlyArray<SourceReportReviewIssue> => {
+      const definition = sourceReportReviewIssueDefinitions[code]
+      const issueReviewIds = new Set(
+        rows
+          .filter((row) => row.matchedLayer === definition.matchedLayer)
+          .map((row) => row.reviewId)
+      )
+      const count = issueReviewIds.size
+      if (count === 0) {
+        return []
+      }
+      return [
+        {
+          code,
+          count,
+          blocking: definition.blocking,
+          summary: definition.summary(count),
+        },
+      ]
+    }
+  )
+  const needsReviewCount = reviewIds.size
+  const blockingIssueCount = issues
+    .filter((issue) => issue.blocking)
+    .reduce((count, issue) => count + issue.count, 0)
+
+  if (needsReviewCount === 0) {
+    return {
+      status: "ok",
+      needsReviewCount: 0,
+      blockingIssueCount: 0,
+      issues: [],
+    }
+  }
+
+  return {
+    status: "needs_review",
+    needsReviewCount,
+    blockingIssueCount,
+    issues,
+  }
 }
 
 const disposalTaxableTreatment = ({
@@ -324,10 +406,39 @@ const make = Effect.gen(function* () {
       } satisfies SourceReportSyncStatus
     })
 
+  const loadReportReviewRows = ({ sourceId }: { readonly sourceId: string }) =>
+    db
+      .select({
+        reviewId: schema.transactionReviews.id,
+        matchedLayer: schema.transactionReviews.matchedLayer,
+        assetId: schema.transactionLegs.assetId,
+      })
+      .from(schema.transactionReviews)
+      .innerJoin(
+        schema.transactions,
+        eq(schema.transactionReviews.transactionId, schema.transactions.id)
+      )
+      .leftJoin(
+        schema.transactionLegs,
+        and(
+          eq(schema.transactionLegs.transactionId, schema.transactions.id),
+          eq(schema.transactionLegs.kind, "disposal")
+        )
+      )
+      .where(
+        and(
+          eq(schema.transactions.sourceId, sourceId),
+          eq(schema.transactionReviews.reviewStatus, "needs_review"),
+          eq(schema.transactionReviews.needsReview, true)
+        )
+      )
+      .pipe(wrapSqlError("sourceReportRepository.loadReportReviewRows"))
+
   const getOverview: SourceReportRepositoryService["getOverview"] = (params) =>
     Effect.gen(function* () {
       const source = yield* loadOwnedSource(params)
       const latestSync = yield* loadLatestSync({ sourceId: params.sourceId })
+      const reviewRows = yield* loadReportReviewRows({ sourceId: params.sourceId })
       const [transactionCount] = yield* db
         .select({ count: count(schema.transactions.id) })
         .from(schema.transactions)
@@ -412,12 +523,13 @@ const make = Effect.gen(function* () {
         currency,
       } satisfies SourceReportTotals
 
-      return { source, latestSync, totals }
+      return { source, latestSync, totals, review: summarizeReviewRows(reviewRows) }
     })
 
   const listAssetPnl: SourceReportRepositoryService["listAssetPnl"] = (params) =>
     Effect.gen(function* () {
       yield* loadOwnedSource(params)
+      const reviewRows = yield* loadReportReviewRows({ sourceId: params.sourceId })
       const legRows = yield* db
         .select({
           assetId: schema.transactionLegs.assetId,
@@ -542,6 +654,15 @@ const make = Effect.gen(function* () {
         accumulator.currency = emptyCurrency(accumulator.currency, row.fiatCurrency)
       }
 
+      const reviewRowsByAssetId = new Map<string, ReadonlyArray<ReviewProjectionRow>>()
+      for (const row of reviewRows) {
+        if (row.assetId === null) {
+          continue
+        }
+        const existing = reviewRowsByAssetId.get(row.assetId) ?? []
+        reviewRowsByAssetId.set(row.assetId, [...existing, row])
+      }
+
       return Array.from(accumulators.values())
         .sort((left, right) => left.asset.symbol.localeCompare(right.asset.symbol))
         .map(
@@ -554,6 +675,7 @@ const make = Effect.gen(function* () {
             proceeds: formatDecimal(row.proceeds),
             realizedGainLoss: formatDecimal(row.realizedGainLoss),
             currency: row.currency,
+            review: summarizeReviewRows(reviewRowsByAssetId.get(row.asset.assetId) ?? []),
           })
         )
     })

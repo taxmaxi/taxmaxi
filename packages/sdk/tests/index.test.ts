@@ -94,6 +94,12 @@ const sourceOverviewResponseBody = JSON.stringify({
     incomeTotal: "0",
     currency: null,
   },
+  review: {
+    status: "ok",
+    needsReviewCount: 0,
+    blockingIssueCount: 0,
+    issues: [],
+  },
 })
 
 const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })

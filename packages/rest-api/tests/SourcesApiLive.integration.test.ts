@@ -817,6 +817,83 @@ describe("SourcesApiLive", () => {
     }).pipe(Effect.provide(HttpLive))
   )
 
+  it.effect("surfaces FIFO inventory review state for unmatched source disposals", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+
+      yield* db
+        .delete(schema.disposalMatches)
+        .where(eq(schema.disposalMatches.disposalLegId, reportFixtureIds.disposalLegId))
+
+      yield* db.insert(schema.transactionReviews).values({
+        transactionId: reportFixtureIds.sellTransactionId,
+        principalId: fixture.principalId,
+        reviewStatus: "needs_review",
+        originalTypeKey: "sell_fiat",
+        currentTypeKey: "sell_fiat",
+        categorizationReason:
+          "Tax review required because the transaction disposes more inventory than the synced FIFO lots currently cover.",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+
+      expect(overview.totals.disposalCount).toBe(1)
+      expect(overview.totals.realizedGainLoss).toBe("0")
+      expect(overview.review).toMatchObject({
+        status: "needs_review",
+        needsReviewCount: 1,
+        blockingIssueCount: 1,
+        issues: [
+          {
+            code: "fifo_inventory_shortfall",
+            count: 1,
+            blocking: true,
+            summary: "1 disposal cannot be matched to available FIFO inventory.",
+          },
+        ],
+      })
+
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets[0]).toMatchObject({
+        disposedAmount: "0.4",
+        proceeds: "0",
+        realizedGainLoss: "0",
+        review: {
+          status: "needs_review",
+          needsReviewCount: 1,
+          blockingIssueCount: 1,
+          issues: [
+            {
+              code: "fifo_inventory_shortfall",
+              count: 1,
+              blocking: true,
+            },
+          ],
+        },
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
   it.effect("returns empty source report lists for a source with no canonical rows", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture()
