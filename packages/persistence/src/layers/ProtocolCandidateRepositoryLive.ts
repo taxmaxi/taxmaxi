@@ -244,10 +244,9 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 const candidate = candidates[index]
                 if (candidate === undefined) {
-                  yield* Effect.fail(
+                  return yield* Effect.fail(
                     storageError({ message: "Missing imported candidate for observation." })
                   )
-                  return
                 }
 
                 const onchainDataSourceObservationKey =
@@ -291,12 +290,11 @@ const make = Effect.gen(function* () {
                   .pipe(wrapSyncEngineSqlError(operation))
 
                 if (persistedObservation === undefined) {
-                  yield* Effect.fail(
+                  return yield* Effect.fail(
                     storageError({
                       message: "Failed to upsert protocol candidate observation.",
                     })
                   )
-                  return
                 }
 
                 yield* tx
