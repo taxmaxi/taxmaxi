@@ -49,9 +49,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   it("imports Dune observations as candidates and observation rows", async () => {
     const solanaBlockchainId = await runPg(findSolanaBlockchainId)
     expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-    if (solanaBlockchainId === undefined) {
-      return
-    }
+
     const providerMappingCountBefore = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -143,6 +141,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
         }
       })
     )
+
     const providerMappingCountAfter = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -181,9 +180,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   it("imports a Solana Dune rankings file as candidates and observations", async () => {
     const solanaBlockchainId = await runPg(findSolanaBlockchainId)
     expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-    if (solanaBlockchainId === undefined) {
-      return
-    }
+
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
@@ -315,9 +312,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
   it("updates existing candidates and observations on re-import without resetting review status", async () => {
     const solanaBlockchainId = await runPg(findSolanaBlockchainId)
     expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-    if (solanaBlockchainId === undefined) {
-      return
-    }
+
     const observation = {
       blockchainId: solanaBlockchainId,
       subjectKind: "program" as const,
@@ -378,9 +373,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
         const [candidateCountRow] = yield* db
           .select({ value: count(schema.protocolCandidates.id) })
           .from(schema.protocolCandidates)
+
         const [observationCountRow] = yield* db
           .select({ value: count(schema.protocolCandidateObservations.id) })
           .from(schema.protocolCandidateObservations)
+
         const [candidate] = yield* db
           .select({
             id: schema.protocolCandidates.id,
@@ -488,12 +485,15 @@ describe("ProtocolCandidateRepositoryLive", () => {
     const rows = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+
         const [candidateCountRow] = yield* db
           .select({ value: count(schema.protocolCandidates.id) })
           .from(schema.protocolCandidates)
+
         const [observationCountRow] = yield* db
           .select({ value: count(schema.protocolCandidateObservations.id) })
           .from(schema.protocolCandidateObservations)
+
         const [duneObservationCountRow] = yield* db
           .select({ value: count(schema.duneProtocolCandidateObservations.observationId) })
           .from(schema.duneProtocolCandidateObservations)
