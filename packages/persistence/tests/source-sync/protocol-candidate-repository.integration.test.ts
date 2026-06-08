@@ -25,17 +25,6 @@ await Effect.runPromise(context.recreateTestDatabase())
 const runRepository = <A, E>(effect: Effect.Effect<A, E, ProtocolCandidateRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ProtocolCandidateRepositoryLive }))
 
-const findSolanaBlockchainId = Effect.gen(function* () {
-  const db = yield* drizzle
-  const [blockchain] = yield* db
-    .select({ id: schema.blockchains.id })
-    .from(schema.blockchains)
-    .where(eq(schema.blockchains.name, "solana"))
-    .limit(1)
-
-  return blockchain?.id
-})
-
 describe("ProtocolCandidateRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
@@ -47,9 +36,6 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("imports Dune observations as candidates and observation rows", async () => {
-    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
-    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-
     const providerMappingCountBefore = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -62,10 +48,10 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     const result = await runRepository(
       Effect.flatMap(ProtocolCandidateRepository, (repository) =>
-        repository.importDuneObservations({
+        repository.importObservations({
           observations: [
             {
-              blockchainId: solanaBlockchainId,
+              blockchainName: "solana",
               subjectKind: "program",
               subjectIdentifier: "dune-program-1",
               protocolNameHint: "Example DEX",
@@ -78,9 +64,12 @@ describe("ProtocolCandidateRepositoryLive", () => {
               sampleTransactionHashes: ["signature-1", "signature-2"],
               retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
               rawPayload: { program_id: "dune-program-1", trade_rows: 1_000 },
-              queryId: 7_647_495,
-              queryName: "solana-dex-project-priority",
-              queryVersion: 1,
+              sourceMetadata: {
+                source: "dune",
+                queryId: 7_647_495,
+                queryName: "solana-dex-project-priority",
+                queryVersion: 1,
+              },
             },
           ],
         })
@@ -178,9 +167,6 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("imports a Solana Dune rankings file as candidates and observations", async () => {
-    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
-    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
@@ -216,7 +202,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
     }
 
     const result = await runRepository(
-      importSolanaDuneRankingsFile({ file: rankingsFile, blockchainId: solanaBlockchainId })
+      importSolanaDuneRankingsFile({ file: rankingsFile, blockchainName: "solana" })
     )
 
     const rows = await runPg(
@@ -310,11 +296,8 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("updates existing candidates and observations on re-import without resetting review status", async () => {
-    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
-    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-
     const observation = {
-      blockchainId: solanaBlockchainId,
+      blockchainName: "solana",
       subjectKind: "program" as const,
       subjectIdentifier: "dune-program-2",
       protocolNameHint: "Review Me",
@@ -327,14 +310,17 @@ describe("ProtocolCandidateRepositoryLive", () => {
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       rawPayload: { program_id: "dune-program-2", trade_rows: 100 },
-      queryId: 7_647_495,
-      queryName: "solana-dex-project-priority",
-      queryVersion: 1,
+      sourceMetadata: {
+        source: "dune" as const,
+        queryId: 7_647_495,
+        queryName: "solana-dex-project-priority",
+        queryVersion: 1,
+      },
     }
 
     await runRepository(
       Effect.flatMap(ProtocolCandidateRepository, (repository) =>
-        repository.importDuneObservations({ observations: [observation] })
+        repository.importObservations({ observations: [observation] })
       )
     )
 
@@ -350,7 +336,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
     await runRepository(
       Effect.flatMap(ProtocolCandidateRepository, (repository) =>
-        repository.importDuneObservations({
+        repository.importObservations({
           observations: [
             {
               ...observation,
@@ -429,19 +415,13 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("rejects malformed batches without importing partial rows", async () => {
-    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
-    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-    if (solanaBlockchainId === undefined) {
-      return
-    }
-
     const importResult = await runRepository(
       Effect.either(
         Effect.flatMap(ProtocolCandidateRepository, (repository) =>
-          repository.importDuneObservations({
+          repository.importObservations({
             observations: [
               {
-                blockchainId: solanaBlockchainId,
+                blockchainName: "solana",
                 subjectKind: "program",
                 subjectIdentifier: "valid-program",
                 protocolNameHint: null,
@@ -454,12 +434,15 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 sampleTransactionHashes: [],
                 retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
                 rawPayload: { program_id: "valid-program" },
-                queryId: 7_647_495,
-                queryName: "solana-dex-project-priority",
-                queryVersion: 1,
+                sourceMetadata: {
+                  source: "dune",
+                  queryId: 7_647_495,
+                  queryName: "solana-dex-project-priority",
+                  queryVersion: 1,
+                },
               },
               {
-                blockchainId: solanaBlockchainId,
+                blockchainName: "solana",
                 subjectKind: "program",
                 subjectIdentifier: "invalid-program",
                 protocolNameHint: null,
@@ -472,9 +455,12 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 sampleTransactionHashes: [],
                 retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
                 rawPayload: { program_id: "invalid-program" },
-                queryId: 7_647_495,
-                queryName: "solana-dex-project-priority",
-                queryVersion: 1,
+                sourceMetadata: {
+                  source: "dune",
+                  queryId: 7_647_495,
+                  queryName: "solana-dex-project-priority",
+                  queryVersion: 1,
+                },
               },
             ],
           })
@@ -519,11 +505,6 @@ describe("ProtocolCandidateRepositoryLive", () => {
   })
 
   it("rejects malformed Solana Dune rankings files with a structured error", async () => {
-    const solanaBlockchainId = await runPg(findSolanaBlockchainId)
-    expect(solanaBlockchainId, "Missing solana blockchain fixture").toBeDefined()
-    if (solanaBlockchainId === undefined) {
-      return
-    }
     const rankingsFile = {
       schemaVersion: 1,
       chain: "solana",
@@ -551,9 +532,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
     }
 
     const importResult = await runRepository(
-      Effect.either(
-        importSolanaDuneRankingsFile({ file: rankingsFile, blockchainId: solanaBlockchainId })
-      )
+      Effect.either(importSolanaDuneRankingsFile({ file: rankingsFile, blockchainName: "solana" }))
     )
 
     const rows = await runPg(

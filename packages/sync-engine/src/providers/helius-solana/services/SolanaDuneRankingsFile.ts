@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
   ProtocolCandidateRepository,
-  type DuneProtocolCandidateObservationDraft,
+  type ProtocolCandidateObservationDraft,
   type ProtocolCandidateImportResult,
   type SyncEngineStorageError,
 } from "../../../services/index.ts"
@@ -145,18 +145,18 @@ const rawPayloadFromEntry = (entry: SolanaDuneRankingEntry): Record<string, unkn
 })
 
 const observationFromEntry = ({
-  blockchainId,
+  blockchainName,
   entry,
 }: {
-  readonly blockchainId: string
+  readonly blockchainName: string
   readonly entry: SolanaDuneRankingEntry
-}): Effect.Effect<DuneProtocolCandidateObservationDraft, SolanaDuneRankingsFileImportError> =>
+}): Effect.Effect<ProtocolCandidateObservationDraft, SolanaDuneRankingsFileImportError> =>
   Effect.gen(function* () {
     const { observedWindowStart, observedWindowEnd } = yield* parseFilePeriod(entry.period)
     const retrievedAt = yield* parseRetrievedAt(entry.retrievedAt)
 
     return {
-      blockchainId,
+      blockchainName,
       subjectKind: "program",
       subjectIdentifier: entry.programId,
       protocolNameHint: null,
@@ -169,20 +169,35 @@ const observationFromEntry = ({
       sampleTransactionHashes: [...entry.sampleSignatures],
       retrievedAt,
       rawPayload: rawPayloadFromEntry(entry),
-      queryId: entry.queryId,
-      queryName: entry.queryName,
-      queryVersion: entry.queryVersion,
+      sourceMetadata: {
+        source: "dune",
+        queryId: entry.queryId,
+        queryName: entry.queryName,
+        queryVersion: entry.queryVersion,
+      },
     }
   })
 
 export const duneObservationsFromSolanaDuneRankingsFile = ({
+  rankingsFile,
+  blockchainName,
+}: {
+  readonly rankingsFile: SolanaDuneRankingsFile
+  readonly blockchainName: string
+}): Effect.Effect<
+  ReadonlyArray<ProtocolCandidateObservationDraft>,
+  SolanaDuneRankingsFileImportError
+> =>
+  Effect.forEach(rankingsFile.entries, (entry) => observationFromEntry({ blockchainName, entry }))
+
+export const decodeDuneObservationsFromSolanaDuneRankingsFile = ({
   file,
-  blockchainId,
+  blockchainName,
 }: {
   readonly file: unknown
-  readonly blockchainId: string
+  readonly blockchainName: string
 }): Effect.Effect<
-  ReadonlyArray<DuneProtocolCandidateObservationDraft>,
+  ReadonlyArray<ProtocolCandidateObservationDraft>,
   SolanaDuneRankingsFileImportError
 > =>
   Schema.decodeUnknown(SolanaDuneRankingsFile)(file).pipe(
@@ -194,16 +209,16 @@ export const duneObservationsFromSolanaDuneRankingsFile = ({
         })
     ),
     Effect.flatMap((decoded) =>
-      Effect.forEach(decoded.entries, (entry) => observationFromEntry({ blockchainId, entry }))
+      duneObservationsFromSolanaDuneRankingsFile({ rankingsFile: decoded, blockchainName })
     )
   )
 
 export const importSolanaDuneRankingsFile = ({
   file,
-  blockchainId,
+  blockchainName,
 }: {
   readonly file: unknown
-  readonly blockchainId: string
+  readonly blockchainName: string
 }): Effect.Effect<
   ProtocolCandidateImportResult,
   SolanaDuneRankingsFileImportError | SyncEngineStorageError,
@@ -211,10 +226,10 @@ export const importSolanaDuneRankingsFile = ({
 > =>
   Effect.gen(function* () {
     const repository = yield* ProtocolCandidateRepository
-    const observations = yield* duneObservationsFromSolanaDuneRankingsFile({
+    const observations = yield* decodeDuneObservationsFromSolanaDuneRankingsFile({
       file,
-      blockchainId,
+      blockchainName,
     })
 
-    return yield* repository.importDuneObservations({ observations })
+    return yield* repository.importObservations({ observations })
   }).pipe(Effect.withSpan(operation))

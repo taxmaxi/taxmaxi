@@ -4,6 +4,10 @@ import { NodeContext } from "@effect/platform-node"
 import { describe, expect, it } from "vitest"
 import { ConfigProvider, Effect, Layer, Option, Schema } from "effect"
 import {
+  ProtocolCandidateRepository,
+  type ProtocolCandidateObservationDraft,
+} from "@my/sync-engine/services"
+import {
   extractSolanaBehaviorSample,
   SolanaBehaviorSamplerClient,
   SolanaBehaviorSamplerClientTestLive,
@@ -39,16 +43,35 @@ const unusedDuneClientLive = SolanaDuneProgramRankingClientTestLive({
   executeQuery: () => Effect.dieMessage("executeQuery should not run"),
 })
 
+const unusedProtocolCandidateRepositoryLive = Layer.succeed(
+  ProtocolCandidateRepository,
+  ProtocolCandidateRepository.of({
+    importObservations: ({ observations }) =>
+      Effect.succeed({
+        candidates: [],
+        observationCount: observations.length,
+      }),
+  })
+)
+
 const runEffect = <A, E>(
   effect: Effect.Effect<
     A,
     E,
-    NodeContext.NodeContext | SolanaBehaviorSamplerClient | SolanaDuneProgramRankingClient
+    | NodeContext.NodeContext
+    | SolanaBehaviorSamplerClient
+    | SolanaDuneProgramRankingClient
+    | ProtocolCandidateRepository
   >
 ): Promise<A> =>
   effect.pipe(
     Effect.provide(
-      Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, unusedDuneClientLive)
+      Layer.mergeAll(
+        NodeContext.layer,
+        unusedSamplerClientLive,
+        unusedDuneClientLive,
+        unusedProtocolCandidateRepositoryLive
+      )
     ),
     Effect.runPromise
   )
@@ -249,7 +272,12 @@ describe("solana crawler", () => {
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
       Effect.provide(
-        Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, unusedDuneClientLive)
+        Layer.mergeAll(
+          NodeContext.layer,
+          unusedSamplerClientLive,
+          unusedDuneClientLive,
+          unusedProtocolCandidateRepositoryLive
+        )
       ),
       Effect.runPromise
     )
@@ -558,7 +586,14 @@ describe("solana crawler", () => {
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, samplerClientLive, unusedDuneClientLive)),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          samplerClientLive,
+          unusedDuneClientLive,
+          unusedProtocolCandidateRepositoryLive
+        )
+      ),
       Effect.runPromise
     )
 
@@ -592,6 +627,7 @@ describe("solana crawler", () => {
 
   it("writes Dune rankings files using decoded saved-query rows", async () => {
     const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const importedObservations: ProtocolCandidateObservationDraft[] = []
     const duneClientLive = SolanaDuneProgramRankingClientTestLive({
       executeQuery: ({ parameters, query }) => {
         if (query.kind === "program-sample-transactions") {
@@ -642,6 +678,19 @@ describe("solana crawler", () => {
         })
       },
     })
+    const protocolCandidateRepositoryLive = Layer.succeed(
+      ProtocolCandidateRepository,
+      ProtocolCandidateRepository.of({
+        importObservations: ({ observations }) =>
+          Effect.sync(() => {
+            importedObservations.push(...observations)
+            return {
+              candidates: [],
+              observationCount: observations.length,
+            }
+          }),
+      })
+    )
 
     const result = await crawlSolanaProgram({
       fromYear: Option.some(2024),
@@ -661,7 +710,14 @@ describe("solana crawler", () => {
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          unusedSamplerClientLive,
+          duneClientLive,
+          protocolCandidateRepositoryLive
+        )
+      ),
       Effect.runPromise
     )
 
@@ -711,6 +767,17 @@ describe("solana crawler", () => {
       periodGranularity: "year",
       queryVersion: 1,
       retrievedAt: "2026-01-01T00:00:00Z",
+    })
+    expect(result.duneProtocolCandidateImport?.observationCount).toBe(2)
+    expect(importedObservations.map((observation) => observation.subjectIdentifier)).toEqual([
+      "ProgramCandidate111111111111111111111111111",
+      "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+    ])
+    expect(importedObservations[0]?.sourceMetadata).toMatchObject({
+      source: "dune",
+      queryId: 7_648_079,
+      queryName: "solana-token-transfer-program-candidates",
+      queryVersion: 1,
     })
     await expect(
       runEffect(Schema.decodeUnknown(SolanaDuneRankingsFile)(result.duneProgramRankings))
@@ -786,7 +853,14 @@ describe("solana crawler", () => {
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          unusedSamplerClientLive,
+          duneClientLive,
+          unusedProtocolCandidateRepositoryLive
+        )
+      ),
       Effect.runPromise
     )
 
@@ -987,7 +1061,14 @@ describe("solana crawler", () => {
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          unusedSamplerClientLive,
+          duneClientLive,
+          unusedProtocolCandidateRepositoryLive
+        )
+      ),
       Effect.runPromise
     )
 
@@ -1157,7 +1238,14 @@ describe("solana crawler", () => {
       Effect.withConfigProvider(
         ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive, duneClientLive)),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          unusedSamplerClientLive,
+          duneClientLive,
+          unusedProtocolCandidateRepositoryLive
+        )
+      ),
       Effect.runPromise
     )
 
@@ -1200,7 +1288,8 @@ describe("solana crawler", () => {
             SolanaDuneProgramRankingClientTestLive({
               executeQuery: () =>
                 Effect.succeed({ state: "QUERY_STATE_COMPLETED", result: { rows: [] } }),
-            })
+            }),
+            unusedProtocolCandidateRepositoryLive
           )
         )
       )
@@ -1242,7 +1331,8 @@ describe("solana crawler", () => {
                   state: "QUERY_STATE_COMPLETED",
                   result: { rows: [{ program_id: 123 }] },
                 }),
-            })
+            }),
+            unusedProtocolCandidateRepositoryLive
           )
         )
       )
@@ -1286,7 +1376,8 @@ describe("solana crawler", () => {
                     queryId: query.queryId,
                   })
                 ),
-            })
+            }),
+            unusedProtocolCandidateRepositoryLive
           )
         )
       )

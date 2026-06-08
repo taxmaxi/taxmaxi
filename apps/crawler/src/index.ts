@@ -3,6 +3,8 @@
 import { Command } from "@effect/cli"
 import { NodeContext, NodeHttpClient, NodeRuntime } from "@effect/platform-node"
 import { Console, Effect, Layer } from "effect"
+import { PgClientLive, ProtocolCandidateRepositoryLive } from "@my/persistence/layers"
+import { ProtocolCandidateRepository, SyncEngineStorageError } from "@my/sync-engine/services"
 import { CrawlerCommandError } from "./errors.ts"
 import { SolanaBehaviorSamplerClientLive } from "./solana-behavior-sampler-live.ts"
 import { crawlSolanaCommand } from "./solana-crawler.ts"
@@ -19,10 +21,30 @@ const command = Command.make("crawler", {}).pipe(Command.withSubcommands([crawlC
 
 const cli = Command.run(command, { name: "TaxMaxi crawler", version: "0.0.0" })
 
+const ProtocolCandidateRepositoryCliLive = Layer.succeed(
+  ProtocolCandidateRepository,
+  ProtocolCandidateRepository.of({
+    importObservations: (params) =>
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations(params)
+      ).pipe(
+        Effect.provide(ProtocolCandidateRepositoryLive.pipe(Layer.provide(PgClientLive))),
+        Effect.mapError(
+          (error) =>
+            new SyncEngineStorageError({
+              operation: "protocolCandidateRepository.importObservations",
+              cause: error,
+            })
+        )
+      ),
+  })
+)
+
 const runtimeLayer = Layer.mergeAll(
   NodeContext.layer,
   SolanaBehaviorSamplerClientLive,
-  SolanaDuneProgramRankingClientLive.pipe(Layer.provide(NodeHttpClient.layer))
+  SolanaDuneProgramRankingClientLive.pipe(Layer.provide(NodeHttpClient.layer)),
+  ProtocolCandidateRepositoryCliLive
 )
 
 cli(process.argv).pipe(

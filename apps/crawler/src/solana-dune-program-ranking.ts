@@ -19,6 +19,7 @@ export {
   SolanaDuneRankingEntry,
   SolanaDuneRankingsFile,
   SolanaDuneQueryConfig,
+  duneObservationsFromSolanaDuneRankingsFile,
 } from "@my/sync-engine/providers/helius-solana"
 
 export const SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME = "solana-dune-program-rankings.json"

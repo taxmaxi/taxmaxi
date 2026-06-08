@@ -15,10 +15,20 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 export type ProtocolCandidateSubjectKind = "program" | "contract" | "protocol"
 
 /**
- * DuneProtocolCandidateObservationDraft - One Dune ranking row ready for import.
+ * ProtocolCandidateObservationSourceMetadata - Source-specific observation metadata.
  */
-export interface DuneProtocolCandidateObservationDraft {
-  readonly blockchainId: string
+export type ProtocolCandidateObservationSourceMetadata = {
+  readonly source: "dune"
+  readonly queryId: number
+  readonly queryName: string
+  readonly queryVersion: number
+}
+
+/**
+ * ProtocolCandidateObservationDraft - One discovered candidate observation ready for import.
+ */
+export interface ProtocolCandidateObservationDraft {
+  readonly blockchainName: string
   readonly subjectKind: ProtocolCandidateSubjectKind
   readonly subjectIdentifier: string
   readonly protocolNameHint: string | null
@@ -31,9 +41,7 @@ export interface DuneProtocolCandidateObservationDraft {
   readonly sampleTransactionHashes: ReadonlyArray<string>
   readonly retrievedAt: Date
   readonly rawPayload: Record<string, unknown>
-  readonly queryId: number
-  readonly queryName: string
-  readonly queryVersion: number
+  readonly sourceMetadata: ProtocolCandidateObservationSourceMetadata
 }
 
 /**
@@ -64,10 +72,10 @@ export interface ProtocolCandidateImportResult {
  */
 export interface ProtocolCandidateRepositoryShape {
   /**
-   * Import Dune ranking rows as review candidates and observations.
+   * Import discovered observations as review candidates and evidence rows.
    */
-  readonly importDuneObservations: (params: {
-    readonly observations: ReadonlyArray<DuneProtocolCandidateObservationDraft>
+  readonly importObservations: (params: {
+    readonly observations: ReadonlyArray<ProtocolCandidateObservationDraft>
   }) => Effect.Effect<ProtocolCandidateImportResult, SyncEngineStorageError>
 }
 

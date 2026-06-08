@@ -3,6 +3,10 @@ import { FileSystem, Path } from "@effect/platform"
 import { Console, Effect, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
+import {
+  ProtocolCandidateRepository,
+  type ProtocolCandidateImportResult,
+} from "@my/sync-engine/services"
 import { CrawlerCommandError } from "./errors.ts"
 import {
   buildSolanaBehaviorSamplesArtifact,
@@ -12,6 +16,7 @@ import {
 } from "./solana-behavior-sampler.ts"
 import {
   buildSolanaDuneRankingsFile,
+  duneObservationsFromSolanaDuneRankingsFile,
   DEFAULT_SOLANA_DUNE_EXECUTION_WINDOW_DAYS,
   SOLANA_DUNE_PROGRAM_RANKINGS_FILE_NAME,
   SolanaDuneProgramRankingClient,
@@ -56,6 +61,7 @@ const CrawlSolanaJsonSummary = Schema.Struct({
   reportPath: Schema.String,
   behaviorSamplesPath: Schema.optional(Schema.String),
   duneProgramRankingsPath: Schema.optional(Schema.String),
+  duneProtocolCandidateObservations: Schema.optional(Schema.Number),
   entries: Schema.Number,
   samples: Schema.optional(Schema.Number),
 })
@@ -84,6 +90,7 @@ export type CrawlSolanaResult = {
   readonly behaviorSamples: SolanaBehaviorSamplesArtifact | null
   readonly duneProgramRankingsPath: string | null
   readonly duneProgramRankings: SolanaDuneRankingsFile | null
+  readonly duneProtocolCandidateImport: ProtocolCandidateImportResult | null
 }
 
 const fromYearOption = Options.integer("from-year").pipe(
@@ -446,7 +453,11 @@ export const crawlSolanaProgram = ({
 }: CrawlSolanaOptions): Effect.Effect<
   CrawlSolanaResult,
   CrawlerCommandError,
-  FileSystem.FileSystem | Path.Path | SolanaBehaviorSamplerClient | SolanaDuneProgramRankingClient
+  | FileSystem.FileSystem
+  | Path.Path
+  | ProtocolCandidateRepository
+  | SolanaBehaviorSamplerClient
+  | SolanaDuneProgramRankingClient
 > =>
   Effect.gen(function* () {
     yield* validateTop(top)
@@ -493,6 +504,34 @@ export const crawlSolanaProgram = ({
             )
           )
         : null
+
+    const duneProtocolCandidateImport =
+      duneProgramRankings === null
+        ? null
+        : yield* Effect.gen(function* () {
+            const repository = yield* ProtocolCandidateRepository
+            const observations = yield* duneObservationsFromSolanaDuneRankingsFile({
+              rankingsFile: duneProgramRankings,
+              blockchainName: "solana",
+            }).pipe(
+              Effect.mapError(
+                (error) =>
+                  new CrawlerCommandError({
+                    message: error.message,
+                  })
+              )
+            )
+
+            return yield* repository.importObservations({ observations }).pipe(
+              Effect.mapError(
+                (error) =>
+                  new CrawlerCommandError({
+                    message: error.message,
+                  })
+              )
+            )
+          })
+
     const priorityMap =
       duneProgramRankings === null
         ? makeEmptySolanaPriorityMap({
@@ -577,6 +616,8 @@ export const crawlSolanaProgram = ({
             ? {}
             : {
                 duneProgramRankingsPath,
+                duneProtocolCandidateObservations:
+                  duneProtocolCandidateImport?.observationCount ?? 0,
               }),
           entries: priorityMap.entries.length,
         })
@@ -600,6 +641,7 @@ export const crawlSolanaProgram = ({
       behaviorSamples,
       duneProgramRankingsPath: duneProgramRankings === null ? null : duneProgramRankingsPath,
       duneProgramRankings,
+      duneProtocolCandidateImport,
     }
   })
 

@@ -4,14 +4,14 @@
  * @module ProtocolCandidateRepositoryLive
  */
 
-import { sql } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
   ProtocolCandidateRepository,
   SyncEngineStorageError,
-  type DuneProtocolCandidateObservationDraft,
   type PersistedProtocolCandidate,
+  type ProtocolCandidateObservationDraft,
   type ProtocolCandidateSubjectKind,
   type ProtocolCandidateRepositoryShape,
 } from "@my/sync-engine/services"
@@ -23,7 +23,7 @@ import {
 } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 
-const operation = "protocolCandidateRepository.importDuneObservations"
+const operation = "protocolCandidateRepository.importObservations"
 
 const storageError = (cause: unknown) =>
   new SyncEngineStorageError({
@@ -65,13 +65,13 @@ const validateNullableSafeCount = ({
   readonly value: number | null
 }) => (value === null ? Effect.void : validateSafeCount({ field, value }))
 
-const validateObservation = (observation: DuneProtocolCandidateObservationDraft) =>
+const validateObservation = (observation: ProtocolCandidateObservationDraft) =>
   Effect.gen(function* () {
+    yield* validateNonEmptyText({ field: "blockchainName", value: observation.blockchainName })
     yield* validateNonEmptyText({
       field: "subjectIdentifier",
       value: observation.subjectIdentifier,
     })
-    yield* validateNonEmptyText({ field: "queryName", value: observation.queryName })
     yield* validateSafeCount({ field: "interactionCount", value: observation.interactionCount })
     yield* validateNullableSafeCount({
       field: "transactionCount",
@@ -81,8 +81,23 @@ const validateObservation = (observation: DuneProtocolCandidateObservationDraft)
       field: "uniqueActorCount",
       value: observation.uniqueActorCount,
     })
-    yield* validateSafeCount({ field: "queryId", value: observation.queryId })
-    yield* validateSafeCount({ field: "queryVersion", value: observation.queryVersion })
+    switch (observation.sourceMetadata.source) {
+      case "dune": {
+        yield* validateNonEmptyText({
+          field: "sourceMetadata.queryName",
+          value: observation.sourceMetadata.queryName,
+        })
+        yield* validateSafeCount({
+          field: "sourceMetadata.queryId",
+          value: observation.sourceMetadata.queryId,
+        })
+        yield* validateSafeCount({
+          field: "sourceMetadata.queryVersion",
+          value: observation.sourceMetadata.queryVersion,
+        })
+        break
+      }
+    }
 
     if (!isValidDate(observation.observedWindowStart)) {
       yield* invalidObservation({
@@ -114,11 +129,11 @@ const validateObservation = (observation: DuneProtocolCandidateObservationDraft)
   })
 
 const makeDuneOnchainDataSourceObservationKey = (
-  observation: DuneProtocolCandidateObservationDraft
+  observation: ProtocolCandidateObservationDraft
 ): string =>
   [
-    observation.queryId,
-    observation.queryVersion,
+    observation.sourceMetadata.queryId,
+    observation.sourceMetadata.queryVersion,
     observation.observedWindowStart.toISOString(),
     observation.observedWindowEnd.toISOString(),
   ].join(":")
@@ -172,7 +187,7 @@ const toPersistedCandidate = (candidate: {
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
-  const importDuneObservations: ProtocolCandidateRepositoryShape["importDuneObservations"] = ({
+  const importObservations: ProtocolCandidateRepositoryShape["importObservations"] = ({
     observations,
   }) =>
     db
@@ -189,53 +204,73 @@ const make = Effect.gen(function* () {
 
           const now = nowDate()
           const candidates = yield* Effect.forEach(observations, (observation) =>
-            tx
-              .insert(schema.protocolCandidates)
-              .values({
-                blockchainId: observation.blockchainId,
-                subjectKind: observation.subjectKind,
-                subjectIdentifier: observation.subjectIdentifier,
-                protocolNameHint: observation.protocolNameHint,
-                categoryHint: observation.categoryHint,
-                mappingStatus: "pending_review",
-                firstSeenAt: observation.retrievedAt,
-                lastSeenAt: observation.retrievedAt,
-                createdAt: now,
-                updatedAt: now,
-              })
-              .onConflictDoUpdate({
-                target: [
-                  schema.protocolCandidates.blockchainId,
-                  schema.protocolCandidates.subjectKind,
-                  schema.protocolCandidates.subjectIdentifier,
-                ],
-                set: {
-                  protocolNameHint: sql`coalesce(excluded.protocol_name_hint, ${schema.protocolCandidates.protocolNameHint})`,
-                  categoryHint: sql`coalesce(excluded.category_hint, ${schema.protocolCandidates.categoryHint})`,
-                  firstSeenAt: sql`least(${schema.protocolCandidates.firstSeenAt}, excluded.first_seen_at)`,
-                  lastSeenAt: sql`greatest(${schema.protocolCandidates.lastSeenAt}, excluded.last_seen_at)`,
+            Effect.gen(function* () {
+              const [blockchain] = yield* tx
+                .select({ id: schema.blockchains.id })
+                .from(schema.blockchains)
+                .where(eq(schema.blockchains.name, observation.blockchainName))
+                .limit(1)
+                .pipe(wrapSyncEngineSqlError(operation))
+
+              if (blockchain === undefined) {
+                return yield* Effect.fail(
+                  storageError({
+                    blockchainName: observation.blockchainName,
+                    message: "Failed to resolve protocol candidate blockchain.",
+                  })
+                )
+              }
+
+              return yield* tx
+                .insert(schema.protocolCandidates)
+                .values({
+                  blockchainId: blockchain.id,
+                  subjectKind: observation.subjectKind,
+                  subjectIdentifier: observation.subjectIdentifier,
+                  protocolNameHint: observation.protocolNameHint,
+                  categoryHint: observation.categoryHint,
+                  mappingStatus: "pending_review",
+                  firstSeenAt: observation.retrievedAt,
+                  lastSeenAt: observation.retrievedAt,
+                  createdAt: now,
                   updatedAt: now,
-                },
-              })
-              .returning({
-                id: schema.protocolCandidates.id,
-                blockchainId: schema.protocolCandidates.blockchainId,
-                subjectKind: schema.protocolCandidates.subjectKind,
-                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
-                protocolNameHint: schema.protocolCandidates.protocolNameHint,
-                categoryHint: schema.protocolCandidates.categoryHint,
-                mappingStatus: schema.protocolCandidates.mappingStatus,
-                firstSeenAt: schema.protocolCandidates.firstSeenAt,
-                lastSeenAt: schema.protocolCandidates.lastSeenAt,
-              })
-              .pipe(
-                Effect.flatMap((rows) =>
-                  rows[0] === undefined
-                    ? Effect.fail(storageError({ message: "Failed to upsert protocol candidate." }))
-                    : toPersistedCandidate(rows[0])
-                ),
-                wrapSyncEngineSqlError(operation)
-              )
+                })
+                .onConflictDoUpdate({
+                  target: [
+                    schema.protocolCandidates.blockchainId,
+                    schema.protocolCandidates.subjectKind,
+                    schema.protocolCandidates.subjectIdentifier,
+                  ],
+                  set: {
+                    protocolNameHint: sql`coalesce(excluded.protocol_name_hint, ${schema.protocolCandidates.protocolNameHint})`,
+                    categoryHint: sql`coalesce(excluded.category_hint, ${schema.protocolCandidates.categoryHint})`,
+                    firstSeenAt: sql`least(${schema.protocolCandidates.firstSeenAt}, excluded.first_seen_at)`,
+                    lastSeenAt: sql`greatest(${schema.protocolCandidates.lastSeenAt}, excluded.last_seen_at)`,
+                    updatedAt: now,
+                  },
+                })
+                .returning({
+                  id: schema.protocolCandidates.id,
+                  blockchainId: schema.protocolCandidates.blockchainId,
+                  subjectKind: schema.protocolCandidates.subjectKind,
+                  subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+                  protocolNameHint: schema.protocolCandidates.protocolNameHint,
+                  categoryHint: schema.protocolCandidates.categoryHint,
+                  mappingStatus: schema.protocolCandidates.mappingStatus,
+                  firstSeenAt: schema.protocolCandidates.firstSeenAt,
+                  lastSeenAt: schema.protocolCandidates.lastSeenAt,
+                })
+                .pipe(
+                  Effect.flatMap((rows) =>
+                    rows[0] === undefined
+                      ? Effect.fail(
+                          storageError({ message: "Failed to upsert protocol candidate." })
+                        )
+                      : toPersistedCandidate(rows[0])
+                  ),
+                  wrapSyncEngineSqlError(operation)
+                )
+            })
           )
 
           yield* Effect.forEach(
@@ -255,7 +290,7 @@ const make = Effect.gen(function* () {
                   .insert(schema.protocolCandidateObservations)
                   .values({
                     candidateId: candidate.id,
-                    onchainDataSource: "dune",
+                    onchainDataSource: observation.sourceMetadata.source,
                     onchainDataSourceObservationKey,
                     observedWindowStart: observation.observedWindowStart,
                     observedWindowEnd: observation.observedWindowEnd,
@@ -301,9 +336,9 @@ const make = Effect.gen(function* () {
                   .insert(schema.duneProtocolCandidateObservations)
                   .values({
                     observationId: persistedObservation.id,
-                    queryId: observation.queryId,
-                    queryName: observation.queryName,
-                    queryVersion: observation.queryVersion,
+                    queryId: observation.sourceMetadata.queryId,
+                    queryName: observation.sourceMetadata.queryName,
+                    queryVersion: observation.sourceMetadata.queryVersion,
                   })
                   .onConflictDoUpdate({
                     target: schema.duneProtocolCandidateObservations.observationId,
@@ -327,7 +362,7 @@ const make = Effect.gen(function* () {
       .pipe(wrapSyncEngineStorageError(operation))
 
   return ProtocolCandidateRepository.of({
-    importDuneObservations,
+    importObservations,
   } satisfies ProtocolCandidateRepositoryShape)
 })
 
