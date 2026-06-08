@@ -1,5 +1,4 @@
 {
-  "tailwindCSS.rootFontSize": 14,
   "explorer.fileNesting.enabled": true,
   "explorer.fileNesting.patterns": {
     "package.json": "package-lock.json, yarn.lock",
@@ -9,15 +8,14 @@
   },
   "oxc.typeAware": true,
   "oxc.fmt.configPath": ".oxfmtrc.jsonc",
+  "tailwindCSS.rootFontSize": 14,
   "typescript.tsdk": "node_modules/typescript/lib",
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "editor.insertSpaces": true,
   "editor.tabSize": 2,
-  "editor.formatOnSave": true,
   "editor.defaultFormatter": "oxc.oxc-vscode",
-  "editor.codeActionsOnSave": {
-    "source.fixAll.oxc": "always"
-  },
+  "editor.formatOnSave": true,
+  "editor.formatOnSaveMode": "file",
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff"
   },
