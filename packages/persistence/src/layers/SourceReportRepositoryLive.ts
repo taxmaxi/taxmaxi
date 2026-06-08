@@ -432,6 +432,7 @@ const make = Effect.gen(function* () {
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .orderBy(asc(schema.assets.symbol), asc(schema.assets.id))
         .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.legs"))
+
       const lotRows = yield* db
         .select({
           assetId: schema.fifoLots.assetId,
@@ -445,6 +446,7 @@ const make = Effect.gen(function* () {
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
         .where(eq(schema.fifoLots.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.lots"))
+
       const matchRows = yield* db
         .select({
           assetId: schema.transactionLegs.assetId,
@@ -559,6 +561,7 @@ const make = Effect.gen(function* () {
   const listTransactions: SourceReportRepositoryService["listTransactions"] = (params) =>
     Effect.gen(function* () {
       yield* loadOwnedSource(params)
+
       const cursor = yield* parseCursor(params.cursor)
       const cursorPredicate = Option.match(cursor, {
         onNone: () => undefined,
@@ -571,6 +574,7 @@ const make = Effect.gen(function* () {
             )
           ),
       })
+
       const rows = yield* db
         .select({
           transactionId: schema.transactions.id,
@@ -591,7 +595,9 @@ const make = Effect.gen(function* () {
         .orderBy(desc(schema.transactions.timestamp), desc(schema.transactions.id))
         .limit(params.limit + 1)
         .pipe(wrapSqlError("sourceReportRepository.listTransactions.transactions"))
+
       const transactionIds = rows.map((row) => row.transactionId)
+
       const movementRows =
         transactionIds.length === 0
           ? []
@@ -614,7 +620,9 @@ const make = Effect.gen(function* () {
               .where(inArray(schema.transactionLegs.transactionId, transactionIds))
               .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
               .pipe(wrapSqlError("sourceReportRepository.listTransactions.movements"))
+
       const movementsByTransaction = new Map<string, ReadonlyArray<SourceTransactionMovement>>()
+
       for (const transactionId of transactionIds) {
         const movements = movementRows
           .filter((row) => row.transactionId === transactionId)
@@ -632,6 +640,7 @@ const make = Effect.gen(function* () {
           )
         movementsByTransaction.set(transactionId, movements)
       }
+
       const items = rows.map(
         (row): SourceTransactionRow => ({
           transactionId: row.transactionId,
@@ -645,6 +654,7 @@ const make = Effect.gen(function* () {
           movements: movementsByTransaction.get(row.transactionId) ?? [],
         })
       )
+
       return makePage({
         rows: items,
         limit: params.limit,
@@ -656,6 +666,7 @@ const make = Effect.gen(function* () {
   const listTaxEvents: SourceReportRepositoryService["listTaxEvents"] = (params) =>
     Effect.gen(function* () {
       yield* loadOwnedSource(params)
+
       const cursor = yield* parseCursor(params.cursor)
       const cursorPredicate = Option.match(cursor, {
         onNone: () => undefined,
@@ -668,6 +679,7 @@ const make = Effect.gen(function* () {
             )
           ),
       })
+
       const rows = yield* db
         .select({
           legId: schema.transactionLegs.id,
@@ -693,7 +705,9 @@ const make = Effect.gen(function* () {
         .orderBy(desc(schema.transactionLegs.timestamp), desc(schema.transactionLegs.id))
         .limit(params.limit + 1)
         .pipe(wrapSqlError("sourceReportRepository.listTaxEvents"))
+
       const legIds = rows.map((row) => row.legId)
+
       const matchRows =
         legIds.length === 0
           ? []
@@ -709,13 +723,16 @@ const make = Effect.gen(function* () {
               .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
               .where(inArray(schema.disposalMatches.disposalLegId, legIds))
               .pipe(wrapSqlError("sourceReportRepository.listTaxEvents.matches"))
+
       const items = yield* Effect.forEach(rows, (row) =>
         Effect.gen(function* () {
           let costBasis = zeroDecimal()
           let proceeds = zeroDecimal()
           let gainLoss = zeroDecimal()
+
           const treatments: Array<SourceReportTaxableTreatment> = []
           const matches = matchRows.filter((match) => match.disposalLegId === row.legId)
+
           for (const match of matches) {
             const matchCostBasis = yield* decodeDecimal({
               operation: "sourceReportRepository.listTaxEvents.costBasis",
@@ -765,6 +782,7 @@ const make = Effect.gen(function* () {
           } satisfies SourceTaxEventRow
         })
       )
+
       return makePage({
         rows: items,
         limit: params.limit,
@@ -775,6 +793,7 @@ const make = Effect.gen(function* () {
   const listFifoLots: SourceReportRepositoryService["listFifoLots"] = (params) =>
     Effect.gen(function* () {
       yield* loadOwnedSource(params)
+
       const cursor = yield* parseCursor(params.cursor)
       const cursorPredicate = Option.match(cursor, {
         onNone: () => undefined,
@@ -784,6 +803,7 @@ const make = Effect.gen(function* () {
             and(eq(schema.fifoLots.acquiredAt, value.timestamp), gt(schema.fifoLots.id, value.id))
           ),
       })
+
       const rows = yield* db
         .select({
           lotId: schema.fifoLots.id,
@@ -807,7 +827,9 @@ const make = Effect.gen(function* () {
         .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.id))
         .limit(params.limit + 1)
         .pipe(wrapSqlError("sourceReportRepository.listFifoLots.lots"))
+
       const lotIds = rows.map((row) => row.lotId)
+
       const matchRows =
         lotIds.length === 0
           ? []
@@ -824,7 +846,9 @@ const make = Effect.gen(function* () {
               .where(inArray(schema.disposalMatches.fifoLotId, lotIds))
               .orderBy(asc(schema.disposalMatches.createdAt), asc(schema.disposalMatches.id))
               .pipe(wrapSqlError("sourceReportRepository.listFifoLots.matches"))
+
       const matchesByLot = new Map<string, ReadonlyArray<SourceFifoLotDisposalSummary>>()
+
       for (const lotId of lotIds) {
         const disposalMatches = yield* Effect.forEach(
           matchRows.filter((row) => row.lotId === lotId),
@@ -902,6 +926,7 @@ const make = Effect.gen(function* () {
       }
 
       yield* loadOwnedSource(params)
+
       const [leg] = yield* db
         .select({
           legId: schema.transactionLegs.id,
@@ -926,6 +951,7 @@ const make = Effect.gen(function* () {
         )
         .limit(1)
         .pipe(wrapSqlError("sourceReportRepository.explainDisposal.leg"))
+
       if (leg === undefined) {
         return yield* Effect.fail(
           new SourceReportSourceNotFoundError({ sourceId: params.sourceId })
@@ -955,7 +981,9 @@ const make = Effect.gen(function* () {
       let proceeds = zeroDecimal()
       let gainLoss = zeroDecimal()
       let firstAcquiredAt: Date | null = null
+
       const matchedLots: Array<SourceDisposalMatchedLot> = []
+
       for (const row of matches) {
         const rowCostBasis = yield* decodeDecimal({
           operation: "sourceReportRepository.explainDisposal.costBasis",
@@ -973,6 +1001,7 @@ const make = Effect.gen(function* () {
           operation: "sourceReportRepository.explainDisposal.matchedAmount",
           value: row.matchedAmount,
         })
+
         costBasis = BigDecimal.sum(costBasis, rowCostBasis)
         proceeds = BigDecimal.sum(proceeds, rowProceeds)
         gainLoss = BigDecimal.sum(gainLoss, rowGainLoss)
@@ -980,6 +1009,7 @@ const make = Effect.gen(function* () {
           firstAcquiredAt === null || row.acquiredAt.getTime() < firstAcquiredAt.getTime()
             ? row.acquiredAt
             : firstAcquiredAt
+
         matchedLots.push({
           lotId: row.lotId,
           asset: assetFromRow(row),
@@ -997,10 +1027,12 @@ const make = Effect.gen(function* () {
                 }),
         })
       }
+
       const amount = yield* decodeDecimal({
         operation: "sourceReportRepository.explainDisposal.amount",
         value: leg.amount,
       })
+
       const fiatAmount = yield* optionalDecimal({
         operation: "sourceReportRepository.explainDisposal.fiatAmount",
         value: leg.fiatAmount,
