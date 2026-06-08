@@ -448,6 +448,7 @@ const make = Effect.gen(function* () {
         .select({
           assetId: schema.transactionLegs.assetId,
           kind: schema.transactionLegs.kind,
+          derivationRule: schema.transactionLegs.derivationRule,
           fiatAmount: schema.transactionLegs.fiatAmount,
           fiatCurrency: schema.transactionLegs.fiatCurrency,
         })
@@ -491,7 +492,7 @@ const make = Effect.gen(function* () {
       let feeCount = 0
       for (const row of legRows) {
         assetIds.add(row.assetId)
-        if (row.kind === "disposal") {
+        if (row.kind === "disposal" && row.derivationRule !== "internal_transfer_out") {
           disposalCount += 1
         }
         if (row.kind === "fee") {

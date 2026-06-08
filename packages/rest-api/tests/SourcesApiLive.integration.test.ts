@@ -950,6 +950,9 @@ describe("SourcesApiLive", () => {
         })
 
         const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+        const overview = yield* client.sources.getSourceOverview({
+          path: { sourceId: fixture.sourceId },
+        })
         const taxEvents = yield* client.sources.listSourceTaxEvents({
           path: { sourceId: fixture.sourceId },
           urlParams: { limit: 10 },
@@ -978,6 +981,7 @@ describe("SourcesApiLive", () => {
           derivationRule: "internal_transfer_in",
           taxableTreatment: "non_taxable",
         })
+        expect(overview.totals.disposalCount).toBe(1)
         const assetPnl = yield* client.sources.listSourceAssetPnl({
           path: { sourceId: fixture.sourceId },
         })
