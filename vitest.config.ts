@@ -1,12 +1,6 @@
 import { loadEnv } from "vite"
 import { defineConfig } from "vitest/config"
 
-const testEnv = {
-  ...loadEnv("test", "./apps/server", ""),
-  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
-  CLAIM_TOKEN_PEPPER: "test-claim-token-pepper",
-}
-
 export default defineConfig({
   test: {
     watch: false,
@@ -28,20 +22,18 @@ export default defineConfig({
             "packages/*/node_modules",
           ],
           name: { label: "unit", color: "cyan" },
-          env: testEnv,
+          env: loadEnv("test", "./apps/server", ""),
         },
       },
       {
         test: {
           include: [
             "packages/**/tests/**/*.integration.test.ts",
-            "apps/worker/tests/**/*.integration.test.ts",
-            "apps/server/tests/**/*.integration.test.ts",
-            "apps/crawler/tests/**/*.integration.test.ts",
+            "apps/**/tests/**/*.integration.test.ts",
           ],
           exclude: ["packages/*/node_modules"],
           name: { label: "integration", color: "magenta" },
-          env: testEnv,
+          env: loadEnv("test", "./apps/server", ""),
           globalSetup: ["./packages/persistence/tests/vitest.integration.setup.ts"],
         },
       },
