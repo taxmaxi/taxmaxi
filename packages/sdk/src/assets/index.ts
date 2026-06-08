@@ -18,7 +18,7 @@ type TaxMaxiAssetsClient =
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
 export type AssetCanonicalizationInput = {
-  readonly providerAssetRowId: string
+  readonly id: string
 } & AssetCanonicalizationRequest
 export type AssetCanonicalization = AssetCanonicalizationResponse
 
@@ -33,7 +33,7 @@ export type AssetsEffectResource = {
   readonly listProviderAssetReviews: (
     input?: ProviderAssetReviewListInput
   ) => Effect.Effect<ProviderAssetReviewList, unknown, never>
-  readonly canonicalizeProviderAssetFromCoinGecko: (
+  readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Effect.Effect<AssetCanonicalization, unknown, never>
 }
@@ -42,7 +42,7 @@ export type AssetsPromiseResource = {
   readonly listProviderAssetReviews: (
     input?: ProviderAssetReviewListInput
   ) => Promise<ProviderAssetReviewList>
-  readonly canonicalizeProviderAssetFromCoinGecko: (
+  readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Promise<AssetCanonicalization>
 }
@@ -61,11 +61,11 @@ export const makeAssetsEffectResource = (
         },
       })
     ),
-  canonicalizeProviderAssetFromCoinGecko: ({ providerAssetRowId, reviewerNotes }) =>
+  canonicalizeProviderAsset: ({ id, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
-      resolved.assets.canonicalizeProviderAssetFromCoinGecko({
+      resolved.assets.canonicalizeProviderAsset({
         path: {
-          providerAssetRowId,
+          id,
         },
         payload: {
           reviewerNotes,
@@ -79,6 +79,5 @@ export const makeAssetsPromiseResource = (
   run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
 ): AssetsPromiseResource => ({
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),
-  canonicalizeProviderAssetFromCoinGecko: (input) =>
-    run(effect.canonicalizeProviderAssetFromCoinGecko(input)),
+  canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
 })

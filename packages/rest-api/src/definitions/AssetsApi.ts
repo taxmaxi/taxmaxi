@@ -122,13 +122,13 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
     })
   )
 
-const canonicalizeProviderAssetFromCoinGecko = HttpApiEndpoint.post(
-  "canonicalizeProviderAssetFromCoinGecko",
-  "/assets/provider-assets/:providerAssetRowId/canonicalize/coingecko"
+const canonicalizeProviderAsset = HttpApiEndpoint.post(
+  "canonicalizeProviderAsset",
+  "/assets/provider-assets/:id/canonicalize"
 )
   .setPath(
     Schema.Struct({
-      providerAssetRowId: Schema.UUID,
+      id: Schema.UUID,
     })
   )
   .setPayload(AssetCanonicalizationRequest)
@@ -139,15 +139,15 @@ const canonicalizeProviderAssetFromCoinGecko = HttpApiEndpoint.post(
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
-      summary: "Canonicalize provider asset through CoinGecko",
+      summary: "Canonicalize provider asset",
       description:
-        "Creates or refreshes a canonical asset from CoinGecko metadata and approves the provider asset mapping.",
+        "Creates or refreshes a canonical asset and approves the provider asset mapping.",
     })
   )
 
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listProviderAssetReviews)
-  .add(canonicalizeProviderAssetFromCoinGecko)
+  .add(canonicalizeProviderAsset)
   .middleware(AuthMiddleware)
   .prefix("/v1")
   .annotateContext(

@@ -492,7 +492,7 @@ describe("TaxMaxi Promise client", () => {
 
   it("plumbs asset review endpoints through the internal assets resource", async () => {
     const capturedRequests: Array<CapturedRequest> = []
-    const providerAssetRowId = "00000000-0000-4000-8000-000000000009"
+    const providerAssetId = "00000000-0000-4000-8000-000000000009"
     const responseBodies = [
       emptyProviderAssetReviewsResponseBody,
       assetCanonicalizationResponseBody,
@@ -531,8 +531,8 @@ describe("TaxMaxi Promise client", () => {
       },
     })
     await expect(
-      taxmaxi.assets.canonicalizeProviderAssetFromCoinGecko({
-        providerAssetRowId,
+      taxmaxi.assets.canonicalizeProviderAsset({
+        id: providerAssetId,
         reviewerNotes: "Looks correct.",
       })
     ).resolves.toMatchObject({
@@ -547,7 +547,7 @@ describe("TaxMaxi Promise client", () => {
         url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
       }),
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize/coingecko",
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
       }),
     ])
   })

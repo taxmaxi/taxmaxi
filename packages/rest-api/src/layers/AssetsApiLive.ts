@@ -94,12 +94,12 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("canonicalizeProviderAssetFromCoinGecko", ({ path, payload }) =>
+      .handle("canonicalizeProviderAsset", ({ path, payload }) =>
         Effect.gen(function* () {
           yield* requireAdmin
           const result = yield* assetCanonicalizationService
             .canonicalizeProviderAssetFromCoinGecko({
-              providerAssetRowId: path.providerAssetRowId,
+              providerAssetRowId: path.id,
               reviewerNotes: payload.reviewerNotes ?? null,
             })
             .pipe(
