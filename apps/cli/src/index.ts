@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command, Options } from "@effect/cli"
+import { Args, Command, Options } from "@effect/cli"
 import {
   FileSystem,
   HttpClient,
@@ -39,6 +39,10 @@ const yearOption = Options.integer("year").pipe(Options.withDescription("Tax yea
 const yearWithDefaultOption = Options.integer("year").pipe(
   Options.withDefault(new Date().getUTCFullYear()),
   Options.withDescription("Tax year (YYYY)")
+)
+const walletAddressArgument = Args.text({ name: "wallet-address" }).pipe(
+  Args.optional,
+  Args.withDescription("Onchain wallet address to create and sync")
 )
 
 class CliCommandError extends Schema.TaggedError<CliCommandError>()("CliCommandError", {
@@ -106,6 +110,14 @@ const SourceListItem = Schema.Struct({
 const SourceListResponse = Schema.Struct({
   sources: Schema.Array(SourceListItem),
 })
+
+const SourceCreateResponse = Schema.Struct({
+  source: SourceListItem,
+  created: Schema.Boolean,
+  syncJob: Schema.OptionFromNullOr(CoinbaseSyncStartResponse),
+  claim: Schema.OptionFromNullOr(Schema.Unknown),
+})
+type SourceCreateResponse = typeof SourceCreateResponse.Type
 
 const GermanTaxComputeResponse = Schema.Struct({
   year: Schema.Number,
@@ -278,6 +290,7 @@ const makeApiClient = (apiUrl: string) =>
     const decodeSyncStart = HttpClientResponse.schemaBodyJson(CoinbaseSyncStartResponse)
     const decodeSyncJob = HttpClientResponse.schemaBodyJson(CoinbaseSyncJobResponse)
     const decodeSourceList = HttpClientResponse.schemaBodyJson(SourceListResponse)
+    const decodeSourceCreate = HttpClientResponse.schemaBodyJson(SourceCreateResponse)
     const decodeGermanTax = HttpClientResponse.schemaBodyJson(GermanTaxComputeResponse)
 
     const executeAndDecode = <A>(
@@ -338,6 +351,26 @@ const makeApiClient = (apiUrl: string) =>
             HttpClientRequest.setHeader("Authorization", `Bearer ${sessionToken}`)
           ),
           decodeSourceList
+        ),
+      createOnchainSource: ({
+        sessionToken,
+        walletAddress,
+      }: {
+        sessionToken: string
+        walletAddress: string
+      }) =>
+        executeAndDecode(
+          HttpClientRequest.post("/v1/sources").pipe(
+            HttpClientRequest.setHeader("Authorization", `Bearer ${sessionToken}`),
+            HttpClientRequest.bodyUnsafeJson({
+              type: "onchain",
+              walletAddress,
+              sync: true,
+              jurisdiction: TAX_JURISDICTION,
+              year: new Date().getUTCFullYear(),
+            })
+          ),
+          decodeSourceCreate
         ),
       startCoinbaseSync: ({ sessionToken, sourceId }: { sessionToken: string; sourceId: string }) =>
         executeAndDecode(
@@ -453,14 +486,14 @@ const waitForSyncCompletion = ({
         }
 
         if (job.status === "failed") {
-          const message = Option.getOrElse(job.message, () => "Coinbase sync failed.")
+          const message = Option.getOrElse(job.message, () => "Source sync failed.")
           return yield* new CliCommandError({ message })
         }
 
         const currentTime = yield* nowMillis
         if (currentTime - startedAt > Duration.toMillis(JOB_TIMEOUT)) {
           return yield* new CliCommandError({
-            message: "Timed out waiting for Coinbase sync job to finish.",
+            message: "Timed out waiting for source sync job to finish.",
           })
         }
 
@@ -529,6 +562,57 @@ const syncProgram = ({
       yield* Console.log(`Failed: ${summary.failedRecords}`)
     }
     return summary
+  })
+
+const syncOnchainSourceProgram = ({
+  walletAddress,
+  json,
+}: {
+  walletAddress: string
+  json: boolean
+}) =>
+  Effect.gen(function* () {
+    const session = yield* readSession()
+    const api = yield* makeApiClient(session.apiUrl)
+    const created = yield* api.createOnchainSource({
+      sessionToken: session.sessionToken,
+      walletAddress,
+    })
+    const syncJob = Option.getOrNull(created.syncJob)
+
+    if (syncJob === null) {
+      return yield* new CliCommandError({
+        message: "Onchain source was created, but no sync job was returned.",
+      })
+    }
+
+    const summary = yield* waitForSyncCompletion({
+      apiUrl: session.apiUrl,
+      sessionToken: session.sessionToken,
+      sourceId: syncJob.sourceId,
+      jobId: syncJob.jobId,
+    })
+
+    const providerKey = Option.getOrNull(created.source.providerKey)
+
+    if (json) {
+      yield* printJson({
+        stage: "onchain_sync_completed",
+        providerKey,
+        created: created.created,
+        ...summary,
+      })
+      return
+    }
+
+    yield* Console.log("Onchain source sync completed.")
+    yield* Console.log(`Source: ${created.source.id}`)
+    if (providerKey !== null) {
+      yield* Console.log(`Provider: ${providerKey}`)
+    }
+    yield* Console.log(`Imported: ${summary.importedRecords}`)
+    yield* Console.log(`Normalized: ${summary.normalizedRecords}`)
+    yield* Console.log(`Failed: ${summary.failedRecords}`)
   })
 
 const replayProgram = ({
@@ -816,7 +900,24 @@ const coinbaseCommand = Command.make(
   Command.withSubcommands([connectCommand, syncCommand, replayCommand, calculateCommand])
 )
 
-const command = Command.make("tax", {}).pipe(Command.withSubcommands([coinbaseCommand]))
+const command = Command.make(
+  "tax",
+  {
+    walletAddress: walletAddressArgument,
+    json: jsonOption,
+  },
+  ({ walletAddress, json }) =>
+    Effect.gen(function* () {
+      if (Option.isSome(walletAddress)) {
+        return yield* syncOnchainSourceProgram({
+          walletAddress: walletAddress.value,
+          json,
+        })
+      }
+
+      yield* Console.log("Run `tax coinbase` or pass an onchain wallet address.")
+    })
+).pipe(Command.withSubcommands([coinbaseCommand]))
 
 const cli = Command.run(command, { name: "TaxMaxi CLI", version: packageJson.version })
 

@@ -108,10 +108,13 @@ For each review-fix pass:
 
 1. Read latest PR reviews/comments/checks.
 2. Identify actionable Codex comments.
-3. If no actionable comments remain and checks are acceptable, prepare Telegram human-review notification.
-4. If actionable comments exist and pass count is less than 3, start a fresh Codex session using `.agents/prompts/codex-address-review.md`.
-5. Verify Codex's changes, commit/push if Codex did not already do so, then wait for the next Codex GitHub App review.
-6. If pass count reaches 3 and actionable comments remain, stop and notify the maintainer with the remaining comments.
+3. Treat a Codex connector top-level comment such as `Codex Review: Didn't find any major issues` as a completed review for the current PR head when it appears after the relevant push/review trigger and checks are green. A formal PR review object is not required in that case.
+4. If no actionable comments remain and checks are acceptable, prepare Telegram human-review notification.
+5. If actionable comments exist and pass count is less than 3, start a fresh Codex session using `.agents/prompts/codex-address-review.md`.
+6. Verify Codex's changes, commit/push if Codex did not already do so, then wait for the next Codex GitHub App review.
+7. If pass count reaches 3 and actionable comments remain, stop and notify the maintainer with the remaining comments.
+
+Do not post another `@codex review` after a no-issue Codex response for the current head SHA. Request another Codex review only after a new commit, stale/ambiguous review state, failing checks, new actionable feedback, or an explicit maintainer request.
 
 ## Phase 6: Telegram notification
 

@@ -31,6 +31,7 @@
     "migration:generate": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs generate",
     "migration:run": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs migrate",
     "db:push": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs push --schema ./src/schema/index.ts",
+    "seed": "node dist/seed/index.js",
     "up": "node --preserve-symlinks-main ./node_modules/drizzle-kit/bin.cjs up",
     "type-check": "tsc --noEmit",
     "type-check:tests": "tsc -p tsconfig.tests.json",

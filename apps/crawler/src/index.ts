@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { Command } from "@effect/cli"
-import { NodeContext, NodeRuntime } from "@effect/platform-node"
+import { NodeContext, NodeHttpClient, NodeRuntime } from "@effect/platform-node"
 import { Console, Effect, Layer } from "effect"
 import { CrawlerCommandError } from "./errors.ts"
 import { SolanaBehaviorSamplerClientLive } from "./solana-behavior-sampler-live.ts"
 import { crawlSolanaCommand } from "./solana-crawler.ts"
+import { SolanaDuneProgramRankingClientLive } from "./solana-dune-program-ranking-live.ts"
 
 export { CrawlerCommandError } from "./errors.ts"
 
@@ -18,7 +19,11 @@ const command = Command.make("crawler", {}).pipe(Command.withSubcommands([crawlC
 
 const cli = Command.run(command, { name: "TaxMaxi crawler", version: "0.0.0" })
 
-const runtimeLayer = Layer.mergeAll(NodeContext.layer, SolanaBehaviorSamplerClientLive)
+const runtimeLayer = Layer.mergeAll(
+  NodeContext.layer,
+  SolanaBehaviorSamplerClientLive,
+  SolanaDuneProgramRankingClientLive.pipe(Layer.provide(NodeHttpClient.layer))
+)
 
 cli(process.argv).pipe(
   Effect.catchAll((error) => {
