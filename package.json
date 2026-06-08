@@ -21,8 +21,8 @@
     "db:seed": "pnpm --filter @my/persistence run seed",
     "lint": "oxlint -c oxlintrc.json apps packages plopfile.cjs",
     "lint:fix": "oxlint -c oxlintrc.json --fix apps packages plopfile.cjs",
-    "format": "oxfmt -c oxfmtrc.jsonc --check apps packages package.json pnpm-workspace.yaml turbo.json oxfmtrc.jsonc oxlintrc.json AGENTS.md",
-    "format:fix": "oxfmt -c oxfmtrc.jsonc apps packages package.json pnpm-workspace.yaml turbo.json oxfmtrc.jsonc oxlintrc.json AGENTS.md",
+    "format": "oxfmt -c .oxfmtrc.jsonc --check apps packages package.json pnpm-workspace.yaml turbo.json .oxfmtrc.jsonc oxlintrc.json AGENTS.md",
+    "format:fix": "oxfmt -c .oxfmtrc.jsonc apps packages package.json pnpm-workspace.yaml turbo.json .oxfmtrc.jsonc oxlintrc.json AGENTS.md",
     "type-check": "turbo run type-check",
     "type-check:tests": "turbo run type-check:tests",
     "server:build": "turbo run build --filter=server...",
@@ -45,7 +45,7 @@
   },
   "lint-staged": {
     "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,vue,astro,svelte}": "oxlint -c oxlintrc.json",
-    "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,toml,json,jsonc,yaml,yml,html,vue,css,scss,less,gql,graphql,md,mdx}": "oxfmt -c oxfmtrc.jsonc"
+    "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,toml,json,jsonc,yaml,yml,html,vue,css,scss,less,gql,graphql,md,mdx}": "oxfmt -c .oxfmtrc.jsonc"
   },
   "packageManager": "pnpm@10.29.1+sha512.48dae233635a645768a3028d19545cacc1688639eeb1f3734e42d6d6b971afbf22aa1ac9af52a173d9c3a20c15857cfa400f19994d79a2f626fcc73fccda9bbc",
   "pnpm": {
