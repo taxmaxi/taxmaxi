@@ -4,7 +4,7 @@
  * @module AssetRepositoryLive
  */
 
-import { and, eq, isNull, sql } from "drizzle-orm"
+import { and, eq, isNull, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -98,7 +98,19 @@ const make = Effect.gen(function* () {
           .where(
             and(
               eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase()),
-              eq(schema.assets.contractAddress, contractAddress)
+              or(
+                and(
+                  eq(schema.blockchains.chainType, "evm"),
+                  eq(
+                    sql<string>`lower(${schema.assets.contractAddress})`,
+                    contractAddress.toLowerCase()
+                  )
+                ),
+                and(
+                  ne(schema.blockchains.chainType, "evm"),
+                  eq(schema.assets.contractAddress, contractAddress)
+                )
+              )
             )
           )
           .limit(1)

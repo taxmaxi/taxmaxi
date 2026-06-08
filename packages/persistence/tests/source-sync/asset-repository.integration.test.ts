@@ -143,5 +143,19 @@ describe("AssetRepositoryLive", () => {
       contractAddress: "0xabcdefabcdef",
       logoUrl: existingLogoUrl,
     })
+
+    const foundAsset = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findAssetByBlockchainAndContractAddress({
+          blockchainName: "base",
+          contractAddress: "0xAbCdEfAbCdEf",
+        })
+      )
+    )
+
+    expect(Option.getOrNull(foundAsset)).toEqual({
+      id: existingAssetId,
+      symbol: "USDC",
+    })
   })
 })
