@@ -2,6 +2,10 @@ TaxMaxi is an open-source crypto tax API. The API follows RESTful principles and
 
 The public product surface is CLI/API first with a web app that shows off the API's capabilities. Do not add a CMS, billing system, admin console, or marketing site unless explicitly requested.
 
+## Communication
+
+Use simple, concrete words when talking to the maintainer, writing plans, writing docs, or adding comments. Do not overcomplicate wording.
+
 ## Launch Status
 
 The product is pre-launch and pre-revenue. Prefer clean code and clean schema over compatibility bridges. Hard migrations are acceptable when they simplify the system.
