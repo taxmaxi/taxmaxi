@@ -25,22 +25,19 @@ import { schema } from "../schema/index.ts"
 
 const operation = "protocolCandidateRepository.importDuneObservations"
 
-const failInvalidObservation = ({
+const storageError = (cause: unknown) =>
+  new SyncEngineStorageError({
+    operation,
+    cause,
+  })
+
+const invalidObservation = ({
   field,
   message,
 }: {
   readonly field: string
   readonly message: string
-}) =>
-  Effect.fail(
-    new SyncEngineStorageError({
-      operation,
-      cause: {
-        field,
-        message,
-      },
-    })
-  )
+}) => Effect.fail(storageError({ field, message }))
 
 const isValidDate = (date: Date): boolean => !Number.isNaN(date.getTime())
 
@@ -52,13 +49,13 @@ const validateNonEmptyText = ({
   readonly value: string
 }) =>
   value.trim().length === 0
-    ? failInvalidObservation({ field, message: `${field} must not be empty.` })
+    ? invalidObservation({ field, message: `${field} must not be empty.` })
     : Effect.void
 
 const validateSafeCount = ({ field, value }: { readonly field: string; readonly value: number }) =>
   Number.isSafeInteger(value) && value >= 0
     ? Effect.void
-    : failInvalidObservation({ field, message: `${field} must be a non-negative safe integer.` })
+    : invalidObservation({ field, message: `${field} must be a non-negative safe integer.` })
 
 const validateNullableSafeCount = ({
   field,
@@ -88,28 +85,28 @@ const validateObservation = (observation: DuneProtocolCandidateObservationDraft)
     yield* validateSafeCount({ field: "queryVersion", value: observation.queryVersion })
 
     if (!isValidDate(observation.observedWindowStart)) {
-      yield* failInvalidObservation({
+      yield* invalidObservation({
         field: "observedWindowStart",
         message: "observedWindowStart must be a valid date.",
       })
     }
 
     if (!isValidDate(observation.observedWindowEnd)) {
-      yield* failInvalidObservation({
+      yield* invalidObservation({
         field: "observedWindowEnd",
         message: "observedWindowEnd must be a valid date.",
       })
     }
 
     if (observation.observedWindowStart >= observation.observedWindowEnd) {
-      yield* failInvalidObservation({
+      yield* invalidObservation({
         field: "observedWindowEnd",
         message: "observedWindowEnd must be after observedWindowStart.",
       })
     }
 
     if (!isValidDate(observation.retrievedAt)) {
-      yield* failInvalidObservation({
+      yield* invalidObservation({
         field: "retrievedAt",
         message: "retrievedAt must be a valid date.",
       })
@@ -126,7 +123,7 @@ const makeDuneOnchainDataSourceObservationKey = (
     observation.observedWindowEnd.toISOString(),
   ].join(":")
 
-const numericValue = (value: number | null): string | null =>
+const toNumericText = (value: number | null): string | null =>
   value === null ? null : String(value)
 
 const decodeSubjectKind = (
@@ -140,12 +137,9 @@ const decodeSubjectKind = (
     }
     default: {
       return Effect.fail(
-        new SyncEngineStorageError({
-          operation,
-          cause: {
-            subjectKind,
-            message: "Persisted protocol candidate has an unknown subject kind.",
-          },
+        storageError({
+          subjectKind,
+          message: "Persisted protocol candidate has an unknown subject kind.",
         })
       )
     }
@@ -237,14 +231,7 @@ const make = Effect.gen(function* () {
               .pipe(
                 Effect.flatMap((rows) =>
                   rows[0] === undefined
-                    ? Effect.fail(
-                        new SyncEngineStorageError({
-                          operation,
-                          cause: {
-                            message: "Failed to upsert protocol candidate.",
-                          },
-                        })
-                      )
+                    ? Effect.fail(storageError({ message: "Failed to upsert protocol candidate." }))
                     : toPersistedCandidate(rows[0])
                 ),
                 wrapSyncEngineSqlError(operation)
@@ -258,12 +245,7 @@ const make = Effect.gen(function* () {
                 const candidate = candidates[index]
                 if (candidate === undefined) {
                   yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation,
-                      cause: {
-                        message: "Missing imported candidate for observation.",
-                      },
-                    })
+                    storageError({ message: "Missing imported candidate for observation." })
                   )
                   return
                 }
@@ -279,8 +261,8 @@ const make = Effect.gen(function* () {
                     observedWindowStart: observation.observedWindowStart,
                     observedWindowEnd: observation.observedWindowEnd,
                     interactionCount: String(observation.interactionCount),
-                    transactionCount: numericValue(observation.transactionCount),
-                    uniqueActorCount: numericValue(observation.uniqueActorCount),
+                    transactionCount: toNumericText(observation.transactionCount),
+                    uniqueActorCount: toNumericText(observation.uniqueActorCount),
                     sampleTransactionHashes: [...observation.sampleTransactionHashes],
                     retrievedAt: observation.retrievedAt,
                     rawPayload: observation.rawPayload,
@@ -310,11 +292,8 @@ const make = Effect.gen(function* () {
 
                 if (persistedObservation === undefined) {
                   yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation,
-                      cause: {
-                        message: "Failed to upsert protocol candidate observation.",
-                      },
+                    storageError({
+                      message: "Failed to upsert protocol candidate observation.",
                     })
                   )
                   return
