@@ -8,7 +8,7 @@ import { HttpApiBuilder } from "@effect/platform"
 import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { ForbiddenError, InternalServerError } from "../definitions/ApiErrors.ts"
+import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   AssetBadRequestError,
   AssetCanonicalizationEvidenceResponse,
@@ -18,7 +18,6 @@ import {
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
 } from "../definitions/AssetsApi.ts"
-import { CurrentUser } from "../definitions/AuthMiddleware.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
 
@@ -26,20 +25,6 @@ const defaultLimit = 50
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
-
-const requireAdmin = Effect.gen(function* () {
-  const currentUser = yield* CurrentUser
-  if (currentUser.role !== "admin") {
-    return yield* Effect.fail(
-      new ForbiddenError({
-        message: "Admin role required.",
-        resource: Option.some("assets"),
-        action: Option.some("review"),
-      })
-    )
-  }
-  return currentUser
-})
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
   ProviderAssetReviewRow.make({
@@ -68,7 +53,6 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
     return handlers
       .handle("listProviderAssetReviews", ({ urlParams }) =>
         Effect.gen(function* () {
-          yield* requireAdmin
           const providerAssets = yield* providerAssetRepository
             .listProviderAssetReviews({
               providerKey: urlParams.provider ?? null,
@@ -96,7 +80,6 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       )
       .handle("canonicalizeProviderAsset", ({ path, payload }) =>
         Effect.gen(function* () {
-          yield* requireAdmin
           const result = yield* assetCanonicalizationService
             .canonicalizeProviderAssetFromCoinGecko({
               providerAssetRowId: path.id,

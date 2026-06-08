@@ -6,8 +6,8 @@
 
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
 import * as Schema from "effect/Schema"
-import { AuthMiddleware } from "./AuthMiddleware.ts"
-import { ForbiddenError, InternalServerError } from "./ApiErrors.ts"
+import { AdminAuthMiddleware } from "./AuthMiddleware.ts"
+import { InternalServerError } from "./ApiErrors.ts"
 
 export class AssetBadRequestError extends Schema.TaggedError<AssetBadRequestError>()(
   "AssetBadRequestError",
@@ -113,7 +113,6 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
 )
   .setUrlParams(ProviderAssetReviewQuery)
   .addSuccess(ProviderAssetReviewListResponse)
-  .addError(ForbiddenError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -135,7 +134,6 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
   .addSuccess(AssetCanonicalizationResponse)
   .addError(AssetBadRequestError)
   .addError(AssetNotFoundError)
-  .addError(ForbiddenError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -148,7 +146,7 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listProviderAssetReviews)
   .add(canonicalizeProviderAsset)
-  .middleware(AuthMiddleware)
+  .middleware(AdminAuthMiddleware)
   .prefix("/v1")
   .annotateContext(
     OpenApi.annotations({

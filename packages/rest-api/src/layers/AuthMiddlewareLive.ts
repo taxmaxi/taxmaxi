@@ -16,8 +16,9 @@ import { Headers, HttpServerRequest } from "@effect/platform"
 import { AuthUserId, SessionId, type UserRole } from "@my/core/authentication"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { SessionRepository, UserRepository } from "@my/persistence/services"
-import { UnauthorizedError } from "../definitions/ApiErrors.ts"
+import { ForbiddenError, UnauthorizedError } from "../definitions/ApiErrors.ts"
 import {
+  AdminAuthMiddleware,
   AuthMiddleware,
   OptionalCurrentUser,
   TokenValidator,
@@ -34,6 +35,20 @@ const extractBearerToken = (authorization: string): Option.Option<string> => {
     return Option.none()
   }
   return Option.some(token)
+}
+
+const requireAdminUser = (currentUser: User) => {
+  if (currentUser.role === "admin") {
+    return Effect.succeed(currentUser)
+  }
+
+  return Effect.fail(
+    new ForbiddenError({
+      message: "Admin role required.",
+      resource: Option.some("admin"),
+      action: Option.some("access"),
+    })
+  )
 }
 
 // =============================================================================
@@ -56,29 +71,44 @@ export const AuthMiddlewareLive: Layer.Layer<AuthMiddleware, never, TokenValidat
   Effect.gen(function* () {
     const tokenValidator = yield* TokenValidator
 
+    const validateUserToken = (token: Redacted.Redacted<string>) =>
+      tokenValidator
+        .validate(token)
+        .pipe(
+          Effect.catchAll((error) => Effect.fail(new UnauthorizedError({ message: error.message })))
+        )
+
     return AuthMiddleware.of({
-      bearer: (token) => {
-        return tokenValidator
-          .validate(token)
-          .pipe(
-            Effect.catchAll((error) =>
-              Effect.fail(new UnauthorizedError({ message: error.message }))
-            )
-          )
-      },
-      cookie: (token) => {
-        // Cookie-based authentication using taxmaxi_session cookie
-        return tokenValidator
-          .validate(token)
-          .pipe(
-            Effect.catchAll((error) =>
-              Effect.fail(new UnauthorizedError({ message: error.message }))
-            )
-          )
-      },
+      bearer: validateUserToken,
+      cookie: validateUserToken,
     })
   })
 )
+
+/**
+ * AdminAuthMiddlewareLive - Live implementation of admin-only authentication.
+ *
+ * Validates the request token and provides CurrentUser only when the caller has
+ * the admin role.
+ */
+export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, TokenValidator> =
+  Layer.effect(
+    AdminAuthMiddleware,
+    Effect.gen(function* () {
+      const tokenValidator = yield* TokenValidator
+
+      const validateAdminToken = (token: Redacted.Redacted<string>) =>
+        tokenValidator.validate(token).pipe(
+          Effect.mapError((error) => new UnauthorizedError({ message: error.message })),
+          Effect.flatMap(requireAdminUser)
+        )
+
+      return AdminAuthMiddleware.of({
+        bearer: validateAdminToken,
+        cookie: validateAdminToken,
+      })
+    })
+  )
 
 /**
  * OptionalCurrentUserLive - Resolves optional request authentication for public endpoints.

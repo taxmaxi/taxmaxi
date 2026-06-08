@@ -35,7 +35,11 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { TaxMaxiApi, HealthCheckResponse } from "../definitions/TaxMaxiApi.ts"
 import { TokenValidator } from "../definitions/AuthMiddleware.ts"
-import { AuthMiddlewareLive, OptionalCurrentUserLive } from "./AuthMiddlewareLive.ts"
+import {
+  AdminAuthMiddlewareLive,
+  AuthMiddlewareLive,
+  OptionalCurrentUserLive,
+} from "./AuthMiddlewareLive.ts"
 import { AuthApiLive, AuthSessionApiLive, CoinbaseCompatApiLive } from "./AuthApiLive.ts"
 import { AnonApiLive } from "./AnonApiLive.ts"
 import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
@@ -158,5 +162,6 @@ export const TaxMaxiApiLive: Layer.Layer<
   // - For production: use SessionTokenValidatorLive (validates against database)
   // - For testing: use SimpleTokenValidatorLive (user_<id>_<role> format)
   Layer.provide(OptionalCurrentUserLive),
+  Layer.provide(AdminAuthMiddlewareLive),
   Layer.provide(AuthMiddlewareLive)
 )
