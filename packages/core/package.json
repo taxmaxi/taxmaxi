@@ -63,6 +63,10 @@
     "./ownership": {
       "types": "./dist/ownership/index.d.ts",
       "default": "./dist/ownership/index.js"
+    },
+    "./report": {
+      "types": "./dist/report/index.d.ts",
+      "default": "./dist/report/index.js"
     }
   },
   "scripts": {

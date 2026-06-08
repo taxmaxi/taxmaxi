@@ -128,6 +128,8 @@ const makeProviderLayer = ({
           findNativeAssetForBlockchain: () => Effect.succeed(Option.none()),
           findAssetByBlockchainAndContractAddress: () => Effect.succeed(Option.none()),
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
+          upsertCanonicalAsset: () =>
+            Effect.dieMessage("upsertCanonicalAsset should not be called"),
         })
       )
     ),

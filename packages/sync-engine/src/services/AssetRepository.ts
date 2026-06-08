@@ -26,6 +26,46 @@ export interface SyncEngineBlockchain {
 }
 
 /**
+ * CanonicalBlockchainDraft - Blockchain reference data to create or refresh.
+ */
+export interface CanonicalBlockchainDraft {
+  readonly name: string
+  readonly chainType: string
+  readonly chainId: number | null
+  readonly nativeAssetSymbol: string
+  readonly explorerUrl: string | null
+  readonly logoUrl: string | null
+  readonly coingeckoPlatformId: string
+}
+
+/**
+ * CanonicalAssetDraft - Canonical asset data to create or refresh.
+ */
+export interface CanonicalAssetDraft {
+  readonly contractAddress: string | null
+  readonly name: string
+  readonly symbol: string
+  readonly decimals: number
+  readonly logoUrl: string | null
+  readonly type: "native" | "token" | "nft"
+  readonly isSpam: boolean
+}
+
+/**
+ * CanonicalAssetRecord - Canonical asset with its owning blockchain.
+ */
+export interface CanonicalAssetRecord {
+  readonly id: string
+  readonly blockchainId: string
+  readonly blockchainName: string
+  readonly name: string
+  readonly symbol: string
+  readonly decimals: number
+  readonly contractAddress: string | null
+  readonly type: "native" | "token" | "nft"
+}
+
+/**
  * AssetRepositoryShape - Canonical asset/network resolution operations.
  */
 export interface AssetRepositoryShape {
@@ -66,6 +106,14 @@ export interface AssetRepositoryShape {
     ReadonlyArray<SyncEngineBlockchain>,
     SyncEngineStorageError
   >
+
+  /**
+   * Create or refresh a canonical blockchain and asset as one durable operation.
+   */
+  readonly upsertCanonicalAsset: (params: {
+    readonly blockchain: CanonicalBlockchainDraft
+    readonly asset: CanonicalAssetDraft
+  }) => Effect.Effect<CanonicalAssetRecord, SyncEngineStorageError>
 }
 
 /**

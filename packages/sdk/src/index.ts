@@ -70,15 +70,23 @@ export type {
 export type {
   CalculateTaxInput,
   Source,
+  SourceAssetPnl,
   SourceCreate,
   SourceCreateInput,
+  SourceDisposalExplanation,
+  SourceDisposalExplanationInput,
+  SourceFifoLots,
   SourceIdInput,
   SourceList,
+  SourceOverview,
+  SourceReportPageInput,
   SourcesEffectResource,
   SourcesPromiseResource,
   SourceSyncJob,
   SourceSyncJobInput,
   SourceSyncStart,
+  SourceTaxEvents,
+  SourceTransactions,
   TaxCalculation,
 } from "./sources/index.ts"
 
