@@ -89,8 +89,9 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
               Effect.mapError((error) => {
                 switch (error._tag) {
                   case "AssetCanonicalizationBadRequestError":
-                  case "AssetCanonicalizationProviderError":
                     return new AssetBadRequestError({ message: error.message })
+                  case "AssetCanonicalizationProviderError":
+                    return toInternalServerError(error.message)
                   case "AssetCanonicalizationNotFoundError":
                     return new AssetNotFoundError({ message: error.message })
                   case "AssetCanonicalizationInternalError":
