@@ -64,9 +64,9 @@ export interface ProviderAssetMappingDraft {
 }
 
 /**
- * ResolvedProviderAssetMapping - Deterministic provider-asset mapping result.
+ * ProviderAssetMappingState - Provider-asset mapping target and review status.
  */
-export interface ResolvedProviderAssetMapping {
+export interface ProviderAssetMappingState {
   readonly providerAssetRowId: string
   readonly mappingKind: ProviderAssetMappingKind
   readonly canonicalAssetId: string | null
@@ -76,16 +76,24 @@ export interface ResolvedProviderAssetMapping {
 }
 
 /**
- * ProviderAssetReviewRecord - Provider asset plus current review mapping state.
+ * ProviderAssetReviewMapping - Provider-asset mapping state plus review notes.
  */
-export interface ProviderAssetReviewRecord extends ProviderAssetRecord {
-  readonly mappingKind: ProviderAssetMappingKind | null
-  readonly canonicalAssetId: string | null
-  readonly canonicalAssetSymbol: string | null
-  readonly canonicalFiatCurrency: string | null
-  readonly mappingStatus: ProviderAssetMappingStatus | null
+export interface ProviderAssetReviewMapping extends ProviderAssetMappingState {
   readonly reviewerNotes: string | null
   readonly sourceNotes: string | null
+}
+
+/**
+ * ResolvedProviderAssetMapping - Deterministic provider-asset mapping result.
+ */
+export type ResolvedProviderAssetMapping = ProviderAssetMappingState
+
+/**
+ * ProviderAssetReviewRecord - Provider asset plus current review mapping state.
+ */
+export interface ProviderAssetReviewRecord {
+  readonly providerAsset: ProviderAssetRecord
+  readonly mapping: ProviderAssetReviewMapping | null
 }
 
 /**

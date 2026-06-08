@@ -10,8 +10,7 @@ import {
   ProviderAssetRepository,
   type CanonicalAssetDraft,
   type CanonicalBlockchainDraft,
-  type ProviderAssetReviewRecord,
-  type SyncEngineChainType,
+  type ProviderAssetRecord,
 } from "@my/sync-engine/services"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
@@ -65,6 +64,7 @@ const CoinGeckoAssetPlatform = Schema.Struct({
 type CoinGeckoSearchCoin = typeof CoinGeckoSearchCoin.Type
 type CoinGeckoCoin = typeof CoinGeckoCoin.Type
 export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
+type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 
 const normalize = (value: string) => value.trim().toLowerCase()
 
@@ -116,7 +116,7 @@ const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
   return upperSymbol(fallback)
 }
 
-const deriveChainType = (platform: CoinGeckoAssetPlatform): SyncEngineChainType => {
+const deriveChainType = (platform: CoinGeckoAssetPlatform): CoinGeckoChainType => {
   const haystack = `${platform.id} ${platform.name}`.toLowerCase()
   if (haystack.includes("solana")) {
     return "solana"
@@ -218,7 +218,7 @@ const selectCoin = ({
   providerAsset,
   searchCoins,
 }: {
-  readonly providerAsset: ProviderAssetReviewRecord
+  readonly providerAsset: ProviderAssetRecord
   readonly searchCoins: ReadonlyArray<CoinGeckoSearchCoin>
 }): Effect.Effect<CoinGeckoSearchCoin, AssetCanonicalizationBadRequestError> => {
   const symbol = normalize(providerAsset.currencyCode)
@@ -292,7 +292,7 @@ const buildTokenCanonicalDrafts = ({
   readonly coin: CoinGeckoCoin
   readonly platform: CoinGeckoAssetPlatform
   readonly contractAddress: string
-  readonly providerAsset: ProviderAssetReviewRecord
+  readonly providerAsset: ProviderAssetRecord
 }): {
   readonly blockchain: CanonicalBlockchainDraft
   readonly asset: CanonicalAssetDraft
@@ -377,7 +377,7 @@ const make = Effect.gen(function* () {
   const resolveCoinGeckoDrafts = ({
     providerAsset,
   }: {
-    readonly providerAsset: ProviderAssetReviewRecord
+    readonly providerAsset: ProviderAssetRecord
   }) =>
     Effect.gen(function* () {
       const search = yield* fetchSearch(providerAsset.currencyCode)
@@ -482,7 +482,7 @@ const make = Effect.gen(function* () {
   const canonicalizeProviderAssetFromCoinGecko: AssetCanonicalizationServiceShape["canonicalizeProviderAssetFromCoinGecko"] =
     ({ providerAssetRowId, reviewerNotes }) =>
       Effect.gen(function* () {
-        const providerAsset = yield* providerAssetRepository
+        const providerAssetReview = yield* providerAssetRepository
           .findProviderAssetReviewById({ providerAssetRowId })
           .pipe(
             Effect.mapError(
@@ -493,21 +493,23 @@ const make = Effect.gen(function* () {
             )
           )
 
-        if (Option.isNone(providerAsset)) {
+        if (Option.isNone(providerAssetReview)) {
           return yield* Effect.fail(
             new AssetCanonicalizationNotFoundError({ message: "Provider asset not found." })
           )
         }
 
-        if (providerAsset.value.mappingStatus !== "pending_review") {
+        if (providerAssetReview.value.mapping?.mappingStatus !== "pending_review") {
           return yield* Effect.fail(makeBadRequest("Provider asset mapping is not pending review."))
         }
 
-        if (providerAsset.value.providerType?.trim().toLowerCase() === "fiat") {
+        if (providerAssetReview.value.providerAsset.providerType?.trim().toLowerCase() === "fiat") {
           return yield* Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
         }
 
-        const resolved = yield* resolveCoinGeckoDrafts({ providerAsset: providerAsset.value })
+        const resolved = yield* resolveCoinGeckoDrafts({
+          providerAsset: providerAssetReview.value.providerAsset,
+        })
         const canonicalAsset = yield* assetRepository
           .upsertCanonicalAsset({
             blockchain: resolved.blockchain,

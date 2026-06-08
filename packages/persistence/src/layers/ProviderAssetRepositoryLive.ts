@@ -343,24 +343,29 @@ const make = Effect.gen(function* () {
       })
 
   const providerAssetReviewProjection = {
-    id: schema.providerAssets.id,
-    provider: schema.providerAssets.provider,
-    providerAssetId: schema.providerAssets.providerAssetId,
-    naturalKey: schema.providerAssets.naturalKey,
-    currencyCode: schema.providerAssets.currencyCode,
-    name: schema.providerAssets.name,
-    exponent: schema.providerAssets.exponent,
-    providerType: schema.providerAssets.providerType,
-    rawProviderPayload: schema.providerAssets.rawProviderPayload,
-    discoveredAt: schema.providerAssets.discoveredAt,
-    retrievedAt: schema.providerAssets.retrievedAt,
-    mappingKind: schema.providerAssetMappings.mappingKind,
-    canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-    canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
-    canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
-    mappingStatus: schema.providerAssetMappings.mappingStatus,
-    reviewerNotes: schema.providerAssetMappings.reviewerNotes,
-    sourceNotes: schema.providerAssetMappings.sourceNotes,
+    providerAsset: {
+      id: schema.providerAssets.id,
+      provider: schema.providerAssets.provider,
+      providerAssetId: schema.providerAssets.providerAssetId,
+      naturalKey: schema.providerAssets.naturalKey,
+      currencyCode: schema.providerAssets.currencyCode,
+      name: schema.providerAssets.name,
+      exponent: schema.providerAssets.exponent,
+      providerType: schema.providerAssets.providerType,
+      rawProviderPayload: schema.providerAssets.rawProviderPayload,
+      discoveredAt: schema.providerAssets.discoveredAt,
+      retrievedAt: schema.providerAssets.retrievedAt,
+    },
+    mapping: {
+      providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+      mappingKind: schema.providerAssetMappings.mappingKind,
+      canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+      canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+      canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
+      mappingStatus: schema.providerAssetMappings.mappingStatus,
+      reviewerNotes: schema.providerAssetMappings.reviewerNotes,
+      sourceNotes: schema.providerAssetMappings.sourceNotes,
+    },
   } as const
 
   const findProviderAssetReviewById: ProviderAssetRepositoryShape["findProviderAssetReviewById"] =

@@ -43,21 +43,21 @@ const requireAdmin = Effect.gen(function* () {
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
   ProviderAssetReviewRow.make({
-    id: row.id,
-    provider: row.provider,
-    providerAssetId: row.providerAssetId,
-    naturalKey: row.naturalKey,
-    currencyCode: row.currencyCode,
-    name: row.name,
-    exponent: row.exponent,
-    providerType: row.providerType,
-    mappingKind: row.mappingKind,
-    canonicalAssetId: row.canonicalAssetId,
-    canonicalAssetSymbol: row.canonicalAssetSymbol,
-    canonicalFiatCurrency: row.canonicalFiatCurrency,
-    mappingStatus: row.mappingStatus,
-    reviewerNotes: row.reviewerNotes,
-    sourceNotes: row.sourceNotes,
+    id: row.providerAsset.id,
+    provider: row.providerAsset.provider,
+    providerAssetId: row.providerAsset.providerAssetId,
+    naturalKey: row.providerAsset.naturalKey,
+    currencyCode: row.providerAsset.currencyCode,
+    name: row.providerAsset.name,
+    exponent: row.providerAsset.exponent,
+    providerType: row.providerAsset.providerType,
+    mappingKind: row.mapping?.mappingKind ?? null,
+    canonicalAssetId: row.mapping?.canonicalAssetId ?? null,
+    canonicalAssetSymbol: row.mapping?.canonicalAssetSymbol ?? null,
+    canonicalFiatCurrency: row.mapping?.canonicalFiatCurrency ?? null,
+    mappingStatus: row.mapping?.mappingStatus ?? null,
+    reviewerNotes: row.mapping?.reviewerNotes ?? null,
+    sourceNotes: row.mapping?.sourceNotes ?? null,
   })
 
 export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>
@@ -85,7 +85,10 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           return ProviderAssetReviewListResponse.make({
             providerAssets: visibleProviderAssets.map(toProviderAssetReviewRow),
             page: {
-              nextCursor: hasMore && lastProviderAsset !== undefined ? lastProviderAsset.id : null,
+              nextCursor:
+                hasMore && lastProviderAsset !== undefined
+                  ? lastProviderAsset.providerAsset.id
+                  : null,
               hasMore,
             },
           })
