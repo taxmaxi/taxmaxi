@@ -116,7 +116,11 @@ const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
   return upperSymbol(fallback)
 }
 
-const deriveChainType = (platform: CoinGeckoAssetPlatform): CoinGeckoChainType => {
+export const deriveChainType = (platform: CoinGeckoAssetPlatform): CoinGeckoChainType => {
+  if (platform.chain_identifier !== null) {
+    return "evm"
+  }
+
   const haystack = `${platform.id} ${platform.name}`.toLowerCase()
   if (haystack.includes("solana")) {
     return "solana"
@@ -127,7 +131,7 @@ const deriveChainType = (platform: CoinGeckoAssetPlatform): CoinGeckoChainType =
   if (haystack.includes("cardano")) {
     return "cardano"
   }
-  return platform.chain_identifier === null ? "other" : "evm"
+  return "other"
 }
 
 export const deriveNativeAssetDecimals = ({
@@ -193,6 +197,15 @@ export const selectNativePlatform = ({
     return exactPlatform
   }
 
+  const overridePlatform = nativeAssetPlatformOverridesByCoinGeckoId[coinId]
+  if (overridePlatform !== undefined) {
+    return overridePlatform
+  }
+
+  if (nativeAssetSymbolsByCoinGeckoId[coinId] === undefined) {
+    return null
+  }
+
   const chainlessPlatforms = nativePlatforms.filter(
     (platform) => platform.chain_identifier === null
   )
@@ -206,12 +219,71 @@ export const selectNativePlatform = ({
     return nativePlatform
   }
 
-  const overridePlatform = nativeAssetPlatformOverridesByCoinGeckoId[coinId]
-  if (overridePlatform !== undefined) {
-    return overridePlatform
+  return null
+}
+
+const trimOrNull = (value: string | null): string | null => {
+  if (value === null) {
+    return null
   }
 
-  return null
+  const trimmed = value.trim()
+  return trimmed === "" ? null : trimmed
+}
+
+const observedTokenIdFromNaturalKey = (naturalKey: string | null): string | null => {
+  const trimmed = trimOrNull(naturalKey)
+  if (trimmed === null) {
+    return null
+  }
+
+  const solanaMintPrefix = "solana:mint:"
+  return trimmed.startsWith(solanaMintPrefix) ? trimmed.slice(solanaMintPrefix.length) : null
+}
+
+const observedProviderTokenId = (providerAsset: ProviderAssetRecord): string | null => {
+  const provider = normalize(providerAsset.provider)
+  const providerType =
+    providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
+  const isObservedOnchainToken =
+    provider.includes("solana") || providerType.startsWith("spl-token") || providerType === "nft"
+
+  if (!isObservedOnchainToken) {
+    return null
+  }
+
+  return (
+    trimOrNull(providerAsset.providerAssetId) ??
+    observedTokenIdFromNaturalKey(providerAsset.naturalKey)
+  )
+}
+
+const validateProviderTokenIdentity = ({
+  contractAddress,
+  platform,
+  providerAsset,
+}: {
+  readonly contractAddress: string
+  readonly platform: CoinGeckoAssetPlatform
+  readonly providerAsset: ProviderAssetRecord
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+  const observedTokenId = observedProviderTokenId(providerAsset)
+  if (observedTokenId === null) {
+    return Effect.void
+  }
+
+  const chainType = deriveChainType(platform)
+  const expectedTokenId = chainType === "evm" ? observedTokenId.toLowerCase() : observedTokenId
+  const selectedTokenId =
+    chainType === "evm" ? contractAddress.trim().toLowerCase() : contractAddress.trim()
+
+  return expectedTokenId === selectedTokenId
+    ? Effect.void
+    : Effect.fail(
+        makeBadRequest(
+          `CoinGecko token contract does not match observed provider asset id for ${providerAsset.currencyCode}.`
+        )
+      )
 }
 
 const selectCoin = ({
@@ -459,6 +531,11 @@ const make = Effect.gen(function* () {
           makeBadRequest(`CoinGecko platform ${platformId} is not available in asset_platforms.`)
         )
       }
+      yield* validateProviderTokenIdentity({
+        contractAddress,
+        platform: tokenPlatform,
+        providerAsset,
+      })
 
       return {
         ...buildTokenCanonicalDrafts({

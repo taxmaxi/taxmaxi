@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  deriveChainType,
   deriveNativeAssetDecimals,
   selectNativePlatform,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
@@ -58,5 +59,34 @@ describe("AssetCanonicalizationService", () => {
       native_coin_id: "bitcoin",
       chain_identifier: null,
     })
+  })
+
+  it("does not select a single related native platform for token coins", () => {
+    expect(
+      selectNativePlatform({
+        coinId: "usd-coin",
+        assetPlatforms: [
+          {
+            id: "hyperliquid",
+            name: "Hyperliquid",
+            chain_identifier: null,
+            shortname: "HYPE",
+            native_coin_id: "usd-coin",
+          },
+        ],
+      })
+    ).toBeNull()
+  })
+
+  it("uses explicit chain identifiers before platform name heuristics", () => {
+    expect(
+      deriveChainType({
+        id: "bitlayer",
+        name: "Bitlayer",
+        chain_identifier: 200901,
+        shortname: null,
+        native_coin_id: "bitcoin",
+      })
+    ).toBe("evm")
   })
 })
