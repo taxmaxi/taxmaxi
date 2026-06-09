@@ -39,7 +39,7 @@
     "oxlint": "~1.69.0",
     "oxlint-tsgolint": "~0.23.0",
     "plop": "~4.0.5",
-    "turbo": "~2.9.3",
+    "turbo": "~2.9.16",
     "typescript": "~6.0.2",
     "vite": "~8.0.3",
     "vitest": "~4.1.2"
@@ -48,11 +48,5 @@
     "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,vue,astro,svelte}": "oxlint -c .oxlintrc.json",
     "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,toml,json,jsonc,yaml,yml,html,vue,css,scss,less,gql,graphql,md,mdx}": "oxfmt -c .oxfmtrc.jsonc --no-error-on-unmatched-pattern"
   },
-  "packageManager": "pnpm@10.29.1+sha512.48dae233635a645768a3028d19545cacc1688639eeb1f3734e42d6d6b971afbf22aa1ac9af52a173d9c3a20c15857cfa400f19994d79a2f626fcc73fccda9bbc",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "lightningcss"
-    ]
-  }
+  "packageManager": "pnpm@11.5.2"
 }

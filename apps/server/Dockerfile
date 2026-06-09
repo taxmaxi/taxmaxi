@@ -1,7 +1,7 @@
-FROM node:lts-slim AS base
+FROM node:26-slim AS base
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME/bin:$PATH"
-RUN corepack enable
+RUN npm install -g pnpm@11.5.2
 
 FROM base AS pruner
 LABEL stage=intermediate

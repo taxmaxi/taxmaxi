@@ -1,6 +1,15 @@
 packages:
   - apps/*
   - packages/*
+allowBuilds:
+  "@parcel/watcher": true
+  "@sentry/cli": true
+  core-js: true
+  esbuild: true
+  msgpackr-extract: true
+  protobufjs: true
+  sharp: true
+  workerd: true
 publicHoistPattern:
   - oxlint
   - oxfmt
