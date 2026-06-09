@@ -47,8 +47,10 @@ export type {
   TaxMaxiRequestOptions,
 } from "./client.ts"
 export type {
+  AuthAuthorizeRedirectResponse,
   AuthEffectResource,
   AuthLogoutResponse,
+  AuthOAuthSessionResponse,
   AuthPromiseResource,
   CurrentUserResponse,
 } from "./auth/index.ts"

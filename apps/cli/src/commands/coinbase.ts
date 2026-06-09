@@ -1,18 +1,24 @@
 import { Command, Options } from "@effect/cli"
 import { Console, DateTime, Duration, Effect } from "effect"
 import * as Option from "effect/Option"
+import type { TaxCalculation } from "taxmaxi"
+import {
+  getOAuthSession,
+  startCoinbaseOAuth,
+  validateSessionToken,
+  type CompletedOAuthSession,
+} from "../api/auth.ts"
+import { computeGermanTax, listSources, replaySourceSync, startSourceSync } from "../api/sources.ts"
 import { openBrowser } from "../browser.ts"
 import { resolveApiUrl, WORKFLOW_PROVIDER } from "../config.ts"
-import { makeApiClient, type CompletedOAuthSession, type SyncSummary } from "../api/client.ts"
 import { CliCommandError, mapUnknownToCliCommandError } from "../errors.ts"
 import { printJson } from "../io/json.ts"
 import { readSession, readSessionOption, saveSession } from "../session.ts"
 import { nowIsoString, nowMillis } from "../time.ts"
+import { getNullableProviderKey, waitForSyncCompletion, type SyncSummary } from "./sourceSync.ts"
 
 const CONNECT_TIMEOUT = Duration.minutes(5)
 const CONNECT_POLL_INTERVAL = Duration.seconds(2)
-const JOB_TIMEOUT = Duration.minutes(10)
-const JOB_POLL_INTERVAL = Duration.seconds(2)
 
 const jsonOption = Options.boolean("json").pipe(
   Options.withDescription("Output machine-readable JSON")
@@ -29,9 +35,6 @@ const yearWithDefaultOption = Options.integer("year").pipe(
   Options.withDescription("Tax year (YYYY)")
 )
 
-const getNullableProviderKey = (source: { readonly providerKey: string | null }) =>
-  source.providerKey
-
 const resolveCoinbaseSourceId = ({
   apiUrl,
   sessionToken,
@@ -40,8 +43,7 @@ const resolveCoinbaseSourceId = ({
   readonly sessionToken: string
 }) =>
   Effect.gen(function* () {
-    const api = makeApiClient({ apiUrl, sessionToken })
-    const sourceList = yield* api.listSources()
+    const sourceList = yield* listSources({ apiUrl, sessionToken })
 
     const source = sourceList.sources.find((candidate) => {
       const providerKey = getNullableProviderKey(candidate)
@@ -57,68 +59,12 @@ const resolveCoinbaseSourceId = ({
     return source.id
   })
 
-const waitForSyncCompletion = ({
-  apiUrl,
-  sessionToken,
-  sourceId,
-  jobId,
-}: {
-  readonly apiUrl: string
-  readonly sessionToken: string
-  readonly sourceId: string
-  readonly jobId: string
-}) =>
-  Effect.gen(function* () {
-    const api = makeApiClient({ apiUrl, sessionToken })
-    const startedAt = yield* nowMillis
-
-    const poll = (): Effect.Effect<SyncSummary, CliCommandError> =>
-      Effect.gen(function* () {
-        const job = yield* api
-          .getSyncJob({ sourceId, jobId })
-          .pipe(Effect.mapError(mapUnknownToCliCommandError("Failed to poll sync job.")))
-
-        if (job.status === "completed") {
-          return {
-            sourceId: job.sourceId,
-            jobId: job.jobId,
-            importedRecords: job.importedRecords ?? 0,
-            normalizedRecords: job.normalizedRecords ?? 0,
-            failedRecords: job.failedRecords ?? 0,
-          } satisfies SyncSummary
-        }
-
-        if (job.status === "failed") {
-          return yield* new CliCommandError({ message: job.message ?? "Source sync failed." })
-        }
-
-        const currentTime = yield* nowMillis
-        if (currentTime - startedAt > Duration.toMillis(JOB_TIMEOUT)) {
-          return yield* new CliCommandError({
-            message: "Timed out waiting for source sync job to finish.",
-          })
-        }
-
-        yield* Effect.sleep(JOB_POLL_INTERVAL)
-        return yield* poll()
-      })
-
-    return yield* poll()
-  })
-
 const printWorkflowSummary = ({
   sync,
   tax,
 }: {
   readonly sync: SyncSummary
-  readonly tax: {
-    readonly currency: string
-    readonly incomeTotal: number
-    readonly taxFreeGains: number
-    readonly taxableGains: number
-    readonly taxableLosses: number
-    readonly year: number
-  }
+  readonly tax: TaxCalculation
 }) =>
   Effect.gen(function* () {
     yield* Console.log(`Coinbase tax summary for ${tax.year} (${tax.currency})`)
@@ -143,11 +89,11 @@ export const syncProgram = ({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
     })
-    const api = makeApiClient({
+    const started = yield* startSourceSync({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
+      sourceId,
     })
-    const started = yield* api.startSourceSync({ sourceId })
 
     const summary = yield* waitForSyncCompletion({
       apiUrl: session.apiUrl,
@@ -173,57 +119,6 @@ export const syncProgram = ({
     return summary
   })
 
-export const syncOnchainSourceProgram = ({
-  walletAddress,
-  json,
-}: {
-  readonly walletAddress: string
-  readonly json: boolean
-}) =>
-  Effect.gen(function* () {
-    const session = yield* readSession()
-    const api = makeApiClient({
-      apiUrl: session.apiUrl,
-      sessionToken: session.sessionToken,
-    })
-    const created = yield* api.createOnchainSource({ walletAddress })
-    const syncJob = created.syncJob
-
-    if (syncJob === null) {
-      return yield* new CliCommandError({
-        message: "Onchain source was created, but no sync job was returned.",
-      })
-    }
-
-    const summary = yield* waitForSyncCompletion({
-      apiUrl: session.apiUrl,
-      sessionToken: session.sessionToken,
-      sourceId: syncJob.sourceId,
-      jobId: syncJob.jobId,
-    })
-
-    const providerKey = getNullableProviderKey(created.source)
-
-    if (json) {
-      yield* printJson({
-        stage: "onchain_sync_completed",
-        providerKey,
-        created: created.created,
-        ...summary,
-      })
-      return
-    }
-
-    yield* Console.log("Onchain source sync completed.")
-    yield* Console.log(`Source: ${created.source.id}`)
-    if (providerKey !== null) {
-      yield* Console.log(`Provider: ${providerKey}`)
-    }
-    yield* Console.log(`Imported: ${summary.importedRecords}`)
-    yield* Console.log(`Normalized: ${summary.normalizedRecords}`)
-    yield* Console.log(`Failed: ${summary.failedRecords}`)
-  })
-
 export const replayProgram = ({
   json,
   emitConsoleOutput = true,
@@ -237,11 +132,11 @@ export const replayProgram = ({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
     })
-    const api = makeApiClient({
+    const started = yield* replaySourceSync({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
+      sourceId,
     })
-    const started = yield* api.replaySourceSync({ sourceId })
 
     const summary = yield* waitForSyncCompletion({
       apiUrl: session.apiUrl,
@@ -282,11 +177,12 @@ export const calculateProgram = ({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
     })
-    const api = makeApiClient({
+    const taxSummary = yield* computeGermanTax({
       apiUrl: session.apiUrl,
       sessionToken: session.sessionToken,
+      sourceId,
+      year,
     })
-    const taxSummary = yield* api.computeGermanTax({ sourceId, year })
 
     if (json) {
       yield* printJson({
@@ -319,16 +215,13 @@ const waitForOAuthCompletion = ({
   readonly sessionId: string
 }) =>
   Effect.gen(function* () {
-    const api = makeApiClient({ apiUrl })
     const startedAt = yield* nowMillis
 
     const poll = (): Effect.Effect<CompletedOAuthSession, CliCommandError> =>
       Effect.gen(function* () {
-        const status = yield* api
-          .getOAuthSession(sessionId)
-          .pipe(
-            Effect.mapError(mapUnknownToCliCommandError("Failed to poll OAuth session status."))
-          )
+        const status = yield* getOAuthSession({ apiUrl, sessionId }).pipe(
+          Effect.mapError(mapUnknownToCliCommandError("Failed to poll OAuth session status."))
+        )
 
         if (
           status.status === "completed" &&
@@ -383,17 +276,15 @@ export const connectProgram = ({
 }) =>
   Effect.gen(function* () {
     const apiUrl = yield* resolveApiUrl
-    const api = makeApiClient({ apiUrl })
 
     if (!force) {
       const maybeSession = yield* readSessionOption()
 
       if (Option.isSome(maybeSession) && maybeSession.value.apiUrl === apiUrl) {
-        const sessionApi = makeApiClient({
+        const isValidSession = yield* validateSessionToken({
           apiUrl,
           sessionToken: maybeSession.value.sessionToken,
         })
-        const isValidSession = yield* sessionApi.validateSession()
         if (isValidSession) {
           if (json) {
             yield* printJson({
@@ -410,7 +301,7 @@ export const connectProgram = ({
       }
     }
 
-    const started = yield* api.startOAuth()
+    const started = yield* startCoinbaseOAuth({ apiUrl })
     const authorizationUrl = started.redirectUrl
 
     if (json) {

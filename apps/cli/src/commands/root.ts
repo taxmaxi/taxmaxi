@@ -1,7 +1,8 @@
 import { Args, Command, Options } from "@effect/cli"
 import { Console, Effect } from "effect"
 import * as Option from "effect/Option"
-import { syncOnchainSourceProgram, coinbaseCommand } from "./coinbase.ts"
+import { coinbaseCommand } from "./coinbase.ts"
+import { syncOnchainSourceProgram } from "./onchain.ts"
 
 const jsonOption = Options.boolean("json").pipe(
   Options.withDescription("Output machine-readable JSON")
