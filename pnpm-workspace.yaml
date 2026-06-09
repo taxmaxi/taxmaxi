@@ -10,6 +10,17 @@ allowBuilds:
   protobufjs: true
   sharp: true
   workerd: true
+minimumReleaseAgeExclude:
+  - "@opentui/core-darwin-arm64@0.4.0"
+  - "@opentui/core-darwin-x64@0.4.0"
+  - "@opentui/core-linux-arm64-musl@0.4.0"
+  - "@opentui/core-linux-arm64@0.4.0"
+  - "@opentui/core-linux-x64-musl@0.4.0"
+  - "@opentui/core-linux-x64@0.4.0"
+  - "@opentui/core-win32-arm64@0.4.0"
+  - "@opentui/core-win32-x64@0.4.0"
+  - "@opentui/core@0.4.0"
+  - "@opentui/solid@0.4.0"
 publicHoistPattern:
   - oxlint
   - oxfmt

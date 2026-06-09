@@ -1,8 +1,13 @@
-import { Effect } from "effect"
+import { Duration, Effect } from "effect"
+import * as Option from "effect/Option"
 import { type AuthAuthorizeRedirectResponse, type AuthOAuthSessionResponse } from "taxmaxi"
-import { CliCommandError } from "../errors.ts"
+import { CliCommandError, mapUnknownToCliCommandError } from "../errors.ts"
+import { nowMillis } from "../time.ts"
 import { toCliApiError } from "./errors.ts"
 import { makeCliTaxMaxiClient } from "./taxmaxi.ts"
+
+const CONNECT_TIMEOUT = Duration.minutes(5)
+const CONNECT_POLL_INTERVAL = Duration.seconds(2)
 
 export type CompletedOAuthSession = Omit<
   AuthOAuthSessionResponse,
@@ -47,6 +52,70 @@ export const getOAuthSession = ({
     ),
     Effect.mapError(toCliApiError("Failed to poll OAuth session status."))
   )
+
+/**
+ * Polls an OAuth session until it completes, fails, expires, or times out.
+ *
+ * Resolves with the completed session (including session token and user id)
+ * or fails with a `CliCommandError` describing why the connect flow ended.
+ */
+export const waitForOAuthCompletion = ({
+  apiUrl,
+  sessionId,
+}: {
+  readonly apiUrl: string
+  readonly sessionId: string
+}) =>
+  Effect.gen(function* () {
+    const startedAt = yield* nowMillis
+
+    const poll = (): Effect.Effect<CompletedOAuthSession, CliCommandError> =>
+      Effect.gen(function* () {
+        const status = yield* getOAuthSession({ apiUrl, sessionId }).pipe(
+          Effect.mapError(mapUnknownToCliCommandError("Failed to poll OAuth session status."))
+        )
+
+        if (
+          status.status === "completed" &&
+          Option.isSome(status.sessionToken) &&
+          Option.isSome(status.userId)
+        ) {
+          return {
+            id: status.id,
+            provider: status.provider,
+            status: "completed" as const,
+            authorizationUrl: status.authorizationUrl,
+            sessionToken: status.sessionToken.value,
+            userId: status.userId.value,
+            message: status.message,
+            expiresAt: status.expiresAt,
+          }
+        }
+
+        if (status.status === "failed") {
+          const message = Option.getOrElse(status.message, () => "OAuth connect failed.")
+          return yield* new CliCommandError({ message })
+        }
+
+        if (status.status === "expired") {
+          return yield* new CliCommandError({
+            message: "OAuth session expired. Please run `tax coinbase connect` again.",
+          })
+        }
+
+        const currentTime = yield* nowMillis
+        if (currentTime - startedAt > Duration.toMillis(CONNECT_TIMEOUT)) {
+          return yield* new CliCommandError({
+            message: "Timed out waiting for browser authorization.",
+          })
+        }
+
+        yield* Effect.sleep(CONNECT_POLL_INTERVAL)
+        return yield* poll()
+      })
+
+    return yield* poll()
+  })
 
 export const validateSessionToken = ({
   apiUrl,

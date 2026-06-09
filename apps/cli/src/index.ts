@@ -6,12 +6,15 @@ import { Console, Effect, Layer } from "effect"
 import packageJson from "../package.json" with { type: "json" }
 import { command } from "./commands/root.ts"
 import { CliCommandError, getErrorMessage } from "./errors.ts"
+import { launchTui, shouldLaunchTui } from "./tuiLaunch.ts"
 
 const cli = Command.run(command, { name: "TaxMaxi CLI", version: packageJson.version })
 
 const runtimeLayer = Layer.mergeAll(NodeContext.layer)
 
-cli(process.argv).pipe(
+const program = shouldLaunchTui(process.argv) ? launchTui : cli(process.argv)
+
+program.pipe(
   Effect.catchAll((error) => {
     const markFailedExit = Effect.sync(() => {
       process.exitCode = 1
