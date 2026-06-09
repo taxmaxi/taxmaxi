@@ -1,9 +1,16 @@
-import type { AuthUserResponse, LogoutResponse } from "@my/rest-api/contracts"
+import type {
+  AuthUserResponse,
+  AuthorizeRedirectResponse,
+  LogoutResponse,
+  OAuthSessionResponse,
+} from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
 import type { TaxMaxiEffectClient } from "../client.ts"
 
 export type CurrentUserResponse = AuthUserResponse
 export type AuthLogoutResponse = LogoutResponse
+export type AuthAuthorizeRedirectResponse = AuthorizeRedirectResponse
+export type AuthOAuthSessionResponse = OAuthSessionResponse
 
 export type AuthEffectResource = {
   readonly me: () => Effect.Effect<CurrentUserResponse, unknown, never>

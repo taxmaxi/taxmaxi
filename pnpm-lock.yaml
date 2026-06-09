@@ -59,6 +59,9 @@ importers:
       effect:
         specifier: 3.21.2
         version: 3.21.2
+      taxmaxi:
+        specifier: workspace:*
+        version: link:../../packages/sdk
     devDependencies:
       '@my/typescript-config':
         specifier: workspace:*
