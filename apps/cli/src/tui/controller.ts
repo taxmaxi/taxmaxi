@@ -9,15 +9,32 @@ import { FileSystem } from "@effect/platform"
 import { NodeContext } from "@effect/platform-node"
 import { Effect, ManagedRuntime } from "effect"
 import * as Option from "effect/Option"
-import type { Source } from "taxmaxi"
+import type {
+  Source,
+  SourceAssetPnl,
+  SourceDisposalExplanation,
+  SourceFifoLots,
+  SourceOverview,
+  SourceTaxEvents,
+  SourceTransactions,
+} from "taxmaxi"
 import {
   logoutSession,
   startCoinbaseOAuth,
   validateSessionToken,
   waitForOAuthCompletion,
 } from "../api/auth.ts"
-import { listSources } from "../api/sources.ts"
+import {
+  explainSourceDisposal,
+  getSourceOverview,
+  listSourceAssetPnl,
+  listSourceFifoLots,
+  listSources,
+  listSourceTaxEvents,
+  listSourceTransactions,
+} from "../api/sources.ts"
 import { openBrowser } from "../browser.ts"
+import { writeClipboard } from "../clipboard.ts"
 import { resolveApiUrl } from "../config.ts"
 import {
   deleteSession,
@@ -103,6 +120,106 @@ export const fetchSources = (session: CliSession): Promise<SourcesResult> =>
     )
   )
 
+export type ReportResult<A> =
+  | { readonly _tag: "ok"; readonly data: A }
+  | { readonly _tag: "error"; readonly message: string }
+
+const runReport = <A>(
+  effect: Effect.Effect<A, { readonly message: string }>
+): Promise<ReportResult<A>> =>
+  runtime.runPromise(
+    effect.pipe(
+      Effect.map((data) => ({ _tag: "ok", data }) as const),
+      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+    )
+  )
+
+/**
+ * Loads source metadata, latest sync status, and report totals.
+ */
+export const fetchSourceOverview = (
+  session: CliSession,
+  sourceId: string
+): Promise<ReportResult<SourceOverview>> =>
+  runReport(
+    getSourceOverview({ apiUrl: session.apiUrl, sessionToken: session.sessionToken, sourceId })
+  )
+
+/**
+ * Loads the per-asset P&L report rows for a source.
+ */
+export const fetchSourceAssetPnl = (
+  session: CliSession,
+  sourceId: string
+): Promise<ReportResult<SourceAssetPnl>> =>
+  runReport(
+    listSourceAssetPnl({ apiUrl: session.apiUrl, sessionToken: session.sessionToken, sourceId })
+  )
+
+/**
+ * Loads one cursor page of source transactions.
+ */
+export const fetchSourceTransactions = (
+  session: CliSession,
+  { cursor, sourceId }: { readonly sourceId: string; readonly cursor?: string | null }
+): Promise<ReportResult<SourceTransactions>> =>
+  runReport(
+    listSourceTransactions({
+      apiUrl: session.apiUrl,
+      sessionToken: session.sessionToken,
+      sourceId,
+      cursor,
+    })
+  )
+
+/**
+ * Loads one cursor page of tax-visible event rows.
+ */
+export const fetchSourceTaxEvents = (
+  session: CliSession,
+  { cursor, sourceId }: { readonly sourceId: string; readonly cursor?: string | null }
+): Promise<ReportResult<SourceTaxEvents>> =>
+  runReport(
+    listSourceTaxEvents({
+      apiUrl: session.apiUrl,
+      sessionToken: session.sessionToken,
+      sourceId,
+      cursor,
+    })
+  )
+
+/**
+ * Loads one cursor page of FIFO lots.
+ */
+export const fetchSourceFifoLots = (
+  session: CliSession,
+  { cursor, sourceId }: { readonly sourceId: string; readonly cursor?: string | null }
+): Promise<ReportResult<SourceFifoLots>> =>
+  runReport(
+    listSourceFifoLots({
+      apiUrl: session.apiUrl,
+      sessionToken: session.sessionToken,
+      sourceId,
+      cursor,
+    })
+  )
+
+/**
+ * Loads the deterministic explanation for one disposal leg.
+ */
+export const fetchDisposalExplanation = (
+  session: CliSession,
+  { legId, sourceId }: { readonly sourceId: string; readonly legId: string }
+): Promise<ReportResult<SourceDisposalExplanation>> =>
+  runReport(
+    explainSourceDisposal({
+      apiUrl: session.apiUrl,
+      sessionToken: session.sessionToken,
+      sourceId,
+      legId,
+    })
+  )
+
 /**
  * Starts the Coinbase OAuth flow and tries to open the connect URL in a
  * browser. The returned OAuth session id is passed to
@@ -181,6 +298,13 @@ export const logout = (session: CliSession): Promise<LogoutResult> =>
       Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     )
   )
+
+/**
+ * Copies text to the system clipboard. Best effort: failures are
+ * swallowed inside the clipboard effect, so this never rejects.
+ */
+export const copyToClipboard = (text: string): Promise<void> =>
+  runtime.runPromise(writeClipboard(text))
 
 /**
  * Releases the controller runtime. Called once when the TUI exits.
