@@ -1,24 +1,16 @@
 import { Command, Options } from "@effect/cli"
-import { Console, DateTime, Duration, Effect } from "effect"
+import { Console, DateTime, Effect } from "effect"
 import * as Option from "effect/Option"
 import type { TaxCalculation } from "taxmaxi"
-import {
-  getOAuthSession,
-  startCoinbaseOAuth,
-  validateSessionToken,
-  type CompletedOAuthSession,
-} from "../api/auth.ts"
+import { startCoinbaseOAuth, validateSessionToken, waitForOAuthCompletion } from "../api/auth.ts"
 import { computeGermanTax, listSources, replaySourceSync, startSourceSync } from "../api/sources.ts"
 import { openBrowser } from "../browser.ts"
 import { resolveApiUrl, WORKFLOW_PROVIDER } from "../config.ts"
-import { CliCommandError, mapUnknownToCliCommandError } from "../errors.ts"
+import { CliCommandError } from "../errors.ts"
 import { printJson } from "../io/json.ts"
 import { readSession, readSessionOption, saveSession } from "../session.ts"
-import { nowIsoString, nowMillis } from "../time.ts"
+import { nowIsoString } from "../time.ts"
 import { getNullableProviderKey, waitForSyncCompletion, type SyncSummary } from "./sourceSync.ts"
-
-const CONNECT_TIMEOUT = Duration.minutes(5)
-const CONNECT_POLL_INTERVAL = Duration.seconds(2)
 
 const jsonOption = Options.boolean("json").pipe(
   Options.withDescription("Output machine-readable JSON")
@@ -205,64 +197,6 @@ export const calculateProgram = ({
       yield* Console.log(`Income total: ${taxSummary.incomeTotal}`)
     }
     return taxSummary
-  })
-
-const waitForOAuthCompletion = ({
-  apiUrl,
-  sessionId,
-}: {
-  readonly apiUrl: string
-  readonly sessionId: string
-}) =>
-  Effect.gen(function* () {
-    const startedAt = yield* nowMillis
-
-    const poll = (): Effect.Effect<CompletedOAuthSession, CliCommandError> =>
-      Effect.gen(function* () {
-        const status = yield* getOAuthSession({ apiUrl, sessionId }).pipe(
-          Effect.mapError(mapUnknownToCliCommandError("Failed to poll OAuth session status."))
-        )
-
-        if (
-          status.status === "completed" &&
-          Option.isSome(status.sessionToken) &&
-          Option.isSome(status.userId)
-        ) {
-          return {
-            id: status.id,
-            provider: status.provider,
-            status: "completed" as const,
-            authorizationUrl: status.authorizationUrl,
-            sessionToken: status.sessionToken.value,
-            userId: status.userId.value,
-            message: status.message,
-            expiresAt: status.expiresAt,
-          }
-        }
-
-        if (status.status === "failed") {
-          const message = Option.getOrElse(status.message, () => "OAuth connect failed.")
-          return yield* new CliCommandError({ message })
-        }
-
-        if (status.status === "expired") {
-          return yield* new CliCommandError({
-            message: "OAuth session expired. Please run `tax coinbase connect` again.",
-          })
-        }
-
-        const currentTime = yield* nowMillis
-        if (currentTime - startedAt > Duration.toMillis(CONNECT_TIMEOUT)) {
-          return yield* new CliCommandError({
-            message: "Timed out waiting for browser authorization.",
-          })
-        }
-
-        yield* Effect.sleep(CONNECT_POLL_INTERVAL)
-        return yield* poll()
-      })
-
-    return yield* poll()
   })
 
 export const connectProgram = ({
