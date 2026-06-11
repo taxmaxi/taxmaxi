@@ -26,7 +26,7 @@
     "build:tui": "node scripts/build-tui.mjs",
     "dev": "tsc --watch --preserveWatchOutput",
     "dev:tui": "node scripts/build-tui.mjs --watch",
-    "type-check": "tsc --noEmit && tsc -p tsconfig.tui.json",
+    "type-check": "tsc --noEmit && tsc -p src/tui",
     "type-check:tests": "tsc -p tsconfig.tests.json",
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },

@@ -6,6 +6,10 @@
 // bundled with the "browser" export condition because their "node"
 // condition resolves to Solid's SSR build, which has no client reactivity.
 // @opentui/core stays external so its native library loading keeps working.
+//
+// Relative imports shared with the CLI (session, api/*) are bundled in, so
+// they exist twice in dist: once as tsc output, once inside run.js. That is
+// intentional — shared state lives on disk, and the size cost is small.
 import { build, context } from "esbuild"
 import { solidPlugin } from "esbuild-plugin-solid"
 

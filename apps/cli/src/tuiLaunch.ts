@@ -14,7 +14,7 @@ import { CliCommandError, mapUnknownToCliCommandError } from "./errors.ts"
 
 const RESPAWN_ENV_VAR = "TAX_TUI_FFI_RESPAWN"
 const FFI_MODULE_SPECIFIER = "node:ffi"
-const NODE_BAD_OPTION_EXIT_CODE = 9
+const MINIMUM_NODE_MAJOR = 26
 
 const NODE_26_MESSAGE =
   "The TaxMaxi TUI needs Node.js 26 or newer (it uses Node's experimental FFI). " +
@@ -54,6 +54,8 @@ const runTuiInProcess = Effect.gen(function* () {
   })
 })
 
+const nodeMajorVersion = (): number => Number.parseInt(process.versions.node, 10)
+
 const respawnWithFfi = Effect.gen(function* () {
   const scriptPath = process.argv[1]
   if (scriptPath === undefined) {
@@ -67,11 +69,16 @@ const respawnWithFfi = Effect.gen(function* () {
     })
   )
 
-  if (result.error !== undefined || result.status === NODE_BAD_OPTION_EXIT_CODE) {
+  if (result.error !== undefined) {
     return yield* new CliCommandError({ message: NODE_26_MESSAGE })
   }
 
   yield* Effect.sync(() => {
+    if (result.signal !== null) {
+      // Mirror a signal-killed child instead of exiting 0.
+      process.kill(process.pid, result.signal)
+      return
+    }
     process.exitCode = result.status ?? 0
   })
 })
@@ -80,6 +87,10 @@ export const launchTui = Effect.gen(function* () {
   const ffiAvailable = yield* isFfiAvailable
   if (ffiAvailable) {
     return yield* runTuiInProcess
+  }
+
+  if (nodeMajorVersion() < MINIMUM_NODE_MAJOR) {
+    return yield* new CliCommandError({ message: NODE_26_MESSAGE })
   }
 
   const alreadyRespawned = yield* Config.option(Config.string(RESPAWN_ENV_VAR))

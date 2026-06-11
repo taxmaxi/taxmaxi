@@ -2,7 +2,7 @@ import { TextAttributes } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, Match, Show, Switch } from "solid-js"
 import type { CliSession } from "../session.ts"
-import { loadSessionState } from "./controller.ts"
+import { loadSessionState, logout } from "./controller.ts"
 import { AddSourceDialog } from "./screens/AddSourceDialog.tsx"
 import { CoinbaseConnectScreen } from "./screens/CoinbaseConnectScreen.tsx"
 import { SourceListScreen } from "./screens/SourceListScreen.tsx"
@@ -14,9 +14,10 @@ import { Spinner } from "./ui/Spinner.tsx"
 type Screen =
   | { readonly type: "boot" }
   | { readonly type: "bootError"; readonly message: string }
-  | { readonly type: "welcome"; readonly note?: string }
+  | { readonly type: "welcome" }
   | { readonly type: "sources" }
   | { readonly type: "connect" }
+  | { readonly type: "loggingOut" }
 
 type DialogKind = "addSource" | "userMenu"
 
@@ -25,11 +26,14 @@ export function App(props: { readonly requestExit: () => void }) {
   const [screen, setScreen] = createSignal<Screen>({ type: "boot" })
   const [session, setSession] = createSignal<CliSession | undefined>(undefined)
   const [dialog, setDialog] = createSignal<DialogKind | undefined>(undefined)
+  // Lives outside the screen state so the note survives welcome → connect → back.
+  const [welcomeNote, setWelcomeNote] = createSignal<string | undefined>(undefined)
 
   const noDialog = () => dialog() === undefined
 
   const boot = async () => {
     setScreen({ type: "boot" })
+    setWelcomeNote(undefined)
     const state = await loadSessionState()
     if (state._tag === "valid") {
       setSession(state.session)
@@ -41,7 +45,8 @@ export function App(props: { readonly requestExit: () => void }) {
       return
     }
     if (state._tag === "invalid") {
-      setScreen({ type: "welcome", note: state.message })
+      setWelcomeNote(state.message)
+      setScreen({ type: "welcome" })
       return
     }
     setScreen({ type: "bootError", message: state.message })
@@ -71,6 +76,7 @@ export function App(props: { readonly requestExit: () => void }) {
 
   const handleConnected = (connected: CliSession) => {
     setSession(connected)
+    setWelcomeNote(undefined)
     setScreen({ type: "sources" })
   }
 
@@ -78,9 +84,23 @@ export function App(props: { readonly requestExit: () => void }) {
     setScreen(session() === undefined ? { type: "welcome" } : { type: "sources" })
   }
 
-  const welcomeNote = (): string | undefined => {
-    const current = screen()
-    return current.type === "welcome" ? current.note : undefined
+  const handleLogout = async () => {
+    const currentSession = session()
+    if (currentSession === undefined) {
+      return
+    }
+    setDialog(undefined)
+    setScreen({ type: "loggingOut" })
+    const result = await logout(currentSession)
+    if (result._tag === "loggedOut") {
+      setSession(undefined)
+      setWelcomeNote(undefined)
+      setScreen({ type: "welcome" })
+      return
+    }
+    // The local session file is still there, so the user stays logged in;
+    // [r] re-boots back to the source list.
+    setScreen({ type: "bootError", message: result.message })
   }
 
   const bootErrorMessage = (): string | undefined => {
@@ -105,6 +125,11 @@ export function App(props: { readonly requestExit: () => void }) {
         <Match when={screen().type === "boot"}>
           <box flexGrow={1} alignItems="center" justifyContent="center">
             <Spinner label="Loading session…" />
+          </box>
+        </Match>
+        <Match when={screen().type === "loggingOut"}>
+          <box flexGrow={1} alignItems="center" justifyContent="center">
+            <Spinner label="Logging out…" />
           </box>
         </Match>
         <Match when={bootErrorMessage()}>
@@ -158,6 +183,7 @@ export function App(props: { readonly requestExit: () => void }) {
             <UserMenuDialog
               session={currentSession}
               onReconnect={openConnect}
+              onLogout={() => void handleLogout()}
               onQuit={props.requestExit}
               onClose={() => setDialog(undefined)}
             />

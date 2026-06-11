@@ -78,3 +78,22 @@ export const readSession = () =>
   })
 
 export const readSessionOption = () => readSession().pipe(Effect.option)
+
+export const deleteSession = () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const sessionFilePath = yield* getSessionFilePath
+    const exists = yield* fs.exists(sessionFilePath).pipe(Effect.orElseSucceed(() => false))
+    if (!exists) {
+      return
+    }
+
+    yield* fs.remove(sessionFilePath).pipe(
+      Effect.mapError(
+        () =>
+          new CliCommandError({
+            message: "Failed to delete the local CLI session file.",
+          })
+      )
+    )
+  })

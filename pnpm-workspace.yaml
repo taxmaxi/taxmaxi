@@ -10,6 +10,8 @@ allowBuilds:
   protobufjs: true
   sharp: true
   workerd: true
+# OpenTUI 0.4.0 (and its per-platform native binaries) is newer than the
+# release-age delay allows. Deliberate bypass; remove once the release ages.
 minimumReleaseAgeExclude:
   - "@opentui/core-darwin-arm64@0.4.0"
   - "@opentui/core-darwin-x64@0.4.0"

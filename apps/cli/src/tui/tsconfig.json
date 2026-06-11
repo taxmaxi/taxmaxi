@@ -1,9 +1,7 @@
 {
   "extends": "@my/typescript-config/node.json",
-  "include": ["src/tui"],
-  "exclude": ["node_modules"],
+  "include": ["."],
   "compilerOptions": {
-    "rootDir": "./src",
     "noEmit": true,
     "jsx": "preserve",
     "jsxImportSource": "@opentui/solid",

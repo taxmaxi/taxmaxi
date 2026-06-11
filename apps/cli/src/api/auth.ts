@@ -99,7 +99,7 @@ export const waitForOAuthCompletion = ({
 
         if (status.status === "expired") {
           return yield* new CliCommandError({
-            message: "OAuth session expired. Please run `tax coinbase connect` again.",
+            message: "OAuth session expired. Start the connect flow again.",
           })
         }
 
@@ -116,6 +116,23 @@ export const waitForOAuthCompletion = ({
 
     return yield* poll()
   })
+
+/**
+ * Invalidates the session on the server. Callers that log out should treat
+ * this as best-effort and still delete the local session file on failure.
+ */
+export const logoutSession = ({
+  apiUrl,
+  sessionToken,
+}: {
+  readonly apiUrl: string
+  readonly sessionToken: string
+}): Effect.Effect<void, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) => resolved.authSession.logout(undefined)),
+    Effect.mapError(toCliApiError("Failed to log out on the server.")),
+    Effect.asVoid
+  )
 
 export const validateSessionToken = ({
   apiUrl,

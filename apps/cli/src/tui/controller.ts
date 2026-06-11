@@ -10,11 +10,22 @@ import { NodeContext } from "@effect/platform-node"
 import { Effect, ManagedRuntime } from "effect"
 import * as Option from "effect/Option"
 import type { Source } from "taxmaxi"
-import { startCoinbaseOAuth, validateSessionToken, waitForOAuthCompletion } from "../api/auth.ts"
+import {
+  logoutSession,
+  startCoinbaseOAuth,
+  validateSessionToken,
+  waitForOAuthCompletion,
+} from "../api/auth.ts"
 import { listSources } from "../api/sources.ts"
 import { openBrowser } from "../browser.ts"
 import { resolveApiUrl } from "../config.ts"
-import { getSessionFilePath, readSession, saveSession, type CliSession } from "../session.ts"
+import {
+  deleteSession,
+  getSessionFilePath,
+  readSession,
+  saveSession,
+  type CliSession,
+} from "../session.ts"
 import { nowIsoString } from "../time.ts"
 
 const runtime = ManagedRuntime.make(NodeContext.layer)
@@ -41,6 +52,10 @@ export type ConnectStart =
 
 export type ConnectResult =
   | { readonly _tag: "connected"; readonly session: CliSession }
+  | { readonly _tag: "error"; readonly message: string }
+
+export type LogoutResult =
+  | { readonly _tag: "loggedOut" }
   | { readonly _tag: "error"; readonly message: string }
 
 /**
@@ -147,6 +162,24 @@ export const completeCoinbaseConnect = (
       Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     ),
     options?.signal !== undefined ? { signal: options.signal } : undefined
+  )
+
+/**
+ * Logs the user out: revokes the session on the server (best-effort, a
+ * failed revoke does not block), then deletes the local session file.
+ */
+export const logout = (session: CliSession): Promise<LogoutResult> =>
+  runtime.runPromise(
+    Effect.gen(function* () {
+      yield* logoutSession({
+        apiUrl: session.apiUrl,
+        sessionToken: session.sessionToken,
+      }).pipe(Effect.catchAll(() => Effect.void))
+      yield* deleteSession()
+      return { _tag: "loggedOut" } as const
+    }).pipe(
+      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+    )
   )
 
 /**

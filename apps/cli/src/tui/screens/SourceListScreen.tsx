@@ -129,7 +129,8 @@ export function SourceListScreen(props: {
         </Switch>
       </box>
       <box flexDirection="row" gap={2} paddingLeft={1}>
-        <text fg={theme.accent}>[a] add source</text>
+        <text fg={theme.textMuted}>[a] add source</text>
+        <text fg={theme.textMuted}>[↑/↓] select</text>
         <text fg={theme.textMuted}>[r] refresh</text>
         <text fg={theme.textMuted}>[u] session</text>
         <text fg={theme.textMuted}>[q] quit</text>

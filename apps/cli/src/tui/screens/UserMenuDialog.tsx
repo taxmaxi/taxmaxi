@@ -3,10 +3,11 @@ import { theme } from "../theme.ts"
 import { Dialog } from "../ui/Dialog.tsx"
 import { DialogSelect, type DialogSelectOption } from "../ui/DialogSelect.tsx"
 
-type UserMenuAction = "reconnect" | "quit" | "close"
+type UserMenuAction = "reconnect" | "logout" | "quit" | "close"
 
 const MENU_OPTIONS: ReadonlyArray<DialogSelectOption<UserMenuAction>> = [
   { title: "Re-connect Coinbase", value: "reconnect", badge: "new login" },
+  { title: "Log out", value: "logout" },
   { title: "Quit TaxMaxi", value: "quit" },
   { title: "Close menu", value: "close" },
 ]
@@ -14,12 +15,17 @@ const MENU_OPTIONS: ReadonlyArray<DialogSelectOption<UserMenuAction>> = [
 export function UserMenuDialog(props: {
   readonly session: CliSession
   readonly onReconnect: () => void
+  readonly onLogout: () => void
   readonly onQuit: () => void
   readonly onClose: () => void
 }) {
   const handleSelect = (action: UserMenuAction) => {
     if (action === "reconnect") {
       props.onReconnect()
+      return
+    }
+    if (action === "logout") {
+      props.onLogout()
       return
     }
     if (action === "quit") {
