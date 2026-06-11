@@ -1,5 +1,5 @@
 import type { MouseEvent } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
 import type { Source, SourceTransactions } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
@@ -39,7 +39,12 @@ const movementLabel = (movement: Movement): string => {
   return `${formatAmount(movement.amount)} ${movement.asset.symbol}${fiat} · ${movement.provenance}${rule}`
 }
 
-function TransactionLine(props: { readonly row: TransactionRow; readonly selected: boolean }) {
+function TransactionLine(props: {
+  readonly row: TransactionRow
+  readonly selected: boolean
+  readonly onSelect: () => void
+  readonly onHover: () => void
+}) {
   return (
     <box
       flexDirection="row"
@@ -47,6 +52,8 @@ function TransactionLine(props: { readonly row: TransactionRow; readonly selecte
       paddingLeft={1}
       paddingRight={1}
       backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
+      onMouseDown={props.onSelect}
+      onMouseOver={props.onHover}
     >
       <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
       <text fg={theme.textMuted}>{formatDate(props.row.timestamp)}</text>
@@ -71,6 +78,7 @@ export function SourceTransactionsScreen(props: {
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
 
@@ -126,6 +134,19 @@ export function SourceTransactionsScreen(props: {
     const next = (selected() + rows().length + delta) % rows().length
     setSelected(next)
     viewport.ensureVisible({ index: next, visible: visibleRows() })
+  }
+
+  const selectRow = (index: number) => {
+    if (props.active()) {
+      setSelected(index)
+    }
+  }
+
+  // Pointing at a row selects it, except while a text drag-select is running.
+  const hoverRow = (index: number) => {
+    if (renderer.getSelection()?.isDragging !== true) {
+      selectRow(index)
+    }
   }
 
   const statusLine = (): string => {
@@ -211,7 +232,12 @@ export function SourceTransactionsScreen(props: {
             <box flexDirection="column">
               <For each={rows().slice(bounds().start, bounds().end)}>
                 {(row, index) => (
-                  <TransactionLine row={row} selected={bounds().start + index() === selected()} />
+                  <TransactionLine
+                    row={row}
+                    selected={bounds().start + index() === selected()}
+                    onSelect={() => selectRow(bounds().start + index())}
+                    onHover={() => hoverRow(bounds().start + index())}
+                  />
                 )}
               </For>
             </box>

@@ -1,5 +1,5 @@
 import type { MouseEvent } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
 import type { Source, SourceTaxEvents } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
@@ -37,7 +37,13 @@ const kindColor = (kind: TaxEventRow["kind"]): string => {
   return theme.textMuted
 }
 
-function TaxEventLine(props: { readonly row: TaxEventRow; readonly selected: boolean }) {
+function TaxEventLine(props: {
+  readonly row: TaxEventRow
+  readonly selected: boolean
+  readonly onSelect: () => void
+  readonly onHover: () => void
+  readonly onActivate: () => void
+}) {
   return (
     <box
       flexDirection="row"
@@ -45,6 +51,9 @@ function TaxEventLine(props: { readonly row: TaxEventRow; readonly selected: boo
       paddingLeft={1}
       paddingRight={1}
       backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
+      onMouseDown={props.onSelect}
+      onMouseOver={props.onHover}
+      onMouseUp={props.onActivate}
     >
       <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
       <text fg={theme.textMuted}>{formatDate(props.row.timestamp)}</text>
@@ -70,6 +79,7 @@ export function SourceTaxEventsScreen(props: {
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
   // While set, the explanation view replaces the list; the loaded pages and
@@ -143,6 +153,27 @@ export function SourceTaxEventsScreen(props: {
   }
 
   const listActive = () => props.active() && explainLegId() === undefined
+
+  const selectRow = (index: number) => {
+    if (listActive()) {
+      setSelected(index)
+    }
+  }
+
+  // Pointing at a row selects it, except while a text drag-select is running.
+  const hoverRow = (index: number) => {
+    if (renderer.getSelection()?.isDragging !== true) {
+      selectRow(index)
+    }
+  }
+
+  // A mouse-up that ends a text drag-select is a copy, not a click.
+  const activateRow = (row: TaxEventRow) => {
+    const dragText = renderer.getSelection()?.getSelectedText() ?? ""
+    if (listActive() && dragText.length === 0 && row.kind === "disposal") {
+      setExplainLegId(row.legId)
+    }
+  }
 
   useKeyboard((evt) => {
     if (!listActive()) {
@@ -233,7 +264,13 @@ export function SourceTaxEventsScreen(props: {
                 <box flexDirection="column">
                   <For each={rows().slice(bounds().start, bounds().end)}>
                     {(row, index) => (
-                      <TaxEventLine row={row} selected={bounds().start + index() === selected()} />
+                      <TaxEventLine
+                        row={row}
+                        selected={bounds().start + index() === selected()}
+                        onSelect={() => selectRow(bounds().start + index())}
+                        onHover={() => hoverRow(bounds().start + index())}
+                        onActivate={() => activateRow(row)}
+                      />
                     )}
                   </For>
                 </box>

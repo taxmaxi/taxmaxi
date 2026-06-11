@@ -1,5 +1,5 @@
 import type { MouseEvent } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
 import type { Source, SourceAssetPnl } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
@@ -19,7 +19,12 @@ type PnlState = { readonly _tag: "loading" } | ReportResult<SourceAssetPnl>
 // key hints, and the detail pane for the selected asset.
 const RESERVED_ROWS = 21
 
-function AssetLine(props: { readonly row: AssetRow; readonly selected: boolean }) {
+function AssetLine(props: {
+  readonly row: AssetRow
+  readonly selected: boolean
+  readonly onSelect: () => void
+  readonly onHover: () => void
+}) {
   return (
     <box
       flexDirection="row"
@@ -27,6 +32,8 @@ function AssetLine(props: { readonly row: AssetRow; readonly selected: boolean }
       paddingLeft={1}
       paddingRight={1}
       backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
+      onMouseDown={props.onSelect}
+      onMouseOver={props.onHover}
     >
       <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
       <text fg={props.selected ? theme.text : theme.textSoft}>
@@ -51,6 +58,7 @@ export function SourceAssetPnlScreen(props: {
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const [state, setState] = createSignal<PnlState>({ _tag: "loading" })
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
@@ -86,6 +94,19 @@ export function SourceAssetPnlScreen(props: {
     const next = (selected() + rows().length + delta) % rows().length
     setSelected(next)
     viewport.ensureVisible({ index: next, visible: visibleRows() })
+  }
+
+  const selectRow = (index: number) => {
+    if (props.active()) {
+      setSelected(index)
+    }
+  }
+
+  // Pointing at a row selects it, except while a text drag-select is running.
+  const hoverRow = (index: number) => {
+    if (renderer.getSelection()?.isDragging !== true) {
+      selectRow(index)
+    }
   }
 
   useKeyboard((evt) => {
@@ -155,7 +176,12 @@ export function SourceAssetPnlScreen(props: {
             <box flexDirection="column">
               <For each={rows().slice(bounds().start, bounds().end)}>
                 {(row, index) => (
-                  <AssetLine row={row} selected={bounds().start + index() === selected()} />
+                  <AssetLine
+                    row={row}
+                    selected={bounds().start + index() === selected()}
+                    onSelect={() => selectRow(bounds().start + index())}
+                    onHover={() => hoverRow(bounds().start + index())}
+                  />
                 )}
               </For>
             </box>

@@ -1,5 +1,5 @@
 import { TextAttributes, type MouseEvent } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Switch } from "solid-js"
 import type { Source } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
@@ -14,7 +14,13 @@ type ListState = { readonly _tag: "loading" } | SourcesResult
 // chrome, the panel title, and the key hints.
 const RESERVED_ROWS = 10
 
-function SourceRow(props: { readonly source: Source; readonly selected: boolean }) {
+function SourceRow(props: {
+  readonly source: Source
+  readonly selected: boolean
+  readonly onSelect: () => void
+  readonly onHover: () => void
+  readonly onActivate: () => void
+}) {
   return (
     <box
       flexDirection="row"
@@ -22,6 +28,9 @@ function SourceRow(props: { readonly source: Source; readonly selected: boolean 
       paddingLeft={1}
       paddingRight={1}
       backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
+      onMouseDown={props.onSelect}
+      onMouseOver={props.onHover}
+      onMouseUp={props.onActivate}
     >
       <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
       <text fg={props.selected ? theme.text : theme.textSoft}>{props.source.name}</text>
@@ -42,6 +51,7 @@ export function SourceListScreen(props: {
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const [state, setState] = createSignal<ListState>({ _tag: "loading" })
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
@@ -76,6 +86,27 @@ export function SourceListScreen(props: {
     const next = (selected() + sources().length + delta) % sources().length
     setSelected(next)
     viewport.ensureVisible({ index: next, visible: visibleRows() })
+  }
+
+  const selectRow = (index: number) => {
+    if (props.active()) {
+      setSelected(index)
+    }
+  }
+
+  // Pointing at a row selects it, except while a text drag-select is running.
+  const hoverRow = (index: number) => {
+    if (renderer.getSelection()?.isDragging !== true) {
+      selectRow(index)
+    }
+  }
+
+  // A mouse-up that ends a text drag-select is a copy, not a click.
+  const activateRow = (source: Source) => {
+    const dragText = renderer.getSelection()?.getSelectedText() ?? ""
+    if (props.active() && dragText.length === 0) {
+      props.onOpenSource(source)
+    }
   }
 
   useKeyboard((evt) => {
@@ -175,7 +206,13 @@ export function SourceListScreen(props: {
           <Match when={state()._tag === "ok"}>
             <For each={sources().slice(bounds().start, bounds().end)}>
               {(source, index) => (
-                <SourceRow source={source} selected={bounds().start + index() === selected()} />
+                <SourceRow
+                  source={source}
+                  selected={bounds().start + index() === selected()}
+                  onSelect={() => selectRow(bounds().start + index())}
+                  onHover={() => hoverRow(bounds().start + index())}
+                  onActivate={() => activateRow(source)}
+                />
               )}
             </For>
           </Match>
