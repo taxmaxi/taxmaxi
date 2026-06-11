@@ -199,6 +199,7 @@ const makeExecutorLayer = ({
       }),
     listReplayCandidates: () => Effect.succeed([]),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
+    listRawRecordsByOccurredAt: () => Effect.succeed([]),
     markRawRecordNormalized: () =>
       Effect.sync(() => {
         events.push("mark-raw-normalized")
