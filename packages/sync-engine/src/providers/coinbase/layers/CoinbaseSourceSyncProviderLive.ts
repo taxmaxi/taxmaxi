@@ -12,6 +12,7 @@ import * as Schema from "effect/Schema"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
 import { ProviderAssetRepository } from "../../../services/ProviderAssetRepository.ts"
 import type { SourceTransactionReviewDraft } from "../../../services/SourceNormalizationRepository.ts"
+import { SourceRawRecordRepository } from "../../../services/SourceRawRecordRepository.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
 import {
   FetchProviderRawBatchResult,
@@ -45,6 +46,7 @@ import {
   type CoinbaseSyncCursor,
   type CoinbaseTransactionPageRecord,
 } from "../services/CoinbaseSyncClient.ts"
+import { isNegativeAmount } from "../shared/CoinbaseDecimal.ts"
 
 const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_RECORD_TYPE_ACCOUNT = "coinbase_account"
@@ -66,6 +68,32 @@ const CoinbaseNormalizedMetadataSchema = Schema.Struct({
 })
 
 type CoinbaseNormalizedMetadata = Schema.Schema.Type<typeof CoinbaseNormalizedMetadataSchema>
+
+const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
+  id: Schema.String,
+  type: Schema.String,
+  amount: Schema.Struct({
+    amount: Schema.String,
+    currency: Schema.String,
+  }),
+  native_amount: Schema.Struct({
+    amount: Schema.String,
+    currency: Schema.String,
+  }),
+})
+
+/**
+ * CoinbasePairedSpreadRecord - Sibling principal row used to derive a spread fee.
+ *
+ * Coinbase reports paired flows such as instant unstaking as two rows at the same
+ * timestamp: a negative full-principal release and a positive net principal credit.
+ * The deductible fee is the spread between the two amounts.
+ */
+interface CoinbasePairedSpreadRecord {
+  readonly externalId: string
+  readonly amount: { readonly amount: string; readonly currency: string }
+  readonly nativeAmount: { readonly amount: string; readonly currency: string }
+}
 
 const makeRawBatchResult = ({
   records,
@@ -286,6 +314,72 @@ const make = Effect.gen(function* () {
   const coinbaseReferenceMappingService = yield* CoinbaseReferenceMappingService
   const assetRepository = yield* AssetRepository
   const providerAssetRepository = yield* ProviderAssetRepository
+  const sourceRawRecordRepository = yield* SourceRawRecordRepository
+
+  /**
+   * Find the positive principal sibling row of a negative paired-spread row.
+   * Fails recoverably when the sibling is missing or ambiguous so the row is
+   * retried on a later replay pass once all sibling rows are cached.
+   */
+  const resolvePairedSpreadRecord = ({
+    sourceRecord,
+    providerTransactionType,
+    amount,
+  }: {
+    readonly sourceRecord: {
+      readonly id: string
+      readonly sourceId: string
+      readonly recordType: string
+      readonly occurredAt: Date
+    }
+    readonly providerTransactionType: string | null
+    readonly amount: CoinbaseNormalizedMetadata["amount"]
+  }): Effect.Effect<
+    CoinbasePairedSpreadRecord,
+    CoinbaseRecordNormalizationError | SyncEngineStorageError
+  > =>
+    Effect.gen(function* () {
+      const siblingRecords = yield* sourceRawRecordRepository.listRawRecordsByOccurredAt({
+        sourceId: sourceRecord.sourceId,
+        recordType: sourceRecord.recordType,
+        occurredAt: sourceRecord.occurredAt,
+      })
+
+      const candidates = siblingRecords.flatMap((sibling) => {
+        if (sibling.id === sourceRecord.id) {
+          return []
+        }
+
+        const decoded = Schema.decodeUnknownOption(CoinbasePairedSpreadPayloadSchema)(
+          sibling.payload
+        )
+
+        return Option.match(decoded, {
+          onNone: () => [],
+          onSome: (payload) =>
+            payload.type === providerTransactionType &&
+            payload.amount.currency.toUpperCase() === amount.currency.toUpperCase() &&
+            !isNegativeAmount(payload.amount.amount)
+              ? [payload]
+              : [],
+        })
+      })
+
+      const [paired] = candidates
+      if (paired === undefined || candidates.length > 1) {
+        return yield* Effect.fail(
+          new CoinbaseRecordNormalizationError({
+            message: `Expected exactly one paired principal row for ${providerTransactionType ?? "unknown"} at ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
+          })
+        )
+      }
+
+      return {
+        externalId: paired.id,
+        amount: paired.amount,
+        nativeAmount: paired.native_amount,
+      }
+    })
 
   const decodeCoinbaseNormalizedMetadata = (
     metadata: unknown
@@ -750,6 +844,16 @@ const make = Effect.gen(function* () {
         }
       )
 
+      const pairedRecord =
+        resolvedTransactionType.resolutionStrategy === "paired_spread_fee" &&
+        isNegativeAmount(normalizedMetadata.amount.amount)
+          ? yield* resolvePairedSpreadRecord({
+              sourceRecord,
+              providerTransactionType: normalized.transaction.providerTransactionType,
+              amount: normalizedMetadata.amount,
+            })
+          : null
+
       const primaryAssetResolution = yield* resolveOptionalAssetForReviewableNormalization({
         currencyCode: normalized.primaryAssetCurrency,
         rawSourcePayload: sourceRecord.payload,
@@ -791,6 +895,7 @@ const make = Effect.gen(function* () {
           metadata: {
             ...normalizedMetadata,
             coinbaseReferenceMapping: resolvedTransactionType,
+            ...(pairedRecord === null ? {} : { pairedRecord }),
           },
         },
         venueContext: normalized.venueContext,

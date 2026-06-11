@@ -128,6 +128,21 @@ const make = Effect.gen(function* () {
       .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
       .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listAllRawRowsForReplay"))
 
+  const listRawRecordsByOccurredAt: SourceRawRecordRepositoryShape["listRawRecordsByOccurredAt"] =
+    ({ sourceId, recordType, occurredAt }) =>
+      db
+        .select(selectRawRecordFields)
+        .from(schema.sourceRecordsRaw)
+        .where(
+          and(
+            eq(schema.sourceRecordsRaw.sourceId, sourceId),
+            eq(schema.sourceRecordsRaw.recordType, recordType),
+            eq(schema.sourceRecordsRaw.occurredAt, occurredAt)
+          )
+        )
+        .orderBy(asc(schema.sourceRecordsRaw.createdAt))
+        .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listRawRecordsByOccurredAt"))
+
   const markRawRecordNormalized: SourceRawRecordRepositoryShape["markRawRecordNormalized"] = ({
     rawRecordId,
   }) =>
@@ -170,6 +185,7 @@ const make = Effect.gen(function* () {
     upsertRawBatch,
     listReplayCandidates,
     listAllRawRowsForReplay,
+    listRawRecordsByOccurredAt,
     markRawRecordNormalized,
     markRawRecordFailed,
     resetNormalizationStateForSource,

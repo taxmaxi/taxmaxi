@@ -364,11 +364,11 @@ export const coinbaseDefaultTransactionTypeMappings: ReadonlyArray<CoinbaseDefau
       transactionTypeKey: "staking_withdrawal",
       inventoryEffect: "internal_transfer",
       taxTreatment: "requires_additional_rule_logic",
-      resolutionStrategy: "amount_sign_fee",
+      resolutionStrategy: "paired_spread_fee",
       pairedRecordRequired: true,
       mappingStatus: "approved",
       sourceNotes:
-        "Instant unstaking is modeled as principal release on positive rows and a fee-like spread on negative rows.",
+        "Instant unstaking emits two principal-sized rows: a negative full release and a positive net credit. Only the spread between them is a deductible fee; principal moves without a leg.",
     },
     {
       providerTransactionType: "retail_eth2_deprecation",

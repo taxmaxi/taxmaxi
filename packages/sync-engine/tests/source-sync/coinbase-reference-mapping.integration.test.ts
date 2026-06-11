@@ -67,34 +67,37 @@ const syncRecords = [
       updated_at: "2025-01-01T00:00:00.000Z",
     },
   }),
+  // Real Coinbase instant unstaking emits two principal-sized rows at the same
+  // timestamp: the full release from the staked balance and the net credit to
+  // the spot balance. Only the spread between them is a fee.
   makeCoinbaseRecord({
-    externalRecordId: "tx-unstake-principal",
+    externalRecordId: "tx-unstake-credit",
     externalParentId: "unstake-group-1",
     occurredAt: new Date("2025-05-01T10:00:00.000Z"),
     payload: {
-      id: "tx-unstake-principal",
+      id: "tx-unstake-credit",
       type: "retail_instant_unstaking",
       status: "completed",
       amount: { amount: "1.25000000", currency: "ETH2" },
       native_amount: { amount: "2500.00", currency: "EUR" },
       created_at: "2025-05-01T10:00:00.000Z",
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-principal",
-      description: "Instant unstaking principal release",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-credit",
+      description: "Instant unstaking net principal credit",
     },
   }),
   makeCoinbaseRecord({
-    externalRecordId: "tx-unstake-fee",
+    externalRecordId: "tx-unstake-release",
     externalParentId: "unstake-group-1",
-    occurredAt: new Date("2025-05-01T10:00:05.000Z"),
+    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
     payload: {
-      id: "tx-unstake-fee",
+      id: "tx-unstake-release",
       type: "retail_instant_unstaking",
       status: "completed",
-      amount: { amount: "-0.01500000", currency: "ETH2" },
-      native_amount: { amount: "-30.00", currency: "EUR" },
-      created_at: "2025-05-01T10:00:05.000Z",
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-fee",
-      description: "Instant unstaking spread",
+      amount: { amount: "-1.26500000", currency: "ETH2" },
+      native_amount: { amount: "-2530.00", currency: "EUR" },
+      created_at: "2025-05-01T10:00:00.000Z",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-release",
+      description: "Instant unstaking principal release",
     },
   }),
   makeCoinbaseRecord({
@@ -428,6 +431,9 @@ const fetchNormalizationState = () =>
         externalId: schema.transactionLegs.externalId,
         kind: schema.transactionLegs.kind,
         derivationRule: schema.transactionLegs.derivationRule,
+        amount: schema.transactionLegs.amount,
+        fiatAmount: schema.transactionLegs.fiatAmount,
+        fiatCurrency: schema.transactionLegs.fiatCurrency,
       })
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.sourceId, sourceId))
@@ -729,13 +735,13 @@ describe("coinbase reference mappings", () => {
             transactionType: "token_migration_transfer",
           },
           {
-            externalId: "tx-unstake-fee",
+            externalId: "tx-unstake-credit",
             externalGroupId: "unstake-group-1",
             providerTransactionType: "retail_instant_unstaking",
             transactionType: "staking_withdrawal",
           },
           {
-            externalId: "tx-unstake-principal",
+            externalId: "tx-unstake-release",
             externalGroupId: "unstake-group-1",
             providerTransactionType: "retail_instant_unstaking",
             transactionType: "staking_withdrawal",
@@ -743,33 +749,34 @@ describe("coinbase reference mappings", () => {
         ])
 
         expect(
-          state.legs
-            .map((row) => ({
-              externalId: row.externalId,
-              kind: row.kind,
-              derivationRule: row.derivationRule,
-            }))
-            .sort((left, right) => String(left.externalId).localeCompare(String(right.externalId)))
+          state.legs.map((row) => ({
+            externalId: row.externalId,
+            kind: row.kind,
+            derivationRule: row.derivationRule,
+          }))
         ).toEqual([
           {
-            externalId: expect.stringContaining("tx-unstake-fee"),
+            externalId: expect.stringContaining("tx-unstake-release"),
             kind: "fee",
-            derivationRule: "coinbase_retail_instant_unstaking_fee",
-          },
-          {
-            externalId: expect.stringContaining("tx-unstake-principal"),
-            kind: "acquisition",
-            derivationRule: "coinbase_retail_instant_unstaking_principal",
+            derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
           },
         ])
 
+        const spreadFeeLeg = state.legs[0]
+        expect(Number(spreadFeeLeg?.amount)).toBeCloseTo(0.015, 9)
+        expect(Number(spreadFeeLeg?.fiatAmount)).toBeCloseTo(30, 6)
+        expect(spreadFeeLeg?.fiatCurrency).toBe("EUR")
+
         expect(
-          state.transactions.find((row) => row.externalId === "tx-unstake-principal")?.metadata
+          state.transactions.find((row) => row.externalId === "tx-unstake-release")?.metadata
         ).toEqual(
           expect.objectContaining({
             coinbaseReferenceMapping: expect.objectContaining({
-              resolutionStrategy: "amount_sign_fee",
+              resolutionStrategy: "paired_spread_fee",
               transactionType: "staking_withdrawal",
+            }),
+            pairedRecord: expect.objectContaining({
+              externalId: "tx-unstake-credit",
             }),
           })
         )
