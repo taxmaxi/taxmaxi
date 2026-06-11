@@ -1,15 +1,29 @@
 import { TextAttributes } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, Match, Show, Switch } from "solid-js"
+import type { Source } from "taxmaxi"
 import type { CliSession } from "../session.ts"
-import { loadSessionState, logout } from "./controller.ts"
+import { copyToClipboard, loadSessionState, logout } from "./controller.ts"
 import { AddSourceDialog } from "./screens/AddSourceDialog.tsx"
 import { CoinbaseConnectScreen } from "./screens/CoinbaseConnectScreen.tsx"
+import { SourceAssetPnlScreen } from "./screens/SourceAssetPnlScreen.tsx"
+import { SourceFifoLotsScreen } from "./screens/SourceFifoLotsScreen.tsx"
 import { SourceListScreen } from "./screens/SourceListScreen.tsx"
+import { SourceOverviewScreen } from "./screens/SourceOverviewScreen.tsx"
+import { SourceTaxEventsScreen } from "./screens/SourceTaxEventsScreen.tsx"
+import { SourceTransactionsScreen } from "./screens/SourceTransactionsScreen.tsx"
 import { UserMenuDialog } from "./screens/UserMenuDialog.tsx"
 import { WelcomeScreen } from "./screens/WelcomeScreen.tsx"
 import { theme } from "./theme.ts"
 import { Spinner } from "./ui/Spinner.tsx"
+import { createToast, Toast } from "./ui/Toast.tsx"
+
+type ReportScreenType =
+  | "sourceOverview"
+  | "sourceAssetPnl"
+  | "sourceTransactions"
+  | "sourceTaxEvents"
+  | "sourceFifoLots"
 
 type Screen =
   | { readonly type: "boot" }
@@ -18,11 +32,13 @@ type Screen =
   | { readonly type: "sources" }
   | { readonly type: "connect" }
   | { readonly type: "loggingOut" }
+  | { readonly type: ReportScreenType; readonly source: Source }
 
 type DialogKind = "addSource" | "userMenu"
 
 export function App(props: { readonly requestExit: () => void }) {
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const [screen, setScreen] = createSignal<Screen>({ type: "boot" })
   const [session, setSession] = createSignal<CliSession | undefined>(undefined)
   const [dialog, setDialog] = createSignal<DialogKind | undefined>(undefined)
@@ -108,12 +124,35 @@ export function App(props: { readonly requestExit: () => void }) {
     return current.type === "bootError" ? current.message : undefined
   }
 
+  const reportScreenSource = (type: ReportScreenType): Source | undefined => {
+    const current = screen()
+    return current.type === type && "source" in current ? current.source : undefined
+  }
+
+  const reportScreen = (type: ReportScreenType, source: Source) => () => setScreen({ type, source })
+
+  const toast = createToast()
+
+  // Releasing the mouse after a drag-select copies the highlighted text,
+  // mirroring opencode's copy-on-select behavior.
+  const copySelection = () => {
+    const text = renderer.getSelection()?.getSelectedText() ?? ""
+    if (text.length === 0) {
+      return
+    }
+    renderer.clearSelection()
+    void copyToClipboard(text).then(() =>
+      toast.show({ message: "Copied to clipboard", variant: "info" })
+    )
+  }
+
   return (
     <box
       width={dimensions().width}
       height={dimensions().height}
       flexDirection="column"
       backgroundColor={theme.background}
+      onMouseUp={copySelection}
     >
       <box flexDirection="row" gap={1} paddingLeft={2} paddingRight={2} paddingTop={1}>
         <text fg={theme.accent} attributes={TextAttributes.BOLD}>
@@ -166,12 +205,92 @@ export function App(props: { readonly requestExit: () => void }) {
               <SourceListScreen
                 session={currentSession}
                 active={noDialog}
+                onOpenSource={(source) => setScreen({ type: "sourceOverview", source })}
                 onAddSource={() => setDialog("addSource")}
                 onUserMenu={() => setDialog("userMenu")}
                 onQuit={props.requestExit}
               />
             )}
           </Show>
+        </Match>
+        <Match when={reportScreenSource("sourceOverview")} keyed>
+          {(source: Source) => (
+            <Show when={session()} keyed>
+              {(currentSession: CliSession) => (
+                <SourceOverviewScreen
+                  session={currentSession}
+                  source={source}
+                  active={noDialog}
+                  onOpenAssetPnl={reportScreen("sourceAssetPnl", source)}
+                  onOpenTransactions={reportScreen("sourceTransactions", source)}
+                  onOpenTaxEvents={reportScreen("sourceTaxEvents", source)}
+                  onOpenFifoLots={reportScreen("sourceFifoLots", source)}
+                  onBack={() => setScreen({ type: "sources" })}
+                  onQuit={props.requestExit}
+                />
+              )}
+            </Show>
+          )}
+        </Match>
+        <Match when={reportScreenSource("sourceAssetPnl")} keyed>
+          {(source: Source) => (
+            <Show when={session()} keyed>
+              {(currentSession: CliSession) => (
+                <SourceAssetPnlScreen
+                  session={currentSession}
+                  source={source}
+                  active={noDialog}
+                  onBack={reportScreen("sourceOverview", source)}
+                  onQuit={props.requestExit}
+                />
+              )}
+            </Show>
+          )}
+        </Match>
+        <Match when={reportScreenSource("sourceTransactions")} keyed>
+          {(source: Source) => (
+            <Show when={session()} keyed>
+              {(currentSession: CliSession) => (
+                <SourceTransactionsScreen
+                  session={currentSession}
+                  source={source}
+                  active={noDialog}
+                  onBack={reportScreen("sourceOverview", source)}
+                  onQuit={props.requestExit}
+                />
+              )}
+            </Show>
+          )}
+        </Match>
+        <Match when={reportScreenSource("sourceTaxEvents")} keyed>
+          {(source: Source) => (
+            <Show when={session()} keyed>
+              {(currentSession: CliSession) => (
+                <SourceTaxEventsScreen
+                  session={currentSession}
+                  source={source}
+                  active={noDialog}
+                  onBack={reportScreen("sourceOverview", source)}
+                  onQuit={props.requestExit}
+                />
+              )}
+            </Show>
+          )}
+        </Match>
+        <Match when={reportScreenSource("sourceFifoLots")} keyed>
+          {(source: Source) => (
+            <Show when={session()} keyed>
+              {(currentSession: CliSession) => (
+                <SourceFifoLotsScreen
+                  session={currentSession}
+                  source={source}
+                  active={noDialog}
+                  onBack={reportScreen("sourceOverview", source)}
+                  onQuit={props.requestExit}
+                />
+              )}
+            </Show>
+          )}
         </Match>
       </Switch>
       <Show when={dialog() === "addSource"}>
@@ -190,6 +309,7 @@ export function App(props: { readonly requestExit: () => void }) {
           )}
         </Show>
       </Show>
+      <Toast toast={toast} />
     </box>
   )
 }

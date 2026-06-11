@@ -1,9 +1,15 @@
 import { Effect } from "effect"
 import {
+  type SourceAssetPnl,
   type SourceCreate,
+  type SourceDisposalExplanation,
+  type SourceFifoLots,
   type SourceList,
+  type SourceOverview,
   type SourceSyncJob,
   type SourceSyncStart,
+  type SourceTaxEvents,
+  type SourceTransactions,
   type TaxCalculation,
 } from "taxmaxi"
 import { TAX_JURISDICTION } from "../config.ts"
@@ -108,6 +114,128 @@ export const getSyncJob = ({
       })
     ),
     Effect.mapError(toCliApiError("Failed to poll sync job."))
+  )
+
+type SourceReportParams = {
+  readonly apiUrl: string
+  readonly sessionToken: string
+  readonly sourceId: string
+}
+
+type SourceReportPageParams = SourceReportParams & {
+  readonly cursor?: string | null | undefined
+}
+
+export const getSourceOverview = ({
+  apiUrl,
+  sessionToken,
+  sourceId,
+}: SourceReportParams): Effect.Effect<SourceOverview, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) =>
+      resolved.sources.getSourceOverview({
+        path: {
+          sourceId,
+        },
+      })
+    ),
+    Effect.mapError(toCliApiError("Failed to load source overview."))
+  )
+
+export const listSourceAssetPnl = ({
+  apiUrl,
+  sessionToken,
+  sourceId,
+}: SourceReportParams): Effect.Effect<SourceAssetPnl, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) =>
+      resolved.sources.listSourceAssetPnl({
+        path: {
+          sourceId,
+        },
+      })
+    ),
+    Effect.mapError(toCliApiError("Failed to load asset P&L."))
+  )
+
+export const listSourceTransactions = ({
+  apiUrl,
+  cursor,
+  sessionToken,
+  sourceId,
+}: SourceReportPageParams): Effect.Effect<SourceTransactions, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) =>
+      resolved.sources.listSourceTransactions({
+        path: {
+          sourceId,
+        },
+        urlParams: {
+          cursor: cursor ?? undefined,
+        },
+      })
+    ),
+    Effect.mapError(toCliApiError("Failed to load transactions."))
+  )
+
+export const listSourceTaxEvents = ({
+  apiUrl,
+  cursor,
+  sessionToken,
+  sourceId,
+}: SourceReportPageParams): Effect.Effect<SourceTaxEvents, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) =>
+      resolved.sources.listSourceTaxEvents({
+        path: {
+          sourceId,
+        },
+        urlParams: {
+          cursor: cursor ?? undefined,
+        },
+      })
+    ),
+    Effect.mapError(toCliApiError("Failed to load tax events."))
+  )
+
+export const listSourceFifoLots = ({
+  apiUrl,
+  cursor,
+  sessionToken,
+  sourceId,
+}: SourceReportPageParams): Effect.Effect<SourceFifoLots, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) =>
+      resolved.sources.listSourceFifoLots({
+        path: {
+          sourceId,
+        },
+        urlParams: {
+          cursor: cursor ?? undefined,
+        },
+      })
+    ),
+    Effect.mapError(toCliApiError("Failed to load FIFO lots."))
+  )
+
+export const explainSourceDisposal = ({
+  apiUrl,
+  legId,
+  sessionToken,
+  sourceId,
+}: SourceReportParams & {
+  readonly legId: string
+}): Effect.Effect<SourceDisposalExplanation, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) =>
+      resolved.sources.explainSourceDisposal({
+        path: {
+          legId,
+          sourceId,
+        },
+      })
+    ),
+    Effect.mapError(toCliApiError("Failed to load disposal explanation."))
   )
 
 export const computeGermanTax = ({
