@@ -4,7 +4,7 @@
  * @module SourceRawRecordRepositoryLive
  */
 
-import { and, asc, eq, lt, sql } from "drizzle-orm"
+import { and, asc, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -102,7 +102,6 @@ const make = Effect.gen(function* () {
 
   const listReplayCandidates: SourceRawRecordRepositoryShape["listReplayCandidates"] = ({
     sourceId,
-    importedBefore,
   }) =>
     db
       .select(selectRawRecordFields)
@@ -111,8 +110,7 @@ const make = Effect.gen(function* () {
         and(
           eq(schema.sourceRecordsRaw.sourceId, sourceId),
           sql`${schema.sourceRecordsRaw.normalizedAt} is null`,
-          sql`${schema.sourceRecordsRaw.normalizationError} is not null`,
-          lt(schema.sourceRecordsRaw.importedAt, importedBefore)
+          sql`${schema.sourceRecordsRaw.normalizationError} is not null`
         )
       )
       .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))

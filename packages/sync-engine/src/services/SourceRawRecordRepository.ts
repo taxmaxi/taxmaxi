@@ -30,11 +30,12 @@ export interface SourceRawRecordRepositoryShape {
   }) => Effect.Effect<UpsertSourceRawBatchResult, SyncEngineStorageError>
 
   /**
-   * Load previously failed raw rows that should be retried after reference refresh.
+   * Load failed raw rows that should be retried at the end of a sync run.
+   * Includes rows that failed during the current run so multi-row provider
+   * events split across pages can normalize once all sibling rows are cached.
    */
   readonly listReplayCandidates: (params: {
     readonly sourceId: string
-    readonly importedBefore: Date
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
   /**

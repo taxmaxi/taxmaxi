@@ -318,6 +318,8 @@ const make = Effect.gen(function* () {
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.
+   * Siblings must belong to the same account and provider group so two
+   * unrelated unstakings at the same second do not pair with each other.
    * Fails recoverably when the sibling is missing or ambiguous so the row is
    * retried on a later replay pass once all sibling rows are cached.
    */
@@ -330,6 +332,8 @@ const make = Effect.gen(function* () {
       readonly id: string
       readonly sourceId: string
       readonly recordType: string
+      readonly externalAccountId: string | null
+      readonly externalParentId: string | null
       readonly occurredAt: Date
     }
     readonly providerTransactionType: string | null
@@ -346,7 +350,11 @@ const make = Effect.gen(function* () {
       })
 
       const candidates = siblingRecords.flatMap((sibling) => {
-        if (sibling.id === sourceRecord.id) {
+        if (
+          sibling.id === sourceRecord.id ||
+          sibling.externalAccountId !== sourceRecord.externalAccountId ||
+          sibling.externalParentId !== sourceRecord.externalParentId
+        ) {
           return []
         }
 

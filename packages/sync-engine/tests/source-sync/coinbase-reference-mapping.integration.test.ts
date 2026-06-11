@@ -100,6 +100,39 @@ const syncRecords = [
       description: "Instant unstaking principal release",
     },
   }),
+  // Second unstaking pair at the exact same timestamp and currency but in a
+  // different provider group. Pairing must match on the group, not just on
+  // timestamp + currency, so the two pairs do not block each other.
+  makeCoinbaseRecord({
+    externalRecordId: "tx-unstake-alt-credit",
+    externalParentId: "unstake-group-2",
+    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    payload: {
+      id: "tx-unstake-alt-credit",
+      type: "retail_instant_unstaking",
+      status: "completed",
+      amount: { amount: "0.50000000", currency: "ETH2" },
+      native_amount: { amount: "1000.00", currency: "EUR" },
+      created_at: "2025-05-01T10:00:00.000Z",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-alt-credit",
+      description: "Second instant unstaking net principal credit",
+    },
+  }),
+  makeCoinbaseRecord({
+    externalRecordId: "tx-unstake-alt-release",
+    externalParentId: "unstake-group-2",
+    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    payload: {
+      id: "tx-unstake-alt-release",
+      type: "retail_instant_unstaking",
+      status: "completed",
+      amount: { amount: "-0.51000000", currency: "ETH2" },
+      native_amount: { amount: "-1020.00", currency: "EUR" },
+      created_at: "2025-05-01T10:00:00.000Z",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-alt-release",
+      description: "Second instant unstaking principal release",
+    },
+  }),
   makeCoinbaseRecord({
     externalRecordId: "tx-eth2-migration-out",
     externalParentId: "eth2-migration-1",
@@ -708,7 +741,7 @@ describe("coinbase reference mappings", () => {
         yield* runSync()
         const state = yield* fetchNormalizationState()
 
-        expect(state.rawRows).toHaveLength(5)
+        expect(state.rawRows).toHaveLength(7)
         expect(state.rawRows.every((row) => row.normalizedAt !== null)).toBe(true)
         expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
 
@@ -735,6 +768,18 @@ describe("coinbase reference mappings", () => {
             transactionType: "token_migration_transfer",
           },
           {
+            externalId: "tx-unstake-alt-credit",
+            externalGroupId: "unstake-group-2",
+            providerTransactionType: "retail_instant_unstaking",
+            transactionType: "staking_withdrawal",
+          },
+          {
+            externalId: "tx-unstake-alt-release",
+            externalGroupId: "unstake-group-2",
+            providerTransactionType: "retail_instant_unstaking",
+            transactionType: "staking_withdrawal",
+          },
+          {
             externalId: "tx-unstake-credit",
             externalGroupId: "unstake-group-1",
             providerTransactionType: "retail_instant_unstaking",
@@ -748,13 +793,21 @@ describe("coinbase reference mappings", () => {
           },
         ])
 
+        const sortedLegs = [...state.legs].sort((left, right) =>
+          String(left.externalId).localeCompare(String(right.externalId))
+        )
         expect(
-          state.legs.map((row) => ({
+          sortedLegs.map((row) => ({
             externalId: row.externalId,
             kind: row.kind,
             derivationRule: row.derivationRule,
           }))
         ).toEqual([
+          {
+            externalId: expect.stringContaining("tx-unstake-alt-release"),
+            kind: "fee",
+            derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
+          },
           {
             externalId: expect.stringContaining("tx-unstake-release"),
             kind: "fee",
@@ -762,10 +815,13 @@ describe("coinbase reference mappings", () => {
           },
         ])
 
-        const spreadFeeLeg = state.legs[0]
+        const [altSpreadFeeLeg, spreadFeeLeg] = sortedLegs
         expect(Number(spreadFeeLeg?.amount)).toBeCloseTo(0.015, 9)
         expect(Number(spreadFeeLeg?.fiatAmount)).toBeCloseTo(30, 6)
         expect(spreadFeeLeg?.fiatCurrency).toBe("EUR")
+        expect(Number(altSpreadFeeLeg?.amount)).toBeCloseTo(0.01, 9)
+        expect(Number(altSpreadFeeLeg?.fiatAmount)).toBeCloseTo(20, 6)
+        expect(altSpreadFeeLeg?.fiatCurrency).toBe("EUR")
 
         expect(
           state.transactions.find((row) => row.externalId === "tx-unstake-release")?.metadata
@@ -777,6 +833,15 @@ describe("coinbase reference mappings", () => {
             }),
             pairedRecord: expect.objectContaining({
               externalId: "tx-unstake-credit",
+            }),
+          })
+        )
+        expect(
+          state.transactions.find((row) => row.externalId === "tx-unstake-alt-release")?.metadata
+        ).toEqual(
+          expect.objectContaining({
+            pairedRecord: expect.objectContaining({
+              externalId: "tx-unstake-alt-credit",
             }),
           })
         )
