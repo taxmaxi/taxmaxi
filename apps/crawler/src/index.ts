@@ -7,14 +7,14 @@ import { PgClientLive, ProtocolCandidateRepositoryLive } from "@my/persistence/l
 import { ProtocolCandidateRepository, SyncEngineStorageError } from "@my/sync-engine/services"
 import { CrawlerCommandError } from "./errors.ts"
 import { SolanaBehaviorSamplerClientLive } from "./solana-behavior-sampler-live.ts"
-import { crawlSolanaCommand } from "./solana-crawler.ts"
-import { SolanaDuneProgramRankingClientLive } from "./solana-dune-program-ranking-live.ts"
+import { crawlSolanaBehaviorCommand, crawlSolanaCommand } from "./solana-crawler.ts"
+import { SolanaDuneClientLive } from "./solana-dune-client-live.ts"
 
 export { CrawlerCommandError } from "./errors.ts"
 
 const crawlCommand = Command.make("crawl", {}).pipe(
   Command.withDescription("Crawler commands"),
-  Command.withSubcommands([crawlSolanaCommand])
+  Command.withSubcommands([crawlSolanaBehaviorCommand, crawlSolanaCommand])
 )
 
 const command = Command.make("crawler", {}).pipe(Command.withSubcommands([crawlCommand]))
@@ -43,7 +43,7 @@ const ProtocolCandidateRepositoryCliLive = Layer.succeed(
 const runtimeLayer = Layer.mergeAll(
   NodeContext.layer,
   SolanaBehaviorSamplerClientLive,
-  SolanaDuneProgramRankingClientLive.pipe(Layer.provide(NodeHttpClient.layer)),
+  SolanaDuneClientLive.pipe(Layer.provide(NodeHttpClient.layer)),
   ProtocolCandidateRepositoryCliLive
 )
 

@@ -13,50 +13,72 @@ import {
   type SyncEngineStorageError,
 } from "../../../services/index.ts"
 
-export const SolanaDunePeriodGranularity = Schema.Literal("year", "quarter")
-export type SolanaDunePeriodGranularity = typeof SolanaDunePeriodGranularity.Type
-
 export const SolanaDuneQueryConfig = Schema.Struct({
   queryId: Schema.Number,
   queryName: Schema.String,
-  periodGranularity: SolanaDunePeriodGranularity,
   version: Schema.Number,
-  kind: Schema.Literal(
-    "dex-project-priority",
-    "token-transfer-program-candidates",
-    "program-sample-transactions"
-  ),
+  kind: Schema.Literal("dex-project-priority", "dex-project-sample-transactions"),
 })
 export type SolanaDuneQueryConfig = typeof SolanaDuneQueryConfig.Type
 
 export const SolanaDuneRankingEntry = Schema.Struct({
   programId: Schema.String,
+  /** Protocol/project name reported by the Dune query, for example `jupiter`. */
+  protocolNameHint: Schema.NullOr(Schema.String),
+  /** Tax-relevant category reported by the Dune query, for example `swap`. */
+  categoryHint: Schema.NullOr(Schema.String),
+  /** Observed window formatted as `YYYY-MM-DD to YYYY-MM-DD`. */
   period: Schema.String,
   invocationCount: Schema.Number,
   uniqueSignerCount: Schema.NullOr(Schema.Number),
   transactionCount: Schema.NullOr(Schema.Number),
+  /** Total traded USD volume in the observed window when the query reports it. */
+  volumeUsd: Schema.NullOr(Schema.Number),
   sampleSignatures: Schema.Array(Schema.String),
   queryId: Schema.Number,
   queryName: Schema.String,
-  periodGranularity: SolanaDunePeriodGranularity,
   queryVersion: Schema.Number,
   retrievedAt: Schema.String,
 })
 export type SolanaDuneRankingEntry = typeof SolanaDuneRankingEntry.Type
+
+/**
+ * SolanaDuneRecordedExecution - One raw Dune query execution captured during a crawl.
+ *
+ * Recorded executions make a rankings file replayable: the crawler can serve
+ * them instead of calling Dune, so re-imports and re-processing with newer
+ * mapping logic cost no Dune credits. Timed-out executions are recorded too so
+ * a replay reproduces the same window-halving decisions.
+ */
+export const SolanaDuneRecordedExecution = Schema.Struct({
+  queryId: Schema.Number,
+  kind: Schema.Literal("dex-project-priority", "dex-project-sample-transactions"),
+  parameters: Schema.Record({ key: Schema.String, value: Schema.String }),
+  status: Schema.Literal("completed", "timed_out"),
+  /** Raw Dune API response for completed executions, null for timed-out ones. */
+  response: Schema.Unknown,
+})
+export type SolanaDuneRecordedExecution = typeof SolanaDuneRecordedExecution.Type
 
 export const SolanaDuneRankingsFile = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   chain: Schema.Literal("solana"),
   onchainDataSource: Schema.Literal("dune"),
   generatedAt: Schema.String,
-  window: Schema.Struct({
-    fromYear: Schema.Number,
-    toYear: Schema.Number,
+  /** Inclusive UTC start date of the crawled range, `YYYY-MM-DD`. */
+  startDate: Schema.String,
+  /** Exclusive UTC end date of the crawled range, `YYYY-MM-DD`. */
+  endDate: Schema.String,
+  /** Crawl tuning used to produce this file; replays reuse it for identical windowing. */
+  parameters: Schema.Struct({
+    topProjects: Schema.Number,
+    samplesPerProject: Schema.Number,
+    windowDays: Schema.Number,
   }),
-  top: Schema.Number,
-  executionWindowDays: Schema.Number,
   queries: Schema.Array(SolanaDuneQueryConfig),
   entries: Schema.Array(SolanaDuneRankingEntry),
+  /** Raw Dune executions captured during the crawl, replayable without credits. */
+  executions: Schema.Array(SolanaDuneRecordedExecution),
 })
 export type SolanaDuneRankingsFile = typeof SolanaDuneRankingsFile.Type
 
@@ -132,14 +154,16 @@ const parseFilePeriod = (
 
 const rawPayloadFromEntry = (entry: SolanaDuneRankingEntry): Record<string, unknown> => ({
   programId: entry.programId,
+  protocolNameHint: entry.protocolNameHint,
+  categoryHint: entry.categoryHint,
   period: entry.period,
   invocationCount: entry.invocationCount,
   uniqueSignerCount: entry.uniqueSignerCount,
   transactionCount: entry.transactionCount,
+  volumeUsd: entry.volumeUsd,
   sampleSignatures: [...entry.sampleSignatures],
   queryId: entry.queryId,
   queryName: entry.queryName,
-  periodGranularity: entry.periodGranularity,
   queryVersion: entry.queryVersion,
   retrievedAt: entry.retrievedAt,
 })
@@ -159,8 +183,8 @@ const observationFromEntry = ({
       blockchainName,
       subjectKind: "program",
       subjectIdentifier: entry.programId,
-      protocolNameHint: null,
-      categoryHint: null,
+      protocolNameHint: entry.protocolNameHint,
+      categoryHint: entry.categoryHint,
       observedWindowStart,
       observedWindowEnd,
       interactionCount: entry.invocationCount,

@@ -7,8 +7,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "crawl:solana:dune:year": "pnpm run build && dotenv -e ../../.env -e .env -- node dist/index.js crawl solana --from-year 2024 --to-year 2024 --top 10 --dune --dune-period year --dune-window-days 1 --out /tmp/taxmaxi-dune-year --json",
-    "crawl:solana:dune:quarter": "pnpm run build && dotenv -e ../../.env -e .env -- node dist/index.js crawl solana --from-year 2024 --to-year 2024 --top 5 --dune --dune-period quarter --dune-window-days 1 --out /tmp/taxmaxi-dune-quarter --json",
+    "crawl:solana:week": "pnpm run build && dotenv -e .env -- node dist/index.js crawl solana --start-date 2026-05-25 --end-date 2026-06-01 --top-projects 8 --json",
     "dev": "dotenv -- tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
     "type-check:tests": "tsc -p tsconfig.tests.json",
