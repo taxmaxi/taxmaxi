@@ -121,7 +121,9 @@ including timed-out ones. `crawl solana --from-file <path>` re-runs the import
 from those recordings with zero Dune credits, applying the current mapping
 logic to the original raw data. Use it to reseed a database, re-import after a
 schema migration, or re-process after classifier mapping changes. A replay
-always uses the file's original date range and window settings.
+always uses the file's original date range and window settings. The file name
+includes the crawled date range, so runs for different ranges never overwrite
+each other even when they share an `--out` directory.
 
 ## Suggested Workflow
 

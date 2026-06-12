@@ -25,7 +25,17 @@ import {
 } from "@my/sync-engine/providers/helius-solana"
 import { SolanaDuneClient, SolanaDuneError } from "./solana-dune-client.ts"
 
-export const SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME = "solana-dune-dex-project-rankings.json"
+/**
+ * Rankings file name for one crawled date range. The range is part of the
+ * name so runs for different ranges never overwrite each other's raw data.
+ */
+export const solanaDuneDexProjectRankingsFileName = ({
+  startDate,
+  endDate,
+}: {
+  readonly startDate: string
+  readonly endDate: string
+}): string => `solana-dune-dex-project-rankings-${startDate}-to-${endDate}.json`
 
 export const DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS = 7
 

@@ -21,7 +21,7 @@ import {
 import {
   buildSolanaDexDiscoveryFile,
   DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS,
-  SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME,
+  solanaDuneDexProjectRankingsFileName,
 } from "./solana-dex-discovery.ts"
 import { SolanaDuneClient, solanaDuneClientFromRecordedExecutions } from "./solana-dune-client.ts"
 
@@ -488,10 +488,6 @@ export const crawlSolanaProgram = ({
           : Effect.succeed<string | null>(trimmed)
       },
     })
-    const dexProjectRankingsPath =
-      outputDirectory === null
-        ? null
-        : path.join(outputDirectory, SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME)
     const generatedAt = yield* nowIsoString
 
     const replayFile = yield* Option.match(fromFile, {
@@ -555,6 +551,11 @@ export const crawlSolanaProgram = ({
               })
           )
         )
+
+    const dexProjectRankingsPath =
+      outputDirectory === null
+        ? null
+        : path.join(outputDirectory, solanaDuneDexProjectRankingsFileName(dexProjectRankings))
 
     const duneProtocolCandidateImport = yield* Effect.gen(function* () {
       const repository = yield* ProtocolCandidateRepository

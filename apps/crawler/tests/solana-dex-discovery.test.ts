@@ -8,7 +8,7 @@ import {
 import { SolanaDuneRankingsFile } from "@my/sync-engine/providers/helius-solana"
 import {
   buildSolanaDexDiscoveryFile,
-  SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME,
+  solanaDuneDexProjectRankingsFileName,
 } from "../src/solana-dex-discovery.ts"
 import { crawlSolanaProgram } from "../src/solana-crawler.ts"
 import {
@@ -481,7 +481,7 @@ describe("solana dex discovery", () => {
     )
 
     expect(result.dexProjectRankingsPath).toBe(
-      `${outputDirectory}/${SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME}`
+      `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`
     )
     expect(result.duneProtocolCandidateImport.observationCount).toBe(4)
     expect(
@@ -608,7 +608,9 @@ describe("solana dex discovery", () => {
     const replayResult = await crawlSolanaProgram({
       startDate: Option.none(),
       endDate: Option.none(),
-      fromFile: Option.some(`${outputDirectory}/${SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME}`),
+      fromFile: Option.some(
+        `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`
+      ),
       topProjects: 10,
       samplesPerProject: 25,
       windowDays: 7,
@@ -622,7 +624,7 @@ describe("solana dex discovery", () => {
     )
 
     expect(replayResult.replayedFromFile).toBe(
-      `${outputDirectory}/${SOLANA_DUNE_DEX_PROJECT_RANKINGS_FILE_NAME}`
+      `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`
     )
     expect(replayResult.dexProjectRankings.entries).toEqual(
       liveResult.dexProjectRankings.entries.map((entry) => ({
