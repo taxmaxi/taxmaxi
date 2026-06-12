@@ -104,7 +104,6 @@ describe("SourceRawRecordRepositoryLive", () => {
       Effect.flatMap(SourceRawRecordRepository, (repository) =>
         repository.listReplayCandidates({
           sourceId: TEST_SOURCE_ID,
-          importedBefore: new Date("2027-01-02T00:00:00.000Z"),
         })
       )
     )

@@ -55,11 +55,23 @@ import {
 interface NormalizationSummary {
   readonly normalizedRecords: number
   readonly failedRecords: number
+  readonly failedRawRecordIds: ReadonlyArray<string>
+}
+
+/**
+ * End-of-sync replay outcome. `failedRecordsDelta` adjusts the run's failure
+ * counter: replayed rows already counted as failed this run are not counted
+ * again, and rows that recover subtract their earlier failure.
+ */
+interface ReplaySummary {
+  readonly normalizedRecords: number
+  readonly failedRecordsDelta: number
 }
 
 interface SyncLoopState {
   readonly execution: SourceSyncExecutionState
   readonly done: boolean
+  readonly failedRawRecordIds: ReadonlySet<string>
 }
 
 type SourceSyncExecutionError =
@@ -193,6 +205,7 @@ const make = Effect.gen(function* () {
       Effect.as({
         normalizedRecords: 0,
         failedRecords: 1,
+        failedRawRecordIds: [rawRecordId],
       } satisfies NormalizationSummary)
     )
 
@@ -207,7 +220,11 @@ const make = Effect.gen(function* () {
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
     Effect.gen(function* () {
       if (rawRecord.normalizedAt !== null) {
-        return { normalizedRecords: 0, failedRecords: 0 } satisfies NormalizationSummary
+        return {
+          normalizedRecords: 0,
+          failedRecords: 0,
+          failedRawRecordIds: [],
+        } satisfies NormalizationSummary
       }
 
       const normalization = yield* normalizeRecord({ source, sourceRecord: rawRecord })
@@ -217,7 +234,11 @@ const make = Effect.gen(function* () {
           rawRecordId: rawRecord.id,
         })
 
-        return { normalizedRecords: 1, failedRecords: 0 } satisfies NormalizationSummary
+        return {
+          normalizedRecords: 1,
+          failedRecords: 0,
+          failedRawRecordIds: [],
+        } satisfies NormalizationSummary
       }
 
       yield* sourceNormalizationRepository.persistNormalizedArtifacts({
@@ -234,6 +255,7 @@ const make = Effect.gen(function* () {
       return {
         normalizedRecords: 1,
         failedRecords: 0,
+        failedRawRecordIds: [],
       } satisfies NormalizationSummary
     }).pipe(
       Effect.catchAll((error) =>
@@ -261,12 +283,13 @@ const make = Effect.gen(function* () {
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
     Effect.reduce(
       rawRecords,
-      { normalizedRecords: 0, failedRecords: 0 } as NormalizationSummary,
+      { normalizedRecords: 0, failedRecords: 0, failedRawRecordIds: [] } as NormalizationSummary,
       (state, rawRecord) =>
         normalizeRawRecord({ source, rawRecord, normalizeRecord }).pipe(
           Effect.map((summary) => ({
             normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
             failedRecords: state.failedRecords + summary.failedRecords,
+            failedRawRecordIds: [...state.failedRawRecordIds, ...summary.failedRawRecordIds],
           }))
         )
     )
@@ -274,27 +297,39 @@ const make = Effect.gen(function* () {
   const replayFailedRawRecords = ({
     source,
     normalizeRecord,
-    importedBefore,
+    countedFailedRawRecordIds,
   }: {
     readonly source: SourceSyncSource
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
-    readonly importedBefore: Date
-  }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
+    readonly countedFailedRawRecordIds: ReadonlySet<string>
+  }): Effect.Effect<ReplaySummary, SyncEngineStorageError> =>
     Effect.gen(function* () {
       const replayCandidates = yield* sourceRawRecordRepository.listReplayCandidates({
         sourceId: source.id,
-        importedBefore,
       })
 
       if (replayCandidates.length === 0) {
-        return { normalizedRecords: 0, failedRecords: 0 } satisfies NormalizationSummary
+        return { normalizedRecords: 0, failedRecordsDelta: 0 } satisfies ReplaySummary
       }
 
-      return yield* normalizeRawBatch({
+      const replaySummary = yield* normalizeRawBatch({
         source,
         rawRecords: replayCandidates,
         normalizeRecord,
       })
+      const replayFailedRawRecordIds = new Set(replaySummary.failedRawRecordIds)
+      const newFailures = replaySummary.failedRawRecordIds.filter(
+        (rawRecordId) => !countedFailedRawRecordIds.has(rawRecordId)
+      ).length
+      const recoveredCountedFailures = replayCandidates.filter(
+        (candidate) =>
+          countedFailedRawRecordIds.has(candidate.id) && !replayFailedRawRecordIds.has(candidate.id)
+      ).length
+
+      return {
+        normalizedRecords: replaySummary.normalizedRecords,
+        failedRecordsDelta: newFailures - recoveredCountedFailures,
+      } satisfies ReplaySummary
     })
 
   const runSync = ({
@@ -309,7 +344,6 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const provider = source.providerKey ?? "unknown"
       const providerModule = yield* resolveProviderModule({ providerKey: provider })
-      const replayImportedBefore = nowDate()
       const referenceRefresh = yield* providerModule.refreshReferenceData().pipe(
         sourceSyncSpan({
           name: "source-sync.refresh-reference-data",
@@ -364,6 +398,7 @@ const make = Effect.gen(function* () {
       const initialLoop: SyncLoopState = {
         execution: initialExecution,
         done: false,
+        failedRawRecordIds: new Set(),
       }
 
       const finalLoop = yield* Effect.iterate(initialLoop, {
@@ -468,14 +503,23 @@ const make = Effect.gen(function* () {
               "source-sync:batch"
             )
 
-            return { execution: nextExecution, done: nextBatch.done } satisfies SyncLoopState
+            return {
+              execution: nextExecution,
+              done: nextBatch.done,
+              failedRawRecordIds:
+                normalization.failedRawRecordIds.length === 0
+                  ? loop.failedRawRecordIds
+                  : new Set([...loop.failedRawRecordIds, ...normalization.failedRawRecordIds]),
+            } satisfies SyncLoopState
           }),
       })
 
+      // Runs after all pages are cached so rows that failed earlier in this
+      // run because a sibling row was on a later page can normalize now.
       const replaySummary = yield* replayFailedRawRecords({
         source,
         normalizeRecord,
-        importedBefore: replayImportedBefore,
+        countedFailedRawRecordIds: finalLoop.failedRawRecordIds,
       }).pipe(
         sourceSyncSpan({
           name: "source-sync.replay-failed-raw-records",
@@ -485,7 +529,7 @@ const make = Effect.gen(function* () {
       const completedExecution: SourceSyncExecutionState = {
         ...finalLoop.execution,
         normalizedRecords: finalLoop.execution.normalizedRecords + replaySummary.normalizedRecords,
-        failedRecords: finalLoop.execution.failedRecords + replaySummary.failedRecords,
+        failedRecords: finalLoop.execution.failedRecords + replaySummary.failedRecordsDelta,
       }
       const reconciliationSummary = yield* transferReconciliationService
         .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
