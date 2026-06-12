@@ -1,7 +1,7 @@
 {
   "extends": "@my/typescript-config/node.json",
   "include": ["src"],
-  "exclude": ["node_modules"],
+  "exclude": ["node_modules", "src/tui"],
   "compilerOptions": {
     "rootDir": "./src",
     "outDir": "./dist"

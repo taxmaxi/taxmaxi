@@ -84,6 +84,8 @@ const makeExecutorLayer = ({
   fetchedProviderRecords = [],
   checkpointRawRecords = [],
   replayRawRecords = [],
+  replayCandidates = [],
+  failNormalizeOnce = false,
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -93,6 +95,8 @@ const makeExecutorLayer = ({
   readonly fetchedProviderRecords?: ReadonlyArray<ProviderRawRecord>
   readonly checkpointRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
+  readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
+  readonly failNormalizeOnce?: boolean
   readonly events: Array<string>
 }) => {
   const syncSource = {
@@ -197,8 +201,9 @@ const makeExecutorLayer = ({
         checkpointExternalId: records[0]?.externalRecordId ?? null,
         checkpointRawRecordId: null,
       }),
-    listReplayCandidates: () => Effect.succeed([]),
+    listReplayCandidates: () => Effect.succeed(replayCandidates),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
+    listRawRecordsByOccurredAt: () => Effect.succeed([]),
     markRawRecordNormalized: () =>
       Effect.sync(() => {
         events.push("mark-raw-normalized")
@@ -267,9 +272,21 @@ const makeExecutorLayer = ({
     makeRawRecordNormalizer: () =>
       Effect.sync(() => {
         events.push("stub:make-normalizer")
+        let normalizeAttempts = 0
         return ({ source, sourceRecord }) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
+            normalizeAttempts += 1
             events.push(`stub:normalize:${source.providerKey}:${sourceRecord.recordType}`)
+
+            if (failNormalizeOnce && normalizeAttempts === 1) {
+              return yield* Effect.fail(
+                new SourceProviderRecoverableNormalizationError({
+                  providerKey: "stub-chain",
+                  message: "Paired sibling row is not cached yet.",
+                })
+              )
+            }
+
             return { kind: "skipped" } as const
           })
       }),
@@ -427,6 +444,55 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("stub:normalize:stub-chain:stub_transaction")
     expect(events).toContain("mark-raw-normalized")
     expect(events).toContain("complete:1:1")
+  })
+
+  it("replays rows that failed during the current run before completing the sync", async () => {
+    const events: Array<string> = []
+    const fetchedProviderRecord = ProviderRawRecord.make({
+      providerKey: "stub-chain",
+      recordType: "stub_transaction",
+      externalRecordId: "stub-tx-1",
+      externalAccountId: null,
+      externalParentId: null,
+      occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+      payload: { id: "stub-tx-1" },
+    })
+    const checkpointRawRecord: SourceRawRecord = {
+      ...replayRawRecord,
+      id: "raw-stub-1",
+      provider: "stub-chain",
+      recordType: "stub_transaction",
+      externalRecordId: "stub-tx-1",
+      payload: { id: "stub-tx-1" },
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            sourceProviderKey: "stub-chain",
+            fetchedProviderRecords: [fetchedProviderRecord],
+            checkpointRawRecords: [checkpointRawRecord],
+            replayCandidates: [checkpointRawRecord],
+            failNormalizeOnce: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events).toContain("mark-raw-failed:Paired sibling row is not cached yet.")
+    expect(
+      events.filter((event) => event === "stub:normalize:stub-chain:stub_transaction")
+    ).toHaveLength(2)
+    expect(events).toContain("mark-raw-normalized")
+    expect(events).toContain("complete:1:1")
+    expect(events).toContain("failed:0")
   })
 
   it("routes Solana production sources through the Helius provider key", async () => {

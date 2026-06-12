@@ -15,6 +15,7 @@ import {
   AssetRepository,
   ProviderAssetRepository,
   ProviderReferenceRepository,
+  SourceRawRecordRepository,
 } from "@my/sync-engine/services"
 
 const watermark = new Date("2026-01-01T00:00:00.000Z")
@@ -113,6 +114,8 @@ const runWithProvider = <A, E>(
             findAssetByBlockchainAndContractAddress: () =>
               Effect.dieMessage("findAssetByBlockchainAndContractAddress should not be called"),
             listBlockchains: () => Effect.dieMessage("listBlockchains should not be called"),
+            upsertCanonicalAsset: () =>
+              Effect.dieMessage("upsertCanonicalAsset should not be called"),
           })
         ),
         Layer.provide(
@@ -133,6 +136,10 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("findProviderAssetByNaturalKey should not be called"),
             findProviderAssetByCurrencyCode: () =>
               Effect.dieMessage("findProviderAssetByCurrencyCode should not be called"),
+            findProviderAssetReviewById: () =>
+              Effect.dieMessage("findProviderAssetReviewById should not be called"),
+            listProviderAssetReviews: () =>
+              Effect.dieMessage("listProviderAssetReviews should not be called"),
             findProviderAssetMapping: () =>
               Effect.dieMessage("findProviderAssetMapping should not be called"),
           })
@@ -147,6 +154,23 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("findTransactionTypeMapping should not be called"),
             recordPendingTransactionTypeMapping: () =>
               Effect.dieMessage("recordPendingTransactionTypeMapping should not be called"),
+          })
+        ),
+        Layer.provide(
+          Layer.succeed(SourceRawRecordRepository, {
+            upsertRawBatch: () => Effect.dieMessage("upsertRawBatch should not be called"),
+            listReplayCandidates: () =>
+              Effect.dieMessage("listReplayCandidates should not be called"),
+            listAllRawRowsForReplay: () =>
+              Effect.dieMessage("listAllRawRowsForReplay should not be called"),
+            listRawRecordsByOccurredAt: () =>
+              Effect.dieMessage("listRawRecordsByOccurredAt should not be called"),
+            markRawRecordNormalized: () =>
+              Effect.dieMessage("markRawRecordNormalized should not be called"),
+            markRawRecordFailed: () =>
+              Effect.dieMessage("markRawRecordFailed should not be called"),
+            resetNormalizationStateForSource: () =>
+              Effect.dieMessage("resetNormalizationStateForSource should not be called"),
           })
         )
       )

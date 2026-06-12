@@ -18,14 +18,10 @@
     "dev": "tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo",
-    "format": "oxfmt -c ../../oxfmtrc.jsonc",
-    "lint": "oxlint -c ../../oxlintrc.json"
   },
   "devDependencies": {
     "@my/typescript-config": "workspace:*",
     "@types/node": "~25.2.2",
-    "oxfmt": "~0.28.0",
-    "oxlint": "~1.43.0",
     "typescript": "~5.9.2"
   }
 }

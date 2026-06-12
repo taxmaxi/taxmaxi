@@ -29,6 +29,7 @@ import {
 } from "@my/sync-engine/services"
 import {
   SourceRepository as PersistenceSourceRepository,
+  SourceReportRepository,
   TaxCalculationService,
 } from "@my/persistence/services"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
@@ -43,9 +44,29 @@ import {
   SourceCreateResponse,
   SourceCreateClaimMetadata,
   SourcePaymentRequiredError,
+  SourceAssetPnlResponse,
+  SourceAssetPnlRow,
+  SourceDisposalExplanationResponse,
+  SourceDisposalMatchedLot,
+  SourceFifoLotDisposalSummary,
+  SourceFifoLotsResponse,
+  SourceFifoLotRow,
+  SourceOverviewResponse,
+  SourceReportReviewIssue,
+  SourceReportReviewSummary,
+  SourceReportSyncStatus,
+  SourceReportTotals,
+  SourceReportAsset,
+  SourceTransactionMovement,
+  SourceTransactionRow,
+  SourceTaxEventRow,
+  SourceReportPageInfo,
+  SourceTaxEventsResponse,
+  SourceTransactionsResponse,
 } from "../definitions/SourcesApi.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { Layer, Option } from "effect"
+import type { ReportReviewReasonCode } from "@my/core/report"
 import { SourceCreationService } from "../services/SourceCreationService.ts"
 import { AnonSessionService } from "../services/AnonSessionService.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
@@ -56,6 +77,7 @@ const toBadRequestError = (message: string) => new SourceBadRequestError({ messa
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 const sourceNotFoundMessage = "No source found. Connect a source first."
+const defaultReportPageLimit = 50
 const cookieOptionsForEnv = (environment: string) => ({
   httpOnly: true,
   secure: environment === "production",
@@ -68,6 +90,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
     const taxCalculationService = yield* TaxCalculationService
     const sourceSyncService = yield* SourceSyncService
     const sourceRepository = yield* PersistenceSourceRepository
+    const sourceReportRepository = yield* SourceReportRepository
     const syncEngineSourceRepository = yield* SyncEngineSourceRepository
     const optionalCurrentUser = yield* OptionalCurrentUser
     const sourceCreationService = yield* SourceCreationService
@@ -125,6 +148,63 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             }
           })
         )
+
+    const reportScope = ({
+      principalId,
+      sourceId,
+    }: {
+      readonly principalId: string
+      readonly sourceId: string
+    }) =>
+      Schema.decodeUnknown(SourceId)(sourceId).pipe(
+        Effect.map((decodedSourceId) => ({ principalId, sourceId: decodedSourceId })),
+        Effect.mapError(() => toBadRequestError("Invalid source identifier."))
+      )
+
+    const reportPageParams = ({
+      cursor,
+      limit,
+    }: {
+      readonly cursor?: string | undefined
+      readonly limit?: number | undefined
+    }) => ({
+      cursor: cursor ?? null,
+      limit: limit ?? defaultReportPageLimit,
+    })
+
+    const mapReportError =
+      (message: string) => (error: { readonly _tag: string; readonly message: string }) => {
+        switch (error._tag) {
+          case "SourceReportSourceNotFoundError":
+            return new SourceNotFoundError({ message: sourceNotFoundMessage })
+          case "SourceReportInvalidCursorError":
+            return toBadRequestError(error.message)
+          default:
+            return toInternalServerError(message)
+        }
+      }
+
+    const reportAsset = (asset: {
+      readonly assetId: string
+      readonly symbol: string
+      readonly name: string
+    }) => SourceReportAsset.make(asset)
+
+    const reportReviewSummary = (review: {
+      readonly status: "ok" | "needs_review"
+      readonly needsReviewCount: number
+      readonly blockingIssueCount: number
+      readonly issues: ReadonlyArray<{
+        readonly code: ReportReviewReasonCode
+        readonly count: number
+        readonly blocking: boolean
+        readonly summary: string
+      }>
+    }) =>
+      SourceReportReviewSummary.make({
+        ...review,
+        issues: review.issues.map((issue) => SourceReportReviewIssue.make(issue)),
+      })
 
     return handlers
       .handle("listSources", () =>
@@ -345,6 +425,135 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             )
 
           return TaxCalculationResponse.make(taxes)
+        })
+      )
+      .handle("getSourceOverview", ({ path }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolveCurrentUserPrincipal
+          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
+          const overview = yield* sourceReportRepository
+            .getOverview(scope)
+            .pipe(Effect.mapError(mapReportError("Failed to load source overview.")))
+
+          return SourceOverviewResponse.make({
+            source: overview.source,
+            latestSync: SourceReportSyncStatus.make(overview.latestSync),
+            totals: SourceReportTotals.make(overview.totals),
+            review: reportReviewSummary(overview.review),
+          })
+        })
+      )
+      .handle("listSourceAssetPnl", ({ path }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolveCurrentUserPrincipal
+          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
+          const assets = yield* sourceReportRepository
+            .listAssetPnl(scope)
+            .pipe(Effect.mapError(mapReportError("Failed to load source asset P&L.")))
+
+          return SourceAssetPnlResponse.make({
+            assets: assets.map((row) =>
+              SourceAssetPnlRow.make({
+                ...row,
+                asset: reportAsset(row.asset),
+                review: reportReviewSummary(row.review),
+              })
+            ),
+          })
+        })
+      )
+      .handle("listSourceTransactions", ({ path, urlParams }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolveCurrentUserPrincipal
+          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
+          const page = yield* sourceReportRepository
+            .listTransactions({ ...scope, ...reportPageParams(urlParams) })
+            .pipe(Effect.mapError(mapReportError("Failed to load source transactions.")))
+
+          return SourceTransactionsResponse.make({
+            transactions: page.items.map((row) =>
+              SourceTransactionRow.make({
+                ...row,
+                movements: row.movements.map((movement) =>
+                  SourceTransactionMovement.make({
+                    ...movement,
+                    asset: reportAsset(movement.asset),
+                  })
+                ),
+              })
+            ),
+            page: SourceReportPageInfo.make({
+              nextCursor: page.nextCursor,
+              hasMore: page.hasMore,
+            }),
+          })
+        })
+      )
+      .handle("listSourceTaxEvents", ({ path, urlParams }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolveCurrentUserPrincipal
+          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
+          const page = yield* sourceReportRepository
+            .listTaxEvents({ ...scope, ...reportPageParams(urlParams) })
+            .pipe(Effect.mapError(mapReportError("Failed to load source tax events.")))
+
+          return SourceTaxEventsResponse.make({
+            taxEvents: page.items.map((row) =>
+              SourceTaxEventRow.make({
+                ...row,
+                asset: reportAsset(row.asset),
+              })
+            ),
+            page: SourceReportPageInfo.make({
+              nextCursor: page.nextCursor,
+              hasMore: page.hasMore,
+            }),
+          })
+        })
+      )
+      .handle("listSourceFifoLots", ({ path, urlParams }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolveCurrentUserPrincipal
+          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
+          const page = yield* sourceReportRepository
+            .listFifoLots({ ...scope, ...reportPageParams(urlParams) })
+            .pipe(Effect.mapError(mapReportError("Failed to load source FIFO lots.")))
+
+          return SourceFifoLotsResponse.make({
+            fifoLots: page.items.map((row) =>
+              SourceFifoLotRow.make({
+                ...row,
+                asset: reportAsset(row.asset),
+                disposalMatches: row.disposalMatches.map((match) =>
+                  SourceFifoLotDisposalSummary.make(match)
+                ),
+              })
+            ),
+            page: SourceReportPageInfo.make({
+              nextCursor: page.nextCursor,
+              hasMore: page.hasMore,
+            }),
+          })
+        })
+      )
+      .handle("explainSourceDisposal", ({ path }) =>
+        Effect.gen(function* () {
+          const principal = yield* resolveCurrentUserPrincipal
+          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
+          const explanation = yield* sourceReportRepository
+            .explainDisposal({ ...scope, legId: path.legId })
+            .pipe(Effect.mapError(mapReportError("Failed to explain source disposal.")))
+
+          return SourceDisposalExplanationResponse.make({
+            ...explanation,
+            asset: reportAsset(explanation.asset),
+            matchedLots: explanation.matchedLots.map((lot) =>
+              SourceDisposalMatchedLot.make({
+                ...lot,
+                asset: reportAsset(lot.asset),
+              })
+            ),
+          })
         })
       )
   })

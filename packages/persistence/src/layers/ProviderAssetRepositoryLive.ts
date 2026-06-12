@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -342,6 +342,120 @@ const make = Effect.gen(function* () {
         return Option.fromNullable(row)
       })
 
+  const providerAssetReviewProjection = {
+    providerAsset: {
+      id: schema.providerAssets.id,
+      provider: schema.providerAssets.provider,
+      providerAssetId: schema.providerAssets.providerAssetId,
+      naturalKey: schema.providerAssets.naturalKey,
+      currencyCode: schema.providerAssets.currencyCode,
+      name: schema.providerAssets.name,
+      exponent: schema.providerAssets.exponent,
+      providerType: schema.providerAssets.providerType,
+      rawProviderPayload: schema.providerAssets.rawProviderPayload,
+      discoveredAt: schema.providerAssets.discoveredAt,
+      retrievedAt: schema.providerAssets.retrievedAt,
+    },
+    mapping: {
+      providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+      mappingKind: schema.providerAssetMappings.mappingKind,
+      canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+      canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+      canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
+      mappingStatus: schema.providerAssetMappings.mappingStatus,
+      reviewerNotes: schema.providerAssetMappings.reviewerNotes,
+      sourceNotes: schema.providerAssetMappings.sourceNotes,
+    },
+  } as const
+
+  const findProviderAssetReviewById: ProviderAssetRepositoryShape["findProviderAssetReviewById"] =
+    ({ providerAssetRowId }) =>
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select(providerAssetReviewProjection)
+          .from(schema.providerAssets)
+          .leftJoin(
+            schema.providerAssetMappings,
+            eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+          )
+          .where(eq(schema.providerAssets.id, providerAssetRowId))
+          .limit(1)
+          .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetReviewById"))
+
+        return Option.fromNullable(row)
+      })
+
+  const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
+    providerKey,
+    mappingStatus,
+    cursorProviderAssetRowId,
+    limit,
+  }) =>
+    Effect.gen(function* () {
+      const cursorRow =
+        cursorProviderAssetRowId === null
+          ? Option.none<{
+              readonly id: string
+              readonly provider: string
+              readonly currencyCode: string
+            }>()
+          : yield* db
+              .select({
+                id: schema.providerAssets.id,
+                provider: schema.providerAssets.provider,
+                currencyCode: schema.providerAssets.currencyCode,
+              })
+              .from(schema.providerAssets)
+              .where(eq(schema.providerAssets.id, cursorProviderAssetRowId))
+              .limit(1)
+              .pipe(
+                Effect.map(([row]) => Option.fromNullable(row)),
+                wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews.cursor")
+              )
+
+      if (cursorProviderAssetRowId !== null && Option.isNone(cursorRow)) {
+        return []
+      }
+
+      const cursorPredicate = Option.match(cursorRow, {
+        onNone: () => undefined,
+        onSome: (row) =>
+          or(
+            gt(schema.providerAssets.provider, row.provider),
+            and(
+              eq(schema.providerAssets.provider, row.provider),
+              gt(schema.providerAssets.currencyCode, row.currencyCode)
+            ),
+            and(
+              eq(schema.providerAssets.provider, row.provider),
+              eq(schema.providerAssets.currencyCode, row.currencyCode),
+              gt(schema.providerAssets.id, row.id)
+            )
+          ),
+      })
+      const predicates = [
+        eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
+        ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
+        ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
+      ]
+
+      return yield* db
+        .select(providerAssetReviewProjection)
+        .from(schema.providerAssets)
+        .innerJoin(
+          schema.providerAssetMappings,
+          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+        )
+        .where(and(...predicates))
+        .orderBy(
+          asc(schema.providerAssets.provider),
+          asc(schema.providerAssets.currencyCode),
+          asc(schema.providerAssets.id)
+        )
+        .limit(limit)
+        .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews"))
+    })
+
   const findProviderAssetMapping: ProviderAssetRepositoryShape["findProviderAssetMapping"] = ({
     providerAssetRowId,
   }) =>
@@ -371,6 +485,8 @@ const make = Effect.gen(function* () {
     findProviderAssetByProviderAssetId,
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,
+    findProviderAssetReviewById,
+    listProviderAssetReviews,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })

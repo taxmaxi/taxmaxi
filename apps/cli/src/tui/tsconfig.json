@@ -1,0 +1,10 @@
+{
+  "extends": "@my/typescript-config/node.json",
+  "include": ["."],
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "incremental": false
+  }
+}

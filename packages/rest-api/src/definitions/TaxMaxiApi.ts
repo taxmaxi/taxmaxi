@@ -13,6 +13,7 @@ import { AuthApi, AuthSessionApi, CoinbaseCompatApi } from "./AuthApi.ts"
 import { AnonApi } from "./AnonApi.ts"
 import { LegalReferenceApi } from "./LegalReferenceApi.ts"
 import { PrincipalsApi } from "./PrincipalsApi.ts"
+import { AssetsApi } from "./AssetsApi.ts"
 import { SourcesApi } from "./SourcesApi.ts"
 import { SyncRunsApi } from "./SyncRunsApi.ts"
 
@@ -82,6 +83,7 @@ export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(CoinbaseCompatApi)
   .add(LegalReferenceApi)
   .add(PrincipalsApi)
+  .add(AssetsApi)
   .add(SourcesApi)
   .add(SyncRunsApi)
   .annotateContext(
