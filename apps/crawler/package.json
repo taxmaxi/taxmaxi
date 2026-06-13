@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "crawl:solana:week": "pnpm run build && dotenv -e .env -- node dist/index.js crawl solana --start-date 2026-05-25 --end-date 2026-06-01 --top-projects 8 --json",
+    "crawl:solana:week": "pnpm run build && dotenv -e ../../.env -e .env -- node dist/index.js crawl solana --start-date 2026-05-25 --end-date 2026-06-01 --top-projects 8 --json",
     "dev": "dotenv -- tsc --watch --preserveWatchOutput",
     "type-check": "tsc --noEmit",
     "type-check:tests": "tsc -p tsconfig.tests.json",

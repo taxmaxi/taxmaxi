@@ -16,6 +16,7 @@
  * @module
  */
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
 import * as Schema from "effect/Schema"
 import {
   SolanaDuneQueryConfig,
@@ -57,6 +58,7 @@ const DexProjectPriorityRow = Schema.Struct({
   approx_trade_transactions: NumericField,
   trade_rows: NumericField,
   canonical_program_ids: Schema.NullOr(Schema.Array(Schema.String)),
+  canonical_program_id_count: NumericField,
   volume_usd: NumericField,
 })
 
@@ -157,14 +159,27 @@ const safeCount = ({
 
 const UTC_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
+const invalidUtcDate = (field: string): SolanaDuneError =>
+  new SolanaDuneError({
+    message: `\`${field}\` must be a UTC date formatted as YYYY-MM-DD`,
+  })
+
+const decodeUtcDate = (
+  value: string,
+  field: string
+): Effect.Effect<DateTime.Utc, SolanaDuneError> =>
+  Schema.decodeUnknown(Schema.DateTimeUtc)(`${value}T00:00:00.000Z`).pipe(
+    Effect.mapError(() => invalidUtcDate(field))
+  )
+
 const validateUtcDate = (value: string, field: string): Effect.Effect<string, SolanaDuneError> =>
-  UTC_DATE_PATTERN.test(value) && !Number.isNaN(new Date(`${value}T00:00:00.000Z`).getTime())
-    ? Effect.succeed(value)
-    : Effect.fail(
-        new SolanaDuneError({
-          message: `\`${field}\` must be a UTC date formatted as YYYY-MM-DD`,
-        })
-      )
+  decodeUtcDate(value, field).pipe(
+    Effect.filterOrFail(
+      (dateTime) => UTC_DATE_PATTERN.test(value) && DateTime.formatIsoDateUtc(dateTime) === value,
+      () => invalidUtcDate(field)
+    ),
+    Effect.as(value)
+  )
 
 const validateDateRange = ({
   startDate,
@@ -182,38 +197,46 @@ const validateDateRange = ({
     }
   })
 
-const addUtcDays = (date: string, days: number): string => {
-  const parsed = new Date(`${date}T00:00:00.000Z`)
-  parsed.setUTCDate(parsed.getUTCDate() + days)
-  return parsed.toISOString().slice(0, 10)
-}
+const addUtcDays = (date: string, days: number): Effect.Effect<string, SolanaDuneError> =>
+  decodeUtcDate(date, "date").pipe(
+    Effect.map(DateTime.add({ days })),
+    Effect.map(DateTime.formatIsoDateUtc)
+  )
 
-const windowDayCount = ({ startDate, endDate }: DateWindow): number => {
+const windowDayCount = ({
+  startDate,
+  endDate,
+}: DateWindow): Effect.Effect<number, SolanaDuneError> => {
   const millisPerDay = 24 * 60 * 60 * 1000
-  const start = new Date(`${startDate}T00:00:00.000Z`).getTime()
-  const end = new Date(`${endDate}T00:00:00.000Z`).getTime()
-  return Math.round((end - start) / millisPerDay)
+  return Effect.gen(function* () {
+    const start = yield* decodeUtcDate(startDate, "startDate")
+    const end = yield* decodeUtcDate(endDate, "endDate")
+    return Math.round(DateTime.distance(start, end) / millisPerDay)
+  })
 }
 
 const splitIntoWindows = ({
   startDate,
   endDate,
   windowDays,
-}: DateWindow & { readonly windowDays: number }): ReadonlyArray<DateWindow> => {
-  const windows: Array<DateWindow> = []
-  let windowStart = startDate
+}: DateWindow & {
+  readonly windowDays: number
+}): Effect.Effect<ReadonlyArray<DateWindow>, SolanaDuneError> =>
+  Effect.gen(function* () {
+    const windows: Array<DateWindow> = []
+    let windowStart = startDate
 
-  while (windowStart < endDate) {
-    const windowEnd = addUtcDays(windowStart, windowDays)
-    windows.push({
-      startDate: windowStart,
-      endDate: windowEnd < endDate ? windowEnd : endDate,
-    })
-    windowStart = windowEnd
-  }
+    while (windowStart < endDate) {
+      const windowEnd = yield* addUtcDays(windowStart, windowDays)
+      windows.push({
+        startDate: windowStart,
+        endDate: windowEnd < endDate ? windowEnd : endDate,
+      })
+      windowStart = windowEnd
+    }
 
-  return windows
-}
+    return windows
+  })
 
 const isDuneExecutionTimeout = (error: SolanaDuneError): boolean =>
   error.message.includes("EXECUTION_TIMEOUT")
@@ -237,6 +260,7 @@ const priorityRowsForWindow = (
   Effect.gen(function* () {
     const client = yield* SolanaDuneClient
     const query = SOLANA_DEX_PROJECT_PRIORITY_QUERY
+    const dayCount = yield* windowDayCount(window)
     const parameters = {
       start_date: window.startDate,
       end_date: window.endDate,
@@ -260,7 +284,7 @@ const priorityRowsForWindow = (
 
     return yield* execution.pipe(
       Effect.catchIf(
-        (error) => isDuneExecutionTimeout(error) && windowDayCount(window) > 1,
+        (error) => isDuneExecutionTimeout(error) && dayCount > 1,
         () =>
           Effect.gen(function* () {
             recorder.push({
@@ -270,8 +294,8 @@ const priorityRowsForWindow = (
               status: "timed_out",
               response: null,
             })
-            const halfDays = Math.ceil(windowDayCount(window) / 2)
-            const midDate = addUtcDays(window.startDate, halfDays)
+            const halfDays = Math.ceil(dayCount / 2)
+            const midDate = yield* addUtcDays(window.startDate, halfDays)
             yield* Effect.logInfo(
               { startDate: window.startDate, endDate: window.endDate, midDate },
               "Dune priority query timed out; halving window"
@@ -310,10 +334,11 @@ const sampleSignaturesForProject = ({
   Effect.gen(function* () {
     const client = yield* SolanaDuneClient
     const query = SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY
+    const endDate = yield* addUtcDays(sampleDate, 1)
     const parameters = {
       project,
       start_date: sampleDate,
-      end_date: addUtcDays(sampleDate, 1),
+      end_date: endDate,
     }
     const response = yield* client.executeQuery({ query, parameters })
     recorder.push({
@@ -355,9 +380,23 @@ const entriesFromPriorityRow = ({
       query,
       field: "approx_unique_traders",
     })
-    const programIds = [
-      ...new Set((row.canonical_program_ids ?? []).filter((programId) => programId.trim() !== "")),
-    ]
+    const rawProgramIds = row.canonical_program_ids ?? []
+    const canonicalProgramIdCount = yield* safeCount({
+      value: row.canonical_program_id_count,
+      query,
+      field: "canonical_program_id_count",
+    })
+
+    if (rawProgramIds.length < canonicalProgramIdCount) {
+      return yield* Effect.fail(
+        queryError({
+          query,
+          message: `Dune row for project ${row.project} has ${rawProgramIds.length} canonical_program_ids but canonical_program_id_count is ${canonicalProgramIdCount}`,
+        })
+      )
+    }
+
+    const programIds = [...new Set(rawProgramIds.filter((programId) => programId.trim() !== ""))]
 
     return programIds.map((programId) => ({
       programId,
@@ -403,7 +442,7 @@ export const buildSolanaDexDiscoveryFile = ({
       )
     }
 
-    const windows = splitIntoWindows({ startDate, endDate, windowDays })
+    const windows = yield* splitIntoWindows({ startDate, endDate, windowDays })
     const sampledProjects = new Map<string, ReadonlyArray<string>>()
     const entries: Array<SolanaDuneRankingEntry> = []
     const executions: ExecutionRecorder = []

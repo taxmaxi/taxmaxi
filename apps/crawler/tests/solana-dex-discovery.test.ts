@@ -34,12 +34,14 @@ const priorityRow = ({
   traders,
   volume,
   programIds,
+  programIdCount = programIds?.length ?? 0,
   period = "2024-01-01 to 2024-01-08",
 }: {
   readonly project: string
   readonly traders: number
   readonly volume: number
   readonly programIds: ReadonlyArray<string> | null
+  readonly programIdCount?: number
   readonly period?: string
 }) => ({
   project,
@@ -50,6 +52,7 @@ const priorityRow = ({
   approx_trade_transactions: traders * 2,
   trade_rows: traders * 3,
   canonical_program_ids: programIds,
+  canonical_program_id_count: programIdCount,
   volume_usd: volume,
 })
 
@@ -394,6 +397,43 @@ describe("solana dex discovery", () => {
     expect(file.entries.map((entry) => entry.programId)).toEqual([ORCA_WHIRLPOOL_PROGRAM])
   })
 
+  it("fails when Dune returns a truncated canonical program id sample", async () => {
+    const result = await Effect.runPromiseExit(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-08",
+        topProjects: 10,
+        samplesPerProject: 0,
+      }).pipe(
+        Effect.provide(
+          dexDiscoveryClientLive({
+            priorityRows: [
+              priorityRow({
+                project: "raydium",
+                traders: 107551,
+                volume: 175670048.87,
+                programIds: Array.from(
+                  { length: 20 },
+                  (_, index) => `${RAYDIUM_AMM_PROGRAM}-${index}`
+                ),
+                programIdCount: 21,
+              }),
+            ],
+            failSampleQuery: true,
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain(
+        "has 20 canonical_program_ids but canonical_program_id_count is 21"
+      )
+    }
+  })
+
   it("fails when the range produces no candidate entries", async () => {
     const result = await Effect.runPromiseExit(
       buildSolanaDexDiscoveryFile({
@@ -444,6 +484,25 @@ describe("solana dex discovery", () => {
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
       expect(result.cause.toString()).toContain("`startDate` must be before `endDate`")
+    }
+  })
+
+  it("rejects normalized but invalid calendar dates", async () => {
+    const result = await Effect.runPromiseExit(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-02-31",
+        endDate: "2024-03-08",
+        topProjects: 10,
+        samplesPerProject: 25,
+      }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain(
+        "`startDate` must be a UTC date formatted as YYYY-MM-DD"
+      )
     }
   })
 

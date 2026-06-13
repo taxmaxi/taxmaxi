@@ -594,6 +594,9 @@ export const crawlSolanaProgram = ({
     }
 
     const replayedFromFile = Option.getOrNull(fromFile)
+    const importedCandidateCount = new Set(
+      duneProtocolCandidateImport.candidates.map((candidate) => candidate.id)
+    ).size
 
     if (json) {
       yield* Console.log(
@@ -602,7 +605,7 @@ export const crawlSolanaProgram = ({
           ...(dexProjectRankingsPath === null ? {} : { dexProjectRankingsPath }),
           ...(replayedFromFile === null ? {} : { replayedFromFile }),
           entries: dexProjectRankings.entries.length,
-          candidates: duneProtocolCandidateImport.candidates.length,
+          candidates: importedCandidateCount,
           duneProtocolCandidateObservations: duneProtocolCandidateImport.observationCount,
         })
       )
