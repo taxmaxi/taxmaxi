@@ -22,11 +22,16 @@ export const SolanaDuneQueryConfig = Schema.Struct({
 export type SolanaDuneQueryConfig = typeof SolanaDuneQueryConfig.Type
 
 export const SolanaDuneRankingEntry = Schema.Struct({
-  programId: Schema.String,
+  /** Subject shape persisted into the protocol candidate review queue. */
+  subjectKind: Schema.Literal("protocol"),
+  /** Stable project/protocol identifier from Dune, for example `raydium`. */
+  subjectIdentifier: Schema.String,
   /** Protocol/project name reported by the Dune query, for example `jupiter`. */
   protocolNameHint: Schema.NullOr(Schema.String),
   /** Tax-relevant category reported by the Dune query, for example `swap`. */
   categoryHint: Schema.NullOr(Schema.String),
+  /** Canonical Solana program ids Dune attributed to the project in this window. */
+  canonicalProgramIds: Schema.Array(Schema.String),
   /** Observed window formatted as `YYYY-MM-DD to YYYY-MM-DD`. */
   period: Schema.String,
   invocationCount: Schema.Number,
@@ -153,9 +158,11 @@ const parseFilePeriod = (
 }
 
 const rawPayloadFromEntry = (entry: SolanaDuneRankingEntry): Record<string, unknown> => ({
-  programId: entry.programId,
+  subjectKind: entry.subjectKind,
+  subjectIdentifier: entry.subjectIdentifier,
   protocolNameHint: entry.protocolNameHint,
   categoryHint: entry.categoryHint,
+  canonicalProgramIds: [...entry.canonicalProgramIds],
   period: entry.period,
   invocationCount: entry.invocationCount,
   uniqueSignerCount: entry.uniqueSignerCount,
@@ -181,8 +188,8 @@ const observationFromEntry = ({
 
     return {
       blockchainName,
-      subjectKind: "program",
-      subjectIdentifier: entry.programId,
+      subjectKind: entry.subjectKind,
+      subjectIdentifier: entry.subjectIdentifier,
       protocolNameHint: entry.protocolNameHint,
       categoryHint: entry.categoryHint,
       observedWindowStart,

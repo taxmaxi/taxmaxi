@@ -8,9 +8,9 @@
  *
  * Date ranges are split into windows and each window that hits the Dune
  * execution timeout is halved and retried, so high-volume periods crawl with
- * smaller windows automatically. Every canonical program id of a ranked
- * project becomes one candidate entry with the project name and tax category
- * attached. Each project is sampled once per invocation from a one-day slice
+ * smaller windows automatically. Every ranked project with canonical program
+ * ids becomes one candidate entry with the program ids retained as review
+ * evidence. Each project is sampled once per invocation from a one-day slice
  * to keep Dune credit usage low.
  *
  * @module
@@ -248,6 +248,30 @@ type PriorityWindowResult = {
 
 type ExecutionRecorder = Array<SolanaDuneRecordedExecution>
 
+const canonicalProgramIdsFromPriorityRow = (
+  row: typeof DexProjectPriorityRow.Type
+): Effect.Effect<ReadonlyArray<string>, SolanaDuneError> =>
+  Effect.gen(function* () {
+    const query = SOLANA_DEX_PROJECT_PRIORITY_QUERY
+    const rawProgramIds = row.canonical_program_ids ?? []
+    const canonicalProgramIdCount = yield* safeCount({
+      value: row.canonical_program_id_count,
+      query,
+      field: "canonical_program_id_count",
+    })
+
+    if (rawProgramIds.length < canonicalProgramIdCount) {
+      return yield* Effect.fail(
+        queryError({
+          query,
+          message: `Dune row for project ${row.project} has ${rawProgramIds.length} canonical_program_ids but canonical_program_id_count is ${canonicalProgramIdCount}`,
+        })
+      )
+    }
+
+    return [...new Set(rawProgramIds.filter((programId) => programId.trim() !== ""))]
+  })
+
 /**
  * Execute the priority query for one window, halving the window on Dune
  * execution timeouts until it fits or a one-day window still times out.
@@ -356,13 +380,15 @@ const sampleSignaturesForProject = ({
 
 const entriesFromPriorityRow = ({
   row,
+  canonicalProgramIds,
   period,
   sampleSignatures,
 }: {
   readonly row: typeof DexProjectPriorityRow.Type
+  readonly canonicalProgramIds: ReadonlyArray<string>
   readonly period: string
   readonly sampleSignatures: ReadonlyArray<string>
-}): Effect.Effect<ReadonlyArray<SolanaDuneRankingEntry>, SolanaDuneError> =>
+}): Effect.Effect<SolanaDuneRankingEntry, SolanaDuneError> =>
   Effect.gen(function* () {
     const query = SOLANA_DEX_PROJECT_PRIORITY_QUERY
     const invocationCount = yield* safeCount({
@@ -380,28 +406,13 @@ const entriesFromPriorityRow = ({
       query,
       field: "approx_unique_traders",
     })
-    const rawProgramIds = row.canonical_program_ids ?? []
-    const canonicalProgramIdCount = yield* safeCount({
-      value: row.canonical_program_id_count,
-      query,
-      field: "canonical_program_id_count",
-    })
 
-    if (rawProgramIds.length < canonicalProgramIdCount) {
-      return yield* Effect.fail(
-        queryError({
-          query,
-          message: `Dune row for project ${row.project} has ${rawProgramIds.length} canonical_program_ids but canonical_program_id_count is ${canonicalProgramIdCount}`,
-        })
-      )
-    }
-
-    const programIds = [...new Set(rawProgramIds.filter((programId) => programId.trim() !== ""))]
-
-    return programIds.map((programId) => ({
-      programId,
+    return {
+      subjectKind: "protocol",
+      subjectIdentifier: row.project,
       protocolNameHint: row.project,
       categoryHint: row.tax_category,
+      canonicalProgramIds: [...canonicalProgramIds],
       period,
       invocationCount,
       uniqueSignerCount,
@@ -412,15 +423,15 @@ const entriesFromPriorityRow = ({
       queryName: query.queryName,
       queryVersion: query.version,
       retrievedAt: row.retrieved_at,
-    }))
+    }
   })
 
 /**
  * Build a Solana Dune rankings file from the curated DEX project queries.
  *
- * One entry is emitted per canonical program id of each ranked project and
- * window, so multi-program DEXes such as raydium or meteora are fully
- * represented and long ranges build per-window observation history.
+ * One entry is emitted per ranked project and window, with canonical program ids
+ * retained as evidence so project-level Dune metrics are not overstated as
+ * per-program measurements.
  */
 export const buildSolanaDexDiscoveryFile = ({
   generatedAt,
@@ -461,6 +472,11 @@ export const buildSolanaDexDiscoveryFile = ({
         const period = `${executedWindow.startDate} to ${executedWindow.endDate}`
 
         for (const row of topRows) {
+          const canonicalProgramIds = yield* canonicalProgramIdsFromPriorityRow(row)
+          if (canonicalProgramIds.length === 0) {
+            continue
+          }
+
           let sampleSignatures: ReadonlyArray<string> = []
           if (samplesPerProject > 0 && !sampledProjects.has(row.project)) {
             sampleSignatures = yield* sampleSignaturesForProject({
@@ -473,11 +489,12 @@ export const buildSolanaDexDiscoveryFile = ({
           }
 
           entries.push(
-            ...(yield* entriesFromPriorityRow({
+            yield* entriesFromPriorityRow({
               row,
+              canonicalProgramIds,
               period,
               sampleSignatures,
-            }))
+            })
           )
         }
       }

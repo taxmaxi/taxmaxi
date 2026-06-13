@@ -134,6 +134,8 @@ const makeDuneOnchainDataSourceObservationKey = (
   [
     observation.sourceMetadata.queryId,
     observation.sourceMetadata.queryVersion,
+    observation.protocolNameHint ?? "",
+    observation.categoryHint ?? "",
     observation.observedWindowStart.toISOString(),
     observation.observedWindowEnd.toISOString(),
   ].join(":")

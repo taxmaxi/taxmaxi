@@ -186,9 +186,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
       ],
       entries: [
         {
-          programId: "dex-only-program",
+          subjectKind: "protocol",
+          subjectIdentifier: "orca",
           protocolNameHint: "orca",
           categoryHint: "swap",
+          canonicalProgramIds: ["dex-only-program"],
           period: "2024-01-01 to 2025-01-01",
           invocationCount: 12_345,
           uniqueSignerCount: 456,
@@ -220,7 +222,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
             mappingStatus: schema.protocolCandidates.mappingStatus,
           })
           .from(schema.protocolCandidates)
-          .where(eq(schema.protocolCandidates.subjectIdentifier, "dex-only-program"))
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "orca"))
           .limit(1)
 
         const [observation] =
@@ -263,8 +265,8 @@ describe("ProtocolCandidateRepositoryLive", () => {
     expect(result.observationCount).toBe(1)
     expect(result.candidates).toHaveLength(1)
     expect(rows.candidate, "Expected imported protocol candidate").toMatchObject({
-      subjectKind: "program",
-      subjectIdentifier: "dex-only-program",
+      subjectKind: "protocol",
+      subjectIdentifier: "orca",
       protocolNameHint: "orca",
       categoryHint: "swap",
       mappingStatus: "pending_review",
@@ -279,9 +281,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
     })
     expect(rows.observation?.rawPayload).toMatchObject({
-      programId: "dex-only-program",
+      subjectKind: "protocol",
+      subjectIdentifier: "orca",
       protocolNameHint: "orca",
       categoryHint: "swap",
+      canonicalProgramIds: ["dex-only-program"],
       period: "2024-01-01 to 2025-01-01",
       invocationCount: 12_345,
       uniqueSignerCount: 456,
@@ -345,7 +349,6 @@ describe("ProtocolCandidateRepositoryLive", () => {
           observations: [
             {
               ...observation,
-              protocolNameHint: null,
               interactionCount: 250,
               transactionCount: 200,
               uniqueActorCount: 90,
@@ -416,6 +419,146 @@ describe("ProtocolCandidateRepositoryLive", () => {
       transactionCount: "200",
       uniqueActorCount: "90",
       sampleTransactionHashes: ["signature-b"],
+    })
+  })
+
+  it("keeps distinct same-window Dune observations when project hints differ", async () => {
+    const baseObservation = {
+      blockchainName: "solana",
+      subjectKind: "program" as const,
+      subjectIdentifier: "shared-dex-program",
+      categoryHint: "swap",
+      observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2024-01-08T00:00:00.000Z"),
+      transactionCount: 80,
+      uniqueActorCount: 25,
+      sampleTransactionHashes: ["signature-a"],
+      retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+      sourceMetadata: {
+        source: "dune" as const,
+        queryId: 7_647_495,
+        queryName: "solana-dex-project-priority",
+        queryVersion: 1,
+      },
+    }
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({
+          observations: [
+            {
+              ...baseObservation,
+              protocolNameHint: "raydium",
+              interactionCount: 100,
+              rawPayload: { project: "raydium" },
+            },
+            {
+              ...baseObservation,
+              protocolNameHint: "orca",
+              interactionCount: 200,
+              rawPayload: { project: "orca" },
+            },
+          ],
+        })
+      )
+    )
+
+    const rows = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidateCountRow] = yield* db
+          .select({ value: count(schema.protocolCandidates.id) })
+          .from(schema.protocolCandidates)
+
+        const observations = yield* db
+          .select({
+            key: schema.protocolCandidateObservations.onchainDataSourceObservationKey,
+            interactionCount: schema.protocolCandidateObservations.interactionCount,
+            rawPayload: schema.protocolCandidateObservations.rawPayload,
+          })
+          .from(schema.protocolCandidateObservations)
+
+        return {
+          candidateCount: candidateCountRow?.value ?? 0,
+          observations,
+        }
+      })
+    )
+
+    expect(rows.candidateCount).toBe(1)
+    expect(rows.observations).toHaveLength(2)
+    expect(rows.observations.map((row) => row.interactionCount).sort()).toEqual(["100", "200"])
+    expect(rows.observations.map((row) => row.rawPayload)).toEqual(
+      expect.arrayContaining([{ project: "raydium" }, { project: "orca" }])
+    )
+    expect(new Set(rows.observations.map((row) => row.key)).size).toBe(2)
+  })
+
+  it("refreshes non-null candidate hints on re-import", async () => {
+    const observation = {
+      blockchainName: "solana",
+      subjectKind: "program" as const,
+      subjectIdentifier: "renamed-dex-program",
+      protocolNameHint: "Old DEX",
+      categoryHint: "dex",
+      observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2024-01-08T00:00:00.000Z"),
+      interactionCount: 100,
+      transactionCount: 80,
+      uniqueActorCount: 25,
+      sampleTransactionHashes: ["signature-a"],
+      retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+      rawPayload: { project: "old-dex" },
+      sourceMetadata: {
+        source: "dune" as const,
+        queryId: 7_647_495,
+        queryName: "solana-dex-project-priority",
+        queryVersion: 1,
+      },
+    }
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({ observations: [observation] })
+      )
+    )
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({
+          observations: [
+            {
+              ...observation,
+              protocolNameHint: "New DEX",
+              categoryHint: "swap",
+              retrievedAt: new Date("2026-06-02T10:00:00.000Z"),
+              rawPayload: { project: "new-dex" },
+            },
+          ],
+        })
+      )
+    )
+
+    const row = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({
+            protocolNameHint: schema.protocolCandidates.protocolNameHint,
+            categoryHint: schema.protocolCandidates.categoryHint,
+            lastSeenAt: schema.protocolCandidates.lastSeenAt,
+          })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "renamed-dex-program"))
+          .limit(1)
+        return candidate
+      })
+    )
+
+    expect(row).toMatchObject({
+      protocolNameHint: "New DEX",
+      categoryHint: "swap",
+      lastSeenAt: new Date("2026-06-02T10:00:00.000Z"),
     })
   })
 
@@ -522,9 +665,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
       queries: [],
       entries: [
         {
-          programId: "malformed-period-program",
+          subjectKind: "protocol",
+          subjectIdentifier: "malformed-period-project",
           protocolNameHint: null,
           categoryHint: null,
+          canonicalProgramIds: ["malformed-period-program"],
           period: "2024",
           invocationCount: 1,
           uniqueSignerCount: null,

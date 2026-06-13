@@ -123,7 +123,7 @@ const runDiscovery = <A, E>(effect: Effect.Effect<A, E, never>): Promise<A> =>
   Effect.runPromise(effect)
 
 describe("solana dex discovery", () => {
-  it("emits one named, categorized entry per canonical program id", async () => {
+  it("emits one named, categorized project entry with canonical program id evidence", async () => {
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
         generatedAt: "2026-06-12T00:00:00.000Z",
@@ -134,16 +134,17 @@ describe("solana dex discovery", () => {
       }).pipe(Effect.provide(dexDiscoveryClientLive()))
     )
 
-    expect(file.entries.map((entry) => entry.programId)).toEqual([
-      RAYDIUM_AMM_PROGRAM,
-      RAYDIUM_CLMM_PROGRAM,
-      ORCA_WHIRLPOOL_PROGRAM,
-      PHOENIX_PROGRAM,
+    expect(file.entries.map((entry) => entry.subjectIdentifier)).toEqual([
+      "raydium",
+      "orca",
+      "phoenix",
     ])
     expect(file.entries[0]).toMatchObject({
-      programId: RAYDIUM_AMM_PROGRAM,
+      subjectKind: "protocol",
+      subjectIdentifier: "raydium",
       protocolNameHint: "raydium",
       categoryHint: "swap",
+      canonicalProgramIds: [RAYDIUM_AMM_PROGRAM, RAYDIUM_CLMM_PROGRAM],
       period: "2024-01-01 to 2024-01-08",
       invocationCount: 107551 * 3,
       uniqueSignerCount: 107551,
@@ -155,14 +156,10 @@ describe("solana dex discovery", () => {
       queryVersion: 1,
       retrievedAt: "2026-06-12T00:00:00Z",
     })
-    expect(file.entries[1]?.sampleSignatures).toEqual([
-      "raydium-swap-1",
-      "raydium-swap-2",
-      "raydium-swap-3",
-    ])
-    expect(file.entries[2]).toMatchObject({
+    expect(file.entries[1]).toMatchObject({
       protocolNameHint: "orca",
       categoryHint: "swap",
+      canonicalProgramIds: [ORCA_WHIRLPOOL_PROGRAM],
       volumeUsd: 247140649.51,
     })
     expect(file.queries.map((query) => query.queryName)).toEqual([
@@ -197,7 +194,7 @@ describe("solana dex discovery", () => {
       }).pipe(Effect.provide(dexDiscoveryClientLive()))
     )
 
-    expect(file.entries.map((entry) => entry.protocolNameHint)).toEqual(["raydium", "raydium"])
+    expect(file.entries.map((entry) => entry.protocolNameHint)).toEqual(["raydium"])
   })
 
   it("limits sample signatures per project", async () => {
@@ -255,19 +252,17 @@ describe("solana dex discovery", () => {
       },
     ])
 
-    const raydiumAmmEntries = file.entries.filter(
-      (entry) => entry.programId === RAYDIUM_AMM_PROGRAM
-    )
-    expect(raydiumAmmEntries.map((entry) => entry.period)).toEqual([
+    const raydiumEntries = file.entries.filter((entry) => entry.subjectIdentifier === "raydium")
+    expect(raydiumEntries.map((entry) => entry.period)).toEqual([
       "2024-01-01 to 2024-01-08",
       "2024-01-08 to 2024-01-15",
     ])
-    expect(raydiumAmmEntries[0]?.sampleSignatures).toEqual([
+    expect(raydiumEntries[0]?.sampleSignatures).toEqual([
       "raydium-swap-1",
       "raydium-swap-2",
       "raydium-swap-3",
     ])
-    expect(raydiumAmmEntries[1]?.sampleSignatures).toEqual([])
+    expect(raydiumEntries[1]?.sampleSignatures).toEqual([])
   })
 
   it("halves a window when the Dune execution times out", async () => {
@@ -369,7 +364,8 @@ describe("solana dex discovery", () => {
     }
   })
 
-  it("emits no entries for projects without canonical program ids", async () => {
+  it("emits no entries or sample queries for projects without canonical program ids", async () => {
+    const calls: Array<RecordedCall> = []
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
         generatedAt: "2026-06-12T00:00:00.000Z",
@@ -380,6 +376,7 @@ describe("solana dex discovery", () => {
       }).pipe(
         Effect.provide(
           dexDiscoveryClientLive({
+            calls,
             priorityRows: [
               priorityRow({ project: "mystery", traders: 999, volume: 1, programIds: null }),
               priorityRow({
@@ -394,7 +391,12 @@ describe("solana dex discovery", () => {
       )
     )
 
-    expect(file.entries.map((entry) => entry.programId)).toEqual([ORCA_WHIRLPOOL_PROGRAM])
+    expect(file.entries.map((entry) => entry.subjectIdentifier)).toEqual(["orca"])
+    expect(
+      calls
+        .filter((call) => call.kind === "dex-project-sample-transactions")
+        .map((call) => call.parameters.project)
+    ).toEqual(["orca"])
   })
 
   it("fails when Dune returns a truncated canonical program id sample", async () => {
@@ -542,36 +544,39 @@ describe("solana dex discovery", () => {
     expect(result.dexProjectRankingsPath).toBe(
       `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`
     )
-    expect(result.duneProtocolCandidateImport.observationCount).toBe(4)
+    expect(result.duneProtocolCandidateImport.observationCount).toBe(3)
     expect(
       importedObservations.map((observation) => ({
+        subjectKind: observation.subjectKind,
         subjectIdentifier: observation.subjectIdentifier,
         protocolNameHint: observation.protocolNameHint,
         categoryHint: observation.categoryHint,
+        canonicalProgramIds: observation.rawPayload.canonicalProgramIds,
       }))
     ).toEqual([
       {
-        subjectIdentifier: RAYDIUM_AMM_PROGRAM,
+        subjectKind: "protocol",
+        subjectIdentifier: "raydium",
         protocolNameHint: "raydium",
         categoryHint: "swap",
+        canonicalProgramIds: [RAYDIUM_AMM_PROGRAM, RAYDIUM_CLMM_PROGRAM],
       },
       {
-        subjectIdentifier: RAYDIUM_CLMM_PROGRAM,
-        protocolNameHint: "raydium",
-        categoryHint: "swap",
-      },
-      {
-        subjectIdentifier: ORCA_WHIRLPOOL_PROGRAM,
+        subjectKind: "protocol",
+        subjectIdentifier: "orca",
         protocolNameHint: "orca",
         categoryHint: "swap",
+        canonicalProgramIds: [ORCA_WHIRLPOOL_PROGRAM],
       },
       {
-        subjectIdentifier: PHOENIX_PROGRAM,
+        subjectKind: "protocol",
+        subjectIdentifier: "phoenix",
         protocolNameHint: "phoenix",
         categoryHint: "swap",
+        canonicalProgramIds: [PHOENIX_PROGRAM],
       },
     ])
-    expect(importedObservations[0]?.subjectKind).toBe("program")
+    expect(importedObservations[0]?.subjectKind).toBe("protocol")
     expect(importedObservations[0]?.sampleTransactionHashes).toEqual([
       "raydium-swap-1",
       "raydium-swap-2",
@@ -580,6 +585,7 @@ describe("solana dex discovery", () => {
     expect(importedObservations[0]?.rawPayload).toMatchObject({
       protocolNameHint: "raydium",
       categoryHint: "swap",
+      canonicalProgramIds: [RAYDIUM_AMM_PROGRAM, RAYDIUM_CLMM_PROGRAM],
       volumeUsd: 175670048.87,
     })
     expect(importedObservations[0]?.sourceMetadata).toEqual({
@@ -623,8 +629,8 @@ describe("solana dex discovery", () => {
     )
 
     expect(result.dexProjectRankingsPath).toBeNull()
-    expect(result.duneProtocolCandidateImport.observationCount).toBe(4)
-    expect(importedObservations).toHaveLength(4)
+    expect(result.duneProtocolCandidateImport.observationCount).toBe(3)
+    expect(importedObservations).toHaveLength(3)
   })
 
   it("replays a written rankings file without calling Dune", async () => {

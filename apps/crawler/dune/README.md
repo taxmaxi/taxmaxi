@@ -90,9 +90,10 @@ only the two curated DEX queries and imports the result into the
 1. `solana-dex-project-priority.sql` ranks DEX projects per date window.
 2. `solana-dex-project-sample-transactions.sql` samples diversified swap
    transactions once per project from a one-day slice.
-3. Every canonical program id of a ranked project becomes one candidate with
-   `protocol_name_hint` (project), `category_hint` (`swap`), counts, USD
-   volume, and sample transaction signatures attached as observation evidence.
+3. Every ranked project with canonical program ids becomes one candidate with
+   `protocol_name_hint` (project), `category_hint` (`swap`), project-level
+   counts, USD volume, canonical program ids, and sample transaction signatures
+   attached as observation evidence.
 
 Dune output is discovery evidence only. It cannot classify production
 transactions; runtime classification reads approved protocol mappings, never
