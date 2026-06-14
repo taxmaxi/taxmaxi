@@ -5,6 +5,7 @@ import * as blockchains from "./BlockchainsTable.ts"
 import * as cex from "./CexTable.ts"
 import * as cexAccount from "./CexAccountTable.ts"
 import * as disposalMatches from "./DisposalMatchesTable.ts"
+import * as duneProtocolCandidateObservations from "./DuneProtocolCandidateObservationsTable.ts"
 import * as emailVerificationRequests from "./EmailVerificationRequestsTable.ts"
 import * as fifoLots from "./FifoLotsTable.ts"
 import * as identities from "./IdentitiesTable.ts"
@@ -13,6 +14,8 @@ import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
 import * as principalClaims from "./PrincipalClaimsTable.ts"
 import * as principals from "./PrincipalsTable.ts"
+import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
+import * as protocolCandidates from "./ProtocolCandidatesTable.ts"
 import * as providerAssetMappings from "./ProviderAssetMappingsTable.ts"
 import * as providerAssets from "./ProviderAssetsTable.ts"
 import * as providerTransfers from "./ProviderTransfersTable.ts"
@@ -44,6 +47,7 @@ export const schema = {
   ...cex,
   ...cexAccount,
   ...disposalMatches,
+  ...duneProtocolCandidateObservations,
   ...emailVerificationRequests,
   ...fifoLots,
   ...identities,
@@ -52,6 +56,8 @@ export const schema = {
   ...processingJobs,
   ...principalClaims,
   ...principals,
+  ...protocolCandidateObservations,
+  ...protocolCandidates,
   ...providerAssetMappings,
   ...providerAssets,
   ...providerTransfers,
@@ -83,6 +89,10 @@ export type { Blockchain, BlockchainInsert } from "./BlockchainsTable.ts"
 export type { Cex, CexInsert } from "./CexTable.ts"
 export type { CexAccount, CexAccountInsert } from "./CexAccountTable.ts"
 export type { DisposalMatch, DisposalMatchInsert } from "./DisposalMatchesTable.ts"
+export type {
+  DuneProtocolCandidateObservationInsert,
+  DuneProtocolCandidateObservationRow,
+} from "./DuneProtocolCandidateObservationsTable.ts"
 export type { EmailVerificationRequest } from "./EmailVerificationRequestsTable.ts"
 export type { FifoLot, FifoLotInsert } from "./FifoLotsTable.ts"
 export type { IdentityRow } from "./IdentitiesTable.ts"
@@ -106,6 +116,12 @@ export type { OAuthStateRow } from "./OAuthStatesTable.ts"
 export type { ProcessingJob, ProcessingJobInsert } from "./ProcessingJobsTable.ts"
 export type { PrincipalClaimInsert, PrincipalClaimRow } from "./PrincipalClaimsTable.ts"
 export type { PrincipalInsert, PrincipalRow } from "./PrincipalsTable.ts"
+export type {
+  ProtocolCandidateObservationInsert,
+  ProtocolCandidateObservationRow,
+  ProtocolCandidateObservationOnchainDataSource,
+} from "./ProtocolCandidateObservationsTable.ts"
+export type { ProtocolCandidateInsert, ProtocolCandidateRow } from "./ProtocolCandidatesTable.ts"
 export type {
   ProviderAssetMappingKind,
   ProviderAssetMappingInsert,

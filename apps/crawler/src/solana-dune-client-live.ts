@@ -1,20 +1,21 @@
 /**
- * Live Dune API client for historical Solana program rankings.
+ * Live Dune API client for executing saved Solana queries.
  *
  * @module
  */
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform"
+import * as Console from "effect/Console"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import {
-  SolanaDuneProgramRankingClient,
-  SolanaDuneProgramRankingError,
+  SolanaDuneClient,
+  SolanaDuneError,
   type ExecuteSolanaDuneQueryParams,
-  type SolanaDuneProgramRankingClientShape,
-} from "./solana-dune-program-ranking.ts"
+  type SolanaDuneClientShape,
+} from "./solana-dune-client.ts"
 
 const DUNE_API_URL = "https://api.dune.com/api/v1"
 const DUNE_API_KEY_CONFIG = Config.redacted("DUNE_API_KEY")
@@ -49,8 +50,8 @@ const toDuneError = ({
 }: {
   readonly message: string
   readonly queryId?: number
-}): SolanaDuneProgramRankingError =>
-  new SolanaDuneProgramRankingError({
+}): SolanaDuneError =>
+  new SolanaDuneError({
     message,
     ...(queryId === undefined ? {} : { queryId }),
   })
@@ -67,7 +68,7 @@ const duneRateLimitRetryDelaySeconds = (
   return Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0 ? parsedRetryAfter : null
 }
 
-export const readSolanaDuneApiKey: Effect.Effect<string, SolanaDuneProgramRankingError> =
+export const readSolanaDuneApiKey: Effect.Effect<string, SolanaDuneError> =
   DUNE_API_KEY_CONFIG.pipe(
     Effect.map(Redacted.value),
     Effect.mapError(() => toDuneError({ message: "DUNE_API_KEY is not configured" })),
@@ -81,9 +82,7 @@ export const readSolanaDuneApiKey: Effect.Effect<string, SolanaDuneProgramRankin
 
 const decodeJson =
   <A, I>(schema: Schema.Schema<A, I>) =>
-  (
-    response: HttpClientResponse.HttpClientResponse
-  ): Effect.Effect<A, SolanaDuneProgramRankingError> =>
+  (response: HttpClientResponse.HttpClientResponse): Effect.Effect<A, SolanaDuneError> =>
     HttpClientResponse.schemaBodyJson(schema)(response).pipe(
       Effect.mapError(() => toDuneError({ message: "Failed to decode Dune API response" }))
     )
@@ -98,7 +97,7 @@ const executeAndDecode = <A, I>({
   readonly request: HttpClientRequest.HttpClientRequest
   readonly schema: Schema.Schema<A, I>
   readonly queryId: number
-}): Effect.Effect<A, SolanaDuneProgramRankingError> =>
+}): Effect.Effect<A, SolanaDuneError> =>
   executeAndDecodeWithRetries({
     client,
     request,
@@ -119,7 +118,7 @@ const executeAndDecodeWithRetries = <A, I>({
   readonly schema: Schema.Schema<A, I>
   readonly queryId: number
   readonly remainingRateLimitRetries: number
-}): Effect.Effect<A, SolanaDuneProgramRankingError> =>
+}): Effect.Effect<A, SolanaDuneError> =>
   Effect.gen(function* () {
     const response = yield* client.execute(request).pipe(
       Effect.mapError((error) =>
@@ -135,9 +134,8 @@ const executeAndDecodeWithRetries = <A, I>({
         duneRateLimitRetryDelaySeconds(response.headers) ??
         DUNE_RATE_LIMIT_DEFAULT_RETRY_DELAY_SECONDS
       if (response.status === 429 && remainingRateLimitRetries > 0) {
-        yield* Effect.logInfo(
-          { queryId, retryDelaySeconds, remainingRateLimitRetries },
-          "Dune API rate limited; retrying"
+        yield* Console.error(
+          `Dune API rate limited; retrying query ${queryId} in ${retryDelaySeconds} seconds (${remainingRateLimitRetries} retries remaining)`
         )
         yield* Effect.sleep(`${retryDelaySeconds} seconds`)
         return yield* executeAndDecodeWithRetries({
@@ -246,7 +244,7 @@ const waitForExecutionResult = ({
   readonly executionId: string
   readonly queryId: number
   readonly remainingPolls: number
-}): Effect.Effect<unknown, SolanaDuneProgramRankingError> =>
+}): Effect.Effect<unknown, SolanaDuneError> =>
   Effect.gen(function* () {
     if (remainingPolls <= 0) {
       return yield* toDuneError({
@@ -290,7 +288,7 @@ const makeClient = ({
 }: {
   readonly apiKey: string
   readonly client: HttpClient.HttpClient
-}): SolanaDuneProgramRankingClientShape => ({
+}): SolanaDuneClientShape => ({
   executeQuery: (params) =>
     Effect.gen(function* () {
       const execution = yield* executeSavedQuery({ client, apiKey, params })
@@ -305,23 +303,20 @@ const makeClient = ({
 })
 
 /** Live Dune client layer backed by the Dune HTTP API. */
-export const SolanaDuneProgramRankingClientLive: Layer.Layer<
-  SolanaDuneProgramRankingClient,
-  never,
-  HttpClient.HttpClient
-> = Layer.effect(
-  SolanaDuneProgramRankingClient,
-  Effect.gen(function* () {
-    const defaultClient = yield* HttpClient.HttpClient
-    const client = defaultClient.pipe(
-      HttpClient.mapRequest(HttpClientRequest.prependUrl(DUNE_API_URL))
-    )
-    return SolanaDuneProgramRankingClient.of({
-      executeQuery: (params) =>
-        Effect.gen(function* () {
-          const apiKey = yield* readSolanaDuneApiKey
-          return yield* makeClient({ apiKey, client }).executeQuery(params)
-        }),
+export const SolanaDuneClientLive: Layer.Layer<SolanaDuneClient, never, HttpClient.HttpClient> =
+  Layer.effect(
+    SolanaDuneClient,
+    Effect.gen(function* () {
+      const defaultClient = yield* HttpClient.HttpClient
+      const client = defaultClient.pipe(
+        HttpClient.mapRequest(HttpClientRequest.prependUrl(DUNE_API_URL))
+      )
+      return SolanaDuneClient.of({
+        executeQuery: (params) =>
+          Effect.gen(function* () {
+            const apiKey = yield* readSolanaDuneApiKey
+            return yield* makeClient({ apiKey, client }).executeQuery(params)
+          }),
+      })
     })
-  })
-)
+  )
