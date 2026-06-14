@@ -63,8 +63,8 @@ export type CrawlSolanaBehaviorResult = {
 }
 
 export type CrawlSolanaOptions = {
-  readonly startDate: Option.Option<string>
-  readonly endDate: Option.Option<string>
+  readonly startDate: string
+  readonly endDate: string
   readonly samplesPerProject: number
   readonly windowDays: number
   readonly out: Option.Option<string>
@@ -98,13 +98,15 @@ const jsonOption = Options.boolean("json").pipe(
 )
 
 const signatureOption = Options.text("signature").pipe(
+  Options.withDescription("Transaction signature to sample"),
   Options.repeated,
-  Options.withDescription("Transaction signature to sample")
+  Options.withDefault<Array<string>>([])
 )
 
 const programOption = Options.text("program").pipe(
+  Options.withDescription("Program id to include when slot-range sampling"),
   Options.repeated,
-  Options.withDescription("Program id to include when slot-range sampling")
+  Options.withDefault<Array<string>>([])
 )
 
 const fromSlotOption = Options.integer("from-slot").pipe(
@@ -123,12 +125,10 @@ const sampleLimitOption = Options.integer("sample-limit").pipe(
 )
 
 const startDateOption = Options.text("start-date").pipe(
-  Options.optional,
   Options.withDescription("Inclusive UTC start date, YYYY-MM-DD")
 )
 
 const endDateOption = Options.text("end-date").pipe(
-  Options.optional,
   Options.withDescription("Exclusive UTC end date, YYYY-MM-DD")
 )
 
@@ -542,8 +542,6 @@ const importAndMaybeWriteDexProjectRankings = <R>({
         ? null
         : path.join(outputDirectory, solanaDuneDexProjectRankingsFileName(dexProjectRankings))
 
-    const duneProtocolCandidateImport = yield* importCandidates(dexProjectRankings)
-
     if (outputDirectory !== null && dexProjectRankingsPath !== null) {
       const encodedDexProjectRankings = yield* encodeDexProjectRankings(dexProjectRankings)
       yield* fs.makeDirectory(outputDirectory, { recursive: true }).pipe(
@@ -563,6 +561,8 @@ const importAndMaybeWriteDexProjectRankings = <R>({
         )
       )
     }
+
+    const duneProtocolCandidateImport = yield* importCandidates(dexProjectRankings)
 
     const importedCandidateCount = new Set(
       duneProtocolCandidateImport.candidates.map((candidate) => candidate.id)
@@ -615,21 +615,10 @@ const crawlSolanaProgramWithImport = <R>({
     yield* validateNonNegative({ flag: "--samples-per-project", value: samplesPerProject })
     const generatedAt = yield* nowIsoString
 
-    const requireDate = (value: Option.Option<string>, flag: string) =>
-      Option.match(value, {
-        onNone: () =>
-          Effect.fail(
-            new CrawlerCommandError({
-              message: `Provide \`${flag}\` and its counterpart.`,
-            })
-          ),
-        onSome: (date) => Effect.succeed(date),
-      })
-
     const dexProjectRankings = yield* buildSolanaDexDiscoveryFile({
       generatedAt,
-      startDate: yield* requireDate(startDate, "--start-date"),
-      endDate: yield* requireDate(endDate, "--end-date"),
+      startDate,
+      endDate,
       samplesPerProject,
       windowDays,
       ...(json ? {} : { onPriorityQueryTimeout: logPriorityQueryTimeoutToStderr }),

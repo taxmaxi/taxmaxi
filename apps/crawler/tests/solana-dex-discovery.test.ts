@@ -1,9 +1,10 @@
 import { NodeContext } from "@effect/platform-node"
-import { mkdir, writeFile } from "node:fs/promises"
+import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
 import { Effect, Layer, Option, Schema } from "effect"
 import {
   ProtocolCandidateRepository,
+  SyncEngineStorageError,
   type ProtocolCandidateObservationDraft,
 } from "@my/sync-engine/services"
 import {
@@ -651,8 +652,8 @@ describe("solana dex discovery", () => {
     )
 
     const result = await crawlSolanaProgram({
-      startDate: Option.some("2024-01-01"),
-      endDate: Option.some("2024-01-08"),
+      startDate: "2024-01-01",
+      endDate: "2024-01-08",
       samplesPerProject: 25,
       windowDays: 7,
       out: Option.some(outputDirectory),
@@ -719,6 +720,53 @@ describe("solana dex discovery", () => {
     })
   })
 
+  it("writes the replayable rankings file before importing candidates", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const outputPath = `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`
+    const failingProtocolCandidateRepositoryLive = Layer.succeed(
+      ProtocolCandidateRepository,
+      ProtocolCandidateRepository.of({
+        importObservations: () =>
+          Effect.fail(
+            new SyncEngineStorageError({
+              operation: "test.protocolCandidateRepository.importObservations",
+              cause: { message: "database unavailable" },
+            })
+          ),
+      })
+    )
+
+    const result = await crawlSolanaProgram({
+      startDate: "2024-01-01",
+      endDate: "2024-01-08",
+      samplesPerProject: 25,
+      windowDays: 7,
+      out: Option.some(outputDirectory),
+      json: true,
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeContext.layer,
+          dexDiscoveryClientLive(),
+          failingProtocolCandidateRepositoryLive
+        )
+      ),
+      Effect.runPromiseExit
+    )
+
+    expect(result._tag).toBe("Failure")
+    const writtenFile = await Effect.runPromise(
+      Schema.decodeUnknown(Schema.parseJson(SolanaDuneRankingsFile))(
+        await readFile(outputPath, "utf8")
+      )
+    )
+    expect(writtenFile.entries.map((entry) => entry.subjectIdentifier)).toEqual([
+      "raydium",
+      "orca",
+      "phoenix",
+    ])
+  })
+
   it("only updates the database when no output directory is requested", async () => {
     const importedObservations: ProtocolCandidateObservationDraft[] = []
     const protocolCandidateRepositoryLive = Layer.succeed(
@@ -736,8 +784,8 @@ describe("solana dex discovery", () => {
     )
 
     const result = await crawlSolanaProgram({
-      startDate: Option.some("2024-01-01"),
-      endDate: Option.some("2024-01-08"),
+      startDate: "2024-01-01",
+      endDate: "2024-01-08",
       samplesPerProject: 25,
       windowDays: 7,
       out: Option.none(),
@@ -775,8 +823,8 @@ describe("solana dex discovery", () => {
     })
 
     const liveResult = await crawlSolanaProgram({
-      startDate: Option.some("2024-01-01"),
-      endDate: Option.some("2024-01-08"),
+      startDate: "2024-01-01",
+      endDate: "2024-01-08",
       samplesPerProject: 25,
       windowDays: 7,
       out: Option.some(outputDirectory),
