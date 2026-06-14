@@ -92,6 +92,10 @@ export interface BuildSolanaDexDiscoveryFileParams {
   readonly samplesPerProject: number
   /** Maximum days per Dune execution window. Timed-out windows are halved automatically. */
   readonly windowDays?: number
+  /** Query metadata to preserve when rebuilding a replayed rankings file. */
+  readonly queryConfigs?: ReadonlyArray<SolanaDuneQueryConfig>
+  /** Optional progress hook for window splits caused by Dune execution timeouts. */
+  readonly onPriorityQueryTimeout?: PriorityQueryTimeoutReporter
 }
 
 type DateWindow = {
@@ -253,11 +257,38 @@ type UsablePriorityRow = {
 
 type ExecutionRecorder = Array<SolanaDuneRecordedExecution>
 
+export type SolanaDexDiscoveryPriorityQueryTimeout = {
+  readonly startDate: string
+  readonly endDate: string
+  readonly midDate: string
+}
+
+export type PriorityQueryTimeoutReporter = (
+  event: SolanaDexDiscoveryPriorityQueryTimeout
+) => Effect.Effect<void>
+
+const queryConfigForKind = ({
+  queries,
+  kind,
+}: {
+  readonly queries: ReadonlyArray<SolanaDuneQueryConfig>
+  readonly kind: SolanaDuneQueryConfig["kind"]
+}): Effect.Effect<SolanaDuneQueryConfig, SolanaDuneError> => {
+  const query = queries.find((candidate) => candidate.kind === kind)
+  return query === undefined
+    ? Effect.fail(
+        new SolanaDuneError({
+          message: `Dune rankings file is missing ${kind} query metadata`,
+        })
+      )
+    : Effect.succeed(query)
+}
+
 const canonicalProgramIdsFromPriorityRow = (
-  row: typeof DexProjectPriorityRow.Type
+  row: typeof DexProjectPriorityRow.Type,
+  query: SolanaDuneQueryConfig
 ): Effect.Effect<ReadonlyArray<string>, SolanaDuneError> =>
   Effect.gen(function* () {
-    const query = SOLANA_DEX_PROJECT_PRIORITY_QUERY
     const rawProgramIds = row.canonical_program_ids ?? []
     const canonicalProgramIdCount = yield* safeCount({
       value: row.canonical_program_id_count,
@@ -279,8 +310,10 @@ const canonicalProgramIdsFromPriorityRow = (
 
 const usablePriorityRows = ({
   rows,
+  query,
 }: {
   readonly rows: ReadonlyArray<typeof DexProjectPriorityRow.Type>
+  readonly query: SolanaDuneQueryConfig
 }): Effect.Effect<ReadonlyArray<UsablePriorityRow>, SolanaDuneError> =>
   Effect.gen(function* () {
     const selected: Array<UsablePriorityRow> = []
@@ -290,7 +323,7 @@ const usablePriorityRows = ({
         break
       }
 
-      const canonicalProgramIds = yield* canonicalProgramIdsFromPriorityRow(row)
+      const canonicalProgramIds = yield* canonicalProgramIdsFromPriorityRow(row, query)
       if (canonicalProgramIds.length === 0) {
         continue
       }
@@ -325,11 +358,15 @@ const validateQueryBound = ({
  */
 const priorityRowsForWindow = (
   window: DateWindow,
-  recorder: ExecutionRecorder
+  recorder: ExecutionRecorder,
+  options: {
+    readonly query: SolanaDuneQueryConfig
+    readonly onPriorityQueryTimeout: PriorityQueryTimeoutReporter | null
+  }
 ): Effect.Effect<ReadonlyArray<PriorityWindowResult>, SolanaDuneError, SolanaDuneClient> =>
   Effect.gen(function* () {
     const client = yield* SolanaDuneClient
-    const query = SOLANA_DEX_PROJECT_PRIORITY_QUERY
+    const { query, onPriorityQueryTimeout } = options
     const dayCount = yield* windowDayCount(window)
     const parameters = {
       start_date: window.startDate,
@@ -366,23 +403,28 @@ const priorityRowsForWindow = (
             })
             const halfDays = Math.ceil(dayCount / 2)
             const midDate = yield* addUtcDays(window.startDate, halfDays)
-            yield* Effect.logInfo(
-              { startDate: window.startDate, endDate: window.endDate, midDate },
-              "Dune priority query timed out; halving window"
-            )
+            if (onPriorityQueryTimeout !== null) {
+              yield* onPriorityQueryTimeout({
+                startDate: window.startDate,
+                endDate: window.endDate,
+                midDate,
+              })
+            }
             const firstHalf = yield* priorityRowsForWindow(
               {
                 startDate: window.startDate,
                 endDate: midDate,
               },
-              recorder
+              recorder,
+              options
             )
             const secondHalf = yield* priorityRowsForWindow(
               {
                 startDate: midDate,
                 endDate: window.endDate,
               },
-              recorder
+              recorder,
+              options
             )
             return [...firstHalf, ...secondHalf]
           })
@@ -395,15 +437,16 @@ const sampleSignaturesForProject = ({
   sampleDate,
   samplesPerProject,
   recorder,
+  query,
 }: {
   readonly project: string
   readonly sampleDate: string
   readonly samplesPerProject: number
   readonly recorder: ExecutionRecorder
+  readonly query: SolanaDuneQueryConfig
 }): Effect.Effect<ReadonlyArray<string>, SolanaDuneError, SolanaDuneClient> =>
   Effect.gen(function* () {
     const client = yield* SolanaDuneClient
-    const query = SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY
     const endDate = yield* addUtcDays(sampleDate, 1)
     const parameters = {
       project,
@@ -429,14 +472,15 @@ const entriesFromPriorityRow = ({
   canonicalProgramIds,
   period,
   sampleSignatures,
+  query,
 }: {
   readonly row: typeof DexProjectPriorityRow.Type
   readonly canonicalProgramIds: ReadonlyArray<string>
   readonly period: string
   readonly sampleSignatures: ReadonlyArray<string>
+  readonly query: SolanaDuneQueryConfig
 }): Effect.Effect<SolanaDuneRankingEntry, SolanaDuneError> =>
   Effect.gen(function* () {
-    const query = SOLANA_DEX_PROJECT_PRIORITY_QUERY
     const invocationCount = yield* safeCount({
       value: row.trade_rows,
       query,
@@ -485,6 +529,8 @@ export const buildSolanaDexDiscoveryFile = ({
   endDate,
   samplesPerProject,
   windowDays = DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS,
+  queryConfigs = [SOLANA_DEX_PROJECT_PRIORITY_QUERY, SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY],
+  onPriorityQueryTimeout,
 }: BuildSolanaDexDiscoveryFileParams): Effect.Effect<
   SolanaDuneRankingsFile,
   SolanaDuneError,
@@ -503,16 +549,27 @@ export const buildSolanaDexDiscoveryFile = ({
       )
     }
 
+    const priorityQuery = yield* queryConfigForKind({
+      queries: queryConfigs,
+      kind: "dex-project-priority",
+    })
+    const sampleTransactionsQuery = yield* queryConfigForKind({
+      queries: queryConfigs,
+      kind: "dex-project-sample-transactions",
+    })
     const windows = yield* splitIntoWindows({ startDate, endDate, windowDays })
     const projectSampleSignatures = new Map<string, ReadonlyArray<string>>()
     const entries: Array<SolanaDuneRankingEntry> = []
     const executions: ExecutionRecorder = []
 
     for (const window of windows) {
-      const windowResults = yield* priorityRowsForWindow(window, executions)
+      const windowResults = yield* priorityRowsForWindow(window, executions, {
+        query: priorityQuery,
+        onPriorityQueryTimeout: onPriorityQueryTimeout ?? null,
+      })
 
       for (const { window: executedWindow, rows } of windowResults) {
-        const topRows = yield* usablePriorityRows({ rows })
+        const topRows = yield* usablePriorityRows({ rows, query: priorityQuery })
         const period = `${executedWindow.startDate} to ${executedWindow.endDate}`
 
         for (const { row, canonicalProgramIds } of topRows) {
@@ -525,6 +582,7 @@ export const buildSolanaDexDiscoveryFile = ({
               sampleDate: executedWindow.startDate,
               samplesPerProject,
               recorder: executions,
+              query: sampleTransactionsQuery,
             })
             sampleSignatures = Array.from(
               new Set([...existingSampleSignatures, ...newSampleSignatures])
@@ -538,6 +596,7 @@ export const buildSolanaDexDiscoveryFile = ({
               canonicalProgramIds,
               period,
               sampleSignatures,
+              query: priorityQuery,
             })
           )
         }
@@ -563,7 +622,7 @@ export const buildSolanaDexDiscoveryFile = ({
         samplesPerProject,
         windowDays,
       },
-      queries: [SOLANA_DEX_PROJECT_PRIORITY_QUERY, SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY],
+      queries: [priorityQuery, sampleTransactionsQuery],
       entries,
       executions,
     }

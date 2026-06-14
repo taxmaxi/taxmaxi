@@ -22,6 +22,7 @@ import {
   buildSolanaDexDiscoveryFile,
   DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS,
   solanaDuneDexProjectRankingsFileName,
+  type SolanaDexDiscoveryPriorityQueryTimeout,
 } from "./solana-dex-discovery.ts"
 import { SolanaDuneClient, solanaDuneClientFromRecordedExecutions } from "./solana-dune-client.ts"
 
@@ -246,6 +247,15 @@ const encodeDexProjectRankings = (rankingsFile: SolanaDuneRankingsFile) =>
           message: "Failed to encode Solana Dune DEX project rankings file.",
         })
     )
+  )
+
+const logPriorityQueryTimeoutToStderr = ({
+  startDate,
+  endDate,
+  midDate,
+}: SolanaDexDiscoveryPriorityQueryTimeout): Effect.Effect<void> =>
+  Console.error(
+    `Dune priority query timed out; halving window ${startDate} to ${endDate} at ${midDate}`
   )
 
 const readDefaultOutputDirectory = Effect.configProviderWith((provider) =>
@@ -596,6 +606,7 @@ export const crawlSolanaProgram = ({
       endDate: yield* requireDate(endDate, "--end-date"),
       samplesPerProject,
       windowDays,
+      ...(json ? {} : { onPriorityQueryTimeout: logPriorityQueryTimeoutToStderr }),
     }).pipe(
       Effect.mapError(
         (error) =>
@@ -633,6 +644,8 @@ export const crawlSolanaReplayProgram = ({
       endDate: replayFile.endDate,
       samplesPerProject: replayFile.parameters.samplesPerProject,
       windowDays: replayFile.parameters.windowDays,
+      queryConfigs: replayFile.queries,
+      ...(json ? {} : { onPriorityQueryTimeout: logPriorityQueryTimeoutToStderr }),
     }).pipe(
       Effect.provideService(
         SolanaDuneClient,

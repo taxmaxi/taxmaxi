@@ -1,11 +1,15 @@
 import { NodeContext } from "@effect/platform-node"
+import { mkdir, writeFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
 import { Effect, Layer, Option, Schema } from "effect"
 import {
   ProtocolCandidateRepository,
   type ProtocolCandidateObservationDraft,
 } from "@my/sync-engine/services"
-import { SolanaDuneRankingsFile } from "@my/sync-engine/providers/helius-solana"
+import {
+  type SolanaDuneQueryConfig,
+  SolanaDuneRankingsFile,
+} from "@my/sync-engine/providers/helius-solana"
 import {
   buildSolanaDexDiscoveryFile,
   solanaDuneDexProjectRankingsFileName,
@@ -810,6 +814,97 @@ describe("solana dex discovery", () => {
     expect(importedObservations.slice(liveImportCount).map((o) => o.subjectIdentifier)).toEqual(
       importedObservations.slice(0, liveImportCount).map((o) => o.subjectIdentifier)
     )
+  })
+
+  it("preserves recorded query metadata when replaying a rankings file", async () => {
+    const outputDirectory = `/tmp/taxmaxi-crawler-test-${crypto.randomUUID()}`
+    const replayFilePath = `${outputDirectory}/archived-rankings.json`
+    const archivedPriorityQuery = {
+      queryId: 7_647_495,
+      queryName: "archived-solana-dex-project-priority",
+      version: 42,
+      kind: "dex-project-priority",
+    } satisfies SolanaDuneQueryConfig
+    const importedObservations: ProtocolCandidateObservationDraft[] = []
+    const protocolCandidateRepositoryLive = Layer.succeed(
+      ProtocolCandidateRepository,
+      ProtocolCandidateRepository.of({
+        importObservations: ({ observations }) =>
+          Effect.sync(() => {
+            importedObservations.push(...observations)
+            return {
+              candidates: [],
+              observationCount: observations.length,
+            }
+          }),
+      })
+    )
+    const deadDuneClientLive = SolanaDuneClientTestLive({
+      executeQuery: () => Effect.dieMessage("Dune must not be called during a replay"),
+    })
+    const replayFile = await runDiscovery(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-08",
+        samplesPerProject: 0,
+        queryConfigs: [
+          archivedPriorityQuery,
+          {
+            queryId: 7_648_044,
+            queryName: "solana-dex-project-sample-transactions",
+            version: 1,
+            kind: "dex-project-sample-transactions",
+          },
+        ],
+      }).pipe(Effect.provide(dexDiscoveryClientLive()))
+    )
+
+    await mkdir(outputDirectory, { recursive: true })
+    await writeFile(replayFilePath, `${JSON.stringify(replayFile)}\n`)
+
+    const replayResult = await crawlSolanaReplayProgram({
+      fromFile: replayFilePath,
+      out: Option.none(),
+      json: true,
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(NodeContext.layer, deadDuneClientLive, protocolCandidateRepositoryLive)
+      ),
+      Effect.runPromise
+    )
+
+    expect(replayResult.dexProjectRankings.queries).toContainEqual(archivedPriorityQuery)
+    expect(replayResult.dexProjectRankings.entries.map((entry) => entry.queryName)).toEqual([
+      archivedPriorityQuery.queryName,
+      archivedPriorityQuery.queryName,
+      archivedPriorityQuery.queryName,
+    ])
+    expect(replayResult.dexProjectRankings.entries.map((entry) => entry.queryVersion)).toEqual([
+      archivedPriorityQuery.version,
+      archivedPriorityQuery.version,
+      archivedPriorityQuery.version,
+    ])
+    expect(importedObservations.map((observation) => observation.sourceMetadata)).toEqual([
+      {
+        source: "dune",
+        queryId: archivedPriorityQuery.queryId,
+        queryName: archivedPriorityQuery.queryName,
+        queryVersion: archivedPriorityQuery.version,
+      },
+      {
+        source: "dune",
+        queryId: archivedPriorityQuery.queryId,
+        queryName: archivedPriorityQuery.queryName,
+        queryVersion: archivedPriorityQuery.version,
+      },
+      {
+        source: "dune",
+        queryId: archivedPriorityQuery.queryId,
+        queryName: archivedPriorityQuery.queryName,
+        queryVersion: archivedPriorityQuery.version,
+      },
+    ])
   })
 
   it("rejects an empty replay file path", async () => {
