@@ -175,6 +175,24 @@ const rawPayloadFromEntry = (entry: SolanaDuneRankingEntry): Record<string, unkn
   retrievedAt: entry.retrievedAt,
 })
 
+const duneSourceObservationKey = ({
+  entry,
+  observedWindowStart,
+  observedWindowEnd,
+}: {
+  readonly entry: SolanaDuneRankingEntry
+  readonly observedWindowStart: Date
+  readonly observedWindowEnd: Date
+}): string =>
+  [
+    entry.queryId,
+    entry.queryVersion,
+    entry.subjectKind,
+    entry.subjectIdentifier,
+    observedWindowStart.toISOString(),
+    observedWindowEnd.toISOString(),
+  ].join(":")
+
 const observationFromEntry = ({
   blockchainName,
   entry,
@@ -192,6 +210,11 @@ const observationFromEntry = ({
       subjectIdentifier: entry.subjectIdentifier,
       protocolNameHint: entry.protocolNameHint,
       categoryHint: entry.categoryHint,
+      sourceObservationKey: duneSourceObservationKey({
+        entry,
+        observedWindowStart,
+        observedWindowEnd,
+      }),
       observedWindowStart,
       observedWindowEnd,
       interactionCount: entry.invocationCount,

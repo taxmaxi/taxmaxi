@@ -462,13 +462,7 @@ export const buildSolanaDexDiscoveryFile = ({
       const windowResults = yield* priorityRowsForWindow(window, executions)
 
       for (const { window: executedWindow, rows } of windowResults) {
-        const rankedRows = [...rows].sort(
-          (left, right) =>
-            right.approx_unique_traders - left.approx_unique_traders ||
-            right.volume_usd - left.volume_usd ||
-            left.project.localeCompare(right.project)
-        )
-        const topRows = rankedRows.slice(0, topProjects)
+        const topRows = rows.slice(0, topProjects)
         const period = `${executedWindow.startDate} to ${executedWindow.endDate}`
 
         for (const row of topRows) {
@@ -485,7 +479,9 @@ export const buildSolanaDexDiscoveryFile = ({
               samplesPerProject,
               recorder: executions,
             })
-            sampledProjects.set(row.project, sampleSignatures)
+            if (sampleSignatures.length > 0) {
+              sampledProjects.set(row.project, sampleSignatures)
+            }
           }
 
           entries.push(

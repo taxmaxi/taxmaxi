@@ -56,6 +56,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
               subjectIdentifier: "dune-program-1",
               protocolNameHint: "Example DEX",
               categoryHint: "dex",
+              sourceObservationKey: "7647495:1:program:dune-program-1:2024-01-01:2025-01-01",
               observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
               observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
               interactionCount: 1_000,
@@ -311,6 +312,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       subjectIdentifier: "dune-program-2",
       protocolNameHint: "Review Me",
       categoryHint: "dex",
+      sourceObservationKey: "7647495:1:program:dune-program-2:2024-01-01:2025-01-01",
       observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
       observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
       interactionCount: 100,
@@ -449,12 +451,14 @@ describe("ProtocolCandidateRepositoryLive", () => {
             {
               ...baseObservation,
               protocolNameHint: "raydium",
+              sourceObservationKey: "7647495:1:program:shared-dex-program:raydium:2024-01-01",
               interactionCount: 100,
               rawPayload: { project: "raydium" },
             },
             {
               ...baseObservation,
               protocolNameHint: "orca",
+              sourceObservationKey: "7647495:1:program:shared-dex-program:orca:2024-01-01",
               interactionCount: 200,
               rawPayload: { project: "orca" },
             },
@@ -501,6 +505,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       subjectIdentifier: "renamed-dex-program",
       protocolNameHint: "Old DEX",
       categoryHint: "dex",
+      sourceObservationKey: "7647495:1:program:renamed-dex-program:2024-01-01:2024-01-08",
       observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
       observedWindowEnd: new Date("2024-01-08T00:00:00.000Z"),
       interactionCount: 100,
@@ -551,15 +556,22 @@ describe("ProtocolCandidateRepositoryLive", () => {
           .from(schema.protocolCandidates)
           .where(eq(schema.protocolCandidates.subjectIdentifier, "renamed-dex-program"))
           .limit(1)
-        return candidate
+        const [observationCountRow] = yield* db
+          .select({ value: count(schema.protocolCandidateObservations.id) })
+          .from(schema.protocolCandidateObservations)
+        return {
+          candidate,
+          observationCount: observationCountRow?.value ?? 0,
+        }
       })
     )
 
-    expect(row).toMatchObject({
+    expect(row.candidate).toMatchObject({
       protocolNameHint: "New DEX",
       categoryHint: "swap",
       lastSeenAt: new Date("2026-06-02T10:00:00.000Z"),
     })
+    expect(row.observationCount).toBe(1)
   })
 
   it("rejects malformed batches without importing partial rows", async () => {
@@ -574,6 +586,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 subjectIdentifier: "valid-program",
                 protocolNameHint: null,
                 categoryHint: null,
+                sourceObservationKey: "7647495:1:program:valid-program:2024-01-01:2025-01-01",
                 observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
                 observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
                 interactionCount: 10,
@@ -595,6 +608,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 subjectIdentifier: "invalid-program",
                 protocolNameHint: null,
                 categoryHint: null,
+                sourceObservationKey: "7647495:1:program:invalid-program:2024-01-01:2025-01-01",
                 observedWindowStart: new Date("2024-01-01T00:00:00.000Z"),
                 observedWindowEnd: new Date("2025-01-01T00:00:00.000Z"),
                 interactionCount: -1,

@@ -72,6 +72,10 @@ const validateObservation = (observation: ProtocolCandidateObservationDraft) =>
       field: "subjectIdentifier",
       value: observation.subjectIdentifier,
     })
+    yield* validateNonEmptyText({
+      field: "sourceObservationKey",
+      value: observation.sourceObservationKey,
+    })
     yield* validateSafeCount({ field: "interactionCount", value: observation.interactionCount })
     yield* validateNullableSafeCount({
       field: "transactionCount",
@@ -127,18 +131,6 @@ const validateObservation = (observation: ProtocolCandidateObservationDraft) =>
       })
     }
   })
-
-const makeDuneOnchainDataSourceObservationKey = (
-  observation: ProtocolCandidateObservationDraft
-): string =>
-  [
-    observation.sourceMetadata.queryId,
-    observation.sourceMetadata.queryVersion,
-    observation.protocolNameHint ?? "",
-    observation.categoryHint ?? "",
-    observation.observedWindowStart.toISOString(),
-    observation.observedWindowEnd.toISOString(),
-  ].join(":")
 
 const toNumericText = (value: number | null): string | null =>
   value === null ? null : String(value)
@@ -286,14 +278,12 @@ const make = Effect.gen(function* () {
                   )
                 }
 
-                const onchainDataSourceObservationKey =
-                  makeDuneOnchainDataSourceObservationKey(observation)
                 const [persistedObservation] = yield* tx
                   .insert(schema.protocolCandidateObservations)
                   .values({
                     candidateId: candidate.id,
                     onchainDataSource: observation.sourceMetadata.source,
-                    onchainDataSourceObservationKey,
+                    onchainDataSourceObservationKey: observation.sourceObservationKey,
                     observedWindowStart: observation.observedWindowStart,
                     observedWindowEnd: observation.observedWindowEnd,
                     interactionCount: String(observation.interactionCount),

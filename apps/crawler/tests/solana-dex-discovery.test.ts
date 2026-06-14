@@ -87,6 +87,9 @@ const dexDiscoveryClientLive = (overrides?: {
   readonly priorityRowsForWindow?: (
     parameters: Readonly<Record<string, string>>
   ) => ReadonlyArray<unknown> | SolanaDuneError
+  readonly sampleRowsForWindow?: (
+    parameters: Readonly<Record<string, string>>
+  ) => ReadonlyArray<unknown>
   readonly failSampleQuery?: boolean
   readonly calls?: Array<RecordedCall>
 }) =>
@@ -106,6 +109,9 @@ const dexDiscoveryClientLive = (overrides?: {
 
       if (overrides?.failSampleQuery === true) {
         return Effect.dieMessage("sample query should not run")
+      }
+      if (overrides?.sampleRowsForWindow !== undefined) {
+        return Effect.succeed(completedRows(overrides.sampleRowsForWindow(parameters)))
       }
       const project = parameters.project ?? "unknown"
       return Effect.succeed(
@@ -197,6 +203,39 @@ describe("solana dex discovery", () => {
     expect(file.entries.map((entry) => entry.protocolNameHint)).toEqual(["raydium"])
   })
 
+  it("preserves the saved Dune query row order for top project selection", async () => {
+    const file = await runDiscovery(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-08",
+        topProjects: 1,
+        samplesPerProject: 0,
+      }).pipe(
+        Effect.provide(
+          dexDiscoveryClientLive({
+            priorityRows: [
+              priorityRow({
+                project: "orca",
+                traders: 100,
+                volume: 10,
+                programIds: [ORCA_WHIRLPOOL_PROGRAM],
+              }),
+              priorityRow({
+                project: "raydium",
+                traders: 100,
+                volume: 1_000,
+                programIds: [RAYDIUM_AMM_PROGRAM],
+              }),
+            ],
+          })
+        )
+      )
+    )
+
+    expect(file.entries.map((entry) => entry.subjectIdentifier)).toEqual(["orca"])
+  })
+
   it("limits sample signatures per project", async () => {
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
@@ -263,6 +302,48 @@ describe("solana dex discovery", () => {
       "raydium-swap-3",
     ])
     expect(raydiumEntries[1]?.sampleSignatures).toEqual([])
+  })
+
+  it("retries project sampling in later windows after an empty sample", async () => {
+    const calls: Array<RecordedCall> = []
+    const file = await runDiscovery(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-15",
+        topProjects: 1,
+        samplesPerProject: 25,
+        windowDays: 7,
+      }).pipe(
+        Effect.provide(
+          dexDiscoveryClientLive({
+            calls,
+            priorityRows: [
+              priorityRow({
+                project: "raydium",
+                traders: 100,
+                volume: 1,
+                programIds: [RAYDIUM_AMM_PROGRAM],
+              }),
+            ],
+            sampleRowsForWindow: (parameters) =>
+              parameters.start_date === "2024-01-01"
+                ? []
+                : [{ tx_id: "raydium-later-window-swap" }],
+          })
+        )
+      )
+    )
+
+    const sampleCalls = calls.filter((call) => call.kind === "dex-project-sample-transactions")
+    expect(sampleCalls.map((call) => call.parameters.start_date)).toEqual([
+      "2024-01-01",
+      "2024-01-08",
+    ])
+    expect(file.entries.map((entry) => entry.sampleSignatures)).toEqual([
+      [],
+      ["raydium-later-window-swap"],
+    ])
   })
 
   it("halves a window when the Dune execution times out", async () => {

@@ -33,6 +33,8 @@ export interface ProtocolCandidateObservationDraft {
   readonly subjectIdentifier: string
   readonly protocolNameHint: string | null
   readonly categoryHint: string | null
+  /** Source-defined stable idempotency key for this candidate observation. */
+  readonly sourceObservationKey: string
   readonly observedWindowStart: Date
   readonly observedWindowEnd: Date
   readonly interactionCount: number
