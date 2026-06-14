@@ -76,7 +76,6 @@ export const SolanaDuneRankingsFile = Schema.Struct({
   endDate: Schema.String,
   /** Crawl tuning used to produce this file; replays reuse it for identical windowing. */
   parameters: Schema.Struct({
-    topProjects: Schema.Number,
     samplesPerProject: Schema.Number,
     windowDays: Schema.Number,
   }),

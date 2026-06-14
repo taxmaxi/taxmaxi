@@ -10,8 +10,8 @@
  * execution timeout is halved and retried, so high-volume periods crawl with
  * smaller windows automatically. Every ranked project with canonical program
  * ids becomes one candidate entry with the program ids retained as review
- * evidence. Each project is sampled once per invocation from a one-day slice
- * to keep Dune credit usage low.
+ * evidence. Projects are sampled across windows until the requested unique
+ * signature count is reached.
  *
  * @module
  */
@@ -88,9 +88,7 @@ export interface BuildSolanaDexDiscoveryFileParams {
   readonly startDate: string
   /** Exclusive UTC end date, `YYYY-MM-DD`. */
   readonly endDate: string
-  /** Maximum number of ranked DEX projects to keep per window. */
-  readonly topProjects: number
-  /** Maximum sample transaction signatures per project. Each project is sampled once. */
+  /** Maximum unique sample transaction signatures to retain per project. */
   readonly samplesPerProject: number
   /** Maximum days per Dune execution window. Timed-out windows are halved automatically. */
   readonly windowDays?: number
@@ -281,16 +279,14 @@ const canonicalProgramIdsFromPriorityRow = (
 
 const usablePriorityRows = ({
   rows,
-  topProjects,
 }: {
   readonly rows: ReadonlyArray<typeof DexProjectPriorityRow.Type>
-  readonly topProjects: number
 }): Effect.Effect<ReadonlyArray<UsablePriorityRow>, SolanaDuneError> =>
   Effect.gen(function* () {
     const selected: Array<UsablePriorityRow> = []
 
     for (const row of rows) {
-      if (selected.length >= topProjects) {
+      if (selected.length >= SOLANA_DEX_PROJECT_PRIORITY_QUERY_ROW_LIMIT) {
         break
       }
 
@@ -487,7 +483,6 @@ export const buildSolanaDexDiscoveryFile = ({
   generatedAt,
   startDate,
   endDate,
-  topProjects,
   samplesPerProject,
   windowDays = DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS,
 }: BuildSolanaDexDiscoveryFileParams): Effect.Effect<
@@ -497,11 +492,6 @@ export const buildSolanaDexDiscoveryFile = ({
 > =>
   Effect.gen(function* () {
     yield* validateDateRange({ startDate, endDate })
-    yield* validateQueryBound({
-      name: "topProjects",
-      value: topProjects,
-      limit: SOLANA_DEX_PROJECT_PRIORITY_QUERY_ROW_LIMIT,
-    })
     yield* validateQueryBound({
       name: "samplesPerProject",
       value: samplesPerProject,
@@ -514,7 +504,7 @@ export const buildSolanaDexDiscoveryFile = ({
     }
 
     const windows = yield* splitIntoWindows({ startDate, endDate, windowDays })
-    const sampledProjects = new Map<string, ReadonlyArray<string>>()
+    const projectSampleSignatures = new Map<string, ReadonlyArray<string>>()
     const entries: Array<SolanaDuneRankingEntry> = []
     const executions: ExecutionRecorder = []
 
@@ -522,21 +512,24 @@ export const buildSolanaDexDiscoveryFile = ({
       const windowResults = yield* priorityRowsForWindow(window, executions)
 
       for (const { window: executedWindow, rows } of windowResults) {
-        const topRows = yield* usablePriorityRows({ rows, topProjects })
+        const topRows = yield* usablePriorityRows({ rows })
         const period = `${executedWindow.startDate} to ${executedWindow.endDate}`
 
         for (const { row, canonicalProgramIds } of topRows) {
-          let sampleSignatures: ReadonlyArray<string> = []
-          if (samplesPerProject > 0 && !sampledProjects.has(row.project)) {
-            sampleSignatures = yield* sampleSignaturesForProject({
+          const existingSampleSignatures = projectSampleSignatures.get(row.project) ?? []
+          let sampleSignatures = existingSampleSignatures
+
+          if (samplesPerProject > 0 && existingSampleSignatures.length < samplesPerProject) {
+            const newSampleSignatures = yield* sampleSignaturesForProject({
               project: row.project,
               sampleDate: executedWindow.startDate,
               samplesPerProject,
               recorder: executions,
             })
-            if (sampleSignatures.length > 0) {
-              sampledProjects.set(row.project, sampleSignatures)
-            }
+            sampleSignatures = Array.from(
+              new Set([...existingSampleSignatures, ...newSampleSignatures])
+            ).slice(0, samplesPerProject)
+            projectSampleSignatures.set(row.project, sampleSignatures)
           }
 
           entries.push(
@@ -567,7 +560,6 @@ export const buildSolanaDexDiscoveryFile = ({
       startDate,
       endDate,
       parameters: {
-        topProjects,
         samplesPerProject,
         windowDays,
       },

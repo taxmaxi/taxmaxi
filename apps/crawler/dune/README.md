@@ -89,7 +89,8 @@ only the two curated DEX queries and imports the result into the
 
 1. `solana-dex-project-priority.sql` ranks DEX projects per date window.
 2. `solana-dex-project-sample-transactions.sql` samples diversified swap
-   transactions once per project from a one-day slice.
+   transactions for each ranked project until the requested unique sample cap is
+   reached.
 3. Every ranked project with canonical program ids becomes one candidate with
    `protocol_name_hint` (project), `category_hint` (`swap`), project-level
    counts, USD volume, canonical program ids, and sample transaction signatures
@@ -113,13 +114,14 @@ Window and cost notes: Dune API executions time out after 2 minutes on the
 current plan. The crawler splits a date range into windows (default 7 days) and
 halves any window that times out, so high-volume periods crawl automatically
 with smaller windows. Each execution consumes Dune credits, including timed-out
-ones, and each project is sampled only once per invocation to keep sample-query
-executions low. The import is idempotent per window, so repeated and
+ones, and each ranked project is sampled in later windows until it has the
+requested number of unique signatures. Lower `--samples-per-project` to reduce
+sample-query executions. The import is idempotent per window, so repeated and
 overlapping runs only add or update observations.
 
 Replay: a rankings file written with `--out` records every raw Dune execution,
-including timed-out ones. `crawl solana --from-file <path>` re-runs the import
-from those recordings with zero Dune credits, applying the current mapping
+including timed-out ones. `crawl solana-replay --from-file <path>` re-runs the
+import from those recordings with zero Dune credits, applying the current mapping
 logic to the original raw data. Use it to reseed a database, re-import after a
 schema migration, or re-process after classifier mapping changes. A replay
 always uses the file's original date range and window settings. The file name

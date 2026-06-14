@@ -175,7 +175,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       generatedAt: "2026-06-01T10:30:00.000Z",
       startDate: "2024-01-01",
       endDate: "2025-01-01",
-      parameters: { topProjects: 10, samplesPerProject: 25, windowDays: 7 },
+      parameters: { samplesPerProject: 25, windowDays: 7 },
       executions: [],
       queries: [
         {
@@ -674,7 +674,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       generatedAt: "2026-06-01T10:30:00.000Z",
       startDate: "2024-01-01",
       endDate: "2025-01-01",
-      parameters: { topProjects: 10, samplesPerProject: 25, windowDays: 7 },
+      parameters: { samplesPerProject: 25, windowDays: 7 },
       executions: [],
       queries: [],
       entries: [

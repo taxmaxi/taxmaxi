@@ -64,10 +64,14 @@ export type CrawlSolanaBehaviorResult = {
 export type CrawlSolanaOptions = {
   readonly startDate: Option.Option<string>
   readonly endDate: Option.Option<string>
-  readonly fromFile: Option.Option<string>
-  readonly topProjects: number
   readonly samplesPerProject: number
   readonly windowDays: number
+  readonly out: Option.Option<string>
+  readonly json: boolean
+}
+
+export type CrawlSolanaReplayOptions = {
+  readonly fromFile: string
   readonly out: Option.Option<string>
   readonly json: boolean
 }
@@ -123,16 +127,10 @@ const endDateOption = Options.text("end-date").pipe(
   Options.withDescription("Exclusive UTC end date, YYYY-MM-DD")
 )
 
-const fromFileOption = Options.text("from-file").pipe(
-  Options.optional,
+const replayFromFileOption = Options.text("from-file").pipe(
   Options.withDescription(
-    "Replay a previously written rankings file instead of calling Dune; uses no Dune credits"
+    "Previously written rankings file to replay instead of calling Dune; uses no Dune credits"
   )
-)
-
-const topProjectsOption = Options.integer("top-projects").pipe(
-  Options.withDefault(10),
-  Options.withDescription("Maximum number of ranked DEX projects to keep per window")
 )
 
 const samplesPerProjectOption = Options.integer("samples-per-project").pipe(
@@ -439,12 +437,17 @@ const readReplayRankingsFile = (
   filePath: string
 ): Effect.Effect<SolanaDuneRankingsFile, CrawlerCommandError, FileSystem.FileSystem> =>
   Effect.gen(function* () {
+    const trimmedFilePath = filePath.trim()
+    if (trimmedFilePath === "") {
+      return yield* new CrawlerCommandError({ message: "`--from-file` must not be empty." })
+    }
+
     const fs = yield* FileSystem.FileSystem
-    const content = yield* fs.readFileString(filePath).pipe(
+    const content = yield* fs.readFileString(trimmedFilePath).pipe(
       Effect.mapError(
         () =>
           new CrawlerCommandError({
-            message: `Failed to read rankings file at ${filePath}.`,
+            message: `Failed to read rankings file at ${trimmedFilePath}.`,
           })
       )
     )
@@ -453,30 +456,28 @@ const readReplayRankingsFile = (
       Effect.mapError(
         () =>
           new CrawlerCommandError({
-            message: `Failed to decode rankings file at ${filePath}; only files written by this crawler version can be replayed.`,
+            message: `Failed to decode rankings file at ${trimmedFilePath}; only files written by this crawler version can be replayed.`,
           })
       )
     )
   })
 
-export const crawlSolanaProgram = ({
-  startDate,
-  endDate,
-  fromFile,
-  topProjects,
-  samplesPerProject,
-  windowDays,
+const importAndMaybeWriteDexProjectRankings = ({
+  dexProjectRankings,
   out,
   json,
-}: CrawlSolanaOptions): Effect.Effect<
+  replayedFromFile,
+}: {
+  readonly dexProjectRankings: SolanaDuneRankingsFile
+  readonly out: Option.Option<string>
+  readonly json: boolean
+  readonly replayedFromFile: string | null
+}): Effect.Effect<
   CrawlSolanaResult,
   CrawlerCommandError,
-  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository
 > =>
   Effect.gen(function* () {
-    yield* validateNonNegative({ flag: "--top-projects", value: topProjects })
-    yield* validateNonNegative({ flag: "--samples-per-project", value: samplesPerProject })
-
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
     const outputDirectory = yield* Option.match(out, {
@@ -488,69 +489,6 @@ export const crawlSolanaProgram = ({
           : Effect.succeed<string | null>(trimmed)
       },
     })
-    const generatedAt = yield* nowIsoString
-
-    const replayFile = yield* Option.match(fromFile, {
-      onNone: () => Effect.succeed<SolanaDuneRankingsFile | null>(null),
-      onSome: (filePath) =>
-        Option.isSome(startDate) || Option.isSome(endDate)
-          ? Effect.fail(
-              new CrawlerCommandError({
-                message:
-                  "`--from-file` replays the file's date range; do not pass `--start-date` or `--end-date`.",
-              })
-            )
-          : readReplayRankingsFile(filePath),
-    })
-
-    const dexProjectRankings = yield* replayFile === null
-      ? Effect.gen(function* () {
-          const requireDate = (value: Option.Option<string>, flag: string) =>
-            Option.match(value, {
-              onNone: () =>
-                Effect.fail(
-                  new CrawlerCommandError({
-                    message: `Provide \`${flag}\` and its counterpart, or replay with \`--from-file\`.`,
-                  })
-                ),
-              onSome: (date) => Effect.succeed(date),
-            })
-
-          return yield* buildSolanaDexDiscoveryFile({
-            generatedAt,
-            startDate: yield* requireDate(startDate, "--start-date"),
-            endDate: yield* requireDate(endDate, "--end-date"),
-            topProjects,
-            samplesPerProject,
-            windowDays,
-          }).pipe(
-            Effect.mapError(
-              (error) =>
-                new CrawlerCommandError({
-                  message: error.message,
-                })
-            )
-          )
-        })
-      : buildSolanaDexDiscoveryFile({
-          generatedAt,
-          startDate: replayFile.startDate,
-          endDate: replayFile.endDate,
-          topProjects: replayFile.parameters.topProjects,
-          samplesPerProject: replayFile.parameters.samplesPerProject,
-          windowDays: replayFile.parameters.windowDays,
-        }).pipe(
-          Effect.provideService(
-            SolanaDuneClient,
-            solanaDuneClientFromRecordedExecutions(replayFile.executions)
-          ),
-          Effect.mapError(
-            (error) =>
-              new CrawlerCommandError({
-                message: error.message,
-              })
-          )
-        )
 
     const dexProjectRankingsPath =
       outputDirectory === null
@@ -593,7 +531,6 @@ export const crawlSolanaProgram = ({
       )
     }
 
-    const replayedFromFile = Option.getOrNull(fromFile)
     const importedCandidateCount = new Set(
       duneProtocolCandidateImport.candidates.map((candidate) => candidate.id)
     ).size
@@ -626,13 +563,102 @@ export const crawlSolanaProgram = ({
     }
   })
 
+export const crawlSolanaProgram = ({
+  startDate,
+  endDate,
+  samplesPerProject,
+  windowDays,
+  out,
+  json,
+}: CrawlSolanaOptions): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+> =>
+  Effect.gen(function* () {
+    yield* validateNonNegative({ flag: "--samples-per-project", value: samplesPerProject })
+    const generatedAt = yield* nowIsoString
+
+    const requireDate = (value: Option.Option<string>, flag: string) =>
+      Option.match(value, {
+        onNone: () =>
+          Effect.fail(
+            new CrawlerCommandError({
+              message: `Provide \`${flag}\` and its counterpart.`,
+            })
+          ),
+        onSome: (date) => Effect.succeed(date),
+      })
+
+    const dexProjectRankings = yield* buildSolanaDexDiscoveryFile({
+      generatedAt,
+      startDate: yield* requireDate(startDate, "--start-date"),
+      endDate: yield* requireDate(endDate, "--end-date"),
+      samplesPerProject,
+      windowDays,
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new CrawlerCommandError({
+            message: error.message,
+          })
+      )
+    )
+
+    return yield* importAndMaybeWriteDexProjectRankings({
+      dexProjectRankings,
+      out,
+      json,
+      replayedFromFile: null,
+    })
+  })
+
+export const crawlSolanaReplayProgram = ({
+  fromFile,
+  out,
+  json,
+}: CrawlSolanaReplayOptions): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+> =>
+  Effect.gen(function* () {
+    const replayFilePath = fromFile.trim()
+    const replayFile = yield* readReplayRankingsFile(replayFilePath)
+    const generatedAt = yield* nowIsoString
+
+    const dexProjectRankings = yield* buildSolanaDexDiscoveryFile({
+      generatedAt,
+      startDate: replayFile.startDate,
+      endDate: replayFile.endDate,
+      samplesPerProject: replayFile.parameters.samplesPerProject,
+      windowDays: replayFile.parameters.windowDays,
+    }).pipe(
+      Effect.provideService(
+        SolanaDuneClient,
+        solanaDuneClientFromRecordedExecutions(replayFile.executions)
+      ),
+      Effect.mapError(
+        (error) =>
+          new CrawlerCommandError({
+            message: error.message,
+          })
+      )
+    )
+
+    return yield* importAndMaybeWriteDexProjectRankings({
+      dexProjectRankings,
+      out,
+      json,
+      replayedFromFile: replayFilePath,
+    })
+  })
+
 export const crawlSolanaCommand = Command.make(
   "solana",
   {
     startDate: startDateOption,
     endDate: endDateOption,
-    fromFile: fromFileOption,
-    topProjects: topProjectsOption,
     samplesPerProject: samplesPerProjectOption,
     windowDays: windowDaysOption,
     out: dexOutOption,
@@ -642,5 +668,19 @@ export const crawlSolanaCommand = Command.make(
 ).pipe(
   Command.withDescription(
     "Discover Solana DEX protocol candidates from curated Dune swap data and import them for review"
+  )
+)
+
+export const crawlSolanaReplayCommand = Command.make(
+  "solana-replay",
+  {
+    fromFile: replayFromFileOption,
+    out: dexOutOption,
+    json: jsonOption,
+  },
+  crawlSolanaReplayProgram
+).pipe(
+  Command.withDescription(
+    "Replay a Solana Dune rankings file without calling Dune and import it for review"
   )
 )

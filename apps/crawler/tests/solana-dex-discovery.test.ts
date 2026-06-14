@@ -10,7 +10,7 @@ import {
   buildSolanaDexDiscoveryFile,
   solanaDuneDexProjectRankingsFileName,
 } from "../src/solana-dex-discovery.ts"
-import { crawlSolanaProgram } from "../src/solana-crawler.ts"
+import { crawlSolanaProgram, crawlSolanaReplayProgram } from "../src/solana-crawler.ts"
 import {
   SolanaDuneClient,
   SolanaDuneClientTestLive,
@@ -135,7 +135,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 25,
       }).pipe(Effect.provide(dexDiscoveryClientLive()))
     )
@@ -174,7 +173,7 @@ describe("solana dex discovery", () => {
     ])
     expect(file.startDate).toBe("2024-01-01")
     expect(file.endDate).toBe("2024-01-08")
-    expect(file.parameters).toEqual({ topProjects: 10, samplesPerProject: 25, windowDays: 7 })
+    expect(file.parameters).toEqual({ samplesPerProject: 25, windowDays: 7 })
     expect(
       file.executions.map((execution) => ({ kind: execution.kind, status: execution.status }))
     ).toEqual([
@@ -189,28 +188,13 @@ describe("solana dex discovery", () => {
     )
   })
 
-  it("keeps only the requested number of top projects ordered by traders", async () => {
-    const file = await runDiscovery(
-      buildSolanaDexDiscoveryFile({
-        generatedAt: "2026-06-12T00:00:00.000Z",
-        startDate: "2024-01-01",
-        endDate: "2024-01-08",
-        topProjects: 1,
-        samplesPerProject: 25,
-      }).pipe(Effect.provide(dexDiscoveryClientLive()))
-    )
-
-    expect(file.entries.map((entry) => entry.protocolNameHint)).toEqual(["raydium"])
-  })
-
-  it("selects the requested number of usable rows after skipping rows without program ids", async () => {
+  it("skips rows without program ids", async () => {
     const calls: Array<RecordedCall> = []
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 1,
         samplesPerProject: 25,
       }).pipe(
         Effect.provide(
@@ -238,13 +222,12 @@ describe("solana dex discovery", () => {
     ).toEqual(["orca"])
   })
 
-  it("preserves the saved Dune query row order for top project selection", async () => {
+  it("preserves the saved Dune query row order", async () => {
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 1,
         samplesPerProject: 0,
       }).pipe(
         Effect.provide(
@@ -268,7 +251,7 @@ describe("solana dex discovery", () => {
       )
     )
 
-    expect(file.entries.map((entry) => entry.subjectIdentifier)).toEqual(["orca"])
+    expect(file.entries.map((entry) => entry.subjectIdentifier)).toEqual(["orca", "raydium"])
   })
 
   it("limits sample signatures per project", async () => {
@@ -277,31 +260,11 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 2,
       }).pipe(Effect.provide(dexDiscoveryClientLive()))
     )
 
     expect(file.entries[0]?.sampleSignatures).toEqual(["raydium-swap-1", "raydium-swap-2"])
-  })
-
-  it("rejects top projects above the saved priority query limit", async () => {
-    const result = await Effect.runPromiseExit(
-      buildSolanaDexDiscoveryFile({
-        generatedAt: "2026-06-12T00:00:00.000Z",
-        startDate: "2024-01-01",
-        endDate: "2024-01-08",
-        topProjects: 101,
-        samplesPerProject: 25,
-      }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
-    )
-
-    expect(result._tag).toBe("Failure")
-    if (result._tag === "Failure") {
-      expect(result.cause.toString()).toContain(
-        "`topProjects` must be an integer between 0 and 100"
-      )
-    }
   })
 
   it("rejects samples per project above the saved sample query limit", async () => {
@@ -310,7 +273,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 51,
       }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
     )
@@ -329,7 +291,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 0,
       }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
     )
@@ -337,17 +298,29 @@ describe("solana dex discovery", () => {
     expect(file.entries[0]?.sampleSignatures).toEqual([])
   })
 
-  it("splits long ranges into windows and samples each project once", async () => {
+  it("splits long ranges into windows and accumulates project samples", async () => {
     const calls: Array<RecordedCall> = []
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-15",
-        topProjects: 10,
         samplesPerProject: 25,
         windowDays: 7,
-      }).pipe(Effect.provide(dexDiscoveryClientLive({ calls })))
+      }).pipe(
+        Effect.provide(
+          dexDiscoveryClientLive({
+            calls,
+            sampleRowsForWindow: (parameters) =>
+              parameters.project === "raydium" && parameters.start_date === "2024-01-08"
+                ? [{ tx_id: "raydium-swap-2" }, { tx_id: "raydium-later-window-swap" }]
+                : [
+                    { tx_id: `${parameters.project ?? "unknown"}-swap-1` },
+                    { tx_id: `${parameters.project ?? "unknown"}-swap-2` },
+                  ],
+          })
+        )
+      )
     )
 
     const priorityCalls = calls.filter((call) => call.kind === "dex-project-priority")
@@ -362,6 +335,10 @@ describe("solana dex discovery", () => {
         kind: "dex-project-sample-transactions",
         parameters: { project: "raydium", start_date: "2024-01-01", end_date: "2024-01-02" },
       },
+      {
+        kind: "dex-project-sample-transactions",
+        parameters: { project: "raydium", start_date: "2024-01-08", end_date: "2024-01-09" },
+      },
     ])
 
     const raydiumEntries = file.entries.filter((entry) => entry.subjectIdentifier === "raydium")
@@ -369,12 +346,12 @@ describe("solana dex discovery", () => {
       "2024-01-01 to 2024-01-08",
       "2024-01-08 to 2024-01-15",
     ])
-    expect(raydiumEntries[0]?.sampleSignatures).toEqual([
+    expect(raydiumEntries[0]?.sampleSignatures).toEqual(["raydium-swap-1", "raydium-swap-2"])
+    expect(raydiumEntries[1]?.sampleSignatures).toEqual([
       "raydium-swap-1",
       "raydium-swap-2",
-      "raydium-swap-3",
+      "raydium-later-window-swap",
     ])
-    expect(raydiumEntries[1]?.sampleSignatures).toEqual([])
   })
 
   it("retries project sampling in later windows after an empty sample", async () => {
@@ -384,7 +361,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-15",
-        topProjects: 1,
         samplesPerProject: 25,
         windowDays: 7,
       }).pipe(
@@ -431,7 +407,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 0,
         windowDays: 7,
       }).pipe(
@@ -500,7 +475,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-03",
-        topProjects: 10,
         samplesPerProject: 0,
         windowDays: 7,
       }).pipe(
@@ -525,7 +499,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 25,
       }).pipe(
         Effect.provide(
@@ -559,7 +532,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 0,
       }).pipe(
         Effect.provide(
@@ -596,7 +568,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 25,
       }).pipe(Effect.provide(dexDiscoveryClientLive({ priorityRows: [] })))
     )
@@ -613,7 +584,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 25,
       }).pipe(
         Effect.provide(dexDiscoveryClientLive({ priorityRows: [{ project: 42, nonsense: true }] }))
@@ -632,7 +602,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-02-01",
         endDate: "2024-01-01",
-        topProjects: 10,
         samplesPerProject: 25,
       }).pipe(Effect.provide(dexDiscoveryClientLive()))
     )
@@ -649,7 +618,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-02-31",
         endDate: "2024-03-08",
-        topProjects: 10,
         samplesPerProject: 25,
       }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
     )
@@ -682,8 +650,6 @@ describe("solana dex discovery", () => {
     const result = await crawlSolanaProgram({
       startDate: Option.some("2024-01-01"),
       endDate: Option.some("2024-01-08"),
-      fromFile: Option.none(),
-      topProjects: 10,
       samplesPerProject: 25,
       windowDays: 7,
       out: Option.some(outputDirectory),
@@ -769,8 +735,6 @@ describe("solana dex discovery", () => {
     const result = await crawlSolanaProgram({
       startDate: Option.some("2024-01-01"),
       endDate: Option.some("2024-01-08"),
-      fromFile: Option.none(),
-      topProjects: 10,
       samplesPerProject: 25,
       windowDays: 7,
       out: Option.none(),
@@ -810,8 +774,6 @@ describe("solana dex discovery", () => {
     const liveResult = await crawlSolanaProgram({
       startDate: Option.some("2024-01-01"),
       endDate: Option.some("2024-01-08"),
-      fromFile: Option.none(),
-      topProjects: 10,
       samplesPerProject: 25,
       windowDays: 7,
       out: Option.some(outputDirectory),
@@ -824,15 +786,8 @@ describe("solana dex discovery", () => {
     )
     const liveImportCount = importedObservations.length
 
-    const replayResult = await crawlSolanaProgram({
-      startDate: Option.none(),
-      endDate: Option.none(),
-      fromFile: Option.some(
-        `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`
-      ),
-      topProjects: 10,
-      samplesPerProject: 25,
-      windowDays: 7,
+    const replayResult = await crawlSolanaReplayProgram({
+      fromFile: `${outputDirectory}/${solanaDuneDexProjectRankingsFileName({ startDate: "2024-01-01", endDate: "2024-01-08" })}`,
       out: Option.none(),
       json: true,
     }).pipe(
@@ -857,15 +812,10 @@ describe("solana dex discovery", () => {
     )
   })
 
-  it("rejects date flags combined with a replay file", async () => {
+  it("rejects an empty replay file path", async () => {
     const result = await Effect.runPromiseExit(
-      crawlSolanaProgram({
-        startDate: Option.some("2024-01-01"),
-        endDate: Option.none(),
-        fromFile: Option.some("/tmp/some-rankings.json"),
-        topProjects: 10,
-        samplesPerProject: 25,
-        windowDays: 7,
+      crawlSolanaReplayProgram({
+        fromFile: " ",
         out: Option.none(),
         json: true,
       }).pipe(
@@ -886,7 +836,7 @@ describe("solana dex discovery", () => {
 
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
-      expect(result.cause.toString()).toContain("do not pass `--start-date` or `--end-date`")
+      expect(result.cause.toString()).toContain("`--from-file` must not be empty")
     }
   })
 
@@ -896,7 +846,6 @@ describe("solana dex discovery", () => {
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-08",
-        topProjects: 10,
         samplesPerProject: 0,
         windowDays: 7,
       }).pipe(Effect.provideService(SolanaDuneClient, solanaDuneClientFromRecordedExecutions([])))
