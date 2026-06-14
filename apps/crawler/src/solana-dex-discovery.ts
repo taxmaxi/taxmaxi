@@ -558,7 +558,6 @@ export const buildSolanaDexDiscoveryFile = ({
       kind: "dex-project-sample-transactions",
     })
     const windows = yield* splitIntoWindows({ startDate, endDate, windowDays })
-    const projectSampleSignatures = new Map<string, ReadonlyArray<string>>()
     const entries: Array<SolanaDuneRankingEntry> = []
     const executions: ExecutionRecorder = []
 
@@ -573,22 +572,16 @@ export const buildSolanaDexDiscoveryFile = ({
         const period = `${executedWindow.startDate} to ${executedWindow.endDate}`
 
         for (const { row, canonicalProgramIds } of topRows) {
-          const existingSampleSignatures = projectSampleSignatures.get(row.project) ?? []
-          let sampleSignatures = existingSampleSignatures
-
-          if (samplesPerProject > 0 && existingSampleSignatures.length < samplesPerProject) {
-            const newSampleSignatures = yield* sampleSignaturesForProject({
-              project: row.project,
-              sampleDate: executedWindow.startDate,
-              samplesPerProject,
-              recorder: executions,
-              query: sampleTransactionsQuery,
-            })
-            sampleSignatures = Array.from(
-              new Set([...existingSampleSignatures, ...newSampleSignatures])
-            ).slice(0, samplesPerProject)
-            projectSampleSignatures.set(row.project, sampleSignatures)
-          }
+          const sampleSignatures =
+            samplesPerProject > 0
+              ? yield* sampleSignaturesForProject({
+                  project: row.project,
+                  sampleDate: executedWindow.startDate,
+                  samplesPerProject,
+                  recorder: executions,
+                  query: sampleTransactionsQuery,
+                })
+              : []
 
           entries.push(
             yield* entriesFromPriorityRow({

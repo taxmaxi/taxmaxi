@@ -302,14 +302,14 @@ describe("solana dex discovery", () => {
     expect(file.entries[0]?.sampleSignatures).toEqual([])
   })
 
-  it("splits long ranges into windows and accumulates project samples", async () => {
+  it("splits long ranges into windows and samples each observation window", async () => {
     const calls: Array<RecordedCall> = []
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
         generatedAt: "2026-06-12T00:00:00.000Z",
         startDate: "2024-01-01",
         endDate: "2024-01-15",
-        samplesPerProject: 25,
+        samplesPerProject: 2,
         windowDays: 7,
       }).pipe(
         Effect.provide(
@@ -352,7 +352,6 @@ describe("solana dex discovery", () => {
     ])
     expect(raydiumEntries[0]?.sampleSignatures).toEqual(["raydium-swap-1", "raydium-swap-2"])
     expect(raydiumEntries[1]?.sampleSignatures).toEqual([
-      "raydium-swap-1",
       "raydium-swap-2",
       "raydium-later-window-swap",
     ])

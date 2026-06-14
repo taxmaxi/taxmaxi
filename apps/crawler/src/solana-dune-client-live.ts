@@ -4,6 +4,7 @@
  * @module
  */
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform"
+import * as Console from "effect/Console"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -133,9 +134,8 @@ const executeAndDecodeWithRetries = <A, I>({
         duneRateLimitRetryDelaySeconds(response.headers) ??
         DUNE_RATE_LIMIT_DEFAULT_RETRY_DELAY_SECONDS
       if (response.status === 429 && remainingRateLimitRetries > 0) {
-        yield* Effect.logInfo(
-          { queryId, retryDelaySeconds, remainingRateLimitRetries },
-          "Dune API rate limited; retrying"
+        yield* Console.error(
+          `Dune API rate limited; retrying query ${queryId} in ${retryDelaySeconds} seconds (${remainingRateLimitRetries} retries remaining)`
         )
         yield* Effect.sleep(`${retryDelaySeconds} seconds`)
         return yield* executeAndDecodeWithRetries({
