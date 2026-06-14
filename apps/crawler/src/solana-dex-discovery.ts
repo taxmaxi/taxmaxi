@@ -10,8 +10,8 @@
  * execution timeout is halved and retried, so high-volume periods crawl with
  * smaller windows automatically. Every ranked project with canonical program
  * ids becomes one candidate entry with the program ids retained as review
- * evidence. Projects are sampled across windows until the requested unique
- * signature count is reached.
+ * evidence. Each project/window observation samples up to the requested
+ * signature count.
  *
  * @module
  */

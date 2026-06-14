@@ -1,6 +1,6 @@
 import { Command, Options } from "@effect/cli"
 import { FileSystem, Path } from "@effect/platform"
-import { Console, Effect, Schema } from "effect"
+import { Console, Effect, Layer, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
 import {
@@ -83,6 +83,10 @@ export type CrawlSolanaResult = {
   readonly duneProtocolCandidateImport: ProtocolCandidateImportResult
   readonly replayedFromFile: string | null
 }
+
+type ImportDexProjectRankingsCandidates<R> = (
+  dexProjectRankings: SolanaDuneRankingsFile
+) => Effect.Effect<ProtocolCandidateImportResult, CrawlerCommandError, R>
 
 const outOption = Options.text("out").pipe(
   Options.optional,
@@ -472,21 +476,54 @@ const readReplayRankingsFile = (
     )
   })
 
-const importAndMaybeWriteDexProjectRankings = ({
+const importDexProjectRankingsCandidates: ImportDexProjectRankingsCandidates<
+  ProtocolCandidateRepository
+> = (dexProjectRankings) =>
+  Effect.gen(function* () {
+    const repository = yield* ProtocolCandidateRepository
+    const observations = yield* duneObservationsFromSolanaDuneRankingsFile({
+      rankingsFile: dexProjectRankings,
+      blockchainName: "solana",
+    })
+    return yield* repository.importObservations({ observations })
+  }).pipe(
+    Effect.mapError(
+      (error) =>
+        new CrawlerCommandError({
+          message: error.message,
+        })
+    )
+  )
+
+const importDexProjectRankingsCandidatesWithLayer =
+  (
+    protocolCandidateRepositoryLayer: Layer.Layer<ProtocolCandidateRepository, unknown, never>
+  ): ImportDexProjectRankingsCandidates<never> =>
+  (dexProjectRankings) =>
+    importDexProjectRankingsCandidates(dexProjectRankings).pipe(
+      Effect.provide(protocolCandidateRepositoryLayer),
+      Effect.mapError((error) =>
+        error instanceof CrawlerCommandError
+          ? error
+          : new CrawlerCommandError({
+              message: "Failed to import Solana Dune protocol candidates.",
+            })
+      )
+    )
+
+const importAndMaybeWriteDexProjectRankings = <R>({
   dexProjectRankings,
+  importCandidates,
   out,
   json,
   replayedFromFile,
 }: {
   readonly dexProjectRankings: SolanaDuneRankingsFile
+  readonly importCandidates: ImportDexProjectRankingsCandidates<R>
   readonly out: Option.Option<string>
   readonly json: boolean
   readonly replayedFromFile: string | null
-}): Effect.Effect<
-  CrawlSolanaResult,
-  CrawlerCommandError,
-  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository
-> =>
+}): Effect.Effect<CrawlSolanaResult, CrawlerCommandError, FileSystem.FileSystem | Path.Path | R> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const path = yield* Path.Path
@@ -505,21 +542,7 @@ const importAndMaybeWriteDexProjectRankings = ({
         ? null
         : path.join(outputDirectory, solanaDuneDexProjectRankingsFileName(dexProjectRankings))
 
-    const duneProtocolCandidateImport = yield* Effect.gen(function* () {
-      const repository = yield* ProtocolCandidateRepository
-      const observations = yield* duneObservationsFromSolanaDuneRankingsFile({
-        rankingsFile: dexProjectRankings,
-        blockchainName: "solana",
-      })
-      return yield* repository.importObservations({ observations })
-    }).pipe(
-      Effect.mapError(
-        (error) =>
-          new CrawlerCommandError({
-            message: error.message,
-          })
-      )
-    )
+    const duneProtocolCandidateImport = yield* importCandidates(dexProjectRankings)
 
     if (outputDirectory !== null && dexProjectRankingsPath !== null) {
       const encodedDexProjectRankings = yield* encodeDexProjectRankings(dexProjectRankings)
@@ -573,17 +596,20 @@ const importAndMaybeWriteDexProjectRankings = ({
     }
   })
 
-export const crawlSolanaProgram = ({
+const crawlSolanaProgramWithImport = <R>({
   startDate,
   endDate,
   samplesPerProject,
   windowDays,
   out,
   json,
-}: CrawlSolanaOptions): Effect.Effect<
+  importCandidates,
+}: CrawlSolanaOptions & {
+  readonly importCandidates: ImportDexProjectRankingsCandidates<R>
+}): Effect.Effect<
   CrawlSolanaResult,
   CrawlerCommandError,
-  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+  FileSystem.FileSystem | Path.Path | R | SolanaDuneClient
 > =>
   Effect.gen(function* () {
     yield* validateNonNegative({ flag: "--samples-per-project", value: samplesPerProject })
@@ -618,20 +644,36 @@ export const crawlSolanaProgram = ({
 
     return yield* importAndMaybeWriteDexProjectRankings({
       dexProjectRankings,
+      importCandidates,
       out,
       json,
       replayedFromFile: null,
     })
   })
 
-export const crawlSolanaReplayProgram = ({
-  fromFile,
-  out,
-  json,
-}: CrawlSolanaReplayOptions): Effect.Effect<
+export const crawlSolanaProgram = (
+  options: CrawlSolanaOptions
+): Effect.Effect<
   CrawlSolanaResult,
   CrawlerCommandError,
   FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+> =>
+  crawlSolanaProgramWithImport({
+    ...options,
+    importCandidates: importDexProjectRankingsCandidates,
+  })
+
+const crawlSolanaReplayProgramWithImport = <R>({
+  fromFile,
+  out,
+  json,
+  importCandidates,
+}: CrawlSolanaReplayOptions & {
+  readonly importCandidates: ImportDexProjectRankingsCandidates<R>
+}): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | R | SolanaDuneClient
 > =>
   Effect.gen(function* () {
     const replayFilePath = fromFile.trim()
@@ -661,39 +703,70 @@ export const crawlSolanaReplayProgram = ({
 
     return yield* importAndMaybeWriteDexProjectRankings({
       dexProjectRankings,
+      importCandidates,
       out,
       json,
       replayedFromFile: replayFilePath,
     })
   })
 
-export const crawlSolanaCommand = Command.make(
-  "solana",
-  {
-    startDate: startDateOption,
-    endDate: endDateOption,
-    samplesPerProject: samplesPerProjectOption,
-    windowDays: windowDaysOption,
-    out: dexOutOption,
-    json: jsonOption,
-  },
-  crawlSolanaProgram
-).pipe(
-  Command.withDescription(
-    "Discover Solana DEX protocol candidates from curated Dune swap data and import them for review"
-  )
-)
+export const crawlSolanaReplayProgram = (
+  options: CrawlSolanaReplayOptions
+): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+> =>
+  crawlSolanaReplayProgramWithImport({
+    ...options,
+    importCandidates: importDexProjectRankingsCandidates,
+  })
 
-export const crawlSolanaReplayCommand = Command.make(
-  "solana-replay",
-  {
-    fromFile: replayFromFileOption,
-    out: dexOutOption,
-    json: jsonOption,
-  },
-  crawlSolanaReplayProgram
-).pipe(
-  Command.withDescription(
-    "Replay a Solana Dune rankings file without calling Dune and import it for review"
+export const makeCrawlSolanaCommand = (
+  protocolCandidateRepositoryLayer: Layer.Layer<ProtocolCandidateRepository, unknown, never>
+) =>
+  Command.make(
+    "solana",
+    {
+      startDate: startDateOption,
+      endDate: endDateOption,
+      samplesPerProject: samplesPerProjectOption,
+      windowDays: windowDaysOption,
+      out: dexOutOption,
+      json: jsonOption,
+    },
+    (options) =>
+      crawlSolanaProgramWithImport({
+        ...options,
+        importCandidates: importDexProjectRankingsCandidatesWithLayer(
+          protocolCandidateRepositoryLayer
+        ),
+      })
+  ).pipe(
+    Command.withDescription(
+      "Discover Solana DEX protocol candidates from curated Dune swap data and import them for review"
+    )
   )
-)
+
+export const makeCrawlSolanaReplayCommand = (
+  protocolCandidateRepositoryLayer: Layer.Layer<ProtocolCandidateRepository, unknown, never>
+) =>
+  Command.make(
+    "solana-replay",
+    {
+      fromFile: replayFromFileOption,
+      out: dexOutOption,
+      json: jsonOption,
+    },
+    (options) =>
+      crawlSolanaReplayProgramWithImport({
+        ...options,
+        importCandidates: importDexProjectRankingsCandidatesWithLayer(
+          protocolCandidateRepositoryLayer
+        ),
+      })
+  ).pipe(
+    Command.withDescription(
+      "Replay a Solana Dune rankings file without calling Dune and import it for review"
+    )
+  )
