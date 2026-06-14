@@ -39,6 +39,8 @@ export const solanaDuneDexProjectRankingsFileName = ({
 }): string => `solana-dune-dex-project-rankings-${startDate}-to-${endDate}.json`
 
 export const DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS = 7
+export const SOLANA_DEX_PROJECT_PRIORITY_QUERY_ROW_LIMIT = 100
+export const SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY_ROW_LIMIT = 50
 
 const NumericField = Schema.Union(Schema.Number, Schema.NumberFromString)
 
@@ -246,6 +248,11 @@ type PriorityWindowResult = {
   readonly rows: ReadonlyArray<typeof DexProjectPriorityRow.Type>
 }
 
+type UsablePriorityRow = {
+  readonly row: typeof DexProjectPriorityRow.Type
+  readonly canonicalProgramIds: ReadonlyArray<string>
+}
+
 type ExecutionRecorder = Array<SolanaDuneRecordedExecution>
 
 const canonicalProgramIdsFromPriorityRow = (
@@ -271,6 +278,49 @@ const canonicalProgramIdsFromPriorityRow = (
 
     return [...new Set(rawProgramIds.filter((programId) => programId.trim() !== ""))]
   })
+
+const usablePriorityRows = ({
+  rows,
+  topProjects,
+}: {
+  readonly rows: ReadonlyArray<typeof DexProjectPriorityRow.Type>
+  readonly topProjects: number
+}): Effect.Effect<ReadonlyArray<UsablePriorityRow>, SolanaDuneError> =>
+  Effect.gen(function* () {
+    const selected: Array<UsablePriorityRow> = []
+
+    for (const row of rows) {
+      if (selected.length >= topProjects) {
+        break
+      }
+
+      const canonicalProgramIds = yield* canonicalProgramIdsFromPriorityRow(row)
+      if (canonicalProgramIds.length === 0) {
+        continue
+      }
+
+      selected.push({ row, canonicalProgramIds })
+    }
+
+    return selected
+  })
+
+const validateQueryBound = ({
+  name,
+  value,
+  limit,
+}: {
+  readonly name: string
+  readonly value: number
+  readonly limit: number
+}): Effect.Effect<void, SolanaDuneError> =>
+  Number.isSafeInteger(value) && value >= 0 && value <= limit
+    ? Effect.void
+    : Effect.fail(
+        new SolanaDuneError({
+          message: `\`${name}\` must be an integer between 0 and ${limit}; the saved Dune query cannot return more rows.`,
+        })
+      )
 
 /**
  * Execute the priority query for one window, halving the window on Dune
@@ -447,6 +497,16 @@ export const buildSolanaDexDiscoveryFile = ({
 > =>
   Effect.gen(function* () {
     yield* validateDateRange({ startDate, endDate })
+    yield* validateQueryBound({
+      name: "topProjects",
+      value: topProjects,
+      limit: SOLANA_DEX_PROJECT_PRIORITY_QUERY_ROW_LIMIT,
+    })
+    yield* validateQueryBound({
+      name: "samplesPerProject",
+      value: samplesPerProject,
+      limit: SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY_ROW_LIMIT,
+    })
     if (!Number.isSafeInteger(windowDays) || windowDays <= 0) {
       return yield* Effect.fail(
         new SolanaDuneError({ message: "`windowDays` must be a positive safe integer" })
@@ -462,15 +522,10 @@ export const buildSolanaDexDiscoveryFile = ({
       const windowResults = yield* priorityRowsForWindow(window, executions)
 
       for (const { window: executedWindow, rows } of windowResults) {
-        const topRows = rows.slice(0, topProjects)
+        const topRows = yield* usablePriorityRows({ rows, topProjects })
         const period = `${executedWindow.startDate} to ${executedWindow.endDate}`
 
-        for (const row of topRows) {
-          const canonicalProgramIds = yield* canonicalProgramIdsFromPriorityRow(row)
-          if (canonicalProgramIds.length === 0) {
-            continue
-          }
-
+        for (const { row, canonicalProgramIds } of topRows) {
           let sampleSignatures: ReadonlyArray<string> = []
           if (samplesPerProject > 0 && !sampledProjects.has(row.project)) {
             sampleSignatures = yield* sampleSignaturesForProject({

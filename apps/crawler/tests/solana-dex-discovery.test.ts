@@ -203,6 +203,41 @@ describe("solana dex discovery", () => {
     expect(file.entries.map((entry) => entry.protocolNameHint)).toEqual(["raydium"])
   })
 
+  it("selects the requested number of usable rows after skipping rows without program ids", async () => {
+    const calls: Array<RecordedCall> = []
+    const file = await runDiscovery(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-08",
+        topProjects: 1,
+        samplesPerProject: 25,
+      }).pipe(
+        Effect.provide(
+          dexDiscoveryClientLive({
+            calls,
+            priorityRows: [
+              priorityRow({ project: "mystery", traders: 999, volume: 1, programIds: null }),
+              priorityRow({
+                project: "orca",
+                traders: 100,
+                volume: 2,
+                programIds: [ORCA_WHIRLPOOL_PROGRAM],
+              }),
+            ],
+          })
+        )
+      )
+    )
+
+    expect(file.entries.map((entry) => entry.subjectIdentifier)).toEqual(["orca"])
+    expect(
+      calls
+        .filter((call) => call.kind === "dex-project-sample-transactions")
+        .map((call) => call.parameters.project)
+    ).toEqual(["orca"])
+  })
+
   it("preserves the saved Dune query row order for top project selection", async () => {
     const file = await runDiscovery(
       buildSolanaDexDiscoveryFile({
@@ -248,6 +283,44 @@ describe("solana dex discovery", () => {
     )
 
     expect(file.entries[0]?.sampleSignatures).toEqual(["raydium-swap-1", "raydium-swap-2"])
+  })
+
+  it("rejects top projects above the saved priority query limit", async () => {
+    const result = await Effect.runPromiseExit(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-08",
+        topProjects: 101,
+        samplesPerProject: 25,
+      }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain(
+        "`topProjects` must be an integer between 0 and 100"
+      )
+    }
+  })
+
+  it("rejects samples per project above the saved sample query limit", async () => {
+    const result = await Effect.runPromiseExit(
+      buildSolanaDexDiscoveryFile({
+        generatedAt: "2026-06-12T00:00:00.000Z",
+        startDate: "2024-01-01",
+        endDate: "2024-01-08",
+        topProjects: 10,
+        samplesPerProject: 51,
+      }).pipe(Effect.provide(dexDiscoveryClientLive({ failSampleQuery: true })))
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.cause.toString()).toContain(
+        "`samplesPerProject` must be an integer between 0 and 50"
+      )
+    }
   })
 
   it("skips the sample query entirely when samples are disabled", async () => {
