@@ -8,6 +8,7 @@ import { and, count, desc, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import {
   ProtocolTransactionTypeMappingRepository,
   SyncEngineStorageError,
@@ -40,6 +41,33 @@ const invalidInput = ({
   readonly field: string
   readonly message: string
 }) => Effect.fail(storageError(operation, { field, message }))
+
+const ProtocolCandidateObservationPayload = Schema.Struct({
+  canonicalProgramIds: Schema.optional(Schema.Array(Schema.String)),
+})
+
+const canonicalProgramIdsFromRawPayload = ({
+  operation,
+  payload,
+}: {
+  readonly operation: string
+  readonly payload: unknown
+}) =>
+  Schema.decodeUnknown(ProtocolCandidateObservationPayload)(payload).pipe(
+    Effect.mapError((cause) =>
+      storageError(operation, {
+        message: "Failed to decode protocol candidate observation payload.",
+        cause,
+      })
+    ),
+    Effect.map(({ canonicalProgramIds }) => [
+      ...new Set(
+        (canonicalProgramIds ?? [])
+          .map((programId) => programId.trim())
+          .filter((programId) => programId.length > 0)
+      ),
+    ])
+  )
 
 const validateNonEmptyText = ({
   operation,
@@ -249,6 +277,54 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* validateEvidence(operation, params)
 
+          const [mapping] = yield* tx
+            .select({
+              candidateId: schema.protocolTransactionTypeMappings.candidateId,
+            })
+            .from(schema.protocolTransactionTypeMappings)
+            .where(eq(schema.protocolTransactionTypeMappings.id, params.mappingId))
+            .limit(1)
+            .pipe(wrapSyncEngineSqlError(operation))
+
+          if (mapping === undefined) {
+            return yield* Effect.fail(
+              storageError(operation, {
+                mappingId: params.mappingId,
+                message: "Failed to resolve protocol mapping.",
+              })
+            )
+          }
+
+          if (params.candidateObservationId !== null) {
+            const [observation] = yield* tx
+              .select({
+                candidateId: schema.protocolCandidateObservations.candidateId,
+              })
+              .from(schema.protocolCandidateObservations)
+              .where(eq(schema.protocolCandidateObservations.id, params.candidateObservationId))
+              .limit(1)
+              .pipe(wrapSyncEngineSqlError(operation))
+
+            if (observation === undefined) {
+              return yield* Effect.fail(
+                storageError(operation, {
+                  candidateObservationId: params.candidateObservationId,
+                  message: "Failed to resolve protocol candidate observation.",
+                })
+              )
+            }
+
+            if (mapping.candidateId === null || mapping.candidateId !== observation.candidateId) {
+              return yield* Effect.fail(
+                storageError(operation, {
+                  mappingId: params.mappingId,
+                  candidateObservationId: params.candidateObservationId,
+                  message: "Protocol mapping evidence must belong to the mapped candidate.",
+                })
+              )
+            }
+          }
+
           const now = nowDate()
           const [evidence] = yield* tx
             .insert(schema.protocolMappingEvidence)
@@ -332,7 +408,12 @@ const make = Effect.gen(function* () {
               reviewerNotes: params.reviewerNotes,
               updatedAt: now,
             })
-            .where(eq(schema.protocolTransactionTypeMappings.id, params.mappingId))
+            .where(
+              and(
+                eq(schema.protocolTransactionTypeMappings.id, params.mappingId),
+                eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+              )
+            )
             .returning()
             .pipe(wrapSyncEngineSqlError(operation))
 
@@ -340,16 +421,82 @@ const make = Effect.gen(function* () {
             return yield* Effect.fail(
               storageError(operation, {
                 mappingId: params.mappingId,
-                message: "Failed to approve protocol mapping.",
+                message: "Failed to approve pending protocol mapping.",
               })
             )
           }
 
           if (mapping.candidateId !== null) {
+            const [candidate] = yield* tx
+              .select({
+                subjectKind: schema.protocolCandidates.subjectKind,
+                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+              })
+              .from(schema.protocolCandidates)
+              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
+              .limit(1)
+              .pipe(wrapSyncEngineSqlError(operation))
+
+            if (candidate === undefined) {
+              return yield* Effect.fail(
+                storageError(operation, {
+                  candidateId: mapping.candidateId,
+                  message: "Failed to resolve protocol candidate.",
+                })
+              )
+            }
+
+            const observationRows = yield* tx
+              .select({
+                rawPayload: schema.protocolCandidateObservations.rawPayload,
+              })
+              .from(schema.protocolCandidateObservations)
+              .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
+              .pipe(wrapSyncEngineSqlError(operation))
+
+            const observedProgramIdGroups = yield* Effect.forEach(observationRows, (row) =>
+              canonicalProgramIdsFromRawPayload({ operation, payload: row.rawPayload })
+            )
+            const requiredProgramIds = [
+              ...new Set(
+                [
+                  ...(candidate.subjectKind === "program" ? [candidate.subjectIdentifier] : []),
+                  ...observedProgramIdGroups.flat(),
+                ]
+                  .map((programId) => programId.trim())
+                  .filter((programId) => programId.length > 0)
+              ),
+            ]
+            const programIdsToReview =
+              requiredProgramIds.length === 0 ? [mapping.programId] : requiredProgramIds
+
+            const approvedMappingRows = yield* tx
+              .select({
+                programId: schema.protocolTransactionTypeMappings.programId,
+              })
+              .from(schema.protocolTransactionTypeMappings)
+              .where(
+                and(
+                  eq(schema.protocolTransactionTypeMappings.candidateId, mapping.candidateId),
+                  eq(
+                    schema.protocolTransactionTypeMappings.movementPattern,
+                    mapping.movementPattern
+                  ),
+                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
+                )
+              )
+              .pipe(wrapSyncEngineSqlError(operation))
+            const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
+            const nextCandidateStatus = programIdsToReview.every((programId) =>
+              approvedProgramIds.has(programId)
+            )
+              ? "approved"
+              : "pending_review"
+
             yield* tx
               .update(schema.protocolCandidates)
               .set({
-                mappingStatus: "approved",
+                mappingStatus: nextCandidateStatus,
                 updatedAt: now,
               })
               .where(eq(schema.protocolCandidates.id, mapping.candidateId))
@@ -383,7 +530,12 @@ const make = Effect.gen(function* () {
               reviewerNotes: params.reviewerNotes,
               updatedAt: nowDate(),
             })
-            .where(eq(schema.protocolTransactionTypeMappings.id, params.mappingId))
+            .where(
+              and(
+                eq(schema.protocolTransactionTypeMappings.id, params.mappingId),
+                eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+              )
+            )
             .returning()
             .pipe(wrapSyncEngineSqlError(operation))
 
@@ -391,7 +543,7 @@ const make = Effect.gen(function* () {
             ? yield* Effect.fail(
                 storageError(operation, {
                   mappingId: params.mappingId,
-                  message: "Failed to reject protocol mapping.",
+                  message: "Failed to reject pending protocol mapping.",
                 })
               )
             : toPersistedMapping(mapping)

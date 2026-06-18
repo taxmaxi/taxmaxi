@@ -31,8 +31,14 @@ const runRepository = <A, E>(
 
 const insertCandidateWithObservation = ({
   programId = "reviewed-program-1",
+  subjectKind = "program",
+  subjectIdentifier = programId,
+  rawPayload = { program_id: programId },
 }: {
   readonly programId?: string
+  readonly subjectKind?: "program" | "contract" | "protocol"
+  readonly subjectIdentifier?: string
+  readonly rawPayload?: Record<string, unknown>
 } = {}) =>
   runPg(
     Effect.gen(function* () {
@@ -52,8 +58,8 @@ const insertCandidateWithObservation = ({
         .insert(schema.protocolCandidates)
         .values({
           blockchainId: blockchain.id,
-          subjectKind: "program",
-          subjectIdentifier: programId,
+          subjectKind,
+          subjectIdentifier,
           protocolNameHint: "Example DEX",
           categoryHint: "swap",
           mappingStatus: "pending_review",
@@ -84,7 +90,7 @@ const insertCandidateWithObservation = ({
           uniqueActorCount: "20",
           sampleTransactionHashes: ["sample-signature-1"],
           retrievedAt: now,
-          rawPayload: { program_id: programId },
+          rawPayload,
           createdAt: now,
         })
         .returning({ id: schema.protocolCandidateObservations.id })
@@ -100,6 +106,63 @@ const insertCandidateWithObservation = ({
         programId,
       }
     })
+  )
+
+const createPendingMapping = ({
+  candidateId,
+  programId,
+  version = 1,
+  protocolName = "Example DEX",
+}: {
+  readonly candidateId: string
+  readonly programId: string
+  readonly version?: number
+  readonly protocolName?: string
+}) =>
+  runRepository(
+    Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+      repository.createPendingMappingFromCandidate({
+        candidateId,
+        programId,
+        protocolName,
+        movementPattern: "token_out_and_token_in",
+        transactionTypeKey: null,
+        inventoryEffect: "disposal",
+        taxTreatment: "taxable_by_default",
+        confidence: "0.9500",
+        version,
+        reviewerNotes: null,
+        sourceNotes: null,
+      })
+    )
+  )
+
+const addEvidenceAndApprove = ({
+  mappingId,
+  observationId,
+  reviewerNotes = "Reviewed fixture",
+}: {
+  readonly mappingId: string
+  readonly observationId: string
+  readonly reviewerNotes?: string
+}) =>
+  runRepository(
+    Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+      Effect.gen(function* () {
+        yield* repository.addEvidence({
+          mappingId,
+          candidateObservationId: observationId,
+          evidenceKind: "dune_observation",
+          sampleSignature: "sample-signature-1",
+          payload: { source: "dune", queryId: 7_647_495 },
+        })
+        return yield* repository.approveMapping({
+          mappingId,
+          transactionTypeKey: "swap_crypto_to_crypto",
+          reviewerNotes,
+        })
+      })
+    )
   )
 
 describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
@@ -370,6 +433,207 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       expect.fail("Expected approval with unknown transaction type to fail")
     }
     expect(approvalResult.left).toBeInstanceOf(SyncEngineStorageError)
+  })
+
+  it("does not attach evidence from another candidate", async () => {
+    const mappingFixture = await insertCandidateWithObservation({
+      programId: "evidence-owner-program",
+    })
+    const unrelatedFixture = await insertCandidateWithObservation({
+      programId: "unrelated-evidence-program",
+    })
+    const pendingMapping = await createPendingMapping({
+      candidateId: mappingFixture.candidateId,
+      programId: mappingFixture.programId,
+    })
+
+    const evidenceResult = await runRepository(
+      Effect.either(
+        Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+          repository.addEvidence({
+            mappingId: pendingMapping.id,
+            candidateObservationId: unrelatedFixture.observationId,
+            evidenceKind: "dune_observation",
+            sampleSignature: "sample-signature-1",
+            payload: { source: "dune", queryId: 7_647_495 },
+          })
+        )
+      )
+    )
+
+    expect(evidenceResult._tag).toBe("Left")
+    if (evidenceResult._tag === "Right") {
+      expect.fail("Expected unrelated evidence to fail")
+    }
+    expect(evidenceResult.left).toBeInstanceOf(SyncEngineStorageError)
+  })
+
+  it("keeps a multi-program candidate pending until every observed program is approved", async () => {
+    const fixture = await insertCandidateWithObservation({
+      programId: "multi-program-a",
+      subjectKind: "protocol",
+      subjectIdentifier: "multi-program-dex",
+      rawPayload: {
+        canonicalProgramIds: ["multi-program-a", "multi-program-b"],
+        project: "multi-program-dex",
+      },
+    })
+    const firstMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: "multi-program-a",
+      protocolName: "Multi Program DEX",
+    })
+    await addEvidenceAndApprove({
+      mappingId: firstMapping.id,
+      observationId: fixture.observationId,
+    })
+
+    const statusAfterFirstApproval = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, fixture.candidateId))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    const secondMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: "multi-program-b",
+      protocolName: "Multi Program DEX",
+    })
+    await addEvidenceAndApprove({
+      mappingId: secondMapping.id,
+      observationId: fixture.observationId,
+    })
+
+    const statusAfterSecondApproval = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, fixture.candidateId))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(statusAfterFirstApproval).toBe("pending_review")
+    expect(statusAfterSecondApproval).toBe("approved")
+  })
+
+  it("does not approve an already approved mapping again", async () => {
+    const fixture = await insertCandidateWithObservation({ programId: "repeat-approval-program" })
+    const pendingMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: fixture.programId,
+    })
+    await addEvidenceAndApprove({
+      mappingId: pendingMapping.id,
+      observationId: fixture.observationId,
+      reviewerNotes: "Original approval",
+    })
+
+    const secondApprovalResult = await runRepository(
+      Effect.either(
+        Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+          repository.approveMapping({
+            mappingId: pendingMapping.id,
+            transactionTypeKey: "trade_other",
+            reviewerNotes: "Changed approval",
+          })
+        )
+      )
+    )
+
+    const row = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [mapping] = yield* db
+          .select({
+            transactionTypeKey: schema.protocolTransactionTypeMappings.transactionTypeKey,
+            mappingStatus: schema.protocolTransactionTypeMappings.mappingStatus,
+            reviewerNotes: schema.protocolTransactionTypeMappings.reviewerNotes,
+          })
+          .from(schema.protocolTransactionTypeMappings)
+          .where(eq(schema.protocolTransactionTypeMappings.id, pendingMapping.id))
+          .limit(1)
+
+        return mapping
+      })
+    )
+
+    expect(secondApprovalResult._tag).toBe("Left")
+    if (secondApprovalResult._tag === "Right") {
+      expect.fail("Expected approving an approved mapping to fail")
+    }
+    expect(secondApprovalResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(row).toMatchObject({
+      transactionTypeKey: "swap_crypto_to_crypto",
+      mappingStatus: "approved",
+      reviewerNotes: "Original approval",
+    })
+  })
+
+  it("does not reject an already approved mapping", async () => {
+    const fixture = await insertCandidateWithObservation({ programId: "reject-approved-program" })
+    const pendingMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: fixture.programId,
+    })
+    await addEvidenceAndApprove({
+      mappingId: pendingMapping.id,
+      observationId: fixture.observationId,
+    })
+
+    const rejectionResult = await runRepository(
+      Effect.either(
+        Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+          repository.rejectMapping({
+            mappingId: pendingMapping.id,
+            reviewerNotes: "Reject after approval",
+          })
+        )
+      )
+    )
+
+    const rows = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [mapping] = yield* db
+          .select({
+            mappingStatus: schema.protocolTransactionTypeMappings.mappingStatus,
+            reviewerNotes: schema.protocolTransactionTypeMappings.reviewerNotes,
+          })
+          .from(schema.protocolTransactionTypeMappings)
+          .where(eq(schema.protocolTransactionTypeMappings.id, pendingMapping.id))
+          .limit(1)
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, fixture.candidateId))
+          .limit(1)
+
+        return { mapping, candidate }
+      })
+    )
+
+    expect(rejectionResult._tag).toBe("Left")
+    if (rejectionResult._tag === "Right") {
+      expect.fail("Expected rejecting an approved mapping to fail")
+    }
+    expect(rejectionResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(rows.mapping).toMatchObject({
+      mappingStatus: "approved",
+      reviewerNotes: "Reviewed fixture",
+    })
+    expect(rows.candidate).toMatchObject({ mappingStatus: "approved" })
   })
 
   it("returns the latest approved version for runtime lookup", async () => {
