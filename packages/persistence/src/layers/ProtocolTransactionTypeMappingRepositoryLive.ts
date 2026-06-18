@@ -4,7 +4,7 @@
  * @module ProtocolTransactionTypeMappingRepositoryLive
  */
 
-import { and, count, desc, eq } from "drizzle-orm"
+import { and, count, desc, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -259,6 +259,15 @@ const make = Effect.gen(function* () {
               .returning()
               .pipe(wrapSyncEngineSqlError(operation))
 
+            yield* tx
+              .update(schema.protocolCandidates)
+              .set({
+                mappingStatus: "pending_review",
+                updatedAt: now,
+              })
+              .where(eq(schema.protocolCandidates.id, candidate.id))
+              .pipe(wrapSyncEngineSqlError(operation))
+
             return mapping === undefined
               ? yield* Effect.fail(
                   storageError(operation, { message: "Failed to create protocol mapping." })
@@ -477,7 +486,8 @@ const make = Effect.gen(function* () {
               .from(schema.protocolTransactionTypeMappings)
               .where(
                 and(
-                  eq(schema.protocolTransactionTypeMappings.candidateId, mapping.candidateId),
+                  eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
+                  inArray(schema.protocolTransactionTypeMappings.programId, programIdsToReview),
                   eq(
                     schema.protocolTransactionTypeMappings.movementPattern,
                     mapping.movementPattern

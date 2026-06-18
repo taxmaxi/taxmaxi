@@ -424,6 +424,115 @@ describe("ProtocolCandidateRepositoryLive", () => {
     })
   })
 
+  it("reopens an approved protocol candidate when re-import adds an uncovered program", async () => {
+    const observation = {
+      blockchainName: "solana",
+      subjectKind: "protocol" as const,
+      subjectIdentifier: "reopen-import-dex",
+      protocolNameHint: "Reopen Import DEX",
+      categoryHint: "dex",
+      sourceObservationKey: "dune:reopen-import-dex",
+      observedWindowStart: new Date("2026-05-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2026-06-01T00:00:00.000Z"),
+      interactionCount: 100,
+      transactionCount: 80,
+      uniqueActorCount: 20,
+      sampleTransactionHashes: ["signature-a"],
+      retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+      rawPayload: {
+        canonicalProgramIds: ["reopen-import-program-a"],
+        project: "reopen-import-dex",
+      },
+      sourceMetadata: {
+        source: "dune" as const,
+        queryId: 7_647_495,
+        queryName: "solana-dex-project-priority",
+        queryVersion: 1,
+      },
+    }
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({ observations: [observation] })
+      )
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({
+            id: schema.protocolCandidates.id,
+            blockchainId: schema.protocolCandidates.blockchainId,
+          })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "reopen-import-dex"))
+          .limit(1)
+
+        if (candidate === undefined) {
+          return yield* Effect.dieMessage("Missing imported protocol candidate fixture")
+        }
+
+        yield* db.insert(schema.protocolTransactionTypeMappings).values({
+          candidateId: candidate.id,
+          blockchainId: candidate.blockchainId,
+          programId: "reopen-import-program-a",
+          protocolName: "Reopen Import DEX",
+          movementPattern: "token_out_and_token_in",
+          transactionTypeKey: "swap_crypto_to_crypto",
+          inventoryEffect: "disposal",
+          taxTreatment: "taxable_by_default",
+          confidence: "0.9500",
+          mappingStatus: "approved",
+          version: 1,
+          reviewerNotes: "Reviewed fixture",
+          sourceNotes: null,
+        })
+
+        yield* db
+          .update(schema.protocolCandidates)
+          .set({ mappingStatus: "approved" })
+          .where(eq(schema.protocolCandidates.id, candidate.id))
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({
+          observations: [
+            {
+              ...observation,
+              interactionCount: 250,
+              transactionCount: 200,
+              uniqueActorCount: 90,
+              sampleTransactionHashes: ["signature-b"],
+              retrievedAt: new Date("2026-06-02T10:00:00.000Z"),
+              rawPayload: {
+                canonicalProgramIds: ["reopen-import-program-a", "reopen-import-program-b"],
+                project: "reopen-import-dex",
+              },
+            },
+          ],
+        })
+      )
+    )
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "reopen-import-dex"))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("pending_review")
+  })
+
   it("keeps distinct same-window Dune observations when project hints differ", async () => {
     const baseObservation = {
       blockchainName: "solana",

@@ -636,6 +636,89 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     expect(rows.candidate).toMatchObject({ mappingStatus: "approved" })
   })
 
+  it("reopens an approved candidate when adding a new pending version", async () => {
+    const fixture = await insertCandidateWithObservation({ programId: "reopen-version-program" })
+    const approvedMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: fixture.programId,
+      version: 1,
+    })
+    await addEvidenceAndApprove({
+      mappingId: approvedMapping.id,
+      observationId: fixture.observationId,
+    })
+
+    await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: fixture.programId,
+      version: 2,
+    })
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, fixture.candidateId))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("pending_review")
+  })
+
+  it("approves a multi-program candidate when other candidates cover required programs", async () => {
+    const existingProgramFixture = await insertCandidateWithObservation({
+      programId: "cross-candidate-program-a",
+    })
+    const existingMapping = await createPendingMapping({
+      candidateId: existingProgramFixture.candidateId,
+      programId: existingProgramFixture.programId,
+      protocolName: "Program DEX",
+    })
+    await addEvidenceAndApprove({
+      mappingId: existingMapping.id,
+      observationId: existingProgramFixture.observationId,
+    })
+
+    const protocolFixture = await insertCandidateWithObservation({
+      programId: "cross-candidate-program-b",
+      subjectKind: "protocol",
+      subjectIdentifier: "cross-candidate-dex",
+      rawPayload: {
+        canonicalProgramIds: ["cross-candidate-program-a", "cross-candidate-program-b"],
+        project: "cross-candidate-dex",
+      },
+    })
+    const protocolMapping = await createPendingMapping({
+      candidateId: protocolFixture.candidateId,
+      programId: "cross-candidate-program-b",
+      protocolName: "Cross Candidate DEX",
+    })
+    await addEvidenceAndApprove({
+      mappingId: protocolMapping.id,
+      observationId: protocolFixture.observationId,
+    })
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, protocolFixture.candidateId))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("approved")
+  })
+
   it("returns the latest approved version for runtime lookup", async () => {
     const fixture = await insertCandidateWithObservation({ programId: "versioned-program" })
 

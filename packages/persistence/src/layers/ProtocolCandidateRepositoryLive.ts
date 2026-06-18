@@ -4,9 +4,10 @@
  * @module ProtocolCandidateRepositoryLive
  */
 
-import { eq, sql } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Schema from "effect/Schema"
 import {
   ProtocolCandidateRepository,
   SyncEngineStorageError,
@@ -38,6 +39,48 @@ const invalidObservation = ({
   readonly field: string
   readonly message: string
 }) => Effect.fail(storageError({ field, message }))
+
+const ProtocolCandidateObservationPayload = Schema.Struct({
+  canonicalProgramIds: Schema.optional(Schema.Array(Schema.String)),
+})
+
+const canonicalProgramIdsFromRawPayload = (payload: unknown) =>
+  Schema.decodeUnknown(ProtocolCandidateObservationPayload)(payload).pipe(
+    Effect.mapError((cause) =>
+      storageError({
+        message: "Failed to decode protocol candidate observation payload.",
+        cause,
+      })
+    ),
+    Effect.map(({ canonicalProgramIds }) => [
+      ...new Set(
+        (canonicalProgramIds ?? [])
+          .map((programId) => programId.trim())
+          .filter((programId) => programId.length > 0)
+      ),
+    ])
+  )
+
+const requiredProgramIdsForCandidate = ({
+  candidate,
+  rawPayloads,
+}: {
+  readonly candidate: Pick<PersistedProtocolCandidate, "subjectKind" | "subjectIdentifier">
+  readonly rawPayloads: ReadonlyArray<unknown>
+}) =>
+  Effect.map(
+    Effect.forEach(rawPayloads, canonicalProgramIdsFromRawPayload),
+    (observedProgramIdGroups) => [
+      ...new Set(
+        [
+          ...(candidate.subjectKind === "program" ? [candidate.subjectIdentifier] : []),
+          ...observedProgramIdGroups.flat(),
+        ]
+          .map((programId) => programId.trim())
+          .filter((programId) => programId.length > 0)
+      ),
+    ]
+  )
 
 const isValidDate = (date: Date): boolean => !Number.isNaN(date.getTime())
 
@@ -187,6 +230,9 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const approvedCandidatesById = new Map<string, PersistedProtocolCandidate>()
+          const requiredProgramIdsBeforeByCandidateId = new Map<string, ReadonlySet<string>>()
+
           if (observations.length === 0) {
             return {
               candidates: [],
@@ -215,7 +261,7 @@ const make = Effect.gen(function* () {
                 )
               }
 
-              return yield* tx
+              const candidate = yield* tx
                 .insert(schema.protocolCandidates)
                 .values({
                   blockchainId: blockchain.id,
@@ -264,6 +310,32 @@ const make = Effect.gen(function* () {
                   ),
                   wrapSyncEngineSqlError(operation)
                 )
+
+              if (!requiredProgramIdsBeforeByCandidateId.has(candidate.id)) {
+                const observationRows = yield* tx
+                  .select({
+                    rawPayload: schema.protocolCandidateObservations.rawPayload,
+                  })
+                  .from(schema.protocolCandidateObservations)
+                  .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                  .pipe(wrapSyncEngineSqlError(operation))
+
+                const requiredProgramIdsBefore = yield* requiredProgramIdsForCandidate({
+                  candidate,
+                  rawPayloads: observationRows.map((row) => row.rawPayload),
+                })
+
+                requiredProgramIdsBeforeByCandidateId.set(
+                  candidate.id,
+                  new Set(requiredProgramIdsBefore)
+                )
+
+                if (candidate.mappingStatus === "approved") {
+                  approvedCandidatesById.set(candidate.id, candidate)
+                }
+              }
+
+              return candidate
             })
           )
 
@@ -345,8 +417,100 @@ const make = Effect.gen(function* () {
             { discard: true }
           )
 
+          yield* Effect.forEach(approvedCandidatesById.values(), (candidate) =>
+            Effect.gen(function* () {
+              const requiredProgramIdsBefore =
+                requiredProgramIdsBeforeByCandidateId.get(candidate.id) ?? new Set<string>()
+
+              const observationRows = yield* tx
+                .select({
+                  rawPayload: schema.protocolCandidateObservations.rawPayload,
+                })
+                .from(schema.protocolCandidateObservations)
+                .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                .pipe(wrapSyncEngineSqlError(operation))
+
+              const requiredProgramIdsAfter = yield* requiredProgramIdsForCandidate({
+                candidate,
+                rawPayloads: observationRows.map((row) => row.rawPayload),
+              })
+              const addedProgramIds = requiredProgramIdsAfter.filter(
+                (programId) => !requiredProgramIdsBefore.has(programId)
+              )
+
+              if (addedProgramIds.length === 0) {
+                return
+              }
+
+              const approvedMappingRows = yield* tx
+                .select({
+                  programId: schema.protocolTransactionTypeMappings.programId,
+                })
+                .from(schema.protocolTransactionTypeMappings)
+                .where(
+                  and(
+                    eq(schema.protocolTransactionTypeMappings.blockchainId, candidate.blockchainId),
+                    inArray(schema.protocolTransactionTypeMappings.programId, addedProgramIds),
+                    eq(
+                      schema.protocolTransactionTypeMappings.movementPattern,
+                      "token_out_and_token_in"
+                    ),
+                    eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
+                  )
+                )
+                .pipe(wrapSyncEngineSqlError(operation))
+              const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
+              const hasUncoveredAddedProgram = addedProgramIds.some(
+                (programId) => !approvedProgramIds.has(programId)
+              )
+
+              if (!hasUncoveredAddedProgram) {
+                return
+              }
+
+              yield* tx
+                .update(schema.protocolCandidates)
+                .set({
+                  mappingStatus: "pending_review",
+                  updatedAt: now,
+                })
+                .where(eq(schema.protocolCandidates.id, candidate.id))
+                .pipe(wrapSyncEngineSqlError(operation))
+            })
+          )
+
+          const candidateIds = [...new Set(candidates.map((candidate) => candidate.id))]
+          const currentCandidateRows = yield* tx
+            .select({
+              id: schema.protocolCandidates.id,
+              blockchainId: schema.protocolCandidates.blockchainId,
+              subjectKind: schema.protocolCandidates.subjectKind,
+              subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+              protocolNameHint: schema.protocolCandidates.protocolNameHint,
+              categoryHint: schema.protocolCandidates.categoryHint,
+              mappingStatus: schema.protocolCandidates.mappingStatus,
+              firstSeenAt: schema.protocolCandidates.firstSeenAt,
+              lastSeenAt: schema.protocolCandidates.lastSeenAt,
+            })
+            .from(schema.protocolCandidates)
+            .where(inArray(schema.protocolCandidates.id, candidateIds))
+            .pipe(wrapSyncEngineSqlError(operation))
+          const currentCandidates = yield* Effect.forEach(
+            currentCandidateRows,
+            toPersistedCandidate
+          )
+          const currentCandidatesById = new Map(
+            currentCandidates.map((candidate) => [candidate.id, candidate])
+          )
+          const returnedCandidates = yield* Effect.forEach(candidates, (candidate) => {
+            const currentCandidate = currentCandidatesById.get(candidate.id)
+            return currentCandidate === undefined
+              ? Effect.fail(storageError({ message: "Failed to reload imported candidate." }))
+              : Effect.succeed(currentCandidate)
+          })
+
           return {
-            candidates,
+            candidates: returnedCandidates,
             observationCount: observations.length,
           }
         })
