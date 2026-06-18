@@ -16,6 +16,8 @@ import * as principalClaims from "./PrincipalClaimsTable.ts"
 import * as principals from "./PrincipalsTable.ts"
 import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
 import * as protocolCandidates from "./ProtocolCandidatesTable.ts"
+import * as protocolMappingEvidence from "./ProtocolMappingEvidenceTable.ts"
+import * as protocolTransactionTypeMappings from "./ProtocolTransactionTypeMappingsTable.ts"
 import * as providerAssetMappings from "./ProviderAssetMappingsTable.ts"
 import * as providerAssets from "./ProviderAssetsTable.ts"
 import * as providerTransfers from "./ProviderTransfersTable.ts"
@@ -58,6 +60,8 @@ export const schema = {
   ...principals,
   ...protocolCandidateObservations,
   ...protocolCandidates,
+  ...protocolMappingEvidence,
+  ...protocolTransactionTypeMappings,
   ...providerAssetMappings,
   ...providerAssets,
   ...providerTransfers,
@@ -122,6 +126,16 @@ export type {
   ProtocolCandidateObservationOnchainDataSource,
 } from "./ProtocolCandidateObservationsTable.ts"
 export type { ProtocolCandidateInsert, ProtocolCandidateRow } from "./ProtocolCandidatesTable.ts"
+export type {
+  ProtocolMappingEvidenceInsert,
+  ProtocolMappingEvidenceKind,
+  ProtocolMappingEvidenceRow,
+} from "./ProtocolMappingEvidenceTable.ts"
+export type {
+  ProtocolMovementPattern,
+  ProtocolTransactionTypeMappingInsert,
+  ProtocolTransactionTypeMappingRow,
+} from "./ProtocolTransactionTypeMappingsTable.ts"
 export type {
   ProviderAssetMappingKind,
   ProviderAssetMappingInsert,
