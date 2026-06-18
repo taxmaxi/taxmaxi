@@ -468,6 +468,44 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     expect(evidenceResult.left).toBeInstanceOf(SyncEngineStorageError)
   })
 
+  it("does not create a mapping for a program outside the candidate evidence", async () => {
+    const fixture = await insertCandidateWithObservation({
+      programId: "candidate-owned-program",
+      subjectKind: "protocol",
+      subjectIdentifier: "candidate-owned-protocol",
+      rawPayload: {
+        canonicalProgramIds: ["candidate-owned-program"],
+        project: "candidate-owned-protocol",
+      },
+    })
+
+    const creationResult = await runRepository(
+      Effect.either(
+        Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+          repository.createPendingMappingFromCandidate({
+            candidateId: fixture.candidateId,
+            programId: "unrelated-program",
+            protocolName: "Unrelated DEX",
+            movementPattern: "token_out_and_token_in",
+            transactionTypeKey: null,
+            inventoryEffect: "disposal",
+            taxTreatment: "taxable_by_default",
+            confidence: "0.9500",
+            version: 1,
+            reviewerNotes: null,
+            sourceNotes: null,
+          })
+        )
+      )
+    )
+
+    expect(creationResult._tag).toBe("Left")
+    if (creationResult._tag === "Right") {
+      expect.fail("Expected unrelated program mapping to fail")
+    }
+    expect(creationResult.left).toBeInstanceOf(SyncEngineStorageError)
+  })
+
   it("keeps a multi-program candidate pending until every observed program is approved", async () => {
     const fixture = await insertCandidateWithObservation({
       programId: "multi-program-a",
@@ -668,6 +706,114 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     )
 
     expect(candidateStatus).toBe("pending_review")
+  })
+
+  it("keeps a candidate pending while linked mapping versions still await review", async () => {
+    const fixture = await insertCandidateWithObservation({
+      programId: "pending-version-program-a",
+      subjectKind: "protocol",
+      subjectIdentifier: "pending-version-dex",
+      rawPayload: {
+        canonicalProgramIds: ["pending-version-program-a", "pending-version-program-b"],
+        project: "pending-version-dex",
+      },
+    })
+    const firstProgramV1 = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: "pending-version-program-a",
+      protocolName: "Pending Version DEX",
+      version: 1,
+    })
+    await addEvidenceAndApprove({
+      mappingId: firstProgramV1.id,
+      observationId: fixture.observationId,
+    })
+    const secondProgramV1 = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: "pending-version-program-b",
+      protocolName: "Pending Version DEX",
+      version: 1,
+    })
+    await addEvidenceAndApprove({
+      mappingId: secondProgramV1.id,
+      observationId: fixture.observationId,
+    })
+
+    const firstProgramV2 = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: "pending-version-program-a",
+      protocolName: "Pending Version DEX",
+      version: 2,
+    })
+    await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: "pending-version-program-b",
+      protocolName: "Pending Version DEX",
+      version: 2,
+    })
+    await addEvidenceAndApprove({
+      mappingId: firstProgramV2.id,
+      observationId: fixture.observationId,
+    })
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, fixture.candidateId))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("pending_review")
+  })
+
+  it("approves a candidate again after rejecting its only pending version bump", async () => {
+    const fixture = await insertCandidateWithObservation({
+      programId: "reject-version-bump-program",
+    })
+    const approvedMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: fixture.programId,
+      version: 1,
+    })
+    await addEvidenceAndApprove({
+      mappingId: approvedMapping.id,
+      observationId: fixture.observationId,
+    })
+
+    const pendingMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: fixture.programId,
+      version: 2,
+    })
+    await runRepository(
+      Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+        repository.rejectMapping({
+          mappingId: pendingMapping.id,
+          reviewerNotes: "Keep the approved version",
+        })
+      )
+    )
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.id, fixture.candidateId))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("approved")
   })
 
   it("approves a multi-program candidate when other candidates cover required programs", async () => {

@@ -69,6 +69,68 @@ const canonicalProgramIdsFromRawPayload = ({
     ])
   )
 
+const uniqueNonEmptyProgramIds = (programIds: ReadonlyArray<string>) => [
+  ...new Set(
+    programIds.map((programId) => programId.trim()).filter((programId) => programId.length > 0)
+  ),
+]
+
+const observedCanonicalProgramIds = ({
+  operation,
+  rawPayloads,
+}: {
+  readonly operation: string
+  readonly rawPayloads: ReadonlyArray<unknown>
+}) =>
+  Effect.gen(function* () {
+    const observedProgramIdGroups = yield* Effect.forEach(rawPayloads, (payload) =>
+      canonicalProgramIdsFromRawPayload({ operation, payload })
+    )
+    return uniqueNonEmptyProgramIds(observedProgramIdGroups.flat())
+  })
+
+const requiredProgramIdsForRuntimeCoverage = ({
+  operation,
+  candidate,
+  rawPayloads,
+  fallbackProgramId,
+}: {
+  readonly operation: string
+  readonly candidate: {
+    readonly subjectKind: string
+    readonly subjectIdentifier: string
+  }
+  readonly rawPayloads: ReadonlyArray<unknown>
+  readonly fallbackProgramId: string
+}) =>
+  Effect.gen(function* () {
+    const canonicalProgramIds = yield* observedCanonicalProgramIds({ operation, rawPayloads })
+    const requiredProgramIds = uniqueNonEmptyProgramIds([
+      ...(candidate.subjectKind === "program" ? [candidate.subjectIdentifier] : []),
+      ...canonicalProgramIds,
+    ])
+
+    return requiredProgramIds.length === 0
+      ? uniqueNonEmptyProgramIds([fallbackProgramId])
+      : requiredProgramIds
+  })
+
+const allowedProgramIdsForCandidate = ({
+  operation,
+  candidate,
+  rawPayloads,
+}: {
+  readonly operation: string
+  readonly candidate: {
+    readonly subjectIdentifier: string
+  }
+  readonly rawPayloads: ReadonlyArray<unknown>
+}) =>
+  Effect.gen(function* () {
+    const canonicalProgramIds = yield* observedCanonicalProgramIds({ operation, rawPayloads })
+    return uniqueNonEmptyProgramIds([candidate.subjectIdentifier, ...canonicalProgramIds])
+  })
+
 const validateNonEmptyText = ({
   operation,
   field,
@@ -221,6 +283,7 @@ const make = Effect.gen(function* () {
               .select({
                 id: schema.protocolCandidates.id,
                 blockchainId: schema.protocolCandidates.blockchainId,
+                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
               })
               .from(schema.protocolCandidates)
               .where(eq(schema.protocolCandidates.id, params.candidateId))
@@ -232,6 +295,29 @@ const make = Effect.gen(function* () {
                 storageError(operation, {
                   candidateId: params.candidateId,
                   message: "Failed to resolve protocol candidate.",
+                })
+              )
+            }
+
+            const observationRows = yield* tx
+              .select({
+                rawPayload: schema.protocolCandidateObservations.rawPayload,
+              })
+              .from(schema.protocolCandidateObservations)
+              .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+              .pipe(wrapSyncEngineSqlError(operation))
+            const allowedProgramIds = yield* allowedProgramIdsForCandidate({
+              operation,
+              candidate,
+              rawPayloads: observationRows.map((row) => row.rawPayload),
+            })
+
+            if (!allowedProgramIds.includes(params.programId.trim())) {
+              return yield* Effect.fail(
+                storageError(operation, {
+                  candidateId: params.candidateId,
+                  programId: params.programId,
+                  message: "Protocol mapping program must belong to the mapped candidate.",
                 })
               )
             }
@@ -463,21 +549,12 @@ const make = Effect.gen(function* () {
               .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
               .pipe(wrapSyncEngineSqlError(operation))
 
-            const observedProgramIdGroups = yield* Effect.forEach(observationRows, (row) =>
-              canonicalProgramIdsFromRawPayload({ operation, payload: row.rawPayload })
-            )
-            const requiredProgramIds = [
-              ...new Set(
-                [
-                  ...(candidate.subjectKind === "program" ? [candidate.subjectIdentifier] : []),
-                  ...observedProgramIdGroups.flat(),
-                ]
-                  .map((programId) => programId.trim())
-                  .filter((programId) => programId.length > 0)
-              ),
-            ]
-            const programIdsToReview =
-              requiredProgramIds.length === 0 ? [mapping.programId] : requiredProgramIds
+            const programIdsToReview = yield* requiredProgramIdsForRuntimeCoverage({
+              operation,
+              candidate,
+              rawPayloads: observationRows.map((row) => row.rawPayload),
+              fallbackProgramId: mapping.programId,
+            })
 
             const approvedMappingRows = yield* tx
               .select({
@@ -497,11 +574,24 @@ const make = Effect.gen(function* () {
               )
               .pipe(wrapSyncEngineSqlError(operation))
             const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
-            const nextCandidateStatus = programIdsToReview.every((programId) =>
+            const [pendingMappingCount] = yield* tx
+              .select({ value: count(schema.protocolTransactionTypeMappings.id) })
+              .from(schema.protocolTransactionTypeMappings)
+              .where(
+                and(
+                  eq(schema.protocolTransactionTypeMappings.candidateId, mapping.candidateId),
+                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+                )
+              )
+              .pipe(wrapSyncEngineSqlError(operation))
+            const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
+            const hasApprovedRuntimeCoverage = programIdsToReview.every((programId) =>
               approvedProgramIds.has(programId)
             )
-              ? "approved"
-              : "pending_review"
+            const nextCandidateStatus =
+              !hasPendingLinkedMappings && hasApprovedRuntimeCoverage
+                ? "approved"
+                : "pending_review"
 
             yield* tx
               .update(schema.protocolCandidates)
@@ -549,14 +639,98 @@ const make = Effect.gen(function* () {
             .returning()
             .pipe(wrapSyncEngineSqlError(operation))
 
-          return mapping === undefined
-            ? yield* Effect.fail(
+          if (mapping === undefined) {
+            return yield* Effect.fail(
+              storageError(operation, {
+                mappingId: params.mappingId,
+                message: "Failed to reject pending protocol mapping.",
+              })
+            )
+          }
+
+          if (mapping.candidateId !== null) {
+            const now = nowDate()
+            const [candidate] = yield* tx
+              .select({
+                subjectKind: schema.protocolCandidates.subjectKind,
+                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+              })
+              .from(schema.protocolCandidates)
+              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
+              .limit(1)
+              .pipe(wrapSyncEngineSqlError(operation))
+
+            if (candidate === undefined) {
+              return yield* Effect.fail(
                 storageError(operation, {
-                  mappingId: params.mappingId,
-                  message: "Failed to reject pending protocol mapping.",
+                  candidateId: mapping.candidateId,
+                  message: "Failed to resolve protocol candidate.",
                 })
               )
-            : toPersistedMapping(mapping)
+            }
+
+            const observationRows = yield* tx
+              .select({
+                rawPayload: schema.protocolCandidateObservations.rawPayload,
+              })
+              .from(schema.protocolCandidateObservations)
+              .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
+              .pipe(wrapSyncEngineSqlError(operation))
+            const programIdsToReview = yield* requiredProgramIdsForRuntimeCoverage({
+              operation,
+              candidate,
+              rawPayloads: observationRows.map((row) => row.rawPayload),
+              fallbackProgramId: mapping.programId,
+            })
+
+            const approvedMappingRows = yield* tx
+              .select({
+                programId: schema.protocolTransactionTypeMappings.programId,
+              })
+              .from(schema.protocolTransactionTypeMappings)
+              .where(
+                and(
+                  eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
+                  inArray(schema.protocolTransactionTypeMappings.programId, programIdsToReview),
+                  eq(
+                    schema.protocolTransactionTypeMappings.movementPattern,
+                    mapping.movementPattern
+                  ),
+                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
+                )
+              )
+              .pipe(wrapSyncEngineSqlError(operation))
+            const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
+            const [pendingMappingCount] = yield* tx
+              .select({ value: count(schema.protocolTransactionTypeMappings.id) })
+              .from(schema.protocolTransactionTypeMappings)
+              .where(
+                and(
+                  eq(schema.protocolTransactionTypeMappings.candidateId, mapping.candidateId),
+                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+                )
+              )
+              .pipe(wrapSyncEngineSqlError(operation))
+            const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
+            const hasApprovedRuntimeCoverage = programIdsToReview.every((programId) =>
+              approvedProgramIds.has(programId)
+            )
+            const nextCandidateStatus =
+              !hasPendingLinkedMappings && hasApprovedRuntimeCoverage
+                ? "approved"
+                : "pending_review"
+
+            yield* tx
+              .update(schema.protocolCandidates)
+              .set({
+                mappingStatus: nextCandidateStatus,
+                updatedAt: now,
+              })
+              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
+              .pipe(wrapSyncEngineSqlError(operation))
+          }
+
+          return toPersistedMapping(mapping)
         })
       )
       .pipe(wrapSyncEngineStorageError(operation))
