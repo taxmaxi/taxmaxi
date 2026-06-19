@@ -506,6 +506,73 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     expect(creationResult.left).toBeInstanceOf(SyncEngineStorageError)
   })
 
+  it("does not create a protocol-candidate mapping for the protocol slug", async () => {
+    const fixture = await insertCandidateWithObservation({
+      programId: "protocol-slug-program",
+      subjectKind: "protocol",
+      subjectIdentifier: "protocol-slug-dex",
+      rawPayload: {
+        canonicalProgramIds: [],
+        project: "protocol-slug-dex",
+      },
+    })
+
+    const creationResult = await runRepository(
+      Effect.either(
+        Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+          repository.createPendingMappingFromCandidate({
+            candidateId: fixture.candidateId,
+            programId: "protocol-slug-dex",
+            protocolName: "Protocol Slug DEX",
+            movementPattern: "token_out_and_token_in",
+            transactionTypeKey: null,
+            inventoryEffect: "disposal",
+            taxTreatment: "taxable_by_default",
+            confidence: "0.9500",
+            version: 1,
+            reviewerNotes: null,
+            sourceNotes: null,
+          })
+        )
+      )
+    )
+
+    expect(creationResult._tag).toBe("Left")
+    if (creationResult._tag === "Right") {
+      expect.fail("Expected protocol slug mapping to fail")
+    }
+    expect(creationResult.left).toBeInstanceOf(SyncEngineStorageError)
+  })
+
+  it("stores the normalized program id for candidate-backed mappings", async () => {
+    const fixture = await insertCandidateWithObservation({ programId: "trimmed-program-id" })
+    const pendingMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      programId: " trimmed-program-id ",
+    })
+
+    const approvedMapping = await addEvidenceAndApprove({
+      mappingId: pendingMapping.id,
+      observationId: fixture.observationId,
+    })
+    const runtimeMapping = await runRepository(
+      Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+        repository.findLatestApprovedMapping({
+          blockchainId: fixture.blockchainId,
+          programId: fixture.programId,
+          movementPattern: "token_out_and_token_in",
+        })
+      )
+    )
+
+    expect(pendingMapping.programId).toBe(fixture.programId)
+    expect(approvedMapping.programId).toBe(fixture.programId)
+    expect(Option.isSome(runtimeMapping)).toBe(true)
+    if (Option.isSome(runtimeMapping)) {
+      expect(runtimeMapping.value.id).toBe(approvedMapping.id)
+    }
+  })
+
   it("keeps a multi-program candidate pending until every observed program is approved", async () => {
     const fixture = await insertCandidateWithObservation({
       programId: "multi-program-a",

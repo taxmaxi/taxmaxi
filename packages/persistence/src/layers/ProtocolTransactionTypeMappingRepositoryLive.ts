@@ -122,13 +122,17 @@ const allowedProgramIdsForCandidate = ({
 }: {
   readonly operation: string
   readonly candidate: {
+    readonly subjectKind: string
     readonly subjectIdentifier: string
   }
   readonly rawPayloads: ReadonlyArray<unknown>
 }) =>
   Effect.gen(function* () {
     const canonicalProgramIds = yield* observedCanonicalProgramIds({ operation, rawPayloads })
-    return uniqueNonEmptyProgramIds([candidate.subjectIdentifier, ...canonicalProgramIds])
+    return uniqueNonEmptyProgramIds([
+      ...(candidate.subjectKind === "protocol" ? [] : [candidate.subjectIdentifier]),
+      ...canonicalProgramIds,
+    ])
   })
 
 const validateNonEmptyText = ({
@@ -283,6 +287,7 @@ const make = Effect.gen(function* () {
               .select({
                 id: schema.protocolCandidates.id,
                 blockchainId: schema.protocolCandidates.blockchainId,
+                subjectKind: schema.protocolCandidates.subjectKind,
                 subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
               })
               .from(schema.protocolCandidates)
@@ -311,12 +316,13 @@ const make = Effect.gen(function* () {
               candidate,
               rawPayloads: observationRows.map((row) => row.rawPayload),
             })
+            const programId = params.programId.trim()
 
-            if (!allowedProgramIds.includes(params.programId.trim())) {
+            if (!allowedProgramIds.includes(programId)) {
               return yield* Effect.fail(
                 storageError(operation, {
                   candidateId: params.candidateId,
-                  programId: params.programId,
+                  programId,
                   message: "Protocol mapping program must belong to the mapped candidate.",
                 })
               )
@@ -328,7 +334,7 @@ const make = Effect.gen(function* () {
               .values({
                 candidateId: candidate.id,
                 blockchainId: candidate.blockchainId,
-                programId: params.programId,
+                programId,
                 protocolName: params.protocolName,
                 movementPattern: params.movementPattern,
                 transactionTypeKey: params.transactionTypeKey,
