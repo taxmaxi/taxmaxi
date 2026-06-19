@@ -35,7 +35,7 @@ export interface PersistedProtocolTransactionTypeMapping {
   readonly id: string
   readonly candidateId: string | null
   readonly blockchainId: string
-  readonly programId: string
+  readonly subjectIdentifier: string
   readonly protocolName: string
   readonly movementPattern: ProtocolMovementPattern
   readonly transactionTypeKey: string | null
@@ -68,7 +68,7 @@ export interface PersistedProtocolMappingEvidence {
  */
 export interface CreatePendingProtocolMappingFromCandidateParams {
   readonly candidateId: string
-  readonly programId: string
+  readonly subjectIdentifier: string
   readonly protocolName: string
   readonly movementPattern: ProtocolMovementPattern
   readonly transactionTypeKey: string | null
@@ -109,11 +109,11 @@ export interface RejectProtocolMappingParams {
 }
 
 /**
- * FindLatestApprovedProtocolMappingParams - Runtime lookup key for approved mappings.
+ * FindLatestApprovedProtocolMappingParams - Runtime subject lookup key for approved mappings.
  */
 export interface FindLatestApprovedProtocolMappingParams {
   readonly blockchainId: string
-  readonly programId: string
+  readonly subjectIdentifier: string
   readonly movementPattern: ProtocolMovementPattern
 }
 
@@ -150,7 +150,7 @@ export interface ProtocolTransactionTypeMappingRepositoryShape {
   ) => Effect.Effect<PersistedProtocolTransactionTypeMapping, SyncEngineStorageError>
 
   /**
-   * Load the newest approved mapping for a runtime program and movement shape.
+   * Load the newest approved mapping for a runtime subject and movement shape.
    */
   readonly findLatestApprovedMapping: (
     params: FindLatestApprovedProtocolMappingParams

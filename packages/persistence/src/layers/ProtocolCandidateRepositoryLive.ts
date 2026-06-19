@@ -444,13 +444,16 @@ const make = Effect.gen(function* () {
 
               const approvedMappingRows = yield* tx
                 .select({
-                  programId: schema.protocolTransactionTypeMappings.programId,
+                  subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
                 })
                 .from(schema.protocolTransactionTypeMappings)
                 .where(
                   and(
                     eq(schema.protocolTransactionTypeMappings.blockchainId, candidate.blockchainId),
-                    inArray(schema.protocolTransactionTypeMappings.programId, addedProgramIds),
+                    inArray(
+                      schema.protocolTransactionTypeMappings.subjectIdentifier,
+                      addedProgramIds
+                    ),
                     eq(
                       schema.protocolTransactionTypeMappings.movementPattern,
                       "token_out_and_token_in"
@@ -459,7 +462,9 @@ const make = Effect.gen(function* () {
                   )
                 )
                 .pipe(wrapSyncEngineSqlError(operation))
-              const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
+              const approvedProgramIds = new Set(
+                approvedMappingRows.map((row) => row.subjectIdentifier)
+              )
               const hasUncoveredAddedProgram = addedProgramIds.some(
                 (programId) => !approvedProgramIds.has(programId)
               )

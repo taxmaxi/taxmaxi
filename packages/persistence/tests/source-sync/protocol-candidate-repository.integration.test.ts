@@ -476,7 +476,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
         yield* db.insert(schema.protocolTransactionTypeMappings).values({
           candidateId: candidate.id,
           blockchainId: candidate.blockchainId,
-          programId: "reopen-import-program-a",
+          subjectIdentifier: "reopen-import-program-a",
           protocolName: "Reopen Import DEX",
           movementPattern: "token_out_and_token_in",
           transactionTypeKey: "swap_crypto_to_crypto",

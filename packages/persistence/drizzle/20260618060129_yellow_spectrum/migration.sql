@@ -14,7 +14,7 @@ CREATE TABLE "protocol_transaction_type_mappings" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"candidate_id" uuid,
 	"blockchain_id" uuid NOT NULL,
-	"program_id" text NOT NULL,
+	"subject_identifier" text NOT NULL,
 	"protocol_name" text NOT NULL,
 	"movement_pattern" "protocol_movement_pattern" NOT NULL,
 	"transaction_type_key" text,
@@ -32,8 +32,8 @@ CREATE TABLE "protocol_transaction_type_mappings" (
 );
 --> statement-breakpoint
 CREATE INDEX "idx_protocol_mapping_evidence_mapping" ON "protocol_mapping_evidence" ("mapping_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "protocol_transaction_type_mappings_program_pattern_version_unique" ON "protocol_transaction_type_mappings" ("blockchain_id","program_id","movement_pattern","version");--> statement-breakpoint
-CREATE INDEX "idx_protocol_transaction_type_mappings_blockchain_program" ON "protocol_transaction_type_mappings" ("blockchain_id","program_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "protocol_transaction_type_mappings_subject_pattern_version_unique" ON "protocol_transaction_type_mappings" ("blockchain_id","subject_identifier","movement_pattern","version");--> statement-breakpoint
+CREATE INDEX "idx_protocol_transaction_type_mappings_blockchain_subject" ON "protocol_transaction_type_mappings" ("blockchain_id","subject_identifier");--> statement-breakpoint
 CREATE INDEX "idx_protocol_transaction_type_mappings_mapping_status" ON "protocol_transaction_type_mappings" ("mapping_status");--> statement-breakpoint
 ALTER TABLE "protocol_mapping_evidence" ADD CONSTRAINT "protocol_mapping_evidence_n1VJSCxTe9Nv_fkey" FOREIGN KEY ("mapping_id") REFERENCES "protocol_transaction_type_mappings"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "protocol_mapping_evidence" ADD CONSTRAINT "protocol_mapping_evidence_Qx3cGe0oz1f5_fkey" FOREIGN KEY ("candidate_observation_id") REFERENCES "protocol_candidate_observations"("id") ON DELETE SET NULL;--> statement-breakpoint

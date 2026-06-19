@@ -186,7 +186,11 @@ const validatePendingMapping = (
 ) =>
   Effect.gen(function* () {
     yield* validateNonEmptyText({ operation, field: "candidateId", value: params.candidateId })
-    yield* validateNonEmptyText({ operation, field: "programId", value: params.programId })
+    yield* validateNonEmptyText({
+      operation,
+      field: "subjectIdentifier",
+      value: params.subjectIdentifier,
+    })
     yield* validateNonEmptyText({ operation, field: "protocolName", value: params.protocolName })
     yield* validateConfidence({ operation, confidence: params.confidence })
     yield* validateVersion({ operation, version: params.version })
@@ -208,7 +212,7 @@ const toPersistedMapping = (row: {
   readonly id: string
   readonly candidateId: string | null
   readonly blockchainId: string
-  readonly programId: string
+  readonly subjectIdentifier: string
   readonly protocolName: string
   readonly movementPattern: "token_out_and_token_in"
   readonly transactionTypeKey: string | null
@@ -234,7 +238,7 @@ const toPersistedMapping = (row: {
   id: row.id,
   candidateId: row.candidateId,
   blockchainId: row.blockchainId,
-  programId: row.programId,
+  subjectIdentifier: row.subjectIdentifier,
   protocolName: row.protocolName,
   movementPattern: row.movementPattern,
   transactionTypeKey: row.transactionTypeKey,
@@ -316,14 +320,14 @@ const make = Effect.gen(function* () {
               candidate,
               rawPayloads: observationRows.map((row) => row.rawPayload),
             })
-            const programId = params.programId.trim()
+            const subjectIdentifier = params.subjectIdentifier.trim()
 
-            if (!allowedProgramIds.includes(programId)) {
+            if (!allowedProgramIds.includes(subjectIdentifier)) {
               return yield* Effect.fail(
                 storageError(operation, {
                   candidateId: params.candidateId,
-                  programId,
-                  message: "Protocol mapping program must belong to the mapped candidate.",
+                  subjectIdentifier,
+                  message: "Protocol mapping subject must belong to the mapped candidate.",
                 })
               )
             }
@@ -334,7 +338,7 @@ const make = Effect.gen(function* () {
               .values({
                 candidateId: candidate.id,
                 blockchainId: candidate.blockchainId,
-                programId,
+                subjectIdentifier,
                 protocolName: params.protocolName,
                 movementPattern: params.movementPattern,
                 transactionTypeKey: params.transactionTypeKey,
@@ -555,22 +559,25 @@ const make = Effect.gen(function* () {
               .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
               .pipe(wrapSyncEngineSqlError(operation))
 
-            const programIdsToReview = yield* requiredProgramIdsForRuntimeCoverage({
+            const subjectIdentifiersToReview = yield* requiredProgramIdsForRuntimeCoverage({
               operation,
               candidate,
               rawPayloads: observationRows.map((row) => row.rawPayload),
-              fallbackProgramId: mapping.programId,
+              fallbackProgramId: mapping.subjectIdentifier,
             })
 
             const approvedMappingRows = yield* tx
               .select({
-                programId: schema.protocolTransactionTypeMappings.programId,
+                subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
               })
               .from(schema.protocolTransactionTypeMappings)
               .where(
                 and(
                   eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
-                  inArray(schema.protocolTransactionTypeMappings.programId, programIdsToReview),
+                  inArray(
+                    schema.protocolTransactionTypeMappings.subjectIdentifier,
+                    subjectIdentifiersToReview
+                  ),
                   eq(
                     schema.protocolTransactionTypeMappings.movementPattern,
                     mapping.movementPattern
@@ -579,7 +586,9 @@ const make = Effect.gen(function* () {
                 )
               )
               .pipe(wrapSyncEngineSqlError(operation))
-            const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
+            const approvedProgramIds = new Set(
+              approvedMappingRows.map((row) => row.subjectIdentifier)
+            )
             const [pendingMappingCount] = yield* tx
               .select({ value: count(schema.protocolTransactionTypeMappings.id) })
               .from(schema.protocolTransactionTypeMappings)
@@ -591,8 +600,8 @@ const make = Effect.gen(function* () {
               )
               .pipe(wrapSyncEngineSqlError(operation))
             const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
-            const hasApprovedRuntimeCoverage = programIdsToReview.every((programId) =>
-              approvedProgramIds.has(programId)
+            const hasApprovedRuntimeCoverage = subjectIdentifiersToReview.every(
+              (subjectIdentifier) => approvedProgramIds.has(subjectIdentifier)
             )
             const nextCandidateStatus =
               !hasPendingLinkedMappings && hasApprovedRuntimeCoverage
@@ -682,22 +691,25 @@ const make = Effect.gen(function* () {
               .from(schema.protocolCandidateObservations)
               .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
               .pipe(wrapSyncEngineSqlError(operation))
-            const programIdsToReview = yield* requiredProgramIdsForRuntimeCoverage({
+            const subjectIdentifiersToReview = yield* requiredProgramIdsForRuntimeCoverage({
               operation,
               candidate,
               rawPayloads: observationRows.map((row) => row.rawPayload),
-              fallbackProgramId: mapping.programId,
+              fallbackProgramId: mapping.subjectIdentifier,
             })
 
             const approvedMappingRows = yield* tx
               .select({
-                programId: schema.protocolTransactionTypeMappings.programId,
+                subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
               })
               .from(schema.protocolTransactionTypeMappings)
               .where(
                 and(
                   eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
-                  inArray(schema.protocolTransactionTypeMappings.programId, programIdsToReview),
+                  inArray(
+                    schema.protocolTransactionTypeMappings.subjectIdentifier,
+                    subjectIdentifiersToReview
+                  ),
                   eq(
                     schema.protocolTransactionTypeMappings.movementPattern,
                     mapping.movementPattern
@@ -706,7 +718,9 @@ const make = Effect.gen(function* () {
                 )
               )
               .pipe(wrapSyncEngineSqlError(operation))
-            const approvedProgramIds = new Set(approvedMappingRows.map((row) => row.programId))
+            const approvedProgramIds = new Set(
+              approvedMappingRows.map((row) => row.subjectIdentifier)
+            )
             const [pendingMappingCount] = yield* tx
               .select({ value: count(schema.protocolTransactionTypeMappings.id) })
               .from(schema.protocolTransactionTypeMappings)
@@ -718,8 +732,8 @@ const make = Effect.gen(function* () {
               )
               .pipe(wrapSyncEngineSqlError(operation))
             const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
-            const hasApprovedRuntimeCoverage = programIdsToReview.every((programId) =>
-              approvedProgramIds.has(programId)
+            const hasApprovedRuntimeCoverage = subjectIdentifiersToReview.every(
+              (subjectIdentifier) => approvedProgramIds.has(subjectIdentifier)
             )
             const nextCandidateStatus =
               !hasPendingLinkedMappings && hasApprovedRuntimeCoverage
@@ -752,7 +766,7 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.protocolTransactionTypeMappings.blockchainId, params.blockchainId),
-            eq(schema.protocolTransactionTypeMappings.programId, params.programId),
+            eq(schema.protocolTransactionTypeMappings.subjectIdentifier, params.subjectIdentifier),
             eq(schema.protocolTransactionTypeMappings.movementPattern, params.movementPattern),
             eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
           )

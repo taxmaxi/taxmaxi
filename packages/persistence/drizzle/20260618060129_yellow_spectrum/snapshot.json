@@ -3752,7 +3752,7 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "program_id",
+      "name": "subject_identifier",
       "entityType": "columns",
       "schema": "public",
       "table": "protocol_transaction_type_mappings"
@@ -8592,7 +8592,7 @@
           "opclass": null
         },
         {
-          "value": "program_id",
+          "value": "subject_identifier",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -8618,7 +8618,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "protocol_transaction_type_mappings_program_pattern_version_unique",
+      "name": "protocol_transaction_type_mappings_subject_pattern_version_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "protocol_transaction_type_mappings"
@@ -8634,7 +8634,7 @@
           "opclass": null
         },
         {
-          "value": "program_id",
+          "value": "subject_identifier",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -8646,7 +8646,7 @@
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "idx_protocol_transaction_type_mappings_blockchain_program",
+      "name": "idx_protocol_transaction_type_mappings_blockchain_subject",
       "entityType": "indexes",
       "schema": "public",
       "table": "protocol_transaction_type_mappings"

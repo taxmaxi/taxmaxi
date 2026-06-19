@@ -30,14 +30,14 @@ const runRepository = <A, E>(
   )
 
 const insertCandidateWithObservation = ({
-  programId = "reviewed-program-1",
+  subjectIdentifier = "reviewed-program-1",
   subjectKind = "program",
-  subjectIdentifier = programId,
-  rawPayload = { program_id: programId },
+  candidateSubjectIdentifier = subjectIdentifier,
+  rawPayload = { program_id: subjectIdentifier },
 }: {
-  readonly programId?: string
-  readonly subjectKind?: "program" | "contract" | "protocol"
   readonly subjectIdentifier?: string
+  readonly subjectKind?: "program" | "contract" | "protocol"
+  readonly candidateSubjectIdentifier?: string
   readonly rawPayload?: Record<string, unknown>
 } = {}) =>
   runPg(
@@ -59,7 +59,7 @@ const insertCandidateWithObservation = ({
         .values({
           blockchainId: blockchain.id,
           subjectKind,
-          subjectIdentifier,
+          subjectIdentifier: candidateSubjectIdentifier,
           protocolNameHint: "Example DEX",
           categoryHint: "swap",
           mappingStatus: "pending_review",
@@ -82,7 +82,7 @@ const insertCandidateWithObservation = ({
         .values({
           candidateId: candidate.id,
           onchainDataSource: "dune",
-          onchainDataSourceObservationKey: `fixture:${programId}`,
+          onchainDataSourceObservationKey: `fixture:${subjectIdentifier}`,
           observedWindowStart: new Date("2026-01-01T00:00:00.000Z"),
           observedWindowEnd: new Date("2026-02-01T00:00:00.000Z"),
           interactionCount: "100",
@@ -103,19 +103,19 @@ const insertCandidateWithObservation = ({
         blockchainId: blockchain.id,
         candidateId: candidate.id,
         observationId: observation.id,
-        programId,
+        subjectIdentifier,
       }
     })
   )
 
 const createPendingMapping = ({
   candidateId,
-  programId,
+  subjectIdentifier,
   version = 1,
   protocolName = "Example DEX",
 }: {
   readonly candidateId: string
-  readonly programId: string
+  readonly subjectIdentifier: string
   readonly version?: number
   readonly protocolName?: string
 }) =>
@@ -123,7 +123,7 @@ const createPendingMapping = ({
     Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
       repository.createPendingMappingFromCandidate({
         candidateId,
-        programId,
+        subjectIdentifier,
         protocolName,
         movementPattern: "token_out_and_token_in",
         transactionTypeKey: null,
@@ -182,7 +182,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.createPendingMappingFromCandidate({
           candidateId: fixture.candidateId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           protocolName: "Example DEX",
           movementPattern: "token_out_and_token_in",
           transactionTypeKey: null,
@@ -200,7 +200,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           movementPattern: "token_out_and_token_in",
         })
       )
@@ -254,7 +254,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     expect(pendingMapping).toMatchObject({
       candidateId: fixture.candidateId,
       blockchainId: fixture.blockchainId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
       movementPattern: "token_out_and_token_in",
       transactionTypeKey: null,
       mappingStatus: "pending_review",
@@ -276,13 +276,15 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("rejects a mapping without deleting the candidate or Dune observations", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "rejected-program-1" })
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "rejected-program-1",
+    })
 
     const pendingMapping = await runRepository(
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.createPendingMappingFromCandidate({
           candidateId: fixture.candidateId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           protocolName: "Rejected DEX",
           movementPattern: "token_out_and_token_in",
           transactionTypeKey: null,
@@ -309,7 +311,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           movementPattern: "token_out_and_token_in",
         })
       )
@@ -346,12 +348,14 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("does not approve a mapping without evidence", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "missing-evidence-program" })
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "missing-evidence-program",
+    })
     const pendingMapping = await runRepository(
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.createPendingMappingFromCandidate({
           candidateId: fixture.candidateId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           protocolName: "Missing Evidence DEX",
           movementPattern: "token_out_and_token_in",
           transactionTypeKey: null,
@@ -385,12 +389,14 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("does not approve a mapping with an unknown transaction type", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "unknown-type-program" })
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "unknown-type-program",
+    })
     const pendingMapping = await runRepository(
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.createPendingMappingFromCandidate({
           candidateId: fixture.candidateId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           protocolName: "Unknown Type DEX",
           movementPattern: "token_out_and_token_in",
           transactionTypeKey: null,
@@ -437,14 +443,14 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("does not attach evidence from another candidate", async () => {
     const mappingFixture = await insertCandidateWithObservation({
-      programId: "evidence-owner-program",
+      subjectIdentifier: "evidence-owner-program",
     })
     const unrelatedFixture = await insertCandidateWithObservation({
-      programId: "unrelated-evidence-program",
+      subjectIdentifier: "unrelated-evidence-program",
     })
     const pendingMapping = await createPendingMapping({
       candidateId: mappingFixture.candidateId,
-      programId: mappingFixture.programId,
+      subjectIdentifier: mappingFixture.subjectIdentifier,
     })
 
     const evidenceResult = await runRepository(
@@ -470,9 +476,9 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("does not create a mapping for a program outside the candidate evidence", async () => {
     const fixture = await insertCandidateWithObservation({
-      programId: "candidate-owned-program",
+      subjectIdentifier: "candidate-owned-program",
       subjectKind: "protocol",
-      subjectIdentifier: "candidate-owned-protocol",
+      candidateSubjectIdentifier: "candidate-owned-protocol",
       rawPayload: {
         canonicalProgramIds: ["candidate-owned-program"],
         project: "candidate-owned-protocol",
@@ -484,7 +490,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.createPendingMappingFromCandidate({
             candidateId: fixture.candidateId,
-            programId: "unrelated-program",
+            subjectIdentifier: "unrelated-program",
             protocolName: "Unrelated DEX",
             movementPattern: "token_out_and_token_in",
             transactionTypeKey: null,
@@ -508,9 +514,9 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("does not create a protocol-candidate mapping for the protocol slug", async () => {
     const fixture = await insertCandidateWithObservation({
-      programId: "protocol-slug-program",
+      subjectIdentifier: "protocol-slug-program",
       subjectKind: "protocol",
-      subjectIdentifier: "protocol-slug-dex",
+      candidateSubjectIdentifier: "protocol-slug-dex",
       rawPayload: {
         canonicalProgramIds: [],
         project: "protocol-slug-dex",
@@ -522,7 +528,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.createPendingMappingFromCandidate({
             candidateId: fixture.candidateId,
-            programId: "protocol-slug-dex",
+            subjectIdentifier: "protocol-slug-dex",
             protocolName: "Protocol Slug DEX",
             movementPattern: "token_out_and_token_in",
             transactionTypeKey: null,
@@ -544,11 +550,13 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     expect(creationResult.left).toBeInstanceOf(SyncEngineStorageError)
   })
 
-  it("stores the normalized program id for candidate-backed mappings", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "trimmed-program-id" })
+  it("stores the normalized subject identifier for candidate-backed mappings", async () => {
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "trimmed-program-id",
+    })
     const pendingMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: " trimmed-program-id ",
+      subjectIdentifier: " trimmed-program-id ",
     })
 
     const approvedMapping = await addEvidenceAndApprove({
@@ -559,14 +567,14 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           movementPattern: "token_out_and_token_in",
         })
       )
     )
 
-    expect(pendingMapping.programId).toBe(fixture.programId)
-    expect(approvedMapping.programId).toBe(fixture.programId)
+    expect(pendingMapping.subjectIdentifier).toBe(fixture.subjectIdentifier)
+    expect(approvedMapping.subjectIdentifier).toBe(fixture.subjectIdentifier)
     expect(Option.isSome(runtimeMapping)).toBe(true)
     if (Option.isSome(runtimeMapping)) {
       expect(runtimeMapping.value.id).toBe(approvedMapping.id)
@@ -575,9 +583,9 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("keeps a multi-program candidate pending until every observed program is approved", async () => {
     const fixture = await insertCandidateWithObservation({
-      programId: "multi-program-a",
+      subjectIdentifier: "multi-program-a",
       subjectKind: "protocol",
-      subjectIdentifier: "multi-program-dex",
+      candidateSubjectIdentifier: "multi-program-dex",
       rawPayload: {
         canonicalProgramIds: ["multi-program-a", "multi-program-b"],
         project: "multi-program-dex",
@@ -585,7 +593,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
     const firstMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: "multi-program-a",
+      subjectIdentifier: "multi-program-a",
       protocolName: "Multi Program DEX",
     })
     await addEvidenceAndApprove({
@@ -608,7 +616,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
     const secondMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: "multi-program-b",
+      subjectIdentifier: "multi-program-b",
       protocolName: "Multi Program DEX",
     })
     await addEvidenceAndApprove({
@@ -634,10 +642,12 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("does not approve an already approved mapping again", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "repeat-approval-program" })
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "repeat-approval-program",
+    })
     const pendingMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
     })
     await addEvidenceAndApprove({
       mappingId: pendingMapping.id,
@@ -687,10 +697,12 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("does not reject an already approved mapping", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "reject-approved-program" })
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "reject-approved-program",
+    })
     const pendingMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
     })
     await addEvidenceAndApprove({
       mappingId: pendingMapping.id,
@@ -742,10 +754,12 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("reopens an approved candidate when adding a new pending version", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "reopen-version-program" })
+    const fixture = await insertCandidateWithObservation({
+      subjectIdentifier: "reopen-version-program",
+    })
     const approvedMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
       version: 1,
     })
     await addEvidenceAndApprove({
@@ -755,7 +769,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
     await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
       version: 2,
     })
 
@@ -777,9 +791,9 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("keeps a candidate pending while linked mapping versions still await review", async () => {
     const fixture = await insertCandidateWithObservation({
-      programId: "pending-version-program-a",
+      subjectIdentifier: "pending-version-program-a",
       subjectKind: "protocol",
-      subjectIdentifier: "pending-version-dex",
+      candidateSubjectIdentifier: "pending-version-dex",
       rawPayload: {
         canonicalProgramIds: ["pending-version-program-a", "pending-version-program-b"],
         project: "pending-version-dex",
@@ -787,7 +801,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
     const firstProgramV1 = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: "pending-version-program-a",
+      subjectIdentifier: "pending-version-program-a",
       protocolName: "Pending Version DEX",
       version: 1,
     })
@@ -797,7 +811,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
     const secondProgramV1 = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: "pending-version-program-b",
+      subjectIdentifier: "pending-version-program-b",
       protocolName: "Pending Version DEX",
       version: 1,
     })
@@ -808,13 +822,13 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
     const firstProgramV2 = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: "pending-version-program-a",
+      subjectIdentifier: "pending-version-program-a",
       protocolName: "Pending Version DEX",
       version: 2,
     })
     await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: "pending-version-program-b",
+      subjectIdentifier: "pending-version-program-b",
       protocolName: "Pending Version DEX",
       version: 2,
     })
@@ -841,11 +855,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("approves a candidate again after rejecting its only pending version bump", async () => {
     const fixture = await insertCandidateWithObservation({
-      programId: "reject-version-bump-program",
+      subjectIdentifier: "reject-version-bump-program",
     })
     const approvedMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
       version: 1,
     })
     await addEvidenceAndApprove({
@@ -855,7 +869,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
     const pendingMapping = await createPendingMapping({
       candidateId: fixture.candidateId,
-      programId: fixture.programId,
+      subjectIdentifier: fixture.subjectIdentifier,
       version: 2,
     })
     await runRepository(
@@ -885,11 +899,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
   it("approves a multi-program candidate when other candidates cover required programs", async () => {
     const existingProgramFixture = await insertCandidateWithObservation({
-      programId: "cross-candidate-program-a",
+      subjectIdentifier: "cross-candidate-program-a",
     })
     const existingMapping = await createPendingMapping({
       candidateId: existingProgramFixture.candidateId,
-      programId: existingProgramFixture.programId,
+      subjectIdentifier: existingProgramFixture.subjectIdentifier,
       protocolName: "Program DEX",
     })
     await addEvidenceAndApprove({
@@ -898,9 +912,9 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const protocolFixture = await insertCandidateWithObservation({
-      programId: "cross-candidate-program-b",
+      subjectIdentifier: "cross-candidate-program-b",
       subjectKind: "protocol",
-      subjectIdentifier: "cross-candidate-dex",
+      candidateSubjectIdentifier: "cross-candidate-dex",
       rawPayload: {
         canonicalProgramIds: ["cross-candidate-program-a", "cross-candidate-program-b"],
         project: "cross-candidate-dex",
@@ -908,7 +922,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
     const protocolMapping = await createPendingMapping({
       candidateId: protocolFixture.candidateId,
-      programId: "cross-candidate-program-b",
+      subjectIdentifier: "cross-candidate-program-b",
       protocolName: "Cross Candidate DEX",
     })
     await addEvidenceAndApprove({
@@ -933,7 +947,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
   })
 
   it("returns the latest approved version for runtime lookup", async () => {
-    const fixture = await insertCandidateWithObservation({ programId: "versioned-program" })
+    const fixture = await insertCandidateWithObservation({ subjectIdentifier: "versioned-program" })
 
     const createApproveMapping = (version: number) =>
       runRepository(
@@ -941,7 +955,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
           Effect.gen(function* () {
             const mapping = yield* repository.createPendingMappingFromCandidate({
               candidateId: fixture.candidateId,
-              programId: fixture.programId,
+              subjectIdentifier: fixture.subjectIdentifier,
               protocolName: "Versioned DEX",
               movementPattern: "token_out_and_token_in",
               transactionTypeKey: null,
@@ -975,7 +989,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
-          programId: fixture.programId,
+          subjectIdentifier: fixture.subjectIdentifier,
           movementPattern: "token_out_and_token_in",
         })
       )

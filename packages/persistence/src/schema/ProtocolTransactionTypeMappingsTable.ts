@@ -27,7 +27,7 @@ export const protocolMovementPatternEnum = pgEnum("protocol_movement_pattern", [
 export type ProtocolMovementPattern = (typeof protocolMovementPatternEnum.enumValues)[number]
 
 /**
- * Reviewed protocol program mappings that may classify onchain activity when approved.
+ * Reviewed protocol subject mappings that may classify onchain activity when approved.
  */
 export const protocolTransactionTypeMappings = pgTable(
   "protocol_transaction_type_mappings",
@@ -39,7 +39,7 @@ export const protocolTransactionTypeMappings = pgTable(
     blockchainId: uuid("blockchain_id")
       .notNull()
       .references(() => blockchains.id),
-    programId: text("program_id").notNull(),
+    subjectIdentifier: text("subject_identifier").notNull(),
     protocolName: text("protocol_name").notNull(),
     movementPattern: protocolMovementPatternEnum("movement_pattern").notNull(),
     transactionTypeKey: text("transaction_type_key").references(() => transactionTypes.typeKey),
@@ -54,15 +54,15 @@ export const protocolTransactionTypeMappings = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("protocol_transaction_type_mappings_program_pattern_version_unique").on(
+    uniqueIndex("protocol_transaction_type_mappings_subject_pattern_version_unique").on(
       table.blockchainId,
-      table.programId,
+      table.subjectIdentifier,
       table.movementPattern,
       table.version
     ),
-    index("idx_protocol_transaction_type_mappings_blockchain_program").on(
+    index("idx_protocol_transaction_type_mappings_blockchain_subject").on(
       table.blockchainId,
-      table.programId
+      table.subjectIdentifier
     ),
     index("idx_protocol_transaction_type_mappings_mapping_status").on(table.mappingStatus),
     check(
