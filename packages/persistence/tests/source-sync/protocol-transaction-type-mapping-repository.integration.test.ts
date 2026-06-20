@@ -199,7 +199,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    const runtimeBeforeApproval = await runRepository(
+    const approvedMappingBeforeApproval = await runRepository(
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
@@ -263,7 +263,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       mappingStatus: "pending_review",
       confidence: "0.9500",
     })
-    expect(Option.isNone(runtimeBeforeApproval)).toBe(true)
+    expect(Option.isNone(approvedMappingBeforeApproval)).toBe(true)
     expect(approvedMapping).toMatchObject({
       id: pendingMapping.id,
       transactionTypeKey: "swap_crypto_to_crypto",
@@ -310,7 +310,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    const runtimeMapping = await runRepository(
+    const approvedMapping = await runRepository(
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
@@ -345,7 +345,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       mappingStatus: "rejected",
       reviewerNotes: "Not enough normalized fixture evidence",
     })
-    expect(Option.isNone(runtimeMapping)).toBe(true)
+    expect(Option.isNone(approvedMapping)).toBe(true)
     expect(rows.candidate).toMatchObject({ mappingStatus: "pending_review" })
     expect(rows.observationCount).toBe(1)
   })
@@ -566,7 +566,8 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       mappingId: pendingMapping.id,
       observationId: fixture.observationId,
     })
-    const runtimeMapping = await runRepository(
+
+    const latestApprovedMapping = await runRepository(
       Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
         repository.findLatestApprovedMapping({
           blockchainId: fixture.blockchainId,
@@ -578,9 +579,9 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
 
     expect(pendingMapping.subjectIdentifier).toBe(fixture.candidateSubjectIdentifier)
     expect(approvedMapping.subjectIdentifier).toBe(fixture.candidateSubjectIdentifier)
-    expect(Option.isSome(runtimeMapping)).toBe(true)
-    if (Option.isSome(runtimeMapping)) {
-      expect(runtimeMapping.value.id).toBe(approvedMapping.id)
+    expect(Option.isSome(latestApprovedMapping)).toBe(true)
+    if (Option.isSome(latestApprovedMapping)) {
+      expect(latestApprovedMapping.value.id).toBe(approvedMapping.id)
     }
   })
 
