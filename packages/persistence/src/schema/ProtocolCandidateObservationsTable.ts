@@ -53,6 +53,10 @@ export const protocolCandidateObservations = pgTable(
     sampleTransactionHashes: jsonb("sample_transaction_hashes")
       .$type<ReadonlyArray<string>>()
       .notNull(),
+    // Additional chain subject identifiers found by the source for this observation.
+    relatedSubjectIdentifiers: jsonb("related_subject_identifiers")
+      .$type<ReadonlyArray<string>>()
+      .notNull(),
     // Onchain data source result retrieval/computation time, distinct from database insertion time.
     retrievedAt: timestamp("retrieved_at").notNull(),
     // Full decoded onchain data source row retained for audit and importer debugging.

@@ -4,7 +4,7 @@
  * @module ProtocolCandidateRepositoryLive
  */
 
-import { eq, sql } from "drizzle-orm"
+import { and, count, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
@@ -38,6 +38,27 @@ const invalidObservation = ({
   readonly field: string
   readonly message: string
 }) => Effect.fail(storageError({ field, message }))
+
+const uniqueNonEmptySubjectIdentifiers = (subjectIdentifiers: ReadonlyArray<string>) => [
+  ...new Set(
+    subjectIdentifiers
+      .map((subjectIdentifier) => subjectIdentifier.trim())
+      .filter((subjectIdentifier) => subjectIdentifier.length > 0)
+  ),
+]
+
+const requiredSubjectIdentifiersForCandidate = ({
+  candidate,
+  relatedSubjectIdentifierGroups,
+}: {
+  readonly candidate: Pick<PersistedProtocolCandidate, "subjectKind" | "subjectIdentifier">
+  readonly relatedSubjectIdentifierGroups: ReadonlyArray<ReadonlyArray<string>>
+}) =>
+  uniqueNonEmptySubjectIdentifiers([
+    // Protocol candidate identifiers are slugs; program/contract identifiers are chain subjects.
+    ...(candidate.subjectKind === "protocol" ? [] : [candidate.subjectIdentifier]),
+    ...relatedSubjectIdentifierGroups.flat(),
+  ])
 
 const isValidDate = (date: Date): boolean => !Number.isNaN(date.getTime())
 
@@ -187,6 +208,11 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const requiredSubjectIdentifiersBeforeByCandidateId = new Map<
+            string,
+            ReadonlySet<string>
+          >()
+
           if (observations.length === 0) {
             return {
               candidates: [],
@@ -215,7 +241,7 @@ const make = Effect.gen(function* () {
                 )
               }
 
-              return yield* tx
+              const candidate = yield* tx
                 .insert(schema.protocolCandidates)
                 .values({
                   blockchainId: blockchain.id,
@@ -264,6 +290,31 @@ const make = Effect.gen(function* () {
                   ),
                   wrapSyncEngineSqlError(operation)
                 )
+
+              if (!requiredSubjectIdentifiersBeforeByCandidateId.has(candidate.id)) {
+                const observationRows = yield* tx
+                  .select({
+                    relatedSubjectIdentifiers:
+                      schema.protocolCandidateObservations.relatedSubjectIdentifiers,
+                  })
+                  .from(schema.protocolCandidateObservations)
+                  .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                  .pipe(wrapSyncEngineSqlError(operation))
+
+                const requiredSubjectIdentifiersBefore = requiredSubjectIdentifiersForCandidate({
+                  candidate,
+                  relatedSubjectIdentifierGroups: observationRows.map(
+                    (row) => row.relatedSubjectIdentifiers
+                  ),
+                })
+
+                requiredSubjectIdentifiersBeforeByCandidateId.set(
+                  candidate.id,
+                  new Set(requiredSubjectIdentifiersBefore)
+                )
+              }
+
+              return candidate
             })
           )
 
@@ -290,6 +341,9 @@ const make = Effect.gen(function* () {
                     transactionCount: toNumericText(observation.transactionCount),
                     uniqueActorCount: toNumericText(observation.uniqueActorCount),
                     sampleTransactionHashes: [...observation.sampleTransactionHashes],
+                    relatedSubjectIdentifiers: uniqueNonEmptySubjectIdentifiers(
+                      observation.relatedSubjectIdentifiers
+                    ),
                     retrievedAt: observation.retrievedAt,
                     rawPayload: observation.rawPayload,
                     createdAt: now,
@@ -307,6 +361,7 @@ const make = Effect.gen(function* () {
                       transactionCount: sql.raw("excluded.transaction_count"),
                       uniqueActorCount: sql.raw("excluded.unique_actor_count"),
                       sampleTransactionHashes: sql.raw("excluded.sample_transaction_hashes"),
+                      relatedSubjectIdentifiers: sql.raw("excluded.related_subject_identifiers"),
                       retrievedAt: sql.raw("excluded.retrieved_at"),
                       rawPayload: sql.raw("excluded.raw_payload"),
                     },
@@ -345,8 +400,125 @@ const make = Effect.gen(function* () {
             { discard: true }
           )
 
+          const candidatesById = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+          yield* Effect.forEach(candidatesById.values(), (candidate) =>
+            Effect.gen(function* () {
+              const requiredSubjectIdentifiersBefore =
+                requiredSubjectIdentifiersBeforeByCandidateId.get(candidate.id) ?? new Set<string>()
+
+              const observationRows = yield* tx
+                .select({
+                  relatedSubjectIdentifiers:
+                    schema.protocolCandidateObservations.relatedSubjectIdentifiers,
+                })
+                .from(schema.protocolCandidateObservations)
+                .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
+                .pipe(wrapSyncEngineSqlError(operation))
+
+              const requiredSubjectIdentifiersAfter = requiredSubjectIdentifiersForCandidate({
+                candidate,
+                relatedSubjectIdentifierGroups: observationRows.map(
+                  (row) => row.relatedSubjectIdentifiers
+                ),
+              })
+              const addedSubjectIdentifiers = requiredSubjectIdentifiersAfter.filter(
+                (subjectIdentifier) => !requiredSubjectIdentifiersBefore.has(subjectIdentifier)
+              )
+
+              const shouldRecomputeStatus =
+                candidate.mappingStatus === "pending_review" ||
+                (candidate.mappingStatus === "approved" && addedSubjectIdentifiers.length > 0)
+
+              if (!shouldRecomputeStatus || requiredSubjectIdentifiersAfter.length === 0) {
+                return
+              }
+
+              const approvedMappingRows = yield* tx
+                .select({
+                  subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
+                })
+                .from(schema.protocolTransactionTypeMappings)
+                .where(
+                  and(
+                    eq(schema.protocolTransactionTypeMappings.blockchainId, candidate.blockchainId),
+                    inArray(
+                      schema.protocolTransactionTypeMappings.subjectIdentifier,
+                      requiredSubjectIdentifiersAfter
+                    ),
+                    eq(
+                      schema.protocolTransactionTypeMappings.movementPattern,
+                      "token_out_and_token_in"
+                    ),
+                    eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
+                  )
+                )
+                .pipe(wrapSyncEngineSqlError(operation))
+              const approvedSubjectIdentifiers = new Set(
+                approvedMappingRows.map((row) => row.subjectIdentifier)
+              )
+              const hasUncoveredSubject = requiredSubjectIdentifiersAfter.some(
+                (subjectIdentifier) => !approvedSubjectIdentifiers.has(subjectIdentifier)
+              )
+
+              const [pendingMappingCount] = yield* tx
+                .select({ value: count(schema.protocolTransactionTypeMappings.id) })
+                .from(schema.protocolTransactionTypeMappings)
+                .where(
+                  and(
+                    eq(schema.protocolTransactionTypeMappings.candidateId, candidate.id),
+                    eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+                  )
+                )
+                .pipe(wrapSyncEngineSqlError(operation))
+
+              const nextMappingStatus =
+                !hasUncoveredSubject && (pendingMappingCount?.value ?? 0) === 0
+                  ? "approved"
+                  : "pending_review"
+
+              yield* tx
+                .update(schema.protocolCandidates)
+                .set({
+                  mappingStatus: nextMappingStatus,
+                  updatedAt: now,
+                })
+                .where(eq(schema.protocolCandidates.id, candidate.id))
+                .pipe(wrapSyncEngineSqlError(operation))
+            })
+          )
+
+          const candidateIds = [...new Set(candidates.map((candidate) => candidate.id))]
+          const currentCandidateRows = yield* tx
+            .select({
+              id: schema.protocolCandidates.id,
+              blockchainId: schema.protocolCandidates.blockchainId,
+              subjectKind: schema.protocolCandidates.subjectKind,
+              subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+              protocolNameHint: schema.protocolCandidates.protocolNameHint,
+              categoryHint: schema.protocolCandidates.categoryHint,
+              mappingStatus: schema.protocolCandidates.mappingStatus,
+              firstSeenAt: schema.protocolCandidates.firstSeenAt,
+              lastSeenAt: schema.protocolCandidates.lastSeenAt,
+            })
+            .from(schema.protocolCandidates)
+            .where(inArray(schema.protocolCandidates.id, candidateIds))
+            .pipe(wrapSyncEngineSqlError(operation))
+          const currentCandidates = yield* Effect.forEach(
+            currentCandidateRows,
+            toPersistedCandidate
+          )
+          const currentCandidatesById = new Map(
+            currentCandidates.map((candidate) => [candidate.id, candidate])
+          )
+          const returnedCandidates = yield* Effect.forEach(candidates, (candidate) => {
+            const currentCandidate = currentCandidatesById.get(candidate.id)
+            return currentCandidate === undefined
+              ? Effect.fail(storageError({ message: "Failed to reload imported candidate." }))
+              : Effect.succeed(currentCandidate)
+          })
+
           return {
-            candidates,
+            candidates: returnedCandidates,
             observationCount: observations.length,
           }
         })

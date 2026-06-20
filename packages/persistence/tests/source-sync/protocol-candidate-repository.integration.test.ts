@@ -62,6 +62,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
               interactionCount: 1_000,
               transactionCount: 800,
               uniqueActorCount: 250,
+              relatedSubjectIdentifiers: [],
               sampleTransactionHashes: ["signature-1", "signature-2"],
               retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
               rawPayload: { program_id: "dune-program-1", trade_rows: 1_000 },
@@ -104,6 +105,8 @@ describe("ProtocolCandidateRepositoryLive", () => {
                   interactionCount: schema.protocolCandidateObservations.interactionCount,
                   transactionCount: schema.protocolCandidateObservations.transactionCount,
                   uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  relatedSubjectIdentifiers:
+                    schema.protocolCandidateObservations.relatedSubjectIdentifiers,
                   sampleTransactionHashes:
                     schema.protocolCandidateObservations.sampleTransactionHashes,
                 })
@@ -237,6 +240,8 @@ describe("ProtocolCandidateRepositoryLive", () => {
                   interactionCount: schema.protocolCandidateObservations.interactionCount,
                   transactionCount: schema.protocolCandidateObservations.transactionCount,
                   uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  relatedSubjectIdentifiers:
+                    schema.protocolCandidateObservations.relatedSubjectIdentifiers,
                   sampleTransactionHashes:
                     schema.protocolCandidateObservations.sampleTransactionHashes,
                   retrievedAt: schema.protocolCandidateObservations.retrievedAt,
@@ -278,6 +283,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: "12345",
       transactionCount: "789",
       uniqueActorCount: "456",
+      relatedSubjectIdentifiers: ["dex-only-program"],
       sampleTransactionHashes: ["sample-signature-1", "sample-signature-2"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
     })
@@ -318,6 +324,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: 100,
       transactionCount: 80,
       uniqueActorCount: 25,
+      relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       rawPayload: { program_id: "dune-program-2", trade_rows: 100 },
@@ -424,6 +431,200 @@ describe("ProtocolCandidateRepositoryLive", () => {
     })
   })
 
+  it("reopens an approved protocol candidate when re-import adds an uncovered program", async () => {
+    const observation = {
+      blockchainName: "solana",
+      subjectKind: "protocol" as const,
+      subjectIdentifier: "reopen-import-dex",
+      protocolNameHint: "Reopen Import DEX",
+      categoryHint: "dex",
+      sourceObservationKey: "dune:reopen-import-dex",
+      observedWindowStart: new Date("2026-05-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2026-06-01T00:00:00.000Z"),
+      interactionCount: 100,
+      transactionCount: 80,
+      uniqueActorCount: 20,
+      relatedSubjectIdentifiers: ["reopen-import-program-a"],
+      sampleTransactionHashes: ["signature-a"],
+      retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+      rawPayload: {
+        canonicalProgramIds: ["reopen-import-program-a"],
+        project: "reopen-import-dex",
+      },
+      sourceMetadata: {
+        source: "dune" as const,
+        queryId: 7_647_495,
+        queryName: "solana-dex-project-priority",
+        queryVersion: 1,
+      },
+    }
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({ observations: [observation] })
+      )
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({
+            id: schema.protocolCandidates.id,
+            blockchainId: schema.protocolCandidates.blockchainId,
+          })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "reopen-import-dex"))
+          .limit(1)
+
+        if (candidate === undefined) {
+          return yield* Effect.dieMessage("Missing imported protocol candidate fixture")
+        }
+
+        yield* db.insert(schema.protocolTransactionTypeMappings).values({
+          candidateId: candidate.id,
+          blockchainId: candidate.blockchainId,
+          subjectIdentifier: "reopen-import-program-a",
+          protocolName: "Reopen Import DEX",
+          movementPattern: "token_out_and_token_in",
+          transactionTypeKey: "swap_crypto_to_crypto",
+          inventoryEffect: "disposal",
+          taxTreatment: "taxable_by_default",
+          confidence: "0.9500",
+          mappingStatus: "approved",
+          version: 1,
+          reviewerNotes: "Reviewed fixture",
+          sourceNotes: null,
+        })
+
+        yield* db
+          .update(schema.protocolCandidates)
+          .set({ mappingStatus: "approved" })
+          .where(eq(schema.protocolCandidates.id, candidate.id))
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({
+          observations: [
+            {
+              ...observation,
+              interactionCount: 250,
+              transactionCount: 200,
+              uniqueActorCount: 90,
+              relatedSubjectIdentifiers: ["reopen-import-program-a", "reopen-import-program-b"],
+              sampleTransactionHashes: ["signature-b"],
+              retrievedAt: new Date("2026-06-02T10:00:00.000Z"),
+              rawPayload: {
+                canonicalProgramIds: ["reopen-import-program-a", "reopen-import-program-b"],
+                project: "reopen-import-dex",
+              },
+            },
+          ],
+        })
+      )
+    )
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "reopen-import-dex"))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("pending_review")
+  })
+
+  it("approves an imported protocol candidate when related subjects are already covered", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (blockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded solana blockchain fixture")
+        }
+
+        yield* db.insert(schema.protocolTransactionTypeMappings).values({
+          candidateId: null,
+          blockchainId: blockchain.id,
+          subjectIdentifier: "already-covered-import-program",
+          protocolName: "Already Covered DEX",
+          movementPattern: "token_out_and_token_in",
+          transactionTypeKey: "swap_crypto_to_crypto",
+          inventoryEffect: "disposal",
+          taxTreatment: "taxable_by_default",
+          confidence: "0.9500",
+          mappingStatus: "approved",
+          version: 1,
+          reviewerNotes: "Reviewed fixture",
+          sourceNotes: null,
+        })
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({
+          observations: [
+            {
+              blockchainName: "solana",
+              subjectKind: "protocol",
+              subjectIdentifier: "already-covered-import-dex",
+              protocolNameHint: "Already Covered DEX",
+              categoryHint: "dex",
+              sourceObservationKey: "dune:already-covered-import-dex",
+              observedWindowStart: new Date("2026-05-01T00:00:00.000Z"),
+              observedWindowEnd: new Date("2026-06-01T00:00:00.000Z"),
+              interactionCount: 100,
+              transactionCount: 80,
+              uniqueActorCount: 20,
+              relatedSubjectIdentifiers: ["already-covered-import-program"],
+              sampleTransactionHashes: ["signature-a"],
+              retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+              rawPayload: {
+                canonicalProgramIds: ["already-covered-import-program"],
+                project: "already-covered-import-dex",
+              },
+              sourceMetadata: {
+                source: "dune",
+                queryId: 7_647_495,
+                queryName: "solana-dex-project-priority",
+                queryVersion: 1,
+              },
+            },
+          ],
+        })
+      )
+    )
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "already-covered-import-dex"))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("approved")
+  })
+
   it("keeps distinct same-window Dune observations when project hints differ", async () => {
     const baseObservation = {
       blockchainName: "solana",
@@ -434,6 +635,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       observedWindowEnd: new Date("2024-01-08T00:00:00.000Z"),
       transactionCount: 80,
       uniqueActorCount: 25,
+      relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       sourceMetadata: {
@@ -511,6 +713,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: 100,
       transactionCount: 80,
       uniqueActorCount: 25,
+      relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       rawPayload: { project: "old-dex" },
@@ -592,6 +795,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 interactionCount: 10,
                 transactionCount: null,
                 uniqueActorCount: null,
+                relatedSubjectIdentifiers: [],
                 sampleTransactionHashes: [],
                 retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
                 rawPayload: { program_id: "valid-program" },
@@ -614,6 +818,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 interactionCount: -1,
                 transactionCount: null,
                 uniqueActorCount: null,
+                relatedSubjectIdentifiers: [],
                 sampleTransactionHashes: [],
                 retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
                 rawPayload: { program_id: "invalid-program" },
