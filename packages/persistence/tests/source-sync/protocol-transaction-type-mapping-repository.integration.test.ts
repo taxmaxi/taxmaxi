@@ -477,6 +477,88 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     expect(evidenceResult.left).toBeInstanceOf(SyncEngineStorageError)
   })
 
+  it("does not attach same-candidate evidence for a different observed subject", async () => {
+    const fixture = await insertCandidateWithObservation({
+      subjectKind: "protocol",
+      candidateSubjectIdentifier: "subject-evidence-dex",
+      relatedSubjectIdentifiers: ["subject-evidence-program-a"],
+      rawPayload: {
+        canonicalProgramIds: ["subject-evidence-program-a"],
+        project: "subject-evidence-dex",
+      },
+    })
+    const unrelatedObservationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const now = new Date("2026-06-01T10:00:00.000Z")
+        const [observation] = yield* db
+          .insert(schema.protocolCandidateObservations)
+          .values({
+            candidateId: fixture.candidateId,
+            onchainDataSource: "dune",
+            onchainDataSourceObservationKey: "fixture:subject-evidence-dex:program-b",
+            observedWindowStart: new Date("2026-02-01T00:00:00.000Z"),
+            observedWindowEnd: new Date("2026-03-01T00:00:00.000Z"),
+            interactionCount: "100",
+            transactionCount: "80",
+            uniqueActorCount: "20",
+            relatedSubjectIdentifiers: ["subject-evidence-program-b"],
+            sampleTransactionHashes: ["sample-signature-2"],
+            retrievedAt: now,
+            rawPayload: {
+              canonicalProgramIds: ["subject-evidence-program-b"],
+              project: "subject-evidence-dex",
+            },
+            createdAt: now,
+          })
+          .returning({ id: schema.protocolCandidateObservations.id })
+
+        if (observation === undefined) {
+          return yield* Effect.dieMessage("Failed to create protocol observation fixture")
+        }
+
+        return observation.id
+      })
+    )
+    const pendingMapping = await createPendingMapping({
+      candidateId: fixture.candidateId,
+      subjectIdentifier: "subject-evidence-program-b",
+      protocolName: "Subject Evidence DEX",
+    })
+
+    const evidenceResult = await runRepository(
+      Effect.either(
+        Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+          repository.addEvidence({
+            mappingId: pendingMapping.id,
+            candidateObservationId: fixture.observationId,
+            evidenceKind: "dune_observation",
+            sampleSignature: "sample-signature-1",
+            payload: { source: "dune", queryId: 7_647_495 },
+          })
+        )
+      )
+    )
+    const validEvidence = await runRepository(
+      Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
+        repository.addEvidence({
+          mappingId: pendingMapping.id,
+          candidateObservationId: unrelatedObservationId,
+          evidenceKind: "dune_observation",
+          sampleSignature: "sample-signature-2",
+          payload: { source: "dune", queryId: 7_647_495 },
+        })
+      )
+    )
+
+    expect(evidenceResult._tag).toBe("Left")
+    if (evidenceResult._tag === "Right") {
+      expect.fail("Expected wrong-subject evidence to fail")
+    }
+    expect(evidenceResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(validEvidence.candidateObservationId).toBe(unrelatedObservationId)
+  })
+
   it("does not create a mapping for a program outside the candidate evidence", async () => {
     const fixture = await insertCandidateWithObservation({
       subjectKind: "protocol",

@@ -4,7 +4,7 @@
  * @module ProtocolCandidateRepositoryLive
  */
 
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, count, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
@@ -208,7 +208,6 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const approvedCandidatesById = new Map<string, PersistedProtocolCandidate>()
           const requiredSubjectIdentifiersBeforeByCandidateId = new Map<
             string,
             ReadonlySet<string>
@@ -313,10 +312,6 @@ const make = Effect.gen(function* () {
                   candidate.id,
                   new Set(requiredSubjectIdentifiersBefore)
                 )
-
-                if (candidate.mappingStatus === "approved") {
-                  approvedCandidatesById.set(candidate.id, candidate)
-                }
               }
 
               return candidate
@@ -405,7 +400,8 @@ const make = Effect.gen(function* () {
             { discard: true }
           )
 
-          yield* Effect.forEach(approvedCandidatesById.values(), (candidate) =>
+          const candidatesById = new Map(candidates.map((candidate) => [candidate.id, candidate]))
+          yield* Effect.forEach(candidatesById.values(), (candidate) =>
             Effect.gen(function* () {
               const requiredSubjectIdentifiersBefore =
                 requiredSubjectIdentifiersBeforeByCandidateId.get(candidate.id) ?? new Set<string>()
@@ -429,7 +425,11 @@ const make = Effect.gen(function* () {
                 (subjectIdentifier) => !requiredSubjectIdentifiersBefore.has(subjectIdentifier)
               )
 
-              if (addedSubjectIdentifiers.length === 0) {
+              const shouldRecomputeStatus =
+                candidate.mappingStatus === "pending_review" ||
+                (candidate.mappingStatus === "approved" && addedSubjectIdentifiers.length > 0)
+
+              if (!shouldRecomputeStatus || requiredSubjectIdentifiersAfter.length === 0) {
                 return
               }
 
@@ -443,7 +443,7 @@ const make = Effect.gen(function* () {
                     eq(schema.protocolTransactionTypeMappings.blockchainId, candidate.blockchainId),
                     inArray(
                       schema.protocolTransactionTypeMappings.subjectIdentifier,
-                      addedSubjectIdentifiers
+                      requiredSubjectIdentifiersAfter
                     ),
                     eq(
                       schema.protocolTransactionTypeMappings.movementPattern,
@@ -456,18 +456,30 @@ const make = Effect.gen(function* () {
               const approvedSubjectIdentifiers = new Set(
                 approvedMappingRows.map((row) => row.subjectIdentifier)
               )
-              const hasUncoveredAddedSubject = addedSubjectIdentifiers.some(
+              const hasUncoveredSubject = requiredSubjectIdentifiersAfter.some(
                 (subjectIdentifier) => !approvedSubjectIdentifiers.has(subjectIdentifier)
               )
 
-              if (!hasUncoveredAddedSubject) {
-                return
-              }
+              const [pendingMappingCount] = yield* tx
+                .select({ value: count(schema.protocolTransactionTypeMappings.id) })
+                .from(schema.protocolTransactionTypeMappings)
+                .where(
+                  and(
+                    eq(schema.protocolTransactionTypeMappings.candidateId, candidate.id),
+                    eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+                  )
+                )
+                .pipe(wrapSyncEngineSqlError(operation))
+
+              const nextMappingStatus =
+                !hasUncoveredSubject && (pendingMappingCount?.value ?? 0) === 0
+                  ? "approved"
+                  : "pending_review"
 
               yield* tx
                 .update(schema.protocolCandidates)
                 .set({
-                  mappingStatus: "pending_review",
+                  mappingStatus: nextMappingStatus,
                   updatedAt: now,
                 })
                 .where(eq(schema.protocolCandidates.id, candidate.id))

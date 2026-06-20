@@ -542,6 +542,89 @@ describe("ProtocolCandidateRepositoryLive", () => {
     expect(candidateStatus).toBe("pending_review")
   })
 
+  it("approves an imported protocol candidate when related subjects are already covered", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (blockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded solana blockchain fixture")
+        }
+
+        yield* db.insert(schema.protocolTransactionTypeMappings).values({
+          candidateId: null,
+          blockchainId: blockchain.id,
+          subjectIdentifier: "already-covered-import-program",
+          protocolName: "Already Covered DEX",
+          movementPattern: "token_out_and_token_in",
+          transactionTypeKey: "swap_crypto_to_crypto",
+          inventoryEffect: "disposal",
+          taxTreatment: "taxable_by_default",
+          confidence: "0.9500",
+          mappingStatus: "approved",
+          version: 1,
+          reviewerNotes: "Reviewed fixture",
+          sourceNotes: null,
+        })
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(ProtocolCandidateRepository, (repository) =>
+        repository.importObservations({
+          observations: [
+            {
+              blockchainName: "solana",
+              subjectKind: "protocol",
+              subjectIdentifier: "already-covered-import-dex",
+              protocolNameHint: "Already Covered DEX",
+              categoryHint: "dex",
+              sourceObservationKey: "dune:already-covered-import-dex",
+              observedWindowStart: new Date("2026-05-01T00:00:00.000Z"),
+              observedWindowEnd: new Date("2026-06-01T00:00:00.000Z"),
+              interactionCount: 100,
+              transactionCount: 80,
+              uniqueActorCount: 20,
+              relatedSubjectIdentifiers: ["already-covered-import-program"],
+              sampleTransactionHashes: ["signature-a"],
+              retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
+              rawPayload: {
+                canonicalProgramIds: ["already-covered-import-program"],
+                project: "already-covered-import-dex",
+              },
+              sourceMetadata: {
+                source: "dune",
+                queryId: 7_647_495,
+                queryName: "solana-dex-project-priority",
+                queryVersion: 1,
+              },
+            },
+          ],
+        })
+      )
+    )
+
+    const candidateStatus = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [candidate] = yield* db
+          .select({ mappingStatus: schema.protocolCandidates.mappingStatus })
+          .from(schema.protocolCandidates)
+          .where(eq(schema.protocolCandidates.subjectIdentifier, "already-covered-import-dex"))
+          .limit(1)
+
+        return candidate?.mappingStatus ?? null
+      })
+    )
+
+    expect(candidateStatus).toBe("approved")
+  })
+
   it("keeps distinct same-window Dune observations when project hints differ", async () => {
     const baseObservation = {
       blockchainName: "solana",

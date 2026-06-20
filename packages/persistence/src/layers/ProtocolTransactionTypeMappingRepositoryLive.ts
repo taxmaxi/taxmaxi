@@ -462,6 +462,7 @@ const make = Effect.gen(function* () {
           const [mappingRow] = yield* tx
             .select({
               candidateId: schema.protocolTransactionTypeMappings.candidateId,
+              subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
             })
             .from(schema.protocolTransactionTypeMappings)
             .where(eq(schema.protocolTransactionTypeMappings.id, params.mappingId))
@@ -481,8 +482,16 @@ const make = Effect.gen(function* () {
             const [observationRow] = yield* tx
               .select({
                 candidateId: schema.protocolCandidateObservations.candidateId,
+                relatedSubjectIdentifiers:
+                  schema.protocolCandidateObservations.relatedSubjectIdentifiers,
+                subjectKind: schema.protocolCandidates.subjectKind,
+                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
               })
               .from(schema.protocolCandidateObservations)
+              .innerJoin(
+                schema.protocolCandidates,
+                eq(schema.protocolCandidateObservations.candidateId, schema.protocolCandidates.id)
+              )
               .where(eq(schema.protocolCandidateObservations.id, params.candidateObservationId))
               .limit(1)
               .pipe(wrapSyncEngineSqlError(operation))
@@ -502,6 +511,22 @@ const make = Effect.gen(function* () {
                   mappingId: params.mappingId,
                   candidateObservationId: params.candidateObservationId,
                   message: "Protocol mapping evidence must belong to the mapped candidate.",
+                })
+              )
+            }
+
+            const coveredSubjectIdentifiers = allowedSubjectIdentifiersForCandidate({
+              candidate: observation,
+              relatedSubjectIdentifierGroups: [observation.relatedSubjectIdentifiers],
+            })
+
+            if (!coveredSubjectIdentifiers.includes(mapping.subjectIdentifier)) {
+              return yield* Effect.fail(
+                storageError(operation, {
+                  mappingId: params.mappingId,
+                  candidateObservationId: params.candidateObservationId,
+                  subjectIdentifier: mapping.subjectIdentifier,
+                  message: "Protocol mapping evidence must cover the mapped subject.",
                 })
               )
             }
