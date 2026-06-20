@@ -315,9 +315,11 @@ const make = Effect.gen(function* () {
               )
             )
             .pipe(wrapSyncEngineSqlError(operation))
+
           const approvedSubjectIdentifiers = new Set(
             approvedMappingRows.map((row) => row.subjectIdentifier)
           )
+
           const [pendingMappingCount] = yield* tx
             .select({ value: count(schema.protocolTransactionTypeMappings.id) })
             .from(schema.protocolTransactionTypeMappings)
@@ -328,10 +330,13 @@ const make = Effect.gen(function* () {
               )
             )
             .pipe(wrapSyncEngineSqlError(operation))
+
           const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
+
           const hasApprovedSubjectCoverage = subjectIdentifiersToReview.every((subjectIdentifier) =>
             approvedSubjectIdentifiers.has(subjectIdentifier)
           )
+
           const nextCandidateStatus =
             !hasPendingLinkedMappings && hasApprovedSubjectCoverage ? "approved" : "pending_review"
 
