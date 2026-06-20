@@ -7,7 +7,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Schema from "effect/Schema"
 import {
   ProtocolCandidateRepository,
   SyncEngineStorageError,
@@ -40,47 +39,26 @@ const invalidObservation = ({
   readonly message: string
 }) => Effect.fail(storageError({ field, message }))
 
-const ProtocolCandidateObservationPayload = Schema.Struct({
-  canonicalProgramIds: Schema.optional(Schema.Array(Schema.String)),
-})
+const uniqueNonEmptySubjectIdentifiers = (subjectIdentifiers: ReadonlyArray<string>) => [
+  ...new Set(
+    subjectIdentifiers
+      .map((subjectIdentifier) => subjectIdentifier.trim())
+      .filter((subjectIdentifier) => subjectIdentifier.length > 0)
+  ),
+]
 
-const canonicalProgramIdsFromRawPayload = (payload: unknown) =>
-  Schema.decodeUnknown(ProtocolCandidateObservationPayload)(payload).pipe(
-    Effect.mapError((cause) =>
-      storageError({
-        message: "Failed to decode protocol candidate observation payload.",
-        cause,
-      })
-    ),
-    Effect.map(({ canonicalProgramIds }) => [
-      ...new Set(
-        (canonicalProgramIds ?? [])
-          .map((programId) => programId.trim())
-          .filter((programId) => programId.length > 0)
-      ),
-    ])
-  )
-
-const requiredProgramIdsForCandidate = ({
+const requiredSubjectIdentifiersForCandidate = ({
   candidate,
-  rawPayloads,
+  relatedSubjectIdentifierGroups,
 }: {
   readonly candidate: Pick<PersistedProtocolCandidate, "subjectKind" | "subjectIdentifier">
-  readonly rawPayloads: ReadonlyArray<unknown>
+  readonly relatedSubjectIdentifierGroups: ReadonlyArray<ReadonlyArray<string>>
 }) =>
-  Effect.map(
-    Effect.forEach(rawPayloads, canonicalProgramIdsFromRawPayload),
-    (observedProgramIdGroups) => [
-      ...new Set(
-        [
-          ...(candidate.subjectKind === "program" ? [candidate.subjectIdentifier] : []),
-          ...observedProgramIdGroups.flat(),
-        ]
-          .map((programId) => programId.trim())
-          .filter((programId) => programId.length > 0)
-      ),
-    ]
-  )
+  uniqueNonEmptySubjectIdentifiers([
+    // Protocol candidate identifiers are slugs; program/contract identifiers are chain subjects.
+    ...(candidate.subjectKind === "protocol" ? [] : [candidate.subjectIdentifier]),
+    ...relatedSubjectIdentifierGroups.flat(),
+  ])
 
 const isValidDate = (date: Date): boolean => !Number.isNaN(date.getTime())
 
@@ -231,7 +209,10 @@ const make = Effect.gen(function* () {
       .transaction((tx) =>
         Effect.gen(function* () {
           const approvedCandidatesById = new Map<string, PersistedProtocolCandidate>()
-          const requiredProgramIdsBeforeByCandidateId = new Map<string, ReadonlySet<string>>()
+          const requiredSubjectIdentifiersBeforeByCandidateId = new Map<
+            string,
+            ReadonlySet<string>
+          >()
 
           if (observations.length === 0) {
             return {
@@ -311,23 +292,26 @@ const make = Effect.gen(function* () {
                   wrapSyncEngineSqlError(operation)
                 )
 
-              if (!requiredProgramIdsBeforeByCandidateId.has(candidate.id)) {
+              if (!requiredSubjectIdentifiersBeforeByCandidateId.has(candidate.id)) {
                 const observationRows = yield* tx
                   .select({
-                    rawPayload: schema.protocolCandidateObservations.rawPayload,
+                    relatedSubjectIdentifiers:
+                      schema.protocolCandidateObservations.relatedSubjectIdentifiers,
                   })
                   .from(schema.protocolCandidateObservations)
                   .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
                   .pipe(wrapSyncEngineSqlError(operation))
 
-                const requiredProgramIdsBefore = yield* requiredProgramIdsForCandidate({
+                const requiredSubjectIdentifiersBefore = requiredSubjectIdentifiersForCandidate({
                   candidate,
-                  rawPayloads: observationRows.map((row) => row.rawPayload),
+                  relatedSubjectIdentifierGroups: observationRows.map(
+                    (row) => row.relatedSubjectIdentifiers
+                  ),
                 })
 
-                requiredProgramIdsBeforeByCandidateId.set(
+                requiredSubjectIdentifiersBeforeByCandidateId.set(
                   candidate.id,
-                  new Set(requiredProgramIdsBefore)
+                  new Set(requiredSubjectIdentifiersBefore)
                 )
 
                 if (candidate.mappingStatus === "approved") {
@@ -362,6 +346,9 @@ const make = Effect.gen(function* () {
                     transactionCount: toNumericText(observation.transactionCount),
                     uniqueActorCount: toNumericText(observation.uniqueActorCount),
                     sampleTransactionHashes: [...observation.sampleTransactionHashes],
+                    relatedSubjectIdentifiers: uniqueNonEmptySubjectIdentifiers(
+                      observation.relatedSubjectIdentifiers
+                    ),
                     retrievedAt: observation.retrievedAt,
                     rawPayload: observation.rawPayload,
                     createdAt: now,
@@ -379,6 +366,7 @@ const make = Effect.gen(function* () {
                       transactionCount: sql.raw("excluded.transaction_count"),
                       uniqueActorCount: sql.raw("excluded.unique_actor_count"),
                       sampleTransactionHashes: sql.raw("excluded.sample_transaction_hashes"),
+                      relatedSubjectIdentifiers: sql.raw("excluded.related_subject_identifiers"),
                       retrievedAt: sql.raw("excluded.retrieved_at"),
                       rawPayload: sql.raw("excluded.raw_payload"),
                     },
@@ -419,26 +407,29 @@ const make = Effect.gen(function* () {
 
           yield* Effect.forEach(approvedCandidatesById.values(), (candidate) =>
             Effect.gen(function* () {
-              const requiredProgramIdsBefore =
-                requiredProgramIdsBeforeByCandidateId.get(candidate.id) ?? new Set<string>()
+              const requiredSubjectIdentifiersBefore =
+                requiredSubjectIdentifiersBeforeByCandidateId.get(candidate.id) ?? new Set<string>()
 
               const observationRows = yield* tx
                 .select({
-                  rawPayload: schema.protocolCandidateObservations.rawPayload,
+                  relatedSubjectIdentifiers:
+                    schema.protocolCandidateObservations.relatedSubjectIdentifiers,
                 })
                 .from(schema.protocolCandidateObservations)
                 .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
                 .pipe(wrapSyncEngineSqlError(operation))
 
-              const requiredProgramIdsAfter = yield* requiredProgramIdsForCandidate({
+              const requiredSubjectIdentifiersAfter = requiredSubjectIdentifiersForCandidate({
                 candidate,
-                rawPayloads: observationRows.map((row) => row.rawPayload),
+                relatedSubjectIdentifierGroups: observationRows.map(
+                  (row) => row.relatedSubjectIdentifiers
+                ),
               })
-              const addedProgramIds = requiredProgramIdsAfter.filter(
-                (programId) => !requiredProgramIdsBefore.has(programId)
+              const addedSubjectIdentifiers = requiredSubjectIdentifiersAfter.filter(
+                (subjectIdentifier) => !requiredSubjectIdentifiersBefore.has(subjectIdentifier)
               )
 
-              if (addedProgramIds.length === 0) {
+              if (addedSubjectIdentifiers.length === 0) {
                 return
               }
 
@@ -452,7 +443,7 @@ const make = Effect.gen(function* () {
                     eq(schema.protocolTransactionTypeMappings.blockchainId, candidate.blockchainId),
                     inArray(
                       schema.protocolTransactionTypeMappings.subjectIdentifier,
-                      addedProgramIds
+                      addedSubjectIdentifiers
                     ),
                     eq(
                       schema.protocolTransactionTypeMappings.movementPattern,
@@ -462,14 +453,14 @@ const make = Effect.gen(function* () {
                   )
                 )
                 .pipe(wrapSyncEngineSqlError(operation))
-              const approvedProgramIds = new Set(
+              const approvedSubjectIdentifiers = new Set(
                 approvedMappingRows.map((row) => row.subjectIdentifier)
               )
-              const hasUncoveredAddedProgram = addedProgramIds.some(
-                (programId) => !approvedProgramIds.has(programId)
+              const hasUncoveredAddedSubject = addedSubjectIdentifiers.some(
+                (subjectIdentifier) => !approvedSubjectIdentifiers.has(subjectIdentifier)
               )
 
-              if (!hasUncoveredAddedProgram) {
+              if (!hasUncoveredAddedSubject) {
                 return
               }
 

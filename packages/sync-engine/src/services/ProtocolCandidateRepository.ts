@@ -40,6 +40,14 @@ export interface ProtocolCandidateObservationDraft {
   readonly interactionCount: number
   readonly transactionCount: number | null
   readonly uniqueActorCount: number | null
+  /**
+   * Additional chain subject identifiers linked to this observation.
+   *
+   * The candidate's own subjectIdentifier is stored separately. This field is
+   * for related subjects found by the source, such as Solana programs grouped
+   * under a protocol slug.
+   */
+  readonly relatedSubjectIdentifiers: ReadonlyArray<string>
   readonly sampleTransactionHashes: ReadonlyArray<string>
   readonly retrievedAt: Date
   readonly rawPayload: Record<string, unknown>

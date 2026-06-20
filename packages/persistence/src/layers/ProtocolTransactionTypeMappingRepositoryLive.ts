@@ -8,7 +8,6 @@ import { and, count, desc, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as Schema from "effect/Schema"
 import {
   ProtocolTransactionTypeMappingRepository,
   SyncEngineStorageError,
@@ -42,98 +41,52 @@ const invalidInput = ({
   readonly message: string
 }) => Effect.fail(storageError(operation, { field, message }))
 
-const ProtocolCandidateObservationPayload = Schema.Struct({
-  canonicalProgramIds: Schema.optional(Schema.Array(Schema.String)),
-})
-
-const canonicalProgramIdsFromRawPayload = ({
-  operation,
-  payload,
-}: {
-  readonly operation: string
-  readonly payload: unknown
-}) =>
-  Schema.decodeUnknown(ProtocolCandidateObservationPayload)(payload).pipe(
-    Effect.mapError((cause) =>
-      storageError(operation, {
-        message: "Failed to decode protocol candidate observation payload.",
-        cause,
-      })
-    ),
-    Effect.map(({ canonicalProgramIds }) => [
-      ...new Set(
-        (canonicalProgramIds ?? [])
-          .map((programId) => programId.trim())
-          .filter((programId) => programId.length > 0)
-      ),
-    ])
-  )
-
-const uniqueNonEmptyProgramIds = (programIds: ReadonlyArray<string>) => [
+const uniqueNonEmptySubjectIdentifiers = (subjectIdentifiers: ReadonlyArray<string>) => [
   ...new Set(
-    programIds.map((programId) => programId.trim()).filter((programId) => programId.length > 0)
+    subjectIdentifiers
+      .map((subjectIdentifier) => subjectIdentifier.trim())
+      .filter((subjectIdentifier) => subjectIdentifier.length > 0)
   ),
 ]
 
-const observedCanonicalProgramIds = ({
-  operation,
-  rawPayloads,
-}: {
-  readonly operation: string
-  readonly rawPayloads: ReadonlyArray<unknown>
-}) =>
-  Effect.gen(function* () {
-    const observedProgramIdGroups = yield* Effect.forEach(rawPayloads, (payload) =>
-      canonicalProgramIdsFromRawPayload({ operation, payload })
-    )
-    return uniqueNonEmptyProgramIds(observedProgramIdGroups.flat())
-  })
-
-const requiredProgramIdsForRuntimeCoverage = ({
-  operation,
+const requiredSubjectIdentifiersForCoverage = ({
   candidate,
-  rawPayloads,
-  fallbackProgramId,
+  relatedSubjectIdentifierGroups,
+  fallbackSubjectIdentifier,
 }: {
-  readonly operation: string
   readonly candidate: {
     readonly subjectKind: string
     readonly subjectIdentifier: string
   }
-  readonly rawPayloads: ReadonlyArray<unknown>
-  readonly fallbackProgramId: string
-}) =>
-  Effect.gen(function* () {
-    const canonicalProgramIds = yield* observedCanonicalProgramIds({ operation, rawPayloads })
-    const requiredProgramIds = uniqueNonEmptyProgramIds([
-      ...(candidate.subjectKind === "program" ? [candidate.subjectIdentifier] : []),
-      ...canonicalProgramIds,
-    ])
+  readonly relatedSubjectIdentifierGroups: ReadonlyArray<ReadonlyArray<string>>
+  readonly fallbackSubjectIdentifier: string
+}) => {
+  const requiredSubjectIdentifiers = uniqueNonEmptySubjectIdentifiers([
+    // Protocol candidate identifiers are slugs; program/contract identifiers are chain subjects.
+    ...(candidate.subjectKind === "protocol" ? [] : [candidate.subjectIdentifier]),
+    ...relatedSubjectIdentifierGroups.flat(),
+  ])
 
-    return requiredProgramIds.length === 0
-      ? uniqueNonEmptyProgramIds([fallbackProgramId])
-      : requiredProgramIds
-  })
+  return requiredSubjectIdentifiers.length === 0
+    ? uniqueNonEmptySubjectIdentifiers([fallbackSubjectIdentifier])
+    : requiredSubjectIdentifiers
+}
 
-const allowedProgramIdsForCandidate = ({
-  operation,
+const allowedSubjectIdentifiersForCandidate = ({
   candidate,
-  rawPayloads,
+  relatedSubjectIdentifierGroups,
 }: {
-  readonly operation: string
   readonly candidate: {
     readonly subjectKind: string
     readonly subjectIdentifier: string
   }
-  readonly rawPayloads: ReadonlyArray<unknown>
+  readonly relatedSubjectIdentifierGroups: ReadonlyArray<ReadonlyArray<string>>
 }) =>
-  Effect.gen(function* () {
-    const canonicalProgramIds = yield* observedCanonicalProgramIds({ operation, rawPayloads })
-    return uniqueNonEmptyProgramIds([
-      ...(candidate.subjectKind === "protocol" ? [] : [candidate.subjectIdentifier]),
-      ...canonicalProgramIds,
-    ])
-  })
+  uniqueNonEmptySubjectIdentifiers([
+    // Protocol candidate identifiers are slugs; program/contract identifiers are chain subjects.
+    ...(candidate.subjectKind === "protocol" ? [] : [candidate.subjectIdentifier]),
+    ...relatedSubjectIdentifierGroups.flat(),
+  ])
 
 const validateNonEmptyText = ({
   operation,
@@ -147,6 +100,16 @@ const validateNonEmptyText = ({
   value.trim().length === 0
     ? invalidInput({ operation, field, message: `${field} must not be empty.` })
     : Effect.succeed(void 0)
+
+const requireRow = <A>({
+  row,
+  operation,
+  cause,
+}: {
+  readonly row: A | undefined
+  readonly operation: string
+  readonly cause: unknown
+}) => (row === undefined ? Effect.fail(storageError(operation, cause)) : Effect.succeed(row))
 
 const validateConfidence = ({
   operation,
@@ -277,6 +240,111 @@ const toPersistedEvidence = (row: {
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0]
+
+  const updateLinkedCandidateMappingStatus = ({
+    tx,
+    operation,
+    mapping,
+    updatedAt,
+  }: {
+    readonly tx: Transaction
+    readonly operation: string
+    readonly mapping: {
+      readonly candidateId: string | null
+      readonly blockchainId: string
+      readonly subjectIdentifier: string
+      readonly movementPattern: "token_out_and_token_in"
+    }
+    readonly updatedAt: Date
+  }) => {
+    const candidateId = mapping.candidateId
+    return candidateId === null
+      ? Effect.void
+      : Effect.gen(function* () {
+          const [candidateRow] = yield* tx
+            .select({
+              subjectKind: schema.protocolCandidates.subjectKind,
+              subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+            })
+            .from(schema.protocolCandidates)
+            .where(eq(schema.protocolCandidates.id, candidateId))
+            .limit(1)
+            .pipe(wrapSyncEngineSqlError(operation))
+
+          const candidate = yield* requireRow({
+            row: candidateRow,
+            operation,
+            cause: {
+              candidateId,
+              message: "Failed to resolve protocol candidate.",
+            },
+          })
+
+          const observationRows = yield* tx
+            .select({
+              relatedSubjectIdentifiers:
+                schema.protocolCandidateObservations.relatedSubjectIdentifiers,
+            })
+            .from(schema.protocolCandidateObservations)
+            .where(eq(schema.protocolCandidateObservations.candidateId, candidateId))
+            .pipe(wrapSyncEngineSqlError(operation))
+
+          const subjectIdentifiersToReview = requiredSubjectIdentifiersForCoverage({
+            candidate,
+            relatedSubjectIdentifierGroups: observationRows.map(
+              (row) => row.relatedSubjectIdentifiers
+            ),
+            fallbackSubjectIdentifier: mapping.subjectIdentifier,
+          })
+
+          const approvedMappingRows = yield* tx
+            .select({
+              subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
+            })
+            .from(schema.protocolTransactionTypeMappings)
+            .where(
+              and(
+                eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
+                inArray(
+                  schema.protocolTransactionTypeMappings.subjectIdentifier,
+                  subjectIdentifiersToReview
+                ),
+                eq(schema.protocolTransactionTypeMappings.movementPattern, mapping.movementPattern),
+                eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
+              )
+            )
+            .pipe(wrapSyncEngineSqlError(operation))
+          const approvedSubjectIdentifiers = new Set(
+            approvedMappingRows.map((row) => row.subjectIdentifier)
+          )
+          const [pendingMappingCount] = yield* tx
+            .select({ value: count(schema.protocolTransactionTypeMappings.id) })
+            .from(schema.protocolTransactionTypeMappings)
+            .where(
+              and(
+                eq(schema.protocolTransactionTypeMappings.candidateId, candidateId),
+                eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
+              )
+            )
+            .pipe(wrapSyncEngineSqlError(operation))
+          const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
+          const hasApprovedSubjectCoverage = subjectIdentifiersToReview.every((subjectIdentifier) =>
+            approvedSubjectIdentifiers.has(subjectIdentifier)
+          )
+          const nextCandidateStatus =
+            !hasPendingLinkedMappings && hasApprovedSubjectCoverage ? "approved" : "pending_review"
+
+          yield* tx
+            .update(schema.protocolCandidates)
+            .set({
+              mappingStatus: nextCandidateStatus,
+              updatedAt,
+            })
+            .where(eq(schema.protocolCandidates.id, candidateId))
+            .pipe(wrapSyncEngineSqlError(operation))
+        })
+  }
 
   const createPendingMappingFromCandidate: ProtocolTransactionTypeMappingRepositoryShape["createPendingMappingFromCandidate"] =
     (params) => {
@@ -287,7 +355,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             yield* validatePendingMapping(operation, params)
 
-            const [candidate] = yield* tx
+            const [candidateRow] = yield* tx
               .select({
                 id: schema.protocolCandidates.id,
                 blockchainId: schema.protocolCandidates.blockchainId,
@@ -299,30 +367,32 @@ const make = Effect.gen(function* () {
               .limit(1)
               .pipe(wrapSyncEngineSqlError(operation))
 
-            if (candidate === undefined) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  candidateId: params.candidateId,
-                  message: "Failed to resolve protocol candidate.",
-                })
-              )
-            }
+            const candidate = yield* requireRow({
+              row: candidateRow,
+              operation,
+              cause: {
+                candidateId: params.candidateId,
+                message: "Failed to resolve protocol candidate.",
+              },
+            })
 
             const observationRows = yield* tx
               .select({
-                rawPayload: schema.protocolCandidateObservations.rawPayload,
+                relatedSubjectIdentifiers:
+                  schema.protocolCandidateObservations.relatedSubjectIdentifiers,
               })
               .from(schema.protocolCandidateObservations)
               .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
               .pipe(wrapSyncEngineSqlError(operation))
-            const allowedProgramIds = yield* allowedProgramIdsForCandidate({
-              operation,
+            const allowedSubjectIdentifiers = allowedSubjectIdentifiersForCandidate({
               candidate,
-              rawPayloads: observationRows.map((row) => row.rawPayload),
+              relatedSubjectIdentifierGroups: observationRows.map(
+                (row) => row.relatedSubjectIdentifiers
+              ),
             })
             const subjectIdentifier = params.subjectIdentifier.trim()
 
-            if (!allowedProgramIds.includes(subjectIdentifier)) {
+            if (!allowedSubjectIdentifiers.includes(subjectIdentifier)) {
               return yield* Effect.fail(
                 storageError(operation, {
                   candidateId: params.candidateId,
@@ -364,11 +434,13 @@ const make = Effect.gen(function* () {
               .where(eq(schema.protocolCandidates.id, candidate.id))
               .pipe(wrapSyncEngineSqlError(operation))
 
-            return mapping === undefined
-              ? yield* Effect.fail(
-                  storageError(operation, { message: "Failed to create protocol mapping." })
-                )
-              : toPersistedMapping(mapping)
+            return toPersistedMapping(
+              yield* requireRow({
+                row: mapping,
+                operation,
+                cause: { message: "Failed to create protocol mapping." },
+              })
+            )
           })
         )
         .pipe(wrapSyncEngineStorageError(operation))
@@ -382,7 +454,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* validateEvidence(operation, params)
 
-          const [mapping] = yield* tx
+          const [mappingRow] = yield* tx
             .select({
               candidateId: schema.protocolTransactionTypeMappings.candidateId,
             })
@@ -391,17 +463,17 @@ const make = Effect.gen(function* () {
             .limit(1)
             .pipe(wrapSyncEngineSqlError(operation))
 
-          if (mapping === undefined) {
-            return yield* Effect.fail(
-              storageError(operation, {
-                mappingId: params.mappingId,
-                message: "Failed to resolve protocol mapping.",
-              })
-            )
-          }
+          const mapping = yield* requireRow({
+            row: mappingRow,
+            operation,
+            cause: {
+              mappingId: params.mappingId,
+              message: "Failed to resolve protocol mapping.",
+            },
+          })
 
           if (params.candidateObservationId !== null) {
-            const [observation] = yield* tx
+            const [observationRow] = yield* tx
               .select({
                 candidateId: schema.protocolCandidateObservations.candidateId,
               })
@@ -410,14 +482,14 @@ const make = Effect.gen(function* () {
               .limit(1)
               .pipe(wrapSyncEngineSqlError(operation))
 
-            if (observation === undefined) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  candidateObservationId: params.candidateObservationId,
-                  message: "Failed to resolve protocol candidate observation.",
-                })
-              )
-            }
+            const observation = yield* requireRow({
+              row: observationRow,
+              operation,
+              cause: {
+                candidateObservationId: params.candidateObservationId,
+                message: "Failed to resolve protocol candidate observation.",
+              },
+            })
 
             if (mapping.candidateId === null || mapping.candidateId !== observation.candidateId) {
               return yield* Effect.fail(
@@ -444,11 +516,13 @@ const make = Effect.gen(function* () {
             .returning()
             .pipe(wrapSyncEngineSqlError(operation))
 
-          return evidence === undefined
-            ? yield* Effect.fail(
-                storageError(operation, { message: "Failed to create protocol mapping evidence." })
-              )
-            : toPersistedEvidence(evidence)
+          return toPersistedEvidence(
+            yield* requireRow({
+              row: evidence,
+              operation,
+              cause: { message: "Failed to create protocol mapping evidence." },
+            })
+          )
         })
       )
       .pipe(wrapSyncEngineStorageError(operation))
@@ -480,14 +554,14 @@ const make = Effect.gen(function* () {
             .limit(1)
             .pipe(wrapSyncEngineSqlError(operation))
 
-          if (transactionType === undefined) {
-            return yield* Effect.fail(
-              storageError(operation, {
-                transactionTypeKey: params.transactionTypeKey,
-                message: "Cannot approve protocol mapping with an unknown transaction type.",
-              })
-            )
-          }
+          yield* requireRow({
+            row: transactionType,
+            operation,
+            cause: {
+              transactionTypeKey: params.transactionTypeKey,
+              message: "Cannot approve protocol mapping with an unknown transaction type.",
+            },
+          })
 
           const [evidenceCount] = yield* tx
             .select({ value: count(schema.protocolMappingEvidence.id) })
@@ -522,103 +596,23 @@ const make = Effect.gen(function* () {
             .returning()
             .pipe(wrapSyncEngineSqlError(operation))
 
-          if (mapping === undefined) {
-            return yield* Effect.fail(
-              storageError(operation, {
-                mappingId: params.mappingId,
-                message: "Failed to approve pending protocol mapping.",
-              })
-            )
-          }
+          const approvedMapping = yield* requireRow({
+            row: mapping,
+            operation,
+            cause: {
+              mappingId: params.mappingId,
+              message: "Failed to approve pending protocol mapping.",
+            },
+          })
 
-          if (mapping.candidateId !== null) {
-            const [candidate] = yield* tx
-              .select({
-                subjectKind: schema.protocolCandidates.subjectKind,
-                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
-              })
-              .from(schema.protocolCandidates)
-              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
-              .limit(1)
-              .pipe(wrapSyncEngineSqlError(operation))
+          yield* updateLinkedCandidateMappingStatus({
+            tx,
+            operation,
+            mapping: approvedMapping,
+            updatedAt: now,
+          })
 
-            if (candidate === undefined) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  candidateId: mapping.candidateId,
-                  message: "Failed to resolve protocol candidate.",
-                })
-              )
-            }
-
-            const observationRows = yield* tx
-              .select({
-                rawPayload: schema.protocolCandidateObservations.rawPayload,
-              })
-              .from(schema.protocolCandidateObservations)
-              .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
-              .pipe(wrapSyncEngineSqlError(operation))
-
-            const subjectIdentifiersToReview = yield* requiredProgramIdsForRuntimeCoverage({
-              operation,
-              candidate,
-              rawPayloads: observationRows.map((row) => row.rawPayload),
-              fallbackProgramId: mapping.subjectIdentifier,
-            })
-
-            const approvedMappingRows = yield* tx
-              .select({
-                subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
-              })
-              .from(schema.protocolTransactionTypeMappings)
-              .where(
-                and(
-                  eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
-                  inArray(
-                    schema.protocolTransactionTypeMappings.subjectIdentifier,
-                    subjectIdentifiersToReview
-                  ),
-                  eq(
-                    schema.protocolTransactionTypeMappings.movementPattern,
-                    mapping.movementPattern
-                  ),
-                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
-                )
-              )
-              .pipe(wrapSyncEngineSqlError(operation))
-            const approvedProgramIds = new Set(
-              approvedMappingRows.map((row) => row.subjectIdentifier)
-            )
-            const [pendingMappingCount] = yield* tx
-              .select({ value: count(schema.protocolTransactionTypeMappings.id) })
-              .from(schema.protocolTransactionTypeMappings)
-              .where(
-                and(
-                  eq(schema.protocolTransactionTypeMappings.candidateId, mapping.candidateId),
-                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
-                )
-              )
-              .pipe(wrapSyncEngineSqlError(operation))
-            const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
-            const hasApprovedRuntimeCoverage = subjectIdentifiersToReview.every(
-              (subjectIdentifier) => approvedProgramIds.has(subjectIdentifier)
-            )
-            const nextCandidateStatus =
-              !hasPendingLinkedMappings && hasApprovedRuntimeCoverage
-                ? "approved"
-                : "pending_review"
-
-            yield* tx
-              .update(schema.protocolCandidates)
-              .set({
-                mappingStatus: nextCandidateStatus,
-                updatedAt: now,
-              })
-              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
-              .pipe(wrapSyncEngineSqlError(operation))
-          }
-
-          return toPersistedMapping(mapping)
+          return toPersistedMapping(approvedMapping)
         })
       )
       .pipe(wrapSyncEngineStorageError(operation))
@@ -638,12 +632,13 @@ const make = Effect.gen(function* () {
             value: params.mappingId,
           })
 
+          const now = nowDate()
           const [mapping] = yield* tx
             .update(schema.protocolTransactionTypeMappings)
             .set({
               mappingStatus: "rejected",
               reviewerNotes: params.reviewerNotes,
-              updatedAt: nowDate(),
+              updatedAt: now,
             })
             .where(
               and(
@@ -654,103 +649,23 @@ const make = Effect.gen(function* () {
             .returning()
             .pipe(wrapSyncEngineSqlError(operation))
 
-          if (mapping === undefined) {
-            return yield* Effect.fail(
-              storageError(operation, {
-                mappingId: params.mappingId,
-                message: "Failed to reject pending protocol mapping.",
-              })
-            )
-          }
+          const rejectedMapping = yield* requireRow({
+            row: mapping,
+            operation,
+            cause: {
+              mappingId: params.mappingId,
+              message: "Failed to reject pending protocol mapping.",
+            },
+          })
 
-          if (mapping.candidateId !== null) {
-            const now = nowDate()
-            const [candidate] = yield* tx
-              .select({
-                subjectKind: schema.protocolCandidates.subjectKind,
-                subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
-              })
-              .from(schema.protocolCandidates)
-              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
-              .limit(1)
-              .pipe(wrapSyncEngineSqlError(operation))
+          yield* updateLinkedCandidateMappingStatus({
+            tx,
+            operation,
+            mapping: rejectedMapping,
+            updatedAt: now,
+          })
 
-            if (candidate === undefined) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  candidateId: mapping.candidateId,
-                  message: "Failed to resolve protocol candidate.",
-                })
-              )
-            }
-
-            const observationRows = yield* tx
-              .select({
-                rawPayload: schema.protocolCandidateObservations.rawPayload,
-              })
-              .from(schema.protocolCandidateObservations)
-              .where(eq(schema.protocolCandidateObservations.candidateId, mapping.candidateId))
-              .pipe(wrapSyncEngineSqlError(operation))
-            const subjectIdentifiersToReview = yield* requiredProgramIdsForRuntimeCoverage({
-              operation,
-              candidate,
-              rawPayloads: observationRows.map((row) => row.rawPayload),
-              fallbackProgramId: mapping.subjectIdentifier,
-            })
-
-            const approvedMappingRows = yield* tx
-              .select({
-                subjectIdentifier: schema.protocolTransactionTypeMappings.subjectIdentifier,
-              })
-              .from(schema.protocolTransactionTypeMappings)
-              .where(
-                and(
-                  eq(schema.protocolTransactionTypeMappings.blockchainId, mapping.blockchainId),
-                  inArray(
-                    schema.protocolTransactionTypeMappings.subjectIdentifier,
-                    subjectIdentifiersToReview
-                  ),
-                  eq(
-                    schema.protocolTransactionTypeMappings.movementPattern,
-                    mapping.movementPattern
-                  ),
-                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
-                )
-              )
-              .pipe(wrapSyncEngineSqlError(operation))
-            const approvedProgramIds = new Set(
-              approvedMappingRows.map((row) => row.subjectIdentifier)
-            )
-            const [pendingMappingCount] = yield* tx
-              .select({ value: count(schema.protocolTransactionTypeMappings.id) })
-              .from(schema.protocolTransactionTypeMappings)
-              .where(
-                and(
-                  eq(schema.protocolTransactionTypeMappings.candidateId, mapping.candidateId),
-                  eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
-                )
-              )
-              .pipe(wrapSyncEngineSqlError(operation))
-            const hasPendingLinkedMappings = (pendingMappingCount?.value ?? 0) > 0
-            const hasApprovedRuntimeCoverage = subjectIdentifiersToReview.every(
-              (subjectIdentifier) => approvedProgramIds.has(subjectIdentifier)
-            )
-            const nextCandidateStatus =
-              !hasPendingLinkedMappings && hasApprovedRuntimeCoverage
-                ? "approved"
-                : "pending_review"
-
-            yield* tx
-              .update(schema.protocolCandidates)
-              .set({
-                mappingStatus: nextCandidateStatus,
-                updatedAt: now,
-              })
-              .where(eq(schema.protocolCandidates.id, mapping.candidateId))
-              .pipe(wrapSyncEngineSqlError(operation))
-          }
-
-          return toPersistedMapping(mapping)
+          return toPersistedMapping(rejectedMapping)
         })
       )
       .pipe(wrapSyncEngineStorageError(operation))

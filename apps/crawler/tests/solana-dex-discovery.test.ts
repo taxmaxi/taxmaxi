@@ -675,7 +675,7 @@ describe("solana dex discovery", () => {
         subjectIdentifier: observation.subjectIdentifier,
         protocolNameHint: observation.protocolNameHint,
         categoryHint: observation.categoryHint,
-        canonicalProgramIds: observation.rawPayload.canonicalProgramIds,
+        relatedSubjectIdentifiers: observation.relatedSubjectIdentifiers,
       }))
     ).toEqual([
       {
@@ -683,21 +683,21 @@ describe("solana dex discovery", () => {
         subjectIdentifier: "raydium",
         protocolNameHint: "raydium",
         categoryHint: "swap",
-        canonicalProgramIds: [RAYDIUM_AMM_PROGRAM, RAYDIUM_CLMM_PROGRAM],
+        relatedSubjectIdentifiers: [RAYDIUM_AMM_PROGRAM, RAYDIUM_CLMM_PROGRAM],
       },
       {
         subjectKind: "protocol",
         subjectIdentifier: "orca",
         protocolNameHint: "orca",
         categoryHint: "swap",
-        canonicalProgramIds: [ORCA_WHIRLPOOL_PROGRAM],
+        relatedSubjectIdentifiers: [ORCA_WHIRLPOOL_PROGRAM],
       },
       {
         subjectKind: "protocol",
         subjectIdentifier: "phoenix",
         protocolNameHint: "phoenix",
         categoryHint: "swap",
-        canonicalProgramIds: [PHOENIX_PROGRAM],
+        relatedSubjectIdentifiers: [PHOENIX_PROGRAM],
       },
     ])
     expect(importedObservations[0]?.subjectKind).toBe("protocol")

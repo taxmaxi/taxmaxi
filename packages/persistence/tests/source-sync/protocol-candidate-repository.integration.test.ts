@@ -62,6 +62,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
               interactionCount: 1_000,
               transactionCount: 800,
               uniqueActorCount: 250,
+              relatedSubjectIdentifiers: [],
               sampleTransactionHashes: ["signature-1", "signature-2"],
               retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
               rawPayload: { program_id: "dune-program-1", trade_rows: 1_000 },
@@ -104,6 +105,8 @@ describe("ProtocolCandidateRepositoryLive", () => {
                   interactionCount: schema.protocolCandidateObservations.interactionCount,
                   transactionCount: schema.protocolCandidateObservations.transactionCount,
                   uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  relatedSubjectIdentifiers:
+                    schema.protocolCandidateObservations.relatedSubjectIdentifiers,
                   sampleTransactionHashes:
                     schema.protocolCandidateObservations.sampleTransactionHashes,
                 })
@@ -237,6 +240,8 @@ describe("ProtocolCandidateRepositoryLive", () => {
                   interactionCount: schema.protocolCandidateObservations.interactionCount,
                   transactionCount: schema.protocolCandidateObservations.transactionCount,
                   uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+                  relatedSubjectIdentifiers:
+                    schema.protocolCandidateObservations.relatedSubjectIdentifiers,
                   sampleTransactionHashes:
                     schema.protocolCandidateObservations.sampleTransactionHashes,
                   retrievedAt: schema.protocolCandidateObservations.retrievedAt,
@@ -278,6 +283,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: "12345",
       transactionCount: "789",
       uniqueActorCount: "456",
+      relatedSubjectIdentifiers: ["dex-only-program"],
       sampleTransactionHashes: ["sample-signature-1", "sample-signature-2"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
     })
@@ -318,6 +324,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: 100,
       transactionCount: 80,
       uniqueActorCount: 25,
+      relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       rawPayload: { program_id: "dune-program-2", trade_rows: 100 },
@@ -437,6 +444,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: 100,
       transactionCount: 80,
       uniqueActorCount: 20,
+      relatedSubjectIdentifiers: ["reopen-import-program-a"],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       rawPayload: {
@@ -505,6 +513,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
               interactionCount: 250,
               transactionCount: 200,
               uniqueActorCount: 90,
+              relatedSubjectIdentifiers: ["reopen-import-program-a", "reopen-import-program-b"],
               sampleTransactionHashes: ["signature-b"],
               retrievedAt: new Date("2026-06-02T10:00:00.000Z"),
               rawPayload: {
@@ -543,6 +552,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       observedWindowEnd: new Date("2024-01-08T00:00:00.000Z"),
       transactionCount: 80,
       uniqueActorCount: 25,
+      relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       sourceMetadata: {
@@ -620,6 +630,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
       interactionCount: 100,
       transactionCount: 80,
       uniqueActorCount: 25,
+      relatedSubjectIdentifiers: [],
       sampleTransactionHashes: ["signature-a"],
       retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
       rawPayload: { project: "old-dex" },
@@ -701,6 +712,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 interactionCount: 10,
                 transactionCount: null,
                 uniqueActorCount: null,
+                relatedSubjectIdentifiers: [],
                 sampleTransactionHashes: [],
                 retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
                 rawPayload: { program_id: "valid-program" },
@@ -723,6 +735,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
                 interactionCount: -1,
                 transactionCount: null,
                 uniqueActorCount: null,
+                relatedSubjectIdentifiers: [],
                 sampleTransactionHashes: [],
                 retrievedAt: new Date("2026-06-01T10:00:00.000Z"),
                 rawPayload: { program_id: "invalid-program" },

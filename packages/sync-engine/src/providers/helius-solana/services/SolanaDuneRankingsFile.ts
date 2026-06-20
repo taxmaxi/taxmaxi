@@ -219,6 +219,7 @@ const observationFromEntry = ({
       interactionCount: entry.invocationCount,
       transactionCount: entry.transactionCount,
       uniqueActorCount: entry.uniqueSignerCount,
+      relatedSubjectIdentifiers: [...entry.canonicalProgramIds],
       sampleTransactionHashes: [...entry.sampleSignatures],
       retrievedAt,
       rawPayload: rawPayloadFromEntry(entry),
