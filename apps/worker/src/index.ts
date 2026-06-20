@@ -3,7 +3,7 @@ import { Layer } from "effect"
 import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   SourceSyncJobExecutorLive,
-  SourceSyncProviderLive,
+  SourceProviderRegistryLive,
   TransferReconciliationServiceLive,
 } from "@my/sync-engine/layers"
 import {
@@ -14,6 +14,7 @@ import {
   CoinbaseSourceSyncProviderLive,
   CoinbaseSyncClientLive,
 } from "@my/sync-engine/providers/coinbase/layers"
+import { HeliusSolanaSourceSyncProviderLive } from "@my/sync-engine/providers/helius-solana/layers"
 import { WorkerBullMqSourceSyncConsumerLive } from "./layers/WorkerBullMqSourceSyncConsumerLive.ts"
 import { WorkerHealthServerLive } from "./layers/WorkerHealthServerLive.ts"
 import { WorkerSourceSyncStartupRepairLive } from "./layers/WorkerSourceSyncStartupRepairLive.ts"
@@ -37,8 +38,9 @@ const CoinbaseSourceSyncProviderRuntimeLive = CoinbaseSourceSyncProviderLive.pip
   Layer.provide(RepositoriesLive)
 )
 
-const SourceSyncProviderRuntimeLive = SourceSyncProviderLive.pipe(
-  Layer.provide(CoinbaseSourceSyncProviderRuntimeLive)
+const SourceProviderRegistryRuntimeLive = SourceProviderRegistryLive.pipe(
+  Layer.provide(CoinbaseSourceSyncProviderRuntimeLive),
+  Layer.provide(HeliusSolanaSourceSyncProviderLive)
 )
 
 const TransferReconciliationRuntimeLive = TransferReconciliationServiceLive.pipe(
@@ -47,8 +49,7 @@ const TransferReconciliationRuntimeLive = TransferReconciliationServiceLive.pipe
 
 const SourceSyncJobExecutorRuntimeLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationRuntimeLive),
-  Layer.provide(SourceSyncProviderRuntimeLive),
-  Layer.provide(CoinbaseSourceSyncProviderRuntimeLive),
+  Layer.provide(SourceProviderRegistryRuntimeLive),
   Layer.provide(RepositoriesLive)
 )
 

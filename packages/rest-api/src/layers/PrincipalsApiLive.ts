@@ -25,6 +25,7 @@ import {
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { claimTokenPepperConfig, hashAnonymousSourceClaimToken } from "../helpers/ClaimTokenHash.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
+import { SIWXProofVerificationError, SIWXProofVerifier } from "../services/SIWXProofVerifier.ts"
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -62,6 +63,9 @@ const loadClaimTokenPepper = Effect.gen(function* () {
   return pepper
 })
 
+const mapSiwxVerificationError = (error: SIWXProofVerificationError) =>
+  new PrincipalClaimBadRequestError({ message: error.message })
+
 /**
  * PrincipalsApiLive - Group implementation for principal endpoints.
  */
@@ -69,6 +73,7 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
   Effect.gen(function* () {
     const principalClaimRepository = yield* PrincipalClaimRepository
     const principalResolutionService = yield* PrincipalResolutionService
+    const siwxProofVerifier = yield* SIWXProofVerifier
 
     return handlers.handle("claimPrincipal", ({ payload }) =>
       Effect.gen(function* () {
@@ -77,35 +82,97 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
             Effect.mapError((error) => toInternalServerError(error.message))
           )
 
-        const pepper = yield* loadClaimTokenPepper
-        const claimValueHash = hashAnonymousSourceClaimToken({
-          claimToken: payload.claimToken,
-          pepper,
-        })
+        if (payload.claimToken === null && payload.siwxProof === null) {
+          return yield* Effect.fail(
+            new PrincipalClaimBadRequestError({
+              message: "Either claimToken or siwxProof is required.",
+            })
+          )
+        }
+
+        if (payload.claimToken !== null && payload.siwxProof !== null) {
+          return yield* Effect.fail(
+            new PrincipalClaimBadRequestError({
+              message: "Provide either claimToken or siwxProof, not both.",
+            })
+          )
+        }
+
+        if (payload.claimToken !== null) {
+          const pepper = yield* loadClaimTokenPepper
+          const claimValueHash = hashAnonymousSourceClaimToken({
+            claimToken: payload.claimToken,
+            pepper,
+          })
+
+          const maybeClaim = yield* principalClaimRepository
+            .findValidAnonymousSourceClaim({
+              requestId: payload.requestId,
+              claimValueHash,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to validate claim token.")))
+
+          if (Option.isNone(maybeClaim)) {
+            return yield* Effect.fail(
+              new PrincipalClaimNotFoundError({ message: "Valid claim token not found." })
+            )
+          }
+
+          if (maybeClaim.value.sourceId === null) {
+            return yield* Effect.fail(
+              new PrincipalClaimBadRequestError({ message: "Claim token is not source-bound." })
+            )
+          }
+
+          const claimedSourceId = yield* principalClaimRepository
+            .claimAnonymousSourceForUser({
+              requestId: payload.requestId,
+              claimValueHash,
+              anonymousPrincipalId: maybeClaim.value.principalId,
+              userPrincipalId: currentUserPrincipal.principal.id,
+              sourceId: maybeClaim.value.sourceId,
+            })
+            .pipe(Effect.mapError(mapClaimTransferError))
+
+          return PrincipalClaimResponse.make({
+            sourceId: claimedSourceId,
+          })
+        }
+
+        const verified = yield* siwxProofVerifier
+          .verify({
+            proof: payload.siwxProof,
+            expectedNonce: payload.requestId,
+          })
+          .pipe(Effect.mapError(mapSiwxVerificationError))
 
         const maybeClaim = yield* principalClaimRepository
-          .findValidAnonymousSourceClaim({
+          .findValidSiwxSourceClaim({
             requestId: payload.requestId,
-            claimValueHash,
+            payerChainType: verified.chainType,
+            payerWalletAddress: verified.walletAddress,
           })
-          .pipe(Effect.mapError(() => toInternalServerError("Failed to validate claim token.")))
+          .pipe(
+            Effect.mapError(() => toInternalServerError("Failed to validate payer entitlement."))
+          )
 
         if (Option.isNone(maybeClaim)) {
           return yield* Effect.fail(
-            new PrincipalClaimNotFoundError({ message: "Valid claim token not found." })
+            new PrincipalClaimNotFoundError({ message: "Valid payer entitlement not found." })
           )
         }
 
         if (maybeClaim.value.sourceId === null) {
           return yield* Effect.fail(
-            new PrincipalClaimBadRequestError({ message: "Claim token is not source-bound." })
+            new PrincipalClaimBadRequestError({ message: "Payer entitlement is not source-bound." })
           )
         }
 
         const claimedSourceId = yield* principalClaimRepository
-          .claimAnonymousSourceForUser({
+          .claimAnonymousSourceForUserByPayer({
             requestId: payload.requestId,
-            claimValueHash,
+            payerChainType: verified.chainType,
+            payerWalletAddress: verified.walletAddress,
             anonymousPrincipalId: maybeClaim.value.principalId,
             userPrincipalId: currentUserPrincipal.principal.id,
             sourceId: maybeClaim.value.sourceId,

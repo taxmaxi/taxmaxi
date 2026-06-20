@@ -4,10 +4,13 @@ import {
   DEFAULT_BASE_URL,
   TaxMaxi,
   TaxMaxiError,
+  isTaxMaxiUnauthorizedError,
   makeTaxMaxiHttpClientTransform,
   normalizeBaseUrl,
+  toTaxMaxiError,
   type TaxMaxiHeaders,
 } from "../src/index.ts"
+import { TaxMaxiInternal } from "../src/internal.ts"
 
 type FetchInput = Parameters<typeof globalThis.fetch>[0]
 type FetchInit = NonNullable<Parameters<typeof globalThis.fetch>[1]>
@@ -33,7 +36,7 @@ const sourceCreateResponseBody = JSON.stringify({
     id: "00000000-0000-4000-8000-000000000001",
     principalId: "00000000-0000-4000-8000-000000000002",
     name: "Demo Solana wallet",
-    providerKey: "solana",
+    providerKey: "helius-solana",
     sourceRef: {
       _tag: "onchain",
       addressId: "00000000-0000-4000-8000-000000000003",
@@ -50,6 +53,148 @@ const sourceCreateResponseBody = JSON.stringify({
     expiresAt: "2026-01-01T00:00:00.000Z",
   },
 })
+
+const sourceResponse = {
+  id: "00000000-0000-4000-8000-000000000001",
+  principalId: "00000000-0000-4000-8000-000000000002",
+  name: "Demo Solana wallet",
+  providerKey: "helius-solana",
+  sourceRef: {
+    _tag: "onchain",
+    addressId: "00000000-0000-4000-8000-000000000003",
+  },
+  createdAt: {
+    epochMillis: 1_767_225_600_000,
+  },
+} as const
+
+const sourceOverviewResponseBody = JSON.stringify({
+  source: sourceResponse,
+  latestSync: {
+    status: null,
+    mode: null,
+    queuedAt: null,
+    startedAt: null,
+    completedAt: null,
+    lastSyncedAt: null,
+    lastErrorMessage: null,
+    importedRecords: null,
+    normalizedRecords: null,
+    failedRecords: null,
+  },
+  totals: {
+    transactionCount: 0,
+    legCount: 0,
+    assetCount: 0,
+    fifoLotCount: 0,
+    disposalCount: 0,
+    incomeCount: 0,
+    feeCount: 0,
+    realizedGainLoss: "0",
+    incomeTotal: "0",
+    currency: null,
+  },
+  review: {
+    status: "ok",
+    needsReviewCount: 0,
+    blockingIssueCount: 0,
+    issues: [],
+  },
+})
+
+const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })
+const emptyProviderAssetReviewsResponseBody = JSON.stringify({
+  providerAssets: [],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
+})
+const assetCanonicalizationResponseBody = JSON.stringify({
+  providerAsset: {
+    id: "00000000-0000-4000-8000-000000000009",
+    provider: "coinbase",
+    providerAssetId: "63062039-7afb-56ff-8e19-5e3215dc404a",
+    naturalKey: null,
+    currencyCode: "ADA",
+    name: "Cardano",
+    exponent: 6,
+    providerType: "crypto",
+    mappingKind: "asset",
+    canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+    canonicalAssetSymbol: "ADA",
+    canonicalFiatCurrency: null,
+    mappingStatus: "approved",
+    reviewerNotes: "Looks correct.",
+    sourceNotes: "Approved with CoinGecko asset/platform metadata.",
+  },
+  canonicalAsset: {
+    id: "00000000-0000-4000-8000-000000000010",
+    blockchainId: "00000000-0000-4000-8000-000000000011",
+    blockchainName: "cardano",
+    name: "Cardano",
+    symbol: "ADA",
+    decimals: 6,
+    contractAddress: null,
+    type: "native",
+  },
+  evidence: {
+    source: "coingecko",
+    coinId: "cardano",
+    coinName: "Cardano",
+    coinSymbol: "ADA",
+    platformId: "cardano",
+    platformName: "Cardano",
+    contractAddress: null,
+  },
+})
+const emptySourceTransactionsResponseBody = JSON.stringify({
+  transactions: [],
+  page: { nextCursor: null, hasMore: false },
+})
+const emptySourceTaxEventsResponseBody = JSON.stringify({
+  taxEvents: [],
+  page: { nextCursor: null, hasMore: false },
+})
+const emptySourceFifoLotsResponseBody = JSON.stringify({
+  fifoLots: [],
+  page: { nextCursor: null, hasMore: false },
+})
+const sourceDisposalExplanationResponseBody = JSON.stringify({
+  disposalLegId: "00000000-0000-4000-8000-000000000006",
+  transactionId: "00000000-0000-4000-8000-000000000007",
+  asset: {
+    assetId: "00000000-0000-4000-8000-000000000008",
+    symbol: "BTC",
+    name: "Bitcoin",
+  },
+  amount: "0.1",
+  proceeds: "500",
+  costBasis: "500",
+  gainLoss: "0",
+  acquiredAt: "2025-01-01T00:00:00.000Z",
+  disposedAt: "2025-02-01T00:00:00.000Z",
+  taxableTreatment: "non_taxable",
+  provenance: "deterministic",
+  derivationRule: "internal_transfer_out",
+  matchedLots: [],
+})
+
+const anonSourceJobResponse = {
+  sourceId: "00000000-0000-4000-8000-000000000001",
+  jobId: "00000000-0000-4000-8000-000000000005",
+  status: "queued",
+  importedRecords: null,
+  normalizedRecords: null,
+  failedRecords: null,
+  message: null,
+}
+
+const anonSourceJobsResponseBody = JSON.stringify({
+  jobs: [anonSourceJobResponse],
+})
+
+const anonSourceJobResponseBody = JSON.stringify(anonSourceJobResponse)
 
 const toHeaderRecord = (headers: FetchInit["headers"]): TaxMaxiHeaders => {
   const record: Record<string, string> = {}
@@ -232,7 +377,7 @@ describe("TaxMaxi Promise client", () => {
       created: true,
       source: {
         name: "Demo Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       },
     })
 
@@ -240,6 +385,175 @@ describe("TaxMaxi Promise client", () => {
       expect.objectContaining({
         credentials: "include",
         url: "https://sdk.example.test/v1/sources",
+      }),
+    ])
+  })
+
+  it("plumbs anonymous source sync-status methods through browser sessions", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const responseBodies = [anonSourceJobsResponseBody, anonSourceJobResponseBody]
+    const taxmaxi = TaxMaxi.fromBrowserSession({
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? anonSourceJobResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(
+      taxmaxi.anon.sources.listJobs({
+        sourceId: anonSourceJobResponse.sourceId,
+      })
+    ).resolves.toEqual({
+      jobs: [anonSourceJobResponse],
+    })
+    await expect(
+      taxmaxi.anon.sources.getJob({
+        sourceId: anonSourceJobResponse.sourceId,
+        jobId: anonSourceJobResponse.jobId,
+      })
+    ).resolves.toEqual(anonSourceJobResponse)
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        credentials: "include",
+        url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs",
+      }),
+      expect.objectContaining({
+        credentials: "include",
+        url: "https://sdk.example.test/v1/anon/sources/00000000-0000-4000-8000-000000000001/jobs/00000000-0000-4000-8000-000000000005",
+      }),
+    ])
+  })
+
+  it("plumbs source report endpoints through the public sources resource", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const sourceId = "00000000-0000-4000-8000-000000000001"
+    const legId = "00000000-0000-4000-8000-000000000006"
+    const responseBodies = [
+      sourceOverviewResponseBody,
+      emptySourceAssetPnlResponseBody,
+      emptySourceTransactionsResponseBody,
+      emptySourceTaxEventsResponseBody,
+      emptySourceFifoLotsResponseBody,
+      sourceDisposalExplanationResponseBody,
+    ]
+    const taxmaxi = new TaxMaxi({
+      apiKey: "tm_report",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? emptySourceAssetPnlResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    await taxmaxi.sources.getOverview({ sourceId })
+    await taxmaxi.sources.listAssetPnl({ sourceId })
+    await taxmaxi.sources.listTransactions({ sourceId, limit: 25 })
+    await taxmaxi.sources.listTaxEvents({ sourceId, cursor: "cursor-value", limit: 10 })
+    await taxmaxi.sources.listFifoLots({ sourceId })
+    await taxmaxi.sources.explainDisposal({ sourceId, legId })
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/overview",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/assets/pnl",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/transactions?limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/tax-events?cursor=cursor-value&limit=10",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/fifo-lots",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
+      }),
+    ])
+  })
+
+  it("plumbs asset review endpoints through the internal assets resource", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const providerAssetId = "00000000-0000-4000-8000-000000000009"
+    const responseBodies = [
+      emptyProviderAssetReviewsResponseBody,
+      assetCanonicalizationResponseBody,
+    ]
+    const taxmaxi = new TaxMaxiInternal({
+      apiKey: "tm_assets",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? emptyProviderAssetReviewsResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(
+      taxmaxi.assets.listProviderAssetReviews({
+        provider: "coinbase",
+        status: "pending_review",
+        cursor: "00000000-0000-4000-8000-000000000008",
+        limit: 25,
+      })
+    ).resolves.toEqual({
+      providerAssets: [],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    })
+    await expect(
+      taxmaxi.assets.canonicalizeProviderAsset({
+        id: providerAssetId,
+        reviewerNotes: "Looks correct.",
+      })
+    ).resolves.toMatchObject({
+      providerAsset: {
+        canonicalAssetSymbol: "ADA",
+        mappingStatus: "approved",
+      },
+    })
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
       }),
     ])
   })
@@ -301,6 +615,29 @@ describe("TaxMaxi Promise client", () => {
     }
 
     expect.unreachable("Expected TaxMaxiError")
+  })
+
+  it("preserves UnauthorizedError status when Effect wraps the API error code", () => {
+    const error = toTaxMaxiError({
+      _tag: "(FiberFailure) UnauthorizedError",
+      message: "Anon session required.",
+    })
+
+    expect(error).toBeInstanceOf(TaxMaxiError)
+    expect(error.code).toBe("(FiberFailure) UnauthorizedError")
+    expect(error.message).toBe("Anon session required.")
+    expect(error.status).toBe(401)
+    expect(isTaxMaxiUnauthorizedError(error)).toBe(true)
+  })
+
+  it("recognizes wrapped UnauthorizedError codes even if status was mis-normalized", () => {
+    const error = new TaxMaxiError({
+      code: "(FiberFailure) UnauthorizedError",
+      message: "Anon session required.",
+      status: 500,
+    })
+
+    expect(isTaxMaxiUnauthorizedError(error)).toBe(true)
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {

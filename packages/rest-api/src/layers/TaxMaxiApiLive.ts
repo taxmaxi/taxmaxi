@@ -17,11 +17,14 @@ import type {
   PrincipalRepository,
   SessionRepository,
   SourceRepository as PersistenceSourceRepository,
+  SourceReportRepository,
   TaxCalculationService,
   UserRepository,
 } from "@my/persistence/services"
 import type {
   SourceRepository as SyncEngineSourceRepository,
+  AssetRepository,
+  ProviderAssetRepository,
   SourceSyncRunService,
   SourceSyncService,
   TransferReconciliationService,
@@ -32,14 +35,23 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { TaxMaxiApi, HealthCheckResponse } from "../definitions/TaxMaxiApi.ts"
 import { TokenValidator } from "../definitions/AuthMiddleware.ts"
-import { AuthMiddlewareLive, OptionalCurrentUserLive } from "./AuthMiddlewareLive.ts"
+import {
+  AdminAuthMiddlewareLive,
+  AuthMiddlewareLive,
+  OptionalCurrentUserLive,
+} from "./AuthMiddlewareLive.ts"
 import { AuthApiLive, AuthSessionApiLive, CoinbaseCompatApiLive } from "./AuthApiLive.ts"
+import { AnonApiLive } from "./AnonApiLive.ts"
 import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
 import { PrincipalResolutionServiceLive } from "./PrincipalResolutionServiceLive.ts"
 import { PrincipalsApiLive } from "./PrincipalsApiLive.ts"
+import { AssetsApiLive } from "./AssetsApiLive.ts"
+import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationServiceLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
+import type { SIWXProofVerifier } from "../services/SIWXProofVerifier.ts"
+import type { AnonSessionService } from "../services/AnonSessionService.ts"
 
 // =============================================================================
 // Health API Implementation
@@ -77,13 +89,16 @@ const CoreApiGroup = Layer.mergeAll(
   CoinbaseCompatApiLive,
   AuthSessionApiLive,
   LegalReferenceApiLive,
+  AnonApiLive,
   PrincipalsApiLive,
+  AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive
 ).pipe(Layer.provide(PrincipalResolutionServiceLive))
 
 type TaxMaxiApiLiveContext =
   | AuthService
+  | AnonSessionService
   | CexAccountRepository
   | IdentityRepository
   | LegalReferenceRepository
@@ -93,6 +108,10 @@ type TaxMaxiApiLiveContext =
   | PrincipalRepository
   | PersistenceSourceRepository
   | SessionRepository
+  | SIWXProofVerifier
+  | AssetRepository
+  | ProviderAssetRepository
+  | SourceReportRepository
   | SourceSyncRunService
   | SourceSyncService
   | SyncEngineSourceRepository
@@ -143,5 +162,6 @@ export const TaxMaxiApiLive: Layer.Layer<
   // - For production: use SessionTokenValidatorLive (validates against database)
   // - For testing: use SimpleTokenValidatorLive (user_<id>_<role> format)
   Layer.provide(OptionalCurrentUserLive),
+  Layer.provide(AdminAuthMiddlewareLive),
   Layer.provide(AuthMiddlewareLive)
 )

@@ -1,0 +1,87 @@
+name: PR
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+
+    env:
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: taxmaxi
+      QUEUE_REDIS_URL: redis://127.0.0.1:6379
+      ANON_SESSION_SECRET: test-anon-session-secret-32-bytes-long
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Start test services
+        run: docker compose up -d db redis
+
+      - name: Wait for test services
+        run: |
+          for attempt in {1..30}; do
+            if docker compose exec -T db pg_isready -U postgres -d taxmaxi >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          docker compose exec -T db pg_isready -U postgres -d taxmaxi
+
+          for attempt in {1..30}; do
+            if [ "$(docker compose exec -T redis redis-cli ping 2>/dev/null)" = "PONG" ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(docker compose exec -T redis redis-cli ping)" = "PONG"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Format check
+        run: pnpm run format
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Type check
+        run: pnpm run type-check
+
+      - name: Test type check
+        run: pnpm run type-check:tests
+
+      - name: Test unit
+        run: pnpm run test --project=unit
+
+      - name: Test integration
+        run: pnpm run test --project=integration
+
+      - name: Stop test services
+        if: always()
+        run: docker compose down --volumes

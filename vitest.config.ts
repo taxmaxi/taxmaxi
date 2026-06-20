@@ -5,17 +5,14 @@ export default defineConfig({
   test: {
     watch: false,
     coverage: {
-      include: [
-        "packages/core/src/**/*.ts",
-        "packages/persistence/src/**/*.ts",
-        "packages/rest-api/src/**/*.ts",
-      ],
+      include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
     },
     projects: [
       {
         test: {
           include: [
             "packages/**/tests/**/*.test.ts",
+            "apps/crawler/tests/**/*.test.ts",
             "apps/server/tests/**/*.test.ts",
             "apps/worker/tests/**/*.test.ts",
           ],
@@ -32,7 +29,7 @@ export default defineConfig({
         test: {
           include: [
             "packages/**/tests/**/*.integration.test.ts",
-            "apps/worker/tests/**/*.integration.test.ts",
+            "apps/**/tests/**/*.integration.test.ts",
           ],
           exclude: ["packages/*/node_modules"],
           name: { label: "integration", color: "magenta" },

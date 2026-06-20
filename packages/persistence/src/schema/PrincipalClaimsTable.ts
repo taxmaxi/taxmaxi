@@ -35,6 +35,8 @@ export const principalClaims = pgTable(
     claimValueHash: text("claim_value_hash").notNull(),
     chainType: text("chain_type"),
     walletAddress: text("wallet_address"),
+    payerChainType: text("payer_chain_type"),
+    payerWalletAddress: text("payer_wallet_address"),
     year: integer("year"),
     jurisdiction: text("jurisdiction"),
     expiresAt: timestamp("expires_at"),
@@ -47,6 +49,7 @@ export const principalClaims = pgTable(
     uniqueIndex("principal_claims_request_type_unique").on(table.requestId, table.claimType),
     index("idx_principal_claims_principal_id").on(table.principalId),
     index("idx_principal_claims_source_id").on(table.sourceId),
+    index("idx_principal_claims_payer_wallet").on(table.payerChainType, table.payerWalletAddress),
     check(
       "principal_claims_wallet_resource_fields",
       sql`${table.claimType} not in ('siwx_wallet', 'anonymous_source_claim_token') or (${table.sourceId} is not null and ${table.chainType} is not null and ${table.walletAddress} is not null and ${table.year} is not null and ${table.jurisdiction} is not null)`

@@ -22,20 +22,29 @@
   ],
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/build-tui.mjs",
+    "build:tui": "node scripts/build-tui.mjs",
     "dev": "tsc --watch --preserveWatchOutput",
-    "type-check": "tsc --noEmit",
-    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo"
+    "dev:tui": "node scripts/build-tui.mjs --watch",
+    "type-check": "tsc --noEmit && tsc -p src/tui",
+    "type-check:tests": "tsc -p tsconfig.tests.json",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
     "@effect/cli": "0.75.1",
     "@effect/platform": "0.96.1",
     "@effect/platform-node": "0.106.0",
-    "effect": "3.21.2"
+    "@opentui/core": "0.4.0",
+    "effect": "3.21.2",
+    "taxmaxi": "workspace:*"
   },
   "devDependencies": {
     "@my/typescript-config": "workspace:*",
+    "@opentui/solid": "0.4.0",
     "@types/node": "~25.5.0",
+    "esbuild": "^0.28.0",
+    "esbuild-plugin-solid": "^0.6.0",
+    "solid-js": "1.9.12",
     "typescript": "~6.0.2"
   }
 }

@@ -199,6 +199,112 @@ describe("ProviderAssetRepositoryLive", () => {
       })
     })
 
+    it("pages provider asset reviews with a stable provider asset cursor", async () => {
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "ada-provider-asset",
+                naturalKey: null,
+                currencyCode: "ADA",
+                name: "Cardano",
+                exponent: 6,
+                providerType: "crypto",
+                payload: { code: "ADA" },
+              },
+              {
+                providerAssetId: "eth-provider-asset",
+                naturalKey: null,
+                currencyCode: "ETH",
+                name: "Ethereum",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { code: "ETH" },
+              },
+              {
+                providerAssetId: "sol-provider-asset",
+                naturalKey: null,
+                currencyCode: "SOL",
+                name: "Solana",
+                exponent: 9,
+                providerType: "crypto",
+                payload: { code: "SOL" },
+              },
+            ],
+          })
+        )
+      )
+
+      const providerAssets = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          const cardano = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "ada-provider-asset",
+          })
+          const ethereum = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "eth-provider-asset",
+          })
+          const solana = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "sol-provider-asset",
+          })
+
+          if (Option.isNone(cardano) || Option.isNone(ethereum) || Option.isNone(solana)) {
+            return yield* Effect.dieMessage("Expected provider assets to exist")
+          }
+
+          return [cardano.value, ethereum.value, solana.value] as const
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: providerAssets.map((providerAsset) => ({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: null,
+              canonicalAssetSymbol: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "pending_review",
+              reviewerNotes: null,
+              sourceNotes: "Needs review",
+            })),
+          })
+        )
+      )
+
+      const firstPage = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listProviderAssetReviews({
+            providerKey: "coinbase",
+            mappingStatus: "pending_review",
+            cursorProviderAssetRowId: null,
+            limit: 2,
+          })
+        )
+      )
+
+      expect(firstPage.map((row) => row.providerAsset.currencyCode)).toEqual(["ADA", "ETH"])
+
+      const secondPage = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listProviderAssetReviews({
+            providerKey: "coinbase",
+            mappingStatus: "pending_review",
+            cursorProviderAssetRowId: firstPage[1]?.providerAsset.id ?? null,
+            limit: 2,
+          })
+        )
+      )
+
+      expect(secondPage.map((row) => row.providerAsset.currencyCode)).toEqual(["SOL"])
+    })
+
     it("keeps reviewed natural-key mappings preferred when a stable provider asset id arrives later", async () => {
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>

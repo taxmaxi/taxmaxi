@@ -43,7 +43,7 @@ export const providerResolutionStrategyEnum = pgEnum("provider_resolution_strate
   "static",
   "amount_sign",
   "venue_side",
-  "amount_sign_fee",
+  "paired_spread_fee",
   "no_leg",
 ])
 

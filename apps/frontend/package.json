@@ -7,11 +7,11 @@
   },
   "scripts": {
     "dev": "dotenv -e .env.local -- sh -c \"NODE_OPTIONS='--import ./instrument.server.mjs' vite dev --port 3000\"",
-    "build": "vite build && cp instrument.server.mjs .output/server",
+    "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "deploy": "pnpm run build && wrangler deploy",
-    "start": "node --import ./.output/server/instrument.server.mjs .output/server/index.mjs"
+    "start": "vite preview"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.26.0",
@@ -37,6 +37,7 @@
     "@tanstack/react-table": "latest",
     "@tanstack/router-plugin": "^1.132.0",
     "@x402/core": "2.12.0",
+    "@x402/extensions": "2.12.0",
     "@x402/fetch": "^2.12.0",
     "@x402/svm": "2.12.0",
     "class-variance-authority": "^0.7.1",
@@ -67,11 +68,5 @@
     "vite": "^8.0.0",
     "vitest": "^4.1.5",
     "wrangler": "^4.70.0"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "lightningcss"
-    ]
   }
 }

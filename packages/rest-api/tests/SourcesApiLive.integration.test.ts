@@ -37,12 +37,26 @@ import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.
 import { schema } from "../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
+import {
+  seedSyncEngineAssets,
+  seedSyncEngineRepositoryFixture,
+  TEST_BTC_ASSET_ID,
+} from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
+import { ANON_CHALLENGE_COOKIE_NAME, ANON_SESSION_COOKIE_NAME } from "../src/layers/AnonApiLive.ts"
 import { SourceCreateResponse, SourcePaymentRequiredError } from "../src/definitions/SourcesApi.ts"
+import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { X402PaymentValidator } from "../src/services/X402PaymentValidator.ts"
-import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
+import {
+  makeX402PaymentValidatorTestLive,
+  TEST_PAYER_WALLET,
+} from "./support/X402PaymentValidatorTestLive.ts"
+import {
+  makeTestSiwxProof,
+  SIWXProofVerifierTestLive,
+} from "./support/SIWXProofVerifierTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_rest_api_sources",
@@ -54,7 +68,10 @@ const queueEvents: Array<SourceSyncQueuePayload> = []
 const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
 const ClaimTokenConfigProvider = ConfigProvider.fromMap(
-  new Map([["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"]])
+  new Map([
+    ["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"],
+    ["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"],
+  ])
 )
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: validX402PaymentHeader,
@@ -65,6 +82,10 @@ const X402PaymentValidatorSettlementFailureTestLive = makeX402PaymentValidatorTe
 })
 const X402PaymentValidatorTrackingTestLive = makeX402PaymentValidatorTestLive({
   onSettle: (paymentHeader) => settlementEvents.push(paymentHeader),
+  validPaymentHeader: validX402PaymentHeader,
+})
+const X402PaymentValidatorWithoutPayerIdentityTestLive = makeX402PaymentValidatorTestLive({
+  includePayerIdentity: false,
   validPaymentHeader: validX402PaymentHeader,
 })
 
@@ -179,6 +200,8 @@ const makeHttpLive = (
 ) =>
   HttpApiBuilder.serve().pipe(
     Layer.provide(TaxMaxiApiLive),
+    Layer.provide(AnonSessionServiceLive),
+    Layer.provide(SIWXProofVerifierTestLive),
     Layer.provide(x402PaymentValidatorLayer),
     Layer.provide(SimpleTokenValidatorLive),
     Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer)),
@@ -190,6 +213,10 @@ const QueueFailureHttpLive = makeHttpLive(SourceSyncQueueFailureTestLive)
 const SettlementFailureHttpLive = makeHttpLive(
   SourceSyncQueueTestLive,
   X402PaymentValidatorSettlementFailureTestLive
+)
+const NoPayerIdentityHttpLive = makeHttpLive(
+  SourceSyncQueueTestLive,
+  X402PaymentValidatorWithoutPayerIdentityTestLive
 )
 const PaidQueueFailureHttpLive = makeHttpLive(
   SourceSyncQueueFailureTestLive,
@@ -250,6 +277,79 @@ const makeClientWithCookie = (cookieHeader: string) =>
         HttpClient.mapRequest(HttpClientRequest.setHeader("cookie", cookieHeader))
       ),
     })
+  })
+
+const makeClientWithBearerTokenAndCookie = ({
+  cookieHeader,
+  token,
+}: {
+  readonly cookieHeader: string
+  readonly token: string
+}) =>
+  Effect.gen(function* () {
+    const baseHttpClient = yield* HttpClient.HttpClient
+    return yield* HttpApiClient.makeWith(TaxMaxiApi, {
+      httpClient: baseHttpClient.pipe(
+        HttpClient.mapRequest((request) =>
+          HttpClientRequest.bearerToken(token)(
+            HttpClientRequest.setHeader("cookie", cookieHeader)(request)
+          )
+        )
+      ),
+    })
+  })
+
+const extractCookieValue = (headers: Headers.Headers, name: string): string => {
+  const setCookie = Headers.get(headers, "set-cookie")
+  if (Option.isNone(setCookie)) {
+    throw new Error(`Missing ${name} cookie`)
+  }
+
+  const cookie = setCookie.value
+    .split(",")
+    .map((value) => value.trim())
+    .find((value) => value.startsWith(`${name}=`))
+
+  if (cookie === undefined) {
+    throw new Error(`Missing ${name} cookie`)
+  }
+
+  return cookie.slice(name.length + 1).split(";", 1)[0] ?? ""
+}
+
+const AnonSessionChallengeBody = EffectSchema.Struct({
+  nonce: EffectSchema.String,
+  expiresAt: EffectSchema.String,
+})
+
+const createAnonSessionCookie = ({
+  walletAddress = TEST_PAYER_WALLET,
+}: {
+  readonly walletAddress?: string
+} = {}) =>
+  Effect.gen(function* () {
+    const challengeResponse = yield* HttpClient.execute(
+      HttpClientRequest.post("/v1/anon/session/challenge")
+    )
+    const challengeCookie = extractCookieValue(
+      challengeResponse.headers,
+      ANON_CHALLENGE_COOKIE_NAME
+    )
+    const challengeJson = yield* challengeResponse.json
+    const challenge = yield* EffectSchema.decodeUnknown(AnonSessionChallengeBody)(challengeJson)
+    const siwxProof = makeTestSiwxProof({
+      chainType: "solana",
+      walletAddress,
+      nonce: challenge.nonce,
+    })
+
+    const sessionResponse = yield* HttpClient.execute(
+      HttpClientRequest.post("/v1/anon/session").pipe(
+        HttpClientRequest.setHeader("cookie", `${ANON_CHALLENGE_COOKIE_NAME}=${challengeCookie}`),
+        HttpClientRequest.bodyUnsafeJson({ siwxProof })
+      )
+    )
+    return extractCookieValue(sessionResponse.headers, ANON_SESSION_COOKIE_NAME)
   })
 
 const postRawSourceCreate = ({
@@ -361,6 +461,257 @@ const seedPrincipalUser = ({
     })
   })
 
+const reportFixtureIds = {
+  buyTransactionId: "00000000-0000-0000-0000-000000046101",
+  sellTransactionId: "00000000-0000-0000-0000-000000046102",
+  acquisitionLegId: "00000000-0000-0000-0000-000000046201",
+  disposalLegId: "00000000-0000-0000-0000-000000046202",
+  feeTransactionId: "00000000-0000-0000-0000-000000046203",
+  feeLegId: "00000000-0000-0000-0000-000000046204",
+  internalTransferTransactionId: "00000000-0000-0000-0000-000000046205",
+  internalTransferLegId: "00000000-0000-0000-0000-000000046206",
+  internalTransferInTransactionId: "00000000-0000-0000-0000-000000046207",
+  internalTransferInLegId: "00000000-0000-0000-0000-000000046208",
+  taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
+  taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
+  internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
+} as const
+
+const seedSourceReportRows = ({
+  principalId,
+  sourceId,
+}: {
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.transactions).values([
+      {
+        id: reportFixtureIds.buyTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-buy-1",
+        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        transactionType: "buy_fiat",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerDescription: "Buy BTC",
+      },
+      {
+        id: reportFixtureIds.sellTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-sell-1",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        transactionType: "sell_fiat",
+        providerTransactionType: "sell",
+        providerStatus: "completed",
+        providerDescription: "Sell BTC",
+      },
+    ])
+
+    yield* db.insert(schema.transactionLegs).values([
+      {
+        id: reportFixtureIds.acquisitionLegId,
+        sourceId,
+        principalId,
+        externalId: "report-buy-1:btc",
+        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "1",
+        kind: "acquisition",
+        provenance: "deterministic",
+        derivationRule: "test_fixture_buy",
+        transactionId: reportFixtureIds.buyTransactionId,
+        fiatAmount: "10000",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: reportFixtureIds.disposalLegId,
+        sourceId,
+        principalId,
+        externalId: "report-sell-1:btc",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.4",
+        kind: "disposal",
+        provenance: "deterministic",
+        derivationRule: "test_fixture_sell",
+        transactionId: reportFixtureIds.sellTransactionId,
+        fiatAmount: "6000",
+        fiatCurrency: "EUR",
+      },
+    ])
+
+    yield* db.insert(schema.fifoLots).values([
+      {
+        id: reportFixtureIds.taxFreeFifoLotId,
+        sourceId,
+        principalId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2023-01-10T12:00:00.000Z"),
+        originalAmount: "0.2",
+        remainingAmount: "0",
+        costBasisPerToken: "5000",
+        costBasisCurrency: "EUR",
+        sourceLegId: reportFixtureIds.acquisitionLegId,
+        sourceLegSequence: 0,
+      },
+      {
+        id: reportFixtureIds.taxableFifoLotId,
+        sourceId,
+        principalId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-01-10T12:00:00.000Z"),
+        originalAmount: "0.8",
+        remainingAmount: "0.6",
+        costBasisPerToken: "15000",
+        costBasisCurrency: "EUR",
+        sourceLegId: reportFixtureIds.acquisitionLegId,
+        sourceLegSequence: 1,
+      },
+    ])
+
+    yield* db.insert(schema.disposalMatches).values([
+      {
+        disposalLegId: reportFixtureIds.disposalLegId,
+        fifoLotId: reportFixtureIds.taxFreeFifoLotId,
+        matchedAmount: "0.2",
+        costBasis: "1000",
+        proceeds: "3000",
+        gainLoss: "2000",
+      },
+      {
+        disposalLegId: reportFixtureIds.disposalLegId,
+        fifoLotId: reportFixtureIds.taxableFifoLotId,
+        matchedAmount: "0.2",
+        costBasis: "3000",
+        proceeds: "3000",
+        gainLoss: "0",
+      },
+    ])
+  })
+
+const seedSourceReportTaxTreatmentRows = ({
+  principalId,
+  sourceId,
+}: {
+  readonly principalId: string
+  readonly sourceId: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.transactions).values([
+      {
+        id: reportFixtureIds.feeTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-fee-1",
+        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+        transactionType: "gas_fee",
+        providerTransactionType: "fee",
+        providerStatus: "completed",
+        providerDescription: "Network fee",
+      },
+      {
+        id: reportFixtureIds.internalTransferTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-1",
+        timestamp: new Date("2025-04-11T12:00:00.000Z"),
+        transactionType: "sell_fiat",
+        providerTransactionType: "send",
+        providerStatus: "completed",
+        providerDescription: "Internal transfer out",
+      },
+      {
+        id: reportFixtureIds.internalTransferInTransactionId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-2",
+        timestamp: new Date("2025-04-12T12:00:00.000Z"),
+        transactionType: "buy_fiat",
+        providerTransactionType: "receive",
+        providerStatus: "completed",
+        providerDescription: "Internal transfer in",
+      },
+    ])
+
+    yield* db.insert(schema.transactionLegs).values([
+      {
+        id: reportFixtureIds.feeLegId,
+        sourceId,
+        principalId,
+        externalId: "report-fee-1:fee",
+        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.01",
+        kind: "fee",
+        provenance: "deterministic",
+        derivationRule: "gas_fee",
+        transactionId: reportFixtureIds.feeTransactionId,
+        fiatAmount: "2",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: reportFixtureIds.internalTransferLegId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-1:internal_transfer_out",
+        timestamp: new Date("2025-04-11T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.1",
+        kind: "disposal",
+        provenance: "deterministic",
+        derivationRule: "internal_transfer_out",
+        transactionId: reportFixtureIds.internalTransferTransactionId,
+        fiatAmount: "500",
+        fiatCurrency: "EUR",
+      },
+      {
+        id: reportFixtureIds.internalTransferInLegId,
+        sourceId,
+        principalId,
+        externalId: "report-transfer-2:internal_transfer_in",
+        timestamp: new Date("2025-04-12T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.1",
+        kind: "acquisition",
+        provenance: "deterministic",
+        derivationRule: "internal_transfer_in",
+        transactionId: reportFixtureIds.internalTransferInTransactionId,
+        fiatAmount: "500",
+        fiatCurrency: "EUR",
+      },
+    ])
+
+    yield* db.insert(schema.fifoLots).values({
+      id: reportFixtureIds.internalTransferFifoLotId,
+      sourceId,
+      principalId,
+      assetId: TEST_BTC_ASSET_ID,
+      acquiredAt: new Date("2025-04-01T12:00:00.000Z"),
+      originalAmount: "0.1",
+      remainingAmount: "0",
+      costBasisPerToken: "5000",
+      costBasisCurrency: "EUR",
+      sourceLegId: reportFixtureIds.acquisitionLegId,
+      sourceLegSequence: 2,
+    })
+
+    yield* db.insert(schema.disposalMatches).values({
+      disposalLegId: reportFixtureIds.internalTransferLegId,
+      fifoLotId: reportFixtureIds.internalTransferFifoLotId,
+      matchedAmount: "0.1",
+      costBasis: "500",
+      proceeds: "500",
+      gainLoss: "0",
+    })
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
@@ -371,6 +722,291 @@ describe("SourcesApiLive", () => {
     settlementEvents.length = 0
     await Effect.runPromise(context.recreateTestDatabase())
   })
+
+  it.effect("returns source-generic report read projections for a populated source", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(overview.source.id).toBe(fixture.sourceId)
+      expect(overview.source.providerKey).toBe("coinbase")
+      expect(overview.totals.transactionCount).toBe(2)
+      expect(overview.totals.disposalCount).toBe(1)
+      expect(overview.totals.realizedGainLoss).toBe("2000")
+
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets).toHaveLength(1)
+      expect(assetPnl.assets[0]).toMatchObject({
+        acquiredAmount: "1",
+        disposedAmount: "0.4",
+        openAmount: "0.6",
+        costBasis: "9000",
+        proceeds: "6000",
+        realizedGainLoss: "2000",
+        currency: "EUR",
+      })
+
+      const transactions = yield* client.sources.listSourceTransactions({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 1 },
+      })
+      expect(transactions.transactions).toHaveLength(1)
+      expect(transactions.transactions[0]?.transactionId).toBe(reportFixtureIds.sellTransactionId)
+      expect(transactions.transactions[0]?.movements[0]?.kind).toBe("disposal")
+      expect(transactions.page.hasMore).toBe(true)
+      expect(transactions.page.nextCursor).not.toBeNull()
+
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(taxEvents.taxEvents.map((event) => event.kind)).toEqual(["disposal", "acquisition"])
+      expect(taxEvents.taxEvents[0]).toMatchObject({
+        legId: reportFixtureIds.disposalLegId,
+        costBasis: "4000",
+        proceeds: "6000",
+        gainLoss: "2000",
+        taxableTreatment: "mixed",
+      })
+
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(fifoLots.fifoLots).toHaveLength(2)
+      expect(fifoLots.fifoLots[0]).toMatchObject({
+        lotId: reportFixtureIds.taxFreeFifoLotId,
+        originalAmount: "0.2",
+        remainingAmount: "0",
+      })
+      expect(fifoLots.fifoLots[0]?.disposalMatches[0]).toMatchObject({
+        disposalLegId: reportFixtureIds.disposalLegId,
+        matchedAmount: "0.2",
+      })
+
+      const explanation = yield* client.sources.explainSourceDisposal({
+        path: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
+      })
+      expect(explanation).toMatchObject({
+        disposalLegId: reportFixtureIds.disposalLegId,
+        amount: "0.4",
+        proceeds: "6000",
+        costBasis: "4000",
+        gainLoss: "2000",
+        taxableTreatment: "mixed",
+      })
+      expect(explanation.matchedLots).toHaveLength(2)
+      expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual([
+        "tax_free",
+        "taxable",
+      ])
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("surfaces FIFO inventory review state for unmatched source disposals", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+
+      yield* db
+        .delete(schema.disposalMatches)
+        .where(eq(schema.disposalMatches.disposalLegId, reportFixtureIds.disposalLegId))
+
+      yield* db.insert(schema.transactionReviews).values({
+        transactionId: reportFixtureIds.sellTransactionId,
+        principalId: fixture.principalId,
+        reviewStatus: "needs_review",
+        originalTypeKey: "sell_fiat",
+        currentTypeKey: "sell_fiat",
+        categorizationReason:
+          "Tax review required because the transaction disposes more inventory than the synced FIFO lots currently cover.",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+
+      expect(overview.totals.disposalCount).toBe(1)
+      expect(overview.totals.realizedGainLoss).toBe("0")
+      expect(overview.review).toMatchObject({
+        status: "needs_review",
+        needsReviewCount: 1,
+        blockingIssueCount: 1,
+        issues: [
+          {
+            code: "fifo_inventory_shortfall",
+            count: 1,
+            blocking: true,
+            summary: "1 disposal cannot be matched to available FIFO inventory.",
+          },
+        ],
+      })
+
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets[0]).toMatchObject({
+        disposedAmount: "0.4",
+        proceeds: "0",
+        realizedGainLoss: "0",
+        review: {
+          status: "needs_review",
+          needsReviewCount: 1,
+          blockingIssueCount: 1,
+          issues: [
+            {
+              code: "fifo_inventory_shortfall",
+              count: 1,
+              blocking: true,
+            },
+          ],
+        },
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("returns empty source report lists for a source with no canonical rows", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(overview.totals.transactionCount).toBe(0)
+      expect(overview.totals.assetCount).toBe(0)
+
+      const assetPnl = yield* client.sources.listSourceAssetPnl({
+        path: { sourceId: fixture.sourceId },
+      })
+      expect(assetPnl.assets).toEqual([])
+
+      const transactions = yield* client.sources.listSourceTransactions({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(transactions.transactions).toEqual([])
+      expect(transactions.page).toMatchObject({ hasMore: false, nextCursor: null })
+
+      const taxEvents = yield* client.sources.listSourceTaxEvents({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(taxEvents.taxEvents).toEqual([])
+
+      const fifoLots = yield* client.sources.listSourceFifoLots({
+        path: { sourceId: fixture.sourceId },
+        urlParams: { limit: 10 },
+      })
+      expect(fifoLots.fifoLots).toEqual([])
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect(
+    "labels deductible fees and internal transfer disposals without taxable treatment",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* seedSyncEngineRepositoryFixture()
+        yield* seedSyncEngineAssets({
+          baseBlockchainId: fixture.baseBlockchainId,
+          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+        })
+        yield* seedSourceReportRows({
+          principalId: fixture.principalId,
+          sourceId: fixture.sourceId,
+        })
+        yield* seedSourceReportTaxTreatmentRows({
+          principalId: fixture.principalId,
+          sourceId: fixture.sourceId,
+        })
+
+        const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+        const overview = yield* client.sources.getSourceOverview({
+          path: { sourceId: fixture.sourceId },
+        })
+        const taxEvents = yield* client.sources.listSourceTaxEvents({
+          path: { sourceId: fixture.sourceId },
+          urlParams: { limit: 10 },
+        })
+        const feeEvent = taxEvents.taxEvents.find(
+          (event) => event.legId === reportFixtureIds.feeLegId
+        )
+        const internalTransferEvent = taxEvents.taxEvents.find(
+          (event) => event.legId === reportFixtureIds.internalTransferLegId
+        )
+        const internalTransferInEvent = taxEvents.taxEvents.find(
+          (event) => event.legId === reportFixtureIds.internalTransferInLegId
+        )
+
+        expect(feeEvent).toMatchObject({
+          kind: "fee",
+          taxableTreatment: "deductible",
+        })
+        expect(internalTransferEvent).toMatchObject({
+          kind: "disposal",
+          derivationRule: "internal_transfer_out",
+          taxableTreatment: "non_taxable",
+        })
+        expect(internalTransferInEvent).toMatchObject({
+          kind: "acquisition",
+          derivationRule: "internal_transfer_in",
+          taxableTreatment: "non_taxable",
+        })
+        expect(overview.totals.disposalCount).toBe(1)
+        const assetPnl = yield* client.sources.listSourceAssetPnl({
+          path: { sourceId: fixture.sourceId },
+        })
+        expect(assetPnl.assets[0]).toMatchObject({
+          acquiredAmount: "1",
+          disposedAmount: "0.4",
+          openAmount: "0.6",
+          costBasis: "9000",
+          proceeds: "6000",
+          realizedGainLoss: "2000",
+        })
+
+        const explanation = yield* client.sources.explainSourceDisposal({
+          path: {
+            sourceId: fixture.sourceId,
+            legId: reportFixtureIds.internalTransferLegId,
+          },
+        })
+        expect(explanation).toMatchObject({
+          disposalLegId: reportFixtureIds.internalTransferLegId,
+          taxableTreatment: "non_taxable",
+        })
+        expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual(["non_taxable"])
+      }).pipe(Effect.provide(HttpLive))
+  )
 
   it.effect("creates an authenticated Solana source without starting sync", () =>
     Effect.gen(function* () {
@@ -394,11 +1030,23 @@ describe("SourcesApiLive", () => {
       expect(response.source).toMatchObject({
         principalId,
         name: "Demo Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       })
       expect(response.source.sourceRef._tag).toBe("onchain")
 
       const db = yield* drizzle
+      const [storedSource] = yield* db
+        .select({
+          providerKey: schema.sources.providerKey,
+          providerMetadata: schema.sources.providerMetadata,
+        })
+        .from(schema.sources)
+
+      expect(storedSource).toEqual({
+        providerKey: "helius-solana",
+        providerMetadata: { chainType: "solana", walletAddress },
+      })
+
       const storedAddresses = yield* db
         .select({
           address: schema.addresses.address,
@@ -441,7 +1089,7 @@ describe("SourcesApiLive", () => {
       expect(response.claim).not.toBeNull()
       expect(response.source).toMatchObject({
         name: "Anonymous Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       })
       if (response.claim === null) {
         return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
@@ -475,6 +1123,8 @@ describe("SourcesApiLive", () => {
           claimValueHash: schema.principalClaims.claimValueHash,
           chainType: schema.principalClaims.chainType,
           walletAddress: schema.principalClaims.walletAddress,
+          payerChainType: schema.principalClaims.payerChainType,
+          payerWalletAddress: schema.principalClaims.payerWalletAddress,
           year: schema.principalClaims.year,
           jurisdiction: schema.principalClaims.jurisdiction,
           expiresAt: schema.principalClaims.expiresAt,
@@ -483,25 +1133,25 @@ describe("SourcesApiLive", () => {
         .from(schema.principalClaims)
 
       expect(claims).toHaveLength(2)
-      const anonymousSourceClaim = claims.find(
-        (claim) => claim.claimType === "anonymous_source_claim_token"
-      )
+      const cliClaim = claims.find((claim) => claim.claimType === "anonymous_source_claim_token")
       const receiptClaim = claims.find((claim) => claim.claimType === "x402_receipt")
 
-      expect(anonymousSourceClaim).toMatchObject({
+      expect(cliClaim).toMatchObject({
         requestId: response.claim.requestId,
         principalId: response.source.principalId,
         sourceId: response.source.id,
         claimType: "anonymous_source_claim_token",
         chainType: "solana",
         walletAddress,
+        payerChainType: null,
+        payerWalletAddress: null,
         year: 2025,
         jurisdiction: "germany",
         consumedAt: null,
       })
-      expect(anonymousSourceClaim?.claimValueHash).not.toBe(response.claim.claimToken)
-      expect(anonymousSourceClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u)
-      expect(anonymousSourceClaim?.expiresAt?.toISOString()).toBe(response.claim.expiresAt)
+      expect(cliClaim?.claimValueHash).not.toBe(response.claim.claimToken)
+      expect(cliClaim?.claimValueHash).toMatch(/^[a-f0-9]{64}$/u)
+      expect(cliClaim?.expiresAt?.toISOString()).toBe(response.claim.expiresAt)
       expect(receiptClaim).toMatchObject({
         requestId: response.claim.requestId,
         principalId: response.source.principalId,
@@ -509,6 +1159,8 @@ describe("SourcesApiLive", () => {
         claimType: "x402_receipt",
         chainType: "solana",
         walletAddress,
+        payerChainType: "solana",
+        payerWalletAddress: TEST_PAYER_WALLET,
         year: 2025,
         jurisdiction: "germany",
         expiresAt: null,
@@ -527,6 +1179,71 @@ describe("SourcesApiLive", () => {
       Effect.withConfigProvider(ClaimTokenConfigProvider),
       Effect.scoped
     )
+  )
+
+  it.effect(
+    "creates an anonymous paid source without anon session when payer identity is unavailable",
+    () =>
+      Effect.gen(function* () {
+        const walletAddress = "So11111111111111111111111111111111111111112"
+
+        const response = yield* postRawSourceCreate({
+          paymentHeader: validX402PaymentHeader,
+          payload: {
+            type: "onchain",
+            walletAddress,
+            name: "Anonymous source without payer identity",
+            year: 2025,
+            jurisdiction: "germany",
+          },
+        })
+        const body = yield* response.json
+        const decodedBody = yield* EffectSchema.decodeUnknown(SourceCreateResponse)(body)
+
+        expect(response.status).toBe(200)
+        expect(Headers.get(response.headers, "payment-response")).toEqual(
+          Option.some("encoded-test-payment-response")
+        )
+        expect(Headers.get(response.headers, "set-cookie")).toEqual(Option.none())
+        expect(decodedBody.created).toBe(true)
+        expect(decodedBody.syncJob).not.toBeNull()
+        expect(decodedBody.claim).not.toBeNull()
+
+        if (decodedBody.claim === null) {
+          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        }
+
+        const db = yield* drizzle
+        const claims = yield* db
+          .select({
+            requestId: schema.principalClaims.requestId,
+            claimType: schema.principalClaims.claimType,
+            payerChainType: schema.principalClaims.payerChainType,
+            payerWalletAddress: schema.principalClaims.payerWalletAddress,
+          })
+          .from(schema.principalClaims)
+          .where(eq(schema.principalClaims.requestId, decodedBody.claim.requestId))
+
+        expect(claims).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              claimType: "anonymous_source_claim_token",
+              payerChainType: null,
+              payerWalletAddress: null,
+            }),
+            expect.objectContaining({
+              claimType: "x402_receipt",
+              payerChainType: null,
+              payerWalletAddress: null,
+            }),
+          ])
+        )
+        expect(queueEvents).toHaveLength(1)
+      }).pipe(
+        Effect.provide(NoPayerIdentityHttpLive),
+        Effect.withConfigProvider(ClaimTokenConfigProvider),
+        Effect.scoped
+      )
   )
 
   it.effect("finds an anonymous source claim by authenticated anonymous source claim token", () =>
@@ -602,23 +1319,207 @@ describe("SourcesApiLive", () => {
     )
   )
 
+  it.effect("lists anonymous paid source handles by payer-wallet SIWX", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const first = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "First payer entitlement",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+      const second = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+          name: "Second payer entitlement",
+          year: 2024,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (first.claim === null || second.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const sessionCookie = yield* createAnonSessionCookie()
+      const anonSessionClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+      )
+      const response = yield* anonSessionClient.anon.listAnonSources()
+
+      expect(response.sources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceId: first.source.id,
+            requestId: first.claim.requestId,
+            chainType: "solana",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            year: 2025,
+            jurisdiction: "germany",
+          }),
+          expect.objectContaining({
+            sourceId: second.source.id,
+            requestId: second.claim.requestId,
+            chainType: "solana",
+            walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+            year: 2024,
+            jurisdiction: "germany",
+          }),
+        ])
+      )
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("lists and reads anonymous paid source sync jobs by payer-wallet SIWX", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Anon sync status wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null || created.syncJob === null) {
+        return yield* Effect.dieMessage(
+          "Anonymous source creation did not return claim metadata and sync job"
+        )
+      }
+
+      const sessionCookie = yield* createAnonSessionCookie()
+      const anonSessionClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+      )
+
+      const listed = yield* anonSessionClient.anon.listAnonSourceJobs({
+        path: { sourceId: created.source.id },
+      })
+      expect(listed.jobs).toEqual([
+        expect.objectContaining({
+          sourceId: created.source.id,
+          jobId: created.syncJob.jobId,
+          status: "queued",
+          importedRecords: null,
+          normalizedRecords: null,
+          failedRecords: null,
+        }),
+      ])
+
+      const job = yield* anonSessionClient.anon.getAnonSourceJob({
+        path: {
+          sourceId: created.source.id,
+          jobId: created.syncJob.jobId,
+        },
+      })
+      expect(job).toEqual(
+        expect.objectContaining({
+          sourceId: created.source.id,
+          jobId: created.syncJob.jobId,
+          status: "queued",
+        })
+      )
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("returns one anonymous paid source only for the matching payer wallet", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Payer-scoped anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null || created.syncJob === null) {
+        return yield* Effect.dieMessage(
+          "Anonymous source creation did not return claim metadata and sync job"
+        )
+      }
+
+      const matchingSessionCookie = yield* createAnonSessionCookie()
+      const matchingPayerClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${matchingSessionCookie}`
+      )
+      const source = yield* matchingPayerClient.anon.getAnonSource({
+        path: { sourceId: created.source.id },
+      })
+      expect(source).toMatchObject({
+        sourceId: created.source.id,
+        requestId: created.claim.requestId,
+        walletAddress: "So11111111111111111111111111111111111111112",
+      })
+
+      const otherSessionCookie = yield* createAnonSessionCookie({
+        walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+      })
+      const otherPayerClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${otherSessionCookie}`
+      )
+      const otherList = yield* otherPayerClient.anon.listAnonSources()
+      expect(otherList.sources.map((visibleSource) => visibleSource.sourceId)).not.toContain(
+        created.source.id
+      )
+
+      const otherSourceResult = yield* otherPayerClient.anon
+        .getAnonSource({ path: { sourceId: created.source.id } })
+        .pipe(Effect.either)
+      const otherJobsResult = yield* otherPayerClient.anon
+        .listAnonSourceJobs({ path: { sourceId: created.source.id } })
+        .pipe(Effect.either)
+      const otherJobResult = yield* otherPayerClient.anon
+        .getAnonSourceJob({
+          path: { sourceId: created.source.id, jobId: created.syncJob.jobId },
+        })
+        .pipe(Effect.either)
+
+      for (const result of [otherSourceResult, otherJobsResult, otherJobResult]) {
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("AnonNotFoundError")
+        }
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
   it.effect(
-    "rejects replaying a anonymous source claim token after a successful ownership move",
+    "keeps authenticated and anonymous source collections separate when both cookies exist",
     () =>
       Effect.gen(function* () {
-        const walletAddress = "So11111111111111111111111111111111111111112"
         const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
-        const created = yield* anonymousClient.sources.createSource({
+        const anonymousCreated = yield* anonymousClient.sources.createSource({
           payload: {
             type: "onchain",
-            walletAddress,
-            name: "Replay protected anonymous Solana wallet",
+            walletAddress: "So11111111111111111111111111111111111111112",
+            name: "Separated anonymous Solana wallet",
             year: 2025,
             jurisdiction: "germany",
           },
         })
 
-        if (created.claim === null) {
+        if (anonymousCreated.claim === null) {
           return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
         }
 
@@ -627,45 +1528,380 @@ describe("SourcesApiLive", () => {
         yield* seedPrincipalUser({ userId, principalId })
 
         const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-        const claimPayload = {
-          requestId: created.claim.requestId,
-          claimToken: created.claim.claimToken,
-          siwxProof: null,
-        }
-
-        const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
-          payload: claimPayload,
+        const authenticatedCreated = yield* authenticatedClient.sources.createSource({
+          payload: {
+            type: "onchain",
+            walletAddress: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E",
+            name: "Separated authenticated Solana wallet",
+          },
         })
-        expect(claimResponse.sourceId).toBe(created.source.id)
 
-        const replayResult = yield* authenticatedClient.principals
-          .claimPrincipal({ payload: claimPayload })
+        const sessionCookie = yield* createAnonSessionCookie()
+        const combinedClient = yield* makeClientWithBearerTokenAndCookie({
+          cookieHeader: `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`,
+          token: `user_${userId}_admin`,
+        })
+
+        const authenticatedSources = yield* combinedClient.sources.listSources()
+        expect(authenticatedSources.sources.map((source) => source.id)).toContain(
+          authenticatedCreated.source.id
+        )
+        expect(authenticatedSources.sources.map((source) => source.id)).not.toContain(
+          anonymousCreated.source.id
+        )
+
+        const anonymousSources = yield* combinedClient.anon.listAnonSources()
+        expect(anonymousSources.sources.map((source) => source.sourceId)).toContain(
+          anonymousCreated.source.id
+        )
+        expect(anonymousSources.sources.map((source) => source.sourceId)).not.toContain(
+          authenticatedCreated.source.id
+        )
+
+        const anonOnlyClient = yield* makeClientWithCookie(
+          `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+        )
+        const authenticatedApiResult = yield* anonOnlyClient.sources
+          .listSources()
           .pipe(Effect.either)
-
-        expect(replayResult._tag).toBe("Left")
-        if (replayResult._tag === "Left") {
-          expect(replayResult.left._tag).toBe("PrincipalClaimNotFoundError")
+        expect(authenticatedApiResult._tag).toBe("Left")
+        if (authenticatedApiResult._tag === "Left") {
+          expect(authenticatedApiResult.left._tag).toBe("UnauthorizedError")
         }
-
-        const db = yield* drizzle
-        const [storedSource] = yield* db
-          .select({ principalId: schema.sources.principalId })
-          .from(schema.sources)
-          .where(eq(schema.sources.id, created.source.id))
-          .limit(1)
-        expect(storedSource).toEqual({ principalId })
-
-        const claims = yield* db
-          .select({ consumedAt: schema.principalClaims.consumedAt })
-          .from(schema.principalClaims)
-          .where(eq(schema.principalClaims.requestId, created.claim.requestId))
-        expect(claims).toHaveLength(2)
-        expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
       }).pipe(
         Effect.provide(HttpLive),
         Effect.withConfigProvider(ClaimTokenConfigProvider),
         Effect.scoped
       )
+  )
+
+  it.effect("removes claimed sources from anonymous payer-session access", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Claim transfer removes anon access",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const sessionCookie = yield* createAnonSessionCookie()
+      const anonSessionClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+      )
+      const beforeClaim = yield* anonSessionClient.anon.listAnonSources()
+      expect(beforeClaim.sources.map((source) => source.sourceId)).toContain(created.source.id)
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        },
+      })
+      expect(claimResponse.sourceId).toBe(created.source.id)
+
+      const authenticatedSources = yield* authenticatedClient.sources.listSources()
+      expect(authenticatedSources.sources.map((source) => source.id)).toContain(created.source.id)
+
+      const afterClaim = yield* anonSessionClient.anon.listAnonSources()
+      expect(afterClaim.sources.map((source) => source.sourceId)).not.toContain(created.source.id)
+
+      const sourceResult = yield* anonSessionClient.anon
+        .getAnonSource({ path: { sourceId: created.source.id } })
+        .pipe(Effect.either)
+      expect(sourceResult._tag).toBe("Left")
+      if (sourceResult._tag === "Left") {
+        expect(sourceResult.left._tag).toBe("AnonNotFoundError")
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("reuses an existing anonymous paid source when the payer session is active", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Idempotent anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      const sessionCookie = yield* createAnonSessionCookie()
+      const anonSessionClient = yield* makeClientWithCookie(
+        `${ANON_SESSION_COOKIE_NAME}=${sessionCookie}`
+      )
+      const reused = yield* anonSessionClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Idempotent anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      expect(reused.source.id).toBe(created.source.id)
+      expect(reused.created).toBe(false)
+      expect(reused.claim).toBeNull()
+      expect(reused.syncJob).toBeNull()
+      expect(queueEvents).toHaveLength(1)
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("claims an anonymous paid source by payer-wallet SIWX without a claim token", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "SIWX claimable anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: null,
+          siwxProof: makeTestSiwxProof({
+            chainType: "solana",
+            walletAddress: TEST_PAYER_WALLET,
+            nonce: created.claim.requestId,
+          }),
+        },
+      })
+
+      expect(claimResponse.sourceId).toBe(created.source.id)
+
+      const db = yield* drizzle
+      const [storedSource] = yield* db
+        .select({
+          sourcePrincipalId: schema.sources.principalId,
+          addressPrincipalId: schema.addresses.principalId,
+        })
+        .from(schema.sources)
+        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+        .where(eq(schema.sources.id, created.source.id))
+        .limit(1)
+      expect(storedSource).toEqual({
+        sourcePrincipalId: principalId,
+        addressPrincipalId: principalId,
+      })
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("rejects SIWX for the synced source wallet when it is not the payer wallet", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Source wallet SIWX mismatch",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const result = yield* authenticatedClient.principals
+        .claimPrincipal({
+          payload: {
+            requestId: created.claim.requestId,
+            claimToken: null,
+            siwxProof: makeTestSiwxProof({
+              chainType: "solana",
+              walletAddress,
+              nonce: created.claim.requestId,
+            }),
+          },
+        })
+        .pipe(Effect.either)
+
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("rejects payer-wallet SIWX with invalid domain, nonce, expiry, or chain", () =>
+    Effect.gen(function* () {
+      const requestId = crypto.randomUUID()
+      const badProofs = [
+        makeTestSiwxProof({
+          chainType: "solana",
+          walletAddress: TEST_PAYER_WALLET,
+          domain: "evil.example",
+          nonce: requestId,
+        }),
+        makeTestSiwxProof({
+          chainType: "solana",
+          walletAddress: TEST_PAYER_WALLET,
+          nonce: "",
+        }),
+        makeTestSiwxProof({
+          chainType: "solana",
+          walletAddress: TEST_PAYER_WALLET,
+          nonce: crypto.randomUUID(),
+        }),
+        makeTestSiwxProof({
+          chainType: "solana",
+          walletAddress: TEST_PAYER_WALLET,
+          expirationTime: "2020-01-01T00:00:00.000Z",
+          nonce: requestId,
+        }),
+        makeTestSiwxProof({
+          chainType: "evm",
+          walletAddress: TEST_PAYER_WALLET,
+          nonce: requestId,
+        }),
+      ]
+
+      const challengeResponse = yield* HttpClient.execute(
+        HttpClientRequest.post("/v1/anon/session/challenge")
+      )
+      const challengeCookie = extractCookieValue(
+        challengeResponse.headers,
+        ANON_CHALLENGE_COOKIE_NAME
+      )
+      const anonChallengeClient = yield* makeClientWithCookie(
+        `${ANON_CHALLENGE_COOKIE_NAME}=${challengeCookie}`
+      )
+
+      for (const siwxProof of badProofs) {
+        const result = yield* anonChallengeClient.anon
+          .createAnonSession({ payload: { siwxProof } })
+          .pipe(Effect.either)
+
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("AnonBadRequestError")
+        }
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
+  )
+
+  it.effect("rejects replaying a anonymous source claim token after a successful ownership move", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "Replay protected anonymous Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const claimPayload = {
+        requestId: created.claim.requestId,
+        claimToken: created.claim.claimToken,
+        siwxProof: null,
+      }
+
+      const claimResponse = yield* authenticatedClient.principals.claimPrincipal({
+        payload: claimPayload,
+      })
+      expect(claimResponse.sourceId).toBe(created.source.id)
+
+      const replayResult = yield* authenticatedClient.principals
+        .claimPrincipal({ payload: claimPayload })
+        .pipe(Effect.either)
+
+      expect(replayResult._tag).toBe("Left")
+      if (replayResult._tag === "Left") {
+        expect(replayResult.left._tag).toBe("PrincipalClaimNotFoundError")
+      }
+
+      const db = yield* drizzle
+      const [storedSource] = yield* db
+        .select({ principalId: schema.sources.principalId })
+        .from(schema.sources)
+        .where(eq(schema.sources.id, created.source.id))
+        .limit(1)
+      expect(storedSource).toEqual({ principalId })
+
+      const claims = yield* db
+        .select({ consumedAt: schema.principalClaims.consumedAt })
+        .from(schema.principalClaims)
+        .where(eq(schema.principalClaims.requestId, created.claim.requestId))
+      expect(claims).toHaveLength(2)
+      expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
   )
 
   it.effect(
@@ -839,108 +2075,104 @@ describe("SourcesApiLive", () => {
     )
   )
 
-  it.effect(
-    "rejects a anonymous source claim token that is no longer owned by an anonymous principal",
-    () =>
-      Effect.gen(function* () {
-        const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
-        const created = yield* anonymousClient.sources.createSource({
+  it.effect("rejects a anonymous source claim token that is no longer owned by an anonymous principal", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "User principal claim Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const claimedUserId = crypto.randomUUID()
+      const db = yield* drizzle
+      yield* db.insert(schema.users).values({
+        id: claimedUserId,
+        email: `${claimedUserId}@taxmaxi.test`,
+        name: "Already Claimed Test User",
+      })
+      yield* db.update(schema.principals).set({ kind: "user", userId: claimedUserId })
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const result = yield* authenticatedClient.principals
+        .claimPrincipal({
           payload: {
-            type: "onchain",
-            walletAddress: "So11111111111111111111111111111111111111112",
-            name: "User principal claim Solana wallet",
-            year: 2025,
-            jurisdiction: "germany",
+            requestId: created.claim.requestId,
+            claimToken: created.claim.claimToken,
+            siwxProof: null,
           },
         })
+        .pipe(Effect.either)
 
-        if (created.claim === null) {
-          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
-        }
-
-        const claimedUserId = crypto.randomUUID()
-        const db = yield* drizzle
-        yield* db.insert(schema.users).values({
-          id: claimedUserId,
-          email: `${claimedUserId}@taxmaxi.test`,
-          name: "Already Claimed Test User",
-        })
-        yield* db.update(schema.principals).set({ kind: "user", userId: claimedUserId })
-
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
-        yield* seedPrincipalUser({ userId, principalId })
-
-        const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-        const result = yield* authenticatedClient.principals
-          .claimPrincipal({
-            payload: {
-              requestId: created.claim.requestId,
-              claimToken: created.claim.claimToken,
-              siwxProof: null,
-            },
-          })
-          .pipe(Effect.either)
-
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
-        }
-      }).pipe(
-        Effect.provide(HttpLive),
-        Effect.withConfigProvider(ClaimTokenConfigProvider),
-        Effect.scoped
-      )
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
   )
 
-  it.effect(
-    "rejects a anonymous source claim token whose wallet context no longer matches its source",
-    () =>
-      Effect.gen(function* () {
-        const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
-        const created = yield* anonymousClient.sources.createSource({
+  it.effect("rejects a anonymous source claim token whose wallet context no longer matches its source", () =>
+    Effect.gen(function* () {
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress: "So11111111111111111111111111111111111111112",
+          name: "Mismatched wallet claim Solana wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+      }
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.addresses)
+        .set({ address: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E" })
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      const result = yield* authenticatedClient.principals
+        .claimPrincipal({
           payload: {
-            type: "onchain",
-            walletAddress: "So11111111111111111111111111111111111111112",
-            name: "Mismatched wallet claim Solana wallet",
-            year: 2025,
-            jurisdiction: "germany",
+            requestId: created.claim.requestId,
+            claimToken: created.claim.claimToken,
+            siwxProof: null,
           },
         })
+        .pipe(Effect.either)
 
-        if (created.claim === null) {
-          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
-        }
-
-        const db = yield* drizzle
-        yield* db
-          .update(schema.addresses)
-          .set({ address: "8aPo8eCUhqJ1sUaz8fQAKUSMNnj3YNd19gNMVq7gFi7E" })
-
-        const userId = crypto.randomUUID()
-        const principalId = crypto.randomUUID()
-        yield* seedPrincipalUser({ userId, principalId })
-
-        const authenticatedClient = yield* makeAuthenticatedClient({ userId })
-        const result = yield* authenticatedClient.principals
-          .claimPrincipal({
-            payload: {
-              requestId: created.claim.requestId,
-              claimToken: created.claim.claimToken,
-              siwxProof: null,
-            },
-          })
-          .pipe(Effect.either)
-
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
-        }
-      }).pipe(
-        Effect.provide(HttpLive),
-        Effect.withConfigProvider(ClaimTokenConfigProvider),
-        Effect.scoped
-      )
+      expect(result._tag).toBe("Left")
+      if (result._tag === "Left") {
+        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      }
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
   )
 
   it.effect("returns conflict when claiming a wallet the user already owns", () =>
@@ -1147,12 +2379,14 @@ describe("SourcesApiLive", () => {
       expect(Headers.get(response.headers, "payment-response")).toEqual(
         Option.some("encoded-test-payment-response")
       )
+      const anonSessionCookie = extractCookieValue(response.headers, ANON_SESSION_COOKIE_NAME)
+      expect(anonSessionCookie).not.toBe("")
       expect(decodedBody.created).toBe(true)
       expect(decodedBody.claim).not.toBeNull()
       expect(decodedBody.syncJob).not.toBeNull()
       expect(decodedBody.source).toMatchObject({
         name: "Anonymous paid Solana wallet",
-        providerKey: "solana",
+        providerKey: "helius-solana",
       })
       expect(queueEvents).toHaveLength(1)
       expect(queueEvents[0]).toMatchObject({
@@ -1356,6 +2590,8 @@ describe("SourcesApiLive", () => {
       expect(first.created).toBe(true)
       expect(second.created).toBe(false)
       expect(second.source.id).toBe(first.source.id)
+      expect(first.source.providerKey).toBe("helius-solana")
+      expect(second.source.providerKey).toBe("helius-solana")
       expect(queueEvents).toHaveLength(0)
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )

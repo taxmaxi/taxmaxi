@@ -21,13 +21,13 @@
       "types": "./dist/layers/index.d.ts",
       "default": "./dist/layers/index.js"
     },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "default": "./dist/shared/index.js"
+    },
     "./services/SourceSyncService": {
       "types": "./dist/services/SourceSyncService.d.ts",
       "default": "./dist/services/SourceSyncService.js"
-    },
-    "./services/SourceSyncProvider": {
-      "types": "./dist/services/SourceSyncProvider.d.ts",
-      "default": "./dist/services/SourceSyncProvider.js"
     },
     "./providers/coinbase": {
       "types": "./dist/providers/coinbase/index.d.ts",
@@ -68,6 +68,18 @@
     "./providers/coinbase/services/CoinbaseLegDerivationService": {
       "types": "./dist/providers/coinbase/services/CoinbaseLegDerivationService.d.ts",
       "default": "./dist/providers/coinbase/services/CoinbaseLegDerivationService.js"
+    },
+    "./providers/helius-solana": {
+      "types": "./dist/providers/helius-solana/index.d.ts",
+      "default": "./dist/providers/helius-solana/index.js"
+    },
+    "./providers/helius-solana/layers": {
+      "types": "./dist/providers/helius-solana/layers/index.d.ts",
+      "default": "./dist/providers/helius-solana/layers/index.js"
+    },
+    "./providers/helius-solana/services": {
+      "types": "./dist/providers/helius-solana/services/index.d.ts",
+      "default": "./dist/providers/helius-solana/services/index.js"
     }
   },
   "scripts": {
@@ -80,7 +92,8 @@
   "dependencies": {
     "@effect/platform": "0.96.1",
     "@my/core": "workspace:*",
-    "effect": "3.21.2"
+    "effect": "3.21.2",
+    "helius-sdk": "2.2.2"
   },
   "devDependencies": {
     "@effect/sql": "0.51.1",

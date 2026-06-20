@@ -16,16 +16,8 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import { FetchProviderRawBatchParams } from "../shared/SourceProviderRawBatch.ts"
 import {
-  CoinbaseSourceSyncProvider,
-  type CoinbaseRecoverableNormalizationError,
-  type CoinbaseNormalizationLookups,
-  type CoinbaseReferenceDataServiceError,
-  type CoinbaseSourceSyncProviderShape,
-} from "../providers/coinbase/index.ts"
-import {
-  type PersistNormalizedSourceArtifactsContext,
-  FetchProviderRawBatchParams,
   SourceNormalizationRepository,
   SourceNotFoundError,
   SourceRawRecordRepository,
@@ -36,14 +28,16 @@ import {
   type SourceSyncJobMode,
   type SourceSyncJobSummary,
   type SourceSyncSource,
+  type SourceProviderModuleShape,
+  type SourceProviderModuleError,
+  type SourceProviderRawRecordNormalizer,
+  SourceProviderRegistry,
   SourceSyncJobExecutionConflictError,
   SourceSyncJobExecutionNotFoundError,
   SourceSyncJobExecutionPayloadError,
   SourceSyncJobRetryableExecutionError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
-  SourceSyncProvider,
-  type SourceSyncProviderError,
   SourceSyncStateRepository,
   SyncEngineStorageError,
   TransferReconciliationService,
@@ -61,19 +55,28 @@ import {
 interface NormalizationSummary {
   readonly normalizedRecords: number
   readonly failedRecords: number
+  readonly failedRawRecordIds: ReadonlyArray<string>
+}
+
+/**
+ * End-of-sync replay outcome. `failedRecordsDelta` adjusts the run's failure
+ * counter: replayed rows already counted as failed this run are not counted
+ * again, and rows that recover subtract their earlier failure.
+ */
+interface ReplaySummary {
+  readonly normalizedRecords: number
+  readonly failedRecordsDelta: number
 }
 
 interface SyncLoopState {
   readonly execution: SourceSyncExecutionState
   readonly done: boolean
+  readonly failedRawRecordIds: ReadonlySet<string>
 }
 
-type SourceProviderModule = CoinbaseSourceSyncProviderShape
-type SourceProviderNormalizationLookups = CoinbaseNormalizationLookups
 type SourceSyncExecutionError =
   | UnsupportedProviderError
-  | CoinbaseReferenceDataServiceError
-  | SourceSyncProviderError
+  | SourceProviderModuleError
   | SyncEngineStorageError
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
@@ -85,7 +88,7 @@ const UnknownSyncErrorSchema = Schema.Struct({
 
 const decodeUnknownSyncError = Schema.decodeUnknownEither(UnknownSyncErrorSchema)
 
-const COINBASE_SYNC_PAGE_SIZE_CONFIG = Config.integer("COINBASE_SYNC_PAGE_SIZE").pipe(
+const SOURCE_SYNC_PAGE_SIZE_CONFIG = Config.integer("SOURCE_SYNC_PAGE_SIZE").pipe(
   Config.map((configuredPageSize) =>
     configuredPageSize > 0 ? configuredPageSize : DEFAULT_SYNC_PAGE_SIZE
   ),
@@ -116,19 +119,18 @@ const errorMessage = (error: unknown): string => {
 }
 
 const isRetryableExecutionError = (error: SourceSyncExecutionError): boolean =>
-  error._tag === "SourceSyncProviderFailureError" && error.retryable
+  error._tag === "SourceSyncProviderFailureError" && "retryable" in error && error.retryable
 
 const make = Effect.gen(function* () {
-  const coinbaseSourceSyncProvider = yield* CoinbaseSourceSyncProvider
+  const sourceProviderRegistry = yield* SourceProviderRegistry
   const sourceRepository = yield* SourceRepository
   const sourceSyncJobRepository = yield* SourceSyncJobRepository
   const sourceSyncStateRepository = yield* SourceSyncStateRepository
   const sourceRawRecordRepository = yield* SourceRawRecordRepository
   const sourceNormalizationRepository = yield* SourceNormalizationRepository
   const sourceReplayRepository = yield* SourceReplayRepository
-  const sourceSyncProvider = yield* SourceSyncProvider
   const transferReconciliationService = yield* TransferReconciliationService
-  const pageSize = yield* COINBASE_SYNC_PAGE_SIZE_CONFIG
+  const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
 
   const loadSource = ({
     principalId,
@@ -175,13 +177,10 @@ const make = Effect.gen(function* () {
     providerKey,
   }: {
     readonly providerKey: string
-  }): Effect.Effect<SourceProviderModule, UnsupportedProviderError> => {
-    switch (providerKey) {
-      case "coinbase":
-        return Effect.succeed(coinbaseSourceSyncProvider)
-      default:
-        return Effect.fail(new UnsupportedProviderError({ provider: providerKey }))
-    }
+  }): Effect.Effect<SourceProviderModuleShape, UnsupportedProviderError> => {
+    return sourceProviderRegistry
+      .resolveProviderModule({ providerKey })
+      .pipe(Effect.mapError(() => new UnsupportedProviderError({ provider: providerKey })))
   }
 
   const markRawRecordFailure = ({
@@ -197,7 +196,7 @@ const make = Effect.gen(function* () {
     error,
   }: {
     readonly rawRecordId: string
-    readonly error: CoinbaseRecoverableNormalizationError
+    readonly error: { readonly message: string }
   }) =>
     markRawRecordFailure({
       rawRecordId,
@@ -206,87 +205,63 @@ const make = Effect.gen(function* () {
       Effect.as({
         normalizedRecords: 0,
         failedRecords: 1,
+        failedRawRecordIds: [rawRecordId],
       } satisfies NormalizationSummary)
     )
 
   const normalizeRawRecord = ({
     source,
     rawRecord,
-    providerModule,
-    lookups,
+    normalizeRecord,
   }: {
     readonly source: SourceSyncSource
     readonly rawRecord: SourceRawRecord
-    readonly providerModule: SourceProviderModule
-    readonly lookups: SourceProviderNormalizationLookups
+    readonly normalizeRecord: SourceProviderRawRecordNormalizer
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
     Effect.gen(function* () {
       if (rawRecord.normalizedAt !== null) {
-        return { normalizedRecords: 0, failedRecords: 0 } satisfies NormalizationSummary
+        return {
+          normalizedRecords: 0,
+          failedRecords: 0,
+          failedRawRecordIds: [],
+        } satisfies NormalizationSummary
       }
 
-      if (rawRecord.recordType !== "coinbase_transaction") {
+      const normalization = yield* normalizeRecord({ source, sourceRecord: rawRecord })
+
+      if (normalization.kind === "skipped") {
         yield* sourceRawRecordRepository.markRawRecordNormalized({
           rawRecordId: rawRecord.id,
         })
 
-        return { normalizedRecords: 1, failedRecords: 0 } satisfies NormalizationSummary
+        return {
+          normalizedRecords: 1,
+          failedRecords: 0,
+          failedRawRecordIds: [],
+        } satisfies NormalizationSummary
       }
 
-      const prepared = yield* providerModule.prepareNormalization({
-        source,
-        sourceRecord: rawRecord,
-        lookups,
+      yield* sourceNormalizationRepository.persistNormalizedArtifacts({
+        transaction: normalization.transaction,
+        venueContext: normalization.venueContext,
+        onchainContext: normalization.onchainContext,
+        providerTransfers: normalization.providerTransfers,
+        feeTransfers: normalization.feeTransfers,
+        transactionReview: normalization.transactionReview,
+        resolvedTransactionType: normalization.resolvedTransactionType,
+        deriveLegs: normalization.deriveLegs,
       })
-
-      yield* sourceNormalizationRepository.persistNormalizedArtifacts(
-        prepared.legDerivationStrategy === "derive"
-          ? {
-              transaction: prepared.transaction,
-              venueContext: prepared.venueContext,
-              providerTransfers: prepared.providerTransfers,
-              feeTransfers: prepared.feeTransfers,
-              transactionReview: prepared.transactionReview,
-              resolvedTransactionType: prepared.resolvedTransactionType,
-              deriveLegs: ({
-                transaction,
-                venueContext,
-                feeTransfers,
-              }: PersistNormalizedSourceArtifactsContext) =>
-                providerModule.deriveLegs({
-                  transaction,
-                  venueContext,
-                  primaryAsset: prepared.primaryAsset,
-                  feeTransfers,
-                }),
-            }
-          : {
-              transaction: prepared.transaction,
-              venueContext: prepared.venueContext,
-              providerTransfers: prepared.providerTransfers,
-              feeTransfers: prepared.feeTransfers,
-              transactionReview: prepared.transactionReview,
-              resolvedTransactionType: prepared.resolvedTransactionType,
-              legs: [],
-            }
-      )
 
       return {
         normalizedRecords: 1,
         failedRecords: 0,
+        failedRawRecordIds: [],
       } satisfies NormalizationSummary
     }).pipe(
-      Effect.catchTag("CoinbaseRecordNormalizationError", (error) =>
-        markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
-      ),
-      Effect.catchTag("CoinbasePendingTransactionTypeMappingError", (error) =>
-        markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
-      ),
-      Effect.catchTag("CoinbaseBrokenApprovedProviderAssetMappingError", (error) =>
-        markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
-      ),
-      Effect.catchTag("CoinbaseLegDerivationError", (error) =>
-        markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
+      Effect.catchAll((error) =>
+        error._tag === "SyncEngineStorageError"
+          ? Effect.fail(error)
+          : markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
       ),
       Effect.mapError(
         (error) =>
@@ -300,53 +275,61 @@ const make = Effect.gen(function* () {
   const normalizeRawBatch = ({
     source,
     rawRecords,
-    providerModule,
-    lookups,
+    normalizeRecord,
   }: {
     readonly source: SourceSyncSource
     readonly rawRecords: ReadonlyArray<SourceRawRecord>
-    readonly providerModule: SourceProviderModule
-    readonly lookups: SourceProviderNormalizationLookups
+    readonly normalizeRecord: SourceProviderRawRecordNormalizer
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
     Effect.reduce(
       rawRecords,
-      { normalizedRecords: 0, failedRecords: 0 } as NormalizationSummary,
+      { normalizedRecords: 0, failedRecords: 0, failedRawRecordIds: [] } as NormalizationSummary,
       (state, rawRecord) =>
-        normalizeRawRecord({ source, rawRecord, providerModule, lookups }).pipe(
+        normalizeRawRecord({ source, rawRecord, normalizeRecord }).pipe(
           Effect.map((summary) => ({
             normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
             failedRecords: state.failedRecords + summary.failedRecords,
+            failedRawRecordIds: [...state.failedRawRecordIds, ...summary.failedRawRecordIds],
           }))
         )
     )
 
   const replayFailedRawRecords = ({
     source,
-    providerModule,
-    lookups,
-    importedBefore,
+    normalizeRecord,
+    countedFailedRawRecordIds,
   }: {
     readonly source: SourceSyncSource
-    readonly providerModule: SourceProviderModule
-    readonly lookups: SourceProviderNormalizationLookups
-    readonly importedBefore: Date
-  }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
+    readonly normalizeRecord: SourceProviderRawRecordNormalizer
+    readonly countedFailedRawRecordIds: ReadonlySet<string>
+  }): Effect.Effect<ReplaySummary, SyncEngineStorageError> =>
     Effect.gen(function* () {
       const replayCandidates = yield* sourceRawRecordRepository.listReplayCandidates({
         sourceId: source.id,
-        importedBefore,
       })
 
       if (replayCandidates.length === 0) {
-        return { normalizedRecords: 0, failedRecords: 0 } satisfies NormalizationSummary
+        return { normalizedRecords: 0, failedRecordsDelta: 0 } satisfies ReplaySummary
       }
 
-      return yield* normalizeRawBatch({
+      const replaySummary = yield* normalizeRawBatch({
         source,
         rawRecords: replayCandidates,
-        providerModule,
-        lookups,
+        normalizeRecord,
       })
+      const replayFailedRawRecordIds = new Set(replaySummary.failedRawRecordIds)
+      const newFailures = replaySummary.failedRawRecordIds.filter(
+        (rawRecordId) => !countedFailedRawRecordIds.has(rawRecordId)
+      ).length
+      const recoveredCountedFailures = replayCandidates.filter(
+        (candidate) =>
+          countedFailedRawRecordIds.has(candidate.id) && !replayFailedRawRecordIds.has(candidate.id)
+      ).length
+
+      return {
+        normalizedRecords: replaySummary.normalizedRecords,
+        failedRecordsDelta: newFailures - recoveredCountedFailures,
+      } satisfies ReplaySummary
     })
 
   const runSync = ({
@@ -361,7 +344,6 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const provider = source.providerKey ?? "unknown"
       const providerModule = yield* resolveProviderModule({ providerKey: provider })
-      const replayImportedBefore = nowDate()
       const referenceRefresh = yield* providerModule.refreshReferenceData().pipe(
         sourceSyncSpan({
           name: "source-sync.refresh-reference-data",
@@ -392,9 +374,9 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
-      const lookups = yield* providerModule.loadNormalizationLookups().pipe(
+      const normalizeRecord = yield* providerModule.makeRawRecordNormalizer().pipe(
         sourceSyncSpan({
-          name: "source-sync.load-normalization-lookups",
+          name: "source-sync.make-raw-record-normalizer",
           attributes: { sourceId: source.id, jobId, provider },
           kind: "client",
         })
@@ -416,17 +398,19 @@ const make = Effect.gen(function* () {
       const initialLoop: SyncLoopState = {
         execution: initialExecution,
         done: false,
+        failedRawRecordIds: new Set(),
       }
 
       const finalLoop = yield* Effect.iterate(initialLoop, {
         while: (loop) => !loop.done,
         body: (loop) =>
           Effect.gen(function* () {
-            const nextBatch = yield* sourceSyncProvider
+            const nextBatch = yield* providerModule
               .fetchRawBatch(
                 FetchProviderRawBatchParams.make({
                   providerKey: provider,
                   sourceId: source.id,
+                  walletAddress: source.walletAddress,
                   cursorPayload: loop.execution.cursorPayload,
                   resumeHighWatermark,
                   resumeCheckpointExternalId,
@@ -458,8 +442,7 @@ const make = Effect.gen(function* () {
             const normalization = yield* normalizeRawBatch({
               source,
               rawRecords: checkpoint.rawRecords,
-              providerModule,
-              lookups,
+              normalizeRecord,
             }).pipe(
               sourceSyncSpan({
                 name: "source-sync.normalize-raw-batch",
@@ -520,15 +503,23 @@ const make = Effect.gen(function* () {
               "source-sync:batch"
             )
 
-            return { execution: nextExecution, done: nextBatch.done } satisfies SyncLoopState
+            return {
+              execution: nextExecution,
+              done: nextBatch.done,
+              failedRawRecordIds:
+                normalization.failedRawRecordIds.length === 0
+                  ? loop.failedRawRecordIds
+                  : new Set([...loop.failedRawRecordIds, ...normalization.failedRawRecordIds]),
+            } satisfies SyncLoopState
           }),
       })
 
+      // Runs after all pages are cached so rows that failed earlier in this
+      // run because a sibling row was on a later page can normalize now.
       const replaySummary = yield* replayFailedRawRecords({
         source,
-        providerModule,
-        lookups,
-        importedBefore: replayImportedBefore,
+        normalizeRecord,
+        countedFailedRawRecordIds: finalLoop.failedRawRecordIds,
       }).pipe(
         sourceSyncSpan({
           name: "source-sync.replay-failed-raw-records",
@@ -538,7 +529,7 @@ const make = Effect.gen(function* () {
       const completedExecution: SourceSyncExecutionState = {
         ...finalLoop.execution,
         normalizedRecords: finalLoop.execution.normalizedRecords + replaySummary.normalizedRecords,
-        failedRecords: finalLoop.execution.failedRecords + replaySummary.failedRecords,
+        failedRecords: finalLoop.execution.failedRecords + replaySummary.failedRecordsDelta,
       }
       const reconciliationSummary = yield* transferReconciliationService
         .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
@@ -635,9 +626,9 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
-      const lookups = yield* providerModule.loadNormalizationLookups().pipe(
+      const normalizeRecord = yield* providerModule.makeRawRecordNormalizer().pipe(
         sourceSyncSpan({
-          name: "source-replay.load-normalization-lookups",
+          name: "source-replay.make-raw-record-normalizer",
           attributes: { sourceId: source.id, jobId, provider },
           kind: "client",
         })
@@ -665,8 +656,7 @@ const make = Effect.gen(function* () {
       const normalization = yield* normalizeRawBatch({
         source,
         rawRecords,
-        providerModule,
-        lookups,
+        normalizeRecord,
       }).pipe(
         sourceSyncSpan({
           name: "source-replay.normalize-raw-batch",

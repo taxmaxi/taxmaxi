@@ -7,7 +7,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import Header from "#/components/Header"
 import Footer from "#/components/Footer"
 
-import { client } from "#/integrations/solana/client"
+import { getSolanaClient } from "#/integrations/solana/client"
 import TanStackQueryDevtools from "#/integrations/tanstack-query/devtools"
 
 import appCss from "../styles.css?url"
@@ -43,6 +43,8 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+  const client = getSolanaClient()
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>

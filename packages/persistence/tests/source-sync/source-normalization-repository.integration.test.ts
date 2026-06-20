@@ -7,6 +7,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderReferenceRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
+import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
@@ -100,7 +101,8 @@ const CoinbaseSourceSyncProviderWithDepsLive = CoinbaseSourceSyncProviderLive.pi
   Layer.provide(CoinbaseSyncClientTestLive),
   Layer.provide(AssetRepositoryLive),
   Layer.provide(ProviderAssetRepositoryLive),
-  Layer.provide(ProviderReferenceRepositoryLive)
+  Layer.provide(ProviderReferenceRepositoryLive),
+  Layer.provide(SourceRawRecordRepositoryLive)
 )
 
 const CoinbaseNormalizationTestLayer = Layer.mergeAll(
@@ -170,6 +172,7 @@ const buildCoinbaseSource = ({
   providerKey: "coinbase",
   cexAccountId,
   addressId: null,
+  walletAddress: null,
 })
 
 const buildSeededRawRecord = ({

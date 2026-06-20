@@ -15,7 +15,7 @@ import type * as Option from "effect/Option"
 import type * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import { AuthUserId, SessionId } from "@my/core/authentication"
-import { UnauthorizedError } from "./ApiErrors.ts"
+import { ForbiddenError, UnauthorizedError } from "./ApiErrors.ts"
 
 // =============================================================================
 // CurrentUser Service
@@ -108,6 +108,25 @@ export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()("Aut
     cookie: HttpApiSecurity.apiKey({ in: "cookie", key: "taxmaxi_session" }),
   },
 }) {}
+
+/**
+ * AdminAuthMiddleware - Authentication middleware for admin-only API groups.
+ *
+ * This middleware validates the caller like AuthMiddleware, then requires
+ * CurrentUser.role to be "admin" before downstream handlers run.
+ */
+// @effect-diagnostics-next-line leakingRequirements:off
+export class AdminAuthMiddleware extends HttpApiMiddleware.Tag<AdminAuthMiddleware>()(
+  "AdminAuthMiddleware",
+  {
+    failure: Schema.Union(UnauthorizedError, ForbiddenError),
+    provides: CurrentUser,
+    security: {
+      bearer: HttpApiSecurity.bearer,
+      cookie: HttpApiSecurity.apiKey({ in: "cookie", key: "taxmaxi_session" }),
+    },
+  }
+) {}
 
 // =============================================================================
 // Token Validation Service

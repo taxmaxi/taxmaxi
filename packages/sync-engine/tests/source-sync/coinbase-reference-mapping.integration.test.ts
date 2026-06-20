@@ -2,22 +2,18 @@ import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import {
-  CoinbaseLegDerivationServiceLive,
-  CoinbaseRecordNormalizerLive,
-  CoinbaseReferenceDataServiceLive,
-  CoinbaseReferenceMappingServiceLive,
-  CoinbaseReferenceMappingService,
-  CoinbaseSourceSyncProviderLive,
-  CoinbaseSyncClient,
-} from "@my/sync-engine/providers/coinbase"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
-import {
-  SourceSyncService,
-  SourceSyncProvider,
-  type SourceSyncProviderShape,
-} from "@my/sync-engine/services"
+import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
+import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
+import { CoinbaseLegDerivationServiceLive } from "../../src/providers/coinbase/layers/CoinbaseLegDerivationServiceLive.ts"
+import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
+import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceDataServiceLive.ts"
+import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceMappingServiceLive.ts"
+import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
+import { CoinbaseReferenceMappingService } from "../../src/providers/coinbase/services/CoinbaseReferenceMappingService.ts"
+import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
+import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -25,7 +21,7 @@ import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLi
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
-import { FetchProviderRawBatchResult, ProviderRawRecord } from "@my/sync-engine/services"
+import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
@@ -71,34 +67,70 @@ const syncRecords = [
       updated_at: "2025-01-01T00:00:00.000Z",
     },
   }),
+  // Real Coinbase instant unstaking emits two principal-sized rows at the same
+  // timestamp: the full release from the staked balance and the net credit to
+  // the spot balance. Only the spread between them is a fee.
   makeCoinbaseRecord({
-    externalRecordId: "tx-unstake-principal",
+    externalRecordId: "tx-unstake-credit",
     externalParentId: "unstake-group-1",
     occurredAt: new Date("2025-05-01T10:00:00.000Z"),
     payload: {
-      id: "tx-unstake-principal",
+      id: "tx-unstake-credit",
       type: "retail_instant_unstaking",
       status: "completed",
       amount: { amount: "1.25000000", currency: "ETH2" },
       native_amount: { amount: "2500.00", currency: "EUR" },
       created_at: "2025-05-01T10:00:00.000Z",
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-principal",
-      description: "Instant unstaking principal release",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-credit",
+      description: "Instant unstaking net principal credit",
     },
   }),
   makeCoinbaseRecord({
-    externalRecordId: "tx-unstake-fee",
+    externalRecordId: "tx-unstake-release",
     externalParentId: "unstake-group-1",
-    occurredAt: new Date("2025-05-01T10:00:05.000Z"),
+    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
     payload: {
-      id: "tx-unstake-fee",
+      id: "tx-unstake-release",
       type: "retail_instant_unstaking",
       status: "completed",
-      amount: { amount: "-0.01500000", currency: "ETH2" },
-      native_amount: { amount: "-30.00", currency: "EUR" },
-      created_at: "2025-05-01T10:00:05.000Z",
-      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-fee",
-      description: "Instant unstaking spread",
+      amount: { amount: "-1.26500000", currency: "ETH2" },
+      native_amount: { amount: "-2530.00", currency: "EUR" },
+      created_at: "2025-05-01T10:00:00.000Z",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-release",
+      description: "Instant unstaking principal release",
+    },
+  }),
+  // Second unstaking pair at the exact same timestamp and currency but in a
+  // different provider group. Pairing must match on the group, not just on
+  // timestamp + currency, so the two pairs do not block each other.
+  makeCoinbaseRecord({
+    externalRecordId: "tx-unstake-alt-credit",
+    externalParentId: "unstake-group-2",
+    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    payload: {
+      id: "tx-unstake-alt-credit",
+      type: "retail_instant_unstaking",
+      status: "completed",
+      amount: { amount: "0.50000000", currency: "ETH2" },
+      native_amount: { amount: "1000.00", currency: "EUR" },
+      created_at: "2025-05-01T10:00:00.000Z",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-alt-credit",
+      description: "Second instant unstaking net principal credit",
+    },
+  }),
+  makeCoinbaseRecord({
+    externalRecordId: "tx-unstake-alt-release",
+    externalParentId: "unstake-group-2",
+    occurredAt: new Date("2025-05-01T10:00:00.000Z"),
+    payload: {
+      id: "tx-unstake-alt-release",
+      type: "retail_instant_unstaking",
+      status: "completed",
+      amount: { amount: "-0.51000000", currency: "ETH2" },
+      native_amount: { amount: "-1020.00", currency: "EUR" },
+      created_at: "2025-05-01T10:00:00.000Z",
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-unstake-alt-release",
+      description: "Second instant unstaking principal release",
     },
   }),
   makeCoinbaseRecord({
@@ -133,22 +165,31 @@ const syncRecords = [
   }),
 ] as const
 
-const SourceSyncProviderTestLive = Layer.succeed(SourceSyncProvider, {
-  fetchRawBatch: () =>
-    Effect.succeed(
-      FetchProviderRawBatchResult.make({
-        records: syncRecords,
-        cursorPayload: { step: "done" },
-        highWatermark: new Date("2025-06-01T09:00:02.000Z"),
-        done: true,
-      })
-    ),
-} satisfies SourceSyncProviderShape)
-
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
-  fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
-  fetchTransactionsPage: () =>
-    Effect.dieMessage("CoinbaseSyncClient test stub: fetchTransactionsPage"),
+  fetchAccountsPage: () =>
+    Effect.succeed({
+      records: syncRecords
+        .filter((record) => record.recordType === "coinbase_account")
+        .map((record) => ({
+          id: record.externalRecordId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
+  fetchTransactionsPage: ({ accountId }) =>
+    Effect.succeed({
+      records: syncRecords
+        .filter((record) => record.recordType === "coinbase_transaction")
+        .map((record) => ({
+          id: record.externalRecordId,
+          accountId: record.externalAccountId ?? accountId,
+          parentId: record.externalParentId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
   fetchFiatCurrencies: () =>
     Effect.succeed([
       {
@@ -219,7 +260,12 @@ const CoinbaseSourceSyncProviderWithDepsLive = CoinbaseSourceSyncProviderLive.pi
 
 const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationServiceLive),
-  Layer.provide(SourceSyncProviderTestLive),
+  Layer.provide(
+    SourceProviderRegistryLive.pipe(
+      Layer.provide(CoinbaseSourceSyncProviderWithDepsLive),
+      Layer.provide(HeliusSolanaSourceSyncProviderLive)
+    )
+  ),
   Layer.provide(CoinbaseSourceSyncProviderWithDepsLive)
 )
 
@@ -229,6 +275,7 @@ const SourceSyncLayer = SourceSyncServiceLive.pipe(
 )
 
 const TestLayer = SourceSyncLayer.pipe(
+  Layer.provideMerge(CoinbaseSourceSyncProviderWithDepsLive),
   Layer.provideMerge(RepositoriesLive),
   Layer.provideMerge(TestPgClientLive)
 )
@@ -417,6 +464,9 @@ const fetchNormalizationState = () =>
         externalId: schema.transactionLegs.externalId,
         kind: schema.transactionLegs.kind,
         derivationRule: schema.transactionLegs.derivationRule,
+        amount: schema.transactionLegs.amount,
+        fiatAmount: schema.transactionLegs.fiatAmount,
+        fiatCurrency: schema.transactionLegs.fiatCurrency,
       })
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.sourceId, sourceId))
@@ -691,7 +741,7 @@ describe("coinbase reference mappings", () => {
         yield* runSync()
         const state = yield* fetchNormalizationState()
 
-        expect(state.rawRows).toHaveLength(5)
+        expect(state.rawRows).toHaveLength(7)
         expect(state.rawRows.every((row) => row.normalizedAt !== null)).toBe(true)
         expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
 
@@ -718,47 +768,80 @@ describe("coinbase reference mappings", () => {
             transactionType: "token_migration_transfer",
           },
           {
-            externalId: "tx-unstake-fee",
+            externalId: "tx-unstake-alt-credit",
+            externalGroupId: "unstake-group-2",
+            providerTransactionType: "retail_instant_unstaking",
+            transactionType: "staking_withdrawal",
+          },
+          {
+            externalId: "tx-unstake-alt-release",
+            externalGroupId: "unstake-group-2",
+            providerTransactionType: "retail_instant_unstaking",
+            transactionType: "staking_withdrawal",
+          },
+          {
+            externalId: "tx-unstake-credit",
             externalGroupId: "unstake-group-1",
             providerTransactionType: "retail_instant_unstaking",
             transactionType: "staking_withdrawal",
           },
           {
-            externalId: "tx-unstake-principal",
+            externalId: "tx-unstake-release",
             externalGroupId: "unstake-group-1",
             providerTransactionType: "retail_instant_unstaking",
             transactionType: "staking_withdrawal",
           },
         ])
 
+        const sortedLegs = [...state.legs].sort((left, right) =>
+          String(left.externalId).localeCompare(String(right.externalId))
+        )
         expect(
-          state.legs
-            .map((row) => ({
-              externalId: row.externalId,
-              kind: row.kind,
-              derivationRule: row.derivationRule,
-            }))
-            .sort((left, right) => String(left.externalId).localeCompare(String(right.externalId)))
+          sortedLegs.map((row) => ({
+            externalId: row.externalId,
+            kind: row.kind,
+            derivationRule: row.derivationRule,
+          }))
         ).toEqual([
           {
-            externalId: expect.stringContaining("tx-unstake-fee"),
+            externalId: expect.stringContaining("tx-unstake-alt-release"),
             kind: "fee",
-            derivationRule: "coinbase_retail_instant_unstaking_fee",
+            derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
           },
           {
-            externalId: expect.stringContaining("tx-unstake-principal"),
-            kind: "acquisition",
-            derivationRule: "coinbase_retail_instant_unstaking_principal",
+            externalId: expect.stringContaining("tx-unstake-release"),
+            kind: "fee",
+            derivationRule: "coinbase_retail_instant_unstaking_spread_fee",
           },
         ])
 
+        const [altSpreadFeeLeg, spreadFeeLeg] = sortedLegs
+        expect(Number(spreadFeeLeg?.amount)).toBeCloseTo(0.015, 9)
+        expect(Number(spreadFeeLeg?.fiatAmount)).toBeCloseTo(30, 6)
+        expect(spreadFeeLeg?.fiatCurrency).toBe("EUR")
+        expect(Number(altSpreadFeeLeg?.amount)).toBeCloseTo(0.01, 9)
+        expect(Number(altSpreadFeeLeg?.fiatAmount)).toBeCloseTo(20, 6)
+        expect(altSpreadFeeLeg?.fiatCurrency).toBe("EUR")
+
         expect(
-          state.transactions.find((row) => row.externalId === "tx-unstake-principal")?.metadata
+          state.transactions.find((row) => row.externalId === "tx-unstake-release")?.metadata
         ).toEqual(
           expect.objectContaining({
             coinbaseReferenceMapping: expect.objectContaining({
-              resolutionStrategy: "amount_sign_fee",
+              resolutionStrategy: "paired_spread_fee",
               transactionType: "staking_withdrawal",
+            }),
+            pairedRecord: expect.objectContaining({
+              externalId: "tx-unstake-credit",
+            }),
+          })
+        )
+        expect(
+          state.transactions.find((row) => row.externalId === "tx-unstake-alt-release")?.metadata
+        ).toEqual(
+          expect.objectContaining({
+            pairedRecord: expect.objectContaining({
+              externalId: "tx-unstake-alt-credit",
             }),
           })
         )

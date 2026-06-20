@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "dune": {
+      "source": "duneanalytics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/dune/SKILL.md",
+      "computedHash": "085c4d5553f7abe9840fd75258f3807649393f451668bade4cda4d1bd93c7408"
+    }
+  }
+}

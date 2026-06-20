@@ -33,6 +33,7 @@ import { EmailVerificationRequestRepositoryLive } from "./EmailVerificationReque
 import { IdentityRepositoryLive } from "./IdentityRepositoryLive.ts"
 import { SessionRepositoryLive } from "./SessionRepositoryLive.ts"
 import { SourceRepositoryLive } from "./SourceRepositoryLive.ts"
+import { SourceReportRepositoryLive } from "./SourceReportRepositoryLive.ts"
 import { CexAccountRepositoryLive } from "./CexAccountRepositoryLive.ts"
 import { OAuthStateStoreLive } from "./OAuthStateStoreLive.ts"
 import { PrincipalRepositoryLive } from "./PrincipalRepositoryLive.ts"
@@ -47,6 +48,7 @@ import { AssetRepositoryLive } from "./AssetRepositoryLive.ts"
 import { CoinbaseCredentialRepositoryLive } from "./CoinbaseCredentialRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "./ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "./ProviderReferenceRepositoryLive.ts"
+import { ProtocolCandidateRepositoryLive } from "./ProtocolCandidateRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "./SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "./SourceRawRecordRepositoryLive.ts"
 import { SourceReplayRepositoryLive } from "./SourceReplayRepositoryLive.ts"
@@ -102,12 +104,14 @@ export const RepositoriesLive = Layer.mergeAll(
   PrincipalClaimRepositoryLive,
   LegalReferenceRepositoryLive,
   SourceRepositoryLive,
+  SourceReportRepositoryLive,
   CexAccountRepositoryLive,
   TaxCalculationServiceLive,
   AssetRepositoryLive,
   CoinbaseCredentialRepositoryLive,
   ProviderAssetRepositoryLive,
   ProviderReferenceRepositoryLive,
+  ProtocolCandidateRepositoryLive,
   SourceNormalizationRepositoryLive,
   SourceRawRecordRepositoryLive,
   SourceReplayRepositoryLive,

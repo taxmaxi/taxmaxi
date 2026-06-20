@@ -1,0 +1,761 @@
+import { Command, Options } from "@effect/cli"
+import { FileSystem, Path } from "@effect/platform"
+import { Console, Effect, Layer, Schema } from "effect"
+import * as Config from "effect/Config"
+import * as Option from "effect/Option"
+import {
+  ProtocolCandidateRepository,
+  type ProtocolCandidateImportResult,
+} from "@my/sync-engine/services"
+import {
+  duneObservationsFromSolanaDuneRankingsFile,
+  SolanaDuneRankingsFile,
+} from "@my/sync-engine/providers/helius-solana"
+import { CrawlerCommandError } from "./errors.ts"
+import {
+  buildSolanaBehaviorSamplesArtifact,
+  SolanaBehaviorSamplerClient,
+  SolanaBehaviorSamplesArtifact,
+  type SolanaBehaviorSamplingInput,
+} from "./solana-behavior-sampler.ts"
+import {
+  buildSolanaDexDiscoveryFile,
+  DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS,
+  solanaDuneDexProjectRankingsFileName,
+  type SolanaDexDiscoveryPriorityQueryTimeout,
+} from "./solana-dex-discovery.ts"
+import { SolanaDuneClient, solanaDuneClientFromRecordedExecutions } from "./solana-dune-client.ts"
+
+export const SOLANA_BEHAVIOR_SAMPLES_FILE_NAME = "solana-behavior-samples.json"
+export const DEFAULT_SOLANA_REFERENCE_DATA_DIR =
+  "packages/sync-engine/src/providers/helius-solana/reference-data"
+
+const SOLANA_REFERENCE_DATA_DIR_ENV_VAR = "CRAWLER_SOLANA_REFERENCE_DATA_DIR"
+
+const CrawlSolanaBehaviorJsonSummary = Schema.Struct({
+  stage: Schema.Literal("crawl_solana_behavior_completed"),
+  behaviorSamplesPath: Schema.String,
+  samples: Schema.Number,
+})
+
+const CrawlSolanaJsonSummary = Schema.Struct({
+  stage: Schema.Literal("crawl_solana_completed"),
+  dexProjectRankingsPath: Schema.optional(Schema.String),
+  replayedFromFile: Schema.optional(Schema.String),
+  entries: Schema.Number,
+  candidates: Schema.Number,
+  duneProtocolCandidateObservations: Schema.Number,
+})
+
+export type CrawlSolanaBehaviorOptions = {
+  readonly out: Option.Option<string>
+  readonly json: boolean
+  readonly signatures: ReadonlyArray<string>
+  readonly programs: ReadonlyArray<string>
+  readonly fromSlot: Option.Option<number>
+  readonly toSlot: Option.Option<number>
+  readonly sampleLimit: number
+}
+
+export type CrawlSolanaBehaviorResult = {
+  readonly behaviorSamplesPath: string
+  readonly behaviorSamples: SolanaBehaviorSamplesArtifact
+}
+
+export type CrawlSolanaOptions = {
+  readonly startDate: string
+  readonly endDate: string
+  readonly samplesPerProject: number
+  readonly windowDays: number
+  readonly out: Option.Option<string>
+  readonly json: boolean
+}
+
+export type CrawlSolanaReplayOptions = {
+  readonly fromFile: string
+  readonly out: Option.Option<string>
+  readonly json: boolean
+}
+
+export type CrawlSolanaResult = {
+  readonly dexProjectRankingsPath: string | null
+  readonly dexProjectRankings: SolanaDuneRankingsFile
+  readonly duneProtocolCandidateImport: ProtocolCandidateImportResult
+  readonly replayedFromFile: string | null
+}
+
+type ImportDexProjectRankingsCandidates<R> = (
+  dexProjectRankings: SolanaDuneRankingsFile
+) => Effect.Effect<ProtocolCandidateImportResult, CrawlerCommandError, R>
+
+const outOption = Options.text("out").pipe(
+  Options.optional,
+  Options.withDescription("Output directory for generated artifacts")
+)
+
+const jsonOption = Options.boolean("json").pipe(
+  Options.withDescription("Output machine-readable JSON")
+)
+
+const signatureOption = Options.text("signature").pipe(
+  Options.withDescription("Transaction signature to sample"),
+  Options.repeated,
+  Options.withDefault<Array<string>>([])
+)
+
+const programOption = Options.text("program").pipe(
+  Options.withDescription("Program id to include when slot-range sampling"),
+  Options.repeated,
+  Options.withDefault<Array<string>>([])
+)
+
+const fromSlotOption = Options.integer("from-slot").pipe(
+  Options.optional,
+  Options.withDescription("First finalized slot to sample")
+)
+
+const toSlotOption = Options.integer("to-slot").pipe(
+  Options.optional,
+  Options.withDescription("Last finalized slot to sample")
+)
+
+const sampleLimitOption = Options.integer("sample-limit").pipe(
+  Options.withDefault(100),
+  Options.withDescription("Maximum behavior samples to emit")
+)
+
+const startDateOption = Options.text("start-date").pipe(
+  Options.withDescription("Inclusive UTC start date, YYYY-MM-DD")
+)
+
+const endDateOption = Options.text("end-date").pipe(
+  Options.withDescription("Exclusive UTC end date, YYYY-MM-DD")
+)
+
+const replayFromFileOption = Options.text("from-file").pipe(
+  Options.withDescription(
+    "Previously written rankings file to replay instead of calling Dune; uses no Dune credits"
+  )
+)
+
+const samplesPerProjectOption = Options.integer("samples-per-project").pipe(
+  Options.withDefault(25),
+  Options.withDescription("Maximum sample transaction signatures per project")
+)
+
+const windowDaysOption = Options.integer("window-days").pipe(
+  Options.withDefault(DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS),
+  Options.withDescription(
+    "Maximum days per Dune execution window; timed-out windows are halved automatically"
+  )
+)
+
+const dexOutOption = Options.text("out").pipe(
+  Options.optional,
+  Options.withDescription(
+    "Also write the rankings file to this directory; without it only the database is updated"
+  )
+)
+
+export const crawlSolanaBehaviorOptions = Options.all({
+  out: outOption,
+  json: jsonOption,
+  signatures: signatureOption,
+  programs: programOption,
+  fromSlot: fromSlotOption,
+  toSlot: toSlotOption,
+  sampleLimit: sampleLimitOption,
+})
+
+const resolveDefaultOutputDirectory = Config.string(SOLANA_REFERENCE_DATA_DIR_ENV_VAR).pipe(
+  Config.map((configuredDirectory) => {
+    const trimmed = configuredDirectory.trim()
+    return trimmed.length > 0 ? trimmed : DEFAULT_SOLANA_REFERENCE_DATA_DIR
+  }),
+  Config.orElse(() => Config.succeed(DEFAULT_SOLANA_REFERENCE_DATA_DIR))
+)
+
+const nowIsoString = Effect.map(
+  Effect.clockWith((clock) => clock.currentTimeMillis),
+  (currentTimeMillis) => new Date(Number(currentTimeMillis)).toISOString()
+)
+
+const validateSampleLimit = (sampleLimit: number) =>
+  sampleLimit < 0
+    ? Effect.fail(
+        new CrawlerCommandError({
+          message: "`--sample-limit` must be zero or greater.",
+        })
+      )
+    : Effect.void
+
+const validateSlotRange = ({
+  fromSlot,
+  toSlot,
+}: {
+  readonly fromSlot: number
+  readonly toSlot: number
+}) =>
+  fromSlot > toSlot
+    ? Effect.fail(
+        new CrawlerCommandError({
+          message: "`--from-slot` must be less than or equal to `--to-slot`.",
+        })
+      )
+    : Effect.void
+
+const validateNonNegative = ({ flag, value }: { readonly flag: string; readonly value: number }) =>
+  value < 0
+    ? Effect.fail(
+        new CrawlerCommandError({
+          message: `\`${flag}\` must be zero or greater.`,
+        })
+      )
+    : Effect.void
+
+const encodeJsonBehaviorSummary = (summary: typeof CrawlSolanaBehaviorJsonSummary.Type) =>
+  Schema.encode(Schema.parseJson(CrawlSolanaBehaviorJsonSummary))(summary).pipe(
+    Effect.mapError(
+      () =>
+        new CrawlerCommandError({
+          message: "Failed to encode Solana crawler JSON summary.",
+        })
+    )
+  )
+
+const encodeJsonSummary = (summary: typeof CrawlSolanaJsonSummary.Type) =>
+  Schema.encode(Schema.parseJson(CrawlSolanaJsonSummary))(summary).pipe(
+    Effect.mapError(
+      () =>
+        new CrawlerCommandError({
+          message: "Failed to encode Solana DEX crawler JSON summary.",
+        })
+    )
+  )
+
+const encodeBehaviorSamples = (artifact: SolanaBehaviorSamplesArtifact) =>
+  Schema.encode(Schema.parseJson(SolanaBehaviorSamplesArtifact))(artifact).pipe(
+    Effect.mapError(
+      () =>
+        new CrawlerCommandError({
+          message: "Failed to encode Solana behavior samples artifact.",
+        })
+    )
+  )
+
+const encodeDexProjectRankings = (rankingsFile: SolanaDuneRankingsFile) =>
+  Schema.encode(Schema.parseJson(SolanaDuneRankingsFile))(rankingsFile).pipe(
+    Effect.mapError(
+      () =>
+        new CrawlerCommandError({
+          message: "Failed to encode Solana Dune DEX project rankings file.",
+        })
+    )
+  )
+
+const logPriorityQueryTimeoutToStderr = ({
+  startDate,
+  endDate,
+  midDate,
+}: SolanaDexDiscoveryPriorityQueryTimeout): Effect.Effect<void> =>
+  Console.error(
+    `Dune priority query timed out; halving window ${startDate} to ${endDate} at ${midDate}`
+  )
+
+const readDefaultOutputDirectory = Effect.configProviderWith((provider) =>
+  provider.load(resolveDefaultOutputDirectory)
+).pipe(
+  Effect.mapError(
+    () =>
+      new CrawlerCommandError({
+        message: "Failed to resolve Solana crawler output directory.",
+      })
+  )
+)
+
+const resolveOutputDirectory = (
+  out: Option.Option<string>
+): Effect.Effect<string, CrawlerCommandError> =>
+  Option.match(out, {
+    onNone: () => readDefaultOutputDirectory,
+    onSome: (directory) => {
+      const trimmed = directory.trim()
+      return trimmed.length > 0
+        ? Effect.succeed(trimmed)
+        : Effect.fail(
+            new CrawlerCommandError({
+              message: "`--out` must not be empty.",
+            })
+          )
+    },
+  })
+
+const trimNonEmpty = (value: string): string | null => {
+  const trimmed = value.trim()
+  return trimmed === "" ? null : trimmed
+}
+
+const normalizeStringValues = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
+  Array.from(
+    new Set(
+      values.flatMap((value) => {
+        const trimmed = trimNonEmpty(value)
+        return trimmed === null ? [] : [trimmed]
+      })
+    )
+  )
+
+const resolveBehaviorSamplingInput = ({
+  signatures,
+  programs,
+  fromSlot,
+  toSlot,
+  sampleLimit,
+}: {
+  readonly signatures: ReadonlyArray<string>
+  readonly programs: ReadonlyArray<string>
+  readonly fromSlot: Option.Option<number>
+  readonly toSlot: Option.Option<number>
+  readonly sampleLimit: number
+}): Effect.Effect<SolanaBehaviorSamplingInput, CrawlerCommandError> =>
+  Effect.gen(function* () {
+    yield* validateSampleLimit(sampleLimit)
+
+    const normalizedSignatures = normalizeStringValues(signatures)
+    const normalizedPrograms = normalizeStringValues(programs)
+    const maybeFromSlot = Option.getOrNull(fromSlot)
+    const maybeToSlot = Option.getOrNull(toSlot)
+
+    if (maybeFromSlot === null && maybeToSlot !== null) {
+      return yield* new CrawlerCommandError({
+        message: "`--to-slot` requires `--from-slot`.",
+      })
+    }
+
+    if (maybeFromSlot !== null && maybeToSlot === null) {
+      return yield* new CrawlerCommandError({
+        message: "`--from-slot` requires `--to-slot`.",
+      })
+    }
+
+    const slotRange =
+      maybeFromSlot === null || maybeToSlot === null
+        ? null
+        : {
+            fromSlot: maybeFromSlot,
+            toSlot: maybeToSlot,
+          }
+
+    if (slotRange !== null) {
+      yield* validateSlotRange(slotRange)
+    }
+
+    if (normalizedSignatures.length === 0 && slotRange === null) {
+      return yield* new CrawlerCommandError({
+        message: "Provide `--signature` values or a `--from-slot`/`--to-slot` range to sample.",
+      })
+    }
+
+    return {
+      signatures: [...normalizedSignatures],
+      programs: [...normalizedPrograms],
+      slotRange,
+      sampleLimit,
+    }
+  })
+
+export const crawlSolanaBehaviorProgram = ({
+  out,
+  json,
+  signatures,
+  programs,
+  fromSlot,
+  toSlot,
+  sampleLimit,
+}: CrawlSolanaBehaviorOptions): Effect.Effect<
+  CrawlSolanaBehaviorResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | SolanaBehaviorSamplerClient
+> =>
+  Effect.gen(function* () {
+    const behaviorSamplingInput = yield* resolveBehaviorSamplingInput({
+      signatures,
+      programs,
+      fromSlot,
+      toSlot,
+      sampleLimit,
+    })
+
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const outputDirectory = yield* resolveOutputDirectory(out)
+    const behaviorSamplesPath = path.join(outputDirectory, SOLANA_BEHAVIOR_SAMPLES_FILE_NAME)
+    const generatedAt = yield* nowIsoString
+
+    const behaviorSamples = yield* buildSolanaBehaviorSamplesArtifact({
+      generatedAt,
+      sampling: behaviorSamplingInput,
+    })
+    const encodedBehaviorSamples = yield* encodeBehaviorSamples(behaviorSamples)
+
+    yield* fs.makeDirectory(outputDirectory, { recursive: true }).pipe(
+      Effect.mapError(
+        () =>
+          new CrawlerCommandError({
+            message: "Failed to create Solana crawler output directory.",
+          })
+      )
+    )
+    yield* fs.writeFileString(behaviorSamplesPath, `${encodedBehaviorSamples}\n`).pipe(
+      Effect.mapError(
+        () =>
+          new CrawlerCommandError({
+            message: "Failed to write Solana behavior samples artifact.",
+          })
+      )
+    )
+
+    if (json) {
+      yield* Console.log(
+        yield* encodeJsonBehaviorSummary({
+          stage: "crawl_solana_behavior_completed",
+          behaviorSamplesPath,
+          samples: behaviorSamples.samples.length,
+        })
+      )
+    } else {
+      yield* Console.log(`Wrote ${behaviorSamplesPath}`)
+    }
+
+    return {
+      behaviorSamplesPath,
+      behaviorSamples,
+    }
+  })
+
+export const crawlSolanaBehaviorCommand = Command.make(
+  "solana-behavior",
+  {
+    out: outOption,
+    json: jsonOption,
+    signatures: signatureOption,
+    programs: programOption,
+    fromSlot: fromSlotOption,
+    toSlot: toSlotOption,
+    sampleLimit: sampleLimitOption,
+  },
+  crawlSolanaBehaviorProgram
+).pipe(Command.withDescription("Sample Solana transaction behavior and emit a samples artifact"))
+
+const readReplayRankingsFile = (
+  filePath: string
+): Effect.Effect<SolanaDuneRankingsFile, CrawlerCommandError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const trimmedFilePath = filePath.trim()
+    if (trimmedFilePath === "") {
+      return yield* new CrawlerCommandError({ message: "`--from-file` must not be empty." })
+    }
+
+    const fs = yield* FileSystem.FileSystem
+    const content = yield* fs.readFileString(trimmedFilePath).pipe(
+      Effect.mapError(
+        () =>
+          new CrawlerCommandError({
+            message: `Failed to read rankings file at ${trimmedFilePath}.`,
+          })
+      )
+    )
+
+    return yield* Schema.decodeUnknown(Schema.parseJson(SolanaDuneRankingsFile))(content).pipe(
+      Effect.mapError(
+        () =>
+          new CrawlerCommandError({
+            message: `Failed to decode rankings file at ${trimmedFilePath}; only files written by this crawler version can be replayed.`,
+          })
+      )
+    )
+  })
+
+const importDexProjectRankingsCandidates: ImportDexProjectRankingsCandidates<
+  ProtocolCandidateRepository
+> = (dexProjectRankings) =>
+  Effect.gen(function* () {
+    const repository = yield* ProtocolCandidateRepository
+    const observations = yield* duneObservationsFromSolanaDuneRankingsFile({
+      rankingsFile: dexProjectRankings,
+      blockchainName: "solana",
+    })
+    return yield* repository.importObservations({ observations })
+  }).pipe(
+    Effect.mapError(
+      (error) =>
+        new CrawlerCommandError({
+          message: error.message,
+        })
+    )
+  )
+
+const importDexProjectRankingsCandidatesWithLayer =
+  (
+    protocolCandidateRepositoryLayer: Layer.Layer<ProtocolCandidateRepository, unknown, never>
+  ): ImportDexProjectRankingsCandidates<never> =>
+  (dexProjectRankings) =>
+    importDexProjectRankingsCandidates(dexProjectRankings).pipe(
+      Effect.provide(protocolCandidateRepositoryLayer),
+      Effect.mapError((error) =>
+        error instanceof CrawlerCommandError
+          ? error
+          : new CrawlerCommandError({
+              message: "Failed to import Solana Dune protocol candidates.",
+            })
+      )
+    )
+
+const importAndMaybeWriteDexProjectRankings = <R>({
+  dexProjectRankings,
+  importCandidates,
+  out,
+  json,
+  replayedFromFile,
+}: {
+  readonly dexProjectRankings: SolanaDuneRankingsFile
+  readonly importCandidates: ImportDexProjectRankingsCandidates<R>
+  readonly out: Option.Option<string>
+  readonly json: boolean
+  readonly replayedFromFile: string | null
+}): Effect.Effect<CrawlSolanaResult, CrawlerCommandError, FileSystem.FileSystem | Path.Path | R> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const outputDirectory = yield* Option.match(out, {
+      onNone: () => Effect.succeed<string | null>(null),
+      onSome: (directory) => {
+        const trimmed = directory.trim()
+        return trimmed.length === 0
+          ? Effect.fail(new CrawlerCommandError({ message: "`--out` must not be empty." }))
+          : Effect.succeed<string | null>(trimmed)
+      },
+    })
+
+    const dexProjectRankingsPath =
+      outputDirectory === null
+        ? null
+        : path.join(outputDirectory, solanaDuneDexProjectRankingsFileName(dexProjectRankings))
+
+    if (outputDirectory !== null && dexProjectRankingsPath !== null) {
+      const encodedDexProjectRankings = yield* encodeDexProjectRankings(dexProjectRankings)
+      yield* fs.makeDirectory(outputDirectory, { recursive: true }).pipe(
+        Effect.mapError(
+          () =>
+            new CrawlerCommandError({
+              message: "Failed to create Solana crawler output directory.",
+            })
+        )
+      )
+      yield* fs.writeFileString(dexProjectRankingsPath, `${encodedDexProjectRankings}\n`).pipe(
+        Effect.mapError(
+          () =>
+            new CrawlerCommandError({
+              message: "Failed to write Solana Dune DEX project rankings file.",
+            })
+        )
+      )
+    }
+
+    const duneProtocolCandidateImport = yield* importCandidates(dexProjectRankings)
+
+    const importedCandidateCount = new Set(
+      duneProtocolCandidateImport.candidates.map((candidate) => candidate.id)
+    ).size
+
+    if (json) {
+      yield* Console.log(
+        yield* encodeJsonSummary({
+          stage: "crawl_solana_completed",
+          ...(dexProjectRankingsPath === null ? {} : { dexProjectRankingsPath }),
+          ...(replayedFromFile === null ? {} : { replayedFromFile }),
+          entries: dexProjectRankings.entries.length,
+          candidates: importedCandidateCount,
+          duneProtocolCandidateObservations: duneProtocolCandidateImport.observationCount,
+        })
+      )
+    } else {
+      if (dexProjectRankingsPath !== null) {
+        yield* Console.log(`Wrote ${dexProjectRankingsPath}`)
+      }
+      yield* Console.log(
+        `Imported ${duneProtocolCandidateImport.observationCount} candidate observations`
+      )
+    }
+
+    return {
+      dexProjectRankingsPath,
+      dexProjectRankings,
+      duneProtocolCandidateImport,
+      replayedFromFile,
+    }
+  })
+
+const crawlSolanaProgramWithImport = <R>({
+  startDate,
+  endDate,
+  samplesPerProject,
+  windowDays,
+  out,
+  json,
+  importCandidates,
+}: CrawlSolanaOptions & {
+  readonly importCandidates: ImportDexProjectRankingsCandidates<R>
+}): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | R | SolanaDuneClient
+> =>
+  Effect.gen(function* () {
+    yield* validateNonNegative({ flag: "--samples-per-project", value: samplesPerProject })
+    const generatedAt = yield* nowIsoString
+
+    const dexProjectRankings = yield* buildSolanaDexDiscoveryFile({
+      generatedAt,
+      startDate,
+      endDate,
+      samplesPerProject,
+      windowDays,
+      ...(json ? {} : { onPriorityQueryTimeout: logPriorityQueryTimeoutToStderr }),
+    }).pipe(
+      Effect.mapError(
+        (error) =>
+          new CrawlerCommandError({
+            message: error.message,
+          })
+      )
+    )
+
+    return yield* importAndMaybeWriteDexProjectRankings({
+      dexProjectRankings,
+      importCandidates,
+      out,
+      json,
+      replayedFromFile: null,
+    })
+  })
+
+export const crawlSolanaProgram = (
+  options: CrawlSolanaOptions
+): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+> =>
+  crawlSolanaProgramWithImport({
+    ...options,
+    importCandidates: importDexProjectRankingsCandidates,
+  })
+
+const crawlSolanaReplayProgramWithImport = <R>({
+  fromFile,
+  out,
+  json,
+  importCandidates,
+}: CrawlSolanaReplayOptions & {
+  readonly importCandidates: ImportDexProjectRankingsCandidates<R>
+}): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | R | SolanaDuneClient
+> =>
+  Effect.gen(function* () {
+    const replayFilePath = fromFile.trim()
+    const replayFile = yield* readReplayRankingsFile(replayFilePath)
+    const generatedAt = yield* nowIsoString
+
+    const dexProjectRankings = yield* buildSolanaDexDiscoveryFile({
+      generatedAt,
+      startDate: replayFile.startDate,
+      endDate: replayFile.endDate,
+      samplesPerProject: replayFile.parameters.samplesPerProject,
+      windowDays: replayFile.parameters.windowDays,
+      queryConfigs: replayFile.queries,
+      ...(json ? {} : { onPriorityQueryTimeout: logPriorityQueryTimeoutToStderr }),
+    }).pipe(
+      Effect.provideService(
+        SolanaDuneClient,
+        solanaDuneClientFromRecordedExecutions(replayFile.executions)
+      ),
+      Effect.mapError(
+        (error) =>
+          new CrawlerCommandError({
+            message: error.message,
+          })
+      )
+    )
+
+    return yield* importAndMaybeWriteDexProjectRankings({
+      dexProjectRankings,
+      importCandidates,
+      out,
+      json,
+      replayedFromFile: replayFilePath,
+    })
+  })
+
+export const crawlSolanaReplayProgram = (
+  options: CrawlSolanaReplayOptions
+): Effect.Effect<
+  CrawlSolanaResult,
+  CrawlerCommandError,
+  FileSystem.FileSystem | Path.Path | ProtocolCandidateRepository | SolanaDuneClient
+> =>
+  crawlSolanaReplayProgramWithImport({
+    ...options,
+    importCandidates: importDexProjectRankingsCandidates,
+  })
+
+export const makeCrawlSolanaCommand = (
+  protocolCandidateRepositoryLayer: Layer.Layer<ProtocolCandidateRepository, unknown, never>
+) =>
+  Command.make(
+    "solana",
+    {
+      startDate: startDateOption,
+      endDate: endDateOption,
+      samplesPerProject: samplesPerProjectOption,
+      windowDays: windowDaysOption,
+      out: dexOutOption,
+      json: jsonOption,
+    },
+    (options) =>
+      crawlSolanaProgramWithImport({
+        ...options,
+        importCandidates: importDexProjectRankingsCandidatesWithLayer(
+          protocolCandidateRepositoryLayer
+        ),
+      })
+  ).pipe(
+    Command.withDescription(
+      "Discover Solana DEX protocol candidates from curated Dune swap data and import them for review"
+    )
+  )
+
+export const makeCrawlSolanaReplayCommand = (
+  protocolCandidateRepositoryLayer: Layer.Layer<ProtocolCandidateRepository, unknown, never>
+) =>
+  Command.make(
+    "solana-replay",
+    {
+      fromFile: replayFromFileOption,
+      out: dexOutOption,
+      json: jsonOption,
+    },
+    (options) =>
+      crawlSolanaReplayProgramWithImport({
+        ...options,
+        importCandidates: importDexProjectRankingsCandidatesWithLayer(
+          protocolCandidateRepositoryLayer
+        ),
+      })
+  ).pipe(
+    Command.withDescription(
+      "Replay a Solana Dune rankings file without calling Dune and import it for review"
+    )
+  )

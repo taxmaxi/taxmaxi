@@ -2,23 +2,21 @@ import { and, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
+import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
+import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
+import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
+import { CoinbaseLegDerivationServiceLive } from "../../src/providers/coinbase/layers/CoinbaseLegDerivationServiceLive.ts"
+import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
+import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceDataServiceLive.ts"
+import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceMappingServiceLive.ts"
+import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
 import {
-  CoinbaseLegDerivationServiceLive,
-  CoinbaseRecordNormalizerLive,
-  CoinbaseReferenceDataServiceLive,
-  CoinbaseReferenceMappingServiceLive,
-  CoinbaseSourceSyncProviderLive,
   CoinbaseSyncClient,
   type CoinbaseCryptoCurrencyRecord,
   type CoinbaseFiatCurrencyRecord,
-} from "@my/sync-engine/providers/coinbase"
-import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
-import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
-import {
-  SourceSyncService,
-  SourceSyncProvider,
-  type SourceSyncProviderShape,
-} from "@my/sync-engine/services"
+} from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
+import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -27,7 +25,7 @@ import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
-import { FetchProviderRawBatchResult, ProviderRawRecord } from "@my/sync-engine/services"
+import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
 const context = makeIntegrationTestDatabaseContext({
@@ -56,13 +54,6 @@ const makeCoinbaseRecord = ({
     occurredAt,
     payload,
   })
-
-const maxOccurredAt = (records: ReadonlyArray<ProviderRawRecord>): Date =>
-  records.reduce(
-    (latest, record) =>
-      record.occurredAt.getTime() > latest.getTime() ? record.occurredAt : latest,
-    records[0]?.occurredAt ?? new Date("1970-01-01T00:00:00.000Z")
-  )
 
 const defaultSyncRecords = [
   makeCoinbaseRecord({
@@ -281,22 +272,31 @@ let activeSyncRecords: ReadonlyArray<ProviderRawRecord> = defaultSyncRecords
 let activeFiatCurrencies: ReadonlyArray<CoinbaseFiatCurrencyRecord> = defaultFiatCurrencies
 let activeCryptoCurrencies: ReadonlyArray<CoinbaseCryptoCurrencyRecord> = defaultCryptoCurrencies
 
-const SourceSyncProviderTestLive = Layer.succeed(SourceSyncProvider, {
-  fetchRawBatch: () =>
-    Effect.succeed(
-      FetchProviderRawBatchResult.make({
-        records: activeSyncRecords,
-        cursorPayload: { step: "done" },
-        highWatermark: maxOccurredAt(activeSyncRecords),
-        done: true,
-      })
-    ),
-} satisfies SourceSyncProviderShape)
-
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
-  fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
-  fetchTransactionsPage: () =>
-    Effect.dieMessage("CoinbaseSyncClient test stub: fetchTransactionsPage"),
+  fetchAccountsPage: () =>
+    Effect.succeed({
+      records: activeSyncRecords
+        .filter((record) => record.recordType === "coinbase_account")
+        .map((record) => ({
+          id: record.externalRecordId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
+  fetchTransactionsPage: ({ accountId }) =>
+    Effect.succeed({
+      records: activeSyncRecords
+        .filter((record) => record.recordType === "coinbase_transaction")
+        .map((record) => ({
+          id: record.externalRecordId,
+          accountId: record.externalAccountId ?? accountId,
+          parentId: record.externalParentId,
+          occurredAt: record.occurredAt,
+          payload: record.payload,
+        })),
+      nextCursor: null,
+    }),
   fetchFiatCurrencies: () => Effect.succeed(activeFiatCurrencies),
   fetchCryptoCurrencies: () => Effect.succeed(activeCryptoCurrencies),
 })
@@ -325,7 +325,12 @@ const CoinbaseSourceSyncProviderWithDepsLive = CoinbaseSourceSyncProviderLive.pi
 
 const SourceSyncJobExecutorTestLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(TransferReconciliationServiceLive),
-  Layer.provide(SourceSyncProviderTestLive),
+  Layer.provide(
+    SourceProviderRegistryLive.pipe(
+      Layer.provide(CoinbaseSourceSyncProviderWithDepsLive),
+      Layer.provide(HeliusSolanaSourceSyncProviderLive)
+    )
+  ),
   Layer.provide(CoinbaseSourceSyncProviderWithDepsLive)
 )
 
@@ -335,6 +340,7 @@ const SourceSyncLayer = SourceSyncServiceLive.pipe(
 )
 
 const TestLayer = SourceSyncLayer.pipe(
+  Layer.provideMerge(CoinbaseSourceSyncProviderWithDepsLive),
   Layer.provideMerge(RepositoriesLive),
   Layer.provideMerge(TestPgClientLive)
 )

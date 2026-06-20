@@ -7,7 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
-import type { ProviderRawRecord } from "./SourceSyncProvider.ts"
+import type { ProviderRawRecord } from "../shared/SourceProviderRawBatch.ts"
 import type { SourceRawRecord, SourceSyncCheckpoint } from "./SourceSyncModels.ts"
 
 /**
@@ -30,11 +30,12 @@ export interface SourceRawRecordRepositoryShape {
   }) => Effect.Effect<UpsertSourceRawBatchResult, SyncEngineStorageError>
 
   /**
-   * Load previously failed raw rows that should be retried after reference refresh.
+   * Load failed raw rows that should be retried at the end of a sync run.
+   * Includes rows that failed during the current run so multi-row provider
+   * events split across pages can normalize once all sibling rows are cached.
    */
   readonly listReplayCandidates: (params: {
     readonly sourceId: string
-    readonly importedBefore: Date
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
   /**
@@ -42,6 +43,16 @@ export interface SourceRawRecordRepositoryShape {
    */
   readonly listAllRawRowsForReplay: (params: {
     readonly sourceId: string
+  }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
+
+  /**
+   * Load all cached raw rows of one record type that occurred at one provider timestamp.
+   * Used to find sibling rows of multi-row provider events (e.g. paired unstaking rows).
+   */
+  readonly listRawRecordsByOccurredAt: (params: {
+    readonly sourceId: string
+    readonly recordType: string
+    readonly occurredAt: Date
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
   /**

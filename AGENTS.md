@@ -1,10 +1,25 @@
 TaxMaxi is an open-source crypto tax API. The API follows RESTful principles and its docs can be found under https://api.taxmaxi.com/openapi.json. You can also install the CLI with `npm i -g tax`, via which you can calculate crypto taxes right from your terminal. The first supported jurisdiction is Germany.
 
-The public product surface is CLI/API first. Do not add a web frontend, CMS, billing system, admin console, or marketing site unless explicitly requested.
+The public product surface is CLI/API first with a web app that shows off the API's capabilities. Do not add a CMS, billing system, admin console, or marketing site unless explicitly requested.
+
+## Communication
+
+Use simple, concrete words when talking to the maintainer, writing plans, writing docs, or adding comments. Do not overcomplicate wording.
 
 ## Launch Status
 
 The product is pre-launch and pre-revenue. Prefer clean code and clean schema over compatibility bridges. Hard migrations are acceptable when they simplify the system.
+
+## Vendored Repositories
+
+This project vendors external repositories under repos/
+
+- Use vendored repositories as read-only reference material when working with related libraries
+- Prefer examples and patterns from the vendored source code over generated guesses or web search results
+- Do not edit files under repos/ unless explicitly asked
+- Do not import from repos/ - application code should continue importing from normal package dependencies
+
+When writing Effect code, inspect repos/effect/ for examples of idiomatic usage, tests, module structure, and API design. Treat it as the source of truth for Effect patterns.
 
 ## Repository Scope
 
@@ -21,18 +36,26 @@ Keep these production-shaped surfaces intact:
 
 ## Build/Lint/Test Commands
 
+### Toolchain
+
+Use `mise` for all Node/package-manager commands in this repo.
+
+- Run package scripts as `mise x -- pnpm ...`
+- Do not call `pnpm`, `npm`, `node`, `oxlint`, `oxfmt`, `vitest`, or `tsc` directly unless explicitly requested.
+- This avoids PATH drift and native binding/code-signature failures from tools launched outside the mise environment.
+
 ### Development
 
-Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `pnpm --filter @my/rest-api run type-check` or `pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists.
+Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `mise x -- pnpm --filter @my/rest-api run type-check` or `mise x -- pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists.
 
 ### Testing
 
 ```bash
-pnpm run test                                    # Run all tests
-pnpm run test transactions.test.ts               # Run single test file
-pnpm run test --project=unit                     # Run only unit tests
-pnpm run test --project=integration              # Run only integration tests
-pnpm run test -t "test name"                     # Run tests matching name
+mise x -- pnpm run test                                    # Run all tests
+mise x -- pnpm run test transactions.test.ts               # Run single test file
+mise x -- pnpm run test --project=unit                     # Run only unit tests
+mise x -- pnpm run test --project=integration              # Run only integration tests
+mise x -- pnpm run test -t "test name"                     # Run tests matching name
 ```
 
 Test files use naming conventions:
@@ -43,20 +66,40 @@ Test files use naming conventions:
 ### Code Quality
 
 ```bash
-pnpm run lint              # Run oxlint across all packages
-pnpm run format            # Run oxfmt across all packages
-pnpm run type-check        # TypeScript type checking
+mise x -- pnpm run lint              # Run oxlint across all packages
+mise x -- pnpm run format            # Run oxfmt across all packages
+mise x -- pnpm run type-check        # TypeScript type checking
 ```
 
 ### Database
 
 ```bash
-pnpm --filter @my/persistence run build
-pnpm --filter @my/persistence run migration:generate
-pnpm --filter @my/persistence run migration:run
+mise x -- pnpm --filter @my/persistence run build
+mise x -- pnpm --filter @my/persistence run migration:generate
+mise x -- pnpm --filter @my/persistence run migration:run
 ```
 
 Preserve useful seed data by rewriting it into clean new seed migrations instead of restoring the old migration chain.
+
+## Commit Messages
+
+Use Conventional Commits 1.0.0 for hand-written commit messages:
+
+```text
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+- Use lowercase types and concise imperative descriptions, for example `feat(sync-engine): add provider module registry`.
+- Prefer scopes that match repo surfaces or established areas, such as `cli`, `server`, `worker`, `core`, `persistence`, `rest-api`, `sync-engine`, `sdk`, `frontend`, `docs`, `repo`, and `skills`.
+- Use `feat` for user-facing or API capability additions and `fix` for bug fixes.
+- Use supporting types when appropriate: `test`, `docs`, `chore`, `refactor`, `perf`, `build`, and `ci`.
+- Mark breaking API, CLI, schema, or contract changes with `!` after the type/scope or a `BREAKING CHANGE:` footer, even while pre-launch.
+- Add a body after a blank line when the commit needs rationale, migration notes, or non-obvious context. Use footer trailers such as `Refs: #123` when useful.
+- Avoid untyped summaries such as `update stuff` or `use new flow` for hand-written commits. Merge commits generated by GitHub are acceptable.
 
 ## Naming Conventions
 

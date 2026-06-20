@@ -13,6 +13,16 @@ const AddressInUseCause = Schema.Struct({
 const isAddressInUseError = (cause: unknown) =>
   Either.isRight(Schema.decodeUnknownEither(AddressInUseCause)(cause))
 
+class WorkerHealthTestPromiseRejectionError extends Schema.TaggedError<WorkerHealthTestPromiseRejectionError>()(
+  "WorkerHealthTestPromiseRejectionError",
+  {
+    cause: Schema.Unknown,
+  }
+) {}
+
+const toPromiseRejectionError = (cause: unknown): WorkerHealthTestPromiseRejectionError =>
+  new WorkerHealthTestPromiseRejectionError({ cause })
+
 const getFreePort = () =>
   new Promise<number>((resolve, reject) => {
     const server = createServer()
@@ -48,11 +58,11 @@ describe("WorkerHealthServerLive", () => {
           Effect.gen(function* () {
             const response = yield* Effect.tryPromise({
               try: () => fetch(`http://127.0.0.1:${port}/health`),
-              catch: (cause) => cause,
+              catch: toPromiseRejectionError,
             })
             const body = yield* Effect.tryPromise({
               try: () => response.text(),
-              catch: (cause) => cause,
+              catch: toPromiseRejectionError,
             })
 
             expect(response.status).toBe(200)

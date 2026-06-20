@@ -4,18 +4,18 @@
  * @module CoinbaseLegDerivationServiceLive
  */
 
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import {
   absoluteDecimal,
-  divideToScale,
+  formatPlain,
   isNegativeAmount,
-  makeFixedPointErrorFactory,
-  parseDecimal,
-  powerOfTen,
-} from "../shared/CoinbaseFixedPoint.ts"
+  isZeroAmount,
+  parseAmount,
+} from "../shared/CoinbaseDecimal.ts"
 import {
   CoinbaseLegDerivationError,
   CoinbaseLegDerivationService,
@@ -62,22 +62,27 @@ const CoinbaseMetadataSchema = Schema.Struct({
       "static",
       "amount_sign",
       "venue_side",
-      "amount_sign_fee",
+      "paired_spread_fee",
       "no_leg"
     ),
     pairedRecordRequired: Schema.Boolean,
     mappingStatus: Schema.Literal("approved", "pending_review"),
   }),
+  pairedRecord: Schema.optional(
+    Schema.Struct({
+      externalId: Schema.String,
+      amount: CoinbaseMoneySchema,
+      nativeAmount: CoinbaseMoneySchema,
+    })
+  ),
 })
 
 type CoinbaseMetadata = Schema.Schema.Type<typeof CoinbaseMetadataSchema>
 
-const fixedPointErrorFactory = makeFixedPointErrorFactory(
-  ({ message }) =>
-    new CoinbaseLegDerivationError({
-      message,
-    })
-)
+const invalidDecimalError = (value: string) =>
+  new CoinbaseLegDerivationError({
+    message: `Invalid decimal amount: ${value}`,
+  })
 
 const decodeCoinbaseMetadata = (
   metadata: unknown
@@ -119,7 +124,8 @@ const shouldSkipQuoteSideMainLeg = (metadata: CoinbaseMetadata): boolean => {
 
 /**
  * Determine the canonical leg kind for the primary Coinbase amount from the
- * persisted mapping metadata written during normalization.
+ * persisted mapping metadata written during normalization. Returns none when
+ * the mapping produces no main inventory leg for this row.
  */
 const deriveMainLegClassification = ({
   providerTransactionType,
@@ -134,10 +140,10 @@ const deriveMainLegClassification = ({
   amount: string
   side: string | null
 }): Effect.Effect<
-  {
+  Option.Option<{
     readonly kind: "acquisition" | "disposal" | "income" | "fee"
     readonly derivationRule: string
-  },
+  }>,
   CoinbaseLegDerivationError
 > => {
   const normalizedType = providerTransactionType ?? "unknown"
@@ -147,15 +153,19 @@ const deriveMainLegClassification = ({
     case "static":
       switch (inventoryEffect) {
         case "acquisition":
-          return Effect.succeed({
-            kind: "acquisition",
-            derivationRule: `coinbase_${normalizedType}`,
-          })
+          return Effect.succeed(
+            Option.some({
+              kind: "acquisition" as const,
+              derivationRule: `coinbase_${normalizedType}`,
+            })
+          )
         case "disposal":
-          return Effect.succeed({
-            kind: "disposal",
-            derivationRule: `coinbase_${normalizedType}`,
-          })
+          return Effect.succeed(
+            Option.some({
+              kind: "disposal" as const,
+              derivationRule: `coinbase_${normalizedType}`,
+            })
+          )
         case "income":
           if (isNegativeAmount(amount)) {
             return Effect.fail(
@@ -164,10 +174,12 @@ const deriveMainLegClassification = ({
               })
             )
           }
-          return Effect.succeed({
-            kind: "income",
-            derivationRule: `coinbase_${normalizedType}`,
-          })
+          return Effect.succeed(
+            Option.some({
+              kind: "income" as const,
+              derivationRule: `coinbase_${normalizedType}`,
+            })
+          )
         default:
           return Effect.fail(
             new CoinbaseLegDerivationError({
@@ -177,16 +189,20 @@ const deriveMainLegClassification = ({
       }
     case "venue_side":
       if (normalizedSide === "buy") {
-        return Effect.succeed({
-          kind: "acquisition",
-          derivationRule: `coinbase_${normalizedType}_buy`,
-        })
+        return Effect.succeed(
+          Option.some({
+            kind: "acquisition" as const,
+            derivationRule: `coinbase_${normalizedType}_buy`,
+          })
+        )
       }
       if (normalizedSide === "sell") {
-        return Effect.succeed({
-          kind: "disposal",
-          derivationRule: `coinbase_${normalizedType}_sell`,
-        })
+        return Effect.succeed(
+          Option.some({
+            kind: "disposal" as const,
+            derivationRule: `coinbase_${normalizedType}_sell`,
+          })
+        )
       }
       return Effect.fail(
         new CoinbaseLegDerivationError({
@@ -195,34 +211,31 @@ const deriveMainLegClassification = ({
       )
     case "amount_sign":
       return Effect.succeed(
-        isNegativeAmount(amount)
-          ? {
-              kind: "disposal",
-              derivationRule: `coinbase_${normalizedType}_outflow`,
-            }
-          : {
-              kind: "acquisition",
-              derivationRule: `coinbase_${normalizedType}_inflow`,
-            }
+        Option.some(
+          isNegativeAmount(amount)
+            ? {
+                kind: "disposal" as const,
+                derivationRule: `coinbase_${normalizedType}_outflow`,
+              }
+            : {
+                kind: "acquisition" as const,
+                derivationRule: `coinbase_${normalizedType}_inflow`,
+              }
+        )
       )
-    case "amount_sign_fee":
+    case "paired_spread_fee":
+      // Paired rows carry the full principal on both sides; only the negative
+      // release row yields a leg, and its amount is the spread vs the paired row.
       return Effect.succeed(
         isNegativeAmount(amount)
-          ? {
-              kind: "fee",
-              derivationRule: `coinbase_${normalizedType}_fee`,
-            }
-          : {
-              kind: "acquisition",
-              derivationRule: `coinbase_${normalizedType}_principal`,
-            }
+          ? Option.some({
+              kind: "fee" as const,
+              derivationRule: `coinbase_${normalizedType}_spread_fee`,
+            })
+          : Option.none()
       )
     case "no_leg":
-      return Effect.fail(
-        new CoinbaseLegDerivationError({
-          message: `${normalizedType} does not produce a main inventory leg`,
-        })
-      )
+      return Effect.succeed(Option.none())
   }
 }
 
@@ -250,18 +263,74 @@ const deriveFeeValuation = ({
       } as const
     }
 
-    const parsedFee = yield* parseDecimal(feeAmount, fixedPointErrorFactory)
-    const parsedPrice = yield* parseDecimal(fillPrice, fixedPointErrorFactory)
-    const numerator = parsedFee.digits * parsedPrice.digits
-    const denominator = powerOfTen(parsedFee.scale + parsedPrice.scale)
+    const fee = yield* parseAmount(feeAmount, invalidDecimalError)
+    const price = yield* parseAmount(fillPrice, invalidDecimalError)
+    const fiatValue = BigDecimal.round(BigDecimal.abs(BigDecimal.multiply(fee, price)), {
+      scale: 8,
+      mode: "half-from-zero",
+    })
 
     return {
-      fiatAmount: divideToScale({
-        numerator,
-        denominator,
-        scale: 8,
-      }),
+      fiatAmount: formatPlain(BigDecimal.scale(fiatValue, 8)),
       fiatCurrency: quoteCurrency,
+    } as const
+  })
+
+/**
+ * Compute the main leg amount and fiat valuation. For paired spread fees the
+ * leg amount is the spread between the negative release row and its paired
+ * positive principal row; all other strategies use the row amount directly.
+ */
+const deriveMainLegAmounts = (
+  params: DeriveCoinbaseLegsParams,
+  metadata: CoinbaseMetadata
+): Effect.Effect<
+  {
+    readonly amount: string
+    readonly fiatAmount: string | null
+    readonly fiatCurrency: string | null
+  },
+  CoinbaseLegDerivationError
+> =>
+  Effect.gen(function* () {
+    if (metadata.coinbaseReferenceMapping.resolutionStrategy !== "paired_spread_fee") {
+      return {
+        amount: absoluteDecimal(metadata.amount.amount),
+        fiatAmount: absoluteDecimal(metadata.nativeAmount.amount),
+        fiatCurrency: metadata.nativeAmount.currency,
+      } as const
+    }
+
+    const paired = metadata.pairedRecord
+    if (paired === undefined) {
+      return yield* Effect.fail(
+        new CoinbaseLegDerivationError({
+          message: `${params.transaction.providerTransactionType ?? "unknown"} requires a paired principal record to derive the spread fee`,
+        })
+      )
+    }
+
+    const releasedPrincipal = yield* parseAmount(metadata.amount.amount, invalidDecimalError)
+    const pairedPrincipal = yield* parseAmount(paired.amount.amount, invalidDecimalError)
+    const spread = BigDecimal.subtract(BigDecimal.abs(releasedPrincipal), pairedPrincipal)
+    if (BigDecimal.isNegative(spread)) {
+      return yield* Effect.fail(
+        new CoinbaseLegDerivationError({
+          message: `Paired principal ${paired.amount.amount} exceeds released principal ${metadata.amount.amount} for ${params.transaction.providerTransactionType ?? "unknown"}`,
+        })
+      )
+    }
+    const amount = formatPlain(spread)
+
+    const releasedFiat = yield* parseAmount(metadata.nativeAmount.amount, invalidDecimalError)
+    const pairedFiat = yield* parseAmount(paired.nativeAmount.amount, invalidDecimalError)
+    const fiatSpread = BigDecimal.subtract(BigDecimal.abs(releasedFiat), pairedFiat)
+    const fiatAmount = BigDecimal.isNegative(fiatSpread) ? null : formatPlain(fiatSpread)
+
+    return {
+      amount,
+      fiatAmount,
+      fiatCurrency: fiatAmount === null ? null : metadata.nativeAmount.currency,
     } as const
   })
 
@@ -269,15 +338,23 @@ const deriveFeeValuation = ({
 const buildMainLeg = (
   params: DeriveCoinbaseLegsParams,
   metadata: CoinbaseMetadata
-): Effect.Effect<CoinbaseLegDerivationResult["legs"][number], CoinbaseLegDerivationError> =>
+): Effect.Effect<
+  Option.Option<CoinbaseLegDerivationResult["legs"][number]>,
+  CoinbaseLegDerivationError
+> =>
   Effect.gen(function* () {
-    if (metadata.coinbaseReferenceMapping.resolutionStrategy === "no_leg") {
-      return yield* Effect.fail(
-        new CoinbaseLegDerivationError({
-          message: `${params.transaction.providerTransactionType ?? "unknown"} does not produce a main inventory leg`,
-        })
-      )
+    const maybeClassification = yield* deriveMainLegClassification({
+      providerTransactionType: params.transaction.providerTransactionType,
+      resolutionStrategy: metadata.coinbaseReferenceMapping.resolutionStrategy,
+      inventoryEffect: metadata.coinbaseReferenceMapping.inventoryEffect,
+      amount: metadata.amount.amount,
+      side: params.venueContext?.side ?? null,
+    })
+
+    if (Option.isNone(maybeClassification)) {
+      return Option.none()
     }
+    const classification = maybeClassification.value
 
     if (params.primaryAsset === null) {
       return yield* Effect.fail(
@@ -287,15 +364,15 @@ const buildMainLeg = (
       )
     }
 
-    const classification = yield* deriveMainLegClassification({
-      providerTransactionType: params.transaction.providerTransactionType,
-      resolutionStrategy: metadata.coinbaseReferenceMapping.resolutionStrategy,
-      inventoryEffect: metadata.coinbaseReferenceMapping.inventoryEffect,
-      amount: metadata.amount.amount,
-      side: params.venueContext?.side ?? null,
-    })
+    const amounts = yield* deriveMainLegAmounts(params, metadata)
+    if (
+      metadata.coinbaseReferenceMapping.resolutionStrategy === "paired_spread_fee" &&
+      isZeroAmount(amounts.amount)
+    ) {
+      return Option.none()
+    }
 
-    return {
+    return Option.some({
       sourceId: params.transaction.sourceId,
       sourceRawRecordId: params.transaction.sourceRawRecordId,
       externalId: `${params.transaction.externalId ?? params.transaction.id}:main`,
@@ -304,7 +381,7 @@ const buildMainLeg = (
       principalId: params.transaction.principalId,
       addressId: null,
       assetId: params.primaryAsset.id,
-      amount: absoluteDecimal(metadata.amount.amount),
+      amount: amounts.amount,
       kind: classification.kind,
       provenance: "deterministic",
       derivationRule: classification.derivationRule,
@@ -318,10 +395,10 @@ const buildMainLeg = (
       },
       transactionId: params.transaction.id,
       sourceTransferId: null,
-      fiatAmount: absoluteDecimal(metadata.nativeAmount.amount),
-      fiatCurrency: metadata.nativeAmount.currency,
+      fiatAmount: amounts.fiatAmount,
+      fiatCurrency: amounts.fiatCurrency,
       feeForTransactionId: classification.kind === "fee" ? params.transaction.id : null,
-    } as const
+    } as const)
   })
 
 /** Build fee legs from normalized Coinbase fee transfer rows. */
@@ -383,14 +460,7 @@ const deriveLegs: CoinbaseLegDerivationServiceShape["deriveLegs"] = (params) =>
     const feeLegs = yield* buildFeeLegs(params, metadata)
     const maybeMainLeg = shouldSkipQuoteSideMainLeg(metadata)
       ? Option.none()
-      : yield* buildMainLeg(params, metadata).pipe(
-          Effect.map(Option.some),
-          Effect.catchTag("CoinbaseLegDerivationError", (error) =>
-            metadata.coinbaseReferenceMapping.resolutionStrategy === "no_leg"
-              ? Effect.succeed(Option.none())
-              : Effect.fail(error)
-          )
-        )
+      : yield* buildMainLeg(params, metadata)
 
     return {
       legs: [...Option.toArray(maybeMainLeg), ...feeLegs],

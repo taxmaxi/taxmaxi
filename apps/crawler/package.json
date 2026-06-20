@@ -1,0 +1,33 @@
+{
+  "name": "crawler",
+  "private": true,
+  "bin": {
+    "crawler": "dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "crawl:solana:week": "pnpm run build && dotenv -e ../../.env -e .env -- node dist/index.js crawl solana --start-date 2026-05-25 --end-date 2026-06-01 --json",
+    "dev": "dotenv -- tsc --watch --preserveWatchOutput",
+    "type-check": "tsc --noEmit",
+    "type-check:tests": "tsc -p tsconfig.tests.json",
+    "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
+  },
+  "dependencies": {
+    "@duneanalytics/client-sdk": "^0.4.0",
+    "@effect/cli": "0.75.1",
+    "@effect/platform": "0.96.1",
+    "@effect/platform-node": "0.106.0",
+    "@my/persistence": "workspace:*",
+    "@my/sync-engine": "workspace:*",
+    "@solana/keys": "5.5.1",
+    "effect": "3.21.2",
+    "helius-sdk": "2.2.2"
+  },
+  "devDependencies": {
+    "@my/typescript-config": "workspace:*",
+    "@types/node": "~25.5.0",
+    "dotenv-cli": "~11.0.0",
+    "typescript": "~6.0.2"
+  }
+}

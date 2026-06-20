@@ -11,6 +11,12 @@ import {
   type TaxMaxiRequestOptions,
 } from "./client.ts"
 import {
+  makeAnonEffectResource,
+  makeAnonPromiseResource,
+  type AnonEffectResource,
+  type AnonPromiseResource,
+} from "./anon/index.ts"
+import {
   makeAuthEffectResource,
   makeAuthPromiseResource,
   type AuthEffectResource,
@@ -41,34 +47,59 @@ export type {
   TaxMaxiRequestOptions,
 } from "./client.ts"
 export type {
+  AuthAuthorizeRedirectResponse,
   AuthEffectResource,
   AuthLogoutResponse,
+  AuthOAuthSessionResponse,
   AuthPromiseResource,
   CurrentUserResponse,
 } from "./auth/index.ts"
-export { TaxMaxiError, toTaxMaxiError } from "./errors.ts"
+export { TaxMaxiError, isTaxMaxiUnauthorizedError, toTaxMaxiError } from "./errors.ts"
 export type { TaxMaxiFieldError } from "./errors.ts"
+export type {
+  AnonEffectResource,
+  AnonPromiseResource,
+  AnonSession,
+  AnonSessionChallenge,
+  AnonSessionCreateInput,
+  AnonSessionDelete,
+  AnonSourceHandle,
+  AnonSourceInput,
+  AnonSourceJobInput,
+  AnonSourceList,
+  AnonSourceSyncJob,
+} from "./anon/index.ts"
 export type {
   CalculateTaxInput,
   Source,
+  SourceAssetPnl,
   SourceCreate,
   SourceCreateInput,
+  SourceDisposalExplanation,
+  SourceDisposalExplanationInput,
+  SourceFifoLots,
   SourceIdInput,
   SourceList,
+  SourceOverview,
+  SourceReportPageInput,
   SourcesEffectResource,
   SourcesPromiseResource,
   SourceSyncJob,
   SourceSyncJobInput,
   SourceSyncStart,
+  SourceTaxEvents,
+  SourceTransactions,
   TaxCalculation,
 } from "./sources/index.ts"
 
 export type TaxMaxiEffectResources = {
+  readonly anon: AnonEffectResource
   readonly auth: AuthEffectResource
   readonly sources: SourcesEffectResource
 }
 
 export type TaxMaxiPromiseResources = {
+  readonly anon: AnonPromiseResource
   readonly auth: AuthPromiseResource
   readonly sources: SourcesPromiseResource
 }
@@ -76,6 +107,7 @@ export type TaxMaxiPromiseResources = {
 const makeTaxMaxiEffectResources = (
   client: Effect.Effect<TaxMaxiEffectClient, never>
 ): TaxMaxiEffectResources => ({
+  anon: makeAnonEffectResource(client),
   auth: makeAuthEffectResource(client),
   sources: makeSourcesEffectResource(client),
 })
@@ -91,6 +123,7 @@ const mergeHeaders =
   })
 
 export class TaxMaxi implements TaxMaxiPromiseResources {
+  readonly anon: AnonPromiseResource
   readonly auth: AuthPromiseResource
   readonly effect: TaxMaxiEffectResources
   readonly sources: SourcesPromiseResource
@@ -100,6 +133,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   constructor(options: TaxMaxiOptions) {
     this.client = makeTaxMaxiEffectClient(options)
     this.effect = makeTaxMaxiEffectResources(this.client)
+    this.anon = makeAnonPromiseResource(this.effect.anon, this.run)
     this.auth = makeAuthPromiseResource(this.effect.auth, this.run)
     this.sources = makeSourcesPromiseResource(this.effect.sources, this.run)
   }
