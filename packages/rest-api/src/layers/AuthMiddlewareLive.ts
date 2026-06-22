@@ -37,6 +37,36 @@ const extractBearerToken = (authorization: string): Option.Option<string> => {
   return Option.some(token)
 }
 
+const nonEmptyRedacted = (
+  token: Redacted.Redacted<string>
+): Option.Option<Redacted.Redacted<string>> =>
+  Redacted.value(token).trim() === "" ? Option.none() : Option.some(token)
+
+const readBearerTokenFromRequest = (): Effect.Effect<
+  Option.Option<Redacted.Redacted<string>>,
+  never,
+  HttpServerRequest.HttpServerRequest
+> =>
+  HttpServerRequest.HttpServerRequest.pipe(
+    Effect.map((request) =>
+      Headers.get(request.headers, "authorization").pipe(
+        Option.flatMap(extractBearerToken),
+        Option.map(Redacted.make)
+      )
+    )
+  )
+
+const readCookieTokenFromRequest = (): Effect.Effect<
+  Option.Option<Redacted.Redacted<string>>,
+  never,
+  HttpServerRequest.HttpServerRequest
+> =>
+  HttpServerRequest.HttpServerRequest.pipe(
+    Effect.map((request) =>
+      Option.fromNullable(request.cookies[SESSION_COOKIE_NAME]).pipe(Option.map(Redacted.make))
+    )
+  )
+
 const requireAdminUser = (currentUser: User) => {
   if (currentUser.role === "admin") {
     return Effect.succeed(currentUser)
@@ -103,9 +133,31 @@ export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, To
           Effect.flatMap(requireAdminUser)
         )
 
+      const validateAdminTokenOrFallback = (
+        token: Redacted.Redacted<string>,
+        fallback: () => Effect.Effect<
+          Option.Option<Redacted.Redacted<string>>,
+          never,
+          HttpServerRequest.HttpServerRequest
+        >
+      ) =>
+        Effect.gen(function* () {
+          const providedToken = nonEmptyRedacted(token)
+          if (Option.isSome(providedToken)) {
+            return yield* validateAdminToken(providedToken.value)
+          }
+
+          const fallbackToken = yield* fallback()
+          if (Option.isSome(fallbackToken)) {
+            return yield* validateAdminToken(fallbackToken.value)
+          }
+
+          return yield* validateAdminToken(token)
+        })
+
       return AdminAuthMiddleware.of({
-        bearer: validateAdminToken,
-        cookie: validateAdminToken,
+        bearer: (token) => validateAdminTokenOrFallback(token, readCookieTokenFromRequest),
+        cookie: (token) => validateAdminTokenOrFallback(token, readBearerTokenFromRequest),
       })
     })
   )
