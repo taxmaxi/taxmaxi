@@ -1,15 +1,13 @@
 import { TextAttributes, type MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
-import { createSignal, For, Match, Switch } from "solid-js"
+import { createSignal, For, Match, Show, Switch } from "solid-js"
 import type { ProtocolCandidateReview } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
-import { fetchProtocolCandidates, type AdminProtocolCandidateListResult } from "../controller.ts"
-import { createListViewport } from "../paging.ts"
+import { fetchProtocolCandidates } from "../controller.ts"
+import { createListViewport, createPagedList } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
-
-type ListState = { readonly _tag: "loading" } | AdminProtocolCandidateListResult
 
 const RESERVED_ROWS = 9
 
@@ -56,26 +54,54 @@ export function ProtocolCandidateListScreen(props: {
 }) {
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
-  const [state, setState] = createSignal<ListState>({ _tag: "loading" })
   const [selected, setSelected] = createSignal(0)
   const viewport = createListViewport()
+  const list = createPagedList<ProtocolCandidateReview>(async (cursor) => {
+    const result = await fetchProtocolCandidates(props.session, { cursor })
+    if (result._tag === "blocked" || result._tag === "error") {
+      return { _tag: "error", message: result.message }
+    }
+    return {
+      _tag: "ok",
+      page: {
+        rows: result.data.candidates,
+        nextCursor: result.data.page.nextCursor,
+        hasMore: result.data.page.hasMore,
+      },
+    }
+  })
 
   const refresh = async () => {
-    setState({ _tag: "loading" })
-    setState(await fetchProtocolCandidates(props.session))
     setSelected(0)
     viewport.reset()
+    await list.reload()
   }
-  void refresh()
 
   const candidates = (): ReadonlyArray<ProtocolCandidateReview> => {
-    const current = state()
-    return current._tag === "ok" ? current.data.candidates : []
+    const current = list.state()
+    return current._tag === "ok" ? current.rows : []
   }
 
   const message = (): string | undefined => {
-    const current = state()
-    return current._tag === "blocked" || current._tag === "error" ? current.message : undefined
+    const current = list.state()
+    return current._tag === "error" ? current.message : undefined
+  }
+
+  const okState = () => {
+    const current = list.state()
+    return current._tag === "ok" ? current : undefined
+  }
+
+  const statusLine = (): string => {
+    const current = okState()
+    if (current === undefined) {
+      return ""
+    }
+    const position = `${selected() + 1}/${current.rows.length} candidates`
+    if (current.loadingMore) {
+      return `${position} · loading more…`
+    }
+    return current.hasMore ? `${position} · [m] load more` : position
   }
 
   const visibleRows = () => Math.max(4, dimensions().height - RESERVED_ROWS)
@@ -124,6 +150,10 @@ export function ProtocolCandidateListScreen(props: {
       void refresh()
       return
     }
+    if (evt.name === "m") {
+      void list.loadMore()
+      return
+    }
     if (evt.name === "escape" || evt.name === "b") {
       props.onBack()
       return
@@ -160,11 +190,18 @@ export function ProtocolCandidateListScreen(props: {
     <ScreenFrame
       title="Protocol candidates"
       subtitle="pending review"
-      hints={["[enter] open", "[↑/↓] select", "[r] refresh", "[b] back", "[q] quit"]}
+      hints={[
+        "[enter] open",
+        "[↑/↓] select",
+        "[m] load more",
+        "[r] refresh",
+        "[b] back",
+        "[q] quit",
+      ]}
     >
       <box flexDirection="column" gap={1} onMouseScroll={onWheel}>
         <Switch>
-          <Match when={state()._tag === "loading"}>
+          <Match when={list.state()._tag === "loading"}>
             <Spinner label="Loading protocol candidates…" />
           </Match>
           <Match when={message()}>
@@ -175,10 +212,10 @@ export function ProtocolCandidateListScreen(props: {
               <text fg={theme.textMuted}>[r] retry</text>
             </box>
           </Match>
-          <Match when={state()._tag === "ok" && candidates().length === 0}>
+          <Match when={list.state()._tag === "ok" && candidates().length === 0}>
             <text fg={theme.textSecondary}>No protocol candidates waiting for review.</text>
           </Match>
-          <Match when={state()._tag === "ok"}>
+          <Match when={list.state()._tag === "ok"}>
             <box flexDirection="column" gap={1}>
               <text fg={theme.textCream} attributes={TextAttributes.BOLD}>
                 Pending candidates
@@ -194,6 +231,14 @@ export function ProtocolCandidateListScreen(props: {
                   />
                 )}
               </For>
+              <text fg={theme.textMuted}>{statusLine()}</text>
+              <Show when={okState()?.loadMoreError} keyed>
+                {(loadMoreError: string) => (
+                  <text fg={theme.error} wrapMode="word">
+                    {loadMoreError}
+                  </text>
+                )}
+              </Show>
             </box>
           </Match>
         </Switch>

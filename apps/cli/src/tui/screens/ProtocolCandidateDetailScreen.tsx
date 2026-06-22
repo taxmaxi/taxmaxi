@@ -6,13 +6,14 @@ import type { ProtocolCandidateReview, ProtocolCandidateReviewDetail } from "tax
 import type { CliSession } from "../../session.ts"
 import { fetchProtocolCandidateDetail, type ReportResult } from "../controller.ts"
 import { formatDateTime } from "../format.ts"
+import { createPagedList, type PagedListState } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 
 type DetailData = {
-  readonly candidate: ProtocolCandidateReviewDetail
+  readonly candidate: ProtocolCandidateReviewDetail["candidate"]
   readonly transactionTypes: {
     readonly transactionTypes: ReadonlyArray<{
       readonly typeKey: string
@@ -25,8 +26,15 @@ type DetailData = {
 }
 
 type DetailState = { readonly _tag: "loading" } | ReportResult<DetailData>
+type ProtocolCandidateObservation = ProtocolCandidateReviewDetail["observations"][number]
+type DetailViewData = {
+  readonly metadata: DetailData
+  readonly observations: Extract<
+    PagedListState<ProtocolCandidateObservation>,
+    { readonly _tag: "ok" }
+  >
+}
 
-const MAX_OBSERVATIONS = 3
 const MAX_SUBJECTS = 6
 const MAX_HASHES = 5
 const MAX_TRANSACTION_TYPES = 8
@@ -47,12 +55,38 @@ export function ProtocolCandidateDetailScreen(props: {
   readonly onQuit: () => void
 }) {
   const [state, setState] = createSignal<DetailState>({ _tag: "loading" })
+  const observationList = createPagedList<ProtocolCandidateObservation>(async (cursor) => {
+    const result = await fetchProtocolCandidateDetail(props.session, props.candidate.id, {
+      observationCursor: cursor,
+    })
+    if (result._tag === "error") {
+      if (cursor === null) {
+        setState(result)
+      }
+      return result
+    }
+
+    setState({
+      _tag: "ok",
+      data: {
+        candidate: result.data.candidate.candidate,
+        transactionTypes: result.data.transactionTypes,
+      },
+    })
+    return {
+      _tag: "ok",
+      page: {
+        rows: result.data.candidate.observations,
+        nextCursor: result.data.candidate.observationsPage.nextCursor,
+        hasMore: result.data.candidate.observationsPage.hasMore,
+      },
+    }
+  })
 
   const refresh = async () => {
     setState({ _tag: "loading" })
-    setState(await fetchProtocolCandidateDetail(props.session, props.candidate.id))
+    await observationList.reload()
   }
-  void refresh()
 
   const data = (): DetailData | undefined => {
     const current = state()
@@ -64,12 +98,32 @@ export function ProtocolCandidateDetailScreen(props: {
     return current._tag === "error" ? current.message : undefined
   }
 
+  const viewData = (): DetailViewData | undefined => {
+    const metadata = data()
+    const observations = observationList.state()
+    return metadata !== undefined && observations._tag === "ok"
+      ? { metadata, observations }
+      : undefined
+  }
+
+  const statusLine = (observations: DetailViewData["observations"]): string => {
+    const position = `${observations.rows.length} observations loaded`
+    if (observations.loadingMore) {
+      return `${position} · loading more…`
+    }
+    return observations.hasMore ? `${position} · [m] load more` : position
+  }
+
   useKeyboard((evt) => {
     if (!props.active()) {
       return
     }
     if (evt.name === "r") {
       void refresh()
+      return
+    }
+    if (evt.name === "m") {
+      void observationList.loadMore()
       return
     }
     if (evt.name === "escape" || evt.name === "b") {
@@ -85,10 +139,10 @@ export function ProtocolCandidateDetailScreen(props: {
     <ScreenFrame
       title={props.candidate.protocolNameHint ?? props.candidate.subjectIdentifier}
       subtitle={`${props.candidate.blockchainName} · ${props.candidate.subjectKind}`}
-      hints={["[r] refresh", "[b] back", "[q] quit"]}
+      hints={["[m] load more", "[r] refresh", "[b] back", "[q] quit"]}
     >
       <Switch>
-        <Match when={state()._tag === "loading"}>
+        <Match when={state()._tag === "loading" || observationList.state()._tag === "loading"}>
           <Spinner label="Loading protocol candidate…" />
         </Match>
         <Match when={errorMessage()}>
@@ -99,36 +153,36 @@ export function ProtocolCandidateDetailScreen(props: {
             <text fg={theme.textMuted}>[r] retry</text>
           </box>
         </Match>
-        <Match when={data()} keyed>
-          {(loaded: DetailData) => (
+        <Match when={viewData()} keyed>
+          {(loaded: DetailViewData) => (
             <box flexDirection="column" gap={1}>
               <box flexDirection="column">
                 <text fg={theme.textSecondary}>Candidate</text>
-                <Field label="subject kind" value={loaded.candidate.candidate.subjectKind} />
-                <Field label="subject id" value={loaded.candidate.candidate.subjectIdentifier} />
+                <Field label="subject kind" value={loaded.metadata.candidate.subjectKind} />
+                <Field label="subject id" value={loaded.metadata.candidate.subjectIdentifier} />
                 <Field
                   label="protocol hint"
-                  value={loaded.candidate.candidate.protocolNameHint ?? "none"}
+                  value={loaded.metadata.candidate.protocolNameHint ?? "none"}
                 />
                 <Field
                   label="category hint"
-                  value={loaded.candidate.candidate.categoryHint ?? "none"}
+                  value={loaded.metadata.candidate.categoryHint ?? "none"}
                 />
                 <Field
                   label="review status"
-                  value={loaded.candidate.candidate.mappingStatus}
+                  value={loaded.metadata.candidate.mappingStatus}
                   color={theme.warning}
                 />
                 <Field
                   label="seen"
-                  value={`${formatApiDateTime(loaded.candidate.candidate.firstSeenAt)} to ${formatApiDateTime(
-                    loaded.candidate.candidate.lastSeenAt
+                  value={`${formatApiDateTime(loaded.metadata.candidate.firstSeenAt)} to ${formatApiDateTime(
+                    loaded.metadata.candidate.lastSeenAt
                   )}`}
                 />
               </box>
               <box flexDirection="column">
                 <text fg={theme.textSecondary}>Observations</text>
-                <For each={loaded.candidate.observations.slice(0, MAX_OBSERVATIONS)}>
+                <For each={loaded.observations.rows}>
                   {(observation) => (
                     <box flexDirection="column" paddingLeft={1}>
                       <text fg={theme.textCream} attributes={TextAttributes.BOLD}>
@@ -165,16 +219,27 @@ export function ProtocolCandidateDetailScreen(props: {
                     </box>
                   )}
                 </For>
-                <Show when={loaded.candidate.observations.length > MAX_OBSERVATIONS}>
+                <text fg={theme.textMuted}>{statusLine(loaded.observations)}</text>
+                <Show when={loaded.observations.loadMoreError} keyed>
+                  {(loadMoreError: string) => (
+                    <text fg={theme.error} wrapMode="word">
+                      {loadMoreError}
+                    </text>
+                  )}
+                </Show>
+                <Show when={loaded.observations.rows.length === 0}>
                   <text fg={theme.textMuted}>
-                    {`+${loaded.candidate.observations.length - MAX_OBSERVATIONS} more observations`}
+                    No source observations have been imported for this candidate.
                   </text>
                 </Show>
               </box>
               <box flexDirection="column">
                 <text fg={theme.textSecondary}>TaxMaxi transaction types</text>
                 <For
-                  each={loaded.transactionTypes.transactionTypes.slice(0, MAX_TRANSACTION_TYPES)}
+                  each={loaded.metadata.transactionTypes.transactionTypes.slice(
+                    0,
+                    MAX_TRANSACTION_TYPES
+                  )}
                 >
                   {(transactionType) => (
                     <Field
@@ -184,10 +249,12 @@ export function ProtocolCandidateDetailScreen(props: {
                   )}
                 </For>
                 <Show
-                  when={loaded.transactionTypes.transactionTypes.length > MAX_TRANSACTION_TYPES}
+                  when={
+                    loaded.metadata.transactionTypes.transactionTypes.length > MAX_TRANSACTION_TYPES
+                  }
                 >
                   <text fg={theme.textMuted}>
-                    {`+${loaded.transactionTypes.transactionTypes.length - MAX_TRANSACTION_TYPES} more transaction types`}
+                    {`+${loaded.metadata.transactionTypes.transactionTypes.length - MAX_TRANSACTION_TYPES} more transaction types`}
                   </text>
                 </Show>
               </box>

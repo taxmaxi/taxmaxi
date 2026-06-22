@@ -255,13 +255,15 @@ const requireAdmin = (session: CliSession): Effect.Effect<void, { readonly messa
  * Loads pending protocol candidates for admin review.
  */
 export const fetchProtocolCandidates = (
-  session: CliSession
+  session: CliSession,
+  options: { readonly cursor?: string | null } = {}
 ): Promise<AdminProtocolCandidateListResult> =>
   runtime.runPromise(
     requireAdmin(session).pipe(
       Effect.flatMap(() =>
         listProtocolCandidates({
           apiUrl: session.apiUrl,
+          cursor: options.cursor,
           sessionToken: session.sessionToken,
         })
       ),
@@ -281,7 +283,8 @@ export const fetchProtocolCandidates = (
  */
 export const fetchProtocolCandidateDetail = (
   session: CliSession,
-  candidateId: string
+  candidateId: string,
+  options: { readonly observationCursor?: string | null } = {}
 ): Promise<
   ReportResult<{
     readonly candidate: ProtocolCandidateReviewDetail
@@ -295,6 +298,7 @@ export const fetchProtocolCandidateDetail = (
           candidate: getProtocolCandidate({
             apiUrl: session.apiUrl,
             candidateId,
+            observationCursor: options.observationCursor,
             sessionToken: session.sessionToken,
           }),
           transactionTypes: listTaxMaxiTransactionTypes({

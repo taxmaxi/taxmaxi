@@ -13,15 +13,20 @@ type AdminSessionParams = {
   readonly sessionToken: string
 }
 
+type ProtocolCandidateListParams = AdminSessionParams & {
+  readonly cursor?: string | null | undefined
+}
+
 export const listProtocolCandidates = ({
   apiUrl,
+  cursor,
   sessionToken,
-}: AdminSessionParams): Effect.Effect<ProtocolCandidateReviewList, CliCommandError> =>
+}: ProtocolCandidateListParams): Effect.Effect<ProtocolCandidateReviewList, CliCommandError> =>
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.adminProtocolReview.listProtocolCandidates({
         urlParams: {
-          cursor: undefined,
+          cursor: cursor ?? undefined,
           limit: undefined,
         },
       })
@@ -32,9 +37,11 @@ export const listProtocolCandidates = ({
 export const getProtocolCandidate = ({
   apiUrl,
   candidateId,
+  observationCursor,
   sessionToken,
 }: AdminSessionParams & {
   readonly candidateId: string
+  readonly observationCursor?: string | null | undefined
 }): Effect.Effect<ProtocolCandidateReviewDetail, CliCommandError> =>
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
@@ -43,7 +50,7 @@ export const getProtocolCandidate = ({
           candidateId,
         },
         urlParams: {
-          observationCursor: undefined,
+          observationCursor: observationCursor ?? undefined,
           observationLimit: undefined,
         },
       })
