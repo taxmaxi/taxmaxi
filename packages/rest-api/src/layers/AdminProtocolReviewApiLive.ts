@@ -28,6 +28,7 @@ import {
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 
 const defaultLimit = 50
+const defaultObservationLimit = 10
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -98,21 +99,34 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
           Effect.gen(function* () {
             const candidates = yield* protocolCandidateRepository
               .listPendingReviewCandidates({
-                limit: urlParams.limit ?? defaultLimit,
+                cursorCandidateId: urlParams.cursor ?? null,
+                limit: (urlParams.limit ?? defaultLimit) + 1,
               })
               .pipe(
                 Effect.mapError(() => toInternalServerError("Failed to list protocol candidates."))
               )
+            const limit = urlParams.limit ?? defaultLimit
+            const visibleCandidates = candidates.slice(0, limit)
+            const lastCandidate = visibleCandidates.at(-1)
+            const hasMore = candidates.length > limit
 
             return ProtocolCandidateReviewListResponse.make({
-              candidates: candidates.map(toProtocolCandidateReviewRow),
+              candidates: visibleCandidates.map(toProtocolCandidateReviewRow),
+              page: {
+                nextCursor: hasMore && lastCandidate !== undefined ? lastCandidate.id : null,
+                hasMore,
+              },
             })
           })
         )
-        .handle("getProtocolCandidate", ({ path }) =>
+        .handle("getProtocolCandidate", ({ path, urlParams }) =>
           Effect.gen(function* () {
             const detail = yield* protocolCandidateRepository
-              .getReviewDetail({ candidateId: path.candidateId })
+              .getReviewDetail({
+                candidateId: path.candidateId,
+                observationCursorId: urlParams.observationCursor ?? null,
+                observationLimit: (urlParams.observationLimit ?? defaultObservationLimit) + 1,
+              })
               .pipe(
                 Effect.mapError(() => toInternalServerError("Failed to load protocol candidate."))
               )
@@ -124,10 +138,19 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
                 })
               )
             }
+            const observationLimit = urlParams.observationLimit ?? defaultObservationLimit
+            const visibleObservations = detail.value.observations.slice(0, observationLimit)
+            const lastObservation = visibleObservations.at(-1)
+            const hasMoreObservations = detail.value.observations.length > observationLimit
 
             return ProtocolCandidateReviewDetailResponse.make({
               candidate: toProtocolCandidateReviewRow(detail.value.candidate),
-              observations: detail.value.observations.map(toProtocolCandidateObservationResponse),
+              observations: visibleObservations.map(toProtocolCandidateObservationResponse),
+              observationsPage: {
+                nextCursor:
+                  hasMoreObservations && lastObservation !== undefined ? lastObservation.id : null,
+                hasMore: hasMoreObservations,
+              },
             })
           })
         )

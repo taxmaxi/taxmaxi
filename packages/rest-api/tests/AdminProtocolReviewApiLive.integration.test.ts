@@ -139,6 +139,7 @@ const seedProtocolCandidate = Effect.gen(function* () {
   const candidateId = crypto.randomUUID()
   const rejectedCandidateId = crypto.randomUUID()
   const observationId = crypto.randomUUID()
+  const olderObservationId = crypto.randomUUID()
   const retrievedAt = new Date("2026-01-02T00:00:00.000Z")
 
   yield* db.insert(schema.protocolCandidates).values([
@@ -165,29 +166,54 @@ const seedProtocolCandidate = Effect.gen(function* () {
       lastSeenAt: retrievedAt,
     },
   ])
-  yield* db.insert(schema.protocolCandidateObservations).values({
-    id: observationId,
-    candidateId,
-    onchainDataSource: "dune",
-    onchainDataSourceObservationKey: "dune:jupiter:2026-01",
-    observedWindowStart: new Date("2026-01-01T00:00:00.000Z"),
-    observedWindowEnd: new Date("2026-01-02T00:00:00.000Z"),
-    interactionCount: "12",
-    transactionCount: "7",
-    uniqueActorCount: "5",
-    relatedSubjectIdentifiers: ["JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB"],
-    sampleTransactionHashes: ["5qJupiterSampleSignature"],
-    retrievedAt,
-    rawPayload: { project: "jupiter", chain: "solana" },
-  })
-  yield* db.insert(schema.duneProtocolCandidateObservations).values({
-    observationId,
-    queryId: 7648079,
-    queryName: "Solana DEX protocol candidates",
-    queryVersion: 1,
-  })
+  yield* db.insert(schema.protocolCandidateObservations).values([
+    {
+      id: observationId,
+      candidateId,
+      onchainDataSource: "dune",
+      onchainDataSourceObservationKey: "dune:jupiter:2026-01",
+      observedWindowStart: new Date("2026-01-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2026-01-02T00:00:00.000Z"),
+      interactionCount: "12",
+      transactionCount: "7",
+      uniqueActorCount: "5",
+      relatedSubjectIdentifiers: ["JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB"],
+      sampleTransactionHashes: ["5qJupiterSampleSignature"],
+      retrievedAt,
+      rawPayload: { project: "jupiter", chain: "solana" },
+    },
+    {
+      id: olderObservationId,
+      candidateId,
+      onchainDataSource: "dune",
+      onchainDataSourceObservationKey: "dune:jupiter:2025-12",
+      observedWindowStart: new Date("2025-12-01T00:00:00.000Z"),
+      observedWindowEnd: new Date("2025-12-02T00:00:00.000Z"),
+      interactionCount: "3",
+      transactionCount: "2",
+      uniqueActorCount: "1",
+      relatedSubjectIdentifiers: [],
+      sampleTransactionHashes: ["olderSampleSignature"],
+      retrievedAt: new Date("2025-12-02T00:00:00.000Z"),
+      rawPayload: { project: "jupiter", chain: "solana", period: "older" },
+    },
+  ])
+  yield* db.insert(schema.duneProtocolCandidateObservations).values([
+    {
+      observationId,
+      queryId: 7648079,
+      queryName: "Solana DEX protocol candidates",
+      queryVersion: 1,
+    },
+    {
+      observationId: olderObservationId,
+      queryId: 7648079,
+      queryName: "Solana DEX protocol candidates",
+      queryVersion: 1,
+    },
+  ])
 
-  return { candidateId }
+  return { candidateId, observationId }
 })
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -211,17 +237,24 @@ describe("AdminProtocolReviewApiLive", () => {
       expect(response.candidates).toHaveLength(1)
       expect(response.candidates[0]?.id).toBe(candidateId)
       expect(response.candidates[0]?.mappingStatus).toBe("pending_review")
-      expect(response.candidates[0]?.observationCount).toBe(1)
+      expect(response.candidates[0]?.observationCount).toBe(2)
+      expect(response.page).toEqual({
+        nextCursor: null,
+        hasMore: false,
+      })
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("returns candidate detail and TaxMaxi transaction types for admins", () =>
     Effect.gen(function* () {
-      const { candidateId } = yield* seedProtocolCandidate
+      const { candidateId, observationId } = yield* seedProtocolCandidate
       const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
 
       const detail = yield* client.adminProtocolReview.getProtocolCandidate({
         path: { candidateId },
+        urlParams: {
+          observationLimit: 1,
+        },
       })
       const transactionTypes =
         yield* client.adminProtocolReview.listTaxMaxiTransactionTypes(undefined)
@@ -229,6 +262,10 @@ describe("AdminProtocolReviewApiLive", () => {
       expect(detail.candidate.id).toBe(candidateId)
       expect(detail.candidate.protocolNameHint).toBe("Jupiter")
       expect(detail.observations).toHaveLength(1)
+      expect(detail.observationsPage).toEqual({
+        nextCursor: observationId,
+        hasMore: true,
+      })
       expect(detail.observations[0]?.relatedSubjectIdentifiers).toEqual([
         "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",
       ])

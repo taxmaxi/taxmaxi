@@ -12,11 +12,14 @@ export type ProtocolCandidateReviewDetail = ProtocolCandidateReviewDetailRespons
 export type TaxMaxiTransactionTypeList = TaxMaxiTransactionTypeListResponse
 
 export type ProtocolCandidateReviewListInput = {
+  readonly cursor?: string | null
   readonly limit?: number
 }
 
 export type ProtocolCandidateReviewDetailInput = {
   readonly candidateId: string
+  readonly observationCursor?: string | null
+  readonly observationLimit?: number
 }
 
 export type AdminProtocolReviewEffectResource = {
@@ -50,15 +53,20 @@ export const makeAdminProtocolReviewEffectResource = (
     Effect.flatMap(client, (resolved) =>
       resolved.adminProtocolReview.listProtocolCandidates({
         urlParams: {
+          cursor: input?.cursor ?? undefined,
           limit: input?.limit,
         },
       })
     ),
-  getProtocolCandidate: ({ candidateId }) =>
+  getProtocolCandidate: ({ candidateId, observationCursor, observationLimit }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.adminProtocolReview.getProtocolCandidate({
         path: {
           candidateId,
+        },
+        urlParams: {
+          observationCursor: observationCursor ?? undefined,
+          observationLimit,
         },
       })
     ),

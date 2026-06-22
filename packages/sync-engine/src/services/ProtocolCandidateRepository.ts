@@ -139,6 +139,7 @@ export interface ProtocolCandidateRepositoryShape {
    * List protocol candidates waiting for admin review.
    */
   readonly listPendingReviewCandidates: (params: {
+    readonly cursorCandidateId: string | null
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<ProtocolCandidateReviewListRow>, SyncEngineStorageError>
 
@@ -147,6 +148,8 @@ export interface ProtocolCandidateRepositoryShape {
    */
   readonly getReviewDetail: (params: {
     readonly candidateId: string
+    readonly observationCursorId: string | null
+    readonly observationLimit: number
   }) => Effect.Effect<Option.Option<ProtocolCandidateReviewDetail>, SyncEngineStorageError>
 
   /**

@@ -37,6 +37,10 @@ export class ProtocolCandidateReviewListResponse extends Schema.Class<ProtocolCa
   "ProtocolCandidateReviewListResponse"
 )({
   candidates: Schema.Array(ProtocolCandidateReviewRow),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
 }) {}
 
 export class ProtocolCandidateObservationSourceMetadataResponse extends Schema.Class<ProtocolCandidateObservationSourceMetadataResponse>(
@@ -71,6 +75,10 @@ export class ProtocolCandidateReviewDetailResponse extends Schema.Class<Protocol
 )({
   candidate: ProtocolCandidateReviewRow,
   observations: Schema.Array(ProtocolCandidateObservationResponse),
+  observationsPage: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
 }) {}
 
 export class TaxMaxiTransactionTypeResponse extends Schema.Class<TaxMaxiTransactionTypeResponse>(
@@ -90,11 +98,23 @@ export class TaxMaxiTransactionTypeListResponse extends Schema.Class<TaxMaxiTran
 }) {}
 
 const CandidateListQuery = Schema.Struct({
+  cursor: Schema.optional(Schema.UUID),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
       Schema.greaterThanOrEqualTo(1),
       Schema.lessThanOrEqualTo(100)
+    )
+  ),
+})
+
+const CandidateDetailQuery = Schema.Struct({
+  observationCursor: Schema.optional(Schema.UUID),
+  observationLimit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(25)
     )
   ),
 })
@@ -122,6 +142,7 @@ const getProtocolCandidate = HttpApiEndpoint.get(
       candidateId: Schema.UUID,
     })
   )
+  .setUrlParams(CandidateDetailQuery)
   .addSuccess(ProtocolCandidateReviewDetailResponse)
   .addError(ProtocolCandidateNotFoundError)
   .addError(InternalServerError)

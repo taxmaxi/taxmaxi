@@ -20,7 +20,10 @@ export const listProtocolCandidates = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.adminProtocolReview.listProtocolCandidates({
-        urlParams: {},
+        urlParams: {
+          cursor: undefined,
+          limit: undefined,
+        },
       })
     ),
     Effect.mapError(toCliApiError("Failed to list protocol candidates."))
@@ -38,6 +41,10 @@ export const getProtocolCandidate = ({
       resolved.adminProtocolReview.getProtocolCandidate({
         path: {
           candidateId,
+        },
+        urlParams: {
+          observationCursor: undefined,
+          observationLimit: undefined,
         },
       })
     ),
