@@ -6,6 +6,7 @@
 
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import type * as Option from "effect/Option"
 import type { ProviderMappingStatus } from "./ProviderReferenceRepository.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
@@ -78,6 +79,52 @@ export interface ProtocolCandidateImportResult {
 }
 
 /**
+ * ProtocolCandidateReviewListRow - Candidate summary for admin review queues.
+ */
+export interface ProtocolCandidateReviewListRow extends PersistedProtocolCandidate {
+  readonly blockchainName: string
+  readonly observationCount: number
+}
+
+/**
+ * ProtocolCandidateReviewObservation - Evidence row shown to reviewers.
+ */
+export interface ProtocolCandidateReviewObservation {
+  readonly id: string
+  readonly onchainDataSource: "dune"
+  readonly onchainDataSourceObservationKey: string
+  readonly observedWindowStart: Date
+  readonly observedWindowEnd: Date
+  readonly interactionCount: string
+  readonly transactionCount: string | null
+  readonly uniqueActorCount: string | null
+  readonly relatedSubjectIdentifiers: ReadonlyArray<string>
+  readonly sampleTransactionHashes: ReadonlyArray<string>
+  readonly retrievedAt: Date
+  readonly rawPayload: Record<string, unknown>
+  readonly sourceMetadata: ProtocolCandidateObservationSourceMetadata
+}
+
+/**
+ * ProtocolCandidateReviewDetail - Candidate details and observations for admin review.
+ */
+export interface ProtocolCandidateReviewDetail {
+  readonly candidate: ProtocolCandidateReviewListRow
+  readonly observations: ReadonlyArray<ProtocolCandidateReviewObservation>
+}
+
+/**
+ * TaxMaxiTransactionTypeReference - Canonical TaxMaxi transaction type reference row.
+ */
+export interface TaxMaxiTransactionTypeReference {
+  readonly typeKey: string
+  readonly categoryKey: string | null
+  readonly subcategoryKey: string | null
+  readonly labelEn: string
+  readonly labelDe: string
+}
+
+/**
  * ProtocolCandidateRepositoryShape - Protocol candidate persistence operations.
  */
 export interface ProtocolCandidateRepositoryShape {
@@ -87,6 +134,28 @@ export interface ProtocolCandidateRepositoryShape {
   readonly importObservations: (params: {
     readonly observations: ReadonlyArray<ProtocolCandidateObservationDraft>
   }) => Effect.Effect<ProtocolCandidateImportResult, SyncEngineStorageError>
+
+  /**
+   * List protocol candidates waiting for admin review.
+   */
+  readonly listPendingReviewCandidates: (params: {
+    readonly limit: number
+  }) => Effect.Effect<ReadonlyArray<ProtocolCandidateReviewListRow>, SyncEngineStorageError>
+
+  /**
+   * Load one protocol candidate with its source observations.
+   */
+  readonly getReviewDetail: (params: {
+    readonly candidateId: string
+  }) => Effect.Effect<Option.Option<ProtocolCandidateReviewDetail>, SyncEngineStorageError>
+
+  /**
+   * List TaxMaxi transaction types available for later protocol mapping work.
+   */
+  readonly listTransactionTypes: () => Effect.Effect<
+    ReadonlyArray<TaxMaxiTransactionTypeReference>,
+    SyncEngineStorageError
+  >
 }
 
 /**

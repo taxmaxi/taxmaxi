@@ -1,11 +1,13 @@
 import { TextAttributes } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, Match, Show, Switch } from "solid-js"
-import type { Source } from "taxmaxi"
+import type { ProtocolCandidateReview, Source } from "taxmaxi"
 import type { CliSession } from "../session.ts"
 import { copyToClipboard, loadSessionState, logout } from "./controller.ts"
 import { AddSourceDialog } from "./screens/AddSourceDialog.tsx"
 import { CoinbaseConnectScreen } from "./screens/CoinbaseConnectScreen.tsx"
+import { ProtocolCandidateDetailScreen } from "./screens/ProtocolCandidateDetailScreen.tsx"
+import { ProtocolCandidateListScreen } from "./screens/ProtocolCandidateListScreen.tsx"
 import { SourceAssetPnlScreen } from "./screens/SourceAssetPnlScreen.tsx"
 import { SourceFifoLotsScreen } from "./screens/SourceFifoLotsScreen.tsx"
 import { SourceListScreen } from "./screens/SourceListScreen.tsx"
@@ -30,6 +32,8 @@ type Screen =
   | { readonly type: "bootError"; readonly message: string }
   | { readonly type: "welcome" }
   | { readonly type: "sources" }
+  | { readonly type: "protocolCandidates" }
+  | { readonly type: "protocolCandidateDetail"; readonly candidate: ProtocolCandidateReview }
   | { readonly type: "connect" }
   | { readonly type: "loggingOut" }
   | { readonly type: ReportScreenType; readonly source: Source }
@@ -206,11 +210,43 @@ export function App(props: { readonly requestExit: () => void }) {
                 session={currentSession}
                 active={noDialog}
                 onOpenSource={(source) => setScreen({ type: "sourceOverview", source })}
+                onOpenProtocolReview={() => setScreen({ type: "protocolCandidates" })}
                 onAddSource={() => setDialog("addSource")}
                 onUserMenu={() => setDialog("userMenu")}
                 onQuit={props.requestExit}
               />
             )}
+          </Show>
+        </Match>
+        <Match when={screen().type === "protocolCandidates"}>
+          <Show when={session()} keyed>
+            {(currentSession: CliSession) => (
+              <ProtocolCandidateListScreen
+                session={currentSession}
+                active={noDialog}
+                onOpenCandidate={(candidate) =>
+                  setScreen({ type: "protocolCandidateDetail", candidate })
+                }
+                onBack={() => setScreen({ type: "sources" })}
+                onQuit={props.requestExit}
+              />
+            )}
+          </Show>
+        </Match>
+        <Match when={screen().type === "protocolCandidateDetail"}>
+          <Show when={session()} keyed>
+            {(currentSession: CliSession) => {
+              const current = screen()
+              return current.type === "protocolCandidateDetail" ? (
+                <ProtocolCandidateDetailScreen
+                  session={currentSession}
+                  candidate={current.candidate}
+                  active={noDialog}
+                  onBack={() => setScreen({ type: "protocolCandidates" })}
+                  onQuit={props.requestExit}
+                />
+              ) : null
+            }}
           </Show>
         </Match>
         <Match when={reportScreenSource("sourceOverview")} keyed>

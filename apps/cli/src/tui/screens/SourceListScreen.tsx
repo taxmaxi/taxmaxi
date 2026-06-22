@@ -46,6 +46,7 @@ export function SourceListScreen(props: {
   readonly session: CliSession
   readonly active: () => boolean
   readonly onOpenSource: (source: Source) => void
+  readonly onOpenProtocolReview: () => void
   readonly onAddSource: () => void
   readonly onUserMenu: () => void
   readonly onQuit: () => void
@@ -78,6 +79,7 @@ export function SourceListScreen(props: {
   const visibleRows = () => Math.max(4, dimensions().height - RESERVED_ROWS)
 
   const bounds = () => viewport.bounds({ length: sources().length, visible: visibleRows() })
+  const isAdmin = () => props.session.role === "admin"
 
   const moveSelection = (delta: number) => {
     if (sources().length === 0) {
@@ -122,6 +124,10 @@ export function SourceListScreen(props: {
     }
     if (evt.name === "a") {
       props.onAddSource()
+      return
+    }
+    if (evt.name === "g" && isAdmin()) {
+      props.onOpenProtocolReview()
       return
     }
     if (evt.name === "u") {
@@ -221,6 +227,7 @@ export function SourceListScreen(props: {
       <box flexDirection="row" gap={2} paddingLeft={1}>
         <text fg={theme.textMuted}>[enter] open</text>
         <text fg={theme.textMuted}>[a] add source</text>
+        {isAdmin() ? <text fg={theme.textMuted}>[g] protocol review</text> : null}
         <text fg={theme.textMuted}>[↑/↓] select</text>
         <text fg={theme.textMuted}>[r] refresh</text>
         <text fg={theme.textMuted}>[u] session</text>

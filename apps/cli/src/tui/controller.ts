@@ -10,6 +10,8 @@ import { NodeContext } from "@effect/platform-node"
 import { Effect, ManagedRuntime } from "effect"
 import * as Option from "effect/Option"
 import type {
+  ProtocolCandidateReviewDetail,
+  ProtocolCandidateReviewList,
   Source,
   SourceAssetPnl,
   SourceDisposalExplanation,
@@ -17,13 +19,20 @@ import type {
   SourceOverview,
   SourceTaxEvents,
   SourceTransactions,
+  TaxMaxiTransactionTypeList,
 } from "taxmaxi"
 import {
+  getCurrentUser,
   logoutSession,
   startCoinbaseOAuth,
   validateSessionToken,
   waitForOAuthCompletion,
 } from "../api/auth.ts"
+import {
+  getProtocolCandidate,
+  listProtocolCandidates,
+  listTaxMaxiTransactionTypes,
+} from "../api/adminProtocolReview.ts"
 import {
   explainSourceDisposal,
   getSourceOverview,
@@ -75,6 +84,11 @@ export type LogoutResult =
   | { readonly _tag: "loggedOut" }
   | { readonly _tag: "error"; readonly message: string }
 
+export type AdminProtocolCandidateListResult =
+  | { readonly _tag: "ok"; readonly data: ProtocolCandidateReviewList }
+  | { readonly _tag: "blocked"; readonly message: string }
+  | { readonly _tag: "error"; readonly message: string }
+
 /**
  * Resolves the local session state: missing file, invalid file or token,
  * or a valid session. Network problems during token validation surface
@@ -103,7 +117,19 @@ export const loadSessionState = (): Promise<SessionState> =>
         return { _tag: "invalid", message: "The saved session is no longer valid." } as const
       }
 
-      return { _tag: "valid", session: session.value } as const
+      const currentUser = yield* getCurrentUser({
+        apiUrl: session.value.apiUrl,
+        sessionToken: session.value.sessionToken,
+      })
+      const hydratedSession: CliSession = {
+        ...session.value,
+        role: currentUser.user.role,
+      }
+      if (session.value.role !== hydratedSession.role) {
+        yield* saveSession(hydratedSession)
+      }
+
+      return { _tag: "valid", session: hydratedSession } as const
     }).pipe(
       Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     )
@@ -220,6 +246,66 @@ export const fetchDisposalExplanation = (
     })
   )
 
+const requireAdmin = (session: CliSession): Effect.Effect<void, { readonly message: string }> =>
+  session.role === "admin"
+    ? Effect.void
+    : Effect.fail({ message: "Admin protocol review is only available to admin sessions." })
+
+/**
+ * Loads pending protocol candidates for admin review.
+ */
+export const fetchProtocolCandidates = (
+  session: CliSession
+): Promise<AdminProtocolCandidateListResult> =>
+  runtime.runPromise(
+    requireAdmin(session).pipe(
+      Effect.flatMap(() =>
+        listProtocolCandidates({
+          apiUrl: session.apiUrl,
+          sessionToken: session.sessionToken,
+        })
+      ),
+      Effect.map((data) => ({ _tag: "ok", data }) as const),
+      Effect.catchAll((error) =>
+        Effect.succeed(
+          error.message.startsWith("Admin protocol review")
+            ? ({ _tag: "blocked", message: error.message } as const)
+            : ({ _tag: "error", message: error.message } as const)
+        )
+      )
+    )
+  )
+
+/**
+ * Loads a protocol candidate detail view and the transaction types needed for mapping review.
+ */
+export const fetchProtocolCandidateDetail = (
+  session: CliSession,
+  candidateId: string
+): Promise<
+  ReportResult<{
+    readonly candidate: ProtocolCandidateReviewDetail
+    readonly transactionTypes: TaxMaxiTransactionTypeList
+  }>
+> =>
+  runReport(
+    requireAdmin(session).pipe(
+      Effect.flatMap(() =>
+        Effect.all({
+          candidate: getProtocolCandidate({
+            apiUrl: session.apiUrl,
+            candidateId,
+            sessionToken: session.sessionToken,
+          }),
+          transactionTypes: listTaxMaxiTransactionTypes({
+            apiUrl: session.apiUrl,
+            sessionToken: session.sessionToken,
+          }),
+        })
+      )
+    )
+  )
+
 /**
  * Starts the Coinbase OAuth flow and tries to open the connect URL in a
  * browser. The returned OAuth session id is passed to
@@ -267,10 +353,15 @@ export const completeCoinbaseConnect = (
   runtime.runPromise(
     Effect.gen(function* () {
       const completed = yield* waitForOAuthCompletion({ apiUrl, sessionId: oauthSessionId })
+      const currentUser = yield* getCurrentUser({
+        apiUrl,
+        sessionToken: completed.sessionToken,
+      })
       const session: CliSession = {
         apiUrl,
         sessionToken: completed.sessionToken,
         userId: completed.userId,
+        role: currentUser.user.role,
         connectedAt: yield* nowIsoString,
       }
       yield* saveSession(session)

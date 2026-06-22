@@ -25,6 +25,7 @@ import type {
   SourceRepository as SyncEngineSourceRepository,
   AssetRepository,
   ProviderAssetRepository,
+  ProtocolCandidateRepository,
   SourceSyncRunService,
   SourceSyncService,
   TransferReconciliationService,
@@ -40,6 +41,7 @@ import {
   AuthMiddlewareLive,
   OptionalCurrentUserLive,
 } from "./AuthMiddlewareLive.ts"
+import { AdminProtocolReviewApiLive } from "./AdminProtocolReviewApiLive.ts"
 import { AuthApiLive, AuthSessionApiLive, CoinbaseCompatApiLive } from "./AuthApiLive.ts"
 import { AnonApiLive } from "./AnonApiLive.ts"
 import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
@@ -85,6 +87,7 @@ const HealthApiLive = HttpApiBuilder.group(TaxMaxiApi, "health", (handlers) =>
  */
 const CoreApiGroup = Layer.mergeAll(
   HealthApiLive,
+  AdminProtocolReviewApiLive,
   AuthApiLive,
   CoinbaseCompatApiLive,
   AuthSessionApiLive,
@@ -111,6 +114,7 @@ type TaxMaxiApiLiveContext =
   | SIWXProofVerifier
   | AssetRepository
   | ProviderAssetRepository
+  | ProtocolCandidateRepository
   | SourceReportRepository
   | SourceSyncRunService
   | SourceSyncService
