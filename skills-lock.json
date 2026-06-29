@@ -6,6 +6,12 @@
       "sourceType": "github",
       "skillPath": "skills/dune/SKILL.md",
       "computedHash": "085c4d5553f7abe9840fd75258f3807649393f451668bade4cda4d1bd93c7408"
+    },
+    "opentui": {
+      "source": "anomalyco/opentui",
+      "sourceType": "github",
+      "skillPath": "packages/web/src/content/SKILL.md",
+      "computedHash": "8da376e9c7b9433d81180dff52dd08b6466008993d7c41ecc47d81197ea2f9f5"
     }
   }
 }
