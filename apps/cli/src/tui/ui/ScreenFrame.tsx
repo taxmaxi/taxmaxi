@@ -17,7 +17,9 @@ export function ScreenFrame(
   return (
     <box
       flexGrow={1}
+      flexShrink={1}
       flexDirection="column"
+      minHeight={0}
       paddingLeft={2}
       paddingRight={2}
       gap={1}
@@ -25,7 +27,9 @@ export function ScreenFrame(
     >
       <box
         flexGrow={1}
+        flexShrink={1}
         flexDirection="column"
+        minHeight={0}
         gap={1}
         backgroundColor={theme.backgroundPanel}
         border

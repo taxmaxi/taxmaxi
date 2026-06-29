@@ -55,13 +55,19 @@ export function SourceOverviewScreen(props: {
   readonly onOpenTaxEvents: () => void
   readonly onOpenFifoLots: () => void
   readonly onBack: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const [state, setState] = createSignal<OverviewState>({ _tag: "loading" })
 
   const refresh = async () => {
     setState({ _tag: "loading" })
-    setState(await fetchSourceOverview(props.session, props.source.id))
+    const result = await fetchSourceOverview(props.session, props.source.id)
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return
+    }
+    setState(result)
   }
   void refresh()
 

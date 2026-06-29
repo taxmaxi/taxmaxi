@@ -94,6 +94,7 @@ export const createPagedList = <Row>(
 }
 
 export type ListViewport = {
+  readonly offset: () => number
   readonly bounds: (args: { readonly length: number; readonly visible: number }) => {
     readonly start: number
     readonly end: number
@@ -104,6 +105,7 @@ export type ListViewport = {
     readonly visible: number
   }) => void
   readonly ensureVisible: (args: { readonly index: number; readonly visible: number }) => void
+  readonly setOffset: (offset: number) => void
   readonly reset: () => void
 }
 
@@ -114,12 +116,13 @@ export type ListViewport = {
  * visible. Terminals emit one scroll event per line, so the wheel
  * scrolls at the native rate.
  */
-export const createListViewport = (): ListViewport => {
-  const [offset, setOffset] = createSignal(0)
+export const createListViewport = (initialOffset = 0): ListViewport => {
+  const [offset, setOffset] = createSignal(initialOffset)
 
   const maxOffset = (length: number, visible: number) => Math.max(0, length - visible)
 
   return {
+    offset,
     bounds: ({ length, visible }) => {
       const start = Math.min(offset(), maxOffset(length, visible))
       return { start, end: Math.min(length, start + visible) }
@@ -138,6 +141,7 @@ export const createListViewport = (): ListViewport => {
         return current
       })
     },
+    setOffset: (nextOffset) => setOffset(Math.max(0, nextOffset)),
     reset: () => setOffset(0),
   }
 }

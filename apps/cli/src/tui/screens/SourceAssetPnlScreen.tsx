@@ -8,6 +8,7 @@ import { formatAmount, formatSigned, gainLossColor } from "../format.ts"
 import { createListViewport } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
+import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 
@@ -26,27 +27,20 @@ function AssetLine(props: {
   readonly onHover: () => void
 }) {
   return (
-    <box
-      flexDirection="row"
-      gap={1}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
-      onMouseDown={props.onSelect}
-      onMouseOver={props.onHover}
-    >
-      <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
-      <text fg={props.selected ? theme.text : theme.textSoft}>
-        {props.row.asset.symbol.padEnd(10)}
-      </text>
-      <text fg={theme.textSecondary}>{`open ${formatAmount(props.row.openAmount)}`}</text>
-      <text fg={gainLossColor(props.row.realizedGainLoss)}>
+    <ListItem selected={props.selected} onMouseDown={props.onSelect} onMouseOver={props.onHover}>
+      <ListItemText selected={props.selected}>{props.row.asset.symbol.padEnd(10)}</ListItemText>
+      <ListItemText selected={props.selected} color={theme.accent}>
+        {`open ${formatAmount(props.row.openAmount)}`}
+      </ListItemText>
+      <ListItemText selected={props.selected} color={gainLossColor(props.row.realizedGainLoss)}>
         {`p&l ${formatSigned(props.row.realizedGainLoss)}`}
-      </text>
+      </ListItemText>
       <Show when={props.row.review.status === "needs_review"}>
-        <text fg={theme.warning}>⚠ review</text>
+        <ListItemText selected={props.selected} color={theme.warning}>
+          ⚠ review
+        </ListItemText>
       </Show>
-    </box>
+    </ListItem>
   )
 }
 
@@ -55,6 +49,7 @@ export function SourceAssetPnlScreen(props: {
   readonly source: Source
   readonly active: () => boolean
   readonly onBack: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
@@ -65,7 +60,12 @@ export function SourceAssetPnlScreen(props: {
 
   const refresh = async () => {
     setState({ _tag: "loading" })
-    setState(await fetchSourceAssetPnl(props.session, props.source.id))
+    const result = await fetchSourceAssetPnl(props.session, props.source.id)
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return
+    }
+    setState(result)
     setSelected(0)
     viewport.reset()
   }

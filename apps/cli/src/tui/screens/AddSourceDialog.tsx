@@ -1,6 +1,6 @@
 import { createSignal, Show } from "solid-js"
 import { theme } from "../theme.ts"
-import { Dialog } from "../ui/Dialog.tsx"
+import { Dialog, useDialog } from "../ui/Dialog.tsx"
 import { DialogSelect, type DialogSelectOption } from "../ui/DialogSelect.tsx"
 
 type ProviderId = "coinbase" | "ethereum" | "kraken" | "solana"
@@ -19,10 +19,8 @@ const PROVIDER_TITLES: Record<ProviderId, string> = {
   solana: "Solana",
 }
 
-export function AddSourceDialog(props: {
-  readonly onPickCoinbase: () => void
-  readonly onClose: () => void
-}) {
+export function AddSourceDialog(props: { readonly onPickCoinbase: () => void }) {
+  const dialog = useDialog()
   const [hint, setHint] = createSignal<string | undefined>(undefined)
 
   const handleSelect = (provider: ProviderId) => {
@@ -35,11 +33,10 @@ export function AddSourceDialog(props: {
 
   return (
     <Dialog title="Add source">
-      <DialogSelect options={PROVIDER_OPTIONS} onSelect={handleSelect} onCancel={props.onClose} />
+      <DialogSelect options={PROVIDER_OPTIONS} onSelect={handleSelect} onCancel={dialog.clear} />
       <Show when={hint()}>
         <text fg={theme.warning}>{hint()}</text>
       </Show>
-      <text fg={theme.textMuted}>[enter] select · [esc] close</text>
     </Dialog>
   )
 }

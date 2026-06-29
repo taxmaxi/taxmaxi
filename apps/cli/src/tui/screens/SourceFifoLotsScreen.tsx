@@ -15,6 +15,7 @@ import {
 import { createListViewport, createPagedList, windowBounds } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
+import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 import { DisposalExplanationView } from "./DisposalExplanationView.tsx"
@@ -34,27 +35,18 @@ function FifoLotLine(props: {
   readonly onHover: () => void
 }) {
   return (
-    <box
-      flexDirection="row"
-      gap={1}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
-      onMouseDown={props.onSelect}
-      onMouseOver={props.onHover}
-    >
-      <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
-      <text fg={theme.textMuted}>{formatDate(props.row.acquiredAt)}</text>
-      <text fg={props.selected ? theme.text : theme.textSoft}>
-        {props.row.asset.symbol.padEnd(10)}
-      </text>
-      <text fg={theme.textSecondary}>
+    <ListItem selected={props.selected} onMouseDown={props.onSelect} onMouseOver={props.onHover}>
+      <ListItemText selected={props.selected} muted>
+        {formatDate(props.row.acquiredAt)}
+      </ListItemText>
+      <ListItemText selected={props.selected}>{props.row.asset.symbol.padEnd(10)}</ListItemText>
+      <ListItemText selected={props.selected} color={theme.accent}>
         {`${formatAmount(props.row.remainingAmount)} of ${formatAmount(props.row.originalAmount)} left`}
-      </text>
-      <text fg={theme.textMuted}>
+      </ListItemText>
+      <ListItemText selected={props.selected} muted>
         {`@ ${formatFiat(props.row.costBasisPerToken, props.row.costBasisCurrency)}`}
-      </text>
-    </box>
+      </ListItemText>
+    </ListItem>
   )
 }
 
@@ -63,6 +55,7 @@ export function SourceFifoLotsScreen(props: {
   readonly source: Source
   readonly active: () => boolean
   readonly onBack: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
@@ -79,6 +72,10 @@ export function SourceFifoLotsScreen(props: {
       sourceId: props.source.id,
       cursor,
     })
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return { _tag: "error", message: result.message }
+    }
     if (result._tag === "error") {
       return result
     }
@@ -312,27 +309,20 @@ export function SourceFifoLotsScreen(props: {
                             const isSelected = () =>
                               matchBounds().start + index() === selectedMatch()
                             return (
-                              <box
-                                flexDirection="row"
-                                gap={1}
-                                paddingLeft={1}
-                                backgroundColor={
-                                  isSelected() ? theme.backgroundElement : theme.backgroundPanel
-                                }
-                              >
-                                <text fg={isSelected() ? theme.text : theme.textMuted}>
-                                  {isSelected() ? "›" : " "}
-                                </text>
-                                <text fg={theme.textSoft}>
+                              <ListItem selected={isSelected()}>
+                                <ListItemText selected={isSelected()}>
                                   {`matched ${formatAmount(match.matchedAmount)}`}
-                                </text>
-                                <text fg={theme.textSecondary}>
+                                </ListItemText>
+                                <ListItemText selected={isSelected()} color={theme.accent}>
                                   {`proceeds ${formatFiat(match.proceeds, row.costBasisCurrency)}`}
-                                </text>
-                                <text fg={gainLossColor(match.gainLoss)}>
+                                </ListItemText>
+                                <ListItemText
+                                  selected={isSelected()}
+                                  color={gainLossColor(match.gainLoss)}
+                                >
                                   {formatSigned(match.gainLoss)}
-                                </text>
-                              </box>
+                                </ListItemText>
+                              </ListItem>
                             )
                           }}
                         </For>
@@ -354,6 +344,7 @@ export function SourceFifoLotsScreen(props: {
           sourceName={props.source.name}
           active={props.active}
           onBack={() => setExplainLegId(undefined)}
+          onSessionExpired={props.onSessionExpired}
           onQuit={props.onQuit}
         />
       )}

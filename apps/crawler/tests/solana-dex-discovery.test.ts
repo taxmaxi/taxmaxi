@@ -29,6 +29,12 @@ const RAYDIUM_CLMM_PROGRAM = "CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK"
 const ORCA_WHIRLPOOL_PROGRAM = "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc"
 const PHOENIX_PROGRAM = "PhoeNiXZ8ByJGLkxNfZRnkUfjvmuYqLR89jjFHGqdXY"
 
+const protocolCandidateReadOnlyStub = {
+  listPendingReviewCandidates: () => Effect.succeed([]),
+  getReviewDetail: () => Effect.succeed(Option.none()),
+  listTransactionTypes: () => Effect.succeed([]),
+}
+
 const completedRows = (rows: ReadonlyArray<unknown>) => ({
   state: "QUERY_STATE_COMPLETED",
   result: { rows },
@@ -640,6 +646,7 @@ describe("solana dex discovery", () => {
     const protocolCandidateRepositoryLive = Layer.succeed(
       ProtocolCandidateRepository,
       ProtocolCandidateRepository.of({
+        ...protocolCandidateReadOnlyStub,
         importObservations: ({ observations }) =>
           Effect.sync(() => {
             importedObservations.push(...observations)
@@ -726,6 +733,7 @@ describe("solana dex discovery", () => {
     const failingProtocolCandidateRepositoryLive = Layer.succeed(
       ProtocolCandidateRepository,
       ProtocolCandidateRepository.of({
+        ...protocolCandidateReadOnlyStub,
         importObservations: () =>
           Effect.fail(
             new SyncEngineStorageError({
@@ -772,6 +780,7 @@ describe("solana dex discovery", () => {
     const protocolCandidateRepositoryLive = Layer.succeed(
       ProtocolCandidateRepository,
       ProtocolCandidateRepository.of({
+        ...protocolCandidateReadOnlyStub,
         importObservations: ({ observations }) =>
           Effect.sync(() => {
             importedObservations.push(...observations)
@@ -808,6 +817,7 @@ describe("solana dex discovery", () => {
     const protocolCandidateRepositoryLive = Layer.succeed(
       ProtocolCandidateRepository,
       ProtocolCandidateRepository.of({
+        ...protocolCandidateReadOnlyStub,
         importObservations: ({ observations }) =>
           Effect.sync(() => {
             importedObservations.push(...observations)
@@ -876,6 +886,7 @@ describe("solana dex discovery", () => {
     const protocolCandidateRepositoryLive = Layer.succeed(
       ProtocolCandidateRepository,
       ProtocolCandidateRepository.of({
+        ...protocolCandidateReadOnlyStub,
         importObservations: ({ observations }) =>
           Effect.sync(() => {
             importedObservations.push(...observations)
@@ -968,6 +979,7 @@ describe("solana dex discovery", () => {
             Layer.succeed(
               ProtocolCandidateRepository,
               ProtocolCandidateRepository.of({
+                ...protocolCandidateReadOnlyStub,
                 importObservations: () => Effect.dieMessage("must not import"),
               })
             )

@@ -9,6 +9,7 @@ export const CliSession = Schema.Struct({
   apiUrl: Schema.String,
   sessionToken: Schema.String,
   userId: Schema.String,
+  role: Schema.optional(Schema.Literal("admin", "owner", "member", "viewer")),
   connectedAt: Schema.String,
 })
 export type CliSession = typeof CliSession.Type

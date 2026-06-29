@@ -59,11 +59,17 @@ export function createToast(): ToastHandle {
   return { current, show }
 }
 
-const variantColor: Record<ToastVariant, string> = {
-  info: theme.accent,
-  success: theme.success,
-  warning: theme.warning,
-  error: theme.error,
+const variantColor = (variant: ToastVariant): string => {
+  if (variant === "success") {
+    return theme.success
+  }
+  if (variant === "warning") {
+    return theme.warning
+  }
+  if (variant === "error") {
+    return theme.error
+  }
+  return theme.accent
 }
 
 export function Toast(props: { readonly toast: ToastHandle }) {
@@ -82,7 +88,7 @@ export function Toast(props: { readonly toast: ToastHandle }) {
           paddingBottom={1}
           backgroundColor={theme.backgroundPanel}
           border={["left", "right"]}
-          borderColor={variantColor[current.variant]}
+          borderColor={variantColor(current.variant)}
           customBorderChars={SPLIT_BORDER_CHARS}
         >
           <Show when={current.title} keyed>

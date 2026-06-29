@@ -73,6 +73,7 @@ type TaxMaxiApiFullClient =
     : never
 
 type TaxMaxiPublicGroup =
+  | "adminProtocolReview"
   | "anon"
   | "auth"
   | "authSession"
@@ -87,6 +88,7 @@ export type TaxMaxiEffectClient = Pick<
 >
 
 const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClient => ({
+  adminProtocolReview: client.adminProtocolReview,
   anon: client.anon,
   auth: client.auth,
   authSession: client.authSession,

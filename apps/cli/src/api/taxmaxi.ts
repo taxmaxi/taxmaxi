@@ -6,8 +6,17 @@ export const makeCliTaxMaxiClient = ({
 }: {
   readonly apiUrl: string
   readonly sessionToken?: string
-}) =>
-  makeTaxMaxiEffectClient({
-    apiKey: sessionToken ?? "",
+}) => {
+  if (sessionToken === undefined || sessionToken === "") {
+    return makeTaxMaxiEffectClient({
+      apiKey: "",
+      baseUrl: apiUrl,
+    })
+  }
+
+  return makeTaxMaxiEffectClient({
+    apiKey: sessionToken,
     baseUrl: apiUrl,
+    headers: { authorization: `Bearer ${sessionToken}` },
   })
+}

@@ -11,6 +11,12 @@ import {
   type TaxMaxiRequestOptions,
 } from "./client.ts"
 import {
+  makeAdminProtocolReviewEffectResource,
+  makeAdminProtocolReviewPromiseResource,
+  type AdminProtocolReviewEffectResource,
+  type AdminProtocolReviewPromiseResource,
+} from "./admin-protocol-review/index.ts"
+import {
   makeAnonEffectResource,
   makeAnonPromiseResource,
   type AnonEffectResource,
@@ -46,6 +52,16 @@ export type {
   TaxMaxiRequestCredentials,
   TaxMaxiRequestOptions,
 } from "./client.ts"
+export type {
+  AdminProtocolReviewEffectResource,
+  AdminProtocolReviewPromiseResource,
+  ProtocolCandidateReview,
+  ProtocolCandidateReviewDetail,
+  ProtocolCandidateReviewDetailInput,
+  ProtocolCandidateReviewList,
+  ProtocolCandidateReviewListInput,
+  TaxMaxiTransactionTypeList,
+} from "./admin-protocol-review/index.ts"
 export type {
   AuthAuthorizeRedirectResponse,
   AuthEffectResource,
@@ -93,12 +109,14 @@ export type {
 } from "./sources/index.ts"
 
 export type TaxMaxiEffectResources = {
+  readonly adminProtocolReview: AdminProtocolReviewEffectResource
   readonly anon: AnonEffectResource
   readonly auth: AuthEffectResource
   readonly sources: SourcesEffectResource
 }
 
 export type TaxMaxiPromiseResources = {
+  readonly adminProtocolReview: AdminProtocolReviewPromiseResource
   readonly anon: AnonPromiseResource
   readonly auth: AuthPromiseResource
   readonly sources: SourcesPromiseResource
@@ -107,6 +125,7 @@ export type TaxMaxiPromiseResources = {
 const makeTaxMaxiEffectResources = (
   client: Effect.Effect<TaxMaxiEffectClient, never>
 ): TaxMaxiEffectResources => ({
+  adminProtocolReview: makeAdminProtocolReviewEffectResource(client),
   anon: makeAnonEffectResource(client),
   auth: makeAuthEffectResource(client),
   sources: makeSourcesEffectResource(client),
@@ -123,6 +142,7 @@ const mergeHeaders =
   })
 
 export class TaxMaxi implements TaxMaxiPromiseResources {
+  readonly adminProtocolReview: AdminProtocolReviewPromiseResource
   readonly anon: AnonPromiseResource
   readonly auth: AuthPromiseResource
   readonly effect: TaxMaxiEffectResources
@@ -133,6 +153,10 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   constructor(options: TaxMaxiOptions) {
     this.client = makeTaxMaxiEffectClient(options)
     this.effect = makeTaxMaxiEffectResources(this.client)
+    this.adminProtocolReview = makeAdminProtocolReviewPromiseResource(
+      this.effect.adminProtocolReview,
+      this.run
+    )
     this.anon = makeAnonPromiseResource(this.effect.anon, this.run)
     this.auth = makeAuthPromiseResource(this.effect.auth, this.run)
     this.sources = makeSourcesPromiseResource(this.effect.sources, this.run)

@@ -2,15 +2,14 @@
 
 import { Command } from "@effect/cli"
 import { NodeContext, NodeRuntime } from "@effect/platform-node"
-import { Console, Effect, Layer } from "effect"
-import packageJson from "../package.json" with { type: "json" }
+import { Console, Effect } from "effect"
+
 import { command } from "./commands/root.ts"
 import { CliCommandError, getErrorMessage } from "./errors.ts"
 import { launchTui, shouldLaunchTui } from "./tuiLaunch.ts"
+import packageJson from "../package.json" with { type: "json" }
 
 const cli = Command.run(command, { name: "TaxMaxi CLI", version: packageJson.version })
-
-const runtimeLayer = Layer.mergeAll(NodeContext.layer)
 
 const program = shouldLaunchTui(process.argv) ? launchTui : cli(process.argv)
 
@@ -28,6 +27,6 @@ program.pipe(
       Effect.zipRight(markFailedExit)
     )
   }),
-  Effect.provide(runtimeLayer),
+  Effect.provide(NodeContext.layer),
   NodeRuntime.runMain
 )
