@@ -213,7 +213,34 @@ const seedProtocolCandidate = Effect.gen(function* () {
     },
   ])
 
-  return { candidateId, observationId }
+  return { candidateId, observationId, olderObservationId }
+})
+
+const seedOlderPendingProtocolCandidate = Effect.gen(function* () {
+  const db = yield* drizzle
+  const [blockchain] = yield* db
+    .select({ id: schema.blockchains.id })
+    .from(schema.blockchains)
+    .where(eq(schema.blockchains.name, "solana"))
+
+  if (blockchain === undefined) {
+    return yield* Effect.dieMessage("Missing solana blockchain seed")
+  }
+
+  const candidateId = crypto.randomUUID()
+  yield* db.insert(schema.protocolCandidates).values({
+    id: candidateId,
+    blockchainId: blockchain.id,
+    subjectKind: "program",
+    subjectIdentifier: "OlderProgram111111111111111111111111111111",
+    protocolNameHint: "Older Protocol",
+    categoryHint: "dex",
+    mappingStatus: "pending_review",
+    firstSeenAt: new Date("2025-12-01T00:00:00.000Z"),
+    lastSeenAt: new Date("2025-12-01T00:00:00.000Z"),
+  })
+
+  return { candidateId }
 })
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -263,9 +290,10 @@ describe("AdminProtocolReviewApiLive", () => {
       expect(detail.candidate.protocolNameHint).toBe("Jupiter")
       expect(detail.observations).toHaveLength(1)
       expect(detail.observationsPage).toEqual({
-        nextCursor: observationId,
+        nextCursor: expect.any(String),
         hasMore: true,
       })
+      expect(detail.observationsPage.nextCursor).not.toBe(observationId)
       expect(detail.observations[0]?.relatedSubjectIdentifiers).toEqual([
         "JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB",
       ])
@@ -278,6 +306,89 @@ describe("AdminProtocolReviewApiLive", () => {
       })
       expect(transactionTypes.transactionTypes.length).toBeGreaterThan(0)
       expect(transactionTypes.transactionTypes[0]?.typeKey).toBeDefined()
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("uses self-contained cursors for pending protocol candidates", () =>
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const { candidateId } = yield* seedProtocolCandidate
+      const { candidateId: olderCandidateId } = yield* seedOlderPendingProtocolCandidate
+      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
+
+      const firstPage = yield* client.adminProtocolReview.listProtocolCandidates({
+        urlParams: {
+          limit: 1,
+        },
+      })
+      expect(firstPage.candidates.map((candidate) => candidate.id)).toEqual([candidateId])
+      expect(firstPage.page.nextCursor).not.toBe(candidateId)
+
+      const cursor = firstPage.page.nextCursor
+      if (cursor === null) {
+        return yield* Effect.dieMessage("Expected protocol candidate cursor")
+      }
+
+      yield* db
+        .update(schema.protocolCandidates)
+        .set({ lastSeenAt: new Date("2025-11-01T00:00:00.000Z") })
+        .where(eq(schema.protocolCandidates.id, candidateId))
+
+      const secondPage = yield* client.adminProtocolReview.listProtocolCandidates({
+        urlParams: {
+          cursor,
+          limit: 1,
+        },
+      })
+
+      expect(secondPage.candidates.map((candidate) => candidate.id)).toEqual([olderCandidateId])
+      expect(secondPage.page).toEqual({
+        nextCursor: null,
+        hasMore: false,
+      })
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("uses self-contained cursors for protocol candidate observations", () =>
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const { candidateId, observationId, olderObservationId } = yield* seedProtocolCandidate
+      const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
+
+      const firstPage = yield* client.adminProtocolReview.getProtocolCandidate({
+        path: { candidateId },
+        urlParams: {
+          observationLimit: 1,
+        },
+      })
+      expect(firstPage.observations.map((observation) => observation.id)).toEqual([observationId])
+      expect(firstPage.observationsPage.nextCursor).not.toBe(observationId)
+
+      const cursor = firstPage.observationsPage.nextCursor
+      if (cursor === null) {
+        return yield* Effect.dieMessage("Expected protocol candidate observation cursor")
+      }
+
+      yield* db
+        .update(schema.protocolCandidateObservations)
+        .set({ retrievedAt: new Date("2025-11-01T00:00:00.000Z") })
+        .where(eq(schema.protocolCandidateObservations.id, observationId))
+
+      const secondPage = yield* client.adminProtocolReview.getProtocolCandidate({
+        path: { candidateId },
+        urlParams: {
+          observationCursor: cursor,
+          observationLimit: 1,
+        },
+      })
+
+      expect(secondPage.observations.map((observation) => observation.id)).toEqual([
+        olderObservationId,
+      ])
+      expect(secondPage.observationsPage).toEqual({
+        nextCursor: null,
+        hasMore: false,
+      })
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 

@@ -4,7 +4,7 @@
  * @module ProtocolCandidateRepositoryLive
  */
 
-import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -605,30 +605,8 @@ const make = Effect.gen(function* () {
       .pipe(wrapSyncEngineStorageError(importOperation))
 
   const listPendingReviewCandidates: ProtocolCandidateRepositoryShape["listPendingReviewCandidates"] =
-    ({ cursorCandidateId, limit }) =>
+    ({ cursor, limit }) =>
       Effect.gen(function* () {
-        const [cursorCandidate] =
-          cursorCandidateId === null
-            ? [undefined]
-            : yield* db
-                .select({
-                  id: schema.protocolCandidates.id,
-                  lastSeenAt: schema.protocolCandidates.lastSeenAt,
-                })
-                .from(schema.protocolCandidates)
-                .where(
-                  and(
-                    eq(schema.protocolCandidates.id, cursorCandidateId),
-                    eq(schema.protocolCandidates.mappingStatus, "pending_review")
-                  )
-                )
-                .limit(1)
-                .pipe(wrapSyncEngineSqlError(listPendingReviewOperation))
-
-        if (cursorCandidateId !== null && cursorCandidate === undefined) {
-          return []
-        }
-
         const rows = yield* db
           .select({
             id: schema.protocolCandidates.id,
@@ -653,15 +631,16 @@ const make = Effect.gen(function* () {
             eq(schema.protocolCandidateObservations.candidateId, schema.protocolCandidates.id)
           )
           .where(
-            cursorCandidate === undefined
+            cursor === null
               ? eq(schema.protocolCandidates.mappingStatus, "pending_review")
               : and(
                   eq(schema.protocolCandidates.mappingStatus, "pending_review"),
+                  ne(schema.protocolCandidates.id, cursor.id),
                   or(
-                    lt(schema.protocolCandidates.lastSeenAt, cursorCandidate.lastSeenAt),
+                    lt(schema.protocolCandidates.lastSeenAt, cursor.lastSeenAt),
                     and(
-                      eq(schema.protocolCandidates.lastSeenAt, cursorCandidate.lastSeenAt),
-                      gt(schema.protocolCandidates.id, cursorCandidate.id)
+                      eq(schema.protocolCandidates.lastSeenAt, cursor.lastSeenAt),
+                      gt(schema.protocolCandidates.id, cursor.id)
                     )
                   )
                 )
@@ -687,7 +666,7 @@ const make = Effect.gen(function* () {
 
   const getReviewDetail: ProtocolCandidateRepositoryShape["getReviewDetail"] = ({
     candidateId,
-    observationCursorId,
+    observationCursor,
     observationLimit,
   }) =>
     Effect.gen(function* () {
@@ -736,31 +715,6 @@ const make = Effect.gen(function* () {
 
       const candidate = yield* toReviewListRow(candidateRow)
 
-      const [cursorObservation] =
-        observationCursorId === null
-          ? [undefined]
-          : yield* db
-              .select({
-                id: schema.protocolCandidateObservations.id,
-                retrievedAt: schema.protocolCandidateObservations.retrievedAt,
-              })
-              .from(schema.protocolCandidateObservations)
-              .where(
-                and(
-                  eq(schema.protocolCandidateObservations.id, observationCursorId),
-                  eq(schema.protocolCandidateObservations.candidateId, candidateId)
-                )
-              )
-              .limit(1)
-              .pipe(wrapSyncEngineSqlError(getReviewDetailOperation))
-
-      if (observationCursorId !== null && cursorObservation === undefined) {
-        return Option.some({
-          candidate,
-          observations: [],
-        })
-      }
-
       const observationRows = yield* db
         .select({
           id: schema.protocolCandidateObservations.id,
@@ -789,21 +743,22 @@ const make = Effect.gen(function* () {
           )
         )
         .where(
-          cursorObservation === undefined
+          observationCursor === null
             ? eq(schema.protocolCandidateObservations.candidateId, candidateId)
             : and(
                 eq(schema.protocolCandidateObservations.candidateId, candidateId),
+                ne(schema.protocolCandidateObservations.id, observationCursor.id),
                 or(
                   lt(
                     schema.protocolCandidateObservations.retrievedAt,
-                    cursorObservation.retrievedAt
+                    observationCursor.retrievedAt
                   ),
                   and(
                     eq(
                       schema.protocolCandidateObservations.retrievedAt,
-                      cursorObservation.retrievedAt
+                      observationCursor.retrievedAt
                     ),
-                    gt(schema.protocolCandidateObservations.id, cursorObservation.id)
+                    gt(schema.protocolCandidateObservations.id, observationCursor.id)
                   )
                 )
               )

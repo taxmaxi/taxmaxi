@@ -114,6 +114,22 @@ export interface ProtocolCandidateReviewDetail {
 }
 
 /**
+ * ProtocolCandidateReviewCursor - Stable pagination boundary for candidate review lists.
+ */
+export interface ProtocolCandidateReviewCursor {
+  readonly lastSeenAt: Date
+  readonly id: string
+}
+
+/**
+ * ProtocolCandidateObservationCursor - Stable pagination boundary for candidate observations.
+ */
+export interface ProtocolCandidateObservationCursor {
+  readonly retrievedAt: Date
+  readonly id: string
+}
+
+/**
  * TaxMaxiTransactionTypeReference - Canonical TaxMaxi transaction type reference row.
  */
 export interface TaxMaxiTransactionTypeReference {
@@ -139,7 +155,7 @@ export interface ProtocolCandidateRepositoryShape {
    * List protocol candidates waiting for admin review.
    */
   readonly listPendingReviewCandidates: (params: {
-    readonly cursorCandidateId: string | null
+    readonly cursor: ProtocolCandidateReviewCursor | null
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<ProtocolCandidateReviewListRow>, SyncEngineStorageError>
 
@@ -148,7 +164,7 @@ export interface ProtocolCandidateRepositoryShape {
    */
   readonly getReviewDetail: (params: {
     readonly candidateId: string
-    readonly observationCursorId: string | null
+    readonly observationCursor: ProtocolCandidateObservationCursor | null
     readonly observationLimit: number
   }) => Effect.Effect<Option.Option<ProtocolCandidateReviewDetail>, SyncEngineStorageError>
 

@@ -14,8 +14,10 @@ import {
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
+  ProtocolCandidateInvalidCursorError,
   ProtocolCandidateNotFoundError,
   ProtocolCandidateObservationResponse,
   ProtocolCandidateObservationSourceMetadataResponse,
@@ -32,8 +34,92 @@ const defaultObservationLimit = 10
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
+const invalidCursorError = (cursorName: string) =>
+  new ProtocolCandidateInvalidCursorError({ message: `Invalid ${cursorName} cursor.` })
 
 const toDateTimeUtc = (date: Date): DateTime.Utc => DateTime.unsafeMake(date)
+
+const CandidateCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  lastSeenAt: Schema.DateTimeUtc,
+  id: Schema.UUID,
+})
+
+const ObservationCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  retrievedAt: Schema.DateTimeUtc,
+  id: Schema.UUID,
+})
+
+const EncodedCandidateCursorPayload = Schema.parseJson(CandidateCursorPayload)
+const EncodedObservationCursorPayload = Schema.parseJson(ObservationCursorPayload)
+
+const encodePayload = (payload: Record<string, unknown>): string =>
+  Buffer.from(JSON.stringify(payload)).toString("base64url")
+
+const decodePayload = <A>(
+  cursor: string,
+  schema: Schema.Schema<A, string>,
+  cursorName: string
+): Effect.Effect<A, ProtocolCandidateInvalidCursorError> =>
+  Effect.gen(function* () {
+    const decoded = yield* Effect.try({
+      try: () => Buffer.from(cursor, "base64url").toString("utf8"),
+      catch: () => invalidCursorError(cursorName),
+    })
+
+    return yield* Schema.decodeUnknown(schema)(decoded).pipe(
+      Effect.mapError(() => invalidCursorError(cursorName))
+    )
+  })
+
+const decodeCandidateCursor = (cursor: string | undefined) =>
+  Effect.gen(function* () {
+    if (cursor === undefined) {
+      return null
+    }
+
+    const payload = yield* decodePayload(
+      cursor,
+      EncodedCandidateCursorPayload,
+      "protocol candidate"
+    )
+    return {
+      id: payload.id,
+      lastSeenAt: DateTime.toDateUtc(payload.lastSeenAt),
+    }
+  })
+
+const decodeObservationCursor = (cursor: string | undefined) =>
+  Effect.gen(function* () {
+    if (cursor === undefined) {
+      return null
+    }
+
+    const payload = yield* decodePayload(
+      cursor,
+      EncodedObservationCursorPayload,
+      "protocol candidate observation"
+    )
+    return {
+      id: payload.id,
+      retrievedAt: DateTime.toDateUtc(payload.retrievedAt),
+    }
+  })
+
+const candidateCursorFor = (candidate: ProtocolCandidateReviewListRow): string =>
+  encodePayload({
+    version: 1,
+    lastSeenAt: candidate.lastSeenAt.toISOString(),
+    id: candidate.id,
+  })
+
+const observationCursorFor = (observation: ProtocolCandidateReviewObservation): string =>
+  encodePayload({
+    version: 1,
+    retrievedAt: observation.retrievedAt.toISOString(),
+    id: observation.id,
+  })
 
 const toProtocolCandidateReviewRow = (
   row: ProtocolCandidateReviewListRow
@@ -97,9 +183,10 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
       return handlers
         .handle("listProtocolCandidates", ({ urlParams }) =>
           Effect.gen(function* () {
+            const cursor = yield* decodeCandidateCursor(urlParams.cursor)
             const candidates = yield* protocolCandidateRepository
               .listPendingReviewCandidates({
-                cursorCandidateId: urlParams.cursor ?? null,
+                cursor,
                 limit: (urlParams.limit ?? defaultLimit) + 1,
               })
               .pipe(
@@ -113,7 +200,8 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
             return ProtocolCandidateReviewListResponse.make({
               candidates: visibleCandidates.map(toProtocolCandidateReviewRow),
               page: {
-                nextCursor: hasMore && lastCandidate !== undefined ? lastCandidate.id : null,
+                nextCursor:
+                  hasMore && lastCandidate !== undefined ? candidateCursorFor(lastCandidate) : null,
                 hasMore,
               },
             })
@@ -121,10 +209,11 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
         )
         .handle("getProtocolCandidate", ({ path, urlParams }) =>
           Effect.gen(function* () {
+            const observationCursor = yield* decodeObservationCursor(urlParams.observationCursor)
             const detail = yield* protocolCandidateRepository
               .getReviewDetail({
                 candidateId: path.candidateId,
-                observationCursorId: urlParams.observationCursor ?? null,
+                observationCursor,
                 observationLimit: (urlParams.observationLimit ?? defaultObservationLimit) + 1,
               })
               .pipe(
@@ -148,7 +237,9 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
               observations: visibleObservations.map(toProtocolCandidateObservationResponse),
               observationsPage: {
                 nextCursor:
-                  hasMoreObservations && lastObservation !== undefined ? lastObservation.id : null,
+                  hasMoreObservations && lastObservation !== undefined
+                    ? observationCursorFor(lastObservation)
+                    : null,
                 hasMore: hasMoreObservations,
               },
             })

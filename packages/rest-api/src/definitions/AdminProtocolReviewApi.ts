@@ -17,6 +17,14 @@ export class ProtocolCandidateNotFoundError extends Schema.TaggedError<ProtocolC
   HttpApiSchema.annotations({ status: 404 })
 ) {}
 
+export class ProtocolCandidateInvalidCursorError extends Schema.TaggedError<ProtocolCandidateInvalidCursorError>()(
+  "ProtocolCandidateInvalidCursorError",
+  {
+    message: Schema.String,
+  },
+  HttpApiSchema.annotations({ status: 400 })
+) {}
+
 export class ProtocolCandidateReviewRow extends Schema.Class<ProtocolCandidateReviewRow>(
   "ProtocolCandidateReviewRow"
 )({
@@ -98,7 +106,7 @@ export class TaxMaxiTransactionTypeListResponse extends Schema.Class<TaxMaxiTran
 }) {}
 
 const CandidateListQuery = Schema.Struct({
-  cursor: Schema.optional(Schema.UUID),
+  cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -109,7 +117,7 @@ const CandidateListQuery = Schema.Struct({
 })
 
 const CandidateDetailQuery = Schema.Struct({
-  observationCursor: Schema.optional(Schema.UUID),
+  observationCursor: Schema.optional(Schema.String),
   observationLimit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -125,6 +133,7 @@ const listProtocolCandidates = HttpApiEndpoint.get(
 )
   .setUrlParams(CandidateListQuery)
   .addSuccess(ProtocolCandidateReviewListResponse)
+  .addError(ProtocolCandidateInvalidCursorError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -145,6 +154,7 @@ const getProtocolCandidate = HttpApiEndpoint.get(
   .setUrlParams(CandidateDetailQuery)
   .addSuccess(ProtocolCandidateReviewDetailResponse)
   .addError(ProtocolCandidateNotFoundError)
+  .addError(ProtocolCandidateInvalidCursorError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
