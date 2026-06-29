@@ -165,16 +165,15 @@ const toCommissionMoney = (
   })
 }
 
-const partyAddress = (
-  party: CoinbaseTransaction["from"] | CoinbaseTransaction["to"]
-): string | null => Option.getOrNull(Option.fromNullable(party?.address))
+const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
+  Option.getOrNull(Option.fromNullable(party?.address))
 
 interface CoinbaseFeeTransferBuildResult {
   readonly transfer: CoinbaseRecordNormalizationResult["feeTransfers"][number] | null
   readonly unresolvedAssetCurrency: string | null
 }
 
-const partyAccountRef = (party: CoinbaseTransaction["from"] | CoinbaseTransaction["to"]) => {
+const partyAccountRef = (party: CoinbaseTransaction["from"]) => {
   const id = Option.fromNullable(party?.id)
   const resourcePath = Option.fromNullable(party?.resource_path)
   return Option.getOrNull(Option.orElse(id, () => resourcePath))

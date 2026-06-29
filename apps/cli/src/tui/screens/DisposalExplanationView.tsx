@@ -33,18 +33,22 @@ export function DisposalExplanationView(props: {
   readonly sourceName: string
   readonly active: () => boolean
   readonly onBack: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const [state, setState] = createSignal<ExplanationState>({ _tag: "loading" })
 
   const refresh = async () => {
     setState({ _tag: "loading" })
-    setState(
-      await fetchDisposalExplanation(props.session, {
-        sourceId: props.sourceId,
-        legId: props.legId,
-      })
-    )
+    const result = await fetchDisposalExplanation(props.session, {
+      sourceId: props.sourceId,
+      legId: props.legId,
+    })
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return
+    }
+    setState(result)
   }
   void refresh()
 

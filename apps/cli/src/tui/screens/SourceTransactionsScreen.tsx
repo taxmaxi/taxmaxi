@@ -8,6 +8,7 @@ import { formatAmount, formatDate, formatDateTime, formatFiat, truncateText } fr
 import { createListViewport, createPagedList } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
+import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 
@@ -46,27 +47,24 @@ function TransactionLine(props: {
   readonly onHover: () => void
 }) {
   return (
-    <box
-      flexDirection="row"
-      gap={1}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
-      onMouseDown={props.onSelect}
-      onMouseOver={props.onHover}
-    >
-      <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
-      <text fg={theme.textMuted}>{formatDate(props.row.timestamp)}</text>
-      <text fg={props.selected ? theme.text : theme.textSoft}>
+    <ListItem selected={props.selected} onMouseDown={props.onSelect} onMouseOver={props.onHover}>
+      <ListItemText selected={props.selected} muted>
+        {formatDate(props.row.timestamp)}
+      </ListItemText>
+      <ListItemText selected={props.selected}>
         {(props.row.transactionType ?? props.row.providerTransactionType ?? "unknown").padEnd(14)}
-      </text>
-      <text fg={theme.textSecondary}>{`${props.row.movements.length} legs`}</text>
+      </ListItemText>
+      <ListItemText selected={props.selected} color={theme.accent}>
+        {`${props.row.movements.length} legs`}
+      </ListItemText>
       <Show when={props.row.providerDescription} keyed>
         {(description: string) => (
-          <text fg={theme.textMuted}>{truncateText(description, DESCRIPTION_LENGTH)}</text>
+          <ListItemText selected={props.selected} muted>
+            {truncateText(description, DESCRIPTION_LENGTH)}
+          </ListItemText>
         )}
       </Show>
-    </box>
+    </ListItem>
   )
 }
 
@@ -75,6 +73,7 @@ export function SourceTransactionsScreen(props: {
   readonly source: Source
   readonly active: () => boolean
   readonly onBack: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
@@ -87,6 +86,10 @@ export function SourceTransactionsScreen(props: {
       sourceId: props.source.id,
       cursor,
     })
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return { _tag: "error", message: result.message }
+    }
     if (result._tag === "error") {
       return result
     }

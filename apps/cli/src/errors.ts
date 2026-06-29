@@ -2,6 +2,7 @@ import { Schema } from "effect"
 
 export class CliCommandError extends Schema.TaggedError<CliCommandError>()("CliCommandError", {
   message: Schema.String,
+  status: Schema.optional(Schema.Number),
 }) {}
 
 export const getErrorMessage = (error: unknown, fallback: string): string => {

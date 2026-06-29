@@ -17,6 +17,7 @@ import {
 import { createListViewport, createPagedList } from "../paging.ts"
 import { theme } from "../theme.ts"
 import { Field } from "../ui/Field.tsx"
+import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 import { DisposalExplanationView } from "./DisposalExplanationView.tsx"
@@ -45,29 +46,32 @@ function TaxEventLine(props: {
   readonly onActivate: () => void
 }) {
   return (
-    <box
-      flexDirection="row"
-      gap={1}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
+    <ListItem
+      selected={props.selected}
       onMouseDown={props.onSelect}
       onMouseOver={props.onHover}
       onMouseUp={props.onActivate}
     >
-      <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
-      <text fg={theme.textMuted}>{formatDate(props.row.timestamp)}</text>
-      <text fg={kindColor(props.row.kind)}>{props.row.kind.padEnd(11)}</text>
-      <text fg={props.selected ? theme.text : theme.textSoft}>
+      <ListItemText selected={props.selected} muted>
+        {formatDate(props.row.timestamp)}
+      </ListItemText>
+      <ListItemText selected={props.selected} color={kindColor(props.row.kind)}>
+        {props.row.kind.padEnd(11)}
+      </ListItemText>
+      <ListItemText selected={props.selected}>
         {`${formatAmount(props.row.amount)} ${props.row.asset.symbol}`}
-      </text>
+      </ListItemText>
       <Show when={props.row.gainLoss} keyed>
-        {(gainLoss: string) => <text fg={gainLossColor(gainLoss)}>{formatSigned(gainLoss)}</text>}
+        {(gainLoss: string) => (
+          <ListItemText selected={props.selected} color={gainLossColor(gainLoss)}>
+            {formatSigned(gainLoss)}
+          </ListItemText>
+        )}
       </Show>
-      <text fg={treatmentColor(props.row.taxableTreatment)}>
+      <ListItemText selected={props.selected} color={treatmentColor(props.row.taxableTreatment)}>
         {formatLabel(props.row.taxableTreatment)}
-      </text>
-    </box>
+      </ListItemText>
+    </ListItem>
   )
 }
 
@@ -76,6 +80,7 @@ export function SourceTaxEventsScreen(props: {
   readonly source: Source
   readonly active: () => boolean
   readonly onBack: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
@@ -91,6 +96,10 @@ export function SourceTaxEventsScreen(props: {
       sourceId: props.source.id,
       cursor,
     })
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return { _tag: "error", message: result.message }
+    }
     if (result._tag === "error") {
       return result
     }
@@ -346,6 +355,7 @@ export function SourceTaxEventsScreen(props: {
           sourceName={props.source.name}
           active={props.active}
           onBack={() => setExplainLegId(undefined)}
+          onSessionExpired={props.onSessionExpired}
           onQuit={props.onQuit}
         />
       )}

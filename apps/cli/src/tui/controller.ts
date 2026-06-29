@@ -64,6 +64,7 @@ export type SessionState =
 
 export type SourcesResult =
   | { readonly _tag: "ok"; readonly sources: ReadonlyArray<Source> }
+  | { readonly _tag: "unauthorized"; readonly message: string }
   | { readonly _tag: "error"; readonly message: string }
 
 export type ConnectStart =
@@ -87,7 +88,26 @@ export type LogoutResult =
 export type AdminProtocolCandidateListResult =
   | { readonly _tag: "ok"; readonly data: ProtocolCandidateReviewList }
   | { readonly _tag: "blocked"; readonly message: string }
+  | { readonly _tag: "unauthorized"; readonly message: string }
   | { readonly _tag: "error"; readonly message: string }
+
+const expiredSessionMessage = "Your session expired. Please connect again."
+
+const isUnauthorizedError = (error: {
+  readonly message: string
+  readonly status?: number | undefined
+}) =>
+  error.status === 401 ||
+  error.message === "Bearer token is required" ||
+  error.message === "Invalid session token"
+
+const toControllerError = (error: {
+  readonly message: string
+  readonly status?: number | undefined
+}) =>
+  isUnauthorizedError(error)
+    ? ({ _tag: "unauthorized", message: expiredSessionMessage } as const)
+    : ({ _tag: "error", message: error.message } as const)
 
 /**
  * Resolves the local session state: missing file, invalid file or token,
@@ -142,12 +162,13 @@ export const fetchSources = (session: CliSession): Promise<SourcesResult> =>
   runtime.runPromise(
     listSources({ apiUrl: session.apiUrl, sessionToken: session.sessionToken }).pipe(
       Effect.map((sourceList) => ({ _tag: "ok", sources: sourceList.sources }) as const),
-      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+      Effect.catchAll((error) => Effect.succeed(toControllerError(error)))
     )
   )
 
 export type ReportResult<A> =
   | { readonly _tag: "ok"; readonly data: A }
+  | { readonly _tag: "unauthorized"; readonly message: string }
   | { readonly _tag: "error"; readonly message: string }
 
 const runReport = <A>(
@@ -156,7 +177,7 @@ const runReport = <A>(
   runtime.runPromise(
     effect.pipe(
       Effect.map((data) => ({ _tag: "ok", data }) as const),
-      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+      Effect.catchAll((error) => Effect.succeed(toControllerError(error)))
     )
   )
 
@@ -272,11 +293,14 @@ export const fetchProtocolCandidates = (
         Effect.succeed(
           error.message.startsWith("Admin protocol review")
             ? ({ _tag: "blocked", message: error.message } as const)
-            : ({ _tag: "error", message: error.message } as const)
+            : toControllerError(error)
         )
       )
     )
   )
+
+export const clearLocalSession = (): Promise<void> =>
+  runtime.runPromise(deleteSession().pipe(Effect.catchAll(() => Effect.void)))
 
 /**
  * Loads a protocol candidate detail view and the transaction types needed for mapping review.
