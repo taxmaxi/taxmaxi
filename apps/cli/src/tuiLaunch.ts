@@ -18,10 +18,10 @@ const MINIMUM_NODE_MAJOR = 26
 
 const NODE_26_MESSAGE =
   "The TaxMaxi TUI needs Node.js 26 or newer (it uses Node's experimental FFI). " +
-  "Update Node, or keep using subcommands like `tax coinbase`."
+  "Update Node, or keep using the CLI without the TUI, e.g. `tax coinbase`."
 
 type TuiModule = {
-  readonly runTui: () => Promise<void>
+  readonly runTui: Effect.Effect<void, unknown>
 }
 
 /**
@@ -48,10 +48,9 @@ const runTuiInProcess = Effect.gen(function* () {
       }),
   })
 
-  yield* Effect.tryPromise({
-    try: () => tuiModule.runTui(),
-    catch: mapUnknownToCliCommandError("The TaxMaxi TUI exited with an unexpected error."),
-  })
+  yield* tuiModule.runTui.pipe(
+    Effect.mapError(mapUnknownToCliCommandError("The TaxMaxi TUI exited with an unexpected error."))
+  )
 })
 
 const nodeMajorVersion = (): number => Number.parseInt(process.versions.node, 10)

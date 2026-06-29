@@ -1,6 +1,10 @@
 import { Duration, Effect } from "effect"
 import * as Option from "effect/Option"
-import { type AuthAuthorizeRedirectResponse, type AuthOAuthSessionResponse } from "taxmaxi"
+import {
+  type AuthAuthorizeRedirectResponse,
+  type AuthOAuthSessionResponse,
+  type CurrentUserResponse,
+} from "taxmaxi"
 import { CliCommandError, mapUnknownToCliCommandError } from "../errors.ts"
 import { nowMillis } from "../time.ts"
 import { toCliApiError } from "./errors.ts"
@@ -171,4 +175,16 @@ export const validateSessionToken = ({
     Effect.flatMap((result) =>
       result instanceof CliCommandError ? Effect.fail(result) : Effect.succeed(result)
     )
+  )
+
+export const getCurrentUser = ({
+  apiUrl,
+  sessionToken,
+}: {
+  readonly apiUrl: string
+  readonly sessionToken: string
+}): Effect.Effect<CurrentUserResponse, CliCommandError> =>
+  makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
+    Effect.flatMap((resolved) => resolved.authSession.me(undefined)),
+    Effect.mapError(toCliApiError("Failed to load current user."))
   )

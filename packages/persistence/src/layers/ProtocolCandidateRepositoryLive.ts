@@ -4,16 +4,22 @@
  * @module ProtocolCandidateRepositoryLive
  */
 
-import { and, count, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, inArray, lt, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import {
   ProtocolCandidateRepository,
   SyncEngineStorageError,
   type PersistedProtocolCandidate,
+  type ProtocolCandidateObservationSourceMetadata,
   type ProtocolCandidateObservationDraft,
+  type ProtocolCandidateReviewDetail,
+  type ProtocolCandidateReviewListRow,
+  type ProtocolCandidateReviewObservation,
   type ProtocolCandidateSubjectKind,
   type ProtocolCandidateRepositoryShape,
+  type TaxMaxiTransactionTypeReference,
 } from "@my/sync-engine/services"
 import { drizzle } from "./PgClientLive.ts"
 import {
@@ -23,9 +29,12 @@ import {
 } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 
-const operation = "protocolCandidateRepository.importObservations"
+const importOperation = "protocolCandidateRepository.importObservations"
+const listPendingReviewOperation = "protocolCandidateRepository.listPendingReviewCandidates"
+const getReviewDetailOperation = "protocolCandidateRepository.getReviewDetail"
+const listTransactionTypesOperation = "protocolCandidateRepository.listTransactionTypes"
 
-const storageError = (cause: unknown) =>
+const storageError = (operation: string, cause: unknown) =>
   new SyncEngineStorageError({
     operation,
     cause,
@@ -37,7 +46,7 @@ const invalidObservation = ({
 }: {
   readonly field: string
   readonly message: string
-}) => Effect.fail(storageError({ field, message }))
+}) => Effect.fail(storageError(importOperation, { field, message }))
 
 const uniqueNonEmptySubjectIdentifiers = (subjectIdentifiers: ReadonlyArray<string>) => [
   ...new Set(
@@ -167,7 +176,7 @@ const decodeSubjectKind = (
     }
     default: {
       return Effect.fail(
-        storageError({
+        storageError(importOperation, {
           subjectKind,
           message: "Persisted protocol candidate has an unknown subject kind.",
         })
@@ -198,6 +207,68 @@ const toPersistedCandidate = (candidate: {
     firstSeenAt: candidate.firstSeenAt,
     lastSeenAt: candidate.lastSeenAt,
   }))
+
+const decodeObservationSourceMetadata = (metadata: {
+  readonly queryId: number
+  readonly queryName: string
+  readonly queryVersion: number
+}): ProtocolCandidateObservationSourceMetadata => ({
+  source: "dune",
+  queryId: metadata.queryId,
+  queryName: metadata.queryName,
+  queryVersion: metadata.queryVersion,
+})
+
+const toReviewListRow = (candidate: {
+  readonly id: string
+  readonly blockchainId: string
+  readonly blockchainName: string
+  readonly subjectKind: string
+  readonly subjectIdentifier: string
+  readonly protocolNameHint: string | null
+  readonly categoryHint: string | null
+  readonly mappingStatus: "approved" | "pending_review" | "rejected"
+  readonly firstSeenAt: Date
+  readonly lastSeenAt: Date
+  readonly observationCount: number
+}): Effect.Effect<ProtocolCandidateReviewListRow, SyncEngineStorageError> =>
+  Effect.map(toPersistedCandidate(candidate), (persisted) => ({
+    ...persisted,
+    blockchainName: candidate.blockchainName,
+    observationCount: candidate.observationCount,
+  }))
+
+const toReviewObservation = (row: {
+  readonly id: string
+  readonly onchainDataSource: "dune"
+  readonly onchainDataSourceObservationKey: string
+  readonly observedWindowStart: Date
+  readonly observedWindowEnd: Date
+  readonly interactionCount: string
+  readonly transactionCount: string | null
+  readonly uniqueActorCount: string | null
+  readonly relatedSubjectIdentifiers: ReadonlyArray<string>
+  readonly sampleTransactionHashes: ReadonlyArray<string>
+  readonly retrievedAt: Date
+  readonly rawPayload: Record<string, unknown>
+  readonly queryId: number
+  readonly queryName: string
+  readonly queryVersion: number
+}): ProtocolCandidateReviewObservation => ({
+  id: row.id,
+  onchainDataSource: row.onchainDataSource,
+  onchainDataSourceObservationKey: row.onchainDataSourceObservationKey,
+  observedWindowStart: row.observedWindowStart,
+  observedWindowEnd: row.observedWindowEnd,
+  interactionCount: row.interactionCount,
+  transactionCount: row.transactionCount,
+  uniqueActorCount: row.uniqueActorCount,
+  relatedSubjectIdentifiers: row.relatedSubjectIdentifiers,
+  sampleTransactionHashes: row.sampleTransactionHashes,
+  retrievedAt: row.retrievedAt,
+  rawPayload: row.rawPayload,
+  sourceMetadata: decodeObservationSourceMetadata(row),
+})
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -230,11 +301,11 @@ const make = Effect.gen(function* () {
                 .from(schema.blockchains)
                 .where(eq(schema.blockchains.name, observation.blockchainName))
                 .limit(1)
-                .pipe(wrapSyncEngineSqlError(operation))
+                .pipe(wrapSyncEngineSqlError(importOperation))
 
               if (blockchain === undefined) {
                 return yield* Effect.fail(
-                  storageError({
+                  storageError(importOperation, {
                     blockchainName: observation.blockchainName,
                     message: "Failed to resolve protocol candidate blockchain.",
                   })
@@ -284,11 +355,13 @@ const make = Effect.gen(function* () {
                   Effect.flatMap((rows) =>
                     rows[0] === undefined
                       ? Effect.fail(
-                          storageError({ message: "Failed to upsert protocol candidate." })
+                          storageError(importOperation, {
+                            message: "Failed to upsert protocol candidate.",
+                          })
                         )
                       : toPersistedCandidate(rows[0])
                   ),
-                  wrapSyncEngineSqlError(operation)
+                  wrapSyncEngineSqlError(importOperation)
                 )
 
               if (!requiredSubjectIdentifiersBeforeByCandidateId.has(candidate.id)) {
@@ -299,7 +372,7 @@ const make = Effect.gen(function* () {
                   })
                   .from(schema.protocolCandidateObservations)
                   .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
-                  .pipe(wrapSyncEngineSqlError(operation))
+                  .pipe(wrapSyncEngineSqlError(importOperation))
 
                 const requiredSubjectIdentifiersBefore = requiredSubjectIdentifiersForCandidate({
                   candidate,
@@ -325,7 +398,9 @@ const make = Effect.gen(function* () {
                 const candidate = candidates[index]
                 if (candidate === undefined) {
                   return yield* Effect.fail(
-                    storageError({ message: "Missing imported candidate for observation." })
+                    storageError(importOperation, {
+                      message: "Missing imported candidate for observation.",
+                    })
                   )
                 }
 
@@ -369,11 +444,11 @@ const make = Effect.gen(function* () {
                   .returning({
                     id: schema.protocolCandidateObservations.id,
                   })
-                  .pipe(wrapSyncEngineSqlError(operation))
+                  .pipe(wrapSyncEngineSqlError(importOperation))
 
                 if (persistedObservation === undefined) {
                   return yield* Effect.fail(
-                    storageError({
+                    storageError(importOperation, {
                       message: "Failed to upsert protocol candidate observation.",
                     })
                   )
@@ -395,7 +470,7 @@ const make = Effect.gen(function* () {
                       queryVersion: sql.raw("excluded.query_version"),
                     },
                   })
-                  .pipe(wrapSyncEngineSqlError(operation))
+                  .pipe(wrapSyncEngineSqlError(importOperation))
               }),
             { discard: true }
           )
@@ -413,7 +488,7 @@ const make = Effect.gen(function* () {
                 })
                 .from(schema.protocolCandidateObservations)
                 .where(eq(schema.protocolCandidateObservations.candidateId, candidate.id))
-                .pipe(wrapSyncEngineSqlError(operation))
+                .pipe(wrapSyncEngineSqlError(importOperation))
 
               const requiredSubjectIdentifiersAfter = requiredSubjectIdentifiersForCandidate({
                 candidate,
@@ -452,7 +527,7 @@ const make = Effect.gen(function* () {
                     eq(schema.protocolTransactionTypeMappings.mappingStatus, "approved")
                   )
                 )
-                .pipe(wrapSyncEngineSqlError(operation))
+                .pipe(wrapSyncEngineSqlError(importOperation))
               const approvedSubjectIdentifiers = new Set(
                 approvedMappingRows.map((row) => row.subjectIdentifier)
               )
@@ -469,7 +544,7 @@ const make = Effect.gen(function* () {
                     eq(schema.protocolTransactionTypeMappings.mappingStatus, "pending_review")
                   )
                 )
-                .pipe(wrapSyncEngineSqlError(operation))
+                .pipe(wrapSyncEngineSqlError(importOperation))
 
               const nextMappingStatus =
                 !hasUncoveredSubject && (pendingMappingCount?.value ?? 0) === 0
@@ -483,7 +558,7 @@ const make = Effect.gen(function* () {
                   updatedAt: now,
                 })
                 .where(eq(schema.protocolCandidates.id, candidate.id))
-                .pipe(wrapSyncEngineSqlError(operation))
+                .pipe(wrapSyncEngineSqlError(importOperation))
             })
           )
 
@@ -502,7 +577,7 @@ const make = Effect.gen(function* () {
             })
             .from(schema.protocolCandidates)
             .where(inArray(schema.protocolCandidates.id, candidateIds))
-            .pipe(wrapSyncEngineSqlError(operation))
+            .pipe(wrapSyncEngineSqlError(importOperation))
           const currentCandidates = yield* Effect.forEach(
             currentCandidateRows,
             toPersistedCandidate
@@ -513,7 +588,11 @@ const make = Effect.gen(function* () {
           const returnedCandidates = yield* Effect.forEach(candidates, (candidate) => {
             const currentCandidate = currentCandidatesById.get(candidate.id)
             return currentCandidate === undefined
-              ? Effect.fail(storageError({ message: "Failed to reload imported candidate." }))
+              ? Effect.fail(
+                  storageError(importOperation, {
+                    message: "Failed to reload imported candidate.",
+                  })
+                )
               : Effect.succeed(currentCandidate)
           })
 
@@ -523,10 +602,201 @@ const make = Effect.gen(function* () {
           }
         })
       )
-      .pipe(wrapSyncEngineStorageError(operation))
+      .pipe(wrapSyncEngineStorageError(importOperation))
+
+  const listPendingReviewCandidates: ProtocolCandidateRepositoryShape["listPendingReviewCandidates"] =
+    ({ cursor, limit }) =>
+      Effect.gen(function* () {
+        const rows = yield* db
+          .select({
+            id: schema.protocolCandidates.id,
+            blockchainId: schema.protocolCandidates.blockchainId,
+            blockchainName: schema.blockchains.name,
+            subjectKind: schema.protocolCandidates.subjectKind,
+            subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+            protocolNameHint: schema.protocolCandidates.protocolNameHint,
+            categoryHint: schema.protocolCandidates.categoryHint,
+            mappingStatus: schema.protocolCandidates.mappingStatus,
+            firstSeenAt: schema.protocolCandidates.firstSeenAt,
+            lastSeenAt: schema.protocolCandidates.lastSeenAt,
+            observationCount: count(schema.protocolCandidateObservations.id),
+          })
+          .from(schema.protocolCandidates)
+          .innerJoin(
+            schema.blockchains,
+            eq(schema.blockchains.id, schema.protocolCandidates.blockchainId)
+          )
+          .leftJoin(
+            schema.protocolCandidateObservations,
+            eq(schema.protocolCandidateObservations.candidateId, schema.protocolCandidates.id)
+          )
+          .where(
+            cursor === null
+              ? eq(schema.protocolCandidates.mappingStatus, "pending_review")
+              : and(
+                  eq(schema.protocolCandidates.mappingStatus, "pending_review"),
+                  ne(schema.protocolCandidates.id, cursor.id),
+                  or(
+                    lt(schema.protocolCandidates.lastSeenAt, cursor.lastSeenAt),
+                    and(
+                      eq(schema.protocolCandidates.lastSeenAt, cursor.lastSeenAt),
+                      gt(schema.protocolCandidates.id, cursor.id)
+                    )
+                  )
+                )
+          )
+          .groupBy(
+            schema.protocolCandidates.id,
+            schema.blockchains.name,
+            schema.protocolCandidates.blockchainId,
+            schema.protocolCandidates.subjectKind,
+            schema.protocolCandidates.subjectIdentifier,
+            schema.protocolCandidates.protocolNameHint,
+            schema.protocolCandidates.categoryHint,
+            schema.protocolCandidates.mappingStatus,
+            schema.protocolCandidates.firstSeenAt,
+            schema.protocolCandidates.lastSeenAt
+          )
+          .orderBy(desc(schema.protocolCandidates.lastSeenAt), asc(schema.protocolCandidates.id))
+          .limit(limit)
+          .pipe(wrapSyncEngineSqlError(listPendingReviewOperation))
+
+        return yield* Effect.forEach(rows, toReviewListRow)
+      })
+
+  const getReviewDetail: ProtocolCandidateRepositoryShape["getReviewDetail"] = ({
+    candidateId,
+    observationCursor,
+    observationLimit,
+  }) =>
+    Effect.gen(function* () {
+      const [candidateRow] = yield* db
+        .select({
+          id: schema.protocolCandidates.id,
+          blockchainId: schema.protocolCandidates.blockchainId,
+          blockchainName: schema.blockchains.name,
+          subjectKind: schema.protocolCandidates.subjectKind,
+          subjectIdentifier: schema.protocolCandidates.subjectIdentifier,
+          protocolNameHint: schema.protocolCandidates.protocolNameHint,
+          categoryHint: schema.protocolCandidates.categoryHint,
+          mappingStatus: schema.protocolCandidates.mappingStatus,
+          firstSeenAt: schema.protocolCandidates.firstSeenAt,
+          lastSeenAt: schema.protocolCandidates.lastSeenAt,
+          observationCount: count(schema.protocolCandidateObservations.id),
+        })
+        .from(schema.protocolCandidates)
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.blockchains.id, schema.protocolCandidates.blockchainId)
+        )
+        .leftJoin(
+          schema.protocolCandidateObservations,
+          eq(schema.protocolCandidateObservations.candidateId, schema.protocolCandidates.id)
+        )
+        .where(eq(schema.protocolCandidates.id, candidateId))
+        .groupBy(
+          schema.protocolCandidates.id,
+          schema.blockchains.name,
+          schema.protocolCandidates.blockchainId,
+          schema.protocolCandidates.subjectKind,
+          schema.protocolCandidates.subjectIdentifier,
+          schema.protocolCandidates.protocolNameHint,
+          schema.protocolCandidates.categoryHint,
+          schema.protocolCandidates.mappingStatus,
+          schema.protocolCandidates.firstSeenAt,
+          schema.protocolCandidates.lastSeenAt
+        )
+        .limit(1)
+        .pipe(wrapSyncEngineSqlError(getReviewDetailOperation))
+
+      if (candidateRow === undefined) {
+        return Option.none<ProtocolCandidateReviewDetail>()
+      }
+
+      const candidate = yield* toReviewListRow(candidateRow)
+
+      const observationRows = yield* db
+        .select({
+          id: schema.protocolCandidateObservations.id,
+          onchainDataSource: schema.protocolCandidateObservations.onchainDataSource,
+          onchainDataSourceObservationKey:
+            schema.protocolCandidateObservations.onchainDataSourceObservationKey,
+          observedWindowStart: schema.protocolCandidateObservations.observedWindowStart,
+          observedWindowEnd: schema.protocolCandidateObservations.observedWindowEnd,
+          interactionCount: schema.protocolCandidateObservations.interactionCount,
+          transactionCount: schema.protocolCandidateObservations.transactionCount,
+          uniqueActorCount: schema.protocolCandidateObservations.uniqueActorCount,
+          relatedSubjectIdentifiers: schema.protocolCandidateObservations.relatedSubjectIdentifiers,
+          sampleTransactionHashes: schema.protocolCandidateObservations.sampleTransactionHashes,
+          retrievedAt: schema.protocolCandidateObservations.retrievedAt,
+          rawPayload: schema.protocolCandidateObservations.rawPayload,
+          queryId: schema.duneProtocolCandidateObservations.queryId,
+          queryName: schema.duneProtocolCandidateObservations.queryName,
+          queryVersion: schema.duneProtocolCandidateObservations.queryVersion,
+        })
+        .from(schema.protocolCandidateObservations)
+        .innerJoin(
+          schema.duneProtocolCandidateObservations,
+          eq(
+            schema.duneProtocolCandidateObservations.observationId,
+            schema.protocolCandidateObservations.id
+          )
+        )
+        .where(
+          observationCursor === null
+            ? eq(schema.protocolCandidateObservations.candidateId, candidateId)
+            : and(
+                eq(schema.protocolCandidateObservations.candidateId, candidateId),
+                ne(schema.protocolCandidateObservations.id, observationCursor.id),
+                or(
+                  lt(
+                    schema.protocolCandidateObservations.retrievedAt,
+                    observationCursor.retrievedAt
+                  ),
+                  and(
+                    eq(
+                      schema.protocolCandidateObservations.retrievedAt,
+                      observationCursor.retrievedAt
+                    ),
+                    gt(schema.protocolCandidateObservations.id, observationCursor.id)
+                  )
+                )
+              )
+        )
+        .orderBy(
+          desc(schema.protocolCandidateObservations.retrievedAt),
+          asc(schema.protocolCandidateObservations.id)
+        )
+        .limit(observationLimit)
+        .pipe(wrapSyncEngineSqlError(getReviewDetailOperation))
+
+      return Option.some({
+        candidate,
+        observations: observationRows.map(toReviewObservation),
+      })
+    })
+
+  const listTransactionTypes: ProtocolCandidateRepositoryShape["listTransactionTypes"] = () =>
+    db
+      .select({
+        typeKey: schema.transactionTypes.typeKey,
+        categoryKey: schema.transactionTypes.categoryKey,
+        subcategoryKey: schema.transactionTypes.subcategoryKey,
+        labelEn: schema.transactionTypes.labelEn,
+        labelDe: schema.transactionTypes.labelDe,
+      })
+      .from(schema.transactionTypes)
+      .orderBy(asc(schema.transactionTypes.typeKey))
+      .pipe(
+        wrapSyncEngineSqlError(listTransactionTypesOperation),
+        Effect.map((rows): ReadonlyArray<TaxMaxiTransactionTypeReference> => rows)
+      )
 
   return ProtocolCandidateRepository.of({
     importObservations,
+    listPendingReviewCandidates,
+    getReviewDetail,
+    listTransactionTypes,
   } satisfies ProtocolCandidateRepositoryShape)
 })
 

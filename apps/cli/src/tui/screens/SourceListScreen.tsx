@@ -6,13 +6,14 @@ import type { CliSession } from "../../session.ts"
 import { fetchSources, type SourcesResult } from "../controller.ts"
 import { createListViewport } from "../paging.ts"
 import { theme } from "../theme.ts"
+import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 
 type ListState = { readonly _tag: "loading" } | SourcesResult
 
 // Rows used by everything around the source list: app header, panel
 // chrome, the panel title, and the key hints.
-const RESERVED_ROWS = 10
+const RESERVED_ROWS = 11
 
 function SourceRow(props: {
   readonly source: Source
@@ -22,23 +23,20 @@ function SourceRow(props: {
   readonly onActivate: () => void
 }) {
   return (
-    <box
-      flexDirection="row"
-      gap={1}
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={props.selected ? theme.backgroundElement : theme.backgroundPanel}
+    <ListItem
+      selected={props.selected}
       onMouseDown={props.onSelect}
       onMouseOver={props.onHover}
       onMouseUp={props.onActivate}
     >
-      <text fg={props.selected ? theme.text : theme.textMuted}>{props.selected ? "›" : " "}</text>
-      <text fg={props.selected ? theme.text : theme.textSoft}>{props.source.name}</text>
-      <box backgroundColor={theme.backgroundElement} paddingLeft={1} paddingRight={1}>
-        <text fg={theme.textSecondary}>{props.source.providerKey ?? "unknown"}</text>
-      </box>
-      <text fg={theme.textMuted}>added {props.source.createdAt.toISOString().slice(0, 10)}</text>
-    </box>
+      <ListItemText selected={props.selected}>{props.source.name}</ListItemText>
+      <ListItemText selected={props.selected} color={theme.accent}>
+        {props.source.providerKey ?? "unknown"}
+      </ListItemText>
+      <ListItemText selected={props.selected} muted>
+        added {props.source.createdAt.toISOString().slice(0, 10)}
+      </ListItemText>
+    </ListItem>
   )
 }
 
@@ -47,7 +45,7 @@ export function SourceListScreen(props: {
   readonly active: () => boolean
   readonly onOpenSource: (source: Source) => void
   readonly onAddSource: () => void
-  readonly onUserMenu: () => void
+  readonly onSessionExpired: () => void
   readonly onQuit: () => void
 }) {
   const dimensions = useTerminalDimensions()
@@ -59,6 +57,10 @@ export function SourceListScreen(props: {
   const refresh = async () => {
     setState({ _tag: "loading" })
     const result = await fetchSources(props.session)
+    if (result._tag === "unauthorized") {
+      props.onSessionExpired()
+      return
+    }
     setState(result)
     setSelected(0)
     viewport.reset()
@@ -124,10 +126,6 @@ export function SourceListScreen(props: {
       props.onAddSource()
       return
     }
-    if (evt.name === "u") {
-      props.onUserMenu()
-      return
-    }
     if (evt.name === "r") {
       void refresh()
       return
@@ -174,9 +172,6 @@ export function SourceListScreen(props: {
         flexDirection="column"
         gap={1}
         backgroundColor={theme.backgroundPanel}
-        border
-        borderStyle="rounded"
-        borderColor={theme.border}
         paddingLeft={2}
         paddingRight={2}
         paddingTop={1}
@@ -223,7 +218,6 @@ export function SourceListScreen(props: {
         <text fg={theme.textMuted}>[a] add source</text>
         <text fg={theme.textMuted}>[↑/↓] select</text>
         <text fg={theme.textMuted}>[r] refresh</text>
-        <text fg={theme.textMuted}>[u] session</text>
         <text fg={theme.textMuted}>[q] quit</text>
       </box>
     </box>
