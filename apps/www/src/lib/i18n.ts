@@ -1,5 +1,4 @@
 import type { Locale } from "#/paraglide/runtime"
-import { localizeHref } from "#/paraglide/runtime"
 import type { CompilerOptions } from "@inlang/paraglide-js"
 import type { FileRoutesByTo } from "../routeTree.gen"
 
@@ -20,24 +19,28 @@ type TranslatedPathname = {
 }
 
 function toUrlPattern(path: string) {
-  return (
-    path
-      // catch-all
-      .replace(/\/\$$/, "/:path(.*)?")
-      // optional parameters: {-$param}
-      .replace(/\{-\$([a-zA-Z0-9_]+)\}/g, ":$1?")
-      // named parameters: $param
-      .replace(/\$([a-zA-Z0-9_]+)/g, ":$1")
-      // remove trailing slash
-      .replace(/\/+$/, "")
-  )
+  const pattern = path
+    // catch-all
+    .replace(/\/\$$/, "/:path(.*)?")
+    // optional parameters: {-$param}
+    .replace(/\{-\$([a-zA-Z0-9_]+)\}/g, ":$1?")
+    // named parameters: $param
+    .replace(/\$([a-zA-Z0-9_]+)/g, ":$1")
+    // remove trailing slash
+    .replace(/\/+$/, "")
+
+  return pattern === "" ? "/" : pattern
 }
 
 function toLocalizedPattern(locale: Locale, path: string) {
   const pattern = toUrlPattern(path)
 
   if (locale === baseLocale) {
-    return pattern === "" ? "/" : pattern
+    return pattern
+  }
+
+  if (pattern === "/") {
+    return `/${locale}`
   }
 
   return `/${locale}${pattern}`
@@ -132,25 +135,3 @@ export const routeStrategies = [
   { match: "/api/:path(.*)?", exclude: true },
   { match: "/demo/api/:path(.*)?", exclude: true },
 ] satisfies RouteStrategies
-
-const routesToPrerender: PublicRoutePath[] = [
-  "/",
-  "/about",
-  "/demo/ai-chat",
-  "/demo/ai-image",
-  "/demo/ai-structured",
-  "/demo/posthog",
-  "/demo/tanstack-query",
-  "/demo/store",
-  "/demo/form/address",
-  "/demo/form/simple",
-  "/demo/guitars/$guitarId",
-  "/demo/guitars",
-]
-
-export const prerenderRoutes = routesToPrerender.map((path) => ({
-  path: localizeHref(path),
-  prerender: {
-    enabled: true,
-  },
-}))
