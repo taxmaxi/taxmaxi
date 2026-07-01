@@ -8,6 +8,7 @@
     "ms-python.python",
     "ms-python.debugpy",
     "ms-python.vscode-pylance",
-    "tomoki1207.pdf"
+    "tomoki1207.pdf",
+    "inlang.vs-code-extension"
   ]
 }

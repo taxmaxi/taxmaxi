@@ -1,5 +1,6 @@
-import { Button } from "#/components/ui/button"
 import { createFileRoute, Link } from "@tanstack/react-router"
+import { Button } from "#/components/ui/button"
+import { m } from "#/paraglide/messages.js"
 
 export const Route = createFileRoute("/")({ component: App })
 
@@ -14,8 +15,9 @@ function App() {
           Start simple, ship quickly.
         </h1>
         <p className="mb-8 max-w-2xl text-base text-[var(--sea-ink-soft)] sm:text-lg">
-          This base starter intentionally keeps things light: two routes, clean structure, and the
-          essentials you need to build from scratch.
+          {m.example_message({
+            username: "Maxi",
+          })}
         </p>
         <div className="flex flex-wrap gap-3">
           <Link to="/about">

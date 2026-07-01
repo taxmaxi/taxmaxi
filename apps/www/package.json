@@ -15,7 +15,8 @@
     "cf-typegen": "wrangler types",
     "generate-routes": "tsr generate",
     "postinstall": "npm run cf-typegen && cd ../.. && pnpm run www:build-deps",
-    "clean": "rm -rf .tanstack .turbo .wrangler dist node_modules"
+    "clean": "rm -rf .tanstack .turbo .wrangler dist node_modules",
+    "machine-translate": "inlang machine translate --project project.inlang"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "1.42.3",
@@ -61,6 +62,8 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@inlang/cli": "^3.0.0",
+    "@inlang/paraglide-js": "^2.20.2",
     "@tailwindcss/typography": "0.5.20",
     "@tanstack/devtools-event-client": "0.5.0",
     "@tanstack/devtools-vite": "0.8.1",

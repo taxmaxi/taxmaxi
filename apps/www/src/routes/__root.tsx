@@ -1,4 +1,4 @@
-import { HeadContent, Scripts, createRootRouteWithContext } from "@tanstack/react-router"
+import { HeadContent, Scripts, createRootRouteWithContext, redirect } from "@tanstack/react-router"
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 import { TanStackDevtools } from "@tanstack/react-devtools"
 import Footer from "../components/Footer"
@@ -13,6 +13,7 @@ import StoreDevtools from "../lib/demo-store-devtools"
 import appCss from "../styles.css?url"
 
 import type { QueryClient } from "@tanstack/react-query"
+import { getLocale, shouldRedirect } from "#/paraglide/runtime"
 
 interface MyRouterContext {
   queryClient: QueryClient
@@ -41,12 +42,24 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
       },
     ],
   }),
+  // this ensures that i18n works while user is offline
+  beforeLoad: async () => {
+    if (typeof window === "undefined") {
+      return
+    }
+
+    const decision = await shouldRedirect({ url: window.location.href })
+
+    if (decision.redirectUrl) {
+      throw redirect({ href: decision.redirectUrl.href })
+    }
+  },
   shellComponent: RootDocument,
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang={getLocale()} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <HeadContent />
