@@ -34,54 +34,54 @@ export default function Header() {
           <details className="relative w-full sm:w-auto">
             <summary className="nav-link list-none cursor-pointer">Demos</summary>
             <div className="mt-2 min-w-56 rounded-xl border border-[var(--line)] bg-[var(--header-bg)] p-2 shadow-lg sm:absolute sm:right-0">
-              <a
-                href="/demo/posthog"
+              <Link
+                to="/demo/posthog"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 PostHog
-              </a>
-              <a
-                href="/demo/form/simple"
+              </Link>
+              <Link
+                to="/demo/form/simple"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 Simple Form
-              </a>
-              <a
-                href="/demo/form/address"
+              </Link>
+              <Link
+                to="/demo/form/address"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 Address Form
-              </a>
-              <a
-                href="/demo/ai-chat"
+              </Link>
+              <Link
+                to="/demo/ai-chat"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 Chat
-              </a>
-              <a
-                href="/demo/ai-image"
+              </Link>
+              <Link
+                to="/demo/ai-image"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 Generate Image
-              </a>
-              <a
-                href="/demo/ai-structured"
+              </Link>
+              <Link
+                to="/demo/ai-structured"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 Structured Output
-              </a>
-              <a
-                href="/demo/tanstack-query"
+              </Link>
+              <Link
+                to="/demo/tanstack-query"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 TanStack Query
-              </a>
-              <a
-                href="/demo/store"
+              </Link>
+              <Link
+                to="/demo/store"
                 className="block rounded-lg px-3 py-2 text-sm text-[var(--sea-ink-soft)] no-underline transition hover:bg-[var(--link-bg-hover)] hover:text-[var(--sea-ink)]"
               >
                 Store
-              </a>
+              </Link>
             </div>
           </details>
         </div>
