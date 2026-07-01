@@ -1,4 +1,11 @@
 import { useCallback, useRef, useState } from "react"
+import { z } from "zod"
+
+import { getJsonErrorMessage } from "#/lib/demo-ai-json"
+
+const TranscriptionResponseSchema = z.object({
+  text: z.string().nullable().optional(),
+})
 
 /**
  * Hook for recording audio and transcribing it via the transcription API.
@@ -60,13 +67,13 @@ export function useAudioRecorder() {
           })
 
           if (!response.ok) {
-            const errorData = await response.json()
-            throw new Error(errorData.error || "Transcription failed")
+            const errorData: unknown = await response.json()
+            throw new Error(getJsonErrorMessage(errorData, "Transcription failed"))
           }
 
-          const result = await response.json()
+          const result = TranscriptionResponseSchema.parse(await response.json())
           setIsTranscribing(false)
-          resolve(result.text || null)
+          resolve(result.text ?? null)
         } catch (error) {
           console.error("Transcription error:", error)
           setIsTranscribing(false)

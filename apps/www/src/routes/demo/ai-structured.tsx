@@ -3,7 +3,9 @@ import { createFileRoute } from "@tanstack/react-router"
 import { ChefHat, Clock, Users, Gauge } from "lucide-react"
 import { Streamdown } from "streamdown"
 
-import type { Recipe } from "./api.ai.structured"
+import { getCaughtErrorMessage, getJsonErrorMessage } from "#/lib/demo-ai-json"
+import { RecipeGenerationResponseSchema } from "#/lib/demo-recipe"
+import type { Recipe, RecipeGenerationResponse } from "#/lib/demo-recipe"
 
 type Mode = "structured" | "oneshot"
 
@@ -127,13 +129,7 @@ function RecipeCard({ recipe }: { recipe: Recipe }) {
 
 function StructuredPage() {
   const [recipeName, setRecipeName] = useState("")
-  const [result, setResult] = useState<{
-    mode: Mode
-    recipe?: Recipe
-    markdown?: string
-    provider: string
-    model: string
-  } | null>(null)
+  const [result, setResult] = useState<RecipeGenerationResponse | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -151,15 +147,20 @@ function StructuredPage() {
         body: JSON.stringify({ recipeName, mode }),
       })
 
-      const data = await response.json()
+      const data: unknown = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to generate recipe")
+        throw new Error(getJsonErrorMessage(data, "Failed to generate recipe"))
       }
 
-      setResult(data)
-    } catch (err: any) {
-      setError(err.message)
+      const parsed = RecipeGenerationResponseSchema.safeParse(data)
+      if (!parsed.success) {
+        throw new Error("Invalid recipe response")
+      }
+
+      setResult(parsed.data)
+    } catch (err: unknown) {
+      setError(getCaughtErrorMessage(err, "Failed to generate recipe"))
     } finally {
       setIsLoading(false)
     }
@@ -249,13 +250,13 @@ function StructuredPage() {
 
           {result ? (
             <div className="space-y-4">
-              {result.mode === "structured" && result.recipe ? (
+              {result.mode === "structured" ? (
                 <RecipeCard recipe={result.recipe} />
-              ) : result.markdown ? (
+              ) : (
                 <div className="max-w-none">
                   <Streamdown>{result.markdown}</Streamdown>
                 </div>
-              ) : null}
+              )}
             </div>
           ) : !error && !isLoading ? (
             <div className="demo-muted flex h-64 flex-col items-center justify-center">

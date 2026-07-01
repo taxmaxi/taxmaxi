@@ -1,11 +1,67 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { chat, maxIterations, toServerSentEventsResponse } from "@tanstack/ai"
+import type { ModelMessage, UIMessage } from "@tanstack/ai"
 import { anthropicText } from "@tanstack/ai-anthropic"
 import { openaiText } from "@tanstack/ai-openai"
 import { geminiText } from "@tanstack/ai-gemini"
 import { ollamaText } from "@tanstack/ai-ollama"
+import { z } from "zod"
 
 import { getGuitars, recommendGuitarToolDef } from "#/lib/demo-guitar-tools"
+import { getCaughtErrorMessage } from "#/lib/demo-ai-json"
+
+type Provider = "anthropic" | "openai" | "gemini" | "ollama"
+type DemoChatMessage = UIMessage | ModelMessage
+
+const isDemoChatMessage = (value: unknown): value is DemoChatMessage => {
+  if (typeof value !== "object" || value === null || !("role" in value)) {
+    return false
+  }
+
+  const { role } = value
+  if (role !== "system" && role !== "user" && role !== "assistant" && role !== "tool") {
+    return false
+  }
+
+  if ("parts" in value) {
+    return Array.isArray(value.parts)
+  }
+
+  return "content" in value
+}
+
+const ChatRequestSchema = z.object({
+  messages: z.array(z.custom<DemoChatMessage>(isDemoChatMessage)),
+})
+
+const getProvider = (): Provider => {
+  if (process.env.ANTHROPIC_API_KEY) {
+    return "anthropic"
+  }
+
+  if (process.env.OPENAI_API_KEY) {
+    return "openai"
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    return "gemini"
+  }
+
+  return "ollama"
+}
+
+const getAdapter = (provider: Provider) => {
+  switch (provider) {
+    case "anthropic":
+      return anthropicText("claude-haiku-4-5")
+    case "openai":
+      return openaiText("gpt-4o")
+    case "gemini":
+      return geminiText("gemini-2.5-flash")
+    case "ollama":
+      return ollamaText("mistral:7b")
+  }
+}
 
 const SYSTEM_PROMPT = `You are a helpful assistant for a store that sells guitars.
 
@@ -39,32 +95,17 @@ export const Route = createFileRoute("/demo/api/ai/chat")({
         const abortController = new AbortController()
 
         try {
-          const body = await request.json()
-          const { messages } = body
-
-          // Determine the best available provider
-          let provider: string = "ollama"
-          let model: string = "mistral:7b"
-          if (process.env.ANTHROPIC_API_KEY) {
-            provider = "anthropic"
-            model = "claude-haiku-4-5"
-          } else if (process.env.OPENAI_API_KEY) {
-            provider = "openai"
-            model = "gpt-4o"
-          } else if (process.env.GEMINI_API_KEY) {
-            provider = "gemini"
-            model = "gemini-2.0-flash-exp"
+          const body: unknown = await request.json()
+          const parsed = ChatRequestSchema.safeParse(body)
+          if (!parsed.success) {
+            return new Response(JSON.stringify({ error: "Invalid chat request" }), {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            })
           }
 
-          // Adapter factory pattern for multi-vendor support
-          const adapterConfig = {
-            anthropic: () => anthropicText((model || "claude-haiku-4-5") as any),
-            openai: () => openaiText((model || "gpt-4o") as any),
-            gemini: () => geminiText((model || "gemini-2.0-flash-exp") as any),
-            ollama: () => ollamaText((model || "mistral:7b") as any),
-          }
-
-          const adapter = adapterConfig[provider]()
+          const { messages } = parsed.data
+          const adapter = getAdapter(getProvider())
 
           const stream = chat({
             adapter,
@@ -79,15 +120,25 @@ export const Route = createFileRoute("/demo/api/ai/chat")({
           })
 
           return toServerSentEventsResponse(stream, { abortController })
-        } catch (error: any) {
+        } catch (error: unknown) {
           // If request was aborted, return early (don't send error response)
-          if (error.name === "AbortError" || abortController.signal.aborted) {
+          if (error instanceof Error && error.name === "AbortError") {
             return new Response(null, { status: 499 }) // 499 = Client Closed Request
           }
-          return new Response(JSON.stringify({ error: "Failed to process chat request" }), {
-            status: 500,
-            headers: { "Content-Type": "application/json" },
-          })
+
+          if (abortController.signal.aborted) {
+            return new Response(null, { status: 499 }) // 499 = Client Closed Request
+          }
+
+          return new Response(
+            JSON.stringify({
+              error: getCaughtErrorMessage(error, "Failed to process chat request"),
+            }),
+            {
+              status: 500,
+              headers: { "Content-Type": "application/json" },
+            }
+          )
         }
       },
     },

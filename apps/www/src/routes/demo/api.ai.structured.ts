@@ -3,46 +3,23 @@ import { chat } from "@tanstack/ai"
 import { openaiText } from "@tanstack/ai-openai"
 import { z } from "zod"
 
-// Schema for structured recipe output
-const RecipeSchema = z.object({
-  name: z.string().describe("The name of the recipe"),
-  description: z.string().describe("A brief description of the dish"),
-  prepTime: z.string().describe('Preparation time (e.g., "15 minutes")'),
-  cookTime: z.string().describe('Cooking time (e.g., "30 minutes")'),
-  servings: z.number().describe("Number of servings"),
-  difficulty: z.enum(["easy", "medium", "hard"]).describe("Difficulty level"),
-  ingredients: z
-    .array(
-      z.object({
-        item: z.string().describe("Ingredient name"),
-        amount: z.string().describe('Amount needed (e.g., "2 cups")'),
-        notes: z.string().optional().describe("Optional preparation notes"),
-      })
-    )
-    .describe("List of ingredients"),
-  instructions: z.array(z.string()).describe("Step-by-step cooking instructions"),
-  tips: z.array(z.string()).optional().describe("Optional cooking tips"),
-  nutritionPerServing: z
-    .object({
-      calories: z.number().optional(),
-      protein: z.string().optional(),
-      carbs: z.string().optional(),
-      fat: z.string().optional(),
-    })
-    .optional()
-    .describe("Nutritional information per serving"),
-})
+import { getCaughtErrorMessage } from "#/lib/demo-ai-json"
+import { RecipeSchema } from "#/lib/demo-recipe"
 
-export type Recipe = z.infer<typeof RecipeSchema>
+export type { Recipe } from "#/lib/demo-recipe"
+
+const StructuredRequestSchema = z.object({
+  recipeName: z.string().trim().min(1),
+  mode: z.enum(["structured", "oneshot"]).default("structured"),
+})
 
 export const Route = createFileRoute("/demo/api/ai/structured")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const body = await request.json()
-        const { recipeName, mode = "structured" } = body
-
-        if (!recipeName || recipeName.trim().length === 0) {
+        const body: unknown = await request.json()
+        const parsed = StructuredRequestSchema.safeParse(body)
+        if (!parsed.success) {
           return new Response(
             JSON.stringify({
               error: "Recipe name is required",
@@ -53,6 +30,8 @@ export const Route = createFileRoute("/demo/api/ai/structured")({
             }
           )
         }
+
+        const { recipeName, mode } = parsed.data
 
         try {
           if (mode === "structured") {
@@ -66,7 +45,7 @@ export const Route = createFileRoute("/demo/api/ai/structured")({
                 },
               ],
               outputSchema: RecipeSchema,
-            } as any)
+            })
 
             return new Response(
               JSON.stringify({
@@ -102,7 +81,7 @@ Format the recipe in beautiful markdown with:
 Make it detailed and easy to follow.`,
                 },
               ],
-            } as any)
+            })
 
             return new Response(
               JSON.stringify({
@@ -117,10 +96,10 @@ Make it detailed and easy to follow.`,
               }
             )
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
           return new Response(
             JSON.stringify({
-              error: error.message || "An error occurred",
+              error: getCaughtErrorMessage(error, "An error occurred"),
             }),
             {
               status: 500,

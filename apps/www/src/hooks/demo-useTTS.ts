@@ -1,4 +1,12 @@
 import { useCallback, useRef, useState } from "react"
+import { z } from "zod"
+
+import { getJsonErrorMessage } from "#/lib/demo-ai-json"
+
+const TTSResponseSchema = z.object({
+  audio: z.string(),
+  contentType: z.string(),
+})
 
 /**
  * Hook for text-to-speech playback via the TTS API.
@@ -29,11 +37,11 @@ export function useTTS() {
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || "TTS failed")
+        const errorData: unknown = await response.json()
+        throw new Error(getJsonErrorMessage(errorData, "TTS failed"))
       }
 
-      const result = await response.json()
+      const result = TTSResponseSchema.parse(await response.json())
 
       // Convert base64 to audio and play
       const audioData = atob(result.audio)
