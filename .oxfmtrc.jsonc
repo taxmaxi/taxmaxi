@@ -3,4 +3,9 @@
   "semi": false,
   "trailingComma": "es5",
   "ignorePatterns": ["**/dist/**", "**/migrations/**", "**/drizzle/meta/**", "**/routeTree.gen.ts"],
+  "sortTailwindcss": {
+    "stylesheet": "./path/to/stylesheet.css",
+    "functions": ["clsx", "cn"],
+    "preserveWhitespace": true,
+  },
 }
