@@ -31,22 +31,22 @@
     "worker:dev": "turbo run dev --filter=worker..."
   },
   "devDependencies": {
-    "@effect/language-service": "~0.85.1",
-    "@vitest/coverage-v8": "~4.1.2",
-    "husky": "~9.1.7",
-    "lint-staged": "~16.4.0",
-    "oxfmt": "~0.54.0",
-    "oxlint": "~1.69.0",
-    "oxlint-tsgolint": "~0.23.0",
-    "plop": "~4.0.5",
-    "turbo": "~2.9.16",
-    "typescript": "~6.0.2",
-    "vite": "~8.0.3",
-    "vitest": "~4.1.2"
+    "@effect/language-service": "0.86.2",
+    "@vitest/coverage-v8": "4.1.9",
+    "husky": "9.1.7",
+    "lint-staged": "17.0.8",
+    "oxfmt": "0.57.0",
+    "oxlint": "1.72.0",
+    "oxlint-tsgolint": "0.23.0",
+    "plop": "4.0.5",
+    "turbo": "2.10.2",
+    "typescript": "6.0.3",
+    "vite": "8.1.2",
+    "vitest": "4.1.9"
   },
   "lint-staged": {
     "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,vue,astro,svelte}": "oxlint -c .oxlintrc.json",
     "**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,toml,json,jsonc,yaml,yml,html,vue,css,scss,less,gql,graphql,md,mdx}": "oxfmt -c .oxfmtrc.jsonc --no-error-on-unmatched-pattern"
   },
-  "packageManager": "pnpm@11.5.2"
+  "packageManager": "pnpm@11.7.0"
 }

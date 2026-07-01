@@ -11,6 +11,7 @@ node_modules
 *.*.tsbuildinfo
 coverage/
 .dev.vars
+.pnpm-store/
 
 /build/
 /api/

@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@my/typescript-config": "workspace:*",
-    "@types/node": "~25.5.0",
-    "typescript": "~6.0.2"
+    "@types/node": "26.0.1",
+    "typescript": "6.0.3"
   }
 }

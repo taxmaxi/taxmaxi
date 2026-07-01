@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
 allowBuilds:
+  "@google/genai": true
   "@parcel/watcher": true
   "@sentry/cli": true
   core-js: true
@@ -10,19 +11,15 @@ allowBuilds:
   protobufjs: true
   sharp: true
   workerd: true
-# OpenTUI 0.4.0 (and its per-platform native binaries) is newer than the
-# release-age delay allows. Deliberate bypass; remove once the release ages.
 minimumReleaseAgeExclude:
-  - "@opentui/core-darwin-arm64@0.4.0"
-  - "@opentui/core-darwin-x64@0.4.0"
-  - "@opentui/core-linux-arm64-musl@0.4.0"
-  - "@opentui/core-linux-arm64@0.4.0"
-  - "@opentui/core-linux-x64-musl@0.4.0"
-  - "@opentui/core-linux-x64@0.4.0"
-  - "@opentui/core-win32-arm64@0.4.0"
-  - "@opentui/core-win32-x64@0.4.0"
-  - "@opentui/core@0.4.0"
-  - "@opentui/solid@0.4.0"
+  - "@turbo/darwin-64@2.10.2"
+  - "@turbo/darwin-arm64@2.10.2"
+  - "@turbo/linux-64@2.10.2"
+  - "@turbo/linux-arm64@2.10.2"
+  - "@turbo/windows-64@2.10.2"
+  - "@turbo/windows-arm64@2.10.2"
+  - turbo@2.10.2
+  - vite@8.1.2
 publicHoistPattern:
   - oxlint
   - oxfmt
