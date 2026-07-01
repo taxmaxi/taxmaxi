@@ -1,0 +1,21 @@
+{
+  "name": "TaxMaxi",
+  "short_name": "TaxMaxi",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "theme_color": "#F7F0E3",
+  "background_color": "#03352D",
+  "display": "standalone"
+}
