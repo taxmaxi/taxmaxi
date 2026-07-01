@@ -10,6 +10,7 @@ allowBuilds:
   msgpackr-extract: true
   protobufjs: true
   sharp: true
+  unrs-resolver: true
   workerd: true
 minimumReleaseAgeExclude:
   - "@turbo/darwin-64@2.10.2"
