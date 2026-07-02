@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router"
 import TanChatAIAssistant from "./demo-AIAssistant.tsx"
-import ThemeToggle from "./ThemeToggle"
+import ThemeToggle from "./theme-toggle.tsx"
 
 export default function Header() {
   return (

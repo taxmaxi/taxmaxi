@@ -1,4 +1,25 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
-  "example_message": "Hello world {username}"
+  "seo": {
+    "title": "TaxMaxi | The Crypto Tax API",
+    "description": "API-first crypto tax infra for wallets, exchanges, and tax advisory firms."
+  },
+  "header": {
+    "apiProduct": "API",
+    "cliProduct": "CLI",
+    "chatProduct": "Chat",
+    "pricing": "Pricing",
+    "roadmap": "Roadmap",
+    "startPilot": "Start Pilot",
+    "backToMenu": "Back to menu",
+    "pilotSheet": {
+      "title": "Schedule a pilot",
+      "description": "Let's review your requirements to get you up and running quickly.",
+      "meeting": "Meeting with TaxMaxi Founder",
+      "dataReview": "Data requirements review",
+      "nextSteps": "Clear next steps for launch",
+      "cancel": "Cancel",
+      "schedule": "Schedule"
+    }
+  }
 }

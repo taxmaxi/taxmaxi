@@ -1,19 +1,15 @@
-import { HeadContent, Scripts, createRootRouteWithContext, redirect } from "@tanstack/react-router"
+import { HeadContent, Scripts, createRootRouteWithContext } from "@tanstack/react-router"
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 import { TanStackDevtools } from "@tanstack/react-devtools"
-import Footer from "../components/Footer"
-import Header from "../components/Header"
-
-import PostHogProvider from "../integrations/posthog/provider"
-
-import TanStackQueryDevtools from "../integrations/tanstack-query/devtools"
-
-import StoreDevtools from "../lib/demo-store-devtools"
-
-import appCss from "../styles.css?url"
-
 import type { QueryClient } from "@tanstack/react-query"
-import { getLocale, shouldRedirect } from "#/paraglide/runtime"
+
+import { DefaultCatchBoundary } from "../components/catch-boundary"
+import { NotFound } from "../components/not-found"
+import TanStackQueryDevtools from "../integrations/tanstack-query/devtools"
+import StoreDevtools from "../lib/demo-store-devtools"
+import { seo } from "../lib/seo"
+import PostHogProvider from "../integrations/posthog/provider"
+import stylesCss from "../styles.css?url"
 
 interface MyRouterContext {
   queryClient: QueryClient
@@ -31,44 +27,62 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
         name: "viewport",
         content: "width=device-width, initial-scale=1",
       },
-      {
-        title: "TanStack Start Starter",
-      },
+      ...seo({
+        title: "TaxMaxi",
+        description: "TaxMaxi | The Crypto Tax API",
+        image: {
+          url: "https://www.taxmaxi.com/og-image.png",
+          type: "image/png",
+          width: "1200",
+          height: "630",
+          alt: "TaxMaxi | The Crypto Tax API",
+        },
+      }),
     ],
     links: [
+      { rel: "stylesheet", href: stylesCss },
       {
-        rel: "stylesheet",
-        href: appCss,
+        rel: "apple-touch-icon",
+        sizes: "180x180",
+        href: "/apple-touch-icon.png",
       },
+      {
+        rel: "icon",
+        type: "image/png",
+        sizes: "64x64",
+        href: "/favicon-64x64.png",
+      },
+      { rel: "manifest", href: "/site.webmanifest", color: "#F7F0E3" },
+      { rel: "icon", href: "/favicon.ico" },
     ],
   }),
-  // this ensures that i18n works while user is offline
-  beforeLoad: async () => {
-    if (typeof window === "undefined") {
-      return
-    }
-
-    const decision = await shouldRedirect({ url: window.location.href })
-
-    if (decision.redirectUrl) {
-      throw redirect({ href: decision.redirectUrl.href })
-    }
+  errorComponent: (props) => {
+    return (
+      <RootDocument>
+        <DefaultCatchBoundary {...props} />
+      </RootDocument>
+    )
   },
+  notFoundComponent: () => <NotFound />,
   shellComponent: RootDocument,
 })
 
+function Providers({ children }: { children: React.ReactNode }): React.ReactNode {
+  if (import.meta.env.DEV) return children
+
+  return <PostHogProvider>{children}</PostHogProvider>
+}
+
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang={getLocale()} suppressHydrationWarning>
+    <html lang="en" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <HeadContent />
       </head>
-      <body className="font-sans antialiased [overflow-wrap:anywhere] selection:bg-[rgba(79,184,178,0.24)]">
-        <PostHogProvider>
-          <Header />
+      <body>
+        <Providers>
           {children}
-          <Footer />
           <TanStackDevtools
             config={{
               position: "bottom-right",
@@ -82,7 +96,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
               StoreDevtools,
             ]}
           />
-        </PostHogProvider>
+        </Providers>
         <Scripts />
       </body>
     </html>

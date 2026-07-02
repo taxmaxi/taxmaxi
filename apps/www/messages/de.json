@@ -1,4 +1,25 @@
 {
   "$schema": "https://inlang.com/schema/inlang-message-format",
-  "example_message": "Guten Tag {username}"
+  "seo": {
+    "title": "TaxMaxi | API für Krypto Steuern",
+    "description": "Die Krypto Steuer API für Wallets, Börsen und Steuerkanzleien"
+  },
+  "header": {
+    "apiProduct": "API",
+    "cliProduct": "CLI",
+    "chatProduct": "Chat",
+    "pricing": "Preise",
+    "roadmap": "Roadmap",
+    "startPilot": "Pilot starten",
+    "backToMenu": "Zurück zum Menü",
+    "pilotSheet": {
+      "title": "Pilottermin buchen",
+      "description": "Anforderungen besprechen, damit ihr schnell loslegen könnt.",
+      "meeting": "Besprechung mit TaxMaxi Gründer",
+      "dataReview": "Datenanforderungen besprechen",
+      "nextSteps": "Klare Anleitung für den Start",
+      "cancel": "Abbrechen",
+      "schedule": "Buchen"
+    }
+  }
 }
