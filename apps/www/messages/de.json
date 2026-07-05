@@ -21,5 +21,230 @@
       "cancel": "Abbrechen",
       "schedule": "Buchen"
     }
+  },
+  "hero": {
+    "title": "Krypto Steuer Rechner per API integrieren",
+    "descriptionLead": "Unterstütze deine Kunden bei der Krypto Steuer Berechnung mithilfe der TaxMaxi API.",
+    "descriptionTarget": "Für Wallets, Börsen und Steuerkanzleien.",
+    "requestPilot": "Pilot anfragen",
+    "seeHowItWorks": "So funktioniert's"
+  },
+  "api": {
+    "eyebrow": "REST API",
+    "stickyTitle": "Eine vereinheitlichende API",
+    "stickyDescription": "Integriere Krypto-Steuerberechnungen nahtlos in dein Produkt mit einer einzigen REST API.",
+    "steps": {
+      "one": {
+        "label": "Schritt 01",
+        "title": "Rohdaten erfassen und in ein einheitliches Ledger überführen",
+        "description": "TaxMaxi übersetzt Rohdaten von Blockchains und Börsen in ein einheitliches Ledger."
+      },
+      "two": {
+        "label": "Schritt 02",
+        "title": "Normalisierte Transaktionen auf Steuerereignisse verschiedener Rechtssysteme abbilden",
+        "description": "Ledger-Einträge werden auf Steuerereignisse verschiedener Rechtssysteme abgebildet. Jedes Steuerereignis lässt sich aufschlüsseln: angewendete Regel, Evidenz und Begründungspfad."
+      },
+      "three": {
+        "label": "Schritt 03",
+        "title": "Steueroptimierungsempfehlungen für Nutzer bereitstellen",
+        "description": "Erschließe finanzielle Einblicke basierend auf den Positionen eines Nutzers in einer bestimmten Rechtssystem."
+      }
+    }
+  },
+  "cli": {
+    "eyebrow": "CLI",
+    "stickyTitle": "Krypto-Steuern direkt aus dem Terminal",
+    "stickyDescription": "Nutze die TaxMaxi CLI, um sie in deine agentischen Workflows zu integrieren.",
+    "steps": {
+      "one": {
+        "label": "Schritt 01",
+        "title": "CLI global installieren",
+        "description": "Verwende pnpm/npm/bun und authentifiziere dich einmalig mit deinem TaxMaxi Account."
+      },
+      "two": {
+        "label": "Schritt 02",
+        "title": "Daten von Börsen und Blockchains synchronisieren",
+        "description": "Verbinde jede Börse oder Onchain-Wallet-Adresse mit einem einzigen Befehl."
+      },
+      "three": {
+        "label": "Schritt 03",
+        "title": "Deine Agents mit der TaxMaxi CLI ausstatten",
+        "description": "AI Agents werden zunehmend zur Automatisierung von Aufgaben eingesetzt. Krypto-Steuerberechnungen sind keine Ausnahme."
+      }
+    }
+  },
+  "pricing": {
+    "eyebrow": "Preise",
+    "title": "Zahle pro Transaktion. Skaliere auf Millionen.",
+    "description": "Du kaufst Klassifizierungs-Kapazität. Die Stufe ändert nur deinen Preis pro 1.000 Transaktionen.",
+    "billingNote": "Jährliche Abrechnung mit monatlichen Kapazitäts-Commitments. Zusätzliche Nutzung bleibt linear zum Tarif deiner Stufe.",
+    "includedLabel": "So funktioniert die Abrechnung",
+    "included": {
+      "unit": "Jede klassifizierte Transaktion entspricht genau einer Preiseinheit.",
+      "minimum": "Dein monatlicher Mindestumsatz kauft ein klares Transaktions-Kontingent.",
+      "rate": "Die Stufen ändern nur den Preis pro 1.000 klassifizierte Transaktionen.",
+      "autoscale": "Zusätzliche Nutzung skaliert automatisch zum gleichen Tarif statt in starren Blöcken.",
+      "sharedCapabilities": "API-Zugriff, Audit Trail, KI-Erklärungen und Workspaces sind in allen Stufen enthalten.",
+      "enterpriseSupport": "Enterprise ergänzt Governance, Beschaffung und Rollout-Support, nicht ein anderes Preismodell."
+    },
+    "tiers": {
+      "build": {
+        "name": "Build",
+        "audience": "Teams, die ihren ersten Steuer-Workflow validieren",
+        "price": "€5,90",
+        "priceSuffix": "pro 1.000 klassifizierte Transaktionen",
+        "description": "€590 Mindestumsatz pro Monat kaufen 100.000 klassifizierte Transaktionen und machen die Stückkosten von Beginn an klar.",
+        "cta": "Build besprechen",
+        "stats": {
+          "monthlyMinimum": {
+            "label": "Monatlicher Mindestumsatz",
+            "value": "€590"
+          },
+          "includedCapacity": {
+            "label": "Inkludierte Kapazität",
+            "value": "100.000 Tx / Monat"
+          },
+          "additionalUsage": {
+            "label": "Zusätzliche Nutzung",
+            "value": "€5,90 / 1.000 Tx"
+          }
+        },
+        "features": {
+          "one": "Onboarding mit TaxMaxi Gründer",
+          "two": "Rechtssystemspezifische Logik + Quellenangaben",
+          "three": "Exportierbare Memos und Review-Historie",
+          "four": "E-Mail-Support"
+        }
+      },
+      "scale": {
+        "name": "Scale",
+        "audience": "Firmen, die Krypto-Steuer als Produkt-Infrastruktur betreiben",
+        "price": "€1,95",
+        "priceSuffix": "pro 1.000 klassifizierte Transaktionen",
+        "description": "€1.950 Mindestumsatz pro Monat kaufen 1.000.000 klassifizierte Transaktionen für Teams, die Steuer-Workflows produktiv betreiben.",
+        "cta": "Scale besprechen",
+        "stats": {
+          "monthlyMinimum": {
+            "label": "Monatlicher Mindestumsatz",
+            "value": "€1.950"
+          },
+          "includedCapacity": {
+            "label": "Inkludierte Kapazität",
+            "value": "1.000.000 Tx / Monat"
+          },
+          "additionalUsage": {
+            "label": "Zusätzliche Nutzung",
+            "value": "€1,95 / 1.000 Tx"
+          }
+        },
+        "features": {
+          "one": "Priorisierter Support",
+          "two": "Geteilte Review-Queues + Playbooks",
+          "three": "Sandbox- und Produktionsumgebungen",
+          "four": "Webhook- und Integrationssupport"
+        },
+        "badge": "Am beliebtesten"
+      },
+      "enterprise": {
+        "name": "Enterprise",
+        "audience": "Börsen, Banken und regulierte Plattformen",
+        "price": "Individuell",
+        "priceSuffix": "verhandeltes Nutzungsmodell",
+        "description": "Für Institutionen mit Governance, Rollout-Support und verhandelten Stückkosten über Teams oder Märkte hinweg.",
+        "cta": "Enterprise planen",
+        "stats": {
+          "monthlyMinimum": {
+            "label": "Monatlicher Mindestumsatz",
+            "value": "Verbindliches Nutzungsvolumen"
+          },
+          "includedCapacity": {
+            "label": "Inkludierte Kapazität",
+            "value": "Individuell"
+          },
+          "additionalUsage": {
+            "label": "Zusätzliche Nutzung",
+            "value": "Vorab verhandelter Tarif"
+          }
+        },
+        "features": {
+          "one": "SSO / SCIM",
+          "two": "SLA + dediziertes Onboarding",
+          "three": "Individuelle Konnektoren und Workflows",
+          "four": "EU-Datenresidenz und Private-Deployment-Optionen"
+        }
+      }
+    },
+    "overages": {
+      "title": "Lineare Nutzungspreise",
+      "description": "Die Basiseinheit sind klassifizierte Transaktionen. Mindestumsätze kaufen Kapazität, zusätzliches Volumen bleibt linear zum gleichen Preis pro 1.000.",
+      "label": "Nutzungsposition",
+      "rows": {
+        "effectiveRate": {
+          "label": "Effektiver Tarif",
+          "build": "€5,90 / 1.000 Tx",
+          "scale": "€1,95 / 1.000 Tx",
+          "enterprise": "Individuell verhandelter Tarif"
+        },
+        "monthlyMinimum": {
+          "label": "Monatlicher Mindestumsatz",
+          "build": "€590",
+          "scale": "€1.950",
+          "enterprise": "Jährliches Commitment"
+        },
+        "includedCapacity": {
+          "label": "Inkludierte Kapazität",
+          "build": "100.000 Tx / Monat",
+          "scale": "1.000.000 Tx / Monat",
+          "enterprise": "Individuell"
+        },
+        "autoscaling": {
+          "label": "Automatische Skalierung",
+          "build": "Weiter zum Stufentarif",
+          "scale": "Weiter zum Stufentarif",
+          "enterprise": "Vorab definierte Skalierung"
+        }
+      }
+    }
+  },
+  "useCases": {
+    "eyebrow": "Anwendungsfälle",
+    "title": "für Plattformen gebaut, nicht für Endkunden",
+    "description": "Dein Produkt, deine UX. TaxMaxi liefert die Klassifizierungsschicht.",
+    "cards": {
+      "taxFirms": {
+        "title": "Steuerkanzleien",
+        "subtitle": "Primärer Fokus",
+        "description": "API-getriebene Klassifizierung für Mandantenportfolios. Manuelle Tabellenarbeit durch programmatische Verarbeitung und auditierbare Outputs ersetzen.",
+        "badge": "Deutschland zuerst"
+      },
+      "wallets": {
+        "title": "Wallets",
+        "subtitle": "Steuerfunktionen einbetten",
+        "description": "Steuerschätzungen in Echtzeit direkt im Wallet. Steuer-Vorschau vor dem Trade. Jahreszusammenfassungen. Compliance als Produktfeature."
+      },
+      "exchanges": {
+        "title": "Börsen",
+        "subtitle": "Compliance-Infrastruktur",
+        "description": "DAC8-Reporting-Anforderungen. Steuerauswertungen pro Nutzer. Rechtssystemspezifische Klassifizierung ohne eigene Logikentwicklung."
+      },
+      "neobanks": {
+        "title": "Neobanken",
+        "subtitle": "Krypto-Steuermodul",
+        "description": "Krypto-Steuer-Compliance ergänzen, ohne selbst Klassifizierungsinfrastruktur zu bauen. Rechtssystem-Updates als Managed Service."
+      }
+    }
+  },
+  "footer": {
+    "eyebrow": "Noch heute loslegen",
+    "ctaTitle": "Krypto-Steuerklassifizierung integrieren",
+    "ctaDescription": "Wir arbeiten mit Steuerkanzleien, Wallets, Börsen und Neobanken, die konforme Krypto-Produkte bauen. Starte mit einem Pilotprojekt.",
+    "requestPilot": "Pilot anfragen",
+    "madeInGermany": "Made in Germany",
+    "gdprCompliant": "DSGVO-konform",
+    "euHosted": "EU-gehostet",
+    "imprint": "Impressum",
+    "privacy": "Datenschutz",
+    "terms": "AGB",
+    "contact": "Kontakt"
   }
 }

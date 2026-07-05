@@ -1,82 +1,188 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "shadcn/tailwind.css";
 @import "@fontsource-variable/jetbrains-mono";
-@import "@fontsource/geist";
+@import "@fontsource/kanit/latin-400.css";
+@import "@fontsource/kanit/latin-600.css";
+@import "@fontsource/kanit/latin-700.css";
+@import "@fontsource-variable/caveat";
 
 @custom-variant dark (&:is(.dark *));
 
+/* shadcn radix-luma preset variables. */
 :root {
   --background: oklch(1 0 0);
-  --foreground: oklch(0.147 0.004 49.25);
+  --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.147 0.004 49.25);
+  --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.147 0.004 49.25);
-  --primary: oklch(0.527 0.154 150.069);
-  --primary-foreground: oklch(0.982 0.018 155.826);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.52 0.105 223.128);
+  --primary-foreground: oklch(0.984 0.019 200.873);
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.97 0.001 106.424);
-  --muted-foreground: oklch(0.553 0.013 58.071);
-  --accent: oklch(0.527 0.154 150.069);
-  --accent-foreground: oklch(0.982 0.018 155.826);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.923 0.003 48.717);
-  --input: oklch(0.923 0.003 48.717);
-  --ring: oklch(0.709 0.01 56.259);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
   --chart-1: oklch(0.871 0.15 154.449);
   --chart-2: oklch(0.723 0.219 149.579);
   --chart-3: oklch(0.627 0.194 149.214);
   --chart-4: oklch(0.527 0.154 150.069);
   --chart-5: oklch(0.448 0.119 151.328);
-  --radius: 0;
-  --sidebar: oklch(0.985 0.001 106.423);
-  --sidebar-foreground: oklch(0.147 0.004 49.25);
-  --sidebar-primary: oklch(0.627 0.194 149.214);
-  --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
-  --sidebar-accent: oklch(0.97 0.001 106.424);
-  --sidebar-accent-foreground: oklch(0.216 0.006 56.043);
-  --sidebar-border: oklch(0.923 0.003 48.717);
-  --sidebar-ring: oklch(0.709 0.01 56.259);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.609 0.126 221.723);
+  --sidebar-primary-foreground: oklch(0.984 0.019 200.873);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+
+  /* TaxMaxi global variables. */
+  --off-white: oklch(0.9571 0.0188 83.06);
+  --font-family-display: "Kanit", sans-serif;
+  --font-family-sans: "JetBrains Mono Variable", monospace;
+  --font-family-handwriting: "Caveat Variable", cursive;
+  --font-size-caption: 0.75rem;
+  --line-height-caption: 1rem;
+  --font-size-body-sm: 0.875rem;
+  --line-height-body-sm: 1.375rem;
+  --font-size-body: 1rem;
+  --line-height-body: 1.5rem;
+  --font-size-body-lg: 1.125rem;
+  --line-height-body-lg: 1.75rem;
+  --font-size-title-sm: 1.25rem;
+  --line-height-title-sm: 1.75rem;
+  --font-size-title-md: 1.5rem;
+  --line-height-title-md: 2rem;
+  --font-size-title-lg: 2rem;
+  --line-height-title-lg: 2.5rem;
+  --font-size-display-sm: 2.5rem;
+  --line-height-display-sm: 2.75rem;
+  --font-size-display-md: 3.5rem;
+  --line-height-display-md: 3.75rem;
+  --font-size-display-lg: 4rem;
+  --line-height-display-lg: 4.5rem;
+  --content-width-xs: 32rem;
+  --content-width-sm: 40rem;
+  --content-width-md: 48rem;
+  --content-width-lg: 64rem;
+  --content-width-xl: 72rem;
+  --content-width-2xl: 80rem;
+  --content-width-reading: 42rem;
+
+  /* Landing page variables. */
+  --cta-background: #1e4d40;
+  --cta-background-hover: #2a6857;
+  --cta-border: #1e4d40;
+  --cta-foreground: #f5f2e8;
+  --marketing-page: #0d1210;
+  --marketing-page-muted: #151a18;
+  --marketing-foreground: #eef7f1;
+  --marketing-text: #cde4d8;
+  --marketing-muted: #8fa89d;
+  --marketing-hover: #d8e7de;
+  --marketing-accent: #9dcaaf;
+  --marketing-accent-hover: #b5dac4;
+  --marketing-accent-foreground: #08110b;
+  --marketing-border: rgb(255 255 255 / 0.12);
+  --marketing-border-muted: rgb(255 255 255 / 0.1);
+  --marketing-surface: rgb(0 0 0 / 0.1);
+  --marketing-surface-active: rgb(255 255 255 / 0.08);
+  --marketing-surface-hover: rgb(255 255 255 / 0.1);
+  --marketing-surface-hover-muted: rgb(255 255 255 / 0.04);
+  --marketing-contrast-background: rgb(13 18 16 / 0.6);
+  --marketing-contrast-background-hover: #151a18;
+  --marketing-contrast-border: #2a3a35;
+  --marketing-contrast-border-hover: #3a4a45;
+  --marketing-contrast-foreground: #a3c4b5;
 }
 
+/* shadcn radix-luma dark variables. */
 .dark {
-  --background: oklch(0.147 0.004 49.25);
-  --foreground: oklch(0.985 0.001 106.423);
-  --card: oklch(0.216 0.006 56.043);
-  --card-foreground: oklch(0.985 0.001 106.423);
-  --popover: oklch(0.216 0.006 56.043);
-  --popover-foreground: oklch(0.985 0.001 106.423);
-  --primary: oklch(0.448 0.119 151.328);
-  --primary-foreground: oklch(0.982 0.018 155.826);
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.45 0.085 224.283);
+  --primary-foreground: oklch(0.984 0.019 200.873);
   --secondary: oklch(0.274 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.268 0.007 34.298);
-  --muted-foreground: oklch(0.709 0.01 56.259);
-  --accent: oklch(0.448 0.119 151.328);
-  --accent-foreground: oklch(0.982 0.018 155.826);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.553 0.013 58.071);
+  --ring: oklch(0.556 0 0);
   --chart-1: oklch(0.871 0.15 154.449);
   --chart-2: oklch(0.723 0.219 149.579);
   --chart-3: oklch(0.627 0.194 149.214);
   --chart-4: oklch(0.527 0.154 150.069);
   --chart-5: oklch(0.448 0.119 151.328);
-  --sidebar: oklch(0.216 0.006 56.043);
-  --sidebar-foreground: oklch(0.985 0.001 106.423);
-  --sidebar-primary: oklch(0.723 0.219 149.579);
-  --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
-  --sidebar-accent: oklch(0.268 0.007 34.298);
-  --sidebar-accent-foreground: oklch(0.985 0.001 106.423);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.715 0.143 215.221);
+  --sidebar-primary-foreground: oklch(0.302 0.056 229.695);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.553 0.013 58.071);
+  --sidebar-ring: oklch(0.556 0 0);
+
+  /* Landing page dark overrides. */
+  --cta-background: #8ab4a3;
+  --cta-background-hover: #a3c4b5;
+  --cta-border: #8ab4a3;
+  --cta-foreground: #1a1f1d;
 }
 
 @theme inline {
-  --font-mono: "JetBrains Mono Variable", monospace;
-  --font-heading: "Geist Variable", sans-serif;
+  /* shadcn preset font tailwind bridge: JetBrains Mono, heading inherits sans. */
+  --font-sans: var(--font-family-sans);
+  --font-mono: var(--font-family-sans);
+  --font-heading: var(--font-sans);
+
+  /* TaxMaxi global tailwind bridge. */
+  --font-display: var(--font-family-display);
+  --font-handwriting: var(--font-family-handwriting);
+  --color-off-white: var(--off-white);
+
+  /* Landing page tailwind bridge. */
+  --color-cta-background: var(--cta-background);
+  --color-cta-background-hover: var(--cta-background-hover);
+  --color-cta-border: var(--cta-border);
+  --color-cta-foreground: var(--cta-foreground);
+  --color-marketing-page: var(--marketing-page);
+  --color-marketing-page-muted: var(--marketing-page-muted);
+  --color-marketing-foreground: var(--marketing-foreground);
+  --color-marketing-text: var(--marketing-text);
+  --color-marketing-muted: var(--marketing-muted);
+  --color-marketing-hover: var(--marketing-hover);
+  --color-marketing-accent: var(--marketing-accent);
+  --color-marketing-accent-hover: var(--marketing-accent-hover);
+  --color-marketing-accent-foreground: var(--marketing-accent-foreground);
+  --color-marketing-border: var(--marketing-border);
+  --color-marketing-border-muted: var(--marketing-border-muted);
+  --color-marketing-surface: var(--marketing-surface);
+  --color-marketing-surface-active: var(--marketing-surface-active);
+  --color-marketing-surface-hover: var(--marketing-surface-hover);
+  --color-marketing-surface-hover-muted: var(--marketing-surface-hover-muted);
+  --color-marketing-contrast-background: var(--marketing-contrast-background);
+  --color-marketing-contrast-background-hover: var(--marketing-contrast-background-hover);
+  --color-marketing-contrast-border: var(--marketing-contrast-border);
+  --color-marketing-contrast-border-hover: var(--marketing-contrast-border-hover);
+  --color-marketing-contrast-foreground: var(--marketing-contrast-foreground);
+
+  /* shadcn color and radius tailwind bridge. */
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -129,6 +235,45 @@
     cursor: pointer;
   }
   html {
-    @apply font-mono;
+    @apply font-sans;
+  }
+}
+
+/* TaxMaxi landing page globals. */
+html:has([data-page="landing"]),
+html:has([data-page="landing"]) > body {
+  background-color: #1a1f1d;
+}
+
+html:has([data-page="landing"]) {
+  scroll-behavior: smooth;
+}
+
+[data-family-mobile-nav][vaul-drawer] {
+  transition: transform 0.22s cubic-bezier(0.165, 0.84, 0.44, 1) !important;
+}
+
+[data-family-mobile-nav-overlay][vaul-overlay] {
+  transition: opacity 0.2s cubic-bezier(0.165, 0.84, 0.44, 1) !important;
+}
+
+@media print {
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:has([data-page="landing"]) {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

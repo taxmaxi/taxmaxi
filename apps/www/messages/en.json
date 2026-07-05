@@ -21,5 +21,230 @@
       "cancel": "Cancel",
       "schedule": "Schedule"
     }
+  },
+  "hero": {
+    "title": "Add crypto tax compliance in a day",
+    "descriptionLead": "Take the crypto tax burden off your users' shoulders with the TaxMaxi API.",
+    "descriptionTarget": "For wallets, exchanges, and tax advisory firms.",
+    "requestPilot": "Request pilot",
+    "seeHowItWorks": "See how it works"
+  },
+  "api": {
+    "eyebrow": "REST API",
+    "stickyTitle": "One unifiying API",
+    "stickyDescription": "Seamlessly integrate crypto tax calculations into your product with a single REST API.",
+    "steps": {
+      "one": {
+        "label": "Step 01",
+        "title": "Ingest raw activity and normalize it into one ledger",
+        "description": "TaxMaxi translates raw activity from blockchains and exchanges into a unified ledger."
+      },
+      "two": {
+        "label": "Step 02",
+        "title": "Map normalized transactions to tax events of different jurisdictions",
+        "description": "Ledger entries are mapped to tax events of different jurisdictions. Drill down into any tax event to see the rule applied, the evidence, and the reasoning path."
+      },
+      "three": {
+        "label": "Step 03",
+        "title": "Provide users with tax optimization recommendations",
+        "description": "Unlock financial insights based on a user's positions in a given jurisdiction."
+      }
+    }
+  },
+  "cli": {
+    "eyebrow": "CLI",
+    "stickyTitle": "Crypto taxes, right from your terminal",
+    "stickyDescription": "Use the TaxMaxi CLI to integrate it into your agentic workflows.",
+    "steps": {
+      "one": {
+        "label": "Step 01",
+        "title": "Install the CLI globally",
+        "description": "Use pnpm/npm/bun and authentiate once using your TaxMaxi Account"
+      },
+      "two": {
+        "label": "Step 02",
+        "title": "Sync data from exchanges and blockchains",
+        "description": "Connect with any exchange or onchain wallet address with a single command."
+      },
+      "three": {
+        "label": "Step 03",
+        "title": "Empower your agents with the TaxMaxi CLI",
+        "description": "AI agents are increasingly being used for automating tasks. Crypto tax calculations are no exception."
+      }
+    }
+  },
+  "pricing": {
+    "eyebrow": "Pricing",
+    "title": "Pay per transaction. Scale to millions.",
+    "description": "Buy transaction classification capacity. Plans only change your rate per 1,000 transactions.",
+    "billingNote": "Annual billing with monthly capacity commits. Additional usage keeps the same tier rate.",
+    "includedLabel": "How capacity pricing works",
+    "included": {
+      "unit": "Every classified transaction maps to one pricing unit.",
+      "minimum": "Your monthly minimum buys a clear bucket of transaction capacity.",
+      "rate": "Plans only change your price per 1,000 classified transactions.",
+      "autoscale": "Additional usage auto-scales at the same tier rate instead of jumping in blocks.",
+      "sharedCapabilities": "API access, audit trails, AI explanations, and workspaces are included across tiers.",
+      "enterpriseSupport": "Enterprise adds governance, procurement, and rollout support, not a different pricing model."
+    },
+    "tiers": {
+      "build": {
+        "name": "Build",
+        "audience": "Teams validating their first tax workflow",
+        "price": "€5.90",
+        "priceSuffix": "per 1,000 classified transactions",
+        "description": "A €590 monthly minimum buys 100,000 classified transactions and keeps pricing explicit from day one.",
+        "cta": "Talk about Build",
+        "stats": {
+          "monthlyMinimum": {
+            "label": "Monthly minimum",
+            "value": "€590"
+          },
+          "includedCapacity": {
+            "label": "Included capacity",
+            "value": "100,000 tx / month"
+          },
+          "additionalUsage": {
+            "label": "Additional usage",
+            "value": "€5.90 / 1k tx"
+          }
+        },
+        "features": {
+          "one": "Onboarding with TaxMaxi Founder",
+          "two": "Jurisdiction-specific reasoning + source citations",
+          "three": "Exportable memos and review history",
+          "four": "Email support"
+        }
+      },
+      "scale": {
+        "name": "Scale",
+        "audience": "Companies depending on crypto tax as core product feature",
+        "price": "€1.95",
+        "priceSuffix": "per 1,000 classified transactions",
+        "description": "A €1,950 monthly minimum buys 1,000,000 classified transactions for teams operating tax workflows at production scale.",
+        "cta": "Talk about Scale",
+        "stats": {
+          "monthlyMinimum": {
+            "label": "Monthly minimum",
+            "value": "€1,950"
+          },
+          "includedCapacity": {
+            "label": "Included capacity",
+            "value": "1,000,000 tx / month"
+          },
+          "additionalUsage": {
+            "label": "Additional usage",
+            "value": "€1.95 / 1k tx"
+          }
+        },
+        "features": {
+          "one": "Priority support",
+          "two": "Shared review queues + playbooks",
+          "three": "Sandbox and production environments",
+          "four": "Webhook + integration support"
+        },
+        "badge": "Most common"
+      },
+      "enterprise": {
+        "name": "Enterprise",
+        "audience": "Exchanges, banks, and regulated platforms",
+        "price": "Custom",
+        "priceSuffix": "committed usage pricing",
+        "description": "For institutions that need governance, rollout support, and negotiated unit economics across teams or markets.",
+        "cta": "Plan Enterprise",
+        "stats": {
+          "monthlyMinimum": {
+            "label": "Monthly minimum",
+            "value": "Committed usage"
+          },
+          "includedCapacity": {
+            "label": "Included capacity",
+            "value": "Custom"
+          },
+          "additionalUsage": {
+            "label": "Additional usage",
+            "value": "Pre-negotiated rate"
+          }
+        },
+        "features": {
+          "one": "SSO / SCIM",
+          "two": "SLA + dedicated onboarding",
+          "three": "Custom connectors and workflows",
+          "four": "Private deployment options"
+        }
+      }
+    },
+    "overages": {
+      "title": "Linear usage economics",
+      "description": "The core unit is classified transactions. Monthly minimums buy capacity, and extra volume keeps the same per-1,000 rate.",
+      "label": "Usage line item",
+      "rows": {
+        "effectiveRate": {
+          "label": "Effective rate",
+          "build": "€5.90 / 1k tx",
+          "scale": "€1.95 / 1k tx",
+          "enterprise": "Custom committed rate"
+        },
+        "monthlyMinimum": {
+          "label": "Monthly minimum",
+          "build": "€590",
+          "scale": "€1,950",
+          "enterprise": "Annual commit"
+        },
+        "includedCapacity": {
+          "label": "Included capacity",
+          "build": "100,000 tx / month",
+          "scale": "1,000,000 tx / month",
+          "enterprise": "Custom"
+        },
+        "autoscaling": {
+          "label": "Autoscaling",
+          "build": "Continue at tier rate",
+          "scale": "Continue at tier rate",
+          "enterprise": "Pre-agreed expansion"
+        }
+      }
+    }
+  },
+  "useCases": {
+    "eyebrow": "Use Cases",
+    "title": "Built for platforms, not consumers",
+    "description": "Your product, your UX. TaxMaxi provides the classification layer.",
+    "cards": {
+      "taxFirms": {
+        "title": "Tax Firms",
+        "subtitle": "Primary focus",
+        "description": "API-driven classification for client portfolios. Replace manual spreadsheet work with programmatic processing and audit-ready outputs.",
+        "badge": "Germany first"
+      },
+      "wallets": {
+        "title": "Wallets",
+        "subtitle": "Embed tax features",
+        "description": "Real-time tax estimates inside your wallet. Pre-trade tax preview. Year-end summaries. Turn compliance into a feature."
+      },
+      "exchanges": {
+        "title": "Exchanges",
+        "subtitle": "Compliance infrastructure",
+        "description": "DAC8 reporting requirements. Per-user tax statements. Jurisdiction-aware classification without building the logic yourself."
+      },
+      "neobanks": {
+        "title": "Neobanks",
+        "subtitle": "Crypto tax module",
+        "description": "Add crypto tax compliance without building classification infrastructure. Managed jurisdiction updates as laws change."
+      }
+    }
+  },
+  "footer": {
+    "eyebrow": "Get started",
+    "ctaTitle": "Integrate crypto tax compliance today",
+    "ctaDescription": "We work with tax advisory firms, wallets, exchanges, and neobanks building compliant crypto products. Start with a pilot.",
+    "requestPilot": "Request pilot",
+    "madeInGermany": "Made in Germany",
+    "gdprCompliant": "GDPR-compliant",
+    "euHosted": "EU-hosted",
+    "imprint": "Imprint",
+    "privacy": "Privacy",
+    "terms": "Terms",
+    "contact": "Contact"
   }
 }

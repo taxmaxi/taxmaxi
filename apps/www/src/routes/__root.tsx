@@ -1,3 +1,6 @@
+import jetBrainsMonoLatinUrl from "@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url"
+import kanitLatin700Url from "@fontsource/kanit/files/kanit-latin-700-normal.woff2?url"
+import kanitLatin600Url from "@fontsource/kanit/files/kanit-latin-600-normal.woff2?url"
 import { HeadContent, Scripts, createRootRouteWithContext } from "@tanstack/react-router"
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 import { TanStackDevtools } from "@tanstack/react-devtools"
@@ -40,6 +43,27 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
       }),
     ],
     links: [
+      {
+        rel: "preload",
+        href: kanitLatin600Url,
+        as: "font",
+        type: "font/woff2",
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        href: kanitLatin700Url,
+        as: "font",
+        type: "font/woff2",
+        crossOrigin: "anonymous",
+      },
+      {
+        rel: "preload",
+        href: jetBrainsMonoLatinUrl,
+        as: "font",
+        type: "font/woff2",
+        crossOrigin: "anonymous",
+      },
       { rel: "stylesheet", href: stylesCss },
       {
         rel: "apple-touch-icon",

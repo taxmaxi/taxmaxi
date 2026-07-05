@@ -10,8 +10,6 @@ import { useTTS } from "#/hooks/demo-useTTS"
 
 import GuitarRecommendation from "#/components/demo-GuitarRecommendation"
 
-import "./ai-chat.css"
-
 function InitialLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex-1 flex items-center justify-center px-4">
@@ -175,7 +173,7 @@ function ChatPage() {
               onSubmit={(e) => {
                 e.preventDefault()
                 if (input.trim()) {
-                  sendMessage(input)
+                  void sendMessage(input)
                   setInput("")
                 }
               }}
@@ -216,7 +214,7 @@ function ChatPage() {
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey && input.trim()) {
                         e.preventDefault()
-                        sendMessage(input)
+                        void sendMessage(input)
                         setInput("")
                       }
                     }}

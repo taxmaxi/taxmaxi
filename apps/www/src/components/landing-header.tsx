@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react"
 import useMeasure from "react-use-measure"
 import {
   startTransition,
+  type ComponentProps,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -11,16 +12,25 @@ import {
   useState,
 } from "react"
 
+import {
+  BottomSheet,
+  BottomSheetClose,
+  BottomSheetContent,
+  BottomSheetDescription,
+  BottomSheetTitle,
+} from "#/components/bottom-sheet"
+import {
+  LandingHeaderDrawerNavButton,
+  LandingHeaderNavButton,
+} from "#/components/landing-header-controls"
+import { LandingButton } from "#/components/landing-button"
 import { Logo } from "#/components/logo"
-import { LandingDrawerContent } from "#/components/landing-drawer-content"
-import { Card } from "#/components/ui/card"
-import { Button } from "#/components/ui/button"
-import { Drawer, DrawerClose, DrawerDescription, DrawerTitle } from "#/components/ui/drawer"
+import { LandingSeparator } from "#/components/landing-separator"
 import { Heading, Text } from "#/components/ui/typography"
 import { CloseIcon } from "#/components/ui/icons/close"
-import { Separator } from "#/components/ui/separator"
 import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
+import { getLocale, localizeHref, type Locale } from "#/paraglide/runtime"
 
 const COMPACT_SCROLL_THRESHOLD = 72
 const EXPANDED_WIDTH = "min(70rem, calc(100vw - 2rem))"
@@ -54,10 +64,112 @@ function getActiveSectionId(sectionIds: string[]): string {
 const navItems = [
   { id: "api", label: m["header.apiProduct"] },
   { id: "cli", label: m["header.cliProduct"] },
-  { id: "chat", label: m["header.chatProduct"] },
-  { id: "roadmap", label: m["header.roadmap"] },
   { id: "pricing", label: m["header.pricing"] },
 ]
+
+const languageOptions = [
+  { locale: "en", label: "EN" },
+  { locale: "de", label: "DE" },
+] as const satisfies ReadonlyArray<{ locale: Locale; label: string }>
+
+const headerShellShadow =
+  "shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_18px_40px_rgba(0,0,0,0.24)]"
+
+const headerShellShadowAtMobile =
+  "max-md:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_18px_40px_rgba(0,0,0,0.24)]"
+
+function LandingHeaderShell({
+  children,
+  className,
+  compact,
+  ...props
+}: ComponentProps<"div"> & { compact: boolean }) {
+  return (
+    <div
+      className={cn(
+        "relative flex flex-col overflow-hidden rounded-[1.75rem] border py-0 text-marketing-foreground transition-[border-color,box-shadow] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+        compact
+          ? cn("border-marketing-border", headerShellShadow)
+          : cn(
+              "border-transparent shadow-none max-md:border-marketing-border",
+              headerShellShadowAtMobile
+            ),
+        className
+      )}
+      {...props}
+    >
+      <div
+        aria-hidden="true"
+        className={cn(
+          "pointer-events-none absolute inset-0 z-0 bg-[linear-gradient(180deg,rgba(17,28,23,0.78),rgba(9,15,12,0.62))] transition-[opacity,backdrop-filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+          compact
+            ? "opacity-100 backdrop-blur-[18px]"
+            : "opacity-0 backdrop-blur-none max-md:opacity-100 max-md:backdrop-blur-[18px]"
+        )}
+      />
+      <div className="relative z-10">{children}</div>
+    </div>
+  )
+}
+
+function LandingHeaderNavIndicator({ className, ...props }: ComponentProps<"div">) {
+  return (
+    <div
+      className={cn(
+        "gap-0 rounded-full border border-marketing-border-muted bg-marketing-surface-active py-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function LandingHeaderIconTile({ className, ...props }: ComponentProps<"div">) {
+  return (
+    <div
+      className={cn(
+        "inline-flex size-12 items-center justify-center rounded-2xl border border-marketing-border-muted bg-marketing-surface py-0 text-marketing-muted shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] supports-[backdrop-filter]:backdrop-blur-md",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function LandingHeaderLanguagePicker({ className }: { className?: string }) {
+  const currentLocale = getLocale()
+
+  return (
+    <div
+      aria-label="Language"
+      className={cn(
+        "inline-flex h-10 items-center rounded-full border border-marketing-border-muted bg-marketing-surface p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] supports-[backdrop-filter]:backdrop-blur-md",
+        className
+      )}
+      role="group"
+    >
+      {languageOptions.map((option) => {
+        const isActive = currentLocale === option.locale
+
+        return (
+          <a
+            key={option.locale}
+            aria-current={isActive ? "true" : undefined}
+            className={cn(
+              "inline-flex h-8 min-w-9 items-center justify-center rounded-full px-2.5 text-xs font-semibold text-marketing-muted transition-[background-color,color,box-shadow] hover:text-marketing-hover",
+              isActive &&
+                "bg-marketing-surface-active text-marketing-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]"
+            )}
+            href={localizeHref("/", { locale: option.locale })}
+            hrefLang={option.locale}
+          >
+            {option.label}
+          </a>
+        )
+      })}
+    </div>
+  )
+}
 
 export function LandingHeader() {
   const [headerState, setHeaderState] = useState({
@@ -184,7 +296,7 @@ export function LandingHeader() {
         className="w-full transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
         style={{ width: headerState.isCompact ? COMPACT_WIDTH : EXPANDED_WIDTH }}
       >
-        <Card className="transition-[background-color,border-color,box-shadow,padding,backdrop-filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]">
+        <LandingHeaderShell compact={headerState.isCompact}>
           <div className="flex h-16 items-center justify-between gap-4 px-3 sm:px-4">
             <Logo theme="dark" size="small" />
 
@@ -196,7 +308,7 @@ export function LandingHeader() {
                 ref={navRef}
                 className="relative flex h-11 w-fit items-center justify-center rounded-full px-2"
               >
-                <Card
+                <LandingHeaderNavIndicator
                   aria-hidden="true"
                   role="presentation"
                   className={cn(
@@ -220,11 +332,11 @@ export function LandingHeader() {
                       }}
                       className="relative z-10 flex h-full items-center justify-center"
                     >
-                      <Button asChild data-active={isActive ? "true" : "false"}>
+                      <LandingHeaderNavButton asChild data-active={isActive ? "true" : "false"}>
                         <a href={`#${item.id}`} aria-current={isActive ? "location" : undefined}>
                           {item.label()}
                         </a>
-                      </Button>
+                      </LandingHeaderNavButton>
                     </li>
                   )
                 })}
@@ -232,18 +344,7 @@ export function LandingHeader() {
             </nav>
 
             <div className="flex shrink-0 items-center gap-2 sm:gap-3">
-              {/* <Card className="px-1">
-                <Button asChild>
-                  <Link resetScroll={false} to="/">
-                    EN
-                  </Link>
-                </Button>
-                <Button asChild>
-                  <Link resetScroll={false} to="/de">
-                    DE
-                  </Link>
-                </Button>
-              </Card> */}
+              <LandingHeaderLanguagePicker />
 
               <FamilyMobileNavDrawer
                 activeId={headerState.activeId}
@@ -252,17 +353,19 @@ export function LandingHeader() {
               />
 
               <div className="md:hidden">
-                <Button
+                <LandingButton
                   aria-label="Open navigation"
                   onClick={() => {
                     setMobileMenuOpen(true)
                   }}
+                  size="icon-xl"
+                  variant="control"
                 >
-                  <Menu className="size-4" />
-                </Button>
+                  <Menu data-icon="inline-start" />
+                </LandingButton>
               </div>
 
-              <Button asChild className="hidden sm:inline-flex">
+              <LandingButton asChild className="hidden sm:inline-flex" size="pill">
                 <a
                   href="https://calendar.app.google/PLa3mhnsHc12npbx7"
                   rel="noreferrer"
@@ -270,10 +373,10 @@ export function LandingHeader() {
                 >
                   {m["header.startPilot"]()}
                 </a>
-              </Button>
+              </LandingButton>
             </div>
           </div>
-        </Card>
+        </LandingHeaderShell>
       </div>
     </header>
   )
@@ -340,8 +443,8 @@ function FamilyMobileNavDrawer({
   }, [bounds.height])
 
   return (
-    <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
-      <LandingDrawerContent data-family-mobile-nav="">
+    <BottomSheet open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
+      <BottomSheetContent data-family-mobile-nav="">
         <motion.div
           animate={
             bounds.height === 0
@@ -356,21 +459,22 @@ function FamilyMobileNavDrawer({
           }
           initial={false}
         >
-          <DrawerTitle className="sr-only">Landing navigation</DrawerTitle>
-          <DrawerDescription className="sr-only">
+          <BottomSheetTitle className="sr-only">Landing navigation</BottomSheetTitle>
+          <BottomSheetDescription className="sr-only">
             Jump between the main landing page sections and start a pilot conversation.
-          </DrawerDescription>
+          </BottomSheetDescription>
 
-          <DrawerClose asChild>
-            <Button
+          <BottomSheetClose asChild>
+            <LandingButton
               aria-label="Close navigation"
               className="absolute right-6 top-9 z-10"
               data-vaul-no-drag=""
               size="icon"
+              variant="control-muted"
             >
               <CloseIcon />
-            </Button>
-          </DrawerClose>
+            </LandingButton>
+          </BottomSheetClose>
 
           <div ref={contentRef} className="px-5 pb-5">
             <AnimatePresence initial={false} mode="popLayout">
@@ -386,8 +490,8 @@ function FamilyMobileNavDrawer({
             </AnimatePresence>
           </div>
         </motion.div>
-      </LandingDrawerContent>
-    </Drawer>
+      </BottomSheetContent>
+    </BottomSheet>
   )
 }
 
@@ -407,21 +511,25 @@ function MobileDrawerNavigationView({
           const isActive = activeId === item.id
 
           return (
-            <DrawerClose asChild key={item.id}>
-              <Button asChild data-active={isActive ? "true" : "false"} data-vaul-no-drag="">
+            <BottomSheetClose asChild key={item.id}>
+              <LandingHeaderDrawerNavButton
+                asChild
+                data-active={isActive ? "true" : "false"}
+                data-vaul-no-drag=""
+              >
                 <a href={`#${item.id}`}>{item.label()}</a>
-              </Button>
-            </DrawerClose>
+              </LandingHeaderDrawerNavButton>
+            </BottomSheetClose>
           )
         })}
       </div>
 
-      <Separator className="mt-5" />
+      <LandingSeparator className="mt-5" />
 
       <div className="pt-5">
-        <Button className="w-full" data-vaul-no-drag="" onClick={onStartPilot}>
+        <LandingButton className="w-full" data-vaul-no-drag="" onClick={onStartPilot} size="pill">
           {m["header.startPilot"]()}
-        </Button>
+        </LandingButton>
       </div>
     </div>
   )
@@ -431,9 +539,9 @@ function MobileDrawerPilotView({ onCancel }: { onCancel: () => void }) {
   return (
     <div className="flex flex-col gap-6 px-1 pt-6">
       <div className="pr-12">
-        <Card aria-hidden="true" className="inline-flex size-12 items-center justify-center">
+        <LandingHeaderIconTile aria-hidden="true">
           <CalendarDays className="size-5" />
-        </Card>
+        </LandingHeaderIconTile>
 
         <Heading as="h2" className="mt-4" size="page" tone="inverse">
           {m["header.pilotSheet.title"]()}
@@ -443,22 +551,22 @@ function MobileDrawerPilotView({ onCancel }: { onCancel: () => void }) {
         </Text>
       </div>
 
-      <Separator />
+      <LandingSeparator />
 
       <ul className="flex flex-col gap-3">
-        <li className="flex items-center gap-3 text-[#8fa89d]">
+        <li className="flex items-center gap-3 text-marketing-muted">
           <Clock3 className="size-4 shrink-0" />
           <Text size="bodySm" tone="inverse">
             {m["header.pilotSheet.meeting"]()}
           </Text>
         </li>
-        <li className="flex items-center gap-3 text-[#8fa89d]">
+        <li className="flex items-center gap-3 text-marketing-muted">
           <Database className="size-4 shrink-0" />
           <Text size="bodySm" tone="inverse">
             {m["header.pilotSheet.dataReview"]()}
           </Text>
         </li>
-        <li className="flex items-center gap-3 text-[#8fa89d]">
+        <li className="flex items-center gap-3 text-marketing-muted">
           <ShieldCheck className="size-4 shrink-0" />
           <Text size="bodySm" tone="inverse">
             {m["header.pilotSheet.nextSteps"]()}
@@ -467,22 +575,28 @@ function MobileDrawerPilotView({ onCancel }: { onCancel: () => void }) {
       </ul>
 
       <div className="flex gap-3">
-        <Button className="flex-1" data-vaul-no-drag="" onClick={onCancel}>
+        <LandingButton
+          className="flex-1"
+          data-vaul-no-drag=""
+          onClick={onCancel}
+          size="modal-action"
+          variant="control-muted"
+        >
           {m["header.pilotSheet.cancel"]()}
-        </Button>
+        </LandingButton>
 
-        <DrawerClose asChild>
-          <Button asChild className="flex-1" data-vaul-no-drag="">
+        <BottomSheetClose asChild>
+          <LandingButton asChild className="flex-1" data-vaul-no-drag="" size="modal-action">
             <a
               href="https://calendar.app.google/PLa3mhnsHc12npbx7"
               rel="noreferrer"
               target="_blank"
             >
-              <CalendarDays className="size-4.5" />
+              <CalendarDays data-icon="inline-start" />
               {m["header.pilotSheet.schedule"]()}
             </a>
-          </Button>
-        </DrawerClose>
+          </LandingButton>
+        </BottomSheetClose>
       </div>
     </div>
   )

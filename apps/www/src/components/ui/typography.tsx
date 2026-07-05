@@ -12,8 +12,8 @@ const headingVariants = cva("font-medium tracking-tight text-balance", {
         "text-[length:var(--font-size-title-sm)] leading-[var(--line-height-title-sm)] sm:text-[length:var(--font-size-title-md)] sm:leading-[var(--line-height-title-md)]",
       page: "text-[length:var(--font-size-title-md)] leading-[var(--line-height-title-md)]",
       display:
-        "font-display font-bold text-[length:var(--font-size-title-lg)] leading-[var(--line-height-title-lg)] sm:text-[length:var(--font-size-display-sm)] sm:leading-[var(--line-height-display-sm)]",
-      hero: "font-display font-bold text-[length:var(--font-size-display-sm)] leading-[var(--line-height-display-sm)] md:text-[length:var(--font-size-display-md)] md:leading-[var(--line-height-display-md)]",
+        "font-display font-semibold text-[length:var(--font-size-title-lg)] leading-[var(--line-height-title-lg)] sm:text-[length:var(--font-size-display-sm)] sm:leading-[var(--line-height-display-sm)]",
+      hero: "font-display font-semibold text-[length:var(--font-size-display-sm)] leading-[var(--line-height-display-sm)] md:text-[length:var(--font-size-display-md)] md:leading-[var(--line-height-display-md)]",
     },
     tone: {
       default: "text-foreground",
