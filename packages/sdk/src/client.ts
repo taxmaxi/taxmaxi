@@ -75,6 +75,7 @@ type TaxMaxiApiFullClient =
 type TaxMaxiPublicGroup =
   | "adminProtocolReview"
   | "anon"
+  | "assets"
   | "auth"
   | "authSession"
   | "coinbaseCompat"
@@ -90,6 +91,7 @@ export type TaxMaxiEffectClient = Pick<
 const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClient => ({
   adminProtocolReview: client.adminProtocolReview,
   anon: client.anon,
+  assets: client.assets,
   auth: client.auth,
   authSession: client.authSession,
   coinbaseCompat: client.coinbaseCompat,

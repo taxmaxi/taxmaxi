@@ -1,4 +1,6 @@
 import type {
+  AssetCatalogAssetResponse,
+  AssetCatalogListResponse,
   AssetCanonicalizationRequest,
   AssetCanonicalizationResponse,
   ProviderAssetReviewListResponse,
@@ -17,10 +19,39 @@ type TaxMaxiAssetsClient =
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
+export type AssetCatalogAsset = {
+  readonly id: string
+  readonly blockchainId: string
+  readonly blockchainName: string
+  readonly blockchainChainType: string
+  readonly blockchainChainId: number | null
+  readonly blockchainExplorerUrl: string | null
+  readonly blockchainLogoUrl: string | null
+  readonly contractAddress: string | null
+  readonly name: string
+  readonly symbol: string
+  readonly decimals: number
+  readonly logoUrl: string | null
+  readonly type: "native" | "token" | "nft"
+  readonly isSpam: boolean
+}
+export type TaxMaxiAssetType = AssetCatalogAsset["type"]
+export type AssetCatalogList = {
+  readonly assets: ReadonlyArray<AssetCatalogAsset>
+}
 export type AssetCanonicalizationInput = {
   readonly id: string
 } & AssetCanonicalizationRequest
 export type AssetCanonicalization = AssetCanonicalizationResponse
+
+export type AssetCatalogListInput = {
+  readonly query?: string | null
+  readonly limit?: number
+}
+
+export type AssetCatalogDetailInput = {
+  readonly assetId: string
+}
 
 export type ProviderAssetReviewListInput = {
   readonly provider?: string
@@ -30,6 +61,16 @@ export type ProviderAssetReviewListInput = {
 }
 
 export type AssetsEffectResource = {
+  readonly list: (input?: AssetCatalogListInput) => Effect.Effect<AssetCatalogList, unknown, never>
+  readonly get: (input: AssetCatalogDetailInput) => Effect.Effect<AssetCatalogAsset, unknown, never>
+}
+
+export type AssetsPromiseResource = {
+  readonly list: (input?: AssetCatalogListInput) => Promise<AssetCatalogList>
+  readonly get: (input: AssetCatalogDetailInput) => Promise<AssetCatalogAsset>
+}
+
+export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly listProviderAssetReviews: (
     input?: ProviderAssetReviewListInput
   ) => Effect.Effect<ProviderAssetReviewList, unknown, never>
@@ -38,7 +79,7 @@ export type AssetsEffectResource = {
   ) => Effect.Effect<AssetCanonicalization, unknown, never>
 }
 
-export type AssetsPromiseResource = {
+export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly listProviderAssetReviews: (
     input?: ProviderAssetReviewListInput
   ) => Promise<ProviderAssetReviewList>
@@ -47,9 +88,59 @@ export type AssetsPromiseResource = {
   ) => Promise<AssetCanonicalization>
 }
 
+const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsset => ({
+  id: asset.id,
+  blockchainId: asset.blockchainId,
+  blockchainName: asset.blockchainName,
+  blockchainChainType: asset.blockchainChainType,
+  blockchainChainId: asset.blockchainChainId,
+  blockchainExplorerUrl: asset.blockchainExplorerUrl,
+  blockchainLogoUrl: asset.blockchainLogoUrl,
+  contractAddress: asset.contractAddress,
+  name: asset.name,
+  symbol: asset.symbol,
+  decimals: asset.decimals,
+  logoUrl: asset.logoUrl,
+  type: asset.type,
+  isSpam: asset.isSpam,
+})
+
+const toAssetCatalogList = (response: AssetCatalogListResponse): AssetCatalogList => ({
+  assets: response.assets.map(toAssetCatalogAsset),
+})
+
 export const makeAssetsEffectResource = (
   client: Effect.Effect<TaxMaxiAssetsClient, never>
 ): AssetsEffectResource => ({
+  list: (input) =>
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.assets.listAssets({
+          urlParams: {
+            q: input?.query ?? undefined,
+            limit: input?.limit,
+          },
+        })
+      ),
+      toAssetCatalogList
+    ),
+  get: ({ assetId }) =>
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.assets.getAsset({
+          path: {
+            assetId,
+          },
+        })
+      ),
+      toAssetCatalogAsset
+    ),
+})
+
+export const makeInternalAssetsEffectResource = (
+  client: Effect.Effect<TaxMaxiAssetsClient, never>
+): InternalAssetsEffectResource => ({
+  ...makeAssetsEffectResource(client),
   listProviderAssetReviews: (input) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.listProviderAssetReviews({
@@ -78,6 +169,15 @@ export const makeAssetsPromiseResource = (
   effect: AssetsEffectResource,
   run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
 ): AssetsPromiseResource => ({
+  list: (input) => run(effect.list(input)),
+  get: (input) => run(effect.get(input)),
+})
+
+export const makeInternalAssetsPromiseResource = (
+  effect: InternalAssetsEffectResource,
+  run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
+): InternalAssetsPromiseResource => ({
+  ...makeAssetsPromiseResource(effect, run),
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),
   canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
 })

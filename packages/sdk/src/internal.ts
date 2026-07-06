@@ -3,10 +3,10 @@ import type { HttpApi } from "@effect/platform"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
 import {
-  makeAssetsEffectResource,
-  makeAssetsPromiseResource,
-  type AssetsEffectResource,
-  type AssetsPromiseResource,
+  makeInternalAssetsEffectResource,
+  makeInternalAssetsPromiseResource,
+  type InternalAssetsEffectResource,
+  type InternalAssetsPromiseResource,
 } from "./assets/index.ts"
 import {
   makeTaxMaxiHttpClientTransform,
@@ -18,8 +18,14 @@ import { toTaxMaxiError } from "./errors.ts"
 export type {
   AssetCanonicalization,
   AssetCanonicalizationInput,
+  AssetCatalogAsset,
+  AssetCatalogDetailInput,
+  AssetCatalogList,
+  AssetCatalogListInput,
   AssetsEffectResource,
   AssetsPromiseResource,
+  InternalAssetsEffectResource,
+  InternalAssetsPromiseResource,
   ProviderAssetReview,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
@@ -53,21 +59,21 @@ export const makeTaxMaxiInternalEffectClient = (
 }
 
 export type TaxMaxiInternalEffectResources = {
-  readonly assets: AssetsEffectResource
+  readonly assets: InternalAssetsEffectResource
 }
 
 export type TaxMaxiInternalPromiseResources = {
-  readonly assets: AssetsPromiseResource
+  readonly assets: InternalAssetsPromiseResource
 }
 
 const makeTaxMaxiInternalEffectResources = (
   client: Effect.Effect<TaxMaxiInternalEffectClient, never>
 ): TaxMaxiInternalEffectResources => ({
-  assets: makeAssetsEffectResource(client),
+  assets: makeInternalAssetsEffectResource(client),
 })
 
 export class TaxMaxiInternal implements TaxMaxiInternalPromiseResources {
-  readonly assets: AssetsPromiseResource
+  readonly assets: InternalAssetsPromiseResource
   readonly effect: TaxMaxiInternalEffectResources
 
   private readonly client: Effect.Effect<TaxMaxiInternalEffectClient, never>
@@ -75,7 +81,7 @@ export class TaxMaxiInternal implements TaxMaxiInternalPromiseResources {
   constructor(options: TaxMaxiEffectClientOptions = {}) {
     this.client = makeTaxMaxiInternalEffectClient(options)
     this.effect = makeTaxMaxiInternalEffectResources(this.client)
-    this.assets = makeAssetsPromiseResource(this.effect.assets, this.run)
+    this.assets = makeInternalAssetsPromiseResource(this.effect.assets, this.run)
   }
 
   static makeEffectClient(

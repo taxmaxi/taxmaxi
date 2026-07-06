@@ -103,6 +103,7 @@ const sourceOverviewResponseBody = JSON.stringify({
 })
 
 const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })
+
 const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   providerAssets: [],
   page: {
@@ -110,6 +111,30 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
     hasMore: false,
   },
 })
+
+const assetCatalogAssetResponse = {
+  id: "00000000-0000-4000-8000-000000000010",
+  blockchainId: "00000000-0000-4000-8000-000000000011",
+  blockchainName: "solana",
+  blockchainChainType: "solana",
+  blockchainChainId: null,
+  blockchainExplorerUrl: "https://explorer.solana.com",
+  blockchainLogoUrl: null,
+  contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  name: "USD Coin",
+  symbol: "USDC",
+  decimals: 6,
+  logoUrl: null,
+  type: "token",
+  isSpam: false,
+} as const
+
+const assetCatalogListResponseBody = JSON.stringify({
+  assets: [assetCatalogAssetResponse],
+})
+
+const assetCatalogAssetResponseBody = JSON.stringify(assetCatalogAssetResponse)
+
 const assetCanonicalizationResponseBody = JSON.stringify({
   providerAsset: {
     id: "00000000-0000-4000-8000-000000000009",
@@ -148,18 +173,22 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     contractAddress: null,
   },
 })
+
 const emptySourceTransactionsResponseBody = JSON.stringify({
   transactions: [],
   page: { nextCursor: null, hasMore: false },
 })
+
 const emptySourceTaxEventsResponseBody = JSON.stringify({
   taxEvents: [],
   page: { nextCursor: null, hasMore: false },
 })
+
 const emptySourceFifoLotsResponseBody = JSON.stringify({
   fifoLots: [],
   page: { nextCursor: null, hasMore: false },
 })
+
 const sourceDisposalExplanationResponseBody = JSON.stringify({
   disposalLegId: "00000000-0000-4000-8000-000000000006",
   transactionId: "00000000-0000-4000-8000-000000000007",
@@ -492,6 +521,46 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
+      }),
+    ])
+  })
+
+  it("plumbs asset catalog endpoints through the public assets resource as plain objects", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const responseBodies = [assetCatalogListResponseBody, assetCatalogAssetResponseBody]
+    const taxmaxi = new TaxMaxi({
+      apiKey: "",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+
+        return new Response(responseBodies.shift() ?? assetCatalogListResponseBody, {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          status: 200,
+        })
+      },
+    })
+
+    const assetList = await taxmaxi.assets.list({ query: "usdc", limit: 25 })
+    const asset = await taxmaxi.assets.get({ assetId: assetCatalogAssetResponse.id })
+
+    expect(assetList).toStrictEqual({
+      assets: [assetCatalogAssetResponse],
+    })
+    expect(asset).toStrictEqual(assetCatalogAssetResponse)
+
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets?q=usdc&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/00000000-0000-4000-8000-000000000010",
       }),
     ])
   })
