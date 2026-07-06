@@ -6,6 +6,7 @@
   },
   "header": {
     "apiProduct": "API",
+    "assets": "Assets",
     "cliProduct": "CLI",
     "chatProduct": "Chat",
     "pricing": "Preise",

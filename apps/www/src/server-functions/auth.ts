@@ -1,0 +1,24 @@
+import { createServerFn } from "@tanstack/react-start"
+import { deleteCookie, getCookie } from "@tanstack/react-start/server"
+
+const REST_SESSION_COOKIE_NAME = "taxmaxi_session"
+
+export const getAuthStatus = createServerFn({ method: "GET" }).handler(async () => {
+  const sessionCookie = getCookie(REST_SESSION_COOKIE_NAME)
+  // TODO: check if session has expired
+  if (sessionCookie) {
+    return { isAuthenticated: true }
+  }
+  return { isAuthenticated: false }
+})
+
+export const getGuestSession = createServerFn({ method: "GET" }).handler(async () => {
+  const guestSession = getCookie("guest_session")
+  return guestSession
+})
+
+export const clearAuthSessionCookie = createServerFn({ method: "POST" }).handler(async () => {
+  deleteCookie(REST_SESSION_COOKIE_NAME, {
+    path: "/",
+  })
+})

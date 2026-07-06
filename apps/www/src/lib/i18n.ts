@@ -86,6 +86,14 @@ export const translatedPathnames = [
       en: "/about",
       de: "/ueber",
     },
+    "/assets": {
+      en: "/assets",
+      de: "/assets",
+    },
+    "/assets/$assetId": {
+      en: "/assets/$assetId",
+      de: "/assets/$assetId",
+    },
     "/demo/ai-chat": {
       en: "/demo/ai-chat",
       de: "/demo/ai-chat",
@@ -125,6 +133,18 @@ export const translatedPathnames = [
     "/demo/guitars": {
       en: "/demo/guitars",
       de: "/demo/gitarren",
+    },
+    "/imprint": {
+      en: "/imprint",
+      de: "/impressum",
+    },
+    "/privacy": {
+      en: "/privacy",
+      de: "/datenschutz",
+    },
+    "/terms": {
+      en: "/terms",
+      de: "/bedingungen",
     },
   }),
 ] satisfies UrlPatterns

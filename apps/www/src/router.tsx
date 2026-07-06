@@ -1,16 +1,50 @@
 import { createRouter as createTanStackRouter } from "@tanstack/react-router"
-import { routeTree } from "./routeTree.gen"
-
+import { QueryClient } from "@tanstack/react-query"
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query"
-import { getContext } from "./integrations/tanstack-query/root-provider"
+import { createIsomorphicFn } from "@tanstack/react-start"
+import { getRequestHeader } from "@tanstack/react-start/server"
+import { TaxMaxi } from "taxmaxi"
+
+import { routeTree } from "./routeTree.gen"
 import { deLocalizeUrl, localizeUrl } from "./paraglide/runtime"
+import { DefaultCatchBoundary } from "./components/catch-boundary"
+import { NotFound } from "./components/not-found"
+
+const getServerCookieHeader = createIsomorphicFn()
+  .server(() => getRequestHeader("Cookie") ?? "")
+  .client(() => undefined)
+
+const nonEmptyBaseUrl = (value: string | undefined): string | undefined => {
+  const trimmed = value?.trim()
+  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed
+}
 
 export function getRouter() {
-  const context = getContext()
+  const queryClient = new QueryClient()
+  let browserTaxMaxi: TaxMaxi | undefined
+
+  const taxmaxi = () => {
+    const cookieHeader = getServerCookieHeader()
+
+    if (cookieHeader !== undefined) {
+      return TaxMaxi.fromRequest({
+        baseUrl: nonEmptyBaseUrl(process.env.TAXMAXI_API_BASE_URL),
+        cookieHeader,
+      })
+    }
+
+    browserTaxMaxi ??= TaxMaxi.fromBrowserSession({
+      baseUrl: nonEmptyBaseUrl(import.meta.env.VITE_TAXMAXI_API_BASE_URL),
+    })
+    return browserTaxMaxi
+  }
 
   const router = createTanStackRouter({
     routeTree,
-    context,
+    context: {
+      queryClient,
+      taxmaxi,
+    },
     scrollRestoration: true,
     defaultPreload: "intent",
     defaultPreloadStaleTime: 0,
@@ -18,9 +52,11 @@ export function getRouter() {
       input: ({ url }) => deLocalizeUrl(url),
       output: ({ url }) => localizeUrl(url),
     },
+    defaultErrorComponent: DefaultCatchBoundary,
+    defaultNotFoundComponent: () => <NotFound />,
   })
 
-  setupRouterSsrQueryIntegration({ router, queryClient: context.queryClient })
+  setupRouterSsrQueryIntegration({ router, queryClient })
 
   return router
 }
