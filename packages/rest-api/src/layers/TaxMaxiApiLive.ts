@@ -10,6 +10,7 @@ import { HttpApiBuilder, type HttpApi } from "@effect/platform"
 import type { PasswordHasher, AuthService } from "@my/core/authentication"
 import type { LegalReferenceRepository } from "@my/core/legal"
 import type {
+  AssetCatalogRepository,
   CexAccountRepository,
   IdentityRepository,
   OAuthStateStore,
@@ -102,6 +103,7 @@ const CoreApiGroup = Layer.mergeAll(
 type TaxMaxiApiLiveContext =
   | AuthService
   | AnonSessionService
+  | AssetCatalogRepository
   | CexAccountRepository
   | IdentityRepository
   | LegalReferenceRepository

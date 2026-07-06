@@ -55,6 +55,31 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   }),
 }) {}
 
+export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetResponse>(
+  "AssetCatalogAssetResponse"
+)({
+  id: Schema.String,
+  blockchainId: Schema.String,
+  blockchainName: Schema.String,
+  blockchainChainType: Schema.String,
+  blockchainChainId: Schema.NullOr(Schema.Number),
+  blockchainExplorerUrl: Schema.NullOr(Schema.String),
+  blockchainLogoUrl: Schema.NullOr(Schema.String),
+  contractAddress: Schema.NullOr(Schema.String),
+  name: Schema.String,
+  symbol: Schema.String,
+  decimals: Schema.Number,
+  logoUrl: Schema.NullOr(Schema.String),
+  type: Schema.Literal("native", "token", "nft"),
+  isSpam: Schema.Boolean,
+}) {}
+
+export class AssetCatalogListResponse extends Schema.Class<AssetCatalogListResponse>(
+  "AssetCatalogListResponse"
+)({
+  assets: Schema.Array(AssetCatalogAssetResponse),
+}) {}
+
 export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicalizationRequest>(
   "AssetCanonicalizationRequest"
 )({
@@ -107,6 +132,44 @@ const ProviderAssetReviewQuery = Schema.Struct({
   ),
 })
 
+const AssetCatalogListQuery = Schema.Struct({
+  q: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(500)
+    )
+  ),
+})
+
+const listAssets = HttpApiEndpoint.get("listAssets", "/assets")
+  .setUrlParams(AssetCatalogListQuery)
+  .addSuccess(AssetCatalogListResponse)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List canonical assets",
+      description: "Lists non-spam canonical assets from the TaxMaxi asset registry.",
+    })
+  )
+
+const getAsset = HttpApiEndpoint.get("getAsset", "/assets/:assetId")
+  .setPath(
+    Schema.Struct({
+      assetId: Schema.UUID,
+    })
+  )
+  .addSuccess(AssetCatalogAssetResponse)
+  .addError(AssetNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Get canonical asset",
+      description: "Returns one non-spam canonical asset from the TaxMaxi asset registry.",
+    })
+  )
+
 const listProviderAssetReviews = HttpApiEndpoint.get(
   "listProviderAssetReviews",
   "/assets/provider-assets"
@@ -120,6 +183,7 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
       description: "Lists provider assets by mapping review status.",
     })
   )
+  .middleware(AdminAuthMiddleware)
 
 const canonicalizeProviderAsset = HttpApiEndpoint.post(
   "canonicalizeProviderAsset",
@@ -142,11 +206,13 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
         "Creates or refreshes a canonical asset and approves the provider asset mapping.",
     })
   )
+  .middleware(AdminAuthMiddleware)
 
 export class AssetsApi extends HttpApiGroup.make("assets")
+  .add(listAssets)
+  .add(getAsset)
   .add(listProviderAssetReviews)
   .add(canonicalizeProviderAsset)
-  .middleware(AdminAuthMiddleware)
   .prefix("/v1")
   .annotateContext(
     OpenApi.annotations({

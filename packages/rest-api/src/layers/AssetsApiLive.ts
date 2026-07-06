@@ -5,11 +5,14 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
+import { AssetCatalogRepository, type AssetCatalogAssetRecord } from "@my/persistence/services"
 import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
+  AssetCatalogAssetResponse,
+  AssetCatalogListResponse,
   AssetBadRequestError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
@@ -22,6 +25,7 @@ import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
 
 const defaultLimit = 50
+const defaultAssetLimit = 500
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -45,12 +49,57 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     sourceNotes: row.mapping?.sourceNotes ?? null,
   })
 
+const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
+  AssetCatalogAssetResponse.make({
+    id: row.id,
+    blockchainId: row.blockchainId,
+    blockchainName: row.blockchainName,
+    blockchainChainType: row.blockchainChainType,
+    blockchainChainId: row.blockchainChainId,
+    blockchainExplorerUrl: row.blockchainExplorerUrl,
+    blockchainLogoUrl: row.blockchainLogoUrl,
+    contractAddress: row.contractAddress,
+    name: row.name,
+    symbol: row.symbol,
+    decimals: row.decimals,
+    logoUrl: row.logoUrl,
+    type: row.type,
+    isSpam: row.isSpam,
+  })
+
 export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>
   Effect.gen(function* () {
+    const assetCatalogRepository = yield* AssetCatalogRepository
     const providerAssetRepository = yield* ProviderAssetRepository
     const assetCanonicalizationService = yield* AssetCanonicalizationService
 
     return handlers
+      .handle("listAssets", ({ urlParams }) =>
+        Effect.gen(function* () {
+          const assets = yield* assetCatalogRepository
+            .listAssets({
+              query: urlParams.q ?? null,
+              limit: urlParams.limit ?? defaultAssetLimit,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to list assets.")))
+
+          return AssetCatalogListResponse.make({
+            assets: assets.map(toAssetCatalogAssetResponse),
+          })
+        })
+      )
+      .handle("getAsset", ({ path }) =>
+        Effect.gen(function* () {
+          const maybeAsset = yield* assetCatalogRepository
+            .findAssetById({ assetId: path.assetId })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to load asset.")))
+
+          return yield* Option.match(maybeAsset, {
+            onNone: () => Effect.fail(new AssetNotFoundError({ message: "Asset not found." })),
+            onSome: (asset) => Effect.succeed(toAssetCatalogAssetResponse(asset)),
+          })
+        })
+      )
       .handle("listProviderAssetReviews", ({ urlParams }) =>
         Effect.gen(function* () {
           const providerAssets = yield* providerAssetRepository

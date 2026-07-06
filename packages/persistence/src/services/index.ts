@@ -1,4 +1,5 @@
 export * from "./IdentityRepository.ts"
+export * from "./AssetCatalogRepository.ts"
 export * from "./EmailVerificationRequestRepository.ts"
 export * from "./OAuthStateStore.ts"
 export * from "./PrincipalRepository.ts"

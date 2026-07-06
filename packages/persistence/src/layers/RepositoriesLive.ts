@@ -44,6 +44,7 @@ import { CoinbaseAuthProviderLive } from "./CoinbaseAuthProviderLive.ts"
 import { GoogleAuthProviderLive } from "./GoogleAuthProviderLive.ts"
 import { LocalAuthProviderLive } from "./LocalAuthProviderLive.ts"
 import { LegalReferenceRepositoryLive } from "./LegalReferenceRepositoryLive.ts"
+import { AssetCatalogRepositoryLive } from "./AssetCatalogRepositoryLive.ts"
 import { AssetRepositoryLive } from "./AssetRepositoryLive.ts"
 import { CoinbaseCredentialRepositoryLive } from "./CoinbaseCredentialRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "./ProviderAssetRepositoryLive.ts"
@@ -108,6 +109,7 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceReportRepositoryLive,
   CexAccountRepositoryLive,
   TaxCalculationServiceLive,
+  AssetCatalogRepositoryLive,
   AssetRepositoryLive,
   CoinbaseCredentialRepositoryLive,
   ProviderAssetRepositoryLive,
