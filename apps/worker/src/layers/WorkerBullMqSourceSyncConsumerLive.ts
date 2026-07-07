@@ -262,7 +262,14 @@ const processJob = ({
     }
 
     return summary
-  })
+  }).pipe(
+    Effect.withSpan("worker.source-sync.process", {
+      attributes: {
+        queueName: SOURCE_SYNC_QUEUE_NAME,
+      },
+      kind: "consumer",
+    })
+  )
 
 const acquireLiveWorker = (
   config: WorkerBullMqSourceSyncConsumerConfig,

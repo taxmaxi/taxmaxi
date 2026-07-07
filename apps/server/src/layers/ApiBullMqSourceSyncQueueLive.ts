@@ -309,7 +309,15 @@ export const makeApiBullMqSourceSyncQueueLive = (options: ApiBullMqSourceSyncQue
             },
             "source-sync:enqueued"
           )
-        })
+        }).pipe(
+          Effect.withSpan("server.source-sync.enqueue", {
+            attributes: {
+              queueName: SOURCE_SYNC_QUEUE_NAME,
+              mode: payload.mode,
+            },
+            kind: "producer",
+          })
+        )
 
       return SourceSyncQueue.of({
         enqueueSourceSyncJob,

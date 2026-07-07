@@ -1,5 +1,5 @@
 import { NodeRuntime } from "@effect/platform-node"
-import { Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   SourceSyncJobExecutorLive,
@@ -18,6 +18,7 @@ import { HeliusSolanaSourceSyncProviderLive } from "@my/sync-engine/providers/he
 import { WorkerBullMqSourceSyncConsumerLive } from "./layers/WorkerBullMqSourceSyncConsumerLive.ts"
 import { WorkerHealthServerLive } from "./layers/WorkerHealthServerLive.ts"
 import { WorkerSourceSyncStartupRepairLive } from "./layers/WorkerSourceSyncStartupRepairLive.ts"
+import { TracingLive } from "./layers/TracingLive.ts"
 
 const CoinbaseReferenceMappingRuntimeLive = CoinbaseReferenceMappingServiceLive.pipe(
   Layer.provide(RepositoriesLive)
@@ -64,4 +65,4 @@ const AppLive: Layer.Layer<never, unknown, never> = Layer.mergeAll(
   WorkerRuntimeLive
 ).pipe(Layer.provide(PgClientLive))
 
-Layer.launch(AppLive).pipe(NodeRuntime.runMain)
+Layer.launch(AppLive).pipe(Effect.provide(TracingLive), NodeRuntime.runMain)

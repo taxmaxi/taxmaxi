@@ -23,6 +23,7 @@ import {
   X402PaymentValidatorLive,
 } from "@my/rest-api"
 import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueLive.ts"
+import { TracingLive } from "./layers/TracingLive.ts"
 
 const port = 4000
 const DEFAULT_FRONTEND_URL = "http://localhost:5173"
@@ -107,4 +108,4 @@ const ServerLive = HttpApiBuilder.serve().pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port }))
 )
 
-Layer.launch(ServerLive).pipe(NodeRuntime.runMain)
+Layer.launch(ServerLive).pipe(Effect.provide(TracingLive), NodeRuntime.runMain)
