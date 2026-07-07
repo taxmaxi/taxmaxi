@@ -32,6 +32,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   SERVER_IMAGE: ghcr.io/taxmaxi/server
+  API_MIGRATE_IMAGE: ghcr.io/taxmaxi/api-migrate
   WORKER_IMAGE: ghcr.io/taxmaxi/worker
 
 jobs:
@@ -40,6 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       server: ${{ steps.filter.outputs.server }}
+      api_migrate: ${{ steps.filter.outputs.api_migrate }}
       worker: ${{ steps.filter.outputs.worker }}
     steps:
       - name: Checkout
@@ -57,6 +59,18 @@ jobs:
               - 'packages/core/**'
               - 'packages/persistence/**'
               - 'packages/rest-api/**'
+              - 'packages/sync-engine/**'
+              - 'packages/typescript-config/**'
+              - '.dockerignore'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'turbo.json'
+            api_migrate:
+              - '.github/workflows/build-and-push-images.yml'
+              - 'apps/server/Dockerfile'
+              - 'packages/core/**'
+              - 'packages/persistence/**'
               - 'packages/sync-engine/**'
               - 'packages/typescript-config/**'
               - '.dockerignore'
@@ -102,6 +116,7 @@ jobs:
         with:
           context: .
           file: apps/server/Dockerfile
+          target: runner
           push: true
           tags: |
             ${{ env.SERVER_IMAGE }}:main
@@ -111,6 +126,41 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=server
           cache-to: type=gha,scope=server,mode=max
+
+  api-migrate:
+    name: Build API migration image
+    needs: changes
+    if: needs.changes.outputs.api_migrate == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/server/Dockerfile
+          target: migrate
+          push: true
+          tags: |
+            ${{ env.API_MIGRATE_IMAGE }}:main
+            ${{ env.API_MIGRATE_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=api-migrate
+          cache-to: type=gha,scope=api-migrate,mode=max
 
   worker:
     name: Build worker image

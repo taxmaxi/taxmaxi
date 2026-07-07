@@ -18,6 +18,10 @@ RUN pnpm install --frozen-lockfile
 COPY --from=pruner /app/out/full/ .
 RUN pnpm run build --filter=server...
 
+FROM builder AS migrate
+WORKDIR /app
+CMD ["pnpm", "run", "db:migrate"]
+
 FROM base AS installer
 LABEL stage=intermediate
 WORKDIR /app
