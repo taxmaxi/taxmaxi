@@ -20,6 +20,22 @@ on:
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
       - turbo.json
+  # A GitHub Release should publish docker image tags with the same semver name.
+  release:
+    types:
+      - published
+  # Temporary: Allows backfilling tags for releases that already existed before this
+  # workflow learned how to publish release-tagged images.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to publish, for example v0.1.0-beta.1.
+        required: true
+        type: string
+      source_ref:
+        description: Git ref to build. Defaults to image_tag.
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,8 +52,58 @@ env:
   WORKER_IMAGE: ghcr.io/taxmaxi/worker
 
 jobs:
+  # Normalize push, release, and manual backfill events into one small contract
+  # that all image jobs can consume.
+  metadata:
+    name: Resolve image metadata
+    runs-on: ubuntu-latest
+    outputs:
+      checkout_ref: ${{ steps.metadata.outputs.checkout_ref }}
+      image_tag: ${{ steps.metadata.outputs.image_tag }}
+      is_promotion: ${{ steps.metadata.outputs.is_promotion }}
+    steps:
+      - name: Resolve image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          checkout_ref="${GITHUB_SHA}"
+          image_tag=""
+          is_promotion="false"
+
+          # Release events build the release tag itself, not whatever commit
+          # happens to be current on the workflow file's branch.
+          if [[ "${GITHUB_EVENT_NAME}" == "release" ]]; then
+            image_tag="${{ github.event.release.tag_name }}"
+            checkout_ref="$image_tag"
+            is_promotion="true"
+          # Manual dispatch is the escape hatch for publishing an existing tag,
+          # for example v0.1.0-beta.1 after this workflow change lands.
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            image_tag="${{ inputs.image_tag }}"
+            checkout_ref="${{ inputs.source_ref }}"
+            if [[ -z "$checkout_ref" ]]; then
+              checkout_ref="$image_tag"
+            fi
+            is_promotion="true"
+          fi
+
+          # Docker tags are stricter than Git refs; fail before buildx starts.
+          if [[ -n "$image_tag" && ! "$image_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]; then
+            echo "Invalid image_tag: $image_tag" >&2
+            exit 1
+          fi
+
+          {
+            echo "checkout_ref=$checkout_ref"
+            echo "image_tag=$image_tag"
+            echo "is_promotion=$is_promotion"
+          } >> "$GITHUB_OUTPUT"
+
   changes:
     name: Detect changes
+    needs: metadata
     runs-on: ubuntu-latest
     outputs:
       server: ${{ steps.filter.outputs.server }}
@@ -46,9 +112,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.checkout_ref }}
 
       - name: Filter changed paths
         id: filter
+        # Promotions must publish a complete API image set with the same tag.
+        # Push builds can stay incremental.
+        if: needs.metadata.outputs.is_promotion != 'true'
         uses: dorny/paths-filter@v4
         with:
           filters: |
@@ -94,12 +165,45 @@ jobs:
 
   server:
     name: Build server image
-    needs: changes
-    if: needs.changes.outputs.server == 'true'
+    needs:
+      - metadata
+      - changes
+    # Release/backfill builds always publish every API image. Normal main builds
+    # only publish this image when relevant files changed.
+    if: needs.metadata.outputs.is_promotion == 'true' || needs.changes.outputs.server == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.checkout_ref }}
+
+      - name: Resolve source revision
+        id: source
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.SERVER_IMAGE }}
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          IS_PROMOTION: ${{ needs.metadata.outputs.is_promotion }}
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          # build-push-action accepts a newline-separated tag list. Compute it
+          # here because :main is only for moving main builds, while release
+          # promotions need the immutable source SHA plus the SemVer tag.
+          {
+            echo "sha=$sha"
+            echo "tags<<EOF"
+            if [[ "$IS_PROMOTION" != "true" ]]; then
+              echo "$IMAGE_NAME:main"
+            fi
+            echo "$IMAGE_NAME:$sha"
+            if [[ -n "$IMAGE_TAG" ]]; then
+              echo "$IMAGE_NAME:$IMAGE_TAG"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -118,23 +222,57 @@ jobs:
           file: apps/server/Dockerfile
           target: runner
           push: true
-          tags: |
-            ${{ env.SERVER_IMAGE }}:main
-            ${{ env.SERVER_IMAGE }}:${{ github.sha }}
+          tags: ${{ steps.source.outputs.tags }}
+          # Release images carry the SemVer tag as embedded metadata; main
+          # images fall back to the exact source SHA for traceability.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.image_tag != '' && needs.metadata.outputs.image_tag || steps.source.outputs.sha }}
           cache-from: type=gha,scope=server
           cache-to: type=gha,scope=server,mode=max
 
   api-migrate:
     name: Build API migration image
-    needs: changes
-    if: needs.changes.outputs.api_migrate == 'true'
+    needs:
+      - metadata
+      - changes
+    # Release/backfill builds always publish every API image. Normal main builds
+    # only publish this image when relevant files changed.
+    if: needs.metadata.outputs.is_promotion == 'true' || needs.changes.outputs.api_migrate == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.checkout_ref }}
+
+      - name: Resolve source revision
+        id: source
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.API_MIGRATE_IMAGE }}
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          IS_PROMOTION: ${{ needs.metadata.outputs.is_promotion }}
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          # build-push-action accepts a newline-separated tag list. Compute it
+          # here because :main is only for moving main builds, while release
+          # promotions need the immutable source SHA plus the SemVer tag.
+          {
+            echo "sha=$sha"
+            echo "tags<<EOF"
+            if [[ "$IS_PROMOTION" != "true" ]]; then
+              echo "$IMAGE_NAME:main"
+            fi
+            echo "$IMAGE_NAME:$sha"
+            if [[ -n "$IMAGE_TAG" ]]; then
+              echo "$IMAGE_NAME:$IMAGE_TAG"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -153,23 +291,57 @@ jobs:
           file: apps/server/Dockerfile
           target: migrate
           push: true
-          tags: |
-            ${{ env.API_MIGRATE_IMAGE }}:main
-            ${{ env.API_MIGRATE_IMAGE }}:${{ github.sha }}
+          tags: ${{ steps.source.outputs.tags }}
+          # Release images carry the SemVer tag as embedded metadata; main
+          # images fall back to the exact source SHA for traceability.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.image_tag != '' && needs.metadata.outputs.image_tag || steps.source.outputs.sha }}
           cache-from: type=gha,scope=api-migrate
           cache-to: type=gha,scope=api-migrate,mode=max
 
   worker:
     name: Build worker image
-    needs: changes
-    if: needs.changes.outputs.worker == 'true'
+    needs:
+      - metadata
+      - changes
+    # Release/backfill builds always publish every API image. Normal main builds
+    # only publish this image when relevant files changed.
+    if: needs.metadata.outputs.is_promotion == 'true' || needs.changes.outputs.worker == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.checkout_ref }}
+
+      - name: Resolve source revision
+        id: source
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.WORKER_IMAGE }}
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+          IS_PROMOTION: ${{ needs.metadata.outputs.is_promotion }}
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          # build-push-action accepts a newline-separated tag list. Compute it
+          # here because :main is only for moving main builds, while release
+          # promotions need the immutable source SHA plus the SemVer tag.
+          {
+            echo "sha=$sha"
+            echo "tags<<EOF"
+            if [[ "$IS_PROMOTION" != "true" ]]; then
+              echo "$IMAGE_NAME:main"
+            fi
+            echo "$IMAGE_NAME:$sha"
+            if [[ -n "$IMAGE_TAG" ]]; then
+              echo "$IMAGE_NAME:$IMAGE_TAG"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -187,11 +359,12 @@ jobs:
           context: .
           file: apps/worker/Dockerfile
           push: true
-          tags: |
-            ${{ env.WORKER_IMAGE }}:main
-            ${{ env.WORKER_IMAGE }}:${{ github.sha }}
+          tags: ${{ steps.source.outputs.tags }}
+          # Release images carry the SemVer tag as embedded metadata; main
+          # images fall back to the exact source SHA for traceability.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.image_tag != '' && needs.metadata.outputs.image_tag || steps.source.outputs.sha }}
           cache-from: type=gha,scope=worker
           cache-to: type=gha,scope=worker,mode=max
