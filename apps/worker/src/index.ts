@@ -1,5 +1,6 @@
 import { NodeRuntime } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
+import { LoggerLive } from "@my/observability"
 import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   SourceSyncJobExecutorLive,
@@ -65,4 +66,7 @@ const AppLive: Layer.Layer<never, unknown, never> = Layer.mergeAll(
   WorkerRuntimeLive
 ).pipe(Layer.provide(PgClientLive))
 
-Layer.launch(AppLive).pipe(Effect.provide(TracingLive), NodeRuntime.runMain)
+Layer.launch(AppLive).pipe(
+  Effect.provide(Layer.mergeAll(LoggerLive, TracingLive)),
+  NodeRuntime.runMain
+)

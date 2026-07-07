@@ -24,6 +24,7 @@ WORKDIR /app
 COPY --from=pruner /app/out/json/ .
 RUN pnpm install --prod --frozen-lockfile --ignore-scripts
 COPY --from=builder /app/packages/core/dist /app/packages/core/dist
+COPY --from=builder /app/packages/observability/dist /app/packages/observability/dist
 COPY --from=builder /app/packages/persistence/dist /app/packages/persistence/dist
 COPY --from=builder /app/packages/sync-engine/dist /app/packages/sync-engine/dist
 COPY --from=builder /app/apps/worker/dist /app/apps/worker/dist

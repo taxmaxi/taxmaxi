@@ -12,6 +12,7 @@
     "@effect/opentelemetry": "0.63.0",
     "@effect/platform-node": "0.106.0",
     "@my/core": "workspace:*",
+    "@my/observability": "workspace:*",
     "@my/persistence": "workspace:*",
     "@my/sync-engine": "workspace:*",
     "@opentelemetry/api": "1.9.1",

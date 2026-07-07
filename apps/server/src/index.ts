@@ -9,6 +9,7 @@ import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { Config, Effect, Layer } from "effect"
 import * as Cause from "effect/Cause"
 import { createServer } from "node:http"
+import { LoggerLive } from "@my/observability"
 import {
   SourceSyncRunServiceLive,
   SourceSyncServiceLive,
@@ -108,4 +109,7 @@ const ServerLive = HttpApiBuilder.serve().pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port }))
 )
 
-Layer.launch(ServerLive).pipe(Effect.provide(TracingLive), NodeRuntime.runMain)
+Layer.launch(ServerLive).pipe(
+  Effect.provide(Layer.mergeAll(LoggerLive, TracingLive)),
+  NodeRuntime.runMain
+)
