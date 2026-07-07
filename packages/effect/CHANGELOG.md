@@ -1,5 +1,19 @@
 # effect
 
+## 3.21.4
+
+### Patch Changes
+
+- [#6267](https://github.com/Effect-TS/effect/pull/6267) [`8222963`](https://github.com/Effect-TS/effect/commit/8222963e76b80e62f27d0301bc4cdac73e73bdfc) Thanks @fubhy! - Fix Graph traversal and shortest-path algorithms to traverse undirected edges independently of their stored source/target orientation.
+
+## 3.21.3
+
+### Patch Changes
+
+- [#6250](https://github.com/Effect-TS/effect/pull/6250) [`e2126bc`](https://github.com/Effect-TS/effect/commit/e2126bc14c4c902ff9f3dbe486e53190c6c87725) Thanks @milkyskies! - Fix $match generic type parameter inference inside arms (#6249)
+
+- [#6257](https://github.com/Effect-TS/effect/pull/6257) [`f7e836e`](https://github.com/Effect-TS/effect/commit/f7e836ea9b399784fdb3846d176ebe72bb07bfc7) Thanks @gcanti! - Emit `additionalProperties: false` for records with string keys and `Schema.Never` values.
+
 ## 3.21.2
 
 ### Patch Changes
