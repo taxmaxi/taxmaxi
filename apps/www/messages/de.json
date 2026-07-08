@@ -4,6 +4,29 @@
     "title": "TaxMaxi | API für Krypto Steuern",
     "description": "Die Krypto Steuer API für Wallets, Börsen und Steuerkanzleien"
   },
+  "auth": {
+    "home": "Startseite",
+    "continueCoinbase": "Mit Coinbase fortfahren",
+    "terms": "Nutzungsbedingungen",
+    "and": "und",
+    "privacy": "Datenschutzrichtlinie",
+    "login": {
+      "title": "Anmelden",
+      "newHere": "Neu hier?",
+      "createAccount": "Konto erstellen",
+      "agreementIntro": "Mit der Nutzung von TaxMaxi stimmst du folgendem zu:"
+    },
+    "signUp": {
+      "title": "Account erstellen",
+      "alreadyAccount": "Du hast bereits einen Account?",
+      "logIn": "Anmelden",
+      "agreementIntro": "Mit der Registrierung stimmst du folgendem zu:"
+    }
+  },
+  "app": {
+    "title": "TaxMaxi App",
+    "description": "Du bist angemeldet. Der App-Workspace entsteht hier."
+  },
   "header": {
     "apiProduct": "API",
     "assets": "Assets",

@@ -5,33 +5,46 @@ import TaxMaxiIconLogo from "#/components/ui/logos/taxmaxi.svg"
 import TaxMaxiIconLogoDark from "#/components/ui/logos/taxmaxi-dark.svg"
 import { cn } from "#/lib/utils"
 
+type LogoTheme = "light" | "dark"
+
 export const Logo = ({
   theme,
   size = "large",
   iconOnly = false,
 }: {
-  theme: string
+  theme?: LogoTheme
   size?: "small" | "large"
   iconOnly?: boolean
 }) => {
-  const className = cn("inline-block", size === "small" ? "h-10" : "h-11")
-  const image = iconOnly ? (
-    <img
-      src={theme === "dark" ? TaxMaxiIconLogoDark : TaxMaxiIconLogo}
-      alt="TaxMaxi Logo"
-      className="object-contain h-full w-auto"
-    />
-  ) : (
-    <img
-      src={theme === "dark" ? TaxMaxiLogoDark : TaxMaxiLogo}
-      alt="TaxMaxi Logo"
-      className="object-contain h-full w-auto"
-    />
-  )
+  const className = cn("inline-block", size === "small" ? "h-10" : "h-14")
+
+  const lightLogo = iconOnly ? TaxMaxiIconLogo : TaxMaxiLogo
+  const darkLogo = iconOnly ? TaxMaxiIconLogoDark : TaxMaxiLogoDark
+
+  if (theme) {
+    return (
+      <Link to="/" className={className}>
+        <img
+          src={theme === "dark" ? darkLogo : lightLogo}
+          alt="TaxMaxi Logo"
+          className="h-full w-auto object-contain"
+        />
+      </Link>
+    )
+  }
 
   return (
     <Link to="/" className={className}>
-      {image}
+      <img
+        src={lightLogo}
+        alt="TaxMaxi Logo"
+        className="h-full w-auto object-contain dark:hidden"
+      />
+      <img
+        src={darkLogo}
+        alt="TaxMaxi Logo"
+        className="hidden h-full w-auto object-contain dark:block"
+      />
     </Link>
   )
 }

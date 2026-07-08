@@ -4,6 +4,29 @@
     "title": "TaxMaxi | The Crypto Tax API",
     "description": "API-first crypto tax infra for wallets, exchanges, and tax advisory firms."
   },
+  "auth": {
+    "home": "Home",
+    "continueCoinbase": "Continue with Coinbase",
+    "terms": "Terms",
+    "and": "and",
+    "privacy": "Privacy Policy",
+    "login": {
+      "title": "Log in",
+      "newHere": "New here?",
+      "createAccount": "Create an account",
+      "agreementIntro": "By using TaxMaxi, you agree to our"
+    },
+    "signUp": {
+      "title": "Create an account",
+      "alreadyAccount": "Already have an account?",
+      "logIn": "Log in",
+      "agreementIntro": "By signing up to TaxMaxi, you agree to our"
+    }
+  },
+  "app": {
+    "title": "TaxMaxi App",
+    "description": "You are signed in. The app workspace will live here."
+  },
   "header": {
     "apiProduct": "API",
     "assets": "Assets",

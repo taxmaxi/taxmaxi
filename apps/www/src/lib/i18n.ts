@@ -94,6 +94,10 @@ export const translatedPathnames = [
       en: "/assets/$assetId",
       de: "/assets/$assetId",
     },
+    "/coinbase-sign-in": {
+      en: "/coinbase-sign-in",
+      de: "/coinbase-sign-in",
+    },
     "/demo/ai-chat": {
       en: "/demo/ai-chat",
       de: "/demo/ai-chat",
@@ -138,9 +142,17 @@ export const translatedPathnames = [
       en: "/imprint",
       de: "/impressum",
     },
+    "/login": {
+      en: "/login",
+      de: "/login",
+    },
     "/privacy": {
       en: "/privacy",
       de: "/datenschutz",
+    },
+    "/sign-up": {
+      en: "/sign-up",
+      de: "/registrieren",
     },
     "/terms": {
       en: "/terms",

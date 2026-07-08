@@ -10,8 +10,12 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as TermsRouteImport } from './routes/terms'
+import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as ImprintRouteImport } from './routes/imprint'
+import { Route as CoinbaseSignInRouteImport } from './routes/coinbase-sign-in'
+import { Route as AppRouteImport } from './routes/app'
 import { Route as AboutRouteImport } from './routes/about'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AssetsIndexRouteImport } from './routes/assets/index'
@@ -37,14 +41,34 @@ const TermsRoute = TermsRouteImport.update({
   path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SignUpRoute = SignUpRouteImport.update({
+  id: '/sign-up',
+  path: '/sign-up',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ImprintRoute = ImprintRouteImport.update({
   id: '/imprint',
   path: '/imprint',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CoinbaseSignInRoute = CoinbaseSignInRouteImport.update({
+  id: '/coinbase-sign-in',
+  path: '/coinbase-sign-in',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AboutRoute = AboutRouteImport.update({
@@ -146,8 +170,12 @@ const DemoApiAiChatRoute = DemoApiAiChatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/app': typeof AppRoute
+  '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
+  '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
+  '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -170,8 +198,12 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/app': typeof AppRoute
+  '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
+  '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
+  '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -195,8 +227,12 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
+  '/app': typeof AppRoute
+  '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
+  '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
+  '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -221,8 +257,12 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/about'
+    | '/app'
+    | '/coinbase-sign-in'
     | '/imprint'
+    | '/login'
     | '/privacy'
+    | '/sign-up'
     | '/terms'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -245,8 +285,12 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/about'
+    | '/app'
+    | '/coinbase-sign-in'
     | '/imprint'
+    | '/login'
     | '/privacy'
+    | '/sign-up'
     | '/terms'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -269,8 +313,12 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/about'
+    | '/app'
+    | '/coinbase-sign-in'
     | '/imprint'
+    | '/login'
     | '/privacy'
+    | '/sign-up'
     | '/terms'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -294,8 +342,12 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
+  AppRoute: typeof AppRoute
+  CoinbaseSignInRoute: typeof CoinbaseSignInRoute
   ImprintRoute: typeof ImprintRoute
+  LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
+  SignUpRoute: typeof SignUpRoute
   TermsRoute: typeof TermsRoute
   AssetsAssetIdRoute: typeof AssetsAssetIdRoute
   DemoAiChatRoute: typeof DemoAiChatRoute
@@ -325,6 +377,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/sign-up': {
+      id: '/sign-up'
+      path: '/sign-up'
+      fullPath: '/sign-up'
+      preLoaderRoute: typeof SignUpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/privacy': {
       id: '/privacy'
       path: '/privacy'
@@ -332,11 +391,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/imprint': {
       id: '/imprint'
       path: '/imprint'
       fullPath: '/imprint'
       preLoaderRoute: typeof ImprintRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/coinbase-sign-in': {
+      id: '/coinbase-sign-in'
+      path: '/coinbase-sign-in'
+      fullPath: '/coinbase-sign-in'
+      preLoaderRoute: typeof CoinbaseSignInRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/about': {
@@ -478,8 +558,12 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
+  AppRoute: AppRoute,
+  CoinbaseSignInRoute: CoinbaseSignInRoute,
   ImprintRoute: ImprintRoute,
+  LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
+  SignUpRoute: SignUpRoute,
   TermsRoute: TermsRoute,
   AssetsAssetIdRoute: AssetsAssetIdRoute,
   DemoAiChatRoute: DemoAiChatRoute,
