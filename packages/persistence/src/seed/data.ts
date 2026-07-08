@@ -1,11 +1,11 @@
 /**
- * SolanaReferenceData - seed data for the Solana-focused hackathon database.
+ * data - seed data for the Solana-focused hackathon database.
  *
  * The transaction taxonomy and CEX/bootstrap rows are carried over from the
  * original TaxMaxi seed migrations, but kept as db-push companion data instead
  * of a migration chain.
  *
- * @module seed/SolanaReferenceData
+ * @module seed/data
  */
 
 import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm"
@@ -1007,9 +1007,9 @@ const transactionTypeLegalRules = [
 ] as const
 
 /**
- * Seed reference rows required by a fresh Solana-focused TaxMaxi database.
+ * Seed rows required by a fresh TaxMaxi database.
  */
-export const seedSolanaReferenceData = Effect.gen(function* () {
+export const seedData = Effect.gen(function* () {
   const db = yield* drizzle
 
   yield* db

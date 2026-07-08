@@ -6,7 +6,7 @@ import {
   runDrizzleMigrations,
   runSqlUnsafe,
 } from "../src/layers/PgClientLive.ts"
-import { seedSolanaReferenceData } from "../src/seed/SolanaReferenceData.ts"
+import { seedData } from "../src/seed/data.ts"
 
 const TEMPLATE_DATABASE_NAME = "taxmaxi_template"
 
@@ -71,7 +71,7 @@ export const setup = async () => {
         statement: `CREATE DATABASE ${quoteIdentifier(TEMPLATE_DATABASE_NAME)}`,
       })
       yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
-      yield* seedSolanaReferenceData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
+      yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
       yield* runAdminSql({
         statement: `
           SELECT pg_terminate_backend(pid)

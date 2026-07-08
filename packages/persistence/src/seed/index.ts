@@ -8,10 +8,10 @@ import { NodeRuntime } from "@effect/platform-node"
 import * as Console from "effect/Console"
 import * as Effect from "effect/Effect"
 import { PgClientLive } from "../layers/PgClientLive.ts"
-import { seedSolanaReferenceData } from "./SolanaReferenceData.ts"
+import { seedData } from "./data.ts"
 
 const program = Effect.gen(function* () {
-  yield* seedSolanaReferenceData
+  yield* seedData
   yield* Console.log("Persistence seed data applied.")
 })
 
