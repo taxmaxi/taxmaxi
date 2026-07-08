@@ -154,6 +154,15 @@ const make = Effect.gen(function* () {
 
   // Build provider registry
   const providerRegistry = buildProviderRegistry(config.providers)
+  const registeredProviders = Chunk.toReadonlyArray(config.providers).map(
+    (provider) => provider.type
+  )
+  yield* Effect.logInfo(
+    {
+      registeredProviders,
+    },
+    "Auth provider registry initialized"
+  )
 
   /**
    * Get a provider by type, failing if not enabled
@@ -191,6 +200,15 @@ const make = Effect.gen(function* () {
           userAgent: Option.map(userAgent, (ua) => ua.slice(0, 1024)),
         })
         .pipe(
+          Effect.tapError((cause) =>
+            Effect.logError(
+              {
+                cause,
+                userId,
+              },
+              "Auth session persistence failed"
+            )
+          ),
           Effect.mapError(
             () =>
               new ProviderAuthFailedError({
@@ -199,6 +217,15 @@ const make = Effect.gen(function* () {
               })
           )
         )
+
+      yield* Effect.logInfo(
+        {
+          provider,
+          userId,
+          expiresAt: expiresAt.toDateTime().toString(),
+        },
+        "Auth session created"
+      )
 
       return session
     })
@@ -518,6 +545,14 @@ const make = Effect.gen(function* () {
     redirectUri?: string
   ) =>
     Effect.gen(function* () {
+      yield* Effect.logInfo(
+        {
+          hasUserId: Option.isSome(userId),
+          redirectUri,
+        },
+        "OAuth flow start requested"
+      )
+
       const provider = yield* getProvider(providerType)
       const state = generateOAuthState()
       const authorizationUrlOption = provider.getAuthorizationUrl(state, redirectUri)
@@ -535,6 +570,14 @@ const make = Effect.gen(function* () {
       const resolvedRedirectUri = yield* extractRedirectUri(providerType, authorizationUrl)
       const expiresAt = Timestamp.addMillis(Timestamp.now(), OAUTH_STATE_TTL_MILLIS)
 
+      yield* Effect.logInfo(
+        {
+          resolvedRedirectUri,
+          expiresAt: expiresAt.toDateTime().toString(),
+        },
+        "OAuth authorization URL created"
+      )
+
       yield* oauthStateStore
         .create({
           state,
@@ -550,6 +593,15 @@ const make = Effect.gen(function* () {
           consumedAt: Option.none(),
         })
         .pipe(
+          Effect.tapError((cause) =>
+            Effect.logError(
+              {
+                cause,
+                resolvedRedirectUri,
+              },
+              "OAuth state persistence failed"
+            )
+          ),
           Effect.mapError(
             () =>
               new ProviderAuthFailedError({
@@ -559,11 +611,24 @@ const make = Effect.gen(function* () {
           )
         )
 
+      yield* Effect.logInfo(
+        {
+          resolvedRedirectUri,
+        },
+        "OAuth state persisted"
+      )
+
       return {
         authorizationUrl,
         state,
       } as const
-    })
+    }).pipe(
+      Effect.annotateLogs({
+        authFlow: "oauth-start",
+        intent,
+        provider: providerType,
+      })
+    )
 
   /**
    * Consume and validate persisted OAuth state for a specific intent
@@ -581,6 +646,14 @@ const make = Effect.gen(function* () {
   > =>
     Effect.gen(function* () {
       const maybeStoredState = yield* oauthStateStore.consume(state).pipe(
+        Effect.tapError((cause) =>
+          Effect.logError(
+            {
+              cause,
+            },
+            "OAuth state load failed"
+          )
+        ),
         Effect.mapError(
           () =>
             new ProviderAuthFailedError({
@@ -591,6 +664,13 @@ const make = Effect.gen(function* () {
       )
 
       if (Option.isNone(maybeStoredState)) {
+        yield* Effect.logError(
+          {
+            hasState: state.length > 0,
+          },
+          "OAuth state missing or expired"
+        )
+
         return yield* Effect.fail(
           new OAuthStateError({
             provider: providerType,
@@ -601,6 +681,16 @@ const make = Effect.gen(function* () {
 
       const storedState = maybeStoredState.value
       if (storedState.provider !== providerType || storedState.intent !== intent) {
+        yield* Effect.logError(
+          {
+            expectedProvider: providerType,
+            storedProvider: storedState.provider,
+            expectedIntent: intent,
+            storedIntent: storedState.intent,
+          },
+          "OAuth state does not match callback"
+        )
+
         return yield* Effect.fail(
           new OAuthStateError({
             provider: providerType,
@@ -630,7 +720,13 @@ const make = Effect.gen(function* () {
       }
 
       return { redirectUri: storedState.redirectUri } as const
-    })
+    }).pipe(
+      Effect.annotateLogs({
+        authFlow: "oauth-state-consume",
+        intent,
+        provider: providerType,
+      })
+    )
 
   const authProcessingError = (operation: string, cause: unknown) =>
     new AuthProcessingError({
@@ -918,6 +1014,14 @@ const make = Effect.gen(function* () {
      */
     completeOAuthLogin: (providerType, code, state) =>
       Effect.gen(function* () {
+        yield* Effect.logInfo(
+          {
+            hasCode: code.length > 0,
+            hasState: state.length > 0,
+          },
+          "OAuth login callback received"
+        )
+
         const { redirectUri } = yield* consumeOAuthStateForIntent(
           providerType,
           state,
@@ -926,7 +1030,33 @@ const make = Effect.gen(function* () {
         )
 
         const provider = yield* getProvider(providerType)
-        const authResult = yield* provider.handleCallback(code, redirectUri)
+
+        yield* Effect.logInfo(
+          {
+            redirectUri,
+          },
+          "OAuth callback state validated"
+        )
+
+        const authResult = yield* provider.handleCallback(code, redirectUri).pipe(
+          Effect.tapError((cause) =>
+            Effect.logError(
+              {
+                cause,
+                redirectUri,
+              },
+              "OAuth provider callback failed"
+            )
+          )
+        )
+
+        yield* Effect.logInfo(
+          {
+            providerUserId: authResult.providerId,
+            emailVerified: authResult.emailVerified,
+          },
+          "OAuth provider callback handled"
+        )
 
         // Find or create the user
         const user = yield* findOrCreateUser(authResult).pipe(
@@ -943,9 +1073,20 @@ const make = Effect.gen(function* () {
 
         // Create a session
         const session = yield* createSession(user.id, providerType, Option.none())
+        yield* Effect.logInfo(
+          {
+            userId: user.id,
+          },
+          "OAuth login completed"
+        )
 
         return { user, session, providerResult: authResult }
-      }),
+      }).pipe(
+        Effect.annotateLogs({
+          authFlow: "oauth-login-callback",
+          provider: providerType,
+        })
+      ),
 
     /**
      * Start OAuth identity linking flow for an authenticated user

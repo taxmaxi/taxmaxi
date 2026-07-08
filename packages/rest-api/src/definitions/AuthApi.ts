@@ -660,6 +660,7 @@ const authorize = HttpApiEndpoint.get("authorize", "/authorize/:provider")
   .setUrlParams(OAuthAuthorizeParams)
   .addSuccess(AuthorizeRedirectResponse)
   .addError(ProviderNotFoundError)
+  .addError(ProviderAuthError)
   .annotateContext(
     OpenApi.annotations({
       summary: "Get authorization URL",
@@ -795,6 +796,7 @@ const linkProvider = HttpApiEndpoint.post("linkProvider", "/link/:provider")
   .setPath(Schema.Struct({ provider: AuthProviderType }))
   .addSuccess(LinkInitiateResponse)
   .addError(ProviderNotFoundError)
+  .addError(ProviderAuthError)
   .addError(IdentityLinkedError)
   .annotateContext(
     OpenApi.annotations({

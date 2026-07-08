@@ -202,6 +202,28 @@ const completeOAuthLoginWithErrorMapping = ({
     })
   )
 
+const mapOAuthStartError = ({
+  provider,
+  error,
+}: {
+  readonly provider: AuthProviderType
+  readonly error: CoreProviderNotEnabledError | CoreProviderAuthFailedError
+}) => {
+  if (isProviderNotEnabledError(error)) {
+    return new ProviderNotFoundError({ provider })
+  }
+  if (isProviderAuthFailedError(error)) {
+    return new ProviderAuthError({
+      provider,
+      reason: error.reason,
+    })
+  }
+  return new ProviderAuthError({
+    provider,
+    reason: "OAuth authorization failed",
+  })
+}
+
 const mapPersistenceError = (provider: AuthProviderType, error: { readonly message: string }) =>
   new ProviderAuthError({
     provider,
@@ -830,36 +852,73 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
       .handle("authorize", (_) =>
         Effect.gen(function* () {
           const { provider } = _.path
-          const redirectTo = _.urlParams.redirectTo
+          return yield* Effect.gen(function* () {
+            const redirectTo = _.urlParams.redirectTo
 
-          // Local provider doesn't support OAuth flow
-          if (provider === "local") {
-            return yield* Effect.fail(new ProviderNotFoundError({ provider }))
-          }
+            // Local provider doesn't support OAuth flow
+            if (provider === "local") {
+              return yield* Effect.fail(new ProviderNotFoundError({ provider }))
+            }
 
-          const loginCallbackUrl = buildOAuthCallbackUrl(
-            authPublicBaseUrl,
-            getOAuthLoginCallbackPath(provider)
-          )
+            const loginCallbackUrl = buildOAuthCallbackUrl(
+              authPublicBaseUrl,
+              getOAuthLoginCallbackPath(provider)
+            )
+            yield* Effect.logInfo(
+              {
+                loginCallbackUrl,
+                redirectTo,
+              },
+              "OAuth authorize requested"
+            )
+            const { authorizationUrl, state } = yield* authService
+              .startOAuthLogin(provider, loginCallbackUrl)
+              .pipe(
+                Effect.tapError((error) =>
+                  Effect.logError(
+                    {
+                      cause: error,
+                    },
+                    "OAuth authorize failed"
+                  )
+                ),
+                Effect.mapError((error) => mapOAuthStartError({ provider, error }))
+              )
 
-          const { authorizationUrl, state } = yield* authService
-            .startOAuthLogin(provider, loginCallbackUrl)
-            .pipe(Effect.mapError(() => new ProviderNotFoundError({ provider })))
+            if (isSafeRedirectPath(redirectTo)) {
+              yield* setOAuthRedirectCookie({
+                provider,
+                redirectTo,
+                baseCookieOptions: sessionCookieOptions,
+              })
 
-          if (isSafeRedirectPath(redirectTo)) {
-            yield* setOAuthRedirectCookie({
-              provider,
-              redirectTo,
-              baseCookieOptions: sessionCookieOptions,
+              yield* Effect.logInfo(
+                {
+                  redirectTo,
+                },
+                "OAuth authorize redirect prepared"
+              )
+
+              return HttpServerResponse.redirect(authorizationUrl)
+            }
+
+            yield* Effect.logInfo(
+              {
+                hasRedirectTo: redirectTo !== undefined,
+              },
+              "OAuth authorize URL returned"
+            )
+
+            return AuthorizeRedirectResponse.make({
+              redirectUrl: authorizationUrl,
+              state,
             })
-
-            return HttpServerResponse.redirect(authorizationUrl)
-          }
-
-          return AuthorizeRedirectResponse.make({
-            redirectUrl: authorizationUrl,
-            state,
-          })
+          }).pipe(
+            Effect.annotateLogs({
+              authRoute: "authorize",
+              provider,
+            })
+          )
         })
       )
       .handle("callback", (_) =>
@@ -1613,7 +1672,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
 
           const { authorizationUrl, state } = yield* authService
             .startLink(currentUser.userId, provider, linkCallbackUrl)
-            .pipe(Effect.mapError(() => new ProviderNotFoundError({ provider })))
+            .pipe(Effect.mapError((error) => mapOAuthStartError({ provider, error })))
 
           return LinkInitiateResponse.make({
             redirectUrl: authorizationUrl,
