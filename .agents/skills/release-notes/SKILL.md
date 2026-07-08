@@ -37,8 +37,6 @@ TaxMaxi release notes are concise and product-focused. Use simple, concrete word
 Default structure:
 
 ```markdown
-## vX.Y.Z-beta.N
-
 This release <one or two sentence summary of the main theme>.
 
 ### What changed
@@ -61,8 +59,6 @@ Use this structure for normal releases or beta releases, matching `v0.1.0` and `
 For a first public or unusually broad launch release, use the longer `v0.1.0-beta.1` shape:
 
 ```markdown
-## TaxMaxi vX.Y.Z-beta.N
-
 This is the first public release of [TaxMaxi](https://www.taxmaxi.com).
 
 TaxMaxi is an open-source crypto tax API and CLI. <Short launch summary.>
@@ -90,8 +86,8 @@ Only use the longer launch shape when the release is a first/broad public produc
 
 ## Writing Rules
 
-- Start with the release version as an H2.
-- Follow with one short paragraph that names the release theme.
+- Do not start with a version heading. GitHub has a separate release title field for the version.
+- Start with one short paragraph that names the release theme.
 - Prefer `### What changed`, not generic categories like "Features" and "Fixes".
 - Include `### Deployment notes` even when there is nothing special to do.
 - Include `### Commits since \`<last-tag>\``using`git log --oneline` order unless the user asks for grouping.
