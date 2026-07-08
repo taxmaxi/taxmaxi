@@ -20,7 +20,7 @@ RUN pnpm run build --filter=server...
 
 FROM builder AS migrate
 WORKDIR /app
-CMD ["pnpm", "run", "db:migrate"]
+CMD ["pnpm", "run", "db:setup"]
 
 FROM base AS installer
 LABEL stage=intermediate

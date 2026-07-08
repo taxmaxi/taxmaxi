@@ -19,6 +19,7 @@
     "db:generate": "pnpm --filter @my/persistence run migration:generate",
     "db:migrate": "pnpm --filter @my/persistence run migration:run",
     "db:seed": "pnpm --filter @my/persistence run seed",
+    "db:setup": "pnpm run db:migrate && pnpm run db:seed",
     "lint": "oxlint -c .oxlintrc.json apps packages plopfile.cjs",
     "lint:fix": "oxlint -c .oxlintrc.json --fix apps packages plopfile.cjs",
     "format": "oxfmt -c .oxfmtrc.jsonc --check apps packages package.json pnpm-workspace.yaml turbo.json .oxfmtrc.jsonc .oxlintrc.json AGENTS.md",
