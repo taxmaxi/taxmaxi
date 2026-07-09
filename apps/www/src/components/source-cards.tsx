@@ -159,7 +159,7 @@ export function SourceCards({
       {children ? (
         <div
           className={cn(
-            "relative z-20 grid gap-2 rounded-lg bg-card p-2 shadow-sm ring-1 ring-border/80",
+            "relative z-20 grid gap-2 rounded-lg bg-card shadow-sm ring-1 ring-border/80",
             contentClassName
           )}
         >
