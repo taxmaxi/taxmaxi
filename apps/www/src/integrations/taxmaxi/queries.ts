@@ -16,6 +16,8 @@ export const queryKeys = {
   assetList: (input: AssetCatalogListInput = {}) =>
     [...queryKeys.assets(), "list", normalizeAssetCatalogListInput(input)] as const,
   assetDetail: (assetId: string) => [...queryKeys.assets(), "detail", assetId] as const,
+  sources: () => [...queryKeys.all, "sources"] as const,
+  sourceList: () => [...queryKeys.sources(), "list"] as const,
 }
 
 export const queries = {
@@ -33,6 +35,12 @@ export const queries = {
       queryKey: queryKeys.assetDetail(assetId),
       queryFn: async () => taxmaxi.assets.get({ assetId }),
       staleTime: 5 * 60 * 1000,
+    }),
+  sourceList: (taxmaxi: TaxMaxi) =>
+    queryOptions({
+      queryKey: queryKeys.sourceList(),
+      queryFn: async () => taxmaxi.sources.list(),
+      staleTime: 30 * 1000,
     }),
 }
 

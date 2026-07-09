@@ -1,10 +1,14 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
+import { useSuspenseQuery } from "@tanstack/react-query"
 import { startTransition, useEffect, useRef, useState } from "react"
+import type { Source as TaxMaxiSource } from "taxmaxi"
 
 import { TaxDashboard } from "#/components/dashboard/TaxDashboard"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
+import type { Account } from "#/components/dashboard/types"
 import { getAuthStatus } from "#/server-functions/auth"
+import { queries } from "#/integrations/taxmaxi/queries"
 import { cn } from "#/lib/utils"
 
 const COMPACT_SCROLL_THRESHOLD = 72
@@ -24,10 +28,20 @@ export const Route = createFileRoute("/app")({
       })
     }
   },
+  loader: async ({ context }) => {
+    const taxmaxi = context.taxmaxi()
+    return context.queryClient.ensureQueryData(queries.sourceList(taxmaxi))
+  },
   component: RouteComponent,
 })
 
 function RouteComponent() {
+  const { taxmaxi } = Route.useRouteContext()
+  const {
+    data: { sources },
+  } = useSuspenseQuery(queries.sourceList(taxmaxi()))
+  const sourceAccounts = sources.map(toDashboardAccount)
+
   return (
     <PageShell
       as="main"
@@ -52,10 +66,47 @@ function RouteComponent() {
 
       <div className="relative z-10">
         <AppHeader />
-        <TaxDashboard />
+        <TaxDashboard accounts={sourceAccounts} />
       </div>
     </PageShell>
   )
+}
+
+function toDashboardAccount(source: TaxMaxiSource): Account {
+  const network = source.sourceRef._tag === "cex" ? undefined : formatProviderNetwork(source)
+
+  return {
+    id: source.id,
+    name: source.name,
+    kind: source.sourceRef._tag === "cex" ? "exchange" : "wallet",
+    ...(network === undefined ? {} : { network }),
+    importedTransactions: 0,
+    unresolvedItems: 0,
+    lastSync: formatSourceCreatedAt(source.createdAt.epochMillis),
+  }
+}
+
+function formatProviderNetwork(source: TaxMaxiSource): string | undefined {
+  switch (source.providerKey) {
+    case "helius-solana":
+      return "Solana"
+    case "bitcoin":
+    case "bitcoin-rpc":
+      return "Bitcoin"
+    case "evm":
+    case "etherscan":
+      return "EVM"
+    default:
+      return source.providerKey ?? undefined
+  }
+}
+
+function formatSourceCreatedAt(epochMillis: number): string {
+  return `Added ${new Intl.DateTimeFormat("en-US", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  }).format(new Date(epochMillis))}`
 }
 
 function AppHeader() {

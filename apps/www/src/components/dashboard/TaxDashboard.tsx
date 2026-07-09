@@ -7,9 +7,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import { Card, CardContent } from "#/components/ui/card"
 import { cn } from "#/lib/utils"
 
-import { accounts, assetHoldings, taxYearAccountSummaries } from "./data"
+import { accounts as mockAccounts, assetHoldings, taxYearAccountSummaries } from "./data"
 import { formatCurrency, formatPercent, formatSignedCurrency, formatTokenAmount } from "./format"
-import { ALL_ACCOUNTS, type AccountId, type AccountScope, type TaxYear } from "./types"
+import {
+  ALL_ACCOUNTS,
+  type Account,
+  type AccountId,
+  type AccountScope,
+  type TaxYear,
+} from "./types"
 import { TransactionsTable } from "../transactions-table"
 
 type AggregatedHolding = {
@@ -34,9 +40,14 @@ type DashboardSummary = {
   unresolvedItems: number
 }
 
-export function TaxDashboard() {
+export function TaxDashboard({ accounts = mockAccounts }: { accounts?: ReadonlyArray<Account> }) {
   const [accountScope, setAccountScope] = useState<AccountScope>(ALL_ACCOUNTS)
   const [taxYear] = useState<TaxYear>(2025)
+
+  const accountsById = useMemo(
+    () => new Map(accounts.map((account) => [account.id, account])),
+    [accounts]
+  )
 
   const activeAccounts = useMemo(
     () =>
@@ -138,7 +149,7 @@ export function TaxDashboard() {
               <TabsTrigger value="taxes">Taxes</TabsTrigger>
             </TabsList>
             <TabsContent value="assets">
-              <AssetsPanel holdings={activeHoldings} />
+              <AssetsPanel accountsById={accountsById} holdings={activeHoldings} />
             </TabsContent>
             <TabsContent value="transactions">
               <TransactionsTable />
@@ -178,7 +189,13 @@ function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
   )
 }
 
-function AssetsPanel({ holdings }: { holdings: ReadonlyArray<AggregatedHolding> }) {
+function AssetsPanel({
+  accountsById,
+  holdings,
+}: {
+  accountsById: ReadonlyMap<AccountId, Account>
+  holdings: ReadonlyArray<AggregatedHolding>
+}) {
   return (
     <Card
       className="rounded-lg border-marketing-border-muted bg-marketing-surface text-marketing-foreground shadow-none ring-1 ring-marketing-border-muted supports-[backdrop-filter]:backdrop-blur-md"
@@ -199,7 +216,7 @@ function AssetsPanel({ holdings }: { holdings: ReadonlyArray<AggregatedHolding> 
             </thead>
             <tbody>
               {holdings.map((holding) => (
-                <AssetRow holding={holding} key={holding.asset} />
+                <AssetRow accountsById={accountsById} holding={holding} key={holding.asset} />
               ))}
             </tbody>
           </table>
@@ -209,7 +226,13 @@ function AssetsPanel({ holdings }: { holdings: ReadonlyArray<AggregatedHolding> 
   )
 }
 
-function AssetRow({ holding }: { holding: AggregatedHolding }) {
+function AssetRow({
+  accountsById,
+  holding,
+}: {
+  accountsById: ReadonlyMap<AccountId, Account>
+  holding: AggregatedHolding
+}) {
   const unrealizedProfitLoss = holding.value - holding.costBasis
 
   return (
@@ -232,7 +255,7 @@ function AssetRow({ holding }: { holding: AggregatedHolding }) {
         </ValueTone>
       </TableCell>
       <TableCell>
-        <AccountList accountIds={holding.accountIds} />
+        <AccountList accountsById={accountsById} accountIds={holding.accountIds} />
       </TableCell>
     </tr>
   )
@@ -277,7 +300,13 @@ function TableCell({
   )
 }
 
-function AccountList({ accountIds }: { accountIds: ReadonlyArray<AccountId> }) {
+function AccountList({
+  accountsById,
+  accountIds,
+}: {
+  accountsById: ReadonlyMap<AccountId, Account>
+  accountIds: ReadonlyArray<AccountId>
+}) {
   return (
     <div className="flex flex-wrap gap-1">
       {accountIds.map((accountId) => {
@@ -316,5 +345,3 @@ function ValueTone({ children, tone }: { children: React.ReactNode; tone: ValueT
     </span>
   )
 }
-
-const accountsById = new Map(accounts.map((account) => [account.id, account]))
