@@ -7,6 +7,7 @@ export type Source = {
   name: string
   kind: SourceKind
   network?: string
+  providerKey?: string
   importedTransactions: number
   unresolvedItems: number
   lastSync: string
@@ -19,29 +20,83 @@ type SourceCardStyle = {
   pattern: "bars" | "grid" | "waves"
 }
 
-const SOURCE_CARD_STYLES: Partial<Record<string, SourceCardStyle>> = {
-  coinbase: {
-    background: "#1458f5",
-    foreground: "#f8fbff",
-    muted: "rgb(248 251 255 / 0.72)",
-    pattern: "waves",
-  },
-  kraken: {
-    background: "#171514",
-    foreground: "#f6efe2",
-    muted: "rgb(246 239 226 / 0.7)",
+const KNOWN_SOURCE_CARD_STYLES: Record<string, SourceCardStyle> = {
+  arbitrum: {
+    background: "#20314f",
+    foreground: "#f3f7ff",
+    muted: "rgb(243 247 255 / 0.68)",
     pattern: "grid",
   },
-  "solana-wallet": {
-    background: "#4ee987",
-    foreground: "#082715",
-    muted: "rgb(8 39 21 / 0.68)",
-    pattern: "bars",
+  "arbitrum-wallet": {
+    background: "#20314f",
+    foreground: "#f3f7ff",
+    muted: "rgb(243 247 255 / 0.68)",
+    pattern: "grid",
+  },
+  base: {
+    background: "#0052ff",
+    foreground: "#f7fbff",
+    muted: "rgb(247 251 255 / 0.72)",
+    pattern: "waves",
+  },
+  "base-wallet": {
+    background: "#0052ff",
+    foreground: "#f7fbff",
+    muted: "rgb(247 251 255 / 0.72)",
+    pattern: "waves",
   },
   binance: {
     background: "#f0b90b",
     foreground: "#2b2100",
     muted: "rgb(43 33 0 / 0.68)",
+    pattern: "grid",
+  },
+  bitcoin: {
+    background: "#f7931a",
+    foreground: "#2a1300",
+    muted: "rgb(42 19 0 / 0.68)",
+    pattern: "grid",
+  },
+  "bitcoin-rpc": {
+    background: "#f7931a",
+    foreground: "#2a1300",
+    muted: "rgb(42 19 0 / 0.68)",
+    pattern: "grid",
+  },
+  bitstamp: {
+    background: "#003c32",
+    foreground: "#eafff6",
+    muted: "rgb(234 255 246 / 0.7)",
+    pattern: "bars",
+  },
+  coinbase: {
+    background: "#2962ff",
+    foreground: "#f8fbff",
+    muted: "rgb(248 251 255 / 0.72)",
+    pattern: "waves",
+  },
+  ethereum: {
+    background: "#627eea",
+    foreground: "#f8fbff",
+    muted: "rgb(248 251 255 / 0.72)",
+    pattern: "grid",
+  },
+  etherscan: {
+    background: "#627eea",
+    foreground: "#f8fbff",
+    muted: "rgb(248 251 255 / 0.72)",
+    pattern: "grid",
+  },
+  evm: {
+    background: "#627eea",
+    foreground: "#f8fbff",
+    muted: "rgb(248 251 255 / 0.72)",
+    pattern: "grid",
+  },
+  kraken: {
+    background: "#5841d8",
+    foreground: "#f8f6ff",
+    muted: "rgb(248 246 255 / 0.7)",
     pattern: "grid",
   },
   ledger: {
@@ -56,17 +111,35 @@ const SOURCE_CARD_STYLES: Partial<Record<string, SourceCardStyle>> = {
     muted: "rgb(42 18 4 / 0.66)",
     pattern: "waves",
   },
-  "base-wallet": {
-    background: "#0052ff",
-    foreground: "#f7fbff",
-    muted: "rgb(247 251 255 / 0.72)",
+  phantom: {
+    background: "#ab9ff2",
+    foreground: "#17112c",
+    muted: "rgb(23 17 44 / 0.66)",
     pattern: "waves",
   },
-  "arbitrum-wallet": {
-    background: "#20314f",
-    foreground: "#f3f7ff",
-    muted: "rgb(243 247 255 / 0.68)",
-    pattern: "grid",
+  rainbow: {
+    background: "#ff4000",
+    foreground: "#fff7f2",
+    muted: "rgb(255 247 242 / 0.72)",
+    pattern: "waves",
+  },
+  solana: {
+    background: "#9945ff",
+    foreground: "#f9f4ff",
+    muted: "rgb(249 244 255 / 0.72)",
+    pattern: "bars",
+  },
+  "helius-solana": {
+    background: "#9945ff",
+    foreground: "#f9f4ff",
+    muted: "rgb(249 244 255 / 0.72)",
+    pattern: "bars",
+  },
+  "solana-wallet": {
+    background: "#9945ff",
+    foreground: "#f9f4ff",
+    muted: "rgb(249 244 255 / 0.72)",
+    pattern: "bars",
   },
 }
 
@@ -202,22 +275,19 @@ export function SourceCard({
             />
           ))}
         </span>
-        <span className="font-mono text-xs tabular-nums opacity-75">
-          {source.kind === "exchange" ? "API" : "WALLET"}
-        </span>
       </span>
 
       <span className="relative z-10 flex items-end justify-between gap-3">
         <span className="min-w-0">
           <span className="block font-mono text-sm tabular-nums tracking-normal">
-            •••• {source.importedTransactions.toString().padStart(4, "0").slice(-4)}
+            •••• •••• {source.id.toString().padStart(4, "0").slice(-4)}
           </span>
           <span className="mt-1 block truncate text-xs" style={{ color: style.muted }}>
             {source.lastSync}
           </span>
         </span>
         <span className="shrink-0 text-right text-xs font-medium">
-          {source.unresolvedItems > 0 ? `${source.unresolvedItems} open` : "Clean"}
+          {source.unresolvedItems > 0 ? `${source.unresolvedItems} open` : ""}
         </span>
       </span>
     </span>
@@ -225,14 +295,42 @@ export function SourceCard({
 }
 
 function getSourceCardStyle(source: Source) {
-  const bespokeStyle = SOURCE_CARD_STYLES[source.id]
+  const knownStyle = getKnownSourceCardStyle(source)
 
-  if (bespokeStyle) {
-    return bespokeStyle
+  if (knownStyle) {
+    return knownStyle
   }
 
   const styleIndex = hashString(source.id) % GENERATED_SOURCE_CARD_STYLES.length
   return GENERATED_SOURCE_CARD_STYLES[styleIndex] ?? GENERATED_SOURCE_CARD_STYLES[0]
+}
+
+function getKnownSourceCardStyle(source: Source): SourceCardStyle | undefined {
+  for (const value of [source.providerKey, source.network, source.name, source.id]) {
+    const key = normalizeSourceStyleKey(value)
+
+    if (key === undefined) {
+      continue
+    }
+
+    const style = KNOWN_SOURCE_CARD_STYLES[key]
+
+    if (style) {
+      return style
+    }
+  }
+
+  return undefined
+}
+
+function normalizeSourceStyleKey(value: string | undefined): string | undefined {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, "-")
+    .replaceAll(/(^-|-$)/g, "")
+
+  return normalized === "" ? undefined : normalized
 }
 
 function hashString(value: string) {

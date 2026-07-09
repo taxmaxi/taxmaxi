@@ -11,6 +11,7 @@ export type Account = {
   name: string
   kind: AccountKind
   network?: string
+  providerKey?: string
   importedTransactions: number
   unresolvedItems: number
   lastSync: string

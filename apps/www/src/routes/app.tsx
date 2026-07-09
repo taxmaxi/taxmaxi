@@ -80,6 +80,7 @@ function toDashboardAccount(source: TaxMaxiSource): Account {
     name: source.name,
     kind: source.sourceRef._tag === "cex" ? "exchange" : "wallet",
     ...(network === undefined ? {} : { network }),
+    ...(source.providerKey === null ? {} : { providerKey: source.providerKey }),
     importedTransactions: 0,
     unresolvedItems: 0,
     lastSync: formatSourceCreatedAt(source.createdAt.epochMillis),

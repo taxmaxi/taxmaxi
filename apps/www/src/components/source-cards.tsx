@@ -1,6 +1,6 @@
 import type * as React from "react"
 import { motion, useReducedMotion } from "motion/react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 
 import { cn } from "#/lib/utils"
 
@@ -198,7 +198,7 @@ function SourceCardRail({
     }
   }, [])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const scroller = scrollerRef.current
 
     if (!scroller) {
@@ -257,7 +257,18 @@ function SourceCardStack({
       : sources.findIndex((source) => source.id === selectedSourceId)
 
   return (
-    <div className="absolute top-0 left-0" style={{ left: layout.left, width: layout.stackWidth }}>
+    <div
+      className={cn(
+        "absolute top-0 transition-opacity duration-150",
+        layout.align === "center" ? "left-1/2 -translate-x-1/2" : "left-0"
+      )}
+      style={{
+        left: layout.align === "center" ? undefined : layout.left,
+        opacity: layout.ready ? 1 : 0,
+        pointerEvents: layout.ready ? undefined : "none",
+        width: layout.stackWidth,
+      }}
+    >
       <div className="relative isolate overflow-visible" style={{ height: SOURCE_STACK.height }}>
         {sources.map((source, index) => {
           const active = selectedSourceId === source.id
@@ -310,7 +321,9 @@ function SourceCardStack({
 }
 
 type SourceStackLayout = {
+  align: "center" | "measured"
   left: number
+  ready: boolean
   stackWidth: number
   startX: number
   stepX: number
@@ -397,18 +410,30 @@ function getStackLayout({
   const cardWidth = SOURCE_STACK.cardWidthPx
   const sidePadding = SOURCE_STACK.fan.sidePadding
   const startX = SOURCE_STACK.fan.startX
+
+  if (total <= 1) {
+    return {
+      align: "center",
+      left: 0,
+      ready: true,
+      stackWidth: cardWidth,
+      startX: 0,
+      stepX: 0,
+    }
+  }
+
   const maxStackWidth = Math.max(0, containerWidth)
+  const ready = maxStackWidth > 0
   const availableStepWidth = maxStackWidth - startX - sidePadding - cardWidth
   const maxStep = SOURCE_STACK.fan.maxStepX
   const minStep = SOURCE_STACK.fan.minStepX
-  const stepX =
-    total <= 1
-      ? maxStep
-      : Math.min(maxStep, Math.max(minStep, availableStepWidth / Math.max(1, total - 1)))
+  const stepX = Math.min(maxStep, Math.max(minStep, availableStepWidth / Math.max(1, total - 1)))
   const stackWidth = startX + Math.max(0, total - 1) * stepX + cardWidth + sidePadding
 
   return {
+    align: "measured",
     left: Math.max(0, (maxStackWidth - stackWidth) / 2),
+    ready,
     stackWidth,
     startX,
     stepX,
