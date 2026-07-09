@@ -27,7 +27,7 @@ import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueL
 import { TracingLive } from "./layers/TracingLive.ts"
 
 const port = 4000
-const DEFAULT_FRONTEND_URL = "http://localhost:5173"
+const DEFAULT_FRONTEND_URL = "http://localhost:3000"
 
 const SyncRuntimeLive = SourceSyncServiceLive.pipe(
   Layer.provide(ApiBullMqSourceSyncQueueLive),

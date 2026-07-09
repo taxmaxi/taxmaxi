@@ -6,7 +6,7 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "vite dev",
+    "dev": "vite dev --port 3000",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run",
