@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "#/lib/utils"
 
 import { SourceCard, type Source } from "./source-card"
+import { ContentContainer } from "./content-container"
 
 /* ---------------------------------------------------------
  * SOURCE STACK STORYBOARD
@@ -157,13 +158,16 @@ export function SourceCards({
       />
 
       {children ? (
-        <div
-          className={cn(
-            "relative z-20 grid gap-2 rounded-lg bg-card shadow-sm ring-1 ring-border/80",
-            contentClassName
-          )}
-        >
-          {children}
+        <div className="relative z-20">
+          <ContentContainer
+            width="2xl"
+            className={cn(
+              "relative z-20 grid gap-2 rounded-3xl bg-card shadow-sm ring-1 ring-border/80",
+              contentClassName
+            )}
+          >
+            {children}
+          </ContentContainer>
         </div>
       ) : null}
     </section>
@@ -218,17 +222,19 @@ function SourceCardRail({
       className="absolute inset-x-0 top-0 z-0 overflow-clip"
       style={{ height: SOURCE_STACK.height }}
     >
-      <div
-        className="relative h-[21.5rem] overflow-x-auto overflow-y-clip overscroll-x-contain"
-        ref={scrollerRef}
-      >
-        <SourceCardStack
-          layout={stackLayout}
-          onSelectedSourceIdChange={onSelectedSourceIdChange}
-          selectedSourceId={selectedSourceId}
-          sources={sources}
-        />
-      </div>
+      <ContentContainer className="h-full overflow-visible" width="2xl">
+        <div
+          className="relative -mx-10 h-[21.5rem] overflow-x-auto overflow-y-clip overscroll-x-contain sm:-mx-12"
+          ref={scrollerRef}
+        >
+          <SourceCardStack
+            layout={stackLayout}
+            onSelectedSourceIdChange={onSelectedSourceIdChange}
+            selectedSourceId={selectedSourceId}
+            sources={sources}
+          />
+        </div>
+      </ContentContainer>
     </div>
   )
 }

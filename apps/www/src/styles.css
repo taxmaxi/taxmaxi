@@ -245,7 +245,13 @@ html:has([data-page="landing"]) > body {
   background-color: #1a1f1d;
 }
 
-html:has([data-page="landing"]) {
+html:has([data-page="app"]),
+html:has([data-page="app"]) > body {
+  background-color: #22312b;
+}
+
+html:has([data-page="landing"]),
+html:has([data-page="app"]) {
   scroll-behavior: smooth;
 }
 
@@ -265,7 +271,8 @@ html:has([data-page="landing"]) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html:has([data-page="landing"]) {
+  html:has([data-page="landing"]),
+  html:has([data-page="app"]) {
     scroll-behavior: auto;
   }
 

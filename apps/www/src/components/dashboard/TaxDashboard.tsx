@@ -1,24 +1,14 @@
 import type * as React from "react"
-import { Download, RefreshCw } from "lucide-react"
 import { useMemo, useState } from "react"
 
-import { ContentContainer } from "#/components/content-container"
-import { Logo } from "#/components/logo"
 import { SourceCards } from "#/components/source-cards"
 import { Badge } from "#/components/ui/badge"
-import { Button } from "#/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import { Card, CardContent } from "#/components/ui/card"
 import { cn } from "#/lib/utils"
 
 import { accounts, assetHoldings, taxYearAccountSummaries } from "./data"
-import {
-  formatCurrency,
-  formatInteger,
-  formatPercent,
-  formatSignedCurrency,
-  formatTokenAmount,
-} from "./format"
+import { formatCurrency, formatPercent, formatSignedCurrency, formatTokenAmount } from "./format"
 import { ALL_ACCOUNTS, type AccountId, type AccountScope, type TaxYear } from "./types"
 import { TransactionsTable } from "../transactions-table"
 
@@ -126,88 +116,38 @@ export function TaxDashboard() {
     }
   }, [activeAccountIds, activeAccounts, activeHoldings, taxYear])
 
-  const selectedAccount =
-    accountScope === ALL_ACCOUNTS
-      ? undefined
-      : accounts.find((account) => account.id === accountScope)
-
-  const accountLabel = selectedAccount ? selectedAccount.name : "All accounts"
-
   const onAccountScopeChange = (scope: AccountScope) => {
     setAccountScope(scope)
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <ContentContainer width="2xl" className="flex min-h-screen flex-col gap-5 py-4 sm:py-5">
-        <DashboardHeader
-          accountLabel={accountLabel}
-          importedTransactions={summary.importedTransactions}
-          taxYear={taxYear}
-        />
+    <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">
+      <SourceCards
+        contentClassName="border border-marketing-border bg-[linear-gradient(180deg,rgba(17,28,23,0.78),rgba(9,15,12,0.62))] text-marketing-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_24px_70px_rgba(0,0,0,0.26)] ring-0 supports-[backdrop-filter]:backdrop-blur-[48px] [--accent:rgb(255_255_255_/_0.1)] [--accent-foreground:var(--marketing-foreground)] [--border:var(--marketing-border-muted)] [--card:rgb(255_255_255_/_0.06)] [--card-foreground:var(--marketing-foreground)] [--foreground:var(--marketing-foreground)] [--input:rgb(255_255_255_/_0.12)] [--muted:rgb(255_255_255_/_0.08)] [--muted-foreground:var(--marketing-muted)] [--popover:rgb(17_28_23_/_0.95)] [--popover-foreground:var(--marketing-foreground)]"
+        onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
+        selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}
+        sources={accounts}
+      >
+        <div className="flex min-w-0 flex-col gap-8 py-6 sm:py-8">
+          <PortfolioOverview summary={summary} />
 
-        <SourceCards
-          onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
-          selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}
-          sources={accounts}
-        >
-          <div className="flex min-w-0 flex-col gap-8 p-8">
-            <PortfolioOverview summary={summary} />
-
-            <Tabs defaultValue="assets" className="gap-y-8">
-              <TabsList>
-                <TabsTrigger value="assets">Assets</TabsTrigger>
-                <TabsTrigger value="transactions">Transactions</TabsTrigger>
-                <TabsTrigger value="taxes">Taxes</TabsTrigger>
-              </TabsList>
-              <TabsContent value="assets">
-                <AssetsPanel holdings={activeHoldings} />
-              </TabsContent>
-              <TabsContent value="transactions">
-                <TransactionsTable />
-              </TabsContent>
-              <TabsContent value="taxes"></TabsContent>
-            </Tabs>
-          </div>
-        </SourceCards>
-      </ContentContainer>
-    </div>
-  )
-}
-
-function DashboardHeader({
-  accountLabel,
-  importedTransactions,
-  taxYear,
-}: {
-  accountLabel: string
-  importedTransactions: number
-  taxYear: TaxYear
-}) {
-  return (
-    <header className="flex flex-col gap-3 border-b border-border pb-4 sm:flex-row sm:items-center sm:justify-between">
-      <div className="flex min-w-0 items-center gap-3">
-        <Logo size="small" />
-        <div className="hidden h-8 w-px bg-border sm:block" />
-        <div className="min-w-0">
-          <p className="m-0 truncate text-sm font-medium">Tax dashboard</p>
-          <p className="m-0 truncate text-xs text-muted-foreground">
-            {accountLabel} · {formatInteger(importedTransactions)} imported transactions · {taxYear}
-          </p>
+          <Tabs defaultValue="assets" className="gap-y-8">
+            <TabsList>
+              <TabsTrigger value="assets">Assets</TabsTrigger>
+              <TabsTrigger value="transactions">Transactions</TabsTrigger>
+              <TabsTrigger value="taxes">Taxes</TabsTrigger>
+            </TabsList>
+            <TabsContent value="assets">
+              <AssetsPanel holdings={activeHoldings} />
+            </TabsContent>
+            <TabsContent value="transactions">
+              <TransactionsTable />
+            </TabsContent>
+            <TabsContent value="taxes"></TabsContent>
+          </Tabs>
         </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <Button className="min-h-11 sm:min-h-9" variant="outline">
-          <RefreshCw data-icon="inline-start" />
-          Sync now
-        </Button>
-        <Button className="min-h-11 sm:min-h-9">
-          <Download data-icon="inline-start" />
-          Export report
-        </Button>
-      </div>
-    </header>
+      </SourceCards>
+    </div>
   )
 }
 
@@ -219,8 +159,8 @@ function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-6">
-        <p className="text-5xl font-semibold tabular-nums tracking-normal">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
+        <p className="text-3xl sm:text-5xl font-semibold tabular-nums tracking-normal">
           {formatCurrency(summary.currentBalance)}
         </p>
 
@@ -240,7 +180,10 @@ function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
 
 function AssetsPanel({ holdings }: { holdings: ReadonlyArray<AggregatedHolding> }) {
   return (
-    <Card className="rounded-lg shadow-none ring-1 ring-border/80" size="sm">
+    <Card
+      className="rounded-lg border-marketing-border-muted bg-marketing-surface text-marketing-foreground shadow-none ring-1 ring-marketing-border-muted supports-[backdrop-filter]:backdrop-blur-md"
+      size="sm"
+    >
       <CardContent className="pt-4">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[44rem] border-separate border-spacing-0 text-sm">
