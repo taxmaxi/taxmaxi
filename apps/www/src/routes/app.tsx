@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { startTransition, useEffect, useRef, useState } from "react"
+import { startTransition, useCallback, useEffect, useRef, useState } from "react"
 import type { Source as TaxMaxiSource } from "taxmaxi"
 
 import { TaxDashboard } from "#/components/dashboard/TaxDashboard"
@@ -41,6 +41,15 @@ function RouteComponent() {
     data: { sources },
   } = useSuspenseQuery(queries.sourceList(taxmaxi()))
   const sourceAccounts = sources.map(toDashboardAccount)
+  const startSourceSync = useCallback(
+    async (sourceId: string) => taxmaxi().sources.startSync({ sourceId }),
+    [taxmaxi]
+  )
+  const getSourceSyncJob = useCallback(
+    async ({ jobId, sourceId }: { sourceId: string; jobId: string }) =>
+      taxmaxi().sources.getSyncJob({ jobId, sourceId }),
+    [taxmaxi]
+  )
 
   return (
     <PageShell
@@ -66,7 +75,11 @@ function RouteComponent() {
 
       <div className="relative z-10">
         <AppHeader />
-        <TaxDashboard accounts={sourceAccounts} />
+        <TaxDashboard
+          accounts={sourceAccounts}
+          getSourceSyncJob={getSourceSyncJob}
+          startSourceSync={startSourceSync}
+        />
       </div>
     </PageShell>
   )

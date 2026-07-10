@@ -1,3 +1,5 @@
+import type * as React from "react"
+
 import { cn } from "#/lib/utils"
 
 export type SourceKind = "exchange" | "wallet"
@@ -224,13 +226,17 @@ const SOURCE_GRID_PATTERN = [
 const SOURCE_CHIP_PATTERN = [true, false, true, false, true, false, true, false, true] as const
 
 export function SourceCard({
+  action,
   className,
   height = "10.75rem",
+  isSyncing = false,
   source,
   width = "17rem",
 }: {
+  action?: React.ReactNode
   className?: string
   height?: number | string
+  isSyncing?: boolean
   source: Source
   width?: number | string
 }) {
@@ -251,6 +257,12 @@ export function SourceCard({
     >
       <SourceCardPattern source={source} />
       <span className="pointer-events-none absolute inset-0 bg-linear-to-br from-white/18 via-transparent to-black/18" />
+      {isSyncing ? (
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 z-0 bg-[radial-gradient(circle_at_78%_18%,rgba(255,255,255,0.34),transparent_26%),linear-gradient(90deg,transparent,rgba(255,255,255,0.16),transparent)]"
+        />
+      ) : null}
       <span className="relative z-10 flex items-start justify-between gap-3">
         <span className="min-w-0">
           <span className="block truncate text-lg font-semibold tracking-normal">
@@ -286,9 +298,10 @@ export function SourceCard({
             {source.lastSync}
           </span>
         </span>
-        <span className="shrink-0 text-right text-xs font-medium">
+        {action ? <span className="shrink-0 z-20 flex justify-end">{action}</span> : null}
+        {/* <span className="shrink-0 text-right text-xs font-medium">
           {source.unresolvedItems > 0 ? `${source.unresolvedItems} open` : ""}
-        </span>
+        </span> */}
       </span>
     </span>
   )

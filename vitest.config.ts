@@ -14,6 +14,7 @@ export default defineConfig({
             "packages/**/tests/**/*.test.ts",
             "apps/crawler/tests/**/*.test.ts",
             "apps/server/tests/**/*.test.ts",
+            "apps/www/tests/**/*.test.tsx",
             "apps/worker/tests/**/*.test.ts",
           ],
           exclude: [

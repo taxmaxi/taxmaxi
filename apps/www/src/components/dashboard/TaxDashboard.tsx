@@ -1,5 +1,6 @@
 import type * as React from "react"
-import { useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import type { SourceSyncJob, SourceSyncStart } from "taxmaxi"
 
 import { SourceCards } from "#/components/source-cards"
 import { Badge } from "#/components/ui/badge"
@@ -17,6 +18,11 @@ import {
   type TaxYear,
 } from "./types"
 import { TransactionsTable } from "../transactions-table"
+import {
+  SourceSyncIsland,
+  type SourceSyncIslandItem,
+  type SourceSyncStatus,
+} from "./source-sync-island"
 
 type AggregatedHolding = {
   asset: string
@@ -40,8 +46,27 @@ type DashboardSummary = {
   unresolvedItems: number
 }
 
-export function TaxDashboard({ accounts = mockAccounts }: { accounts?: ReadonlyArray<Account> }) {
+type SourceSyncJobInput = {
+  sourceId: string
+  jobId: string
+}
+
+type ActiveSourceSync = SourceSyncIslandItem & {
+  sourceId: AccountId
+  jobId?: string
+}
+
+export function TaxDashboard({
+  accounts = mockAccounts,
+  getSourceSyncJob,
+  startSourceSync,
+}: {
+  accounts?: ReadonlyArray<Account>
+  getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
+  startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
+}) {
   const [accountScope, setAccountScope] = useState<AccountScope>(ALL_ACCOUNTS)
+  const [activeSyncs, setActiveSyncs] = useState<ReadonlyArray<ActiveSourceSync>>([])
   const [taxYear] = useState<TaxYear>(2025)
 
   const accountsById = useMemo(
@@ -131,12 +156,132 @@ export function TaxDashboard({ accounts = mockAccounts }: { accounts?: ReadonlyA
     setAccountScope(scope)
   }
 
+  const syncingSourceIds = useMemo(
+    () =>
+      new Set(
+        activeSyncs
+          .filter((sync) => sync.status === "queued" || sync.status === "running")
+          .map((sync) => sync.sourceId)
+      ),
+    [activeSyncs]
+  )
+
+  const onSourceSync = useCallback(
+    (source: Account) => {
+      if (!startSourceSync || syncingSourceIds.has(source.id)) {
+        return
+      }
+
+      setActiveSyncs((syncs) => upsertSourceSync(syncs, makePendingSourceSync(source)))
+
+      startSourceSync(source.id).then(
+        (started) => {
+          setActiveSyncs((syncs) =>
+            upsertSourceSync(syncs, {
+              id: source.id,
+              jobId: started.jobId,
+              progress: getProgressForStatus(started.status),
+              sourceId: source.id,
+              sourceName: source.name,
+              status: started.status,
+              ...(started.message === null ? {} : { message: started.message }),
+            })
+          )
+        },
+        (error: unknown) => {
+          setActiveSyncs((syncs) =>
+            upsertSourceSync(syncs, {
+              id: source.id,
+              progress: 100,
+              sourceId: source.id,
+              sourceName: source.name,
+              status: "failed",
+              message: getErrorMessage(error),
+            })
+          )
+        }
+      )
+    },
+    [startSourceSync, syncingSourceIds]
+  )
+
+  useEffect(() => {
+    if (!getSourceSyncJob) {
+      return
+    }
+
+    const pollableSyncs = activeSyncs.filter(
+      (sync) => sync.jobId !== undefined && (sync.status === "queued" || sync.status === "running")
+    )
+
+    if (pollableSyncs.length === 0) {
+      return
+    }
+
+    const intervalId = window.setInterval(() => {
+      for (const sync of pollableSyncs) {
+        if (sync.jobId === undefined) {
+          continue
+        }
+
+        void getSourceSyncJob({ sourceId: sync.sourceId, jobId: sync.jobId }).then(
+          (job) =>
+            setActiveSyncs((syncs) => upsertSourceSync(syncs, toActiveSourceSync(job, sync))),
+          () => undefined
+        )
+      }
+    }, 1600)
+
+    return () => window.clearInterval(intervalId)
+  }, [activeSyncs, getSourceSyncJob])
+
+  useEffect(() => {
+    const terminalSyncs = activeSyncs.filter((sync) => sync.status === "completed")
+
+    if (terminalSyncs.length === 0) {
+      return
+    }
+
+    const timeoutIds = terminalSyncs.map((sync) =>
+      window.setTimeout(() => {
+        setActiveSyncs((syncs) => syncs.filter((candidate) => candidate.id !== sync.id))
+      }, 2800)
+    )
+
+    return () => {
+      for (const timeoutId of timeoutIds) {
+        window.clearTimeout(timeoutId)
+      }
+    }
+  }, [activeSyncs])
+
+  const onDismissSync = useCallback((item: SourceSyncIslandItem) => {
+    setActiveSyncs((syncs) => syncs.filter((sync) => sync.id !== item.id))
+  }, [])
+
+  const onRetrySync = useCallback(
+    (item: SourceSyncIslandItem) => {
+      const source = accountsById.get(item.id)
+
+      if (!source) {
+        return
+      }
+
+      setActiveSyncs((syncs) => syncs.filter((sync) => sync.id !== item.id))
+      onSourceSync(source)
+    },
+    [accountsById, onSourceSync]
+  )
+
   return (
     <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">
+      <SourceSyncIsland items={activeSyncs} onDismiss={onDismissSync} onRetry={onRetrySync} />
       <SourceCards
         contentClassName="border border-marketing-border bg-[linear-gradient(180deg,rgba(17,28,23,0.78),rgba(9,15,12,0.62))] text-marketing-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_24px_70px_rgba(0,0,0,0.26)] ring-0 supports-[backdrop-filter]:backdrop-blur-[48px] [--accent:rgb(255_255_255_/_0.1)] [--accent-foreground:var(--marketing-foreground)] [--border:var(--marketing-border-muted)] [--card:rgb(255_255_255_/_0.06)] [--card-foreground:var(--marketing-foreground)] [--foreground:var(--marketing-foreground)] [--input:rgb(255_255_255_/_0.12)] [--muted:rgb(255_255_255_/_0.08)] [--muted-foreground:var(--marketing-muted)] [--popover:rgb(17_28_23_/_0.95)] [--popover-foreground:var(--marketing-foreground)]"
         onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
+        onSourceSync={onSourceSync}
         selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}
+        syncingSourceIds={syncingSourceIds}
         sources={accounts}
       >
         <div className="flex min-w-0 flex-col gap-8 py-6 sm:py-8">
@@ -160,6 +305,61 @@ export function TaxDashboard({ accounts = mockAccounts }: { accounts?: ReadonlyA
       </SourceCards>
     </div>
   )
+}
+
+function makePendingSourceSync(source: Account): ActiveSourceSync {
+  return {
+    id: source.id,
+    progress: 0,
+    sourceId: source.id,
+    sourceName: source.name,
+    status: "queued",
+  }
+}
+
+function toActiveSourceSync(job: SourceSyncJob, current: ActiveSourceSync): ActiveSourceSync {
+  return {
+    ...current,
+    id: job.sourceId,
+    jobId: job.jobId,
+    progress: Math.max(current.progress, getProgressForStatus(job.status)),
+    sourceId: job.sourceId,
+    status: job.status,
+    ...(job.importedRecords === null ? {} : { importedRecords: job.importedRecords }),
+    ...(job.normalizedRecords === null ? {} : { normalizedRecords: job.normalizedRecords }),
+    ...(job.failedRecords === null ? {} : { failedRecords: job.failedRecords }),
+    ...(job.message === null ? {} : { message: job.message }),
+  }
+}
+
+function upsertSourceSync(
+  syncs: ReadonlyArray<ActiveSourceSync>,
+  nextSync: ActiveSourceSync
+): ReadonlyArray<ActiveSourceSync> {
+  const found = syncs.some((sync) => sync.id === nextSync.id)
+
+  if (!found) {
+    return [nextSync, ...syncs]
+  }
+
+  return syncs.map((sync) => (sync.id === nextSync.id ? nextSync : sync))
+}
+
+function getProgressForStatus(status: SourceSyncStatus): number {
+  switch (status) {
+    case "queued":
+      return 0
+    case "running":
+      return 0
+    case "completed":
+      return 100
+    case "failed":
+      return 100
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Failed to start sync."
 }
 
 function PortfolioOverview({ summary }: { summary: DashboardSummary }) {

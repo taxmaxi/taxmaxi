@@ -1,6 +1,7 @@
 import type * as React from "react"
 import { motion, useReducedMotion } from "motion/react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { Loader2, RefreshCw } from "lucide-react"
 
 import { cn } from "#/lib/utils"
 
@@ -136,14 +137,18 @@ export function SourceCards({
   className,
   contentClassName,
   onSelectedSourceIdChange,
+  onSourceSync,
   selectedSourceId,
+  syncingSourceIds,
   sources = mockSources,
 }: {
   children?: React.ReactNode
   className?: string
   contentClassName?: string
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
+  onSourceSync?: (source: Source) => void
   selectedSourceId?: Source["id"]
+  syncingSourceIds?: ReadonlySet<Source["id"]>
   sources?: ReadonlyArray<Source>
 }) {
   return (
@@ -153,7 +158,9 @@ export function SourceCards({
     >
       <SourceCardRail
         onSelectedSourceIdChange={onSelectedSourceIdChange}
+        onSourceSync={onSourceSync}
         selectedSourceId={selectedSourceId}
+        syncingSourceIds={syncingSourceIds}
         sources={sources}
       />
 
@@ -176,11 +183,15 @@ export function SourceCards({
 
 function SourceCardRail({
   onSelectedSourceIdChange,
+  onSourceSync,
   selectedSourceId,
+  syncingSourceIds,
   sources,
 }: {
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
+  onSourceSync?: (source: Source) => void
   selectedSourceId?: Source["id"]
+  syncingSourceIds?: ReadonlySet<Source["id"]>
   sources: ReadonlyArray<Source>
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
@@ -230,7 +241,9 @@ function SourceCardRail({
           <SourceCardStack
             layout={stackLayout}
             onSelectedSourceIdChange={onSelectedSourceIdChange}
+            onSourceSync={onSourceSync}
             selectedSourceId={selectedSourceId}
+            syncingSourceIds={syncingSourceIds}
             sources={sources}
           />
         </div>
@@ -242,12 +255,16 @@ function SourceCardRail({
 function SourceCardStack({
   layout,
   onSelectedSourceIdChange,
+  onSourceSync,
   selectedSourceId,
+  syncingSourceIds,
   sources,
 }: {
   layout: SourceStackLayout
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
+  onSourceSync?: (source: Source) => void
   selectedSourceId?: Source["id"]
+  syncingSourceIds?: ReadonlySet<Source["id"]>
   sources: ReadonlyArray<Source>
 }) {
   const reduceMotion = useReducedMotion()
@@ -272,6 +289,7 @@ function SourceCardStack({
       <div className="relative isolate overflow-visible" style={{ height: SOURCE_STACK.height }}>
         {sources.map((source, index) => {
           const active = selectedSourceId === source.id
+          const isSyncing = syncingSourceIds?.has(source.id) ?? false
           const resting = getCardPlacement({
             index,
             layout,
@@ -280,9 +298,10 @@ function SourceCardStack({
           })
 
           return (
-            <motion.button
+            <motion.div
               aria-label={`${active ? "Show all sources" : `Show ${source.name}`}`}
               aria-pressed={active}
+              role="button"
               animate={{
                 opacity: 1,
                 rotate: resting.rotate,
@@ -290,13 +309,25 @@ function SourceCardStack({
                 x: resting.x,
                 y: resting.y,
               }}
-              className="absolute left-0 top-0 outline-none will-change-transform focus-visible:ring-3 focus-visible:ring-ring/40"
+              className="absolute left-0 top-0 cursor-pointer outline-none will-change-transform focus-visible:ring-3 focus-visible:ring-ring/40"
               initial={false}
               key={source.id}
               onClick={() => onSelectedSourceIdChange?.(active ? undefined : source.id)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget) {
+                  return
+                }
+
+                if (event.key !== "Enter" && event.key !== " ") {
+                  return
+                }
+
+                event.preventDefault()
+                onSelectedSourceIdChange?.(active ? undefined : source.id)
+              }}
               style={{ zIndex: resting.zIndex }}
+              tabIndex={0}
               transition={reduceMotion ? SOURCE_STACK.reducedTransition : SOURCE_STACK.spring}
-              type="button"
               whileHover={
                 reduceMotion
                   ? undefined
@@ -308,11 +339,33 @@ function SourceCardStack({
               whileTap={reduceMotion ? undefined : { scale: resting.scale * SOURCE_STACK.tapScale }}
             >
               <SourceCard
+                action={
+                  onSourceSync ? (
+                    <button
+                      aria-label={`Sync ${source.name}`}
+                      className="relative inline-flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/24 bg-white/16 px-2.5 text-xs font-medium text-current shadow-sm backdrop-blur-md transition-[background-color,border-color,transform] duration-150 before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-white/24 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-white/35 disabled:cursor-not-allowed disabled:opacity-70 [&_svg]:size-3"
+                      disabled={isSyncing}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onSourceSync(source)
+                      }}
+                      type="button"
+                    >
+                      {isSyncing ? (
+                        <Loader2 aria-hidden="true" className="animate-spin" />
+                      ) : (
+                        <RefreshCw aria-hidden="true" />
+                      )}
+                      <span>{isSyncing ? "Syncing" : "Sync"}</span>
+                    </button>
+                  ) : undefined
+                }
                 height={SOURCE_STACK.cardHeight}
+                isSyncing={isSyncing}
                 source={source}
                 width={SOURCE_STACK.cardWidth}
               />
-            </motion.button>
+            </motion.div>
           )
         })}
       </div>
