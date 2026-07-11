@@ -54,46 +54,57 @@ export function useSourceSyncs({
   )
 
   const onSourceSync = useCallback(
-    (source: Account) => {
+    async (source: Account) => {
       if (!startSourceSync || syncingSourceIds.has(source.id)) {
         return
       }
 
       setActiveSyncs((syncs) => upsertSourceSync(syncs, makePendingSourceSync(source)))
 
-      startSourceSync(source.id).then(
-        (started) => {
-          setActiveSyncs((syncs) =>
-            upsertSourceSync(syncs, {
-              id: source.id,
-              jobId: started.jobId,
-              progress: getProgressForStatus(started.status),
-              sourceId: source.id,
-              sourceName: source.name,
-              status: started.status,
-              ...(started.message === null ? {} : { message: started.message }),
-            })
-          )
-        },
-        (error: unknown) => {
-          if (isTaxMaxiUnauthorizedError(error)) {
-            setActiveSyncs((syncs) => syncs.filter((sync) => sync.sourceId !== source.id))
-            void Promise.resolve(onUnauthorized?.()).catch(() => undefined)
-            return
+      try {
+        const started = await startSourceSync(source.id)
+        setActiveSyncs((syncs) =>
+          upsertSourceSync(syncs, {
+            id: source.id,
+            jobId: started.jobId,
+            progress: getProgressForStatus(started.status),
+            sourceId: source.id,
+            sourceName: source.name,
+            status: started.status,
+            ...(started.message === null ? {} : { message: started.message }),
+          })
+        )
+      } catch (error: unknown) {
+        if (isTaxMaxiUnauthorizedError(error)) {
+          setActiveSyncs((syncs) => syncs.filter((sync) => sync.sourceId !== source.id))
+          try {
+            await onUnauthorized?.()
+          } catch {
+            setActiveSyncs((syncs) =>
+              upsertSourceSync(syncs, {
+                id: source.id,
+                progress: 100,
+                sourceId: source.id,
+                sourceName: source.name,
+                status: "failed",
+                message: "Your session expired. Reload the page to sign in again.",
+              })
+            )
           }
-
-          setActiveSyncs((syncs) =>
-            upsertSourceSync(syncs, {
-              id: source.id,
-              progress: 100,
-              sourceId: source.id,
-              sourceName: source.name,
-              status: "failed",
-              message: getErrorMessage(error),
-            })
-          )
+          return
         }
-      )
+
+        setActiveSyncs((syncs) =>
+          upsertSourceSync(syncs, {
+            id: source.id,
+            progress: 100,
+            sourceId: source.id,
+            sourceName: source.name,
+            status: "failed",
+            message: getErrorMessage(error),
+          })
+        )
+      }
     },
     [onUnauthorized, startSourceSync, syncingSourceIds]
   )
@@ -124,7 +135,12 @@ export function useSourceSyncs({
             pollFailureCountsRef.current.delete(syncKey)
             if (job.status === "completed" && !completedNotificationsRef.current.has(syncKey)) {
               completedNotificationsRef.current.add(syncKey)
-              void Promise.resolve(onCompleted?.(sync.sourceId)).catch(() => undefined)
+              void notifySourceSyncCompleted({
+                completedNotifications: completedNotificationsRef.current,
+                onCompleted,
+                sourceId: sync.sourceId,
+                syncKey,
+              })
             }
             setActiveSyncs((syncs) => {
               const currentSync = syncs.find((candidate) => candidate.id === sync.id)
@@ -147,7 +163,7 @@ export function useSourceSyncs({
                 setActiveSyncs,
                 sourceId: sync.sourceId,
               })
-              void Promise.resolve(onUnauthorized?.()).catch(() => undefined)
+              void handlePollingUnauthorized({ onUnauthorized })
               return
             }
 
@@ -244,7 +260,7 @@ export function useSourceSyncs({
       }
 
       setActiveSyncs((syncs) => syncs.filter((sync) => sync.id !== item.id))
-      onSourceSync(source)
+      void onSourceSync(source)
     },
     [accountsById, onSourceSync]
   )
@@ -332,6 +348,36 @@ function failPolledSourceSync({
         : sync
     )
   )
+}
+
+async function notifySourceSyncCompleted({
+  completedNotifications,
+  onCompleted,
+  sourceId,
+  syncKey,
+}: {
+  completedNotifications: Set<string>
+  onCompleted: ((sourceId: AccountId) => void | Promise<void>) | undefined
+  sourceId: AccountId
+  syncKey: string
+}) {
+  try {
+    await onCompleted?.(sourceId)
+  } catch {
+    completedNotifications.delete(syncKey)
+  }
+}
+
+async function handlePollingUnauthorized({
+  onUnauthorized,
+}: {
+  onUnauthorized: (() => void | Promise<void>) | undefined
+}) {
+  try {
+    await onUnauthorized?.()
+  } catch {
+    // The sync is already failed and dismissible; a later protected request will retry auth cleanup.
+  }
 }
 
 function getProgressForStatus(status: SourceSyncStatus): number {

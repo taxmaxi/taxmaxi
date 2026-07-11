@@ -146,7 +146,7 @@ export function SourceCards({
   className?: string
   contentClassName?: string
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
-  onSourceSync?: (source: Source) => void
+  onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
   syncingSourceIds?: ReadonlySet<Source["id"]>
   sources?: ReadonlyArray<Source>
@@ -189,7 +189,7 @@ function SourceCardRail({
   sources,
 }: {
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
-  onSourceSync?: (source: Source) => void
+  onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
   syncingSourceIds?: ReadonlySet<Source["id"]>
   sources: ReadonlyArray<Source>
@@ -262,7 +262,7 @@ function SourceCardStack({
 }: {
   layout: SourceStackLayout
   onSelectedSourceIdChange?: (sourceId: Source["id"] | undefined) => void
-  onSourceSync?: (source: Source) => void
+  onSourceSync?: (source: Source) => void | Promise<void>
   selectedSourceId?: Source["id"]
   syncingSourceIds?: ReadonlySet<Source["id"]>
   sources: ReadonlyArray<Source>
@@ -346,7 +346,7 @@ function SourceCardStack({
                       className="relative inline-flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/24 bg-white/16 px-2.5 text-xs font-medium text-current shadow-sm backdrop-blur-md transition-[background-color,border-color,transform] duration-150 before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-white/24 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-white/35 [&_svg]:size-3"
                       onClick={(event) => {
                         event.stopPropagation()
-                        onSourceSync(source)
+                        void onSourceSync(source)
                       }}
                       type="button"
                     >
