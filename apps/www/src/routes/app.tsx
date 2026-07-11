@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { startTransition, useCallback, useEffect, useRef, useState } from "react"
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { isTaxMaxiUnauthorizedError, type Source as TaxMaxiSource } from "taxmaxi"
 
 import { Dashboard } from "#/components/dashboard"
@@ -51,7 +51,7 @@ function RouteComponent() {
   const {
     data: { sources },
   } = useSuspenseQuery(queries.sourceList(taxmaxi()))
-  const sourceAccounts = sources.map(toDashboardAccount)
+  const sourceAccounts = useMemo(() => sources.map(toDashboardAccount), [sources])
   const startSourceSync = useCallback(
     async (sourceId: string) => taxmaxi().sources.startSync({ sourceId }),
     [taxmaxi]
