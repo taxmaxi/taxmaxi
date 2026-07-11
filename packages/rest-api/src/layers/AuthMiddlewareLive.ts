@@ -16,7 +16,7 @@ import { Headers, HttpApp, HttpServerRequest, HttpServerResponse } from "@effect
 import { AuthUserId, SessionId, type UserRole } from "@my/core/authentication"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { SessionRepository, UserRepository } from "@my/persistence/services"
-import { ForbiddenError, UnauthorizedError } from "../definitions/ApiErrors.ts"
+import { ForbiddenError, UnauthorizedError, isUnauthorizedError } from "../definitions/ApiErrors.ts"
 import {
   AdminAuthMiddleware,
   AuthMiddleware,
@@ -44,6 +44,13 @@ const clearSessionCookie = (): Effect.Effect<void> =>
 const clearSessionCookieOnError = <A, E, R>(
   effect: Effect.Effect<A, E, R>
 ): Effect.Effect<A, E, R> => effect.pipe(Effect.tapError(() => clearSessionCookie()))
+
+const clearSessionCookieOnUnauthorized = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  effect.pipe(
+    Effect.tapError((error) => (isUnauthorizedError(error) ? clearSessionCookie() : Effect.void))
+  )
 
 const extractBearerToken = (authorization: string): Option.Option<string> => {
   const [scheme, token] = authorization.split(" ", 2)
@@ -174,7 +181,7 @@ export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, To
       return AdminAuthMiddleware.of({
         bearer: (token) => validateAdminTokenOrFallback(token, readCookieTokenFromRequest),
         cookie: (token) =>
-          clearSessionCookieOnError(
+          clearSessionCookieOnUnauthorized(
             validateAdminTokenOrFallback(token, readBearerTokenFromRequest)
           ),
       })
