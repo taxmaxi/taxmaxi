@@ -1,7 +1,7 @@
 import type * as React from "react"
 import { motion, useReducedMotion } from "motion/react"
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { Loader2, RefreshCw } from "lucide-react"
+import { RefreshCw } from "lucide-react"
 
 import { cn } from "#/lib/utils"
 
@@ -340,23 +340,18 @@ function SourceCardStack({
             >
               <SourceCard
                 action={
-                  onSourceSync ? (
+                  onSourceSync && !isSyncing ? (
                     <button
                       aria-label={`Sync ${source.name}`}
-                      className="relative inline-flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/24 bg-white/16 px-2.5 text-xs font-medium text-current shadow-sm backdrop-blur-md transition-[background-color,border-color,transform] duration-150 before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-white/24 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-white/35 disabled:cursor-not-allowed disabled:opacity-70 [&_svg]:size-3"
-                      disabled={isSyncing}
+                      className="relative inline-flex h-7 touch-manipulation items-center gap-1 rounded-full border border-white/24 bg-white/16 px-2.5 text-xs font-medium text-current shadow-sm backdrop-blur-md transition-[background-color,border-color,transform] duration-150 before:absolute before:-inset-y-2 before:inset-x-0 hover:bg-white/24 focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-white/35 [&_svg]:size-3"
                       onClick={(event) => {
                         event.stopPropagation()
                         onSourceSync(source)
                       }}
                       type="button"
                     >
-                      {isSyncing ? (
-                        <Loader2 aria-hidden="true" className="animate-spin" />
-                      ) : (
-                        <RefreshCw aria-hidden="true" />
-                      )}
-                      <span>{isSyncing ? "Syncing" : "Sync"}</span>
+                      <RefreshCw aria-hidden="true" />
+                      <span>Sync</span>
                     </button>
                   ) : undefined
                 }
