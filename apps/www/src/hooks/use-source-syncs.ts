@@ -73,6 +73,12 @@ export function useSourceSyncs({
           )
         },
         (error: unknown) => {
+          if (isTaxMaxiUnauthorizedError(error)) {
+            setActiveSyncs((syncs) => syncs.filter((sync) => sync.sourceId !== source.id))
+            void Promise.resolve(onUnauthorized?.()).catch(() => undefined)
+            return
+          }
+
           setActiveSyncs((syncs) =>
             upsertSourceSync(syncs, {
               id: source.id,
@@ -86,7 +92,7 @@ export function useSourceSyncs({
         }
       )
     },
-    [startSourceSync, syncingSourceIds]
+    [onUnauthorized, startSourceSync, syncingSourceIds]
   )
 
   useEffect(() => {
