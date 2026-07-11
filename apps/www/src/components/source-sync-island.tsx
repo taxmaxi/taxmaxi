@@ -1,12 +1,20 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect, useState } from "react"
-import { Check, CircleX, RotateCcw, X } from "lucide-react"
+import { RotateCcw, X } from "lucide-react"
+import type { SourceSyncJob } from "taxmaxi"
 
+import { SourceSyncStatusOrb } from "#/components/source-sync-status-orb"
+import {
+  SOURCE_SYNC_MOCK_SCENARIOS,
+  SOURCE_SYNC_MOCKS_ENABLED,
+  SourceSyncMockControls,
+  type SourceSyncMockScenario,
+} from "#/components/source-sync-island-mocks"
 import { Button } from "#/components/ui/button"
 import { cn } from "#/lib/utils"
 
-export type SourceSyncStatus = "queued" | "running" | "completed" | "failed"
-export type SourceSyncPhase = "discovering" | "classifying" | "reconciling" | "completed"
+export type SourceSyncStatus = SourceSyncJob["status"]
+export type SourceSyncPhase = NonNullable<SourceSyncJob["phase"]>
 
 export const SOURCE_SYNC_PROGRESS = {
   classificationStart: 50,
@@ -71,87 +79,6 @@ type SourceSyncIslandProps = {
   onRetry?: (item: SourceSyncIslandItem) => void
 }
 
-type MockScenario = "live" | SourceSyncStatus | "multiple"
-
-const DEV_MOCKS_ENABLED = import.meta.env.DEV && import.meta.env.MODE !== "test"
-
-const MOCK_SCENARIOS: Record<Exclude<MockScenario, "live">, ReadonlyArray<SourceSyncIslandItem>> = {
-  queued: [
-    {
-      id: "mock-coinbase",
-      progress: 0,
-      sourceName: "Coinbase",
-      status: "queued",
-    },
-  ],
-  running: [
-    {
-      id: "mock-coinbase",
-      importedRecords: 24,
-      normalizedRecords: 21,
-      progress: 18,
-      sourceName: "Coinbase",
-      status: "running",
-    },
-  ],
-  completed: [
-    {
-      failedRecords: 0,
-      id: "mock-coinbase",
-      importedRecords: 284,
-      normalizedRecords: 284,
-      progress: 100,
-      sourceName: "Coinbase",
-      status: "completed",
-    },
-  ],
-  failed: [
-    {
-      failedRecords: 5,
-      id: "mock-coinbase",
-      importedRecords: 104,
-      message: "Coinbase stopped responding. Your imported records are safe.",
-      normalizedRecords: 99,
-      progress: 100,
-      sourceName: "Coinbase",
-      status: "failed",
-    },
-  ],
-  multiple: [
-    {
-      id: "mock-coinbase",
-      importedRecords: 24,
-      normalizedRecords: 21,
-      progress: 18,
-      sourceName: "Coinbase",
-      status: "running",
-    },
-    {
-      id: "mock-kraken",
-      progress: 0,
-      sourceName: "Kraken",
-      status: "queued",
-    },
-    {
-      id: "mock-phantom",
-      importedRecords: 57,
-      normalizedRecords: 52,
-      progress: 0,
-      sourceName: "Phantom",
-      status: "running",
-    },
-  ],
-}
-
-const MOCK_SCENARIO_OPTIONS: ReadonlyArray<{ label: string; value: MockScenario }> = [
-  { label: "Live", value: "live" },
-  { label: "Queued", value: "queued" },
-  { label: "Syncing", value: "running" },
-  { label: "Synced", value: "completed" },
-  { label: "Failed", value: "failed" },
-  { label: "+2", value: "multiple" },
-]
-
 /* ─────────────────────────────────────────────────────────
  * ANIMATION STORYBOARD
  *
@@ -172,10 +99,7 @@ const TIMING = {
   activeReveal: 80, // shell unfolds after the compact orb lands
   failureReveal: 180, // failed sync reveals its recovery details
   detailReveal: 180, // detail content settles into the expanded shell
-  progressSettle: 450, // determinate progress catches up to the latest polled value
-  discoveryTimeline: 300_000, // discovery keeps visibly creeping toward the classification boundary
   progressCompletion: 600, // terminal data waits for the ring to visibly reach 100%
-  successMorph: 180, // completed ring gives way to the success check
 }
 
 const VIEW_STAGE = {
@@ -198,22 +122,6 @@ const ISLAND = {
 const CONTENT = {
   offsetY: -4,
   easeOut: [0.22, 1, 0.36, 1] as const,
-}
-
-const ORB = {
-  center: 16,
-  radius: 12.5,
-  strokeWidth: 4,
-  normalizedLength: 100,
-  queuedDash: "0.05 0.11",
-}
-
-const DISCOVERY_PROGRESS: {
-  strokeDashoffsets: Array<number>
-  times: Array<number>
-} = {
-  strokeDashoffsets: [100, 80, 65, 55, 50.5],
-  times: [0, 1 / 60, 1 / 12, 7 / 30, 1],
 }
 
 const PROGRESS = {
@@ -261,9 +169,9 @@ const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits:
 
 export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIslandProps) {
   const reduceMotion = useReducedMotion()
-  const [mockScenario, setMockScenario] = useState<MockScenario>("live")
-  const usingMockScenario = DEV_MOCKS_ENABLED && mockScenario !== "live"
-  const rawVisibleItems = usingMockScenario ? MOCK_SCENARIOS[mockScenario] : items
+  const [mockScenario, setMockScenario] = useState<SourceSyncMockScenario>("live")
+  const usingMockScenario = SOURCE_SYNC_MOCKS_ENABLED && mockScenario !== "live"
+  const rawVisibleItems = usingMockScenario ? SOURCE_SYNC_MOCK_SCENARIOS[mockScenario] : items
   const rawPrimaryItem = rawVisibleItems[0]
   const [orchestratedPrimaryItem, setOrchestratedPrimaryItem] = useState<
     SourceSyncIslandItem | undefined
@@ -423,48 +331,10 @@ export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIsland
         </AnimatePresence>
       </div>
 
-      {DEV_MOCKS_ENABLED ? (
-        <MockScenarioControls scenario={mockScenario} onScenarioChange={setMockScenario} />
+      {SOURCE_SYNC_MOCKS_ENABLED ? (
+        <SourceSyncMockControls scenario={mockScenario} onScenarioChange={setMockScenario} />
       ) : null}
     </>
-  )
-}
-
-function MockScenarioControls({
-  onScenarioChange,
-  scenario,
-}: {
-  onScenarioChange: (scenario: MockScenario) => void
-  scenario: MockScenario
-}) {
-  return (
-    <aside className="fixed left-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-50 rounded-2xl border border-white/10 bg-black/90 p-2 font-interface text-white shadow-2xl backdrop-blur-xl">
-      <p className="px-2 pt-1 pb-2 text-[0.625rem] font-medium uppercase tracking-[0.1em] text-white/45">
-        Sync island mock
-      </p>
-      <div aria-label="Sync island mock state" className="flex flex-wrap gap-1" role="group">
-        {MOCK_SCENARIO_OPTIONS.map((option) => {
-          const selected = option.value === scenario
-
-          return (
-            <button
-              aria-pressed={selected}
-              className={cn(
-                "min-h-11 rounded-full px-3 text-xs font-medium outline-none transition-[background-color,color] duration-150 focus-visible:ring-1 focus-visible:ring-white/70",
-                selected
-                  ? "bg-white text-black"
-                  : "text-white/60 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-white/10 [@media(hover:hover)_and_(pointer:fine)]:hover:text-white"
-              )}
-              key={option.value}
-              onClick={() => onScenarioChange(option.value)}
-              type="button"
-            >
-              {option.label}
-            </button>
-          )
-        })}
-      </div>
-    </aside>
   )
 }
 
@@ -485,7 +355,7 @@ function CompactIslandContent({
       type="button"
       whileTap={reduceMotion ? undefined : { scale: ISLAND.tapScale }}
     >
-      <StatusOrb
+      <SourceSyncStatusOrb
         phase={item.phase}
         progress={item.progress}
         reduceMotion={reduceMotion}
@@ -607,7 +477,7 @@ function SyncHeadline({
 }) {
   return (
     <>
-      <StatusOrb
+      <SourceSyncStatusOrb
         phase={item.phase}
         progress={item.progress}
         reduceMotion={reduceMotion}
@@ -617,112 +487,6 @@ function SyncHeadline({
         {getIslandHeadline(items)}
       </span>
     </>
-  )
-}
-
-function StatusOrb({
-  phase,
-  progress,
-  reduceMotion,
-  status,
-}: {
-  phase: SourceSyncPhase | undefined
-  progress: number
-  reduceMotion: boolean
-  status: SourceSyncStatus
-}) {
-  const progressVisible = status === "running" || status === "completed"
-  const determinate = status === "running"
-  const estimated = phase === "discovering"
-  const completed = status === "completed"
-
-  return (
-    <span
-      aria-label={
-        determinate ? (estimated ? "Estimated sync progress" : "Sync progress") : undefined
-      }
-      aria-valuemax={determinate ? 100 : undefined}
-      aria-valuemin={determinate ? 0 : undefined}
-      aria-valuenow={determinate && !estimated ? Math.round(progress) : undefined}
-      aria-valuetext={estimated ? "Discovering transactions" : undefined}
-      className="relative grid size-5 shrink-0 place-items-center rounded-full"
-      role={determinate ? "progressbar" : undefined}
-    >
-      <svg
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 size-full"
-        viewBox="0 0 32 32"
-      >
-        {status === "queued" ? (
-          <circle
-            className="fill-none stroke-white"
-            cx={ORB.center}
-            cy={ORB.center}
-            pathLength="1"
-            r={ORB.radius}
-            strokeDasharray={ORB.queuedDash}
-            strokeLinecap="round"
-            strokeWidth={ORB.strokeWidth}
-          />
-        ) : null}
-        {progressVisible ? (
-          <>
-            <motion.circle
-              animate={{ opacity: completed ? 0 : 1 }}
-              className="fill-none stroke-white/20"
-              cx={ORB.center}
-              cy={ORB.center}
-              initial={false}
-              r={ORB.radius}
-              strokeWidth={ORB.strokeWidth}
-              transition={getSuccessTransition(reduceMotion)}
-            />
-            <motion.circle
-              animate={{
-                opacity: completed ? 0 : 1,
-                strokeDashoffset:
-                  estimated && !reduceMotion
-                    ? DISCOVERY_PROGRESS.strokeDashoffsets
-                    : ORB.normalizedLength - progress,
-              }}
-              className="fill-none stroke-white"
-              cx={ORB.center}
-              cy={ORB.center}
-              initial={reduceMotion ? false : { strokeDashoffset: ORB.normalizedLength }}
-              pathLength={ORB.normalizedLength}
-              r={ORB.radius}
-              strokeDasharray={`${ORB.normalizedLength} ${ORB.normalizedLength}`}
-              strokeLinecap="round"
-              strokeWidth={ORB.strokeWidth}
-              transform={`rotate(-90 ${ORB.center} ${ORB.center})`}
-              transition={
-                completed
-                  ? getSuccessTransition(reduceMotion)
-                  : getOrbTransition({ phase, reduceMotion })
-              }
-            />
-          </>
-        ) : null}
-      </svg>
-
-      <span className="relative grid size-5 place-items-center rounded-full">
-        <motion.span
-          animate={completed ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.82 }}
-          className="absolute inset-0 grid place-items-center rounded-full bg-green-500"
-          initial={false}
-          transition={getSuccessTransition(reduceMotion)}
-        >
-          <Check aria-hidden="true" className="size-3 text-white" strokeWidth={4} />
-        </motion.span>
-        {status === "failed" ? (
-          <CircleX
-            aria-hidden="true"
-            className="size-4.5 text-sync-island-failed"
-            strokeWidth={3}
-          />
-        ) : null}
-      </span>
-    </span>
   )
 }
 
@@ -846,34 +610,6 @@ function formatRecordCount(value: number | undefined): string {
 
 function getShellTransition(reduceMotion: boolean) {
   return reduceMotion ? ISLAND.reducedTransition : ISLAND.shellSpring
-}
-
-function getOrbTransition({
-  phase,
-  reduceMotion,
-}: {
-  phase: SourceSyncPhase | undefined
-  reduceMotion: boolean
-}) {
-  if (reduceMotion) {
-    return ISLAND.reducedTransition
-  }
-
-  if (phase === "discovering") {
-    return {
-      duration: toSeconds(TIMING.discoveryTimeline),
-      ease: "linear" as const,
-      times: DISCOVERY_PROGRESS.times,
-    }
-  }
-
-  return { duration: toSeconds(TIMING.progressSettle), ease: CONTENT.easeOut }
-}
-
-function getSuccessTransition(reduceMotion: boolean) {
-  return reduceMotion
-    ? ISLAND.reducedTransition
-    : { duration: toSeconds(TIMING.successMorph), ease: CONTENT.easeOut }
 }
 
 function getFlashTransition(reduceMotion: boolean) {

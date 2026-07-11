@@ -6,8 +6,7 @@ import {
   SelectGroup,
   SelectItem,
 } from "./ui/select"
-import { taxYears } from "#/components/dashboard/data"
-import type { TaxYear } from "#/components/dashboard/types"
+import { taxYears, type TaxYear } from "#/lib/dashboard-types"
 
 export function TaxYearSelect({ taxYear }: { taxYear: TaxYear }) {
   return (

@@ -1,17 +1,19 @@
+import type { Source } from "taxmaxi"
+
 export const ALL_ACCOUNTS = "all"
+export const taxYears = [2025, 2024, 2023] as const
 
 export type AccountScope = typeof ALL_ACCOUNTS | AccountId
-export type TransactionMode = "tax" | "raw"
 export type AccountKind = "exchange" | "wallet"
-export type AccountId = string
-export type TaxYear = 2025 | 2024 | 2023
+export type AccountId = Source["id"]
+export type TaxYear = (typeof taxYears)[number]
 
 export type Account = {
   id: AccountId
-  name: string
+  name: Source["name"]
   kind: AccountKind
   network?: string
-  providerKey?: string
+  providerKey?: NonNullable<Source["providerKey"]>
   importedTransactions: number
   unresolvedItems: number
   lastSync: string
@@ -36,20 +38,4 @@ export type AssetHolding = {
     value: number
     costBasis: number
   }>
-}
-
-export type DashboardTransaction = {
-  id: string
-  accountId: AccountId
-  taxYear: TaxYear
-  date: string
-  asset: string
-  rawAction: string
-  taxTreatment: string
-  amount: number
-  value: number
-  realizedProfitLoss: number
-  taxImpact: number
-  txId: string
-  taxRelevant: boolean
 }

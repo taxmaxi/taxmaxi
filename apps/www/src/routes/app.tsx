@@ -6,7 +6,7 @@ import { isTaxMaxiUnauthorizedError, type Source as TaxMaxiSource } from "taxmax
 import { Dashboard } from "#/components/dashboard"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
-import type { Account } from "#/components/dashboard/types"
+import type { Account } from "#/lib/dashboard-types"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries } from "#/integrations/taxmaxi/queries"
 import { cn } from "#/lib/utils"
