@@ -18,6 +18,39 @@ export type SourceSyncJobStatus = "pending" | "processing" | "completed" | "fail
 export type ActiveSourceSyncJobStatus = Extract<SourceSyncJobStatus, "pending" | "processing">
 
 /**
+ * SourceSyncPhase - Current user-visible phase of a running source job.
+ */
+export const SourceSyncPhaseSchema = Schema.Literal(
+  "discovering",
+  "classifying",
+  "reconciling",
+  "completed"
+)
+
+export type SourceSyncPhase = Schema.Schema.Type<typeof SourceSyncPhaseSchema>
+
+/** Return determinate progress only for phases with a stable denominator. */
+export const getSourceSyncProgressPercent = ({
+  phase,
+  processedRecords,
+  totalRecords,
+}: {
+  readonly phase: SourceSyncPhase | null
+  readonly processedRecords: number | null
+  readonly totalRecords: number | null
+}): number | null => {
+  if (phase === "completed") {
+    return 100
+  }
+
+  if (phase !== "classifying" || processedRecords === null || totalRecords === null) {
+    return null
+  }
+
+  return totalRecords === 0 ? 100 : Math.min(100, (processedRecords / totalRecords) * 100)
+}
+
+/**
  * SourceSyncSource - Minimal source context required by the sync engine.
  */
 export interface SourceSyncSource {
@@ -33,6 +66,9 @@ export interface SourceSyncSource {
  * SourceSyncExecutionState - Durable sync progress and replay checkpoint state.
  */
 export interface SourceSyncExecutionState {
+  readonly phase: SourceSyncPhase
+  readonly processedRecords: number
+  readonly totalRecords: number | null
   readonly importedRecords: number
   readonly normalizedRecords: number
   readonly failedRecords: number
@@ -47,6 +83,9 @@ export interface SourceSyncExecutionState {
  */
 export interface SourceSyncJobProgressSnapshot {
   readonly mode: SourceSyncJobMode | null
+  readonly phase: SourceSyncPhase | null
+  readonly processedRecords: number | null
+  readonly totalRecords: number | null
   readonly importedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
@@ -131,6 +170,10 @@ export interface SourceSyncJobSummary {
  * SourceSyncJobDetails - Public sync job status view with counters.
  */
 export interface SourceSyncJobDetails extends SourceSyncJobSummary {
+  readonly phase: SourceSyncPhase | null
+  readonly processedRecords: number | null
+  readonly totalRecords: number | null
+  readonly progressPercent: number | null
   readonly importedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null

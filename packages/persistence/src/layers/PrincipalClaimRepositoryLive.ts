@@ -8,6 +8,7 @@ import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm"
 import { PrincipalId } from "@my/core/ownership"
 import type { ChainType } from "@my/core/source"
 import { SourceId } from "@my/core/source"
+import { getSourceSyncProgressPercent } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -102,6 +103,9 @@ const isPrincipalClaimTransferError = (error: unknown): error is PrincipalClaimT
   isPrincipalClaimTransferConflictError(error) || isPrincipalClaimTransferStaleError(error)
 
 const SourceSyncJobProgressSnapshot = Schema.Struct({
+  phase: Schema.optional(Schema.Literal("discovering", "classifying", "reconciling", "completed")),
+  processedRecords: Schema.optional(Schema.Number),
+  totalRecords: Schema.optional(Schema.NullOr(Schema.Number)),
   importedRecords: Schema.optional(Schema.Number),
   normalizedRecords: Schema.optional(Schema.Number),
   failedRecords: Schema.optional(Schema.Number),
@@ -124,12 +128,18 @@ const decodeProgress = (progressDetails: unknown) =>
     ? Effect.succeed(null)
     : Schema.decodeUnknown(SourceSyncJobProgressSnapshot)(progressDetails).pipe(
         Effect.map((progress) => ({
+          phase: progress.phase ?? null,
+          processedRecords: progress.processedRecords ?? null,
+          totalRecords: progress.totalRecords ?? null,
           importedRecords: progress.importedRecords ?? null,
           normalizedRecords: progress.normalizedRecords ?? null,
           failedRecords: progress.failedRecords ?? null,
         })),
         Effect.catchAll(() =>
           Effect.succeed({
+            phase: null,
+            processedRecords: null,
+            totalRecords: null,
             importedRecords: null,
             normalizedRecords: null,
             failedRecords: null,
@@ -369,10 +379,21 @@ const make = Effect.gen(function* () {
         return yield* Effect.forEach(rows, (row) =>
           Effect.gen(function* () {
             const progress = yield* decodeProgress(row.progressDetails)
+            const phase = progress?.phase ?? null
+            const processedRecords = progress?.processedRecords ?? null
+            const totalRecords = progress?.totalRecords ?? null
             return {
               sourceId: SourceId.make(row.sourceId),
               jobId: row.id,
               status: toPublicJobStatus(row.status),
+              phase,
+              processedRecords,
+              totalRecords,
+              progressPercent: getSourceSyncProgressPercent({
+                phase,
+                processedRecords,
+                totalRecords,
+              }),
               importedRecords: progress?.importedRecords ?? null,
               normalizedRecords: progress?.normalizedRecords ?? null,
               failedRecords: progress?.failedRecords ?? null,

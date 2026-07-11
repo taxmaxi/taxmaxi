@@ -17,6 +17,7 @@ import {
   wrapSyncEngineSqlError,
 } from "./SyncEngineRepositorySupport.ts"
 import {
+  getSourceSyncProgressPercent,
   SourceSyncRunRecordNotFoundError,
   SourceSyncRunRepository,
   SyncEngineStorageError,
@@ -162,6 +163,14 @@ const rowToRunItem = (item: {
 }): Effect.Effect<SyncRunItemRecord> =>
   Effect.gen(function* () {
     const progress = yield* decodeSourceSyncJobProgressSnapshot(item.progressDetails)
+    const phase = progress?.phase ?? null
+    const processedRecords = progress?.processedRecords ?? null
+    const totalRecords = progress?.totalRecords ?? null
+    const progressPercent = getSourceSyncProgressPercent({
+      phase,
+      processedRecords,
+      totalRecords,
+    })
 
     return {
       id: item.id,
@@ -170,6 +179,10 @@ const rowToRunItem = (item: {
       processingJobId: item.processingJobId,
       provider: item.provider,
       status: item.status,
+      phase,
+      processedRecords,
+      totalRecords,
+      progressPercent,
       importedRecords: progress?.importedRecords ?? null,
       normalizedRecords: progress?.normalizedRecords ?? null,
       failedRecords: progress?.failedRecords ?? null,

@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema"
 import { PersistenceError, isPersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import {
   SourceSyncJobModeSchema,
+  SourceSyncPhaseSchema,
   SyncEngineStorageError,
   type SourceSyncJobProgressSnapshot,
 } from "@my/sync-engine/services"
@@ -18,6 +19,9 @@ const ProgressCounterSchema = Schema.Union(Schema.Number, Schema.NumberFromStrin
 
 const SourceSyncProgressDetailsSchema = Schema.Struct({
   mode: Schema.optional(SourceSyncJobModeSchema),
+  phase: Schema.optional(SourceSyncPhaseSchema),
+  processedRecords: Schema.optional(ProgressCounterSchema),
+  totalRecords: Schema.optional(Schema.NullOr(ProgressCounterSchema)),
   importedRecords: Schema.optional(ProgressCounterSchema),
   normalizedRecords: Schema.optional(ProgressCounterSchema),
   failedRecords: Schema.optional(ProgressCounterSchema),
@@ -92,6 +96,9 @@ export const decodeSourceSyncJobProgressSnapshot = (
         ? null
         : {
             mode: details.mode ?? null,
+            phase: details.phase ?? null,
+            processedRecords: details.processedRecords ?? null,
+            totalRecords: details.totalRecords ?? null,
             importedRecords: details.importedRecords ?? null,
             normalizedRecords: details.normalizedRecords ?? null,
             failedRecords: details.failedRecords ?? null,

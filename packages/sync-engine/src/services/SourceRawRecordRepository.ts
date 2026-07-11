@@ -46,6 +46,22 @@ export interface SourceRawRecordRepositoryShape {
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
   /**
+   * List ids for raw rows that still require normalization.
+   *
+   * Callers can snapshot these ids after discovery and load them in bounded
+   * batches while normalization markers change underneath the job.
+   */
+  readonly listPendingNormalizationRecordIds: (params: {
+    readonly sourceId: string
+  }) => Effect.Effect<ReadonlyArray<string>, SyncEngineStorageError>
+
+  /** Load a selected batch of raw rows by durable id. */
+  readonly listRawRecordsByIds: (params: {
+    readonly sourceId: string
+    readonly rawRecordIds: ReadonlyArray<string>
+  }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
+
+  /**
    * Load all cached raw rows of one record type that occurred at one provider timestamp.
    * Used to find sibling rows of multi-row provider events (e.g. paired unstaking rows).
    */

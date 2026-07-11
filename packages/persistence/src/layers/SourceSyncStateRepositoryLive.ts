@@ -38,6 +38,9 @@ const make = Effect.gen(function* () {
 
       if (syncState === undefined) {
         return {
+          phase: "discovering",
+          processedRecords: 0,
+          totalRecords: null,
           importedRecords: 0,
           normalizedRecords: 0,
           failedRecords: 0,
@@ -49,6 +52,9 @@ const make = Effect.gen(function* () {
       }
 
       return {
+        phase: "discovering",
+        processedRecords: 0,
+        totalRecords: null,
         importedRecords: 0,
         normalizedRecords: 0,
         failedRecords: 0,
@@ -69,6 +75,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const now = nowDate()
       const progressDetails = {
+        phase: state.phase,
+        processedRecords: state.processedRecords,
+        totalRecords: state.totalRecords,
         importedRecords: state.importedRecords,
         normalizedRecords: state.normalizedRecords,
         failedRecords: state.failedRecords,

@@ -4,7 +4,7 @@
  * @module SourceRawRecordRepositoryLive
  */
 
-import { and, asc, eq, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -126,6 +126,41 @@ const make = Effect.gen(function* () {
       .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
       .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listAllRawRowsForReplay"))
 
+  const listPendingNormalizationRecordIds: SourceRawRecordRepositoryShape["listPendingNormalizationRecordIds"] =
+    ({ sourceId }) =>
+      db
+        .select({ id: schema.sourceRecordsRaw.id })
+        .from(schema.sourceRecordsRaw)
+        .where(
+          and(
+            eq(schema.sourceRecordsRaw.sourceId, sourceId),
+            isNull(schema.sourceRecordsRaw.normalizedAt)
+          )
+        )
+        .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
+        .pipe(
+          wrapSyncEngineSqlError("sourceRawRecordRepository.listPendingNormalizationRecordIds"),
+          Effect.map((rows) => rows.map((row) => row.id))
+        )
+
+  const listRawRecordsByIds: SourceRawRecordRepositoryShape["listRawRecordsByIds"] = ({
+    sourceId,
+    rawRecordIds,
+  }) =>
+    rawRecordIds.length === 0
+      ? Effect.succeed([])
+      : db
+          .select(selectRawRecordFields)
+          .from(schema.sourceRecordsRaw)
+          .where(
+            and(
+              eq(schema.sourceRecordsRaw.sourceId, sourceId),
+              inArray(schema.sourceRecordsRaw.id, rawRecordIds)
+            )
+          )
+          .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
+          .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listRawRecordsByIds"))
+
   const listRawRecordsByOccurredAt: SourceRawRecordRepositoryShape["listRawRecordsByOccurredAt"] =
     ({ sourceId, recordType, occurredAt }) =>
       db
@@ -183,6 +218,8 @@ const make = Effect.gen(function* () {
     upsertRawBatch,
     listReplayCandidates,
     listAllRawRowsForReplay,
+    listPendingNormalizationRecordIds,
+    listRawRecordsByIds,
     listRawRecordsByOccurredAt,
     markRawRecordNormalized,
     markRawRecordFailed,

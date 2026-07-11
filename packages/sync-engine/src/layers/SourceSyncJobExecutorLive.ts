@@ -71,6 +71,10 @@ interface ReplaySummary {
 interface SyncLoopState {
   readonly execution: SourceSyncExecutionState
   readonly done: boolean
+}
+
+interface ClassificationResult {
+  readonly execution: SourceSyncExecutionState
   readonly failedRawRecordIds: ReadonlySet<string>
 }
 
@@ -294,6 +298,107 @@ const make = Effect.gen(function* () {
         )
     )
 
+  const classifyRawRecords = ({
+    source,
+    jobId,
+    workerId,
+    provider,
+    normalizeRecord,
+    rawRecordIds,
+    baseExecution,
+  }: {
+    readonly source: SourceSyncSource
+    readonly jobId: string
+    readonly workerId: string
+    readonly provider: string
+    readonly normalizeRecord: SourceProviderRawRecordNormalizer
+    readonly rawRecordIds: ReadonlyArray<string>
+    readonly baseExecution: SourceSyncExecutionState
+  }): Effect.Effect<ClassificationResult, SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      const initialClassification: ClassificationResult = {
+        execution: {
+          ...baseExecution,
+          phase: "classifying",
+          processedRecords: 0,
+          totalRecords: rawRecordIds.length,
+          normalizedRecords: 0,
+          failedRecords: 0,
+        },
+        failedRawRecordIds: new Set(),
+      }
+
+      yield* sourceSyncStateRepository.persistProgress({
+        sourceId: source.id,
+        jobId,
+        state: initialClassification.execution,
+        lastSyncedAt: null,
+        lastErrorMessage: null,
+      })
+
+      return yield* Effect.iterate(initialClassification, {
+        while: ({ execution }) => execution.processedRecords < rawRecordIds.length,
+        body: (classification) =>
+          Effect.gen(function* () {
+            const batchIds = rawRecordIds.slice(
+              classification.execution.processedRecords,
+              classification.execution.processedRecords + pageSize
+            )
+            const rawRecords = yield* sourceRawRecordRepository
+              .listRawRecordsByIds({ sourceId: source.id, rawRecordIds: batchIds })
+              .pipe(
+                sourceSyncSpan({
+                  name: "source-sync.load-classification-batch",
+                  attributes: { sourceId: source.id, jobId, provider },
+                  kind: "client",
+                })
+              )
+            const normalization = yield* normalizeRawBatch({
+              source,
+              rawRecords,
+              normalizeRecord,
+            }).pipe(
+              sourceSyncSpan({
+                name: "source-sync.normalize-raw-batch",
+                attributes: {
+                  sourceId: source.id,
+                  jobId,
+                  provider,
+                  rawRecordCount: rawRecords.length,
+                },
+              })
+            )
+            const execution: SourceSyncExecutionState = {
+              ...classification.execution,
+              processedRecords: classification.execution.processedRecords + batchIds.length,
+              normalizedRecords:
+                classification.execution.normalizedRecords + normalization.normalizedRecords,
+              failedRecords: classification.execution.failedRecords + normalization.failedRecords,
+            }
+
+            yield* sourceSyncStateRepository.persistProgress({
+              sourceId: source.id,
+              jobId,
+              state: execution,
+              lastSyncedAt: null,
+              lastErrorMessage: null,
+            })
+            yield* heartbeatSourceSyncJob({ jobId, workerId })
+
+            return {
+              execution,
+              failedRawRecordIds:
+                normalization.failedRawRecordIds.length === 0
+                  ? classification.failedRawRecordIds
+                  : new Set([
+                      ...classification.failedRawRecordIds,
+                      ...normalization.failedRawRecordIds,
+                    ]),
+            } satisfies ClassificationResult
+          }),
+      })
+    })
+
   const replayFailedRawRecords = ({
     source,
     normalizeRecord,
@@ -396,10 +501,22 @@ const make = Effect.gen(function* () {
       )
 
       const initialLoop: SyncLoopState = {
-        execution: initialExecution,
+        execution: {
+          ...initialExecution,
+          phase: "discovering",
+          processedRecords: 0,
+          totalRecords: null,
+        },
         done: false,
-        failedRawRecordIds: new Set(),
       }
+
+      yield* sourceSyncStateRepository.persistProgress({
+        sourceId: source.id,
+        jobId,
+        state: initialLoop.execution,
+        lastSyncedAt: null,
+        lastErrorMessage: null,
+      })
 
       const finalLoop = yield* Effect.iterate(initialLoop, {
         while: (loop) => !loop.done,
@@ -439,27 +556,9 @@ const make = Effect.gen(function* () {
                   kind: "client",
                 })
               )
-            const normalization = yield* normalizeRawBatch({
-              source,
-              rawRecords: checkpoint.rawRecords,
-              normalizeRecord,
-            }).pipe(
-              sourceSyncSpan({
-                name: "source-sync.normalize-raw-batch",
-                attributes: {
-                  sourceId: source.id,
-                  jobId,
-                  provider,
-                  rawRecordCount: checkpoint.rawRecords.length,
-                },
-              })
-            )
-
             const nextExecution: SourceSyncExecutionState = {
               ...loop.execution,
               importedRecords: loop.execution.importedRecords + nextBatch.records.length,
-              normalizedRecords: loop.execution.normalizedRecords + normalization.normalizedRecords,
-              failedRecords: loop.execution.failedRecords + normalization.failedRecords,
               cursorPayload: nextBatch.cursorPayload,
               highWatermark: Timestamp.maxNullableDate(
                 loop.execution.highWatermark,
@@ -506,12 +605,27 @@ const make = Effect.gen(function* () {
             return {
               execution: nextExecution,
               done: nextBatch.done,
-              failedRawRecordIds:
-                normalization.failedRawRecordIds.length === 0
-                  ? loop.failedRawRecordIds
-                  : new Set([...loop.failedRawRecordIds, ...normalization.failedRawRecordIds]),
             } satisfies SyncLoopState
           }),
+      })
+
+      const pendingRawRecordIds = yield* sourceRawRecordRepository
+        .listPendingNormalizationRecordIds({ sourceId: source.id })
+        .pipe(
+          sourceSyncSpan({
+            name: "source-sync.list-pending-normalization-records",
+            attributes: { sourceId: source.id, jobId, provider },
+            kind: "client",
+          })
+        )
+      const classification = yield* classifyRawRecords({
+        source,
+        jobId,
+        workerId,
+        provider,
+        normalizeRecord,
+        rawRecordIds: pendingRawRecordIds,
+        baseExecution: finalLoop.execution,
       })
 
       // Runs after all pages are cached so rows that failed earlier in this
@@ -519,18 +633,29 @@ const make = Effect.gen(function* () {
       const replaySummary = yield* replayFailedRawRecords({
         source,
         normalizeRecord,
-        countedFailedRawRecordIds: finalLoop.failedRawRecordIds,
+        countedFailedRawRecordIds: classification.failedRawRecordIds,
       }).pipe(
         sourceSyncSpan({
           name: "source-sync.replay-failed-raw-records",
           attributes: { sourceId: source.id, jobId, provider },
         })
       )
-      const completedExecution: SourceSyncExecutionState = {
-        ...finalLoop.execution,
-        normalizedRecords: finalLoop.execution.normalizedRecords + replaySummary.normalizedRecords,
-        failedRecords: finalLoop.execution.failedRecords + replaySummary.failedRecordsDelta,
+      const reconciliationExecution: SourceSyncExecutionState = {
+        ...classification.execution,
+        phase: "reconciling",
+        processedRecords: 0,
+        totalRecords: null,
+        normalizedRecords:
+          classification.execution.normalizedRecords + replaySummary.normalizedRecords,
+        failedRecords: classification.execution.failedRecords + replaySummary.failedRecordsDelta,
       }
+      yield* sourceSyncStateRepository.persistProgress({
+        sourceId: source.id,
+        jobId,
+        state: reconciliationExecution,
+        lastSyncedAt: null,
+        lastErrorMessage: null,
+      })
       const reconciliationSummary = yield* transferReconciliationService
         .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
         .pipe(
@@ -553,6 +678,12 @@ const make = Effect.gen(function* () {
           })
         )
       const completedAt = nowDate()
+      const completedExecution: SourceSyncExecutionState = {
+        ...reconciliationExecution,
+        phase: "completed",
+        processedRecords: classification.execution.totalRecords ?? 0,
+        totalRecords: classification.execution.totalRecords,
+      }
 
       yield* sourceSyncStateRepository.persistProgress({
         sourceId: source.id,
@@ -653,31 +784,35 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
-      const normalization = yield* normalizeRawBatch({
+      const classification = yield* classifyRawRecords({
         source,
-        rawRecords,
+        jobId,
+        workerId,
+        provider,
         normalizeRecord,
-      }).pipe(
-        sourceSyncSpan({
-          name: "source-replay.normalize-raw-batch",
-          attributes: {
-            sourceId: source.id,
-            jobId,
-            provider,
-            rawRecordCount: rawRecords.length,
-          },
-        })
-      )
+        rawRecordIds: rawRecords.map((rawRecord) => rawRecord.id),
+        baseExecution: {
+          ...initialExecution,
+          importedRecords: rawRecords.length,
+        },
+      })
 
       yield* sourceSyncStateRepository.clearReplayFailureMetadata({ sourceId: source.id })
       yield* heartbeatSourceSyncJob({ jobId, workerId })
 
-      const replayExecution: SourceSyncExecutionState = {
-        ...initialExecution,
-        importedRecords: rawRecords.length,
-        normalizedRecords: normalization.normalizedRecords,
-        failedRecords: normalization.failedRecords,
+      const reconciliationExecution: SourceSyncExecutionState = {
+        ...classification.execution,
+        phase: "reconciling",
+        processedRecords: 0,
+        totalRecords: null,
       }
+      yield* sourceSyncStateRepository.persistProgress({
+        sourceId: source.id,
+        jobId,
+        state: reconciliationExecution,
+        lastSyncedAt: null,
+        lastErrorMessage: null,
+      })
       const reconciliationSummary = yield* transferReconciliationService
         .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
         .pipe(
@@ -699,6 +834,13 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
+
+      const replayExecution: SourceSyncExecutionState = {
+        ...reconciliationExecution,
+        phase: "completed",
+        processedRecords: classification.execution.totalRecords ?? 0,
+        totalRecords: classification.execution.totalRecords,
+      }
 
       yield* Effect.annotateCurrentSpan({
         sourceId: source.id,

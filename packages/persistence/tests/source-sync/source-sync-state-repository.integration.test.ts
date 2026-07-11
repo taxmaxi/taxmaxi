@@ -60,6 +60,9 @@ describe("SourceSyncStateRepositoryLive", () => {
     )
 
     expect(executionState).toEqual({
+      phase: "discovering",
+      processedRecords: 0,
+      totalRecords: null,
       importedRecords: 0,
       normalizedRecords: 0,
       failedRecords: 0,
@@ -74,6 +77,9 @@ describe("SourceSyncStateRepositoryLive", () => {
     const jobId = await runPg(seedProcessingJob())
 
     const state: SourceSyncExecutionState = {
+      phase: "classifying",
+      processedRecords: 5,
+      totalRecords: 7,
       importedRecords: 7,
       normalizedRecords: 6,
       failedRecords: 1,
@@ -134,6 +140,9 @@ describe("SourceSyncStateRepositoryLive", () => {
     expect(persisted.syncState?.lastErrorMessage).toBeNull()
     expect(persisted.job?.checkpointExternalId).toBe("tx-7")
     expect(persisted.job?.progressDetails).toMatchObject({
+      phase: "classifying",
+      processedRecords: 5,
+      totalRecords: 7,
       importedRecords: 7,
       normalizedRecords: 6,
       failedRecords: 1,
