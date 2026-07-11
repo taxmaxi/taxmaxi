@@ -39,10 +39,12 @@ type DashboardSummary = {
 export function Dashboard({
   accounts = mockAccounts,
   getSourceSyncJob,
+  onSourceSyncUnauthorized,
   startSourceSync,
 }: {
   accounts?: ReadonlyArray<Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
+  onSourceSyncUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }) {
   const [accountScope, setAccountScope] = useState<AccountScope>(ALL_ACCOUNTS)
@@ -58,7 +60,7 @@ export function Dashboard({
       accountScope === ALL_ACCOUNTS
         ? accounts
         : accounts.filter((account) => account.id === accountScope),
-    [accountScope]
+    [accountScope, accounts]
   )
 
   const activeAccountIds = useMemo(
@@ -136,7 +138,12 @@ export function Dashboard({
   }
 
   const { activeSyncs, onDismissSync, onRetrySync, onSourceSync, syncingSourceIds } =
-    useSourceSyncs({ accountsById, getSourceSyncJob, startSourceSync })
+    useSourceSyncs({
+      accountsById,
+      getSourceSyncJob,
+      onUnauthorized: onSourceSyncUnauthorized,
+      startSourceSync,
+    })
 
   return (
     <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { SourceSyncJob, SourceSyncJobInput, SourceSyncStart } from "taxmaxi"
+import type { Dispatch, SetStateAction } from "react"
+import {
+  TaxMaxiError,
+  isTaxMaxiUnauthorizedError,
+  type SourceSyncJob,
+  type SourceSyncJobInput,
+  type SourceSyncStart,
+} from "taxmaxi"
 
 import {
   getSourceSyncDisplayProgress,
@@ -16,19 +23,23 @@ type ActiveSourceSync = SourceSyncIslandItem & {
 type UseSourceSyncsOptions = {
   accountsById: ReadonlyMap<AccountId, Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
+  onUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }
 
 const SOURCE_SYNC_POLL_INTERVAL_MS = 500
 const COMPLETED_SYNC_DISMISS_DELAY_MS = 2800
+const MAX_CONSECUTIVE_POLL_FAILURES = 3
 
 export function useSourceSyncs({
   accountsById,
   getSourceSyncJob,
+  onUnauthorized,
   startSourceSync,
 }: UseSourceSyncsOptions) {
   const [activeSyncs, setActiveSyncs] = useState<ReadonlyArray<ActiveSourceSync>>([])
   const completionTimeoutsRef = useRef(new Map<string, number>())
+  const pollFailureCountsRef = useRef(new Map<string, number>())
   const syncingSourceIds = useMemo(
     () =>
       new Set(
@@ -96,26 +107,60 @@ export function useSourceSyncs({
         if (sync.jobId === undefined) {
           continue
         }
+        const jobId = sync.jobId
 
-        void getSourceSyncJob({ sourceId: sync.sourceId, jobId: sync.jobId }).then(
+        void getSourceSyncJob({ sourceId: sync.sourceId, jobId }).then(
           (job) => {
+            pollFailureCountsRef.current.delete(getSourceSyncKey(sync))
             setActiveSyncs((syncs) => {
               const currentSync = syncs.find((candidate) => candidate.id === sync.id)
 
-              if (!currentSync || currentSync.jobId !== sync.jobId) {
+              if (!currentSync || currentSync.jobId !== jobId) {
                 return syncs
               }
 
               return replaceSourceSync(syncs, toActiveSourceSync(job, currentSync))
             })
           },
-          () => undefined
+          (error: unknown) => {
+            const syncKey = getSourceSyncKey(sync)
+
+            if (isTaxMaxiUnauthorizedError(error)) {
+              pollFailureCountsRef.current.delete(syncKey)
+              failPolledSourceSync({
+                expectedJobId: jobId,
+                message: "Your session expired. Sign in again to continue syncing.",
+                setActiveSyncs,
+                sourceId: sync.sourceId,
+              })
+              void Promise.resolve(onUnauthorized?.()).catch(() => undefined)
+              return
+            }
+
+            const failureCount = (pollFailureCountsRef.current.get(syncKey) ?? 0) + 1
+            const jobNotFound = error instanceof TaxMaxiError && error.status === 404
+
+            if (!jobNotFound && failureCount < MAX_CONSECUTIVE_POLL_FAILURES) {
+              pollFailureCountsRef.current.set(syncKey, failureCount)
+              return
+            }
+
+            pollFailureCountsRef.current.delete(syncKey)
+            failPolledSourceSync({
+              expectedJobId: jobId,
+              message: jobNotFound
+                ? "The sync job could not be found. Start the sync again."
+                : "The sync status could not be loaded after several attempts. Try again.",
+              setActiveSyncs,
+              sourceId: sync.sourceId,
+            })
+          }
         )
       }
     }, SOURCE_SYNC_POLL_INTERVAL_MS)
 
     return () => window.clearInterval(intervalId)
-  }, [activeSyncs, getSourceSyncJob])
+  }, [activeSyncs, getSourceSyncJob, onUnauthorized])
 
   useEffect(() => {
     const completedSyncKeys = new Set<string>()
@@ -150,6 +195,13 @@ export function useSourceSyncs({
       window.clearTimeout(timeoutId)
       completionTimeoutsRef.current.delete(syncKey)
     }
+
+    const activeSyncKeys = new Set(activeSyncs.map(getSourceSyncKey))
+    for (const syncKey of pollFailureCountsRef.current.keys()) {
+      if (!activeSyncKeys.has(syncKey)) {
+        pollFailureCountsRef.current.delete(syncKey)
+      }
+    }
   }, [activeSyncs])
 
   useEffect(
@@ -159,6 +211,7 @@ export function useSourceSyncs({
       }
 
       completionTimeoutsRef.current.clear()
+      pollFailureCountsRef.current.clear()
     },
     []
   )
@@ -244,6 +297,26 @@ function replaceSourceSync(
 
 function getSourceSyncKey(sync: ActiveSourceSync): string {
   return `${sync.sourceId}:${sync.jobId ?? "pending"}`
+}
+
+function failPolledSourceSync({
+  expectedJobId,
+  message,
+  setActiveSyncs,
+  sourceId,
+}: {
+  expectedJobId: string
+  message: string
+  setActiveSyncs: Dispatch<SetStateAction<ReadonlyArray<ActiveSourceSync>>>
+  sourceId: AccountId
+}) {
+  setActiveSyncs((syncs) =>
+    syncs.map((sync) =>
+      sync.sourceId === sourceId && sync.jobId === expectedJobId
+        ? { ...sync, message, progress: 100, status: "failed" }
+        : sync
+    )
+  )
 }
 
 function getProgressForStatus(status: SourceSyncStatus): number {

@@ -1,14 +1,18 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
-import { useSuspenseQuery } from "@tanstack/react-query"
+import { useSuspenseQueries, useSuspenseQuery } from "@tanstack/react-query"
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { isTaxMaxiUnauthorizedError, type Source as TaxMaxiSource } from "taxmaxi"
+import {
+  isTaxMaxiUnauthorizedError,
+  type Source as TaxMaxiSource,
+  type SourceOverview,
+} from "taxmaxi"
 
 import { Dashboard } from "#/components/dashboard"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
 import type { Account } from "#/lib/dashboard-types"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
-import { queries } from "#/integrations/taxmaxi/queries"
+import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
 import { cn } from "#/lib/utils"
 
 const COMPACT_SCROLL_THRESHOLD = 72
@@ -31,7 +35,14 @@ export const Route = createFileRoute("/app")({
   loader: async ({ context }) => {
     const taxmaxi = context.taxmaxi()
     try {
-      return await context.queryClient.ensureQueryData(queries.sourceList(taxmaxi))
+      const sourceList = await taxmaxi.sources.list()
+      context.queryClient.setQueryData(queryKeys.sourceList(), sourceList)
+      await Promise.all(
+        sourceList.sources.map((source) =>
+          context.queryClient.ensureQueryData(queries.sourceOverview(taxmaxi, source.id))
+        )
+      )
+      return sourceList
     } catch (error) {
       if (!isTaxMaxiUnauthorizedError(error)) {
         throw error
@@ -47,11 +58,21 @@ export const Route = createFileRoute("/app")({
 })
 
 function RouteComponent() {
-  const { taxmaxi } = Route.useRouteContext()
+  const { queryClient, taxmaxi } = Route.useRouteContext()
+  const navigate = Route.useNavigate()
   const {
     data: { sources },
   } = useSuspenseQuery(queries.sourceList(taxmaxi()))
-  const sourceAccounts = useMemo(() => sources.map(toDashboardAccount), [sources])
+  const sourceOverviews = useSuspenseQueries({
+    queries: sources.map((source) => queries.sourceOverview(taxmaxi(), source.id)),
+    combine: (results) => results.map((result) => result.data),
+  })
+  const sourceAccounts = useMemo(() => {
+    const overviewsBySourceId = new Map(
+      sourceOverviews.map((overview) => [overview.source.id, overview])
+    )
+    return sources.map((source) => toDashboardAccount(source, overviewsBySourceId.get(source.id)))
+  }, [sourceOverviews, sources])
   const startSourceSync = useCallback(
     async (sourceId: string) => taxmaxi().sources.startSync({ sourceId }),
     [taxmaxi]
@@ -61,6 +82,11 @@ function RouteComponent() {
       taxmaxi().sources.getSyncJob({ jobId, sourceId }),
     [taxmaxi]
   )
+  const onSourceSyncUnauthorized = useCallback(async () => {
+    queryClient.removeQueries({ queryKey: queryKeys.all })
+    await clearAuthSessionCookie()
+    await navigate({ to: "/login", replace: true })
+  }, [navigate, queryClient])
 
   return (
     <PageShell
@@ -89,6 +115,7 @@ function RouteComponent() {
         <Dashboard
           accounts={sourceAccounts}
           getSourceSyncJob={getSourceSyncJob}
+          onSourceSyncUnauthorized={onSourceSyncUnauthorized}
           startSourceSync={startSourceSync}
         />
       </div>
@@ -96,7 +123,7 @@ function RouteComponent() {
   )
 }
 
-function toDashboardAccount(source: TaxMaxiSource): Account {
+function toDashboardAccount(source: TaxMaxiSource, overview: SourceOverview | undefined): Account {
   const network = source.sourceRef._tag === "cex" ? undefined : formatProviderNetwork(source)
 
   return {
@@ -105,8 +132,8 @@ function toDashboardAccount(source: TaxMaxiSource): Account {
     kind: source.sourceRef._tag === "cex" ? "exchange" : "wallet",
     ...(network === undefined ? {} : { network }),
     ...(source.providerKey === null ? {} : { providerKey: source.providerKey }),
-    importedTransactions: 0,
-    unresolvedItems: 0,
+    importedTransactions: overview?.totals.transactionCount ?? 0,
+    unresolvedItems: overview?.review.needsReviewCount ?? 0,
     lastSync: formatSourceCreatedAt(source.createdAt.epochMillis),
   }
 }
