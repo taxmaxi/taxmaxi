@@ -6,12 +6,59 @@ import { Button } from "#/components/ui/button"
 import { cn } from "#/lib/utils"
 
 export type SourceSyncStatus = "queued" | "running" | "completed" | "failed"
+export type SourceSyncPhase = "discovering" | "classifying" | "reconciling" | "completed"
+
+export const SOURCE_SYNC_PROGRESS = {
+  classificationStart: 50,
+  completed: 100,
+  discoveryTarget: 49.5,
+  reconciliation: 100,
+} as const
+
+export function getSourceSyncDisplayProgress({
+  phase,
+  progressPercent,
+  status,
+}: {
+  phase: SourceSyncPhase | null
+  progressPercent: number | null
+  status: SourceSyncStatus
+}): number {
+  if (status === "completed" || status === "failed") {
+    return SOURCE_SYNC_PROGRESS.completed
+  }
+
+  if (status === "queued") {
+    return 0
+  }
+
+  switch (phase) {
+    case "discovering":
+      return SOURCE_SYNC_PROGRESS.discoveryTarget
+    case "classifying": {
+      const classificationProgress = Math.min(100, Math.max(0, progressPercent ?? 0))
+      return (
+        SOURCE_SYNC_PROGRESS.classificationStart +
+        (classificationProgress / 100) *
+          (SOURCE_SYNC_PROGRESS.completed - SOURCE_SYNC_PROGRESS.classificationStart)
+      )
+    }
+    case "reconciling":
+    case "completed":
+      return SOURCE_SYNC_PROGRESS.reconciliation
+    case null:
+      return 0
+  }
+}
 
 export type SourceSyncIslandItem = {
   id: string
   sourceName: string
   status: SourceSyncStatus
   progress: number
+  phase?: SourceSyncPhase
+  processedRecords?: number
+  totalRecords?: number
   importedRecords?: number
   normalizedRecords?: number
   failedRecords?: number
@@ -115,13 +162,20 @@ const MOCK_SCENARIO_OPTIONS: ReadonlyArray<{ label: string; value: MockScenario 
  *  180ms   a failed sync expands to reveal recovery details
  * on tap   shell morphs while its headline stays mounted and visually stable
  *  +0ms    detail content fades and moves 4px into the expanded shell
+ * on sync  discovery progress advances clockwise 0% → 49.5% in continuously moving stages
+ * on data  classification maps measured progress onto 50% → 100%
+ * on done  ring finishes clockwise to 100% before the success state appears
+ * +600ms   completed ring fades and the green check settles into place
  * ───────────────────────────────────────────────────────── */
 
 const TIMING = {
   activeReveal: 80, // shell unfolds after the compact orb lands
   failureReveal: 180, // failed sync reveals its recovery details
   detailReveal: 180, // detail content settles into the expanded shell
-  progressCycle: 1400, // indeterminate progress makes one pass
+  progressSettle: 450, // determinate progress catches up to the latest polled value
+  discoveryTimeline: 300_000, // discovery keeps visibly creeping toward the classification boundary
+  progressCompletion: 600, // terminal data waits for the ring to visibly reach 100%
+  successMorph: 180, // completed ring gives way to the success check
 }
 
 const VIEW_STAGE = {
@@ -148,11 +202,18 @@ const CONTENT = {
 
 const ORB = {
   center: 16,
-  fullRotation: 360,
   radius: 12.5,
   strokeWidth: 4,
-  runningDash: "0.3 0.7",
+  normalizedLength: 100,
   queuedDash: "0.05 0.11",
+}
+
+const DISCOVERY_PROGRESS: {
+  strokeDashoffsets: Array<number>
+  times: Array<number>
+} = {
+  strokeDashoffsets: [100, 80, 65, 55, 50.5],
+  times: [0, 1 / 60, 1 / 12, 7 / 30, 1],
 }
 
 const PROGRESS = {
@@ -200,11 +261,64 @@ const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits:
 
 export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIslandProps) {
   const reduceMotion = useReducedMotion()
-  const [mockScenario, setMockScenario] = useState<MockScenario>("running")
+  const [mockScenario, setMockScenario] = useState<MockScenario>("live")
   const usingMockScenario = DEV_MOCKS_ENABLED && mockScenario !== "live"
-  const visibleItems = usingMockScenario ? MOCK_SCENARIOS[mockScenario] : items
-  const primaryItem = visibleItems[0]
+  const rawVisibleItems = usingMockScenario ? MOCK_SCENARIOS[mockScenario] : items
+  const rawPrimaryItem = rawVisibleItems[0]
+  const [orchestratedPrimaryItem, setOrchestratedPrimaryItem] = useState<
+    SourceSyncIslandItem | undefined
+  >(rawPrimaryItem)
   const [stage, setStage] = useState<number>(VIEW_STAGE.compact)
+
+  useEffect(() => {
+    if (!rawPrimaryItem) {
+      setOrchestratedPrimaryItem(undefined)
+      return
+    }
+
+    if (rawPrimaryItem.status !== "completed") {
+      setOrchestratedPrimaryItem(rawPrimaryItem)
+      return
+    }
+
+    const completingItem: SourceSyncIslandItem = {
+      ...rawPrimaryItem,
+      phase: "completed",
+      progress: SOURCE_SYNC_PROGRESS.completed,
+      status: "running",
+    }
+    setOrchestratedPrimaryItem(completingItem)
+
+    if (reduceMotion) {
+      setOrchestratedPrimaryItem(rawPrimaryItem)
+      return
+    }
+
+    const timerId = window.setTimeout(
+      () => setOrchestratedPrimaryItem(rawPrimaryItem),
+      TIMING.progressCompletion
+    )
+
+    return () => window.clearTimeout(timerId)
+  }, [rawPrimaryItem, reduceMotion])
+
+  const orchestratedMatchesPrimary = orchestratedPrimaryItem?.id === rawPrimaryItem?.id
+  const awaitingCompletedRing =
+    rawPrimaryItem?.status === "completed" &&
+    (!orchestratedMatchesPrimary || orchestratedPrimaryItem?.status !== "completed")
+  const primaryItem = awaitingCompletedRing
+    ? orchestratedMatchesPrimary
+      ? orchestratedPrimaryItem
+      : {
+          ...rawPrimaryItem,
+          phase: "completed" as const,
+          progress: SOURCE_SYNC_PROGRESS.completed,
+          status: "running" as const,
+        }
+    : orchestratedMatchesPrimary
+      ? orchestratedPrimaryItem
+      : rawPrimaryItem
+  const visibleItems = primaryItem ? [primaryItem, ...rawVisibleItems.slice(1)] : []
 
   useEffect(() => {
     if (!primaryItem) {
@@ -371,7 +485,12 @@ function CompactIslandContent({
       type="button"
       whileTap={reduceMotion ? undefined : { scale: ISLAND.tapScale }}
     >
-      <StatusOrb progress={item.progress} reduceMotion={reduceMotion} status={item.status} />
+      <StatusOrb
+        phase={item.phase}
+        progress={item.progress}
+        reduceMotion={reduceMotion}
+        status={item.status}
+      />
     </motion.button>
   )
 }
@@ -488,7 +607,12 @@ function SyncHeadline({
 }) {
   return (
     <>
-      <StatusOrb progress={item.progress} reduceMotion={reduceMotion} status={item.status} />
+      <StatusOrb
+        phase={item.phase}
+        progress={item.progress}
+        reduceMotion={reduceMotion}
+        status={item.status}
+      />
       <span className="min-w-0 truncate text-[0.8125rem] font-medium tracking-[-0.012em]">
         {getIslandHeadline(items)}
       </span>
@@ -497,21 +621,36 @@ function SyncHeadline({
 }
 
 function StatusOrb({
+  phase,
   progress,
   reduceMotion,
   status,
 }: {
+  phase: SourceSyncPhase | undefined
   progress: number
   reduceMotion: boolean
   status: SourceSyncStatus
 }) {
-  const determinate = status === "running" && progress > 0 && progress < 100
+  const progressVisible = status === "running" || status === "completed"
+  const determinate = status === "running"
+  const estimated = phase === "discovering"
+  const completed = status === "completed"
 
   return (
-    <span className="relative grid size-5 shrink-0 place-items-center rounded-full">
+    <span
+      aria-label={
+        determinate ? (estimated ? "Estimated sync progress" : "Sync progress") : undefined
+      }
+      aria-valuemax={determinate ? 100 : undefined}
+      aria-valuemin={determinate ? 0 : undefined}
+      aria-valuenow={determinate && !estimated ? Math.round(progress) : undefined}
+      aria-valuetext={estimated ? "Discovering transactions" : undefined}
+      className="relative grid size-5 shrink-0 place-items-center rounded-full"
+      role={determinate ? "progressbar" : undefined}
+    >
       <svg
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 size-full -rotate-90"
+        className="pointer-events-none absolute inset-0 size-full"
         viewBox="0 0 32 32"
       >
         {status === "queued" ? (
@@ -526,48 +665,56 @@ function StatusOrb({
             strokeWidth={ORB.strokeWidth}
           />
         ) : null}
-        {status === "running" ? (
+        {progressVisible ? (
           <>
-            <circle
+            <motion.circle
+              animate={{ opacity: completed ? 0 : 1 }}
               className="fill-none stroke-white/20"
               cx={ORB.center}
               cy={ORB.center}
+              initial={false}
               r={ORB.radius}
               strokeWidth={ORB.strokeWidth}
+              transition={getSuccessTransition(reduceMotion)}
             />
             <motion.circle
-              animate={
-                determinate
-                  ? { pathLength: progress / 100, rotate: 0 }
-                  : reduceMotion
-                    ? { rotate: 0 }
-                    : { rotate: ORB.fullRotation }
-              }
+              animate={{
+                opacity: completed ? 0 : 1,
+                strokeDashoffset:
+                  estimated && !reduceMotion
+                    ? DISCOVERY_PROGRESS.strokeDashoffsets
+                    : ORB.normalizedLength - progress,
+              }}
               className="fill-none stroke-white"
               cx={ORB.center}
               cy={ORB.center}
-              initial={false}
-              pathLength="1"
+              initial={reduceMotion ? false : { strokeDashoffset: ORB.normalizedLength }}
+              pathLength={ORB.normalizedLength}
               r={ORB.radius}
-              strokeDasharray={determinate ? "1 1" : ORB.runningDash}
+              strokeDasharray={`${ORB.normalizedLength} ${ORB.normalizedLength}`}
               strokeLinecap="round"
               strokeWidth={ORB.strokeWidth}
-              transition={getOrbTransition({ determinate, reduceMotion })}
+              transform={`rotate(-90 ${ORB.center} ${ORB.center})`}
+              transition={
+                completed
+                  ? getSuccessTransition(reduceMotion)
+                  : getOrbTransition({ phase, reduceMotion })
+              }
             />
           </>
         ) : null}
       </svg>
 
-      <span
-        className={cn(
-          "relative grid size-5 place-items-center rounded-full",
-          status === "completed" ? "bg-green-500" : "",
-          status === "failed" ? "" : ""
-        )}
-      >
-        {status === "completed" ? (
+      <span className="relative grid size-5 place-items-center rounded-full">
+        <motion.span
+          animate={completed ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.82 }}
+          className="absolute inset-0 grid place-items-center rounded-full bg-green-500"
+          initial={false}
+          transition={getSuccessTransition(reduceMotion)}
+        >
           <Check aria-hidden="true" className="size-3 text-white" strokeWidth={4} />
-        ) : status === "failed" ? (
+        </motion.span>
+        {status === "failed" ? (
           <CircleX
             aria-hidden="true"
             className="size-4.5 text-sync-island-failed"
@@ -702,23 +849,31 @@ function getShellTransition(reduceMotion: boolean) {
 }
 
 function getOrbTransition({
-  determinate,
+  phase,
   reduceMotion,
 }: {
-  determinate: boolean
+  phase: SourceSyncPhase | undefined
   reduceMotion: boolean
 }) {
   if (reduceMotion) {
     return ISLAND.reducedTransition
   }
 
-  return determinate
-    ? ISLAND.elementSpring
-    : {
-        duration: toSeconds(TIMING.progressCycle),
-        ease: "linear" as const,
-        repeat: Infinity,
-      }
+  if (phase === "discovering") {
+    return {
+      duration: toSeconds(TIMING.discoveryTimeline),
+      ease: "linear" as const,
+      times: DISCOVERY_PROGRESS.times,
+    }
+  }
+
+  return { duration: toSeconds(TIMING.progressSettle), ease: CONTENT.easeOut }
+}
+
+function getSuccessTransition(reduceMotion: boolean) {
+  return reduceMotion
+    ? ISLAND.reducedTransition
+    : { duration: toSeconds(TIMING.successMorph), ease: CONTENT.easeOut }
 }
 
 function getFlashTransition(reduceMotion: boolean) {
