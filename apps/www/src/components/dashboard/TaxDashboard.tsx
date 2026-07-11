@@ -20,6 +20,7 @@ import {
 import { TransactionsTable } from "../transactions-table"
 import {
   SourceSyncIsland,
+  getSourceSyncDisplayProgress,
   type SourceSyncIslandItem,
   type SourceSyncStatus,
 } from "./source-sync-island"
@@ -55,6 +56,8 @@ type ActiveSourceSync = SourceSyncIslandItem & {
   sourceId: AccountId
   jobId?: string
 }
+
+const SOURCE_SYNC_POLL_INTERVAL_MS = 500
 
 export function TaxDashboard({
   accounts = mockAccounts,
@@ -230,7 +233,7 @@ export function TaxDashboard({
           () => undefined
         )
       }
-    }, 1600)
+    }, SOURCE_SYNC_POLL_INTERVAL_MS)
 
     return () => window.clearInterval(intervalId)
   }, [activeSyncs, getSourceSyncJob])
@@ -322,9 +325,16 @@ function toActiveSourceSync(job: SourceSyncJob, current: ActiveSourceSync): Acti
     ...current,
     id: job.sourceId,
     jobId: job.jobId,
-    progress: Math.max(current.progress, getProgressForStatus(job.status)),
+    progress: getSourceSyncDisplayProgress({
+      phase: job.phase,
+      progressPercent: job.progressPercent,
+      status: job.status,
+    }),
     sourceId: job.sourceId,
     status: job.status,
+    ...(job.phase === null ? {} : { phase: job.phase }),
+    ...(job.processedRecords === null ? {} : { processedRecords: job.processedRecords }),
+    ...(job.totalRecords === null ? {} : { totalRecords: job.totalRecords }),
     ...(job.importedRecords === null ? {} : { importedRecords: job.importedRecords }),
     ...(job.normalizedRecords === null ? {} : { normalizedRecords: job.normalizedRecords }),
     ...(job.failedRecords === null ? {} : { failedRecords: job.failedRecords }),
