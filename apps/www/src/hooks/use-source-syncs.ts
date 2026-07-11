@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { SourceSyncJob, SourceSyncJobInput, SourceSyncStart } from "taxmaxi"
 
 import {
@@ -20,6 +20,7 @@ type UseSourceSyncsOptions = {
 }
 
 const SOURCE_SYNC_POLL_INTERVAL_MS = 500
+const COMPLETED_SYNC_DISMISS_DELAY_MS = 2800
 
 export function useSourceSyncs({
   accountsById,
@@ -27,6 +28,7 @@ export function useSourceSyncs({
   startSourceSync,
 }: UseSourceSyncsOptions) {
   const [activeSyncs, setActiveSyncs] = useState<ReadonlyArray<ActiveSourceSync>>([])
+  const completionTimeoutsRef = useRef(new Map<string, number>())
   const syncingSourceIds = useMemo(
     () =>
       new Set(
@@ -96,8 +98,17 @@ export function useSourceSyncs({
         }
 
         void getSourceSyncJob({ sourceId: sync.sourceId, jobId: sync.jobId }).then(
-          (job) =>
-            setActiveSyncs((syncs) => upsertSourceSync(syncs, toActiveSourceSync(job, sync))),
+          (job) => {
+            setActiveSyncs((syncs) => {
+              const currentSync = syncs.find((candidate) => candidate.id === sync.id)
+
+              if (!currentSync || currentSync.jobId !== sync.jobId) {
+                return syncs
+              }
+
+              return replaceSourceSync(syncs, toActiveSourceSync(job, currentSync))
+            })
+          },
           () => undefined
         )
       }
@@ -107,24 +118,50 @@ export function useSourceSyncs({
   }, [activeSyncs, getSourceSyncJob])
 
   useEffect(() => {
-    const terminalSyncs = activeSyncs.filter((sync) => sync.status === "completed")
+    const completedSyncKeys = new Set<string>()
 
-    if (terminalSyncs.length === 0) {
-      return
+    for (const sync of activeSyncs) {
+      if (sync.status !== "completed") {
+        continue
+      }
+
+      const syncKey = getSourceSyncKey(sync)
+      completedSyncKeys.add(syncKey)
+
+      if (completionTimeoutsRef.current.has(syncKey)) {
+        continue
+      }
+
+      const timeoutId = window.setTimeout(() => {
+        completionTimeoutsRef.current.delete(syncKey)
+        setActiveSyncs((syncs) =>
+          syncs.filter((candidate) => getSourceSyncKey(candidate) !== syncKey)
+        )
+      }, COMPLETED_SYNC_DISMISS_DELAY_MS)
+
+      completionTimeoutsRef.current.set(syncKey, timeoutId)
     }
 
-    const timeoutIds = terminalSyncs.map((sync) =>
-      window.setTimeout(() => {
-        setActiveSyncs((syncs) => syncs.filter((candidate) => candidate.id !== sync.id))
-      }, 2800)
-    )
-
-    return () => {
-      for (const timeoutId of timeoutIds) {
-        window.clearTimeout(timeoutId)
+    for (const [syncKey, timeoutId] of completionTimeoutsRef.current) {
+      if (completedSyncKeys.has(syncKey)) {
+        continue
       }
+
+      window.clearTimeout(timeoutId)
+      completionTimeoutsRef.current.delete(syncKey)
     }
   }, [activeSyncs])
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of completionTimeoutsRef.current.values()) {
+        window.clearTimeout(timeoutId)
+      }
+
+      completionTimeoutsRef.current.clear()
+    },
+    []
+  )
 
   const onDismissSync = useCallback((item: SourceSyncIslandItem) => {
     setActiveSyncs((syncs) => syncs.filter((sync) => sync.id !== item.id))
@@ -196,6 +233,17 @@ function upsertSourceSync(
   }
 
   return syncs.map((sync) => (sync.id === nextSync.id ? nextSync : sync))
+}
+
+function replaceSourceSync(
+  syncs: ReadonlyArray<ActiveSourceSync>,
+  nextSync: ActiveSourceSync
+): ReadonlyArray<ActiveSourceSync> {
+  return syncs.map((sync) => (sync.id === nextSync.id ? nextSync : sync))
+}
+
+function getSourceSyncKey(sync: ActiveSourceSync): string {
+  return `${sync.sourceId}:${sync.jobId ?? "pending"}`
 }
 
 function getProgressForStatus(status: SourceSyncStatus): number {
