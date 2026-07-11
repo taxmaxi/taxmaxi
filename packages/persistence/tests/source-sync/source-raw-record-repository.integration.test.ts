@@ -68,6 +68,23 @@ describe("SourceRawRecordRepositoryLive", () => {
     expect(firstWrite.checkpointExternalId).toBe("tx-1")
     expect(firstWrite.checkpointRawRecordId).not.toBeNull()
 
+    const pendingIds = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.listPendingNormalizationRecordIds({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    const firstPendingBatch = await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.listRawRecordsByIds({
+          sourceId: TEST_SOURCE_ID,
+          rawRecordIds: pendingIds.slice(0, 1),
+        })
+      )
+    )
+
+    expect(pendingIds).toHaveLength(2)
+    expect(firstPendingBatch.map((row) => row.id)).toEqual(pendingIds.slice(0, 1))
+
     const secondWrite = await runRepository(
       Effect.flatMap(SourceRawRecordRepository, (repository) =>
         repository.upsertRawBatch({

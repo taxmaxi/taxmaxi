@@ -9,6 +9,7 @@ import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
+import type { SourceSyncPhase } from "./SourceSyncModels.ts"
 
 /**
  * SyncRunStatus - Aggregate principal-wide source sync run status.
@@ -49,6 +50,10 @@ export interface SyncRunItemRecord {
   readonly processingJobId: string | null
   readonly provider: string | null
   readonly status: SyncRunItemStatus
+  readonly phase: SourceSyncPhase | null
+  readonly processedRecords: number | null
+  readonly totalRecords: number | null
+  readonly progressPercent: number | null
   readonly importedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null

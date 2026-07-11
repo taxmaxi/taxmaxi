@@ -28,6 +28,9 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceSyncJobRepository
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceSyncJobRepositoryLive }))
 
 const completedState: SourceSyncExecutionState = {
+  phase: "completed",
+  processedRecords: 4,
+  totalRecords: 4,
   importedRecords: 4,
   normalizedRecords: 3,
   failedRecords: 1,
@@ -444,6 +447,10 @@ describe("SourceSyncJobRepositoryLive", () => {
       sourceId: TEST_SOURCE_ID,
       jobId: created.id,
       status: "completed",
+      phase: "completed",
+      processedRecords: 4,
+      totalRecords: 4,
+      progressPercent: 100,
       importedRecords: 4,
       normalizedRecords: 3,
       failedRecords: 1,

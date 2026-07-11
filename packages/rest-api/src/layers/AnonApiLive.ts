@@ -66,6 +66,10 @@ const toSyncJobResponse = (job: {
   readonly sourceId: string
   readonly jobId: string
   readonly status: "queued" | "running" | "completed" | "failed"
+  readonly phase: "discovering" | "classifying" | "reconciling" | "completed" | null
+  readonly processedRecords: number | null
+  readonly totalRecords: number | null
+  readonly progressPercent: number | null
   readonly importedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null

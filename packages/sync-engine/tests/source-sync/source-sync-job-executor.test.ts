@@ -40,6 +40,9 @@ const source: SourceSyncSource = {
 }
 
 const initialExecution: SourceSyncExecutionState = {
+  phase: "discovering",
+  processedRecords: 0,
+  totalRecords: null,
   importedRecords: 0,
   normalizedRecords: 0,
   failedRecords: 0,
@@ -183,6 +186,9 @@ const makeExecutorLayer = ({
     persistProgress: ({ state, lastSyncedAt }) =>
       Effect.sync(() => {
         events.push(`progress:${state.importedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
+        events.push(
+          `phase:${state.phase}:${state.processedRecords}:${state.totalRecords ?? "unknown"}`
+        )
       }),
     persistFailureMetadata: ({ lastErrorMessage }) =>
       Effect.sync(() => {
@@ -203,6 +209,14 @@ const makeExecutorLayer = ({
       }),
     listReplayCandidates: () => Effect.succeed(replayCandidates),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
+    listPendingNormalizationRecordIds: () =>
+      Effect.succeed(checkpointRawRecords.map((rawRecord) => rawRecord.id)),
+    listRawRecordsByIds: ({ rawRecordIds }) =>
+      Effect.succeed(
+        [...checkpointRawRecords, ...replayRawRecords].filter((rawRecord) =>
+          rawRecordIds.includes(rawRecord.id)
+        )
+      ),
     listRawRecordsByOccurredAt: () => Effect.succeed([]),
     markRawRecordNormalized: () =>
       Effect.sync(() => {
@@ -443,6 +457,11 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("stub:make-normalizer")
     expect(events).toContain("stub:normalize:stub-chain:stub_transaction")
     expect(events).toContain("mark-raw-normalized")
+    expect(events).toContain("phase:discovering:0:unknown")
+    expect(events).toContain("phase:classifying:0:1")
+    expect(events).toContain("phase:classifying:1:1")
+    expect(events).toContain("phase:reconciling:0:unknown")
+    expect(events).toContain("phase:completed:1:1")
     expect(events).toContain("complete:1:1")
   })
 
