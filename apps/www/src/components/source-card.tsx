@@ -224,6 +224,7 @@ const SOURCE_GRID_PATTERN = [
 ] as const
 
 const SOURCE_CHIP_PATTERN = [true, false, true, false, true, false, true, false, true] as const
+const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 
 export function SourceCard({
   action,
@@ -410,5 +411,5 @@ function formatSourceKind(kind: SourceKind): string {
 }
 
 function formatInteger(value: number) {
-  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value)
+  return integerFormatter.format(value)
 }
