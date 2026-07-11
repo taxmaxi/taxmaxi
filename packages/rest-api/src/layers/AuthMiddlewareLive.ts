@@ -12,7 +12,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
-import { Headers, HttpServerRequest } from "@effect/platform"
+import { Headers, HttpApp, HttpServerRequest, HttpServerResponse } from "@effect/platform"
 import { AuthUserId, SessionId, type UserRole } from "@my/core/authentication"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { SessionRepository, UserRepository } from "@my/persistence/services"
@@ -28,6 +28,22 @@ import {
 } from "../definitions/AuthMiddleware.ts"
 
 const SESSION_COOKIE_NAME = "taxmaxi_session"
+
+const clearSessionCookie = (): Effect.Effect<void> =>
+  HttpApp.appendPreResponseHandler((_request, response) =>
+    Effect.orDie(
+      HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
+        expires: new Date(0),
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+      })
+    )
+  )
+
+const clearSessionCookieOnError = <A, E, R>(
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> => effect.pipe(Effect.tapError(() => clearSessionCookie()))
 
 const extractBearerToken = (authorization: string): Option.Option<string> => {
   const [scheme, token] = authorization.split(" ", 2)
@@ -110,7 +126,7 @@ export const AuthMiddlewareLive: Layer.Layer<AuthMiddleware, never, TokenValidat
 
     return AuthMiddleware.of({
       bearer: validateUserToken,
-      cookie: validateUserToken,
+      cookie: (token) => clearSessionCookieOnError(validateUserToken(token)),
     })
   })
 )
@@ -157,7 +173,10 @@ export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, To
 
       return AdminAuthMiddleware.of({
         bearer: (token) => validateAdminTokenOrFallback(token, readCookieTokenFromRequest),
-        cookie: (token) => validateAdminTokenOrFallback(token, readBearerTokenFromRequest),
+        cookie: (token) =>
+          clearSessionCookieOnError(
+            validateAdminTokenOrFallback(token, readBearerTokenFromRequest)
+          ),
       })
     })
   )
@@ -193,7 +212,9 @@ export const OptionalCurrentUserLive: Layer.Layer<OptionalCurrentUser, never, To
           }
 
           if (Option.isSome(maybeSessionToken)) {
-            const user = yield* tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            const user = yield* clearSessionCookieOnError(
+              tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            )
             return Option.some(user)
           }
 

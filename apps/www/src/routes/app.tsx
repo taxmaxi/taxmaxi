@@ -1,13 +1,13 @@
 import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { startTransition, useCallback, useEffect, useRef, useState } from "react"
-import type { Source as TaxMaxiSource } from "taxmaxi"
+import { isTaxMaxiUnauthorizedError, type Source as TaxMaxiSource } from "taxmaxi"
 
 import { TaxDashboard } from "#/components/dashboard/TaxDashboard"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
 import type { Account } from "#/components/dashboard/types"
-import { getAuthStatus } from "#/server-functions/auth"
+import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries } from "#/integrations/taxmaxi/queries"
 import { cn } from "#/lib/utils"
 
@@ -30,7 +30,18 @@ export const Route = createFileRoute("/app")({
   },
   loader: async ({ context }) => {
     const taxmaxi = context.taxmaxi()
-    return context.queryClient.ensureQueryData(queries.sourceList(taxmaxi))
+    try {
+      return await context.queryClient.ensureQueryData(queries.sourceList(taxmaxi))
+    } catch (error) {
+      if (!isTaxMaxiUnauthorizedError(error)) {
+        throw error
+      }
+
+      await clearAuthSessionCookie()
+      throw redirect({
+        to: "/login",
+      })
+    }
   },
   component: RouteComponent,
 })
