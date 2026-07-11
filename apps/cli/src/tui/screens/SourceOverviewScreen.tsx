@@ -13,6 +13,9 @@ type OverviewState = { readonly _tag: "loading" } | ReportResult<SourceOverview>
 
 const MAX_REVIEW_ISSUES = 3
 
+const formatSourceCreatedAt = (epochMillis: number): string =>
+  formatDate(new Date(epochMillis).toISOString())
+
 const syncStatusColor = (status: string | null): string => {
   if (status === "completed") {
     return theme.success
@@ -117,7 +120,7 @@ export function SourceOverviewScreen(props: {
   return (
     <ScreenFrame
       title={props.source.name}
-      subtitle={`${props.source.providerKey ?? "unknown"} · ${props.source.sourceRef._tag} · added ${formatDate(props.source.createdAt.toISOString())}`}
+      subtitle={`${props.source.providerKey ?? "unknown"} · ${props.source.sourceRef._tag} · added ${formatSourceCreatedAt(props.source.createdAt.epochMillis)}`}
       hints={[
         "[p] asset p&l",
         "[t] transactions",
