@@ -3,7 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query"
 import { startTransition, useCallback, useEffect, useRef, useState } from "react"
 import { isTaxMaxiUnauthorizedError, type Source as TaxMaxiSource } from "taxmaxi"
 
-import { TaxDashboard } from "#/components/dashboard/TaxDashboard"
+import { Dashboard } from "#/components/dashboard"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
 import type { Account } from "#/components/dashboard/types"
@@ -86,7 +86,7 @@ function RouteComponent() {
 
       <div className="relative z-10">
         <AppHeader />
-        <TaxDashboard
+        <Dashboard
           accounts={sourceAccounts}
           getSourceSyncJob={getSourceSyncJob}
           startSourceSync={startSourceSync}

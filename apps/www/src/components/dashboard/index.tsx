@@ -59,7 +59,7 @@ type ActiveSourceSync = SourceSyncIslandItem & {
 
 const SOURCE_SYNC_POLL_INTERVAL_MS = 500
 
-export function TaxDashboard({
+export function Dashboard({
   accounts = mockAccounts,
   getSourceSyncJob,
   startSourceSync,
