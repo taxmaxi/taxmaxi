@@ -39,11 +39,13 @@ type DashboardSummary = {
 export function Dashboard({
   accounts = mockAccounts,
   getSourceSyncJob,
+  onSourceSyncCompleted,
   onSourceSyncUnauthorized,
   startSourceSync,
 }: {
   accounts?: ReadonlyArray<Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
+  onSourceSyncCompleted?: (sourceId: AccountId) => void | Promise<void>
   onSourceSyncUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }) {
@@ -141,6 +143,7 @@ export function Dashboard({
     useSourceSyncs({
       accountsById,
       getSourceSyncJob,
+      onCompleted: onSourceSyncCompleted,
       onUnauthorized: onSourceSyncUnauthorized,
       startSourceSync,
     })

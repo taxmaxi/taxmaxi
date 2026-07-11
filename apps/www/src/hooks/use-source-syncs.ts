@@ -23,6 +23,7 @@ type ActiveSourceSync = SourceSyncIslandItem & {
 type UseSourceSyncsOptions = {
   accountsById: ReadonlyMap<AccountId, Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
+  onCompleted?: (sourceId: AccountId) => void | Promise<void>
   onUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }
@@ -34,11 +35,13 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 3
 export function useSourceSyncs({
   accountsById,
   getSourceSyncJob,
+  onCompleted,
   onUnauthorized,
   startSourceSync,
 }: UseSourceSyncsOptions) {
   const [activeSyncs, setActiveSyncs] = useState<ReadonlyArray<ActiveSourceSync>>([])
   const completionTimeoutsRef = useRef(new Map<string, number>())
+  const completedNotificationsRef = useRef(new Set<string>())
   const pollFailureCountsRef = useRef(new Map<string, number>())
   const syncingSourceIds = useMemo(
     () =>
@@ -117,7 +120,12 @@ export function useSourceSyncs({
 
         void getSourceSyncJob({ sourceId: sync.sourceId, jobId }).then(
           (job) => {
-            pollFailureCountsRef.current.delete(getSourceSyncKey(sync))
+            const syncKey = getSourceSyncKey(sync)
+            pollFailureCountsRef.current.delete(syncKey)
+            if (job.status === "completed" && !completedNotificationsRef.current.has(syncKey)) {
+              completedNotificationsRef.current.add(syncKey)
+              void Promise.resolve(onCompleted?.(sync.sourceId)).catch(() => undefined)
+            }
             setActiveSyncs((syncs) => {
               const currentSync = syncs.find((candidate) => candidate.id === sync.id)
 
@@ -166,7 +174,7 @@ export function useSourceSyncs({
     }, SOURCE_SYNC_POLL_INTERVAL_MS)
 
     return () => window.clearInterval(intervalId)
-  }, [activeSyncs, getSourceSyncJob, onUnauthorized])
+  }, [activeSyncs, getSourceSyncJob, onCompleted, onUnauthorized])
 
   useEffect(() => {
     const completedSyncKeys = new Set<string>()
@@ -217,6 +225,7 @@ export function useSourceSyncs({
       }
 
       completionTimeoutsRef.current.clear()
+      completedNotificationsRef.current.clear()
       pollFailureCountsRef.current.clear()
     },
     []

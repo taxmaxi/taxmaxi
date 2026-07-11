@@ -87,6 +87,15 @@ function RouteComponent() {
     await clearAuthSessionCookie()
     await navigate({ to: "/login", replace: true })
   }, [navigate, queryClient])
+  const onSourceSyncCompleted = useCallback(
+    async (sourceId: string) => {
+      await queryClient.invalidateQueries({
+        exact: true,
+        queryKey: queryKeys.sourceOverview(sourceId),
+      })
+    },
+    [queryClient]
+  )
 
   return (
     <PageShell
@@ -115,6 +124,7 @@ function RouteComponent() {
         <Dashboard
           accounts={sourceAccounts}
           getSourceSyncJob={getSourceSyncJob}
+          onSourceSyncCompleted={onSourceSyncCompleted}
           onSourceSyncUnauthorized={onSourceSyncUnauthorized}
           startSourceSync={startSourceSync}
         />
