@@ -144,7 +144,7 @@ function toDashboardAccount(source: TaxMaxiSource, overview: SourceOverview | un
     ...(source.providerKey === null ? {} : { providerKey: source.providerKey }),
     importedTransactions: overview?.totals.transactionCount ?? 0,
     unresolvedItems: overview?.review.needsReviewCount ?? 0,
-    lastSync: formatSourceCreatedAt(source.createdAt.epochMillis),
+    lastSync: formatLastSync(overview?.latestSync.lastSyncedAt ?? null),
   }
 }
 
@@ -163,12 +163,18 @@ function formatProviderNetwork(source: TaxMaxiSource): string | undefined {
   }
 }
 
-function formatSourceCreatedAt(epochMillis: number): string {
-  return `Added ${new Intl.DateTimeFormat("en-US", {
+function formatLastSync(lastSyncedAt: string | null): string {
+  if (lastSyncedAt === null) {
+    return "Never synced"
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     month: "short",
     year: "numeric",
-  }).format(new Date(epochMillis))}`
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(lastSyncedAt))
 }
 
 function AppHeader() {
