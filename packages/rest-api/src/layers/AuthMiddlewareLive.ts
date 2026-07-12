@@ -7,6 +7,7 @@
  * @module AuthMiddlewareLive
  */
 
+import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -29,6 +30,9 @@ import {
 
 const SESSION_COOKIE_NAME = "taxmaxi_session"
 const invalidSessionRequests = new WeakSet<object>()
+const sessionCookieDomain = Config.option(Config.string("COOKIE_DOMAIN")).pipe(
+  Config.map(Option.getOrUndefined)
+)
 
 const markInvalidSessionRequest = () =>
   HttpServerRequest.HttpServerRequest.pipe(
@@ -53,11 +57,16 @@ export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default) =>
       return Effect.succeed(response)
     }
 
-    return HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
-      expires: new Date(0),
-      httpOnly: true,
-      path: "/",
-      sameSite: "lax",
+    return Effect.gen(function* () {
+      const cookieDomain = yield* sessionCookieDomain
+
+      return yield* HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
+        expires: new Date(0),
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+        ...(cookieDomain === undefined ? {} : { domain: cookieDomain }),
+      })
     }).pipe(Effect.orDie)
   })
 
