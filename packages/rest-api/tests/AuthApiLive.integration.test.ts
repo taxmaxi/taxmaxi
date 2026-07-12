@@ -34,7 +34,10 @@ import { LocalAuthProvider } from "../../persistence/src/services/LocalAuthProvi
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
-import { SessionTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
+import {
+  invalidSessionCookieCleanup,
+  SessionTokenValidatorLive,
+} from "../src/layers/AuthMiddlewareLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
@@ -170,7 +173,8 @@ const makeAuthHandler = () => {
       Layer.provide(AuthServiceTestLive),
       Layer.provideMerge(InfrastructureLive),
       Layer.provideMerge(HttpServer.layerContext)
-    )
+    ),
+    { middleware: invalidSessionCookieCleanup }
   )
 
   return {

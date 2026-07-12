@@ -18,6 +18,7 @@ import {
 import { AuthLive, PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   AnonSessionServiceLive,
+  InvalidSessionCookieCleanupLive,
   SessionTokenValidatorLive,
   SIWXProofVerifierLive,
   TaxMaxiApiLive,
@@ -95,6 +96,7 @@ const RequestFailureLoggingLive = HttpApiBuilder.middleware((httpApp) =>
 
 const ServerLive = HttpApiBuilder.serve().pipe(
   Layer.provide(CorsLive),
+  Layer.provide(InvalidSessionCookieCleanupLive),
   Layer.provide(RequestFailureLoggingLive),
   Layer.provide(HttpApiSwagger.layer()),
   Layer.provide(HttpApiBuilder.middlewareOpenApi({ path: "/openapi.json" })),
