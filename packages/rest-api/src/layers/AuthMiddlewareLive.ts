@@ -28,6 +28,19 @@ import {
 } from "../definitions/AuthMiddleware.ts"
 
 const SESSION_COOKIE_NAME = "taxmaxi_session"
+const invalidSessionRequests = new WeakSet<object>()
+
+const markInvalidSessionRequest = () =>
+  HttpServerRequest.HttpServerRequest.pipe(
+    Effect.tap((request) => Effect.sync(() => invalidSessionRequests.add(request)))
+  )
+
+const markInvalidCookieOnUnauthorized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.tapError((error) =>
+      error instanceof UnauthorizedError ? markInvalidSessionRequest() : Effect.void
+    )
+  )
 
 /**
  * Clears a submitted session cookie when the final response is unauthorized.
@@ -36,11 +49,7 @@ const SESSION_COOKIE_NAME = "taxmaxi_session"
  */
 export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default) =>
   HttpApp.withPreResponseHandler(httpApp, (request, response) => {
-    const submittedSessionCookie = Headers.get(request.headers, "cookie").pipe(
-      Option.exists((cookie) => /(?:^|;\s*)taxmaxi_session=/.test(cookie))
-    )
-
-    if (response.status !== 401 || !submittedSessionCookie) {
+    if (response.status !== 401 || !invalidSessionRequests.has(request)) {
       return Effect.succeed(response)
     }
 
@@ -128,7 +137,7 @@ export const AuthMiddlewareLive: Layer.Layer<AuthMiddleware, never, TokenValidat
 
     return AuthMiddleware.of({
       bearer: validateUserToken,
-      cookie: validateUserToken,
+      cookie: (token) => markInvalidCookieOnUnauthorized(validateUserToken(token)),
     })
   })
 )
@@ -172,7 +181,10 @@ export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, To
 
       return AdminAuthMiddleware.of({
         bearer: (token) => validateAdminTokenOrFallback(token, readCookieTokenFromRequest),
-        cookie: (token) => validateAdminTokenOrFallback(token, readBearerTokenFromRequest),
+        cookie: (token) =>
+          markInvalidCookieOnUnauthorized(
+            validateAdminTokenOrFallback(token, readBearerTokenFromRequest)
+          ),
       })
     })
   )
@@ -208,7 +220,9 @@ export const OptionalCurrentUserLive: Layer.Layer<OptionalCurrentUser, never, To
           }
 
           if (Option.isSome(maybeSessionToken)) {
-            const user = yield* tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            const user = yield* markInvalidCookieOnUnauthorized(
+              tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            )
             return Option.some(user)
           }
 
