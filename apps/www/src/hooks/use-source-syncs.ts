@@ -145,7 +145,12 @@ export function useSourceSyncs({
             setActiveSyncs((syncs) => {
               const currentSync = syncs.find((candidate) => candidate.id === sync.id)
 
-              if (!currentSync || currentSync.jobId !== jobId) {
+              if (
+                !currentSync ||
+                currentSync.jobId !== jobId ||
+                currentSync.status === "completed" ||
+                currentSync.status === "failed"
+              ) {
                 return syncs
               }
 
@@ -343,7 +348,9 @@ function failPolledSourceSync({
 }) {
   setActiveSyncs((syncs) =>
     syncs.map((sync) =>
-      sync.sourceId === sourceId && sync.jobId === expectedJobId
+      sync.sourceId === sourceId &&
+      sync.jobId === expectedJobId &&
+      (sync.status === "queued" || sync.status === "running")
         ? { ...sync, message, progress: 100, status: "failed" }
         : sync
     )
