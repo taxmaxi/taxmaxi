@@ -32,7 +32,10 @@ import { schema } from "../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
-import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
+import {
+  invalidSessionCookieCleanup,
+  SimpleTokenValidatorLive,
+} from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
@@ -106,7 +109,7 @@ const PersistenceLayer = Layer.mergeAll(
   TransferReconciliationServiceTestLive
 ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const HttpLive = HttpApiBuilder.serve().pipe(
+const HttpLive = HttpApiBuilder.serve(invalidSessionCookieCleanup).pipe(
   Layer.provide(TaxMaxiApiLive),
   Layer.provide(AnonSessionServiceLive),
   Layer.provide(SIWXProofVerifierTestLive),

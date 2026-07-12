@@ -12,13 +12,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
-import {
-  Headers,
-  HttpApiBuilder,
-  HttpApp,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
+import { Headers, HttpApp, HttpServerRequest, HttpServerResponse } from "@effect/platform"
 import { AuthUserId, SessionId, type UserRole } from "@my/core/authentication"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { SessionRepository, UserRepository } from "@my/persistence/services"
@@ -40,9 +34,13 @@ const SESSION_COOKIE_NAME = "taxmaxi_session"
  *
  * This runs around the complete HTTP app so the cleanup survives API error encoding.
  */
-export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default): HttpApp.Default =>
+export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default) =>
   HttpApp.withPreResponseHandler(httpApp, (request, response) => {
-    if (response.status !== 401 || request.cookies[SESSION_COOKIE_NAME] === undefined) {
+    const submittedSessionCookie = Headers.get(request.headers, "cookie").pipe(
+      Option.exists((cookie) => /(?:^|;\s*)taxmaxi_session=/.test(cookie))
+    )
+
+    if (response.status !== 401 || !submittedSessionCookie) {
       return Effect.succeed(response)
     }
 
@@ -53,10 +51,6 @@ export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default): HttpApp.D
       sameSite: "lax",
     }).pipe(Effect.orDie)
   })
-
-export const InvalidSessionCookieCleanupLive = HttpApiBuilder.middleware(
-  invalidSessionCookieCleanup
-)
 
 const extractBearerToken = (authorization: string): Option.Option<string> => {
   const [scheme, token] = authorization.split(" ", 2)
