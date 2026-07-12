@@ -25,6 +25,7 @@ export const getGuestSession = createServerFn({ method: "GET" }).handler(async (
 export const clearAuthSessionCookie = createServerFn({ method: "POST" }).handler(async () => {
   deleteCookie(REST_SESSION_COOKIE_NAME, {
     path: "/",
+    ...(process.env.COOKIE_DOMAIN === undefined ? {} : { domain: process.env.COOKIE_DOMAIN }),
   })
 })
 

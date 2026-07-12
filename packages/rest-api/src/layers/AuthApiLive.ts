@@ -127,12 +127,17 @@ const FRONTEND_URL_DEFAULT = "http://localhost:3000"
 const VERIFY_EMAIL_REDIRECT = "/verify-email"
 const POST_AUTH_REDIRECT = "/home"
 
-const cookieOptionsForEnv = (environment: string, path = "/") => ({
+const cookieOptionsForEnv = (environment: string, path = "/", domain?: string) => ({
   httpOnly: true,
   secure: environment === "production",
   sameSite: "lax" as const,
   path,
+  ...(domain === undefined ? {} : { domain }),
 })
+
+const sessionCookieDomain = Config.option(Config.string("COOKIE_DOMAIN")).pipe(
+  Config.map(Option.getOrUndefined)
+)
 
 // =============================================================================
 // Helper Functions
@@ -537,7 +542,8 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
       Config.map(normalizeBaseUrl)
     )
     const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
-    const sessionCookieOptions = cookieOptionsForEnv(environment)
+    const cookieDomain = yield* sessionCookieDomain
+    const sessionCookieOptions = cookieOptionsForEnv(environment, "/", cookieDomain)
     const verificationCookieOptions = cookieOptionsForEnv(environment, "/auth")
 
     const failWithPendingEmailVerification = (email: AuthUser["email"]) =>
@@ -1059,7 +1065,8 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
       const environment = yield* Config.string("ENVIRONMENT").pipe(
         Config.withDefault("development")
       )
-      const baseCookieOptions = cookieOptionsForEnv(environment)
+      const cookieDomain = yield* sessionCookieDomain
+      const baseCookieOptions = cookieOptionsForEnv(environment, "/", cookieDomain)
 
       return handlers.handle("cdpCallback", (_) =>
         Effect.gen(function* () {
@@ -1369,7 +1376,8 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
     const identityRepo = yield* IdentityRepository
     const sessionRepo = yield* SessionRepository
     const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
-    const baseCookieOptions = cookieOptionsForEnv(environment)
+    const cookieDomain = yield* sessionCookieDomain
+    const baseCookieOptions = cookieOptionsForEnv(environment, "/", cookieDomain)
 
     const internalServerResponse = (message: string) =>
       HttpServerResponse.json(
