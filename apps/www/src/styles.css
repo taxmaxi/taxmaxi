@@ -2,6 +2,9 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource/geist/latin-400.css";
+@import "@fontsource/geist/latin-500.css";
+@import "@fontsource/geist/latin-600.css";
 @import "@fontsource/kanit/latin-400.css";
 @import "@fontsource/kanit/latin-600.css";
 @import "@fontsource/kanit/latin-700.css";
@@ -47,6 +50,7 @@
   /* TaxMaxi global variables. */
   --off-white: oklch(0.9571 0.0188 83.06);
   --font-family-display: "Kanit", sans-serif;
+  --font-family-interface: "Geist", sans-serif;
   --font-family-sans: "JetBrains Mono Variable", monospace;
   --font-family-handwriting: "Caveat Variable", cursive;
   --font-size-caption: 0.75rem;
@@ -102,6 +106,15 @@
   --marketing-contrast-border: #2a3a35;
   --marketing-contrast-border-hover: #3a4a45;
   --marketing-contrast-foreground: #a3c4b5;
+
+  /* Sync island variables. */
+  --sync-island: #000;
+  --sync-island-foreground: #f2f7f4;
+  --sync-island-muted: #98a8a0;
+  --sync-island-accent: #82ddb3;
+  --sync-island-complete: #91e3aa;
+  --sync-island-failed: #ff927c;
+  --sync-island-border: rgb(255 255 255 / 0.09);
 }
 
 /* shadcn radix-luma dark variables. */
@@ -150,6 +163,7 @@
   --font-sans: var(--font-family-sans);
   --font-mono: var(--font-family-sans);
   --font-heading: var(--font-sans);
+  --font-interface: var(--font-family-interface);
 
   /* TaxMaxi global tailwind bridge. */
   --font-display: var(--font-family-display);
@@ -181,6 +195,15 @@
   --color-marketing-contrast-border: var(--marketing-contrast-border);
   --color-marketing-contrast-border-hover: var(--marketing-contrast-border-hover);
   --color-marketing-contrast-foreground: var(--marketing-contrast-foreground);
+
+  /* Sync island tailwind bridge. */
+  --color-sync-island: var(--sync-island);
+  --color-sync-island-foreground: var(--sync-island-foreground);
+  --color-sync-island-muted: var(--sync-island-muted);
+  --color-sync-island-accent: var(--sync-island-accent);
+  --color-sync-island-complete: var(--sync-island-complete);
+  --color-sync-island-failed: var(--sync-island-failed);
+  --color-sync-island-border: var(--sync-island-border);
 
   /* shadcn color and radius tailwind bridge. */
   --color-sidebar-ring: var(--sidebar-ring);
@@ -245,7 +268,13 @@ html:has([data-page="landing"]) > body {
   background-color: #1a1f1d;
 }
 
-html:has([data-page="landing"]) {
+html:has([data-page="app"]),
+html:has([data-page="app"]) > body {
+  background-color: #22312b;
+}
+
+html:has([data-page="landing"]),
+html:has([data-page="app"]) {
   scroll-behavior: smooth;
 }
 
@@ -265,7 +294,8 @@ html:has([data-page="landing"]) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html:has([data-page="landing"]) {
+  html:has([data-page="landing"]),
+  html:has([data-page="app"]) {
     scroll-behavior: auto;
   }
 

@@ -1,4 +1,10 @@
-import { HttpApiBuilder, HttpApiClient, HttpClient, HttpClientRequest } from "@effect/platform"
+import {
+  Headers,
+  HttpApiBuilder,
+  HttpApiClient,
+  HttpClient,
+  HttpClientRequest,
+} from "@effect/platform"
 import { NodeHttpServer } from "@effect/platform-node"
 import { afterAll, beforeEach, describe, expect, it } from "@effect/vitest"
 import {
@@ -18,6 +24,7 @@ import {
 import * as Chunk from "effect/Chunk"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import { eq } from "../../persistence/src/query/index.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
@@ -25,7 +32,10 @@ import { schema } from "../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
-import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
+import {
+  invalidSessionCookieCleanup,
+  SimpleTokenValidatorLive,
+} from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
@@ -99,7 +109,7 @@ const PersistenceLayer = Layer.mergeAll(
   TransferReconciliationServiceTestLive
 ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const HttpLive = HttpApiBuilder.serve().pipe(
+const HttpLive = HttpApiBuilder.serve(invalidSessionCookieCleanup).pipe(
   Layer.provide(TaxMaxiApiLive),
   Layer.provide(AnonSessionServiceLive),
   Layer.provide(SIWXProofVerifierTestLive),
@@ -406,6 +416,37 @@ describe("AdminProtocolReviewApiLive", () => {
       expect(result._tag).toBe("Left")
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("ForbiddenError")
+      }
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("preserves a valid non-admin session cookie after a forbidden response", () =>
+    Effect.gen(function* () {
+      const baseHttpClient = yield* HttpClient.HttpClient
+      const userId = crypto.randomUUID()
+      const response = yield* HttpClientRequest.get("/v1/admin/protocol-review/candidates").pipe(
+        HttpClientRequest.setHeader("cookie", `taxmaxi_session=user_${userId}_user`),
+        baseHttpClient.execute
+      )
+
+      expect(response.status).toBe(403)
+      expect(Headers.get(response.headers, "set-cookie")).toEqual(Option.none())
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("clears an invalid admin session cookie after an unauthorized response", () =>
+    Effect.gen(function* () {
+      const baseHttpClient = yield* HttpClient.HttpClient
+      const response = yield* HttpClientRequest.get("/v1/admin/protocol-review/candidates").pipe(
+        HttpClientRequest.setHeader("cookie", "taxmaxi_session=invalid-session"),
+        baseHttpClient.execute
+      )
+
+      expect(response.status).toBe(401)
+      const setCookie = Headers.get(response.headers, "set-cookie")
+      expect(Option.isSome(setCookie)).toBe(true)
+      if (Option.isSome(setCookie)) {
+        expect(setCookie.value).toContain("taxmaxi_session=;")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )

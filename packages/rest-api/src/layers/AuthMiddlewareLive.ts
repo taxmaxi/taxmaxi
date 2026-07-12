@@ -7,12 +7,13 @@
  * @module AuthMiddlewareLive
  */
 
+import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
-import { Headers, HttpServerRequest } from "@effect/platform"
+import { Headers, HttpApp, HttpServerRequest, HttpServerResponse } from "@effect/platform"
 import { AuthUserId, SessionId, type UserRole } from "@my/core/authentication"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { SessionRepository, UserRepository } from "@my/persistence/services"
@@ -28,6 +29,46 @@ import {
 } from "../definitions/AuthMiddleware.ts"
 
 const SESSION_COOKIE_NAME = "taxmaxi_session"
+const invalidSessionRequests = new WeakSet<object>()
+const sessionCookieDomain = Config.option(Config.string("COOKIE_DOMAIN")).pipe(
+  Config.map(Option.getOrUndefined)
+)
+
+const markInvalidSessionRequest = () =>
+  HttpServerRequest.HttpServerRequest.pipe(
+    Effect.tap((request) => Effect.sync(() => invalidSessionRequests.add(request)))
+  )
+
+const markInvalidCookieOnUnauthorized = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.tapError((error) =>
+      error instanceof UnauthorizedError ? markInvalidSessionRequest() : Effect.void
+    )
+  )
+
+/**
+ * Clears a submitted session cookie when the final response is unauthorized.
+ *
+ * This runs around the complete HTTP app so the cleanup survives API error encoding.
+ */
+export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default) =>
+  HttpApp.withPreResponseHandler(httpApp, (request, response) => {
+    if (response.status !== 401 || !invalidSessionRequests.has(request)) {
+      return Effect.succeed(response)
+    }
+
+    return Effect.gen(function* () {
+      const cookieDomain = yield* sessionCookieDomain
+
+      return yield* HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
+        expires: new Date(0),
+        httpOnly: true,
+        path: "/",
+        sameSite: "lax",
+        ...(cookieDomain === undefined ? {} : { domain: cookieDomain }),
+      })
+    }).pipe(Effect.orDie)
+  })
 
 const extractBearerToken = (authorization: string): Option.Option<string> => {
   const [scheme, token] = authorization.split(" ", 2)
@@ -101,16 +142,11 @@ export const AuthMiddlewareLive: Layer.Layer<AuthMiddleware, never, TokenValidat
   Effect.gen(function* () {
     const tokenValidator = yield* TokenValidator
 
-    const validateUserToken = (token: Redacted.Redacted<string>) =>
-      tokenValidator
-        .validate(token)
-        .pipe(
-          Effect.catchAll((error) => Effect.fail(new UnauthorizedError({ message: error.message })))
-        )
+    const validateUserToken = (token: Redacted.Redacted<string>) => tokenValidator.validate(token)
 
     return AuthMiddleware.of({
       bearer: validateUserToken,
-      cookie: validateUserToken,
+      cookie: (token) => markInvalidCookieOnUnauthorized(validateUserToken(token)),
     })
   })
 )
@@ -128,10 +164,7 @@ export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, To
       const tokenValidator = yield* TokenValidator
 
       const validateAdminToken = (token: Redacted.Redacted<string>) =>
-        tokenValidator.validate(token).pipe(
-          Effect.mapError((error) => new UnauthorizedError({ message: error.message })),
-          Effect.flatMap(requireAdminUser)
-        )
+        tokenValidator.validate(token).pipe(Effect.flatMap(requireAdminUser))
 
       const validateAdminTokenOrFallback = (
         token: Redacted.Redacted<string>,
@@ -157,7 +190,10 @@ export const AdminAuthMiddlewareLive: Layer.Layer<AdminAuthMiddleware, never, To
 
       return AdminAuthMiddleware.of({
         bearer: (token) => validateAdminTokenOrFallback(token, readCookieTokenFromRequest),
-        cookie: (token) => validateAdminTokenOrFallback(token, readBearerTokenFromRequest),
+        cookie: (token) =>
+          markInvalidCookieOnUnauthorized(
+            validateAdminTokenOrFallback(token, readBearerTokenFromRequest)
+          ),
       })
     })
   )
@@ -193,7 +229,9 @@ export const OptionalCurrentUserLive: Layer.Layer<OptionalCurrentUser, never, To
           }
 
           if (Option.isSome(maybeSessionToken)) {
-            const user = yield* tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            const user = yield* markInvalidCookieOnUnauthorized(
+              tokenValidator.validate(Redacted.make(maybeSessionToken.value))
+            )
             return Option.some(user)
           }
 
@@ -252,9 +290,7 @@ export const SimpleTokenValidatorLive: Layer.Layer<TokenValidator> = Layer.succe
       }
 
       return yield* Effect.fail(
-        new UnauthorizedError({
-          message: `Invalid token: invalid role "${roleStr}"`,
-        })
+        new UnauthorizedError({ message: `Invalid token: invalid role "${roleStr}"` })
       )
     }),
 } satisfies TokenValidatorService)

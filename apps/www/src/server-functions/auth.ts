@@ -11,7 +11,6 @@ const getRestServerUrl = (): string => {
 
 export const getAuthStatus = createServerFn({ method: "GET" }).handler(async () => {
   const sessionCookie = getCookie(REST_SESSION_COOKIE_NAME)
-  // TODO: check if session has expired
   if (sessionCookie) {
     return { isAuthenticated: true }
   }
@@ -26,6 +25,7 @@ export const getGuestSession = createServerFn({ method: "GET" }).handler(async (
 export const clearAuthSessionCookie = createServerFn({ method: "POST" }).handler(async () => {
   deleteCookie(REST_SESSION_COOKIE_NAME, {
     path: "/",
+    ...(process.env.COOKIE_DOMAIN === undefined ? {} : { domain: process.env.COOKIE_DOMAIN }),
   })
 })
 

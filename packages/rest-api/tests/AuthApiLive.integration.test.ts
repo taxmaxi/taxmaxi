@@ -34,7 +34,10 @@ import { LocalAuthProvider } from "../../persistence/src/services/LocalAuthProvi
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
-import { SessionTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
+import {
+  invalidSessionCookieCleanup,
+  SessionTokenValidatorLive,
+} from "../src/layers/AuthMiddlewareLive.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
@@ -170,7 +173,8 @@ const makeAuthHandler = () => {
       Layer.provide(AuthServiceTestLive),
       Layer.provideMerge(InfrastructureLive),
       Layer.provideMerge(HttpServer.layerContext)
-    )
+    ),
+    { middleware: invalidSessionCookieCleanup }
   )
 
   return {
@@ -295,6 +299,27 @@ describe("AuthApiLive integration", () => {
   afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
 
   beforeEach(() => Effect.runPromise(clearAuthTables()))
+
+  it.effect("clears an invalid session cookie on an unauthorized response", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+
+      const response = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie: "taxmaxi_session=invalid-session",
+      })
+
+      expect(response.status).toBe(401)
+      const clearedSessionCookie = getSetCookies(response).find((cookie) =>
+        cookie.startsWith("taxmaxi_session=")
+      )
+      expect(clearedSessionCookie).toContain("taxmaxi_session=;")
+      expect(clearedSessionCookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+      expect(clearedSessionCookie).toContain("HttpOnly")
+      expect(clearedSessionCookie).toContain("Path=/")
+    }).pipe(Effect.scoped)
+  )
 
   it.effect(
     "registers, rotates the verification cookie on resend, rejects stale codes, and authenticates with the issued session cookie",

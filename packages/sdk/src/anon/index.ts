@@ -1,4 +1,4 @@
-import type {
+import {
   AnonSessionChallengeResponse,
   AnonSessionCreateRequest,
   AnonSessionDeleteResponse,
@@ -8,15 +8,20 @@ import type {
   SourceSyncJobResponse,
 } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 import type { TaxMaxiEffectClient } from "../client.ts"
 
-export type AnonSourceList = AnonSourceListResponse
-export type AnonSourceHandle = AnonSource
-export type AnonSourceSyncJob = SourceSyncJobResponse
-export type AnonSessionChallenge = AnonSessionChallengeResponse
+const AnonSourceJobsResponse = Schema.Struct({
+  jobs: Schema.Array(SourceSyncJobResponse),
+})
+
+export type AnonSourceList = Schema.Schema.Encoded<typeof AnonSourceListResponse>
+export type AnonSourceHandle = Schema.Schema.Encoded<typeof AnonSource>
+export type AnonSourceSyncJob = Schema.Schema.Encoded<typeof SourceSyncJobResponse>
+export type AnonSessionChallenge = Schema.Schema.Encoded<typeof AnonSessionChallengeResponse>
 export type AnonSessionCreateInput = AnonSessionCreateRequest
-export type AnonSession = AnonSessionResponse
-export type AnonSessionDelete = AnonSessionDeleteResponse
+export type AnonSession = Schema.Schema.Encoded<typeof AnonSessionResponse>
+export type AnonSessionDelete = Schema.Schema.Encoded<typeof AnonSessionDeleteResponse>
 
 export type AnonSourceInput = {
   readonly sourceId: string
@@ -58,40 +63,71 @@ export type AnonPromiseResource = {
   }
 }
 
+const encodeAnonSourceList = Schema.encodeSync(AnonSourceListResponse)
+const encodeAnonSource = Schema.encodeSync(AnonSource)
+const encodeAnonSourceJobs = Schema.encodeSync(AnonSourceJobsResponse)
+const encodeSourceSyncJob = Schema.encodeSync(SourceSyncJobResponse)
+const encodeAnonSessionChallenge = Schema.encodeSync(AnonSessionChallengeResponse)
+const encodeAnonSession = Schema.encodeSync(AnonSessionResponse)
+const encodeAnonSessionDelete = Schema.encodeSync(AnonSessionDeleteResponse)
+
 export const makeAnonEffectResource = (
   client: Effect.Effect<TaxMaxiEffectClient, never>
 ): AnonEffectResource => ({
   sources: {
-    list: () => Effect.flatMap(client, (resolved) => resolved.anon.listAnonSources(undefined)),
+    list: () =>
+      Effect.map(
+        Effect.flatMap(client, (resolved) => resolved.anon.listAnonSources(undefined)),
+        encodeAnonSourceList
+      ),
     get: ({ sourceId }) =>
-      Effect.flatMap(client, (resolved) =>
-        resolved.anon.getAnonSource({
-          path: { sourceId },
-        })
+      Effect.map(
+        Effect.flatMap(client, (resolved) =>
+          resolved.anon.getAnonSource({
+            path: { sourceId },
+          })
+        ),
+        encodeAnonSource
       ),
     listJobs: ({ sourceId }) =>
-      Effect.flatMap(client, (resolved) =>
-        resolved.anon.listAnonSourceJobs({
-          path: { sourceId },
-        })
+      Effect.map(
+        Effect.flatMap(client, (resolved) =>
+          resolved.anon.listAnonSourceJobs({
+            path: { sourceId },
+          })
+        ),
+        encodeAnonSourceJobs
       ),
     getJob: ({ sourceId, jobId }) =>
-      Effect.flatMap(client, (resolved) =>
-        resolved.anon.getAnonSourceJob({
-          path: { sourceId, jobId },
-        })
+      Effect.map(
+        Effect.flatMap(client, (resolved) =>
+          resolved.anon.getAnonSourceJob({
+            path: { sourceId, jobId },
+          })
+        ),
+        encodeSourceSyncJob
       ),
   },
   session: {
     challenge: () =>
-      Effect.flatMap(client, (resolved) => resolved.anon.createAnonSessionChallenge(undefined)),
-    create: (input) =>
-      Effect.flatMap(client, (resolved) =>
-        resolved.anon.createAnonSession({
-          payload: input,
-        })
+      Effect.map(
+        Effect.flatMap(client, (resolved) => resolved.anon.createAnonSessionChallenge(undefined)),
+        encodeAnonSessionChallenge
       ),
-    delete: () => Effect.flatMap(client, (resolved) => resolved.anon.deleteAnonSession(undefined)),
+    create: (input) =>
+      Effect.map(
+        Effect.flatMap(client, (resolved) =>
+          resolved.anon.createAnonSession({
+            payload: input,
+          })
+        ),
+        encodeAnonSession
+      ),
+    delete: () =>
+      Effect.map(
+        Effect.flatMap(client, (resolved) => resolved.anon.deleteAnonSession(undefined)),
+        encodeAnonSessionDelete
+      ),
   },
 })
 

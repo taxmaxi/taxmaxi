@@ -18,6 +18,7 @@ import {
 import { AuthLive, PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   AnonSessionServiceLive,
+  invalidSessionCookieCleanup,
   SessionTokenValidatorLive,
   SIWXProofVerifierLive,
   TaxMaxiApiLive,
@@ -27,7 +28,7 @@ import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueL
 import { TracingLive } from "./layers/TracingLive.ts"
 
 const port = 4000
-const DEFAULT_FRONTEND_URL = "http://localhost:5173"
+const DEFAULT_FRONTEND_URL = "http://localhost:3000"
 
 const SyncRuntimeLive = SourceSyncServiceLive.pipe(
   Layer.provide(ApiBullMqSourceSyncQueueLive),
@@ -93,7 +94,7 @@ const RequestFailureLoggingLive = HttpApiBuilder.middleware((httpApp) =>
   )
 )
 
-const ServerLive = HttpApiBuilder.serve().pipe(
+const ServerLive = HttpApiBuilder.serve(invalidSessionCookieCleanup).pipe(
   Layer.provide(CorsLive),
   Layer.provide(RequestFailureLoggingLive),
   Layer.provide(HttpApiSwagger.layer()),

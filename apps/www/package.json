@@ -6,7 +6,7 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "vite dev",
+    "dev": "vite dev --port 3000",
     "build": "vite build && tsc --noEmit",
     "preview": "vite preview",
     "test": "vitest run",
@@ -45,10 +45,12 @@
     "@tanstack/react-router-ssr-query": "1.167.1",
     "@tanstack/react-start": "1.168.26",
     "@tanstack/react-store": "0.11.0",
+    "@tanstack/react-table": "8.21.3",
     "@tanstack/router-plugin": "1.168.18",
     "@tanstack/store": "0.11.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "cmdk": "1.1.1",
     "dotenv-cli": "11.0.0",
     "highlight.js": "11.11.1",
     "lucide-react": "1.22.0",

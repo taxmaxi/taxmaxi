@@ -1,4 +1,4 @@
-import type {
+import {
   SourceCreateRequest,
   SourceCreateResponse,
   SourceAssetPnlResponse,
@@ -14,21 +14,24 @@ import type {
   TaxCalculationResponse,
 } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 import type { TaxMaxiEffectClient } from "../client.ts"
 
-export type Source = SourceListResponse["sources"][number]
+export type Source = SourceList["sources"][number]
 export type SourceCreateInput = SourceCreateRequest
-export type SourceCreate = SourceCreateResponse
-export type SourceList = SourceListResponse
-export type SourceSyncStart = SourceSyncStartResponse
-export type SourceSyncJob = SourceSyncJobResponse
-export type TaxCalculation = TaxCalculationResponse
-export type SourceOverview = SourceOverviewResponse
-export type SourceAssetPnl = SourceAssetPnlResponse
-export type SourceTransactions = SourceTransactionsResponse
-export type SourceTaxEvents = SourceTaxEventsResponse
-export type SourceFifoLots = SourceFifoLotsResponse
-export type SourceDisposalExplanation = SourceDisposalExplanationResponse
+export type SourceCreate = Schema.Schema.Encoded<typeof SourceCreateResponse>
+export type SourceList = Schema.Schema.Encoded<typeof SourceListResponse>
+export type SourceSyncStart = Schema.Schema.Encoded<typeof SourceSyncStartResponse>
+export type SourceSyncJob = Schema.Schema.Encoded<typeof SourceSyncJobResponse>
+export type TaxCalculation = Schema.Schema.Encoded<typeof TaxCalculationResponse>
+export type SourceOverview = Schema.Schema.Encoded<typeof SourceOverviewResponse>
+export type SourceAssetPnl = Schema.Schema.Encoded<typeof SourceAssetPnlResponse>
+export type SourceTransactions = Schema.Schema.Encoded<typeof SourceTransactionsResponse>
+export type SourceTaxEvents = Schema.Schema.Encoded<typeof SourceTaxEventsResponse>
+export type SourceFifoLots = Schema.Schema.Encoded<typeof SourceFifoLotsResponse>
+export type SourceDisposalExplanation = Schema.Schema.Encoded<
+  typeof SourceDisposalExplanationResponse
+>
 
 export type SourceIdInput = {
   readonly sourceId: string
@@ -89,113 +92,162 @@ export type SourcesPromiseResource = {
   ) => Promise<SourceDisposalExplanation>
 }
 
+const encodeSourceList = Schema.encodeSync(SourceListResponse)
+const encodeSourceCreate = Schema.encodeSync(SourceCreateResponse)
+const encodeSourceSyncStart = Schema.encodeSync(SourceSyncStartResponse)
+const encodeSourceSyncJob = Schema.encodeSync(SourceSyncJobResponse)
+const encodeTaxCalculation = Schema.encodeSync(TaxCalculationResponse)
+const encodeSourceOverview = Schema.encodeSync(SourceOverviewResponse)
+const encodeSourceAssetPnl = Schema.encodeSync(SourceAssetPnlResponse)
+const encodeSourceTransactions = Schema.encodeSync(SourceTransactionsResponse)
+const encodeSourceTaxEvents = Schema.encodeSync(SourceTaxEventsResponse)
+const encodeSourceFifoLots = Schema.encodeSync(SourceFifoLotsResponse)
+const encodeSourceDisposalExplanation = Schema.encodeSync(SourceDisposalExplanationResponse)
+
 export const makeSourcesEffectResource = (
   client: Effect.Effect<TaxMaxiEffectClient, never>
 ): SourcesEffectResource => ({
-  list: () => Effect.flatMap(client, (resolved) => resolved.sources.listSources(undefined)),
+  list: () =>
+    Effect.map(
+      Effect.flatMap(client, (resolved) => resolved.sources.listSources(undefined)),
+      encodeSourceList
+    ),
   create: (input) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.createSource({
-        payload: input,
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.createSource({
+          payload: input,
+        })
+      ),
+      encodeSourceCreate
     ),
   startSync: ({ sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.startSourceSyncJob({
-        path: {
-          sourceId,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.startSourceSyncJob({
+          path: {
+            sourceId,
+          },
+        })
+      ),
+      encodeSourceSyncStart
     ),
   replaySync: ({ sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.replaySourceSyncJob({
-        path: {
-          sourceId,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.replaySourceSyncJob({
+          path: {
+            sourceId,
+          },
+        })
+      ),
+      encodeSourceSyncStart
     ),
   getSyncJob: ({ jobId, sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.getSourceSyncJobStatus({
-        path: {
-          jobId,
-          sourceId,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.getSourceSyncJobStatus({
+          path: {
+            jobId,
+            sourceId,
+          },
+        })
+      ),
+      encodeSourceSyncJob
     ),
   calculateTax: ({ jurisdiction, sourceId, year }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.calculateTaxForSource({
-        path: {
-          sourceId,
-        },
-        payload: {
-          jurisdiction,
-          year,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.calculateTaxForSource({
+          path: {
+            sourceId,
+          },
+          payload: {
+            jurisdiction,
+            year,
+          },
+        })
+      ),
+      encodeTaxCalculation
     ),
   getOverview: ({ sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.getSourceOverview({
-        path: {
-          sourceId,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.getSourceOverview({
+          path: {
+            sourceId,
+          },
+        })
+      ),
+      encodeSourceOverview
     ),
   listAssetPnl: ({ sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.listSourceAssetPnl({
-        path: {
-          sourceId,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.listSourceAssetPnl({
+          path: {
+            sourceId,
+          },
+        })
+      ),
+      encodeSourceAssetPnl
     ),
   listTransactions: ({ cursor, limit, sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.listSourceTransactions({
-        path: {
-          sourceId,
-        },
-        urlParams: {
-          cursor: cursor ?? undefined,
-          limit,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.listSourceTransactions({
+          path: {
+            sourceId,
+          },
+          urlParams: {
+            cursor: cursor ?? undefined,
+            limit,
+          },
+        })
+      ),
+      encodeSourceTransactions
     ),
   listTaxEvents: ({ cursor, limit, sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.listSourceTaxEvents({
-        path: {
-          sourceId,
-        },
-        urlParams: {
-          cursor: cursor ?? undefined,
-          limit,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.listSourceTaxEvents({
+          path: {
+            sourceId,
+          },
+          urlParams: {
+            cursor: cursor ?? undefined,
+            limit,
+          },
+        })
+      ),
+      encodeSourceTaxEvents
     ),
   listFifoLots: ({ cursor, limit, sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.listSourceFifoLots({
-        path: {
-          sourceId,
-        },
-        urlParams: {
-          cursor: cursor ?? undefined,
-          limit,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.listSourceFifoLots({
+          path: {
+            sourceId,
+          },
+          urlParams: {
+            cursor: cursor ?? undefined,
+            limit,
+          },
+        })
+      ),
+      encodeSourceFifoLots
     ),
   explainDisposal: ({ legId, sourceId }) =>
-    Effect.flatMap(client, (resolved) =>
-      resolved.sources.explainSourceDisposal({
-        path: {
-          legId,
-          sourceId,
-        },
-      })
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.sources.explainSourceDisposal({
+          path: {
+            legId,
+            sourceId,
+          },
+        })
+      ),
+      encodeSourceDisposalExplanation
     ),
 })
 

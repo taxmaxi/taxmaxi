@@ -15,6 +15,9 @@ type ListState = { readonly _tag: "loading" } | SourcesResult
 // chrome, the panel title, and the key hints.
 const RESERVED_ROWS = 11
 
+const formatSourceDate = (epochMillis: number): string =>
+  new Date(epochMillis).toISOString().slice(0, 10)
+
 function SourceRow(props: {
   readonly source: Source
   readonly selected: boolean
@@ -34,7 +37,7 @@ function SourceRow(props: {
         {props.source.providerKey ?? "unknown"}
       </ListItemText>
       <ListItemText selected={props.selected} muted>
-        added {props.source.createdAt.toISOString().slice(0, 10)}
+        added {formatSourceDate(props.source.createdAt.epochMillis)}
       </ListItemText>
     </ListItem>
   )
