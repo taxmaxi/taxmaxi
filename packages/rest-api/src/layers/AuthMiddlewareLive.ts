@@ -59,13 +59,18 @@ export const invalidSessionCookieCleanup = (httpApp: HttpApp.Default) =>
 
     return Effect.gen(function* () {
       const cookieDomain = yield* sessionCookieDomain
+      const environment = yield* Config.string("ENVIRONMENT").pipe(
+        Config.withDefault("development")
+      )
 
       return yield* HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
         expires: new Date(0),
         httpOnly: true,
         path: "/",
         sameSite: "lax",
-        ...(cookieDomain === undefined ? {} : { domain: cookieDomain }),
+        ...(environment === "production" && cookieDomain !== undefined
+          ? { domain: cookieDomain }
+          : {}),
       })
     }).pipe(Effect.orDie)
   })

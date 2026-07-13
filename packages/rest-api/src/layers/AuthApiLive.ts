@@ -132,7 +132,7 @@ const cookieOptionsForEnv = (environment: string, path = "/", domain?: string) =
   secure: environment === "production",
   sameSite: "lax" as const,
   path,
-  ...(domain === undefined ? {} : { domain }),
+  ...(environment === "production" && domain !== undefined ? { domain } : {}),
 })
 
 const sessionCookieDomain = Config.option(Config.string("COOKIE_DOMAIN")).pipe(
