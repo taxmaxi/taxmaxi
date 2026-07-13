@@ -399,7 +399,7 @@ function ActiveIslandContent({
           aria-label={
             expanded ? `Hide sync details for ${item.sourceName}` : `Show sync details: ${headline}`
           }
-          className="flex min-h-11 min-w-0 flex-1 touch-manipulation items-center gap-2 rounded-[1.5rem] pl-3 pr-4 text-left outline-none transition-[background-color] duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/40 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-marketing-surface-hover-muted"
+          className="flex min-h-9 min-w-0 flex-1 touch-manipulation items-center gap-2 rounded-[1.5rem] pl-3 pr-4 text-left outline-none transition-[background-color] duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/40 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-marketing-surface-hover-muted"
           layout="position"
           onClick={onOpen}
           type="button"
