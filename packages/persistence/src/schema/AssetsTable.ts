@@ -26,6 +26,7 @@ export const assets = pgTable(
     name: text("name").notNull(),
     symbol: text("symbol").notNull(),
     decimals: integer("decimals").notNull(),
+    coingeckoCoinId: text("coingecko_coin_id"),
     logoUrl: text("logo_url"),
     type: assetTypeEnum("type").notNull().default("token"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -40,6 +41,7 @@ export const assets = pgTable(
     // For now, we'll rely on application logic or a simpler unique constraint on symbol if truly global symbols are unique enough.
     // A common pattern is to ensure contractAddress is an empty string for native assets if the DB doesn't support NULL in unique constraints well.
     index("asset_symbol_idx").on(table.symbol),
+    index("asset_coingecko_coin_id_idx").on(table.coingeckoCoinId),
   ]
 )
 

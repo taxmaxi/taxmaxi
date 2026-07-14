@@ -1,27 +1,24 @@
+import { useState } from "react"
 import type * as React from "react"
+import type { PortfolioAssets } from "taxmaxi"
 
-import { Badge } from "#/components/ui/badge"
 import { Card, CardContent } from "#/components/ui/card"
 import { ValueTone } from "#/components/value-tone"
 import { formatCurrency, formatSignedCurrency, formatTokenAmount } from "#/lib/dashboard-format"
-import type { Account, AccountId } from "#/lib/dashboard-types"
 import { cn } from "#/lib/utils"
 
-export type AggregatedHolding = {
-  asset: string
-  name: string
-  amount: number
-  value: number
-  costBasis: number
-  accountIds: ReadonlyArray<AccountId>
-}
+type PortfolioAsset = PortfolioAssets["assets"][number]
 
 export function AssetsTable({
-  accountsById,
+  currency,
+  error = false,
   holdings,
+  loading = false,
 }: {
-  accountsById: ReadonlyMap<AccountId, Account>
-  holdings: ReadonlyArray<AggregatedHolding>
+  currency: string
+  error?: boolean
+  holdings: PortfolioAssets["assets"]
+  loading?: boolean
 }) {
   return (
     <Card
@@ -30,21 +27,36 @@ export function AssetsTable({
     >
       <CardContent className="pt-4">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[44rem] border-separate border-spacing-0 text-sm">
+          <table className="w-full min-w-[42rem] border-separate border-spacing-0 text-sm">
             <thead>
               <tr className="text-left text-xs text-muted-foreground">
                 <TableHead>Asset</TableHead>
                 <TableHead align="right">Amount</TableHead>
-                <TableHead align="right">Value</TableHead>
-                <TableHead align="right">Cost basis</TableHead>
+                <TableHead align="right">Price</TableHead>
+                <TableHead align="right">Total value</TableHead>
                 <TableHead align="right">Unrealized P/L</TableHead>
-                <TableHead>Accounts</TableHead>
               </tr>
             </thead>
             <tbody>
-              {holdings.map((holding) => (
-                <AssetRow accountsById={accountsById} holding={holding} key={holding.asset} />
-              ))}
+              {loading ? (
+                <LoadingRows />
+              ) : error ? (
+                <tr>
+                  <td className="h-28 text-center text-muted-foreground" colSpan={5}>
+                    Asset values could not be loaded. Try again in a moment.
+                  </td>
+                </tr>
+              ) : holdings.length === 0 ? (
+                <tr>
+                  <td className="h-28 text-center text-muted-foreground" colSpan={5}>
+                    No assets with an open balance yet.
+                  </td>
+                </tr>
+              ) : (
+                holdings.map((holding) => (
+                  <AssetRow currency={currency} holding={holding} key={holding.assetId} />
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -53,36 +65,29 @@ export function AssetsTable({
   )
 }
 
-function AssetRow({
-  accountsById,
-  holding,
-}: {
-  accountsById: ReadonlyMap<AccountId, Account>
-  holding: AggregatedHolding
-}) {
-  const unrealizedProfitLoss = holding.value - holding.costBasis
-
+function AssetRow({ currency, holding }: { currency: string; holding: PortfolioAsset }) {
   return (
     <tr className="h-14 border-b border-border">
       <TableCell>
         <div className="flex items-center gap-3">
-          <AssetMark asset={holding.asset} />
+          <AssetMark logoUrl={holding.logoUrl} name={holding.name} symbol={holding.symbol} />
           <span className="min-w-0">
-            <span className="block truncate font-medium">{holding.asset}</span>
+            <span className="block truncate font-medium">{holding.symbol}</span>
             <span className="block truncate text-xs text-muted-foreground">{holding.name}</span>
           </span>
         </div>
       </TableCell>
-      <TableCell align="right">{formatTokenAmount(holding.amount)}</TableCell>
-      <TableCell align="right">{formatCurrency(holding.value)}</TableCell>
-      <TableCell align="right">{formatCurrency(holding.costBasis)}</TableCell>
+      <TableCell align="right">{formatTokenAmount(Number(holding.amount))}</TableCell>
+      <TableCell align="right">{formatNullableCurrency(holding.currentPrice, currency)}</TableCell>
+      <TableCell align="right">{formatNullableCurrency(holding.totalValue, currency)}</TableCell>
       <TableCell align="right">
-        <ValueTone tone={unrealizedProfitLoss >= 0 ? "positive" : "negative"}>
-          {formatSignedCurrency(unrealizedProfitLoss)}
-        </ValueTone>
-      </TableCell>
-      <TableCell>
-        <AccountList accountsById={accountsById} accountIds={holding.accountIds} />
+        {holding.profitLoss === null ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          <ValueTone tone={Number(holding.profitLoss) >= 0 ? "positive" : "negative"}>
+            {formatSignedCurrency(Number(holding.profitLoss), currency)}
+          </ValueTone>
+        )}
       </TableCell>
     </tr>
   )
@@ -127,31 +132,51 @@ function TableCell({
   )
 }
 
-function AccountList({
-  accountsById,
-  accountIds,
+function AssetMark({
+  logoUrl,
+  name,
+  symbol,
 }: {
-  accountsById: ReadonlyMap<AccountId, Account>
-  accountIds: ReadonlyArray<AccountId>
+  logoUrl: string | null
+  name: string
+  symbol: string
 }) {
+  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null)
+  const usableLogoUrl = logoUrl === failedLogoUrl ? null : logoUrl
+
+  if (usableLogoUrl === null) {
+    return (
+      <span className="relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted font-mono text-xs font-medium ring-1 ring-border">
+        {symbol.slice(0, 1)}
+      </span>
+    )
+  }
   return (
-    <div className="flex flex-wrap gap-1">
-      {accountIds.map((accountId) => {
-        const account = accountsById.get(accountId)
-        return (
-          <Badge key={accountId} variant="outline">
-            {account ? account.name : accountId}
-          </Badge>
-        )
-      })}
-    </div>
+    <span className="relative size-8">
+      <img
+        alt={`${name} logo`}
+        className="absolute inset-0 size-full object-cover"
+        loading="lazy"
+        onError={() => setFailedLogoUrl(usableLogoUrl)}
+        src={usableLogoUrl}
+        title={name}
+      />
+    </span>
   )
 }
 
-function AssetMark({ asset }: { asset: string }) {
-  return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted font-mono text-xs font-medium ring-1 ring-border">
-      {asset.slice(0, 1)}
-    </span>
-  )
+function formatNullableCurrency(value: string | null, currency: string) {
+  return value === null ? "—" : formatCurrency(Number(value), currency)
+}
+
+function LoadingRows() {
+  return Array.from({ length: 3 }, (_, index) => (
+    <tr aria-hidden="true" key={index}>
+      {Array.from({ length: 5 }, (_cell, cellIndex) => (
+        <TableCell align={cellIndex === 0 ? "left" : "right"} key={cellIndex}>
+          <span className="inline-block h-4 w-20 animate-pulse rounded bg-muted motion-reduce:animate-none" />
+        </TableCell>
+      ))}
+    </tr>
+  ))
 }

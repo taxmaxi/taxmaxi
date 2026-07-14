@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { useRouteContext } from "@tanstack/react-router"
 import type { SourceSyncJob, SourceSyncJobInput, SourceSyncStart } from "taxmaxi"
 
 import { AssetsTable } from "#/components/assets-table"
@@ -7,11 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import { ValueTone } from "#/components/value-tone"
 import { useSourceSyncs } from "#/hooks/use-source-syncs"
 
-import {
-  accounts as mockAccounts,
-  assetHoldings,
-  taxYearAccountSummaries,
-} from "#/fixtures/dashboard-data"
+import { accounts as mockAccounts, taxYearAccountSummaries } from "#/fixtures/dashboard-data"
 import { formatCurrency, formatPercent, formatSignedCurrency } from "#/lib/dashboard-format"
 import {
   ALL_ACCOUNTS,
@@ -20,13 +18,14 @@ import {
   type AccountScope,
   type TaxYear,
 } from "#/lib/dashboard-types"
+import { queries } from "#/integrations/taxmaxi/queries"
 import { TransactionsTable } from "./transactions-table"
 import { SourceSyncIsland } from "./source-sync-island"
 
 type DashboardSummary = {
   currentBalance: number
-  currentCostBasis: number
   unrealizedProfitLoss: number
+  unrealizedProfitLossPercentage: number
   realizedProfitLoss: number
   taxesPayable: number
   taxesReceivable: number
@@ -49,6 +48,11 @@ export function Dashboard({
   onSourceSyncUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }) {
+  const taxmaxi = useRouteContext({
+    from: "/app",
+    select: (context) => context.taxmaxi(),
+  })
+
   const [accountScope, setAccountScope] = useState<AccountScope>(ALL_ACCOUNTS)
   const [taxYear] = useState<TaxYear>(2025)
 
@@ -70,26 +74,9 @@ export function Dashboard({
     [activeAccounts]
   )
 
-  const activeHoldings = useMemo(
-    () =>
-      assetHoldings
-        .map((holding) => {
-          const activeLots = holding.lots.filter((lot) => activeAccountIds.has(lot.accountId))
-          const accountIds = activeLots.map((lot) => lot.accountId)
-
-          return {
-            asset: holding.asset,
-            name: holding.name,
-            amount: activeLots.reduce((total, lot) => total + lot.amount, 0),
-            value: activeLots.reduce((total, lot) => total + lot.value, 0),
-            costBasis: activeLots.reduce((total, lot) => total + lot.costBasis, 0),
-            accountIds,
-          }
-        })
-        .filter((holding) => holding.accountIds.length > 0)
-        .sort((left, right) => right.value - left.value),
-    [activeAccountIds]
-  )
+  const selectedSourceId = accountScope === ALL_ACCOUNTS ? undefined : accountScope
+  const portfolioQuery = useQuery(queries.portfolioAssets(taxmaxi, selectedSourceId))
+  const activeHoldings = portfolioQuery.data?.assets ?? []
 
   const summary = useMemo<DashboardSummary>(() => {
     const taxSummaries = taxYearAccountSummaries.filter(
@@ -97,13 +84,12 @@ export function Dashboard({
         yearSummary.taxYear === taxYear && activeAccountIds.has(yearSummary.accountId)
     )
 
-    const currentBalance = activeHoldings.reduce((total, holding) => total + holding.value, 0)
-    const currentCostBasis = activeHoldings.reduce((total, holding) => total + holding.costBasis, 0)
+    const portfolioSummary = portfolioQuery.data?.summary
 
     return {
-      currentBalance,
-      currentCostBasis,
-      unrealizedProfitLoss: currentBalance - currentCostBasis,
+      currentBalance: Number(portfolioSummary?.totalValue ?? 0),
+      unrealizedProfitLoss: Number(portfolioSummary?.profitLoss ?? 0),
+      unrealizedProfitLossPercentage: Number(portfolioSummary?.profitLossPercentage ?? 0),
       realizedProfitLoss: taxSummaries.reduce(
         (total, yearSummary) => total + yearSummary.realizedProfitLoss,
         0
@@ -133,7 +119,7 @@ export function Dashboard({
         0
       ),
     }
-  }, [activeAccountIds, activeAccounts, activeHoldings, taxYear])
+  }, [activeAccountIds, activeAccounts, portfolioQuery.data?.summary, taxYear])
 
   const onAccountScopeChange = (scope: AccountScope) => {
     setAccountScope(scope)
@@ -169,7 +155,12 @@ export function Dashboard({
               <TabsTrigger value="taxes">Taxes</TabsTrigger>
             </TabsList>
             <TabsContent value="assets">
-              <AssetsTable accountsById={accountsById} holdings={activeHoldings} />
+              <AssetsTable
+                currency={portfolioQuery.data?.currency ?? "EUR"}
+                error={portfolioQuery.isError}
+                holdings={activeHoldings}
+                loading={portfolioQuery.isPending}
+              />
             </TabsContent>
             <TabsContent value="transactions">
               <TransactionsTable />
@@ -183,11 +174,6 @@ export function Dashboard({
 }
 
 function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
-  const unrealizedPercent =
-    summary.currentCostBasis === 0
-      ? 0
-      : (summary.unrealizedProfitLoss / summary.currentCostBasis) * 100
-
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
@@ -200,8 +186,8 @@ function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
             {formatSignedCurrency(summary.unrealizedProfitLoss)}
           </ValueTone>
 
-          <ValueTone tone={unrealizedPercent >= 0 ? "positive" : "negative"}>
-            {formatPercent(unrealizedPercent)}
+          <ValueTone tone={summary.unrealizedProfitLossPercentage >= 0 ? "positive" : "negative"}>
+            {formatPercent(summary.unrealizedProfitLossPercentage)}
           </ValueTone>
         </div>
       </div>

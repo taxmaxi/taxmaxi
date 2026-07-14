@@ -15,6 +15,7 @@ import { AnonApi } from "./AnonApi.ts"
 import { LegalReferenceApi } from "./LegalReferenceApi.ts"
 import { PrincipalsApi } from "./PrincipalsApi.ts"
 import { AssetsApi } from "./AssetsApi.ts"
+import { PortfolioApi } from "./PortfolioApi.ts"
 import { SourcesApi } from "./SourcesApi.ts"
 import { SyncRunsApi } from "./SyncRunsApi.ts"
 
@@ -86,6 +87,7 @@ export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(LegalReferenceApi)
   .add(PrincipalsApi)
   .add(AssetsApi)
+  .add(PortfolioApi)
   .add(SourcesApi)
   .add(SyncRunsApi)
   .annotateContext(

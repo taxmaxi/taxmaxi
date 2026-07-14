@@ -36,6 +36,12 @@ import {
 } from "./assets/index.ts"
 import { toTaxMaxiError } from "./errors.ts"
 import {
+  makePortfolioEffectResource,
+  makePortfolioPromiseResource,
+  type PortfolioEffectResource,
+  type PortfolioPromiseResource,
+} from "./portfolio/index.ts"
+import {
   makeSourcesEffectResource,
   makeSourcesPromiseResource,
   type SourcesEffectResource,
@@ -88,6 +94,12 @@ export type {
 export { TaxMaxiError, isTaxMaxiUnauthorizedError, toTaxMaxiError } from "./errors.ts"
 export type { TaxMaxiFieldError } from "./errors.ts"
 export type {
+  PortfolioAssets,
+  PortfolioAssetsInput,
+  PortfolioEffectResource,
+  PortfolioPromiseResource,
+} from "./portfolio/index.ts"
+export type {
   AnonEffectResource,
   AnonPromiseResource,
   AnonSession,
@@ -128,6 +140,7 @@ export type TaxMaxiEffectResources = {
   readonly anon: AnonEffectResource
   readonly assets: AssetsEffectResource
   readonly auth: AuthEffectResource
+  readonly portfolio: PortfolioEffectResource
   readonly sources: SourcesEffectResource
 }
 
@@ -136,6 +149,7 @@ export type TaxMaxiPromiseResources = {
   readonly anon: AnonPromiseResource
   readonly assets: AssetsPromiseResource
   readonly auth: AuthPromiseResource
+  readonly portfolio: PortfolioPromiseResource
   readonly sources: SourcesPromiseResource
 }
 
@@ -146,6 +160,7 @@ const makeTaxMaxiEffectResources = (
   anon: makeAnonEffectResource(client),
   assets: makeAssetsEffectResource(client),
   auth: makeAuthEffectResource(client),
+  portfolio: makePortfolioEffectResource(client),
   sources: makeSourcesEffectResource(client),
 })
 
@@ -164,6 +179,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   readonly anon: AnonPromiseResource
   readonly assets: AssetsPromiseResource
   readonly auth: AuthPromiseResource
+  readonly portfolio: PortfolioPromiseResource
   readonly effect: TaxMaxiEffectResources
   readonly sources: SourcesPromiseResource
 
@@ -179,6 +195,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
     this.anon = makeAnonPromiseResource(this.effect.anon, this.run)
     this.assets = makeAssetsPromiseResource(this.effect.assets, this.run)
     this.auth = makeAuthPromiseResource(this.effect.auth, this.run)
+    this.portfolio = makePortfolioPromiseResource(this.effect.portfolio, this.run)
     this.sources = makeSourcesPromiseResource(this.effect.sources, this.run)
   }
 

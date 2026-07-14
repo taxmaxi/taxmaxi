@@ -114,6 +114,7 @@ describe("AssetRepositoryLive", () => {
             name: "USD Coin",
             symbol: "usdc",
             decimals: 6,
+            coingeckoCoinId: "usd-coin",
             logoUrl: null,
             type: "token",
             isSpam: false,
@@ -129,6 +130,7 @@ describe("AssetRepositoryLive", () => {
           .select({
             id: schema.assets.id,
             contractAddress: schema.assets.contractAddress,
+            coingeckoCoinId: schema.assets.coingeckoCoinId,
             logoUrl: schema.assets.logoUrl,
           })
           .from(schema.assets)
@@ -141,6 +143,7 @@ describe("AssetRepositoryLive", () => {
     expect(storedAsset).toEqual({
       id: existingAssetId,
       contractAddress: "0xabcdefabcdef",
+      coingeckoCoinId: "usd-coin",
       logoUrl: existingLogoUrl,
     })
 

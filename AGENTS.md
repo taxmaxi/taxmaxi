@@ -46,7 +46,7 @@ Use `mise` for all Node/package-manager commands in this repo.
 
 ### Development
 
-Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `mise x -- pnpm --filter @my/rest-api run type-check` or `mise x -- pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists.
+Use turbo CLI for running dev servers and builds. Default to scripts in package.json of the given package, for example `mise x -- pnpm --filter @my/rest-api run type-check` or `mise x -- pnpm --filter server run dev`. Avoid custom one-off commands when a package script exists. Use line breaks between variable and function definitions, unless they are one line only and it makes sense to group them.
 
 ### Testing
 

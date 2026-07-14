@@ -1,17 +1,17 @@
-export function formatCurrency(value: number): string {
+export function formatCurrency(value: number, currency = "EUR"): string {
   return `${value.toLocaleString("de-DE", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  })} EUR`
+  })} ${currency.toUpperCase()}`
 }
 
-export function formatSignedCurrency(value: number): string {
+export function formatSignedCurrency(value: number, currency = "EUR"): string {
   if (value === 0) {
-    return formatCurrency(0)
+    return formatCurrency(0, currency)
   }
 
   const prefix = value > 0 ? "+" : "-"
-  return `${prefix}${formatCurrency(Math.abs(value))}`
+  return `${prefix}${formatCurrency(Math.abs(value), currency)}`
 }
 
 export function formatInteger(value: number): string {
