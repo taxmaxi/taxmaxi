@@ -59,40 +59,49 @@ export const Route = createFileRoute("/app")({
 
 function RouteComponent() {
   const { queryClient, taxmaxi } = Route.useRouteContext()
+
   const navigate = Route.useNavigate()
+
   const {
     data: { sources },
   } = useSuspenseQuery(queries.sourceList(taxmaxi()))
+
   const sourceOverviews = useSuspenseQueries({
     queries: sources.map((source) => queries.sourceOverview(taxmaxi(), source.id)),
     combine: (results) => results.map((result) => result.data),
   })
+
   const sourceAccounts = useMemo(() => {
     const overviewsBySourceId = new Map(
       sourceOverviews.map((overview) => [overview.source.id, overview])
     )
     return sources.map((source) => toDashboardAccount(source, overviewsBySourceId.get(source.id)))
   }, [sourceOverviews, sources])
+
   const startSourceSync = useCallback(
     async (sourceId: string) => taxmaxi().sources.startSync({ sourceId }),
     [taxmaxi]
   )
+
   const getSourceSyncJob = useCallback(
     async ({ jobId, sourceId }: { sourceId: string; jobId: string }) =>
       taxmaxi().sources.getSyncJob({ jobId, sourceId }),
     [taxmaxi]
   )
-  const onSourceSyncUnauthorized = useCallback(async () => {
+
+  const onUnauthorized = useCallback(async () => {
     queryClient.removeQueries({ queryKey: queryKeys.all })
     await clearAuthSessionCookie()
     await navigate({ to: "/login", replace: true })
   }, [navigate, queryClient])
+
   const onSourceSyncCompleted = useCallback(
     async (sourceId: string) => {
       await queryClient.invalidateQueries({
         exact: true,
         queryKey: queryKeys.sourceOverview(sourceId),
       })
+      await queryClient.invalidateQueries({ queryKey: ["taxmaxi", "portfolio"] })
     },
     [queryClient]
   )
@@ -125,7 +134,7 @@ function RouteComponent() {
           accounts={sourceAccounts}
           getSourceSyncJob={getSourceSyncJob}
           onSourceSyncCompleted={onSourceSyncCompleted}
-          onSourceSyncUnauthorized={onSourceSyncUnauthorized}
+          onUnauthorized={onUnauthorized}
           startSourceSync={startSourceSync}
         />
       </div>

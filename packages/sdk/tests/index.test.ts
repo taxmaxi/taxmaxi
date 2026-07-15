@@ -103,6 +103,17 @@ const sourceOverviewResponseBody = JSON.stringify({
 })
 
 const emptySourceAssetPnlResponseBody = JSON.stringify({ assets: [] })
+const emptyPortfolioSummary = {
+  totalValue: "0",
+  costBasis: "0",
+  profitLoss: "0",
+  profitLossPercentage: null,
+}
+const portfolioAssetsResponseBody = JSON.stringify({
+  currency: "EUR",
+  summary: emptyPortfolioSummary,
+  assets: [],
+})
 
 const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   providerAssets: [],
@@ -526,6 +537,38 @@ describe("TaxMaxi Promise client", () => {
       expect.objectContaining({
         url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/disposals/00000000-0000-4000-8000-000000000006/explanation",
       }),
+    ])
+  })
+
+  it("lists combined and source-scoped portfolio assets", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const sourceId = "00000000-0000-4000-8000-000000000001"
+    const taxmaxi = new TaxMaxi({
+      apiKey: "tm_portfolio",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          headers: toHeaderRecord(init?.headers),
+          url: getRequestUrl(input),
+        })
+        return new Response(portfolioAssetsResponseBody, {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(taxmaxi.portfolio.listAssets({ currency: "EUR" })).resolves.toEqual({
+      currency: "EUR",
+      summary: emptyPortfolioSummary,
+      assets: [],
+    })
+    await taxmaxi.portfolio.listAssets({ sourceId, currency: "eur" })
+
+    expect(capturedRequests.map((request) => request.url)).toEqual([
+      "https://sdk.example.test/v1/portfolio/assets?currency=eur",
+      `https://sdk.example.test/v1/portfolio/assets?sourceId=${sourceId}&currency=eur`,
     ])
   })
 

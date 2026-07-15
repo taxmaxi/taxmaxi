@@ -81,6 +81,7 @@ type TaxMaxiPublicGroup =
   | "coinbaseCompat"
   | "health"
   | "legalReferences"
+  | "portfolio"
   | "sources"
 
 export type TaxMaxiEffectClient = Pick<
@@ -97,6 +98,7 @@ const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClien
   coinbaseCompat: client.coinbaseCompat,
   health: client.health,
   legalReferences: client.legalReferences,
+  portfolio: client.portfolio,
   sources: client.sources,
 })
 

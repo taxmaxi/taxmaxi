@@ -4,7 +4,6 @@
  * @module AssetCanonicalizationServiceLive
  */
 
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform"
 import {
   AssetRepository,
   ProviderAssetRepository,
@@ -12,7 +11,6 @@ import {
   type CanonicalBlockchainDraft,
   type ProviderAssetRecord,
 } from "@my/sync-engine/services"
-import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -25,33 +23,14 @@ import {
   AssetCanonicalizationService,
   type AssetCanonicalizationServiceShape,
 } from "../services/AssetCanonicalizationService.ts"
+import {
+  CoinGeckoClient,
+  type CoinGeckoCoin,
+  type CoinGeckoSearchCoin,
+} from "../services/coingecko/CoinGeckoClient.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
-
-const CoinGeckoSearchCoin = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  symbol: Schema.String,
-})
-
-const CoinGeckoSearchResponse = Schema.Struct({
-  coins: Schema.Array(CoinGeckoSearchCoin),
-})
-
-const CoinGeckoDetailPlatform = Schema.Struct({
-  decimal_place: Schema.NullOr(Schema.Number),
-  contract_address: Schema.String,
-})
-
-const CoinGeckoCoin = Schema.Struct({
-  id: Schema.String,
-  symbol: Schema.String,
-  name: Schema.String,
-  asset_platform_id: Schema.NullOr(Schema.String),
-  platforms: Schema.Record({ key: Schema.String, value: Schema.String }),
-  detail_platforms: Schema.Record({ key: Schema.String, value: CoinGeckoDetailPlatform }),
-})
 
 const CoinGeckoAssetPlatform = Schema.Struct({
   id: Schema.String,
@@ -61,8 +40,6 @@ const CoinGeckoAssetPlatform = Schema.Struct({
   native_coin_id: Schema.NullOr(Schema.String),
 })
 
-type CoinGeckoSearchCoin = typeof CoinGeckoSearchCoin.Type
-type CoinGeckoCoin = typeof CoinGeckoCoin.Type
 export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 
@@ -168,21 +145,7 @@ export const deriveNativeAssetDecimals = ({
   }
 }
 
-const decodeJson =
-  <A, I>(schema: Schema.Schema<A, I, never>, endpoint: string) =>
-  (payload: unknown) =>
-    Schema.decodeUnknown(schema)(payload).pipe(
-      Effect.mapError(
-        (error) =>
-          new AssetCanonicalizationProviderError({
-            message: `Failed to decode CoinGecko response for ${endpoint}: ${error.message}`,
-          })
-      )
-    )
-
 const makeBadRequest = (message: string) => new AssetCanonicalizationBadRequestError({ message })
-
-const makeProviderError = (message: string) => new AssetCanonicalizationProviderError({ message })
 
 export const selectNativePlatform = ({
   coinId,
@@ -349,7 +312,8 @@ const buildNativeCanonicalDrafts = ({
     name: coin.name,
     symbol: upperSymbol(coin.symbol),
     decimals,
-    logoUrl: null,
+    coingeckoCoinId: coin.id,
+    logoUrl: coin.image?.small ?? null,
     type: "native",
     isSpam: false,
   },
@@ -385,7 +349,8 @@ const buildTokenCanonicalDrafts = ({
       name: coin.name,
       symbol: upperSymbol(coin.symbol),
       decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
-      logoUrl: null,
+      coingeckoCoinId: coin.id,
+      logoUrl: coin.image?.small ?? null,
       type: "token",
       isSpam: false,
     },
@@ -393,58 +358,12 @@ const buildTokenCanonicalDrafts = ({
 }
 
 const make = Effect.gen(function* () {
-  const httpClient = yield* HttpClient.HttpClient
+  const coinGeckoClient = yield* CoinGeckoClient
   const providerAssetRepository = yield* ProviderAssetRepository
   const assetRepository = yield* AssetRepository
-  const baseUrl = yield* Config.string("COINGECKO_API_BASE_URL").pipe(
-    Config.withDefault("https://api.coingecko.com/api/v3")
-  )
-  const apiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
 
-  const executeGetJson = (endpoint: string) =>
-    Effect.gen(function* () {
-      const requestUrl = `${baseUrl}${endpoint}`
-      const baseRequest = HttpClientRequest.get(requestUrl)
-      const request = Option.isSome(apiKey)
-        ? baseRequest.pipe(HttpClientRequest.setHeader("x-cg-demo-api-key", apiKey.value))
-        : baseRequest
-      const response = yield* httpClient
-        .execute(request)
-        .pipe(
-          Effect.mapError((error) =>
-            makeProviderError(`CoinGecko request failed for ${endpoint}: ${error.message}`)
-          )
-        )
-
-      if (response.status < 200 || response.status >= 300) {
-        const bodyText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
-        return yield* Effect.fail(
-          makeProviderError(
-            `CoinGecko request failed (${response.status}) ${endpoint}: ${bodyText}`
-          )
-        )
-      }
-
-      return yield* response.json.pipe(
-        Effect.mapError((error) =>
-          makeProviderError(`Failed to parse CoinGecko JSON for ${endpoint}: ${String(error)}`)
-        )
-      )
-    })
-
-  const fetchSearch = (query: string) =>
-    Effect.gen(function* () {
-      const endpoint = `/search?query=${encodeURIComponent(query)}`
-      const json = yield* executeGetJson(endpoint)
-      return yield* decodeJson(CoinGeckoSearchResponse, endpoint)(json)
-    })
-
-  const fetchCoin = (coinId: string) =>
-    Effect.gen(function* () {
-      const endpoint = `/coins/${encodeURIComponent(coinId)}`
-      const json = yield* executeGetJson(endpoint)
-      return yield* decodeJson(CoinGeckoCoin, endpoint)(json)
-    })
+  const mapCoinGeckoError = (error: { readonly message: string }) =>
+    new AssetCanonicalizationProviderError({ message: error.message })
 
   const resolveCoinGeckoDrafts = ({
     providerAsset,
@@ -452,12 +371,16 @@ const make = Effect.gen(function* () {
     readonly providerAsset: ProviderAssetRecord
   }) =>
     Effect.gen(function* () {
-      const search = yield* fetchSearch(providerAsset.currencyCode)
+      const searchCoins = yield* coinGeckoClient
+        .searchCoins({ query: providerAsset.currencyCode })
+        .pipe(Effect.mapError(mapCoinGeckoError))
       const selectedCoin = yield* selectCoin({
         providerAsset,
-        searchCoins: search.coins,
+        searchCoins,
       })
-      const coin = yield* fetchCoin(selectedCoin.id)
+      const coin = yield* coinGeckoClient
+        .getCoin({ coinId: selectedCoin.id })
+        .pipe(Effect.mapError(mapCoinGeckoError))
       const assetPlatforms: ReadonlyArray<CoinGeckoAssetPlatform> = coinGeckoAssetPlatformSnapshot
       const nativePlatforms = assetPlatforms.filter(
         (platform) => platform.native_coin_id === coin.id
@@ -656,7 +579,4 @@ const make = Effect.gen(function* () {
   } satisfies AssetCanonicalizationServiceShape)
 })
 
-export const AssetCanonicalizationServiceLive = Layer.effect(
-  AssetCanonicalizationService,
-  make
-).pipe(Layer.provide(FetchHttpClient.layer))
+export const AssetCanonicalizationServiceLive = Layer.effect(AssetCanonicalizationService, make)

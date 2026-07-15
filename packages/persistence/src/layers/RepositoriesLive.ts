@@ -34,6 +34,7 @@ import { IdentityRepositoryLive } from "./IdentityRepositoryLive.ts"
 import { SessionRepositoryLive } from "./SessionRepositoryLive.ts"
 import { SourceRepositoryLive } from "./SourceRepositoryLive.ts"
 import { SourceReportRepositoryLive } from "./SourceReportRepositoryLive.ts"
+import { PortfolioRepositoryLive } from "./PortfolioRepositoryLive.ts"
 import { CexAccountRepositoryLive } from "./CexAccountRepositoryLive.ts"
 import { OAuthStateStoreLive } from "./OAuthStateStoreLive.ts"
 import { PrincipalRepositoryLive } from "./PrincipalRepositoryLive.ts"
@@ -107,6 +108,7 @@ export const RepositoriesLive = Layer.mergeAll(
   LegalReferenceRepositoryLive,
   SourceRepositoryLive,
   SourceReportRepositoryLive,
+  PortfolioRepositoryLive,
   CexAccountRepositoryLive,
   TaxCalculationServiceLive,
   AssetCatalogRepositoryLive,

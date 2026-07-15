@@ -218,6 +218,7 @@ const make = Effect.gen(function* () {
             name: asset.name,
             symbol: asset.symbol.toUpperCase(),
             decimals: asset.decimals,
+            coingeckoCoinId: asset.coingeckoCoinId,
             type: asset.type,
             isSpam: asset.isSpam,
             updatedAt: now,

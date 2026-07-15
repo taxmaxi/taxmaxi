@@ -19,6 +19,8 @@ export const queryKeys = {
   sources: () => [...queryKeys.all, "sources"] as const,
   sourceList: () => [...queryKeys.sources(), "list"] as const,
   sourceOverview: (sourceId: string) => [...queryKeys.sources(), sourceId, "overview"] as const,
+  portfolioAssets: (sourceId?: string) =>
+    [...queryKeys.all, "portfolio", "assets", sourceId ?? "all"] as const,
 }
 
 export const queries = {
@@ -48,6 +50,12 @@ export const queries = {
       queryKey: queryKeys.sourceOverview(sourceId),
       queryFn: async () => taxmaxi.sources.getOverview({ sourceId }),
       staleTime: 30 * 1000,
+    }),
+  portfolioAssets: (taxmaxi: TaxMaxi, sourceId?: string) =>
+    queryOptions({
+      queryKey: queryKeys.portfolioAssets(sourceId),
+      queryFn: async () => taxmaxi.portfolio.listAssets({ sourceId, currency: "eur" }),
+      staleTime: 60 * 1000,
     }),
 }
 

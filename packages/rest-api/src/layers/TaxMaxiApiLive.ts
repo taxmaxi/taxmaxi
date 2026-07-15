@@ -6,11 +6,12 @@
  * @module TaxMaxiApiLive
  */
 
-import { HttpApiBuilder, type HttpApi } from "@effect/platform"
+import { FetchHttpClient, HttpApiBuilder, type HttpApi } from "@effect/platform"
 import type { PasswordHasher, AuthService } from "@my/core/authentication"
 import type { LegalReferenceRepository } from "@my/core/legal"
 import type {
   AssetCatalogRepository,
+  PortfolioRepository,
   CexAccountRepository,
   IdentityRepository,
   OAuthStateStore,
@@ -49,6 +50,9 @@ import { LegalReferenceApiLive } from "./LegalReferenceApiLive.ts"
 import { PrincipalResolutionServiceLive } from "./PrincipalResolutionServiceLive.ts"
 import { PrincipalsApiLive } from "./PrincipalsApiLive.ts"
 import { AssetsApiLive } from "./AssetsApiLive.ts"
+import { PortfolioApiLive } from "./PortfolioApiLive.ts"
+import { CoinGeckoPriceServiceLive } from "./CoinGeckoPriceServiceLive.ts"
+import { CoinGeckoClientLive } from "./CoinGeckoClientLive.ts"
 import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationServiceLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
@@ -96,9 +100,13 @@ const CoreApiGroup = Layer.mergeAll(
   AnonApiLive,
   PrincipalsApiLive,
   AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
+  PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive
-).pipe(Layer.provide(PrincipalResolutionServiceLive))
+).pipe(
+  Layer.provide(PrincipalResolutionServiceLive),
+  Layer.provide(CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.layer)))
+)
 
 type TaxMaxiApiLiveContext =
   | AuthService
@@ -111,6 +119,7 @@ type TaxMaxiApiLiveContext =
   | PasswordHasher
   | PrincipalClaimRepository
   | PrincipalRepository
+  | PortfolioRepository
   | PersistenceSourceRepository
   | SessionRepository
   | SIWXProofVerifier

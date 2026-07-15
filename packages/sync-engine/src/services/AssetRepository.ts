@@ -46,6 +46,7 @@ export interface CanonicalAssetDraft {
   readonly name: string
   readonly symbol: string
   readonly decimals: number
+  readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
   readonly type: "native" | "token" | "nft"
   readonly isSpam: boolean
