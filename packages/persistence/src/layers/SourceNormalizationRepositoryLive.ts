@@ -1065,6 +1065,87 @@ const make = Effect.gen(function* () {
       })
     )
 
+  const resetInventoryMovementAllocations = ({
+    executor,
+    movementId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly movementId: string
+  }) =>
+    Effect.gen(function* () {
+      const allocations = yield* executor
+        .select({
+          fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
+          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+        })
+        .from(schema.inventoryMovementAllocations)
+        .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.resetInventoryMovementAllocations.selectAllocations"
+          )
+        )
+
+      yield* Effect.forEach(allocations, (allocation) =>
+        executor
+          .update(schema.fifoLots)
+          .set({
+            remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
+            updatedAt: nowDate(),
+          })
+          .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.resetInventoryMovementAllocations.restoreLot"
+            )
+          )
+      )
+
+      yield* executor
+        .delete(schema.inventoryMovementAllocations)
+        .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.resetInventoryMovementAllocations.deleteAllocations"
+          )
+        )
+    })
+
+  const removeInventoryMovementsForTransaction = ({
+    executor,
+    transactionId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* executor
+        .select({ id: schema.inventoryMovements.id })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementsForTransaction.selectMovements"
+          )
+        )
+
+      yield* Effect.forEach(movements, (movement) =>
+        resetInventoryMovementAllocations({
+          executor,
+          movementId: movement.id,
+        })
+      )
+
+      yield* executor
+        .delete(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteMovements"
+          )
+        )
+    })
+
   const allocateOutboundInventoryMovements = ({
     executor,
     transaction,
@@ -1158,6 +1239,11 @@ const make = Effect.gen(function* () {
             )
           }
 
+          yield* resetInventoryMovementAllocations({
+            executor,
+            movementId: movement.id,
+          })
+
           const matchingDisposalResults = yield* Effect.forEach(
             legs.filter((leg) => leg.kind === "disposal" && leg.assetId === assetMapping.assetId),
             (leg) =>
@@ -1168,21 +1254,6 @@ const make = Effect.gen(function* () {
           )
 
           if (matchingDisposalResults.some((comparison) => comparison === 0)) {
-            return
-          }
-
-          const [existingAllocation] = yield* executor
-            .select({ id: schema.inventoryMovementAllocations.id })
-            .from(schema.inventoryMovementAllocations)
-            .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movement.id))
-            .limit(1)
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.allocateOutboundInventoryMovements.findAllocation"
-              )
-            )
-
-          if (existingAllocation !== undefined) {
             return
           }
 
@@ -1306,20 +1377,10 @@ const make = Effect.gen(function* () {
             )
           }
 
-          const [existingAllocation] = yield* executor
-            .select({ id: schema.inventoryMovementAllocations.id })
-            .from(schema.inventoryMovementAllocations)
-            .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movement.id))
-            .limit(1)
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.allocateFeeInventoryMovements.findAllocation"
-              )
-            )
-
-          if (existingAllocation !== undefined) {
-            return
-          }
+          yield* resetInventoryMovementAllocations({
+            executor,
+            movementId: movement.id,
+          })
 
           const openLots = yield* loadOpenFifoLots({
             executor,
@@ -1418,6 +1479,13 @@ const make = Effect.gen(function* () {
             legs: derivedLegs,
           })
 
+          if (params.transaction.providerStatus !== "completed") {
+            yield* removeInventoryMovementsForTransaction({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+            })
+          }
+
           const transactionReview = yield* feedFifoLegs({
             executor: tx,
             legs: persistedLegs,
@@ -1433,10 +1501,12 @@ const make = Effect.gen(function* () {
                 : Effect.void
             ),
             Effect.zipRight(
-              allocateFeeInventoryMovements({
-                executor: tx,
-                legs: persistedLegs,
-              })
+              params.transaction.providerStatus === "completed"
+                ? allocateFeeInventoryMovements({
+                    executor: tx,
+                    legs: persistedLegs,
+                  })
+                : Effect.void
             ),
             Effect.as(params.transactionReview),
             Effect.catchTag("SyncEngineStorageError", (error) =>

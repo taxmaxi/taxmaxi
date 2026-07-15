@@ -813,6 +813,11 @@ describe("coinbase reference mappings", () => {
       candidateAccountId: "coinbase-account-2",
       candidateParentId: null,
     },
+    {
+      caseName: "an ungrouped candidate from the same account",
+      candidateAccountId: "coinbase-account-1",
+      candidateParentId: null,
+    },
   ])("does not pair an ungrouped unstaking row with $caseName", async (testCase) => {
     activeSyncRecords = [
       makeCoinbaseRecord({

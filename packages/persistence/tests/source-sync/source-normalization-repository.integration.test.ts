@@ -1155,6 +1155,153 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
+  it("rebuilds changed movement allocations and clears them for a pending replay", async () => {
+    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000700"
+    const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
+    const acquisitionPayload = {
+      id: "tx-movement-replay-opening-inventory",
+      type: "buy",
+      status: "completed",
+      amount: { amount: "1.00000000", currency: "BTC" },
+      native_amount: { amount: "10000.00", currency: "EUR" },
+      created_at: acquiredAt.toISOString(),
+      resource_path:
+        "/v2/accounts/coinbase-account-1/transactions/tx-movement-replay-opening-inventory",
+    }
+    const rawRecordId = "00000000-0000-0000-0000-000000000701"
+    const occurredAt = new Date("2025-04-01T10:00:00.000Z")
+    const buildSendPayload = ({
+      status,
+      amount,
+      feeAmount,
+    }: {
+      readonly status: "completed" | "pending"
+      readonly amount: string
+      readonly feeAmount: string
+    }) => ({
+      id: "tx-movement-replay-send",
+      type: "send",
+      status,
+      amount: { amount, currency: "BTC" },
+      native_amount: { amount: "-1500.00", currency: "EUR" },
+      created_at: occurredAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-movement-replay-send",
+      network: {
+        status: "confirmed",
+        hash: "tx-movement-replay-hash",
+        network_name: "base",
+        transaction_fee: { amount: feeAmount, currency: "BTC" },
+      },
+      to: {
+        address: "bc1qmovementreplaydestination",
+        resource: "address",
+      },
+    })
+    const initialSendPayload = buildSendPayload({
+      status: "completed",
+      amount: "-0.10000000",
+      feeAmount: "0.01000000",
+    })
+
+    await runPg(
+      Effect.all([
+        seedRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-movement-replay-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+        seedRawRecord({
+          rawRecordId,
+          externalRecordId: "raw-movement-replay-send",
+          occurredAt,
+          payload: initialSendPayload,
+        }),
+      ])
+    )
+
+    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+    const normalizeSend = (payload: ReturnType<typeof buildSendPayload>) =>
+      runCoinbaseNormalization(
+        persistCoinbaseNormalization({
+          source,
+          sourceRecord: buildSeededRawRecord({
+            rawRecordId,
+            externalRecordId: "raw-movement-replay-send",
+            occurredAt,
+            payload,
+          }),
+        })
+      )
+
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-movement-replay-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+      })
+    )
+    await normalizeSend(initialSendPayload)
+    await normalizeSend(
+      buildSendPayload({
+        status: "completed",
+        amount: "-0.20000000",
+        feeAmount: "0.02000000",
+      })
+    )
+
+    const changedState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots)
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        return { lot, movements, allocations }
+      })
+    )
+
+    expect(changedState.lot?.remainingAmount).toContain("0.78000000")
+    expect(changedState.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.2") }),
+        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.02") }),
+      ])
+    )
+    expect(changedState.allocations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.02") }),
+      ])
+    )
+    expect(changedState.allocations).toHaveLength(2)
+
+    await normalizeSend(
+      buildSendPayload({
+        status: "pending",
+        amount: "-0.20000000",
+        feeAmount: "0.02000000",
+      })
+    )
+
+    const pendingState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots)
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        return { lot, movements, allocations }
+      })
+    )
+
+    expect(pendingState.lot?.remainingAmount).toContain("1.00000000")
+    expect(pendingState.movements).toHaveLength(0)
+    expect(pendingState.allocations).toHaveLength(0)
+  })
+
   it("persists a Coinbase receive provider transfer with source and destination context", async () => {
     const rawRecordId = "00000000-0000-0000-0000-000000000692"
     const occurredAt = new Date("2025-04-02T10:00:00.000Z")

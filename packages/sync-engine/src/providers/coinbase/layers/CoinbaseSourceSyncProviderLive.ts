@@ -318,9 +318,10 @@ const make = Effect.gen(function* () {
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.
-   * Provider group identifiers allow siblings across provider accounts. When
-   * no group exists, siblings must share an account. Compatible type and
-   * timestamp proximity handle the remaining provider variation.
+   * Provider group identifiers allow siblings across provider accounts.
+   * Compatible type and timestamp proximity handle the remaining provider
+   * variation. Ungrouped rows remain pending because Coinbase does not expose
+   * enough information to pair them safely.
    * Fails recoverably when the sibling is missing or ambiguous so the row is
    * retried on a later replay pass once all sibling rows are cached.
    */
@@ -386,14 +387,11 @@ const make = Effect.gen(function* () {
             const groupMatches =
               sourceRecord.externalParentId !== null &&
               sibling.externalParentId === sourceRecord.externalParentId
-            const sameAccount = sibling.externalAccountId === sourceRecord.externalAccountId
-            const bothUngrouped =
-              sourceRecord.externalParentId === null && sibling.externalParentId === null
-
-            if (!groupMatches && !(bothUngrouped && sameAccount)) {
+            if (!groupMatches) {
               return []
             }
 
+            const sameAccount = sibling.externalAccountId === sourceRecord.externalAccountId
             const sameType = payload.type === providerTransactionType
 
             return [
