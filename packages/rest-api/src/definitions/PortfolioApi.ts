@@ -37,9 +37,11 @@ export class PortfolioAssetsResponse extends Schema.Class<PortfolioAssetsRespons
   assets: Schema.Array(PortfolioAssetRow),
 }) {}
 
+export const PortfolioCurrency = Schema.Lowercase.pipe(Schema.pattern(/^[a-z]{3}$/))
+
 const PortfolioAssetsQuery = Schema.Struct({
   sourceId: Schema.optional(Schema.UUID),
-  currency: Schema.optional(Schema.String.pipe(Schema.pattern(/^[a-z]{3}$/))),
+  currency: Schema.optional(PortfolioCurrency),
 })
 
 const listPortfolioAssets = HttpApiEndpoint.get("listPortfolioAssets", "/assets")

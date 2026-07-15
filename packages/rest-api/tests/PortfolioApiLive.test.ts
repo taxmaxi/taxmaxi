@@ -1,5 +1,6 @@
+import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
-import { PortfolioAssetRow } from "../src/definitions/PortfolioApi.ts"
+import { PortfolioAssetRow, PortfolioCurrency } from "../src/definitions/PortfolioApi.ts"
 import { makePortfolioSummary } from "../src/layers/PortfolioApiLive.ts"
 
 const makeAsset = ({
@@ -72,5 +73,15 @@ describe("makePortfolioSummary", () => {
       profitLoss: null,
       profitLossPercentage: null,
     })
+  })
+})
+
+describe("PortfolioCurrency", () => {
+  it("normalizes uppercase ISO currency codes", () => {
+    expect(Schema.decodeUnknownSync(PortfolioCurrency)("EUR")).toBe("eur")
+  })
+
+  it("rejects values that are not three letters", () => {
+    expect(() => Schema.decodeUnknownSync(PortfolioCurrency)("EURO")).toThrow()
   })
 })
