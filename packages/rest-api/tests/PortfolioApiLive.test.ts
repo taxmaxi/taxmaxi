@@ -1,11 +1,19 @@
+import type * as BigDecimal from "effect/BigDecimal"
 import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
 import {
   PortfolioAssetRow,
   PortfolioCurrency,
-  PortfolioDecimal,
+  PortfolioSummary,
 } from "../src/definitions/PortfolioApi.ts"
 import { makePortfolioSummary } from "../src/layers/PortfolioApiLive.ts"
+
+const encodeSummary = Schema.encodeSync(PortfolioSummary)
+
+const decodeDecimal = Schema.decodeSync(Schema.BigDecimal)
+
+const decodeNullableDecimal = (value: string | null): BigDecimal.BigDecimal | null =>
+  value === null ? null : decodeDecimal(value)
 
 const makeAsset = ({
   assetId,
@@ -21,10 +29,10 @@ const makeAsset = ({
     symbol: assetId,
     name: assetId,
     logoUrl: null,
-    amount: "1",
-    currentPrice: totalValue,
-    totalValue,
-    profitLoss,
+    amount: decodeDecimal("1"),
+    currentPrice: decodeNullableDecimal(totalValue),
+    totalValue: decodeNullableDecimal(totalValue),
+    profitLoss: decodeNullableDecimal(profitLoss),
   })
 
 describe("makePortfolioSummary", () => {
@@ -35,7 +43,7 @@ describe("makePortfolioSummary", () => {
       makeAsset({ assetId: "unpriced", totalValue: null, profitLoss: null }),
     ])
 
-    expect(summary).toEqual({
+    expect(encodeSummary(summary)).toEqual({
       totalValue: null,
       costBasis: null,
       profitLoss: null,
@@ -49,7 +57,7 @@ describe("makePortfolioSummary", () => {
       makeAsset({ assetId: "two", totalValue: "49.9", profitLoss: "-5.1" }),
     ])
 
-    expect(summary).toEqual({
+    expect(encodeSummary(summary)).toEqual({
       totalValue: "150",
       costBasis: "135",
       profitLoss: "15",
@@ -71,7 +79,7 @@ describe("makePortfolioSummary", () => {
       makeAsset({ assetId: "unknown", totalValue: "50", profitLoss: null }),
     ])
 
-    expect(summary).toEqual({
+    expect(encodeSummary(summary)).toEqual({
       totalValue: "150",
       costBasis: null,
       profitLoss: null,
@@ -87,19 +95,5 @@ describe("PortfolioCurrency", () => {
 
   it("rejects values that are not three letters", () => {
     expect(() => Schema.decodeUnknownSync(PortfolioCurrency)("EURO")).toThrow()
-  })
-})
-
-describe("PortfolioDecimal", () => {
-  it("accepts canonical decimal strings", () => {
-    expect(Schema.decodeUnknownSync(PortfolioDecimal)("9007199254740993.125")).toBe(
-      "9007199254740993.125"
-    )
-    expect(Schema.decodeUnknownSync(PortfolioDecimal)("-0.25")).toBe("-0.25")
-  })
-
-  it("rejects non-canonical and non-decimal strings", () => {
-    expect(() => Schema.decodeUnknownSync(PortfolioDecimal)("01.2")).toThrow()
-    expect(() => Schema.decodeUnknownSync(PortfolioDecimal)("1e3")).toThrow()
   })
 })

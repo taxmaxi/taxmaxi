@@ -65,6 +65,7 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
           .map((position) => {
             const market =
               position.coingeckoCoinId === null ? undefined : prices.get(position.coingeckoCoinId)
+            const amount = BigDecimal.unsafeFromString(position.amount)
 
             if (market === undefined) {
               return PortfolioAssetRow.make({
@@ -72,17 +73,15 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
                 symbol: position.symbol,
                 name: position.name,
                 logoUrl: position.logoUrl,
-                amount: position.amount,
+                amount,
                 currentPrice: null,
                 totalValue: null,
                 profitLoss: null,
               })
             }
 
-            const totalValue = BigDecimal.multiply(
-              BigDecimal.unsafeFromString(position.amount),
-              BigDecimal.unsafeFromString(market.price)
-            )
+            const currentPrice = BigDecimal.unsafeFromString(market.price)
+            const totalValue = BigDecimal.multiply(amount, currentPrice)
 
             const canCalculateProfitLoss = position.costBasisCurrency?.toLowerCase() === currency
 
@@ -95,20 +94,13 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
               symbol: position.symbol,
               name: position.name,
               logoUrl: market.logoUrl,
-              amount: position.amount,
-              currentPrice: market.price,
-              totalValue: BigDecimal.format(BigDecimal.round(totalValue, { scale: 8 })),
-              profitLoss:
-                profitLoss === null
-                  ? null
-                  : BigDecimal.format(BigDecimal.round(profitLoss, { scale: 8 })),
+              amount,
+              currentPrice,
+              totalValue: roundPortfolioDecimal(totalValue),
+              profitLoss: profitLoss === null ? null : roundPortfolioDecimal(profitLoss),
             })
           })
-          .sort(
-            (left, right) =>
-              Number(right.totalValue ?? -1) - Number(left.totalValue ?? -1) ||
-              left.symbol.localeCompare(right.symbol)
-          )
+          .sort(comparePortfolioAssets)
         const summary = makePortfolioSummary(assets)
 
         return PortfolioAssetsResponse.make({
@@ -144,18 +136,27 @@ export const makePortfolioSummary = (
         )
 
   return PortfolioSummary.make({
-    totalValue: totalValue === null ? null : formatPortfolioDecimal(totalValue),
-    costBasis: costBasis === null ? null : formatPortfolioDecimal(costBasis),
-    profitLoss: profitLoss === null ? null : formatPortfolioDecimal(profitLoss),
+    totalValue: totalValue === null ? null : roundPortfolioDecimal(totalValue),
+    costBasis: costBasis === null ? null : roundPortfolioDecimal(costBasis),
+    profitLoss: profitLoss === null ? null : roundPortfolioDecimal(profitLoss),
     profitLossPercentage:
-      profitLossPercentage === null ? null : formatPortfolioDecimal(profitLossPercentage),
+      profitLossPercentage === null ? null : roundPortfolioDecimal(profitLossPercentage),
   })
 }
 
-const sumDecimals = (values: ReadonlyArray<string | null>): BigDecimal.BigDecimal =>
-  BigDecimal.sumAll(
-    values.flatMap((value) => (value === null ? [] : [BigDecimal.unsafeFromString(value)]))
-  )
+const sumDecimals = (values: ReadonlyArray<BigDecimal.BigDecimal | null>): BigDecimal.BigDecimal =>
+  BigDecimal.sumAll(values.flatMap((value) => (value === null ? [] : [value])))
 
-const formatPortfolioDecimal = (value: BigDecimal.BigDecimal): string =>
-  BigDecimal.format(BigDecimal.round(value, { scale: 8 }))
+const roundPortfolioDecimal = (value: BigDecimal.BigDecimal): BigDecimal.BigDecimal =>
+  BigDecimal.round(value, { scale: 8 })
+
+const comparePortfolioAssets = (left: PortfolioAssetRow, right: PortfolioAssetRow): number => {
+  if (left.totalValue === null) {
+    return right.totalValue === null ? left.symbol.localeCompare(right.symbol) : 1
+  }
+  if (right.totalValue === null) return -1
+
+  return (
+    BigDecimal.Order(right.totalValue, left.totalValue) || left.symbol.localeCompare(right.symbol)
+  )
+}

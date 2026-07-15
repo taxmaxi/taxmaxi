@@ -11,24 +11,22 @@ export class PortfolioSourceNotFoundResponse extends Schema.TaggedError<Portfoli
   HttpApiSchema.annotations({ status: 404 })
 ) {}
 
-export const PortfolioDecimal = Schema.String.pipe(Schema.pattern(/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/))
-
 export class PortfolioAssetRow extends Schema.Class<PortfolioAssetRow>("PortfolioAssetRow")({
   assetId: Schema.String,
   symbol: Schema.String,
   name: Schema.String,
   logoUrl: Schema.NullOr(Schema.String),
-  amount: PortfolioDecimal,
-  currentPrice: Schema.NullOr(PortfolioDecimal),
-  totalValue: Schema.NullOr(PortfolioDecimal),
-  profitLoss: Schema.NullOr(PortfolioDecimal),
+  amount: Schema.BigDecimal,
+  currentPrice: Schema.NullOr(Schema.BigDecimal),
+  totalValue: Schema.NullOr(Schema.BigDecimal),
+  profitLoss: Schema.NullOr(Schema.BigDecimal),
 }) {}
 
 export class PortfolioSummary extends Schema.Class<PortfolioSummary>("PortfolioSummary")({
-  totalValue: Schema.NullOr(PortfolioDecimal),
-  costBasis: Schema.NullOr(PortfolioDecimal),
-  profitLoss: Schema.NullOr(PortfolioDecimal),
-  profitLossPercentage: Schema.NullOr(PortfolioDecimal),
+  totalValue: Schema.NullOr(Schema.BigDecimal),
+  costBasis: Schema.NullOr(Schema.BigDecimal),
+  profitLoss: Schema.NullOr(Schema.BigDecimal),
+  profitLossPercentage: Schema.NullOr(Schema.BigDecimal),
 }) {}
 
 export class PortfolioAssetsResponse extends Schema.Class<PortfolioAssetsResponse>(
