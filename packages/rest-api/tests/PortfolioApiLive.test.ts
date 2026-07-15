@@ -1,6 +1,10 @@
 import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
-import { PortfolioAssetRow, PortfolioCurrency } from "../src/definitions/PortfolioApi.ts"
+import {
+  PortfolioAssetRow,
+  PortfolioCurrency,
+  PortfolioDecimal,
+} from "../src/definitions/PortfolioApi.ts"
 import { makePortfolioSummary } from "../src/layers/PortfolioApiLive.ts"
 
 const makeAsset = ({
@@ -83,5 +87,19 @@ describe("PortfolioCurrency", () => {
 
   it("rejects values that are not three letters", () => {
     expect(() => Schema.decodeUnknownSync(PortfolioCurrency)("EURO")).toThrow()
+  })
+})
+
+describe("PortfolioDecimal", () => {
+  it("accepts canonical decimal strings", () => {
+    expect(Schema.decodeUnknownSync(PortfolioDecimal)("9007199254740993.125")).toBe(
+      "9007199254740993.125"
+    )
+    expect(Schema.decodeUnknownSync(PortfolioDecimal)("-0.25")).toBe("-0.25")
+  })
+
+  it("rejects non-canonical and non-decimal strings", () => {
+    expect(() => Schema.decodeUnknownSync(PortfolioDecimal)("01.2")).toThrow()
+    expect(() => Schema.decodeUnknownSync(PortfolioDecimal)("1e3")).toThrow()
   })
 })

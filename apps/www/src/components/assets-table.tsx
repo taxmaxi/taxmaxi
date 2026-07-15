@@ -89,8 +89,8 @@ function AssetRow({ currency, holding }: { currency: string; holding: PortfolioA
         {holding.profitLoss === null ? (
           <span className="text-muted-foreground">—</span>
         ) : (
-          <ValueTone tone={Number(holding.profitLoss) >= 0 ? "positive" : "negative"}>
-            {formatSignedCurrency(Number(holding.profitLoss), currency)}
+          <ValueTone tone={holding.profitLoss.startsWith("-") ? "negative" : "positive"}>
+            {formatSignedCurrency(holding.profitLoss, currency)}
           </ValueTone>
         )}
       </TableCell>
@@ -171,7 +171,7 @@ function AssetMark({
 }
 
 function formatNullableCurrency(value: string | null, currency: string) {
-  return value === null ? "—" : formatCurrency(Number(value), currency)
+  return value === null ? "—" : formatCurrency(value, currency)
 }
 
 function formatNullablePrice(value: string | null, currency: string) {

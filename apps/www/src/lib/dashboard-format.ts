@@ -1,17 +1,28 @@
-export function formatCurrency(value: number, currency = "EUR"): string {
-  return `${value.toLocaleString("de-DE", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })} ${currency.toUpperCase()}`
+declare global {
+  namespace Intl {
+    interface NumberFormat {
+      format(value: `${number}`): string
+    }
+  }
 }
 
-export function formatSignedCurrency(value: number, currency = "EUR"): string {
-  if (value === 0) {
-    return formatCurrency(0, currency)
-  }
+export function formatCurrency(value: string, currency = "EUR"): string {
+  if (!isDecimalString(value)) return `${value} ${currency.toUpperCase()}`
 
-  const prefix = value > 0 ? "+" : "-"
-  return `${prefix}${formatCurrency(Math.abs(value), currency)}`
+  return `${new Intl.NumberFormat("de-DE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value)} ${currency.toUpperCase()}`
+}
+
+export function formatSignedCurrency(value: string, currency = "EUR"): string {
+  if (!isDecimalString(value)) return `${value} ${currency.toUpperCase()}`
+
+  return `${new Intl.NumberFormat("de-DE", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    signDisplay: "exceptZero",
+  }).format(value)} ${currency.toUpperCase()}`
 }
 
 export function formatInteger(value: number): string {
@@ -19,90 +30,45 @@ export function formatInteger(value: number): string {
 }
 
 export function formatTokenAmount(value: string): string {
-  const decimal = parseDecimal(value)
-  if (decimal === null) return value
+  if (!isDecimalString(value)) return value
 
-  const isBelowOne = decimal.integer === "0"
-  return formatDecimal(decimal, {
+  const isBelowOne = getUnsignedInteger(value) === "0"
+  return new Intl.NumberFormat("de-DE", {
     minimumFractionDigits: isBelowOne ? 4 : 2,
     maximumFractionDigits: isBelowOne ? 6 : 2,
-  })
+  }).format(value)
 }
 
 export function formatTokenPrice(value: string, currency = "EUR"): string {
-  const decimal = parseDecimal(value)
-  if (decimal === null) return `${value} ${currency.toUpperCase()}`
+  if (!isDecimalString(value)) return `${value} ${currency.toUpperCase()}`
 
-  const firstSignificantFractionIndex = decimal.fraction.search(/[1-9]/)
+  const [integer, fraction = ""] = getUnsignedDecimal(value).split(".")
+  const firstSignificantFractionIndex = fraction.search(/[1-9]/)
   const maximumFractionDigits =
-    decimal.integer === "0" && firstSignificantFractionIndex >= 0
+    integer === "0" && firstSignificantFractionIndex >= 0
       ? Math.min(18, Math.max(2, firstSignificantFractionIndex + 4))
       : 2
 
-  return `${formatDecimal(decimal, {
+  return `${new Intl.NumberFormat("de-DE", {
     minimumFractionDigits: 2,
     maximumFractionDigits,
-  })} ${currency.toUpperCase()}`
+  }).format(value)} ${currency.toUpperCase()}`
 }
 
-export function formatPercent(value: number): string {
-  return `${value.toLocaleString("de-DE", {
+export function formatPercent(value: string): string {
+  if (!isDecimalString(value)) return `${value}%`
+
+  return `${new Intl.NumberFormat("de-DE", {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
-  })}%`
+  }).format(value)}%`
 }
 
-interface DecimalParts {
-  readonly negative: boolean
-  readonly integer: string
-  readonly fraction: string
-}
+const isDecimalString = (value: string): value is `${number}` =>
+  /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)
 
-interface DecimalFormatOptions {
-  readonly minimumFractionDigits: number
-  readonly maximumFractionDigits: number
-}
+const getUnsignedDecimal = (value: `${number}`): string =>
+  value.startsWith("-") ? value.slice(1) : value
 
-const parseDecimal = (value: string): DecimalParts | null => {
-  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value)
-  if (match === null) return null
-
-  const integer = (match[2] ?? "0").replace(/^0+(?=\d)/, "")
-
-  return {
-    negative: match[1] === "-",
-    integer,
-    fraction: match[3] ?? "",
-  }
-}
-
-const formatDecimal = (
-  decimal: DecimalParts,
-  { minimumFractionDigits, maximumFractionDigits }: DecimalFormatOptions
-): string => {
-  const retainedFraction = decimal.fraction
-    .slice(0, maximumFractionDigits)
-    .padEnd(maximumFractionDigits, "0")
-  const shouldRoundUp = "56789".includes(decimal.fraction[maximumFractionDigits] ?? "0")
-  const scale = 10n ** BigInt(maximumFractionDigits)
-  const scaledValue =
-    BigInt(decimal.integer) * scale +
-    BigInt(retainedFraction === "" ? "0" : retainedFraction) +
-    (shouldRoundUp ? 1n : 0n)
-  const roundedInteger = scaledValue / scale
-  const roundedFraction =
-    maximumFractionDigits === 0
-      ? ""
-      : (scaledValue % scale).toString().padStart(maximumFractionDigits, "0")
-  const visibleFraction = roundedFraction.replace(
-    new RegExp(`0{0,${Math.max(0, maximumFractionDigits - minimumFractionDigits)}}$`),
-    ""
-  )
-  const isZero = roundedInteger === 0n && !/[1-9]/.test(visibleFraction)
-  const sign = decimal.negative && !isZero ? "-" : ""
-  const groupedInteger = roundedInteger.toLocaleString("de-DE")
-
-  return visibleFraction === ""
-    ? `${sign}${groupedInteger}`
-    : `${sign}${groupedInteger},${visibleFraction}`
-}
+const getUnsignedInteger = (value: `${number}`): string =>
+  getUnsignedDecimal(value).split(".", 1)[0] ?? "0"
