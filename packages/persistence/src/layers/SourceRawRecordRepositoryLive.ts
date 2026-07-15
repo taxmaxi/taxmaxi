@@ -4,7 +4,7 @@
  * @module SourceRawRecordRepositoryLive
  */
 
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm"
+import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -162,19 +162,29 @@ const make = Effect.gen(function* () {
           .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listRawRecordsByIds"))
 
   const listRawRecordsByOccurredAt: SourceRawRecordRepositoryShape["listRawRecordsByOccurredAt"] =
-    ({ sourceId, recordType, occurredAt }) =>
-      db
+    ({ sourceId, recordType, occurredAt }) => {
+      const pairingWindowMilliseconds = 5 * 60 * 1000
+
+      return db
         .select(selectRawRecordFields)
         .from(schema.sourceRecordsRaw)
         .where(
           and(
             eq(schema.sourceRecordsRaw.sourceId, sourceId),
             eq(schema.sourceRecordsRaw.recordType, recordType),
-            eq(schema.sourceRecordsRaw.occurredAt, occurredAt)
+            gte(
+              schema.sourceRecordsRaw.occurredAt,
+              new Date(occurredAt.getTime() - pairingWindowMilliseconds)
+            ),
+            lte(
+              schema.sourceRecordsRaw.occurredAt,
+              new Date(occurredAt.getTime() + pairingWindowMilliseconds)
+            )
           )
         )
         .orderBy(asc(schema.sourceRecordsRaw.createdAt))
         .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listRawRecordsByOccurredAt"))
+    }
 
   const markRawRecordNormalized: SourceRawRecordRepositoryShape["markRawRecordNormalized"] = ({
     rawRecordId,

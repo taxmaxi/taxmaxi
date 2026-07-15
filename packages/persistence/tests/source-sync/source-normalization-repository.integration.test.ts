@@ -6,9 +6,11 @@ import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderReferenceRepositoryLive.ts"
+import { PortfolioRepositoryLive } from "../../src/layers/PortfolioRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
+import { PortfolioRepository } from "../../src/services/PortfolioRepository.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_EUR_ASSET_ID,
@@ -38,6 +40,7 @@ const context = makeIntegrationTestDatabaseContext({
 })
 
 const runPg = context.runPg
+const TEST_SOL_ASSET_ID = "00000000-0000-0000-0000-000000000483"
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -75,6 +78,20 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
           exponent: 8,
           type: "crypto",
           asset_id: "btc-provider-asset",
+        },
+      },
+      {
+        currencyCode: "SOL",
+        name: "Solana",
+        providerAssetId: "sol-provider-asset",
+        exponent: 9,
+        providerType: "crypto",
+        payload: {
+          code: "SOL",
+          name: "Solana",
+          exponent: 9,
+          type: "crypto",
+          asset_id: "sol-provider-asset",
         },
       },
     ] as const),
@@ -181,18 +198,20 @@ const buildSeededRawRecord = ({
   occurredAt,
   payload,
   externalParentId = null,
+  externalAccountId = "coinbase-account-1",
 }: {
   readonly rawRecordId: string
   readonly externalRecordId: string
   readonly occurredAt: Date
   readonly payload: unknown
   readonly externalParentId?: string | null
+  readonly externalAccountId?: string
 }): SourceRawRecord => ({
   id: rawRecordId,
   sourceId: TEST_SOURCE_ID,
   provider: "coinbase",
   recordType: "coinbase_transaction",
-  externalAccountId: "coinbase-account-1",
+  externalAccountId,
   externalRecordId,
   externalParentId,
   occurredAt,
@@ -888,6 +907,18 @@ describe("SourceNormalizationRepositoryLive", () => {
   })
 
   it("persists a Coinbase send provider transfer without creating a canonical principal leg", async () => {
+    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000690"
+    const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
+    const acquisitionPayload = {
+      id: "tx-send-provider-transfer-opening-inventory",
+      type: "buy",
+      status: "completed",
+      amount: { amount: "1.00000000", currency: "BTC" },
+      native_amount: { amount: "10000.00", currency: "EUR" },
+      created_at: acquiredAt.toISOString(),
+      resource_path:
+        "/v2/accounts/coinbase-account-1/transactions/tx-send-provider-transfer-opening-inventory",
+    }
     const rawRecordId = "00000000-0000-0000-0000-000000000691"
     const occurredAt = new Date("2025-04-01T10:00:00.000Z")
     const payload = {
@@ -911,11 +942,31 @@ describe("SourceNormalizationRepositoryLive", () => {
     }
 
     await runPg(
-      seedRawRecord({
-        rawRecordId,
-        externalRecordId: "raw-provider-send-1",
-        occurredAt,
-        payload,
+      Effect.all([
+        seedRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-provider-send-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+        seedRawRecord({
+          rawRecordId,
+          externalRecordId: "raw-provider-send-1",
+          occurredAt,
+          payload,
+        }),
+      ])
+    )
+
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-provider-send-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
       })
     )
 
@@ -953,15 +1004,155 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         const providerTransfers = yield* db.select().from(schema.providerTransfers)
         const legs = yield* db.select().from(schema.transactionLegs)
+        const lots = yield* db.select().from(schema.fifoLots)
+        const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
+        const reviews = yield* db.select().from(schema.transactionReviews)
         return {
           providerTransfers,
           legs,
+          lots,
+          inventoryMovements,
+          reviews,
         }
       })
     )
 
     expect(counts.providerTransfers).toHaveLength(1)
-    expect(counts.legs).toHaveLength(1)
+    expect(counts.legs).toHaveLength(2)
+    expect(counts.legs.filter((leg) => leg.kind === "disposal")).toHaveLength(0)
+    expect(counts.lots).toEqual([
+      expect.objectContaining({
+        sourceId: TEST_SOURCE_ID,
+        remainingAmount: expect.stringContaining("0.89990000"),
+      }),
+    ])
+    expect(counts.inventoryMovements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          direction: "outbound",
+          purpose: "principal",
+          taxTreatment: "pending_review",
+        }),
+        expect.objectContaining({
+          direction: "outbound",
+          purpose: "fee",
+          taxTreatment: "pending_review",
+        }),
+      ])
+    )
+    expect(counts.reviews).toContainEqual(
+      expect.objectContaining({
+        reviewStatus: "needs_review",
+        needsReview: true,
+      })
+    )
+  })
+
+  it("does not allocate an internal-transfer outflow after its disposal leg consumed inventory", async () => {
+    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000698"
+    const acquiredAt = new Date("2025-03-01T10:00:00.000Z")
+    const acquisitionPayload = {
+      id: "tx-internal-transfer-opening-inventory",
+      type: "buy",
+      status: "completed",
+      amount: { amount: "1.00000000", currency: "BTC" },
+      native_amount: { amount: "10000.00", currency: "EUR" },
+      created_at: acquiredAt.toISOString(),
+      resource_path:
+        "/v2/accounts/coinbase-account-1/transactions/tx-internal-transfer-opening-inventory",
+    }
+    const rawRecordId = "00000000-0000-0000-0000-000000000699"
+    const occurredAt = new Date("2025-04-01T10:00:00.000Z")
+    const payload = {
+      id: "tx-internal-transfer-outflow",
+      type: "intx_withdrawal",
+      status: "completed",
+      amount: { amount: "-0.10000000", currency: "BTC" },
+      native_amount: { amount: "-1500.00", currency: "EUR" },
+      created_at: occurredAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-internal-transfer-outflow",
+    }
+
+    await runPg(
+      Effect.all([
+        seedRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-internal-transfer-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+        seedRawRecord({
+          rawRecordId,
+          externalRecordId: "raw-internal-transfer-outflow",
+          occurredAt,
+          payload,
+        }),
+      ])
+    )
+
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-internal-transfer-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+      })
+    )
+
+    const result = await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId,
+          externalRecordId: "raw-internal-transfer-outflow",
+          occurredAt,
+          payload,
+        }),
+      })
+    )
+
+    expect(result.providerTransfers).toHaveLength(1)
+    expect(result.legs).toEqual([expect.objectContaining({ kind: "disposal" })])
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const lots = yield* db.select().from(schema.fifoLots)
+        const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
+        const inventoryMovementAllocations = yield* db
+          .select()
+          .from(schema.inventoryMovementAllocations)
+        const disposalMatches = yield* db.select().from(schema.disposalMatches)
+
+        return {
+          lots,
+          inventoryMovements,
+          inventoryMovementAllocations,
+          disposalMatches,
+        }
+      })
+    )
+
+    expect(state.lots).toEqual([
+      expect.objectContaining({
+        sourceId: TEST_SOURCE_ID,
+        remainingAmount: expect.stringContaining("0.90000000"),
+      }),
+    ])
+    expect(state.inventoryMovements).toEqual([
+      expect.objectContaining({
+        direction: "outbound",
+        purpose: "principal",
+        amount: expect.stringContaining("0.10000000"),
+      }),
+    ])
+    expect(state.inventoryMovementAllocations).toHaveLength(0)
+    expect(state.disposalMatches).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.10000000") }),
+    ])
   })
 
   it("persists a Coinbase receive provider transfer with source and destination context", async () => {
@@ -1036,6 +1227,165 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
+  it("projects the exact SOL balance after instant unstaking and an unmatched send", async () => {
+    const openingAt = new Date("2025-05-01T09:00:00.000Z")
+    const unstakingCreditAt = new Date("2025-05-02T10:00:00.000Z")
+    const unstakingReleaseAt = new Date("2025-05-02T10:00:30.000Z")
+    const sendAt = new Date("2025-05-03T11:00:00.000Z")
+    const records = [
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000694",
+        externalRecordId: "sol-opening-inventory",
+        externalAccountId: "coinbase-sol-primary",
+        externalParentId: null,
+        occurredAt: openingAt,
+        payload: {
+          id: "sol-opening-inventory",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "46.039172889", currency: "SOL" },
+          native_amount: { amount: "4603.91728890", currency: "EUR" },
+          created_at: openingAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-opening-inventory",
+        },
+      },
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000695",
+        externalRecordId: "sol-instant-unstaking-credit",
+        externalAccountId: "coinbase-sol-primary",
+        externalParentId: "sol-instant-unstaking-group",
+        occurredAt: unstakingCreditAt,
+        payload: {
+          id: "sol-instant-unstaking-credit",
+          type: "unstaking_transfer",
+          status: "completed",
+          amount: { amount: "0.956937564", currency: "SOL" },
+          native_amount: { amount: "95.69375640", currency: "EUR" },
+          created_at: unstakingCreditAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-sol-primary/transactions/sol-instant-unstaking-credit",
+        },
+      },
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000696",
+        externalRecordId: "sol-instant-unstaking-release",
+        externalAccountId: "coinbase-sol-staking",
+        externalParentId: "sol-instant-unstaking-group",
+        occurredAt: unstakingReleaseAt,
+        payload: {
+          id: "sol-instant-unstaking-release",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "-0.966603600", currency: "SOL" },
+          native_amount: { amount: "-96.66036000", currency: "EUR" },
+          created_at: unstakingReleaseAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-sol-staking/transactions/sol-instant-unstaking-release",
+        },
+      },
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000697",
+        externalRecordId: "sol-external-send",
+        externalAccountId: "coinbase-sol-primary",
+        externalParentId: null,
+        occurredAt: sendAt,
+        payload: {
+          id: "sol-external-send",
+          type: "send",
+          status: "completed",
+          amount: { amount: "-1.000000000", currency: "SOL" },
+          native_amount: { amount: "-100.00", currency: "EUR" },
+          created_at: sendAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-external-send",
+          network: {
+            status: "confirmed",
+            hash: "sol-external-send-hash",
+            network_name: "solana",
+          },
+          to: {
+            address: "sol-external-destination",
+            resource: "address",
+          },
+        },
+      },
+    ] as const
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_SOL_ASSET_ID,
+          blockchainId: fixture.baseBlockchainId,
+          contractAddress: "sync-engine-sol-fixture",
+          name: "Sync Engine Solana Fixture",
+          symbol: "SOL",
+          decimals: 9,
+          type: "token",
+        })
+
+        yield* Effect.forEach(records, (record) =>
+          seedRawRecord({
+            ...record,
+          })
+        )
+      })
+    )
+
+    for (const record of records) {
+      await runCoinbaseNormalization(
+        persistCoinbaseNormalization({
+          source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+          sourceRecord: buildSeededRawRecord({ ...record }),
+        })
+      )
+    }
+
+    const positions = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(PortfolioRepository, (repository) =>
+          repository.listAssetPositions({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        ),
+        layer: PortfolioRepositoryLive,
+      })
+    )
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const movements = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.assetId, TEST_SOL_ASSET_ID))
+        const legs = yield* db
+          .select()
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.assetId, TEST_SOL_ASSET_ID))
+        return { movements, legs }
+      })
+    )
+
+    expect(positions).toEqual([
+      expect.objectContaining({
+        assetId: TEST_SOL_ASSET_ID,
+        symbol: "SOL",
+        amount: "45.029506853",
+      }),
+    ])
+    expect(state.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.009666036") }),
+        expect.objectContaining({
+          purpose: "principal",
+          amount: expect.stringContaining("1.000000000"),
+          taxTreatment: "pending_review",
+        }),
+      ])
+    )
+    expect(state.legs.filter((leg) => leg.kind === "disposal")).toHaveLength(0)
+  })
+
   it("keeps Coinbase provider transfer persistence idempotent on replay", async () => {
     const rawRecordId = "00000000-0000-0000-0000-000000000693"
     const occurredAt = new Date("2025-04-03T10:00:00.000Z")
@@ -1095,14 +1445,17 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         const providerTransfers = yield* db.select().from(schema.providerTransfers)
         const transactions = yield* db.select().from(schema.transactions)
+        const inventoryMovements = yield* db.select().from(schema.inventoryMovements)
         return {
           providerTransfers,
           transactions,
+          inventoryMovements,
         }
       })
     )
 
     expect(counts.providerTransfers).toHaveLength(1)
     expect(counts.transactions).toHaveLength(1)
+    expect(counts.inventoryMovements).toHaveLength(1)
   })
 })

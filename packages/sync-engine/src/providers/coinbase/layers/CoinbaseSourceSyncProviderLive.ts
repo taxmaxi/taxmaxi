@@ -318,8 +318,9 @@ const make = Effect.gen(function* () {
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.
-   * Siblings must belong to the same account and provider group so two
-   * unrelated unstakings at the same second do not pair with each other.
+   * Provider group identifiers allow siblings across provider accounts. When
+   * no group exists, siblings must share an account. Compatible type and
+   * timestamp proximity handle the remaining provider variation.
    * Fails recoverably when the sibling is missing or ambiguous so the row is
    * retried on a later replay pass once all sibling rows are cached.
    */
@@ -349,12 +350,21 @@ const make = Effect.gen(function* () {
         occurredAt: sourceRecord.occurredAt,
       })
 
+      const isCompatibleType = (candidateType: string): boolean => {
+        if (candidateType === providerTransactionType) {
+          return true
+        }
+
+        return (
+          (providerTransactionType === "retail_instant_unstaking" &&
+            candidateType === "unstaking_transfer") ||
+          (providerTransactionType === "unstaking_transfer" &&
+            candidateType === "retail_instant_unstaking")
+        )
+      }
+
       const candidates = siblingRecords.flatMap((sibling) => {
-        if (
-          sibling.id === sourceRecord.id ||
-          sibling.externalAccountId !== sourceRecord.externalAccountId ||
-          sibling.externalParentId !== sourceRecord.externalParentId
-        ) {
+        if (sibling.id === sourceRecord.id) {
           return []
         }
 
@@ -364,28 +374,64 @@ const make = Effect.gen(function* () {
 
         return Option.match(decoded, {
           onNone: () => [],
-          onSome: (payload) =>
-            payload.type === providerTransactionType &&
-            payload.amount.currency.toUpperCase() === amount.currency.toUpperCase() &&
-            !isNegativeAmount(payload.amount.amount)
-              ? [payload]
-              : [],
+          onSome: (payload) => {
+            if (
+              !isCompatibleType(payload.type) ||
+              payload.amount.currency.toUpperCase() !== amount.currency.toUpperCase() ||
+              isNegativeAmount(payload.amount.amount)
+            ) {
+              return []
+            }
+
+            const groupMatches =
+              sourceRecord.externalParentId !== null &&
+              sibling.externalParentId === sourceRecord.externalParentId
+            const sameAccount = sibling.externalAccountId === sourceRecord.externalAccountId
+            const bothUngrouped =
+              sourceRecord.externalParentId === null && sibling.externalParentId === null
+
+            if (!groupMatches && !(bothUngrouped && sameAccount)) {
+              return []
+            }
+
+            const sameType = payload.type === providerTransactionType
+
+            return [
+              {
+                payload,
+                score: (groupMatches ? 100 : 0) + (sameType ? 10 : 0) + (sameAccount ? 5 : 0),
+                timestampDistance: Math.abs(
+                  sibling.occurredAt.getTime() - sourceRecord.occurredAt.getTime()
+                ),
+              },
+            ]
+          },
         })
       })
 
-      const [paired] = candidates
-      if (paired === undefined || candidates.length > 1) {
+      const rankedCandidates = candidates.sort(
+        (left, right) =>
+          right.score - left.score || left.timestampDistance - right.timestampDistance
+      )
+      const [paired, runnerUp] = rankedCandidates
+      const isAmbiguous =
+        paired !== undefined &&
+        runnerUp !== undefined &&
+        paired.score === runnerUp.score &&
+        paired.timestampDistance === runnerUp.timestampDistance
+
+      if (paired === undefined || isAmbiguous) {
         return yield* Effect.fail(
           new CoinbaseRecordNormalizationError({
-            message: `Expected exactly one paired principal row for ${providerTransactionType ?? "unknown"} at ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
+            message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
           })
         )
       }
 
       return {
-        externalId: paired.id,
-        amount: paired.amount,
-        nativeAmount: paired.native_amount,
+        externalId: paired.payload.id,
+        amount: paired.payload.amount,
+        nativeAmount: paired.payload.native_amount,
       }
     })
 

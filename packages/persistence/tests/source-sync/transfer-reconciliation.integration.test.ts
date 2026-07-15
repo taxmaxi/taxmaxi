@@ -734,17 +734,57 @@ describe("TransferReconciliationServiceLive", () => {
           return yield* Effect.dieMessage("Failed to create acquisition leg fixture")
         }
 
-        yield* db.insert(schema.fifoLots).values({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: TEST_SOURCE_ID,
-          assetId: TEST_BTC_ASSET_ID,
-          acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
-          originalAmount: "1.00000000",
-          remainingAmount: "1.00000000",
-          costBasisPerToken: "50000.000000000000000000",
-          costBasisCurrency: "EUR",
-          sourceLegId: leg.id,
-          sourceLegSequence: 0,
+        const [lot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "0.90000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: leg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [providerTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, firstProviderTransferId))
+          .limit(1)
+
+        if (lot === undefined || providerTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create custody allocation fixture")
+        }
+
+        const [movement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId: firstProviderTransferId,
+            transactionLegId: null,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (movement === undefined) {
+          return yield* Effect.dieMessage("Failed to create inventory movement fixture")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: movement.id,
+          fifoLotId: lot.id,
+          matchedAmount: "0.10000000",
         })
       })
     )
@@ -772,5 +812,47 @@ describe("TransferReconciliationServiceLive", () => {
     )
 
     expect(secondSummary).toEqual({ canonicalizedPairs: 1 })
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const lots = yield* db
+          .select({
+            sourceId: schema.fifoLots.sourceId,
+            remainingAmount: schema.fifoLots.remainingAmount,
+          })
+          .from(schema.fifoLots)
+        const [movement] = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.providerTransferId, firstProviderTransferId))
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        return { lots, movement, allocations }
+      })
+    )
+
+    expect(state.movement).toEqual(
+      expect.objectContaining({
+        reconciliationStatus: "matched",
+        taxTreatment: "non_taxable",
+      })
+    )
+    expect(state.allocations).toHaveLength(0)
+    expect(state.lots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: TEST_SOURCE_ID,
+          remainingAmount: expect.stringContaining("0.70000000"),
+        }),
+        expect.objectContaining({
+          sourceId: ONCHAIN_SOURCE_ID,
+          remainingAmount: expect.stringContaining("0.10000000"),
+        }),
+        expect.objectContaining({
+          sourceId: ONCHAIN_SOURCE_ID,
+          remainingAmount: expect.stringContaining("0.20000000"),
+        }),
+      ])
+    )
   })
 })

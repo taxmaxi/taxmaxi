@@ -9,6 +9,7 @@ import * as duneProtocolCandidateObservations from "./DuneProtocolCandidateObser
 import * as emailVerificationRequests from "./EmailVerificationRequestsTable.ts"
 import * as fifoLots from "./FifoLotsTable.ts"
 import * as identities from "./IdentitiesTable.ts"
+import * as inventoryMovements from "./InventoryMovementsTable.ts"
 import * as legalRules from "./LegalRulesTable.ts"
 import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
@@ -53,6 +54,7 @@ export const schema = {
   ...emailVerificationRequests,
   ...fifoLots,
   ...identities,
+  ...inventoryMovements,
   ...legalRules,
   ...oauthStates,
   ...processingJobs,
@@ -100,6 +102,12 @@ export type {
 export type { EmailVerificationRequest } from "./EmailVerificationRequestsTable.ts"
 export type { FifoLot, FifoLotInsert } from "./FifoLotsTable.ts"
 export type { IdentityRow } from "./IdentitiesTable.ts"
+export type {
+  InventoryMovement,
+  InventoryMovementAllocation,
+  InventoryMovementAllocationInsert,
+  InventoryMovementInsert,
+} from "./InventoryMovementsTable.ts"
 export type {
   JurisdictionRuleSet,
   JurisdictionRuleSetInsert,

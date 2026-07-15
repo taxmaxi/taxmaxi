@@ -25,6 +25,41 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const inventoryMovementAllocations = yield* tx
+            .select({
+              fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
+              matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+            })
+            .from(schema.inventoryMovementAllocations)
+            .innerJoin(
+              schema.inventoryMovements,
+              eq(
+                schema.inventoryMovements.id,
+                schema.inventoryMovementAllocations.inventoryMovementId
+              )
+            )
+            .where(eq(schema.inventoryMovements.sourceId, sourceId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.selectInventoryMovementAllocations"
+              )
+            )
+
+          yield* Effect.forEach(inventoryMovementAllocations, (allocation) =>
+            tx
+              .update(schema.fifoLots)
+              .set({
+                remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
+                updatedAt: nowDate(),
+              })
+              .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayRepository.resetSourceDerivedState.restoreInventoryMovementLots"
+                )
+              )
+          )
+
           const disposalMatches = yield* tx
             .select({
               fifoLotId: schema.disposalMatches.fifoLotId,
