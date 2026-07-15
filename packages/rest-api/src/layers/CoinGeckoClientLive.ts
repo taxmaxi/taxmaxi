@@ -70,17 +70,25 @@ const decodeJson = <A, I>(schema: Schema.Schema<A, I, never>, endpoint: string, 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
   const configuredBaseUrl = yield* Config.option(Config.string("COINGECKO_API_BASE_URL"))
-  const apiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
+  const demoApiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
+  const proApiKey = yield* Config.option(Config.string("COINGECKO_PRO_API_KEY"))
   const baseUrl = Option.getOrElse(configuredBaseUrl, () =>
-    Option.isSome(apiKey) ? COINGECKO_PRO_API_BASE_URL : COINGECKO_PUBLIC_API_BASE_URL
+    Option.isSome(proApiKey) ? COINGECKO_PRO_API_BASE_URL : COINGECKO_PUBLIC_API_BASE_URL
   )
 
   const executeGetJson = (endpoint: string) =>
     Effect.gen(function* () {
       const baseRequest = HttpClientRequest.get(`${baseUrl}${endpoint}`)
-      const request = Option.isSome(apiKey)
-        ? baseRequest.pipe(HttpClientRequest.setHeader("x-cg-pro-api-key", apiKey.value))
-        : baseRequest
+      const request = Option.match(proApiKey, {
+        onNone: () =>
+          Option.match(demoApiKey, {
+            onNone: () => baseRequest,
+            onSome: (apiKey) =>
+              baseRequest.pipe(HttpClientRequest.setHeader("x-cg-demo-api-key", apiKey)),
+          }),
+        onSome: (apiKey) =>
+          baseRequest.pipe(HttpClientRequest.setHeader("x-cg-pro-api-key", apiKey)),
+      })
       const response = yield* httpClient
         .execute(request)
         .pipe(

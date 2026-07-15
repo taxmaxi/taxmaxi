@@ -23,7 +23,7 @@ export class PortfolioAssetRow extends Schema.Class<PortfolioAssetRow>("Portfoli
 }) {}
 
 export class PortfolioSummary extends Schema.Class<PortfolioSummary>("PortfolioSummary")({
-  totalValue: Schema.String,
+  totalValue: Schema.NullOr(Schema.String),
   costBasis: Schema.NullOr(Schema.String),
   profitLoss: Schema.NullOr(Schema.String),
   profitLossPercentage: Schema.NullOr(Schema.String),

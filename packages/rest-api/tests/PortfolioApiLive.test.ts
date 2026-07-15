@@ -23,11 +23,25 @@ const makeAsset = ({
   })
 
 describe("makePortfolioSummary", () => {
-  it("aggregates decimal values without floating-point rounding", () => {
+  it("keeps aggregate values unavailable when an asset is unpriced", () => {
     const summary = makePortfolioSummary([
       makeAsset({ assetId: "one", totalValue: "100.1", profitLoss: "20.1" }),
       makeAsset({ assetId: "two", totalValue: "49.9", profitLoss: "-5.1" }),
       makeAsset({ assetId: "unpriced", totalValue: null, profitLoss: null }),
+    ])
+
+    expect(summary).toEqual({
+      totalValue: null,
+      costBasis: null,
+      profitLoss: null,
+      profitLossPercentage: null,
+    })
+  })
+
+  it("aggregates decimal values without floating-point rounding", () => {
+    const summary = makePortfolioSummary([
+      makeAsset({ assetId: "one", totalValue: "100.1", profitLoss: "20.1" }),
+      makeAsset({ assetId: "two", totalValue: "49.9", profitLoss: "-5.1" }),
     ])
 
     expect(summary).toEqual({

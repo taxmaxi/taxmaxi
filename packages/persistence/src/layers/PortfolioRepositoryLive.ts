@@ -80,6 +80,7 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.fifoLots.principalId, scope.principalId),
             gt(schema.fifoLots.remainingAmount, "0"),
+            eq(schema.assets.isSpam, false),
             scope.sourceId === null ? undefined : eq(schema.fifoLots.sourceId, scope.sourceId)
           )
         )

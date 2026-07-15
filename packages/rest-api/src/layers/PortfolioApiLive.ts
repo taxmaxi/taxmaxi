@@ -125,14 +125,16 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
 export const makePortfolioSummary = (
   assets: ReadonlyArray<PortfolioAssetRow>
 ): PortfolioSummary => {
-  const totalValue = sumDecimals(assets.map((asset) => asset.totalValue))
-  const hasUnavailableProfitLoss = assets.some(
-    (asset) => asset.totalValue !== null && asset.profitLoss === null
-  )
+  const hasUnavailableTotalValue = assets.some((asset) => asset.totalValue === null)
+  const totalValue = hasUnavailableTotalValue
+    ? null
+    : sumDecimals(assets.map((asset) => asset.totalValue))
+  const hasUnavailableProfitLoss = assets.some((asset) => asset.profitLoss === null)
   const profitLoss = hasUnavailableProfitLoss
     ? null
     : sumDecimals(assets.map((asset) => asset.profitLoss))
-  const costBasis = profitLoss === null ? null : BigDecimal.subtract(totalValue, profitLoss)
+  const costBasis =
+    totalValue === null || profitLoss === null ? null : BigDecimal.subtract(totalValue, profitLoss)
   const profitLossPercentage =
     profitLoss === null || costBasis === null || BigDecimal.isZero(costBasis)
       ? null
@@ -142,7 +144,7 @@ export const makePortfolioSummary = (
         )
 
   return PortfolioSummary.make({
-    totalValue: formatPortfolioDecimal(totalValue),
+    totalValue: totalValue === null ? null : formatPortfolioDecimal(totalValue),
     costBasis: costBasis === null ? null : formatPortfolioDecimal(costBasis),
     profitLoss: profitLoss === null ? null : formatPortfolioDecimal(profitLoss),
     profitLossPercentage:

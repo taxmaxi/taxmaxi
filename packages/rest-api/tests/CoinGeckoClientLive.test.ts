@@ -56,12 +56,39 @@ describe("CoinGeckoClientLive", () => {
     expect(apiKey).toBeNull()
   })
 
-  it("shares configuration, authentication, decoding, and market batching", async () => {
+  it("uses Demo authentication for the generic API key", async () => {
+    let requestUrlValue: URL | undefined
+    let demoApiKey: string | null = null
+    let proApiKey: string | null = null
+
+    await runClient(
+      Effect.gen(function* () {
+        const client = yield* CoinGeckoClient
+        return yield* client.searchCoins({ query: "BTC" })
+      }),
+      async (input, init) => {
+        requestUrlValue = requestUrl(input)
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : {})
+        )
+        demoApiKey = headers.get("x-cg-demo-api-key")
+        proApiKey = headers.get("x-cg-pro-api-key")
+        return Response.json({ coins: [] })
+      },
+      ConfigProvider.fromMap(new Map([["COINGECKO_API_KEY", "demo-key"]]))
+    )
+
+    expect(requestUrlValue?.origin).toBe("https://api.coingecko.com")
+    expect(demoApiKey).toBe("demo-key")
+    expect(proApiKey).toBeNull()
+  })
+
+  it("shares configuration, Demo authentication, decoding, and market batching", async () => {
     const requests: Array<{ readonly url: URL; readonly apiKey: string | null }> = []
     const fetch: typeof globalThis.fetch = async (input, init) => {
       const url = requestUrl(input)
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : {}))
-      requests.push({ url, apiKey: headers.get("x-cg-pro-api-key") })
+      requests.push({ url, apiKey: headers.get("x-cg-demo-api-key") })
 
       if (url.pathname.endsWith("/search")) {
         return Response.json({ coins: [{ id: "bitcoin", name: "Bitcoin", symbol: "btc" }] })
@@ -130,6 +157,30 @@ describe("CoinGeckoClientLive", () => {
     expect(
       requests.every((request) => request.url.origin === "https://coingecko.example.test")
     ).toBe(true)
+  })
+
+  it("uses the Pro API only with an explicit Pro key", async () => {
+    let requestUrlValue: URL | undefined
+    let proApiKey: string | null = null
+
+    await runClient(
+      Effect.gen(function* () {
+        const client = yield* CoinGeckoClient
+        return yield* client.searchCoins({ query: "BTC" })
+      }),
+      async (input, init) => {
+        requestUrlValue = requestUrl(input)
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : {})
+        )
+        proApiKey = headers.get("x-cg-pro-api-key")
+        return Response.json({ coins: [] })
+      },
+      ConfigProvider.fromMap(new Map([["COINGECKO_PRO_API_KEY", "pro-key"]]))
+    )
+
+    expect(requestUrlValue?.origin).toBe("https://pro-api.coingecko.com")
+    expect(proApiKey).toBe("pro-key")
   })
 
   it("returns one client error for non-success responses", async () => {

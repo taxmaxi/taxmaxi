@@ -28,7 +28,7 @@ import { TransactionsTable } from "./transactions-table"
 import { SourceSyncIsland } from "./source-sync-island"
 
 type DashboardSummary = {
-  currentBalance: number
+  currentBalance: number | null
   unrealizedProfitLoss: number | null
   unrealizedProfitLossPercentage: number | null
   realizedProfitLoss: number
@@ -98,7 +98,8 @@ export function Dashboard({
     const portfolioSummary = portfolioQuery.data?.summary
 
     return {
-      currentBalance: Number(portfolioSummary?.totalValue ?? 0),
+      currentBalance:
+        portfolioSummary?.totalValue == null ? null : Number(portfolioSummary.totalValue),
       unrealizedProfitLoss:
         portfolioSummary?.profitLoss == null ? null : Number(portfolioSummary.profitLoss),
       unrealizedProfitLossPercentage:
@@ -193,7 +194,7 @@ function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
     <div className="flex flex-col gap-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
         <p className="text-3xl sm:text-5xl font-semibold tabular-nums tracking-normal">
-          {formatCurrency(summary.currentBalance)}
+          {summary.currentBalance === null ? "—" : formatCurrency(summary.currentBalance)}
         </p>
 
         <div className="flex flex-col">
