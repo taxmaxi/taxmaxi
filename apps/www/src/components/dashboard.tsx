@@ -1,7 +1,12 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useRouteContext } from "@tanstack/react-router"
-import type { SourceSyncJob, SourceSyncJobInput, SourceSyncStart } from "taxmaxi"
+import {
+  isTaxMaxiUnauthorizedError,
+  type SourceSyncJob,
+  type SourceSyncJobInput,
+  type SourceSyncStart,
+} from "taxmaxi"
 
 import { AssetsTable } from "#/components/assets-table"
 import { SourceCards } from "#/components/source-cards"
@@ -39,13 +44,13 @@ export function Dashboard({
   accounts = mockAccounts,
   getSourceSyncJob,
   onSourceSyncCompleted,
-  onSourceSyncUnauthorized,
+  onUnauthorized,
   startSourceSync,
 }: {
   accounts?: ReadonlyArray<Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
   onSourceSyncCompleted?: (sourceId: AccountId) => void | Promise<void>
-  onSourceSyncUnauthorized?: () => void | Promise<void>
+  onUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
 }) {
   const taxmaxi = useRouteContext({
@@ -77,6 +82,12 @@ export function Dashboard({
   const selectedSourceId = accountScope === ALL_ACCOUNTS ? undefined : accountScope
   const portfolioQuery = useQuery(queries.portfolioAssets(taxmaxi, selectedSourceId))
   const activeHoldings = portfolioQuery.data?.assets ?? []
+
+  useEffect(() => {
+    if (isTaxMaxiUnauthorizedError(portfolioQuery.error)) {
+      void onUnauthorized?.()
+    }
+  }, [onUnauthorized, portfolioQuery.error])
 
   const summary = useMemo<DashboardSummary>(() => {
     const taxSummaries = taxYearAccountSummaries.filter(
@@ -134,7 +145,7 @@ export function Dashboard({
       accountsById,
       getSourceSyncJob,
       onCompleted: onSourceSyncCompleted,
-      onUnauthorized: onSourceSyncUnauthorized,
+      onUnauthorized,
       startSourceSync,
     })
 

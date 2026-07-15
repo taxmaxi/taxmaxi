@@ -89,7 +89,7 @@ function RouteComponent() {
     [taxmaxi]
   )
 
-  const onSourceSyncUnauthorized = useCallback(async () => {
+  const onUnauthorized = useCallback(async () => {
     queryClient.removeQueries({ queryKey: queryKeys.all })
     await clearAuthSessionCookie()
     await navigate({ to: "/login", replace: true })
@@ -134,7 +134,7 @@ function RouteComponent() {
           accounts={sourceAccounts}
           getSourceSyncJob={getSourceSyncJob}
           onSourceSyncCompleted={onSourceSyncCompleted}
-          onSourceSyncUnauthorized={onSourceSyncUnauthorized}
+          onUnauthorized={onUnauthorized}
           startSourceSync={startSourceSync}
         />
       </div>
