@@ -126,19 +126,25 @@ export const makePortfolioSummary = (
   assets: ReadonlyArray<PortfolioAssetRow>
 ): PortfolioSummary => {
   const totalValue = sumDecimals(assets.map((asset) => asset.totalValue))
-  const profitLoss = sumDecimals(assets.map((asset) => asset.profitLoss))
-  const costBasis = BigDecimal.subtract(totalValue, profitLoss)
-  const profitLossPercentage = BigDecimal.isZero(costBasis)
+  const hasUnavailableProfitLoss = assets.some(
+    (asset) => asset.totalValue !== null && asset.profitLoss === null
+  )
+  const profitLoss = hasUnavailableProfitLoss
     ? null
-    : BigDecimal.multiply(
-        BigDecimal.unsafeDivide(profitLoss, costBasis),
-        BigDecimal.fromBigInt(100n)
-      )
+    : sumDecimals(assets.map((asset) => asset.profitLoss))
+  const costBasis = profitLoss === null ? null : BigDecimal.subtract(totalValue, profitLoss)
+  const profitLossPercentage =
+    profitLoss === null || costBasis === null || BigDecimal.isZero(costBasis)
+      ? null
+      : BigDecimal.multiply(
+          BigDecimal.unsafeDivide(profitLoss, costBasis),
+          BigDecimal.fromBigInt(100n)
+        )
 
   return PortfolioSummary.make({
     totalValue: formatPortfolioDecimal(totalValue),
-    costBasis: formatPortfolioDecimal(costBasis),
-    profitLoss: formatPortfolioDecimal(profitLoss),
+    costBasis: costBasis === null ? null : formatPortfolioDecimal(costBasis),
+    profitLoss: profitLoss === null ? null : formatPortfolioDecimal(profitLoss),
     profitLossPercentage:
       profitLossPercentage === null ? null : formatPortfolioDecimal(profitLossPercentage),
   })

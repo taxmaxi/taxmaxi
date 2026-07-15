@@ -55,6 +55,9 @@ const CoinGeckoMarket = Schema.Struct({
 
 const CoinGeckoMarketsResponse = Schema.Array(CoinGeckoMarket)
 
+const COINGECKO_PRO_API_BASE_URL = "https://pro-api.coingecko.com/api/v3"
+const COINGECKO_PUBLIC_API_BASE_URL = "https://api.coingecko.com/api/v3"
+
 const makeError = (message: string) => new CoinGeckoClientError({ message })
 
 const decodeJson = <A, I>(schema: Schema.Schema<A, I, never>, endpoint: string, payload: unknown) =>
@@ -66,10 +69,11 @@ const decodeJson = <A, I>(schema: Schema.Schema<A, I, never>, endpoint: string, 
 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
-  const baseUrl = yield* Config.string("COINGECKO_API_BASE_URL").pipe(
-    Config.withDefault("https://pro-api.coingecko.com/api/v3")
-  )
+  const configuredBaseUrl = yield* Config.option(Config.string("COINGECKO_API_BASE_URL"))
   const apiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
+  const baseUrl = Option.getOrElse(configuredBaseUrl, () =>
+    Option.isSome(apiKey) ? COINGECKO_PRO_API_BASE_URL : COINGECKO_PUBLIC_API_BASE_URL
+  )
 
   const executeGetJson = (endpoint: string) =>
     Effect.gen(function* () {

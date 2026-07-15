@@ -16,13 +16,14 @@ const ClientTestLive = CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.la
 
 const runClient = <A>(
   effect: Effect.Effect<A, unknown, CoinGeckoClient>,
-  fetch: typeof globalThis.fetch
+  fetch: typeof globalThis.fetch,
+  provider = configProvider
 ) =>
   Effect.runPromise(
     effect.pipe(
       Effect.provide(ClientTestLive),
       Effect.provideService(FetchHttpClient.Fetch, fetch),
-      Effect.withConfigProvider(configProvider)
+      Effect.withConfigProvider(provider)
     )
   )
 
@@ -30,6 +31,31 @@ const requestUrl = (input: Parameters<typeof globalThis.fetch>[0]): URL =>
   new URL(input instanceof Request ? input.url : input.toString())
 
 describe("CoinGeckoClientLive", () => {
+  it("uses the public API without authentication by default", async () => {
+    let requestUrlValue: URL | undefined
+    let apiKey: string | null = null
+
+    await runClient(
+      Effect.gen(function* () {
+        const client = yield* CoinGeckoClient
+        return yield* client.searchCoins({ query: "BTC" })
+      }),
+      async (input, init) => {
+        requestUrlValue = requestUrl(input)
+        const headers = new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : {})
+        )
+        apiKey = headers.get("x-cg-pro-api-key")
+        return Response.json({ coins: [] })
+      },
+      ConfigProvider.fromMap(new Map())
+    )
+
+    expect(requestUrlValue?.origin).toBe("https://api.coingecko.com")
+    expect(requestUrlValue?.pathname).toBe("/api/v3/search")
+    expect(apiKey).toBeNull()
+  })
+
   it("shares configuration, authentication, decoding, and market batching", async () => {
     const requests: Array<{ readonly url: URL; readonly apiKey: string | null }> = []
     const fetch: typeof globalThis.fetch = async (input, init) => {

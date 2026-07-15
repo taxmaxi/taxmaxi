@@ -24,8 +24,8 @@ import { SourceSyncIsland } from "./source-sync-island"
 
 type DashboardSummary = {
   currentBalance: number
-  unrealizedProfitLoss: number
-  unrealizedProfitLossPercentage: number
+  unrealizedProfitLoss: number | null
+  unrealizedProfitLossPercentage: number | null
   realizedProfitLoss: number
   taxesPayable: number
   taxesReceivable: number
@@ -88,8 +88,12 @@ export function Dashboard({
 
     return {
       currentBalance: Number(portfolioSummary?.totalValue ?? 0),
-      unrealizedProfitLoss: Number(portfolioSummary?.profitLoss ?? 0),
-      unrealizedProfitLossPercentage: Number(portfolioSummary?.profitLossPercentage ?? 0),
+      unrealizedProfitLoss:
+        portfolioSummary?.profitLoss == null ? null : Number(portfolioSummary.profitLoss),
+      unrealizedProfitLossPercentage:
+        portfolioSummary?.profitLossPercentage == null
+          ? null
+          : Number(portfolioSummary.profitLossPercentage),
       realizedProfitLoss: taxSummaries.reduce(
         (total, yearSummary) => total + yearSummary.realizedProfitLoss,
         0
@@ -182,13 +186,21 @@ function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
         </p>
 
         <div className="flex flex-col">
-          <ValueTone tone={summary.unrealizedProfitLoss >= 0 ? "positive" : "negative"}>
-            {formatSignedCurrency(summary.unrealizedProfitLoss)}
-          </ValueTone>
+          {summary.unrealizedProfitLoss === null ? (
+            <ValueTone tone="neutral">—</ValueTone>
+          ) : (
+            <ValueTone tone={summary.unrealizedProfitLoss >= 0 ? "positive" : "negative"}>
+              {formatSignedCurrency(summary.unrealizedProfitLoss)}
+            </ValueTone>
+          )}
 
-          <ValueTone tone={summary.unrealizedProfitLossPercentage >= 0 ? "positive" : "negative"}>
-            {formatPercent(summary.unrealizedProfitLossPercentage)}
-          </ValueTone>
+          {summary.unrealizedProfitLossPercentage === null ? (
+            <ValueTone tone="neutral">—</ValueTone>
+          ) : (
+            <ValueTone tone={summary.unrealizedProfitLossPercentage >= 0 ? "positive" : "negative"}>
+              {formatPercent(summary.unrealizedProfitLossPercentage)}
+            </ValueTone>
+          )}
         </div>
       </div>
     </div>

@@ -68,7 +68,7 @@ const solanaNativeAsset = {
 const solanaTokenAssets = [
   {
     contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    name: "USDC",
+    name: "USD Coin",
     symbol: "USDC",
     decimals: 6,
     coingeckoCoinId: "usd-coin",
@@ -1062,6 +1062,7 @@ export const seedData = Effect.gen(function* () {
       .set({
         name: solanaNativeAsset.name,
         decimals: solanaNativeAsset.decimals,
+        coingeckoCoinId: solanaNativeAsset.coingeckoCoinId,
         logoUrl: solanaNativeAsset.logoUrl,
         isSpam: solanaNativeAsset.isSpam,
         updatedAt: seedTimestamp,
@@ -1085,6 +1086,7 @@ export const seedData = Effect.gen(function* () {
         name: sql.raw("excluded.name"),
         symbol: sql.raw("excluded.symbol"),
         decimals: sql.raw("excluded.decimals"),
+        coingeckoCoinId: sql.raw("excluded.coingecko_coin_id"),
         logoUrl: sql.raw("excluded.logo_url"),
         type: sql.raw("excluded.type"),
         isSpam: sql.raw("excluded.is_spam"),

@@ -37,12 +37,11 @@ export const Route = createFileRoute("/app")({
     try {
       const sourceList = await taxmaxi.sources.list()
       context.queryClient.setQueryData(queryKeys.sourceList(), sourceList)
-      await Promise.all([
-        context.queryClient.ensureQueryData(queries.portfolioAssets(taxmaxi)),
-        ...sourceList.sources.map((source) =>
+      await Promise.all(
+        sourceList.sources.map((source) =>
           context.queryClient.ensureQueryData(queries.sourceOverview(taxmaxi, source.id))
-        ),
-      ])
+        )
+      )
       return sourceList
     } catch (error) {
       if (!isTaxMaxiUnauthorizedError(error)) {

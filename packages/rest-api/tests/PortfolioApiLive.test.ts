@@ -45,4 +45,18 @@ describe("makePortfolioSummary", () => {
 
     expect(summary.profitLossPercentage).toBeNull()
   })
+
+  it("keeps aggregate profit and cost basis unavailable when a priced asset has no P/L", () => {
+    const summary = makePortfolioSummary([
+      makeAsset({ assetId: "known", totalValue: "100", profitLoss: "25" }),
+      makeAsset({ assetId: "unknown", totalValue: "50", profitLoss: null }),
+    ])
+
+    expect(summary).toEqual({
+      totalValue: "150",
+      costBasis: null,
+      profitLoss: null,
+      profitLossPercentage: null,
+    })
+  })
 })
