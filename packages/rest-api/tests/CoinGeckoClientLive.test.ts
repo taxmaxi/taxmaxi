@@ -35,11 +35,12 @@ describe("CoinGeckoClientLive", () => {
     const fetch: typeof globalThis.fetch = async (input, init) => {
       const url = requestUrl(input)
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : {}))
-      requests.push({ url, apiKey: headers.get("x-cg-demo-api-key") })
+      requests.push({ url, apiKey: headers.get("x-cg-pro-api-key") })
 
       if (url.pathname.endsWith("/search")) {
         return Response.json({ coins: [{ id: "bitcoin", name: "Bitcoin", symbol: "btc" }] })
       }
+
       if (url.pathname.endsWith("/coins/bitcoin")) {
         return Response.json({
           id: "bitcoin",
@@ -55,6 +56,7 @@ describe("CoinGeckoClientLive", () => {
           },
         })
       }
+
       if (url.pathname.endsWith("/coins/markets")) {
         const firstId = url.searchParams.get("ids")?.split(",")[0] ?? "missing"
         return Response.json([
@@ -65,6 +67,7 @@ describe("CoinGeckoClientLive", () => {
           },
         ])
       }
+
       return new Response("not found", { status: 404 })
     }
 
