@@ -31,7 +31,7 @@ export const makePortfolioEffectResource = (
         resolved.portfolio.listPortfolioAssets({
           urlParams: {
             sourceId: input.sourceId,
-            currency: input.currency,
+            currency: input.currency?.toLowerCase(),
           },
         })
       ),

@@ -559,7 +559,7 @@ describe("TaxMaxi Promise client", () => {
       },
     })
 
-    await expect(taxmaxi.portfolio.listAssets({ currency: "eur" })).resolves.toEqual({
+    await expect(taxmaxi.portfolio.listAssets({ currency: "EUR" })).resolves.toEqual({
       currency: "EUR",
       summary: emptyPortfolioSummary,
       assets: [],

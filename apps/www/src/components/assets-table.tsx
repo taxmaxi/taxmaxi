@@ -4,7 +4,12 @@ import type { PortfolioAssets } from "taxmaxi"
 
 import { Card, CardContent } from "#/components/ui/card"
 import { ValueTone } from "#/components/value-tone"
-import { formatCurrency, formatSignedCurrency, formatTokenAmount } from "#/lib/dashboard-format"
+import {
+  formatCurrency,
+  formatSignedCurrency,
+  formatTokenAmount,
+  formatTokenPrice,
+} from "#/lib/dashboard-format"
 import { cn } from "#/lib/utils"
 
 type PortfolioAsset = PortfolioAssets["assets"][number]
@@ -77,8 +82,8 @@ function AssetRow({ currency, holding }: { currency: string; holding: PortfolioA
           </span>
         </div>
       </TableCell>
-      <TableCell align="right">{formatTokenAmount(Number(holding.amount))}</TableCell>
-      <TableCell align="right">{formatNullableCurrency(holding.currentPrice, currency)}</TableCell>
+      <TableCell align="right">{formatTokenAmount(holding.amount)}</TableCell>
+      <TableCell align="right">{formatNullablePrice(holding.currentPrice, currency)}</TableCell>
       <TableCell align="right">{formatNullableCurrency(holding.totalValue, currency)}</TableCell>
       <TableCell align="right">
         {holding.profitLoss === null ? (
@@ -167,6 +172,10 @@ function AssetMark({
 
 function formatNullableCurrency(value: string | null, currency: string) {
   return value === null ? "—" : formatCurrency(Number(value), currency)
+}
+
+function formatNullablePrice(value: string | null, currency: string) {
+  return value === null ? "—" : formatTokenPrice(value, currency)
 }
 
 function LoadingRows() {
