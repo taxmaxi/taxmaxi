@@ -806,6 +806,7 @@ const buildProviderTransferDraft = ({
   metadata: {
     provider: HELIUS_SOLANA_PROVIDER_KEY,
     role: movement.role,
+    canonicalTransferExternalId: `${signature}:${movement.role}:${movement.position}`,
     evidenceKind: movement.evidenceKind,
     rawUnits: movement.rawUnits,
     mintAddress: movement.asset.mintAddress,

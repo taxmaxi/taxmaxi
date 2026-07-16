@@ -855,4 +855,332 @@ describe("TransferReconciliationServiceLive", () => {
       ])
     )
   })
+
+  it("uses the canonical outbound custody movement and removes the redundant inbound lot", async () => {
+    const walletAddress = "bc1qownedwalletexactcustody000000000000000"
+    const timestamp = new Date("2025-04-12T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-asset-exact-custody" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+
+    const fixtureIds = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "provider-inbound-exact-custody:tx",
+            externalGroupId: "provider-inbound-exact-custody",
+            timestamp,
+            transactionType: null,
+            providerTransactionType: "receive",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: "Inbound provider transfer fixture",
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "coinbase" },
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [canonicalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "exact-custody-signature",
+            externalGroupId: "exact-custody-signature",
+            timestamp,
+            transactionType: null,
+            providerTransactionType: "transfer",
+            providerStatus: "succeeded",
+            providerResourcePath: null,
+            providerDescription: "Onchain send fixture",
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "helius-solana" },
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (providerTransaction === undefined || canonicalTransaction === undefined) {
+          return yield* Effect.dieMessage("Failed to create exact custody transactions")
+        }
+
+        const [inboundProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: null,
+            transactionId: providerTransaction.id,
+            externalId: "provider-inbound-exact-custody",
+            externalGroupId: "exact-custody-group",
+            providerAssetId: providerAssetRowId,
+            timestamp,
+            direction: "inbound",
+            fromAccountRef: null,
+            toAccountRef: "coinbase-account-1",
+            fromAddress: walletAddress,
+            toAddress: null,
+            networkName: "bitcoin",
+            networkHash: "exact-custody-signature",
+            amount: "0.10000000",
+            metadata: { provider: "coinbase", role: "principal" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+        const canonicalTransfers = yield* db
+          .insert(schema.transfers)
+          .values(
+            [0, 1].map((position) => ({
+              sourceId: ONCHAIN_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: `exact-custody-signature:principal:${position}`,
+              externalGroupId: "exact-custody-signature",
+              addressId: ONCHAIN_ADDRESS_ID,
+              blockchainId: fixture.bitcoinBlockchainId,
+              txHash: "exact-custody-signature",
+              timestamp,
+              type: "native" as const,
+              fromAddress: walletAddress,
+              toAddress: `bc1qexactcustodydestination${position}`,
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromPartyType: "address",
+              fromPartyResourcePath: null,
+              toPartyType: "address",
+              toPartyResourcePath: null,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.10000000",
+              tokenId: null,
+              notes: null,
+              metadata: {
+                provider: "helius-solana",
+                role: "principal",
+                position,
+              },
+              principalId: TEST_PRINCIPAL_ID,
+            }))
+          )
+          .returning({ id: schema.transfers.id, externalId: schema.transfers.externalId })
+        const outboundProviderTransfers = yield* db
+          .insert(schema.providerTransfers)
+          .values(
+            [0, 1].map((position) => ({
+              sourceId: ONCHAIN_SOURCE_ID,
+              sourceRawRecordId: null,
+              transactionId: canonicalTransaction.id,
+              externalId: `exact-custody-signature:provider:principal:${position}`,
+              externalGroupId: "exact-custody-signature",
+              providerAssetId: providerAssetRowId,
+              timestamp,
+              direction: "outbound" as const,
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: walletAddress,
+              toAddress: `bc1qexactcustodydestination${position}`,
+              networkName: "bitcoin",
+              networkHash: "exact-custody-signature",
+              amount: "0.10000000",
+              metadata: {
+                provider: "helius-solana",
+                role: "principal",
+                position,
+                canonicalTransferExternalId: `exact-custody-signature:principal:${position}`,
+              },
+            }))
+          )
+          .returning({
+            id: schema.providerTransfers.id,
+            externalId: schema.providerTransfers.externalId,
+          })
+
+        const canonicalTransfer = canonicalTransfers.find((row) => row.externalId.endsWith(":1"))
+        const exactProviderTransfer = outboundProviderTransfers.find((row) =>
+          row.externalId.endsWith(":1")
+        )
+        const unrelatedProviderTransfer = outboundProviderTransfers.find((row) =>
+          row.externalId.endsWith(":0")
+        )
+
+        if (
+          inboundProviderTransfer === undefined ||
+          canonicalTransfer === undefined ||
+          exactProviderTransfer === undefined ||
+          unrelatedProviderTransfer === undefined
+        ) {
+          return yield* Effect.dieMessage("Failed to create exact custody transfer fixtures")
+        }
+
+        const acquisitionLegs = yield* db
+          .insert(schema.transactionLegs)
+          .values(
+            [0, 1].map((position) => ({
+              sourceId: ONCHAIN_SOURCE_ID,
+              externalId: `exact-custody-opening-leg-${position}`,
+              timestamp: new Date("2025-04-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.10000000",
+              kind: "acquisition" as const,
+              provenance: "deterministic" as const,
+              fiatAmount: "1000.00",
+              fiatCurrency: "EUR",
+            }))
+          )
+          .returning({ id: schema.transactionLegs.id })
+        const lots = yield* db
+          .insert(schema.fifoLots)
+          .values(
+            acquisitionLegs.map((leg, position) => ({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: ONCHAIN_SOURCE_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: new Date(`2025-04-0${position + 1}T10:00:00.000Z`),
+              originalAmount: "0.10000000",
+              remainingAmount: "0",
+              costBasisPerToken: "10000.000000000000000000",
+              costBasisCurrency: "EUR",
+              sourceLegId: leg.id,
+              sourceLegSequence: 0,
+            }))
+          )
+          .returning({ id: schema.fifoLots.id })
+        const movements = yield* db
+          .insert(schema.inventoryMovements)
+          .values(
+            outboundProviderTransfers.map((providerTransfer) => ({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: ONCHAIN_SOURCE_ID,
+              transactionId: canonicalTransaction.id,
+              providerTransferId: providerTransfer.id,
+              transactionLegId: null,
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp,
+              direction: "outbound" as const,
+              purpose: "principal" as const,
+              taxTreatment: "pending_review" as const,
+              reconciliationStatus: "unmatched" as const,
+              amount: "0.10000000",
+            }))
+          )
+          .returning({
+            id: schema.inventoryMovements.id,
+            providerTransferId: schema.inventoryMovements.providerTransferId,
+          })
+
+        yield* db.insert(schema.inventoryMovementAllocations).values(
+          movements.map((movement, position) => ({
+            inventoryMovementId: movement.id,
+            fifoLotId: lots[position]?.id ?? "",
+            matchedAmount: "0.10000000",
+          }))
+        )
+        const [inboundMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransaction.id,
+            providerTransferId: inboundProviderTransfer.id,
+            transactionLegId: null,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "inbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (inboundMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create inbound movement fixture")
+        }
+
+        yield* db.insert(schema.fifoLots).values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: timestamp,
+          originalAmount: "0.10000000",
+          remainingAmount: "0.10000000",
+          costBasisPerToken: "0",
+          costBasisCurrency: "EUR",
+          sourceLegId: null,
+          sourceProviderTransferId: inboundProviderTransfer.id,
+          sourceLegSequence: 0,
+        })
+        const [reconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: inboundProviderTransfer.id,
+            canonicalTransferId: canonicalTransfer.id,
+            canonicalTransactionId: canonicalTransaction.id,
+            status: "auto_applied",
+            matchReason: "deterministic_wallet_receipt_match",
+            confidence: "1.00",
+            deterministic: true,
+            reviewMetadata: null,
+          })
+          .returning({ id: schema.transferReconciliations.id })
+
+        if (reconciliation === undefined) {
+          return yield* Effect.dieMessage("Failed to create exact custody reconciliation")
+        }
+
+        return {
+          reconciliationId: reconciliation.id,
+          inboundProviderTransferId: inboundProviderTransfer.id,
+          exactProviderTransferId: exactProviderTransfer.id,
+          unrelatedProviderTransferId: unrelatedProviderTransfer.id,
+        }
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId: fixtureIds.reconciliationId,
+        })
+      )
+    )
+
+    expect(summary).toEqual({ canonicalizedPairs: 1 })
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        const inboundLots = yield* db
+          .select()
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceProviderTransferId, fixtureIds.inboundProviderTransferId))
+        return { movements, allocations, inboundLots }
+      })
+    )
+
+    expect(
+      state.movements.find(
+        (movement) => movement.providerTransferId === fixtureIds.exactProviderTransferId
+      )
+    ).toEqual(
+      expect.objectContaining({ reconciliationStatus: "matched", taxTreatment: "non_taxable" })
+    )
+    expect(
+      state.movements.find(
+        (movement) => movement.providerTransferId === fixtureIds.unrelatedProviderTransferId
+      )
+    ).toEqual(
+      expect.objectContaining({ reconciliationStatus: "unmatched", taxTreatment: "pending_review" })
+    )
+    expect(state.allocations).toHaveLength(1)
+    expect(state.inboundLots).toHaveLength(0)
+  })
 })

@@ -79,6 +79,9 @@ const COMPLETED_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
 const hasCompletedProviderStatus = (providerStatus: string | null): boolean =>
   providerStatus !== null && COMPLETED_PROVIDER_STATUSES.has(providerStatus.toLowerCase())
 
+const hasFailedProviderStatus = (providerStatus: string | null): boolean =>
+  providerStatus?.toLowerCase() === "failed"
+
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literal("principal", "fee", "rent")),
 })
@@ -1127,6 +1130,104 @@ const make = Effect.gen(function* () {
         )
     })
 
+  const deleteUnusedInboundProviderLot = ({
+    executor,
+    providerTransferId,
+    operation,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransferId: string
+    readonly operation: string
+  }) =>
+    Effect.gen(function* () {
+      const [existingLot] = yield* executor
+        .select({ id: schema.fifoLots.id })
+        .from(schema.fifoLots)
+        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
+        .limit(1)
+        .pipe(wrapSyncEngineSqlError(`${operation}.selectLot`))
+
+      if (existingLot === undefined) {
+        return
+      }
+
+      const [deletedLot] = yield* executor
+        .delete(schema.fifoLots)
+        .where(
+          and(
+            eq(schema.fifoLots.id, existingLot.id),
+            eq(schema.fifoLots.remainingAmount, schema.fifoLots.originalAmount),
+            sql`not exists (
+              select 1
+              from ${schema.disposalMatches}
+              where ${schema.disposalMatches.fifoLotId} = ${schema.fifoLots.id}
+            )`,
+            sql`not exists (
+              select 1
+              from ${schema.inventoryMovementAllocations}
+              where ${schema.inventoryMovementAllocations.fifoLotId} = ${schema.fifoLots.id}
+            )`
+          )
+        )
+        .returning({ id: schema.fifoLots.id })
+        .pipe(wrapSyncEngineSqlError(`${operation}.deleteLot`))
+
+      if (deletedLot === undefined) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation,
+            error: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+          })
+        )
+      }
+    })
+
+  const ensureInboundProviderLotCanChangeAmount = ({
+    executor,
+    providerTransferId,
+    amount,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransferId: string
+    readonly amount: string
+  }) =>
+    Effect.gen(function* () {
+      const [existingLot] = yield* executor
+        .select({
+          id: schema.fifoLots.id,
+          originalAmount: schema.fifoLots.originalAmount,
+          remainingAmount: schema.fifoLots.remainingAmount,
+        })
+        .from(schema.fifoLots)
+        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.selectLot"
+          )
+        )
+
+      if (existingLot === undefined) {
+        return
+      }
+
+      const consumedAmount = yield* subtractDecimalQuantities({
+        left: existingLot.originalAmount,
+        right: existingLot.remainingAmount,
+      })
+      const comparison = yield* compareDecimalQuantities({ left: amount, right: consumedAmount })
+
+      if (comparison < 0) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation:
+              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAmount",
+            error: `Cannot reduce inbound provider lot ${existingLot.id} below its consumed amount ${consumedAmount}`,
+          })
+        )
+      }
+    })
+
   const removeInventoryMovementsForTransaction = ({
     executor,
     transactionId,
@@ -1160,14 +1261,12 @@ const make = Effect.gen(function* () {
           movement.providerTransferId === null ? [] : [movement.providerTransferId]
         ),
         (providerTransferId) =>
-          executor
-            .delete(schema.fifoLots)
-            .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteInboundLot"
-              )
-            )
+          deleteUnusedInboundProviderLot({
+            executor,
+            providerTransferId,
+            operation:
+              "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteInboundLot",
+          })
       )
 
       yield* executor
@@ -1225,14 +1324,12 @@ const make = Effect.gen(function* () {
           )
         )
 
-      yield* executor
-        .delete(schema.fifoLots)
-        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
-        .pipe(
-          wrapSyncEngineSqlError(
-            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteInboundLot"
-          )
-        )
+      yield* deleteUnusedInboundProviderLot({
+        executor,
+        providerTransferId,
+        operation:
+          "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteInboundLot",
+      })
 
       if (movement === undefined) {
         return
@@ -1257,11 +1354,13 @@ const make = Effect.gen(function* () {
     transaction,
     providerTransfers,
     legs,
+    feesOnly,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly transaction: PersistedSourceTransaction
     readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
     readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+    readonly feesOnly: boolean
   }) => {
     const orderedProviderTransfers = [
       ...providerTransfers.filter((providerTransfer) => providerTransfer.direction === "inbound"),
@@ -1270,6 +1369,15 @@ const make = Effect.gen(function* () {
 
     return Effect.forEach(orderedProviderTransfers, (providerTransfer) =>
       Effect.gen(function* () {
+        const purpose = yield* decodeProviderTransferPurpose(providerTransfer.metadata)
+
+        if (feesOnly && purpose !== "fee") {
+          return yield* removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId: providerTransfer.id,
+          })
+        }
+
         if (providerTransfer.providerAssetId === null) {
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
@@ -1301,7 +1409,6 @@ const make = Effect.gen(function* () {
           })
         }
 
-        const purpose = yield* decodeProviderTransferPurpose(providerTransfer.metadata)
         const now = nowDate()
         const [movement] = yield* executor
           .insert(schema.inventoryMovements)
@@ -1394,16 +1501,20 @@ const make = Effect.gen(function* () {
           )
 
           if (matchingAcquisitionResults.some((comparison) => comparison === 0)) {
-            yield* executor
-              .delete(schema.fifoLots)
-              .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransfer.id))
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "sourceNormalizationRepository.allocateProviderInventoryMovements.removeRedundantInboundLot"
-                )
-              )
+            yield* deleteUnusedInboundProviderLot({
+              executor,
+              providerTransferId: providerTransfer.id,
+              operation:
+                "sourceNormalizationRepository.allocateProviderInventoryMovements.removeRedundantInboundLot",
+            })
             return
           }
+
+          yield* ensureInboundProviderLotCanChangeAmount({
+            executor,
+            providerTransferId: providerTransfer.id,
+            amount: providerTransfer.amount,
+          })
 
           yield* executor
             .insert(schema.fifoLots)
@@ -1441,6 +1552,13 @@ const make = Effect.gen(function* () {
             )
           return
         }
+
+        yield* deleteUnusedInboundProviderLot({
+          executor,
+          providerTransferId: providerTransfer.id,
+          operation:
+            "sourceNormalizationRepository.allocateProviderInventoryMovements.removeStaleInboundLot",
+        })
 
         const matchingDisposalResults = yield* Effect.forEach(
           legs.filter((leg) => leg.kind === "disposal" && leg.assetId === assetMapping.assetId),
@@ -1693,8 +1811,10 @@ const make = Effect.gen(function* () {
           })
 
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
+          const hasFailedStatus = hasFailedProviderStatus(params.transaction.providerStatus)
+          const materializesProviderMovements = hasCompletedStatus || hasFailedStatus
 
-          if (hasCompletedStatus) {
+          if (materializesProviderMovements) {
             yield* resetInventoryMovementAllocationsForTransaction({
               executor: tx,
               transactionId: persistedTransaction.id,
@@ -1711,12 +1831,13 @@ const make = Effect.gen(function* () {
             legs: persistedLegs,
           }).pipe(
             Effect.zipRight(
-              hasCompletedStatus
+              materializesProviderMovements
                 ? allocateProviderInventoryMovements({
                     executor: tx,
                     transaction: persistedTransaction,
                     providerTransfers: persistedProviderTransfers,
                     legs: persistedLegs,
+                    feesOnly: hasFailedStatus,
                   })
                 : Effect.void
             ),

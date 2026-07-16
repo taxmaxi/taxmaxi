@@ -253,6 +253,7 @@ const make = Effect.gen(function* () {
                 providerTransactionId: schema.providerTransfers.transactionId,
                 canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
                 canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+                canonicalTransferExternalId: schema.transfers.externalId,
                 assetId: schema.transfers.assetId,
                 amount: schema.transfers.amount,
                 providerTransactionSourceId: providerTransactionTable.sourceId,
@@ -337,6 +338,63 @@ const make = Effect.gen(function* () {
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadDependentUsageCount"
                   )
                 )
+
+            const removeUnusedInboundProviderLot = ({
+              providerTransferId,
+            }: {
+              readonly providerTransferId: string
+            }) =>
+              Effect.gen(function* () {
+                const [existingLot] = yield* tx
+                  .select({ id: schema.fifoLots.id })
+                  .from(schema.fifoLots)
+                  .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.removeUnusedInboundProviderLot.selectLot"
+                    )
+                  )
+
+                if (existingLot === undefined) {
+                  return
+                }
+
+                const [deletedLot] = yield* tx
+                  .delete(schema.fifoLots)
+                  .where(
+                    and(
+                      eq(schema.fifoLots.id, existingLot.id),
+                      eq(schema.fifoLots.remainingAmount, schema.fifoLots.originalAmount),
+                      sql`not exists (
+                        select 1
+                        from ${schema.disposalMatches}
+                        where ${schema.disposalMatches.fifoLotId} = ${schema.fifoLots.id}
+                      )`,
+                      sql`not exists (
+                        select 1
+                        from ${schema.inventoryMovementAllocations}
+                        where ${schema.inventoryMovementAllocations.fifoLotId} = ${schema.fifoLots.id}
+                      )`
+                    )
+                  )
+                  .returning({ id: schema.fifoLots.id })
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.removeUnusedInboundProviderLot.deleteLot"
+                    )
+                  )
+
+                if (deletedLot === undefined) {
+                  return yield* Effect.fail(
+                    new SyncEngineStorageError({
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.removeUnusedInboundProviderLot.dependentUsage",
+                      cause: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+                    })
+                  )
+                }
+              })
 
             const roundFiatAmount = (value: BigDecimal.BigDecimal) =>
               BigDecimal.format(BigDecimal.round(value, { scale: 8 }))
@@ -1251,13 +1309,17 @@ const make = Effect.gen(function* () {
                           providerTransferId: schema.inventoryMovements.providerTransferId,
                         })
                         .from(schema.inventoryMovements)
+                        .innerJoin(
+                          schema.providerTransfers,
+                          eq(
+                            schema.providerTransfers.id,
+                            schema.inventoryMovements.providerTransferId
+                          )
+                        )
                         .where(
                           and(
                             eq(schema.inventoryMovements.transactionId, originTransaction.id),
-                            eq(schema.inventoryMovements.assetId, row.assetId),
-                            eq(schema.inventoryMovements.direction, "outbound"),
-                            eq(schema.inventoryMovements.purpose, "principal"),
-                            eq(schema.inventoryMovements.amount, amount),
+                            sql`${schema.providerTransfers.metadata}->>'canonicalTransferExternalId' = ${row.canonicalTransferExternalId}`,
                             sql`${schema.inventoryMovements.providerTransferId} is not null`
                           )
                         )
@@ -1460,6 +1522,12 @@ const make = Effect.gen(function* () {
                   destinationLegId,
                   disposition,
                 })
+
+                if (row.providerDirection === "inbound") {
+                  yield* removeUnusedInboundProviderLot({
+                    providerTransferId: row.providerTransferId,
+                  })
+                }
 
                 const matchedProviderTransferIds =
                   custodyProviderTransferId === null ||
