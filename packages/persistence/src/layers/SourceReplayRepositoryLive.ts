@@ -4,7 +4,7 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { eq, sql } from "drizzle-orm"
+import { and, eq, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -12,6 +12,7 @@ import { schema } from "../schema/index.ts"
 import { SourceReplayRepository, type SourceReplayRepositoryShape } from "@my/sync-engine/services"
 import {
   nowDate,
+  toSyncEngineStorageError,
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
@@ -25,6 +26,43 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const [crossSourceAllocation] = yield* tx
+            .select({ id: schema.inventoryMovementAllocations.id })
+            .from(schema.inventoryMovementAllocations)
+            .innerJoin(
+              schema.inventoryMovements,
+              eq(
+                schema.inventoryMovements.id,
+                schema.inventoryMovementAllocations.inventoryMovementId
+              )
+            )
+            .innerJoin(
+              schema.fifoLots,
+              eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+            )
+            .where(
+              and(
+                eq(schema.fifoLots.sourceId, sourceId),
+                ne(schema.inventoryMovements.sourceId, sourceId)
+              )
+            )
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.selectCrossSourceAllocation"
+              )
+            )
+
+          if (crossSourceAllocation !== undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation: "sourceReplayRepository.resetSourceDerivedState.crossSourceAllocation",
+                error:
+                  "Cannot replay a source while another source has an inventory movement allocated to its FIFO lots",
+              })
+            )
+          }
+
           const inventoryMovementAllocations = yield* tx
             .select({
               fifoLotId: schema.inventoryMovementAllocations.fifoLotId,

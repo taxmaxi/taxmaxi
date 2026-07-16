@@ -1591,6 +1591,32 @@ describe("SourceNormalizationRepositoryLive", () => {
       normalizeReceive(buildReceivePayload({ status: "completed", amount: "0.50000000" }))
     ).rejects.toThrow("below its consumed amount")
 
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_SOL_ASSET_ID,
+          blockchainId: fixture.baseBlockchainId,
+          contractAddress: "consumed-provider-lot-sol-fixture",
+          name: "Consumed Provider Lot Solana Fixture",
+          symbol: "SOL",
+          decimals: 9,
+          type: "token",
+        })
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            canonicalAssetId: TEST_SOL_ASSET_ID,
+            canonicalAssetSymbol: "SOL",
+          })
+          .where(eq(schema.providerAssetMappings.canonicalAssetId, TEST_BTC_ASSET_ID))
+      })
+    )
+
+    await expect(normalizeReceive(receivePayload)).rejects.toThrow(
+      "Cannot change asset of inbound provider lot"
+    )
+
     const state = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -1612,6 +1638,197 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(state.allocations).toEqual([
       expect.objectContaining({ matchedAmount: expect.stringContaining("0.80000000") }),
     ])
+  })
+
+  it("moves a replayed fee movement to the leg's current transaction and raw record", async () => {
+    const newRawRecordId = "00000000-0000-0000-0000-000000000710"
+    const openingTransactionId = "00000000-0000-0000-0000-000000000711"
+    const oldTransactionId = "00000000-0000-0000-0000-000000000712"
+    const feeLegExternalId = "fee-leg-moved-between-transactions"
+    const occurredAt = new Date("2025-04-03T10:00:00.000Z")
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* seedRawRecord({
+          rawRecordId: newRawRecordId,
+          externalRecordId: "raw-fee-new-parent",
+          occurredAt,
+        })
+        yield* db.insert(schema.transactions).values([
+          {
+            id: openingTransactionId,
+            sourceId: TEST_SOURCE_ID,
+            externalId: "fee-opening-transaction",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          {
+            id: oldTransactionId,
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "fee-old-parent",
+            timestamp: new Date("2025-04-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          },
+        ])
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "fee-opening-leg",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            transactionId: openingTransactionId,
+          })
+          .returning({ id: schema.transactionLegs.id })
+        const [feeLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: feeLegExternalId,
+            timestamp: new Date("2025-04-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "fee",
+            provenance: "deterministic",
+            transactionId: oldTransactionId,
+            feeForTransactionId: oldTransactionId,
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (openingLeg === undefined || feeLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create replayed fee movement legs")
+        }
+
+        const [lot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "0.90000000",
+            costBasisPerToken: "10000.00",
+            costBasisCurrency: "EUR",
+            sourceLegId: openingLeg.id,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [movement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            transactionId: oldTransactionId,
+            transactionLegId: feeLeg.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-02T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "fee",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (lot === undefined || movement === undefined) {
+          return yield* Effect.dieMessage("Failed to create replayed fee movement allocation")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: movement.id,
+          fifoLotId: lot.id,
+          matchedAmount: "0.10000000",
+        })
+      })
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: newRawRecordId,
+            externalId: "fee-new-parent",
+            externalGroupId: null,
+            timestamp: occurredAt,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: occurredAt,
+            providerUpdatedAt: occurredAt,
+            metadata: { provider: "coinbase" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "coinbase-account-1",
+            externalOrderId: "fee-new-parent-order",
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "coinbase" },
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          deriveLegs: ({ transaction }) =>
+            Effect.succeed([
+              {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: newRawRecordId,
+                externalId: feeLegExternalId,
+                txHash: null,
+                timestamp: occurredAt,
+                principalId: TEST_PRINCIPAL_ID,
+                addressId: null,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.10000000",
+                kind: "fee" as const,
+                provenance: "deterministic" as const,
+                derivationRule: "commission",
+                metadata: { provider: "coinbase" },
+                transactionId: transaction.id,
+                sourceTransferId: null,
+                fiatAmount: null,
+                fiatCurrency: null,
+                feeForTransactionId: transaction.id,
+              },
+            ]),
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+
+    const [movement] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.select().from(schema.inventoryMovements)
+      })
+    )
+
+    expect(movement).toEqual(
+      expect.objectContaining({
+        transactionId: result.transaction.id,
+        sourceRawRecordId: newRawRecordId,
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+      })
+    )
   })
 
   it("removes an unused inbound provider lot before replaying the transfer as outbound", async () => {

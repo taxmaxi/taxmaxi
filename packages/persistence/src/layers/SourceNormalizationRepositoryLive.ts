@@ -1185,16 +1185,19 @@ const make = Effect.gen(function* () {
   const ensureInboundProviderLotCanChangeAmount = ({
     executor,
     providerTransferId,
+    assetId,
     amount,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly providerTransferId: string
+    readonly assetId: string
     readonly amount: string
   }) =>
     Effect.gen(function* () {
       const [existingLot] = yield* executor
         .select({
           id: schema.fifoLots.id,
+          assetId: schema.fifoLots.assetId,
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
         })
@@ -1215,6 +1218,21 @@ const make = Effect.gen(function* () {
         left: existingLot.originalAmount,
         right: existingLot.remainingAmount,
       })
+      const consumedComparison = yield* compareDecimalQuantities({
+        left: consumedAmount,
+        right: "0",
+      })
+
+      if (existingLot.assetId !== assetId && consumedComparison > 0) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation:
+              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAsset",
+            error: `Cannot change asset of inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+          })
+        )
+      }
+
       const comparison = yield* compareDecimalQuantities({ left: amount, right: consumedAmount })
 
       if (comparison < 0) {
@@ -1513,6 +1531,7 @@ const make = Effect.gen(function* () {
           yield* ensureInboundProviderLotCanChangeAmount({
             executor,
             providerTransferId: providerTransfer.id,
+            assetId: assetMapping.assetId,
             amount: providerTransfer.amount,
           })
 
@@ -1671,17 +1690,23 @@ const make = Effect.gen(function* () {
               target: schema.inventoryMovements.transactionLegId,
               targetWhere: sql`${schema.inventoryMovements.transactionLegId} is not null`,
               set: {
+                sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
+                transactionId: sql.raw("excluded.transaction_id"),
                 assetId: sql.raw("excluded.asset_id"),
                 timestamp: sql.raw("excluded.timestamp"),
                 taxTreatment: sql`case
-                  when ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
                     or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
                     or ${schema.inventoryMovements.amount} is distinct from excluded.amount
                   then 'pending_review'::inventory_movement_tax_treatment
                   else ${schema.inventoryMovements.taxTreatment}
                 end`,
                 reconciliationStatus: sql`case
-                  when ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
                     or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
                     or ${schema.inventoryMovements.amount} is distinct from excluded.amount
                   then 'unmatched'::inventory_movement_reconciliation_status

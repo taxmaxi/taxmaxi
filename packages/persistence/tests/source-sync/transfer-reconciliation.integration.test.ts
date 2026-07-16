@@ -997,12 +997,12 @@ describe("TransferReconciliationServiceLive", () => {
             externalId: schema.providerTransfers.externalId,
           })
 
-        const canonicalTransfer = canonicalTransfers.find((row) => row.externalId.endsWith(":1"))
+        const canonicalTransfer = canonicalTransfers.find((row) => row.externalId?.endsWith(":1"))
         const exactProviderTransfer = outboundProviderTransfers.find((row) =>
-          row.externalId.endsWith(":1")
+          row.externalId?.endsWith(":1")
         )
         const unrelatedProviderTransfer = outboundProviderTransfers.find((row) =>
-          row.externalId.endsWith(":0")
+          row.externalId?.endsWith(":0")
         )
 
         if (
