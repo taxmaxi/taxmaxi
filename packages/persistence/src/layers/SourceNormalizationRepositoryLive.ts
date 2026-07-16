@@ -804,13 +804,11 @@ const make = Effect.gen(function* () {
   const loadOpenFifoLots = ({
     executor,
     principalId,
-    sourceId,
     assetId,
     maxAcquiredAt,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly principalId: string
-    readonly sourceId: string
     readonly assetId: string
     readonly maxAcquiredAt: Date
   }) =>
@@ -827,8 +825,8 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.fifoLots.principalId, principalId),
-            eq(schema.fifoLots.sourceId, sourceId),
             eq(schema.fifoLots.assetId, assetId),
+            sql`${schema.fifoLots.sourceLegId} is not null`,
             gt(schema.fifoLots.remainingAmount, "0"),
             lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
           )
@@ -1024,7 +1022,6 @@ const make = Effect.gen(function* () {
       const openLots = yield* loadOpenFifoLots({
         executor,
         principalId: leg.principalId,
-        sourceId: leg.sourceId,
         assetId: leg.assetId,
         maxAcquiredAt: leg.timestamp,
       })
@@ -1367,6 +1364,45 @@ const make = Effect.gen(function* () {
         )
     })
 
+  const removeStaleProviderInventoryMovements = ({
+    executor,
+    transactionId,
+    currentProviderTransferIds,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+    readonly currentProviderTransferIds: ReadonlySet<string>
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* executor
+        .select({ providerTransferId: schema.inventoryMovements.providerTransferId })
+        .from(schema.inventoryMovements)
+        .where(
+          and(
+            eq(schema.inventoryMovements.transactionId, transactionId),
+            sql`${schema.inventoryMovements.providerTransferId} is not null`
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeStaleProviderInventoryMovements.selectMovements"
+          )
+        )
+
+      yield* Effect.forEach(
+        movements.flatMap(({ providerTransferId }) =>
+          providerTransferId !== null && !currentProviderTransferIds.has(providerTransferId)
+            ? [providerTransferId]
+            : []
+        ),
+        (providerTransferId) =>
+          removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId,
+          })
+      )
+    })
+
   const allocateProviderInventoryMovements = ({
     executor,
     transaction,
@@ -1595,7 +1631,6 @@ const make = Effect.gen(function* () {
         const openLots = yield* loadOpenFifoLots({
           executor,
           principalId: transaction.principalId,
-          sourceId: providerTransfer.sourceId,
           assetId: assetMapping.assetId,
           maxAcquiredAt: providerTransfer.timestamp,
         })
@@ -1741,7 +1776,6 @@ const make = Effect.gen(function* () {
           const openLots = yield* loadOpenFifoLots({
             executor,
             principalId: leg.principalId,
-            sourceId: leg.sourceId,
             assetId: leg.assetId,
             maxAcquiredAt: leg.timestamp,
           })
@@ -1844,6 +1878,13 @@ const make = Effect.gen(function* () {
               executor: tx,
               transactionId: persistedTransaction.id,
             })
+            yield* removeStaleProviderInventoryMovements({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+              currentProviderTransferIds: new Set(
+                persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
+              ),
+            })
           } else {
             yield* removeInventoryMovementsForTransaction({
               executor: tx,
@@ -1867,7 +1908,7 @@ const make = Effect.gen(function* () {
                 : Effect.void
             ),
             Effect.zipRight(
-              hasCompletedStatus
+              materializesProviderMovements
                 ? allocateFeeInventoryMovements({
                     executor: tx,
                     legs: persistedLegs,

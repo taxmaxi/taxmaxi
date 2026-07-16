@@ -803,6 +803,167 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(String(counts.lot?.remainingAmount)).toContain("1")
   })
 
+  it("matches FIFO inventory across sources for the same principal", async () => {
+    const dependentSourceId = "00000000-0000-0000-0000-000000000282"
+    const originTransactionId = "00000000-0000-0000-0000-000000000283"
+
+    const lotId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "bc1qcrosssourcefifo",
+            type: "bitcoin",
+            name: "Cross-source FIFO",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.addresses.id })
+
+        if (address === undefined) {
+          return yield* Effect.dieMessage("Failed to create cross-source FIFO address")
+        }
+
+        yield* db.insert(schema.sources).values({
+          id: dependentSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Cross-source FIFO",
+          providerKey: "bitcoin-rpc",
+          sourceableType: "onchain",
+          cexAccountId: null,
+          addressId: address.id,
+        })
+        yield* db.insert(schema.transactions).values({
+          id: originTransactionId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "cross-source-fifo-origin",
+          timestamp: new Date("2025-01-01T10:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        const [originLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "cross-source-fifo-origin-leg",
+            timestamp: new Date("2025-01-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            transactionId: originTransactionId,
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (originLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create cross-source FIFO origin leg")
+        }
+
+        const [lot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "1.00000000",
+            costBasisPerToken: "10000.00",
+            costBasisCurrency: "EUR",
+            sourceLegId: originLeg.id,
+          })
+          .returning({ id: schema.fifoLots.id })
+
+        if (lot === undefined) {
+          return yield* Effect.dieMessage("Failed to create cross-source FIFO lot")
+        }
+
+        return lot.id
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: dependentSourceId,
+            sourceRawRecordId: null,
+            externalId: "cross-source-fifo-disposal",
+            externalGroupId: null,
+            timestamp: new Date("2025-02-01T10:00:00.000Z"),
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: null,
+            providerUpdatedAt: null,
+            metadata: null,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "cross-source-fifo",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "sell",
+            instrument: "BTC-EUR",
+            fillPrice: "12000.00",
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [
+            {
+              sourceId: dependentSourceId,
+              sourceRawRecordId: null,
+              externalId: "cross-source-fifo-disposal-leg",
+              txHash: null,
+              timestamp: new Date("2025-02-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              addressId: null,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.40000000",
+              kind: "disposal",
+              provenance: "deterministic",
+              derivationRule: "spot_sell",
+              metadata: null,
+              transactionId: null,
+              sourceTransferId: null,
+              fiatAmount: "4800.00",
+              fiatCurrency: "EUR",
+              feeForTransactionId: null,
+            },
+          ],
+          transactionReview: null,
+          resolvedTransactionType: {
+            ...APPROVED_MAPPING,
+            providerTransactionType: "sell",
+            transactionType: "sell_fiat",
+            inventoryEffect: "disposal",
+          },
+        })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots).where(eq(schema.fifoLots.id, lotId))
+        const matches = yield* db.select().from(schema.disposalMatches)
+        return { lot, matches }
+      })
+    )
+
+    expect(state.lot?.remainingAmount).toContain("0.60000000")
+    expect(state.matches).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.40000000") }),
+    ])
+  })
+
   it("persists a reviewable partial normalization with no canonical legs", async () => {
     const partialRawRecordId = "00000000-0000-0000-0000-000000000591"
 
@@ -1505,28 +1666,86 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
-  it("preserves a consumed inbound provider lot when replay would remove or over-shrink it", async () => {
+  it("removes provider movements and lots that disappear on replay", async () => {
+    const rawRecordId = "00000000-0000-0000-0000-000000000713"
+    const occurredAt = new Date("2025-04-02T10:00:00.000Z")
+    const receivePayload = {
+      id: "tx-provider-transfer-disappears",
+      type: "receive",
+      status: "completed",
+      amount: { amount: "0.25000000", currency: "BTC" },
+      native_amount: { amount: "2500.00", currency: "EUR" },
+      created_at: occurredAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-transfer-disappears",
+      from: { address: "bc1qprovidertransfersource", resource: "address" },
+    }
+    const buyPayload = {
+      ...receivePayload,
+      type: "buy",
+      from: undefined,
+    }
+
+    await runPg(
+      seedRawRecord({
+        rawRecordId,
+        externalRecordId: "raw-provider-transfer-disappears",
+        occurredAt,
+        payload: receivePayload,
+      })
+    )
+
+    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+    const normalize = (payload: typeof receivePayload | typeof buyPayload) =>
+      runCoinbaseNormalization(
+        persistCoinbaseNormalization({
+          source,
+          sourceRecord: buildSeededRawRecord({
+            rawRecordId,
+            externalRecordId: "raw-provider-transfer-disappears",
+            occurredAt,
+            payload,
+          }),
+          skipLegDerivation: payload.type === "receive",
+        })
+      )
+
+    await normalize(receivePayload)
+    await normalize(buyPayload)
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        const lots = yield* db.select().from(schema.fifoLots)
+        return { movements, lots }
+      })
+    )
+
+    expect(state.movements).toHaveLength(0)
+    expect(state.lots).toEqual([
+      expect.objectContaining({
+        sourceLegId: expect.any(String),
+        sourceProviderTransferId: null,
+        remainingAmount: expect.stringContaining("0.25000000"),
+      }),
+    ])
+  })
+
+  it("does not spend an unreconciled inbound provider lot", async () => {
     const receiveRawRecordId = "00000000-0000-0000-0000-000000000704"
     const sendRawRecordId = "00000000-0000-0000-0000-000000000705"
     const receiveAt = new Date("2025-04-02T10:00:00.000Z")
     const sendAt = new Date("2025-04-03T10:00:00.000Z")
-    const buildReceivePayload = ({
-      status,
-      amount,
-    }: {
-      readonly status: "completed" | "pending"
-      readonly amount: string
-    }) => ({
+    const receivePayload = {
       id: "tx-consumed-provider-receive",
       type: "receive",
-      status,
-      amount: { amount, currency: "BTC" },
+      status: "completed",
+      amount: { amount: "1.00000000", currency: "BTC" },
       native_amount: { amount: "10000.00", currency: "EUR" },
       created_at: receiveAt.toISOString(),
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-consumed-provider-receive",
       from: { address: "bc1qconsumedproviderlot", resource: "address" },
-    })
-    const receivePayload = buildReceivePayload({ status: "completed", amount: "1.00000000" })
+    }
     const sendPayload = {
       id: "tx-consuming-provider-send",
       type: "send",
@@ -1556,21 +1775,18 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const normalizeReceive = (payload: ReturnType<typeof buildReceivePayload>) =>
-      runCoinbaseNormalization(
-        persistCoinbaseNormalization({
-          source,
-          sourceRecord: buildSeededRawRecord({
-            rawRecordId: receiveRawRecordId,
-            externalRecordId: "raw-consumed-provider-receive",
-            occurredAt: receiveAt,
-            payload,
-          }),
-          skipLegDerivation: true,
-        })
-      )
-
-    await normalizeReceive(receivePayload)
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: receiveRawRecordId,
+          externalRecordId: "raw-consumed-provider-receive",
+          occurredAt: receiveAt,
+          payload: receivePayload,
+        }),
+        skipLegDerivation: true,
+      })
+    )
     await runCoinbaseNormalization(
       persistCoinbaseNormalization({
         source,
@@ -1584,39 +1800,6 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    await expect(
-      normalizeReceive(buildReceivePayload({ status: "pending", amount: "1.00000000" }))
-    ).rejects.toThrow("later inventory usage depends on it")
-    await expect(
-      normalizeReceive(buildReceivePayload({ status: "completed", amount: "0.50000000" }))
-    ).rejects.toThrow("below its consumed amount")
-
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* db.insert(schema.assets).values({
-          id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "consumed-provider-lot-sol-fixture",
-          name: "Consumed Provider Lot Solana Fixture",
-          symbol: "SOL",
-          decimals: 9,
-          type: "token",
-        })
-        yield* db
-          .update(schema.providerAssetMappings)
-          .set({
-            canonicalAssetId: TEST_SOL_ASSET_ID,
-            canonicalAssetSymbol: "SOL",
-          })
-          .where(eq(schema.providerAssetMappings.canonicalAssetId, TEST_BTC_ASSET_ID))
-      })
-    )
-
-    await expect(normalizeReceive(receivePayload)).rejects.toThrow(
-      "Cannot change asset of inbound provider lot"
-    )
-
     const state = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -1625,19 +1808,25 @@ describe("SourceNormalizationRepositoryLive", () => {
           .from(schema.fifoLots)
           .where(sql`${schema.fifoLots.sourceProviderTransferId} is not null`)
         const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { inboundLot, allocations }
+        const reviews = yield* db.select().from(schema.transactionReviews)
+        return { inboundLot, allocations, reviews }
       })
     )
 
     expect(state.inboundLot).toEqual(
       expect.objectContaining({
         originalAmount: expect.stringContaining("1.00000000"),
-        remainingAmount: expect.stringContaining("0.20000000"),
+        remainingAmount: expect.stringContaining("1.00000000"),
       })
     )
-    expect(state.allocations).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.80000000") }),
-    ])
+    expect(state.allocations).toHaveLength(0)
+    expect(state.reviews).toContainEqual(
+      expect.objectContaining({
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
+      })
+    )
   })
 
   it("moves a replayed fee movement to the leg's current transaction and raw record", async () => {
@@ -1926,7 +2115,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
-  it("records a failed onchain provider fee as a custody movement", async () => {
+  it("records a failed Coinbase network fee leg as a custody movement", async () => {
     const openingRawRecordId = "00000000-0000-0000-0000-000000000708"
     const feeRawRecordId = "00000000-0000-0000-0000-000000000709"
     const openingAt = new Date("2025-04-01T10:00:00.000Z")
@@ -1949,6 +2138,10 @@ describe("SourceNormalizationRepositoryLive", () => {
       created_at: feeAt.toISOString(),
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-failed-onchain-fee",
       to: { address: "bc1qfailedfeedestination", resource: "address" },
+      network: {
+        status: "failed",
+        transaction_fee: { amount: "0.01000000", currency: "BTC" },
+      },
     }
 
     await runPg(
@@ -1980,7 +2173,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         }),
       })
     )
-    await runCoinbaseNormalization(
+    const result = await runCoinbaseNormalization(
       persistCoinbaseNormalization({
         source,
         sourceRecord: buildSeededRawRecord({
@@ -1989,10 +2182,10 @@ describe("SourceNormalizationRepositoryLive", () => {
           occurredAt: feeAt,
           payload: failedFeePayload,
         }),
-        skipLegDerivation: true,
-        providerTransferRole: "fee",
       })
     )
+
+    expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -2009,6 +2202,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         direction: "outbound",
         purpose: "fee",
         amount: expect.stringContaining("0.01000000"),
+        providerTransferId: null,
+        transactionLegId: expect.any(String),
       })
     )
   })
