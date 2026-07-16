@@ -1175,7 +1175,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       amount,
       feeAmount,
     }: {
-      readonly status: "completed" | "pending"
+      readonly status: "completed" | "pending" | "succeeded"
       readonly amount: string
       readonly feeAmount: string
     }) => ({
@@ -1246,6 +1246,18 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
     await normalizeSend(initialSendPayload)
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.inventoryMovements)
+          .set({
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+          })
+          .where(eq(schema.inventoryMovements.sourceId, TEST_SOURCE_ID))
+      })
+    )
     await normalizeSend(
       buildSendPayload({
         status: "completed",
@@ -1267,8 +1279,18 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(changedState.lot?.remainingAmount).toContain("0.78000000")
     expect(changedState.movements).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.2") }),
-        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.02") }),
+        expect.objectContaining({
+          purpose: "principal",
+          amount: expect.stringContaining("0.2"),
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        }),
+        expect.objectContaining({
+          purpose: "fee",
+          amount: expect.stringContaining("0.02"),
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        }),
       ])
     )
     expect(changedState.allocations).toEqual(
@@ -1278,6 +1300,28 @@ describe("SourceNormalizationRepositoryLive", () => {
       ])
     )
     expect(changedState.allocations).toHaveLength(2)
+
+    await normalizeSend(
+      buildSendPayload({
+        status: "succeeded",
+        amount: "-0.20000000",
+        feeAmount: "0.02000000",
+      })
+    )
+
+    const succeededState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots)
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        return { lot, movements, allocations }
+      })
+    )
+
+    expect(succeededState.lot?.remainingAmount).toContain("0.78000000")
+    expect(succeededState.movements).toHaveLength(2)
+    expect(succeededState.allocations).toHaveLength(2)
 
     await normalizeSend(
       buildSendPayload({

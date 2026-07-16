@@ -74,6 +74,11 @@ interface FifoLotAllocation {
 const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
 
+const COMPLETED_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
+
+const hasCompletedProviderStatus = (providerStatus: string | null): boolean =>
+  providerStatus !== null && COMPLETED_PROVIDER_STATUSES.has(providerStatus.toLowerCase())
+
 const NumericStringSchema = Schema.Union(
   Schema.String,
   Schema.transform(Schema.Number, Schema.String, {
@@ -1146,6 +1151,69 @@ const make = Effect.gen(function* () {
         )
     })
 
+  const resetInventoryMovementAllocationsForTransaction = ({
+    executor,
+    transactionId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* executor
+        .select({ id: schema.inventoryMovements.id })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.resetInventoryMovementAllocationsForTransaction.selectMovements"
+          )
+        )
+
+      yield* Effect.forEach(movements, (movement) =>
+        resetInventoryMovementAllocations({
+          executor,
+          movementId: movement.id,
+        })
+      )
+    })
+
+  const removeInventoryMovementForProviderTransfer = ({
+    executor,
+    providerTransferId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransferId: string
+  }) =>
+    Effect.gen(function* () {
+      const [movement] = yield* executor
+        .select({ id: schema.inventoryMovements.id })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.selectMovement"
+          )
+        )
+
+      if (movement === undefined) {
+        return
+      }
+
+      yield* resetInventoryMovementAllocations({
+        executor,
+        movementId: movement.id,
+      })
+      yield* executor
+        .delete(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.id, movement.id))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteMovement"
+          )
+        )
+    })
+
   const allocateOutboundInventoryMovements = ({
     executor,
     transaction,
@@ -1162,7 +1230,10 @@ const make = Effect.gen(function* () {
       (providerTransfer) =>
         Effect.gen(function* () {
           if (providerTransfer.providerAssetId === null) {
-            return
+            return yield* removeInventoryMovementForProviderTransfer({
+              executor,
+              providerTransferId: providerTransfer.id,
+            })
           }
 
           const [assetMapping] = yield* executor
@@ -1186,7 +1257,10 @@ const make = Effect.gen(function* () {
             )
 
           if (assetMapping?.assetId === null || assetMapping?.assetId === undefined) {
-            return
+            return yield* removeInventoryMovementForProviderTransfer({
+              executor,
+              providerTransferId: providerTransfer.id,
+            })
           }
 
           const now = nowDate()
@@ -1218,6 +1292,28 @@ const make = Effect.gen(function* () {
                 timestamp: sql.raw("excluded.timestamp"),
                 direction: sql.raw("excluded.direction"),
                 purpose: sql.raw("excluded.purpose"),
+                taxTreatment: sql`case
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.direction} is distinct from excluded.direction
+                    or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'pending_review'::inventory_movement_tax_treatment
+                  else ${schema.inventoryMovements.taxTreatment}
+                end`,
+                reconciliationStatus: sql`case
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.direction} is distinct from excluded.direction
+                    or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'unmatched'::inventory_movement_reconciliation_status
+                  else ${schema.inventoryMovements.reconciliationStatus}
+                end`,
                 amount: sql.raw("excluded.amount"),
                 updatedAt: now,
               },
@@ -1356,6 +1452,20 @@ const make = Effect.gen(function* () {
               set: {
                 assetId: sql.raw("excluded.asset_id"),
                 timestamp: sql.raw("excluded.timestamp"),
+                taxTreatment: sql`case
+                  when ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'pending_review'::inventory_movement_tax_treatment
+                  else ${schema.inventoryMovements.taxTreatment}
+                end`,
+                reconciliationStatus: sql`case
+                  when ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'unmatched'::inventory_movement_reconciliation_status
+                  else ${schema.inventoryMovements.reconciliationStatus}
+                end`,
                 amount: sql.raw("excluded.amount"),
                 updatedAt: now,
               },
@@ -1479,7 +1589,14 @@ const make = Effect.gen(function* () {
             legs: derivedLegs,
           })
 
-          if (params.transaction.providerStatus !== "completed") {
+          const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
+
+          if (hasCompletedStatus) {
+            yield* resetInventoryMovementAllocationsForTransaction({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+            })
+          } else {
             yield* removeInventoryMovementsForTransaction({
               executor: tx,
               transactionId: persistedTransaction.id,
@@ -1491,7 +1608,7 @@ const make = Effect.gen(function* () {
             legs: persistedLegs,
           }).pipe(
             Effect.zipRight(
-              params.transaction.providerStatus === "completed"
+              hasCompletedStatus
                 ? allocateOutboundInventoryMovements({
                     executor: tx,
                     transaction: persistedTransaction,
@@ -1501,7 +1618,7 @@ const make = Effect.gen(function* () {
                 : Effect.void
             ),
             Effect.zipRight(
-              params.transaction.providerStatus === "completed"
+              hasCompletedStatus
                 ? allocateFeeInventoryMovements({
                     executor: tx,
                     legs: persistedLegs,
