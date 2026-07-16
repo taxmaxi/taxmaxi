@@ -1829,6 +1829,116 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
+  it("restores earlier movement allocations when a later movement lacks inventory", async () => {
+    const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000720"
+    const sendRawRecordId = "00000000-0000-0000-0000-000000000721"
+    const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
+    const sentAt = new Date("2025-04-02T10:00:00.000Z")
+    const acquisitionPayload = {
+      id: "tx-partial-movement-opening-inventory",
+      type: "buy",
+      status: "completed",
+      amount: { amount: "0.15000000", currency: "BTC" },
+      native_amount: { amount: "1500.00", currency: "EUR" },
+      created_at: acquiredAt.toISOString(),
+      resource_path:
+        "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-opening-inventory",
+    }
+    const sendPayload = {
+      id: "tx-partial-movement-send",
+      type: "send",
+      status: "completed",
+      amount: { amount: "-0.10000000", currency: "BTC" },
+      native_amount: { amount: "-1000.00", currency: "EUR" },
+      created_at: sentAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-send",
+      network: {
+        status: "confirmed",
+        hash: "tx-partial-movement-send-hash",
+        network_name: "base",
+        transaction_fee: { amount: "0.10000000", currency: "BTC" },
+      },
+      to: {
+        address: "bc1qpartialmovementdestination",
+        resource: "address",
+      },
+    }
+
+    await runPg(
+      Effect.all([
+        seedRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-partial-movement-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+        seedRawRecord({
+          rawRecordId: sendRawRecordId,
+          externalRecordId: "raw-partial-movement-send",
+          occurredAt: sentAt,
+          payload: sendPayload,
+        }),
+      ])
+    )
+
+    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+    await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: acquisitionRawRecordId,
+          externalRecordId: "raw-partial-movement-opening-inventory",
+          occurredAt: acquiredAt,
+          payload: acquisitionPayload,
+        }),
+      })
+    )
+    const result = await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source,
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: sendRawRecordId,
+          externalRecordId: "raw-partial-movement-send",
+          occurredAt: sentAt,
+          payload: sendPayload,
+        }),
+      })
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+        const movements = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.transactionId, result.transaction.id))
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        const [review] = yield* db
+          .select()
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, result.transaction.id))
+        return { lot, movements, allocations, review }
+      })
+    )
+
+    expect(state.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.1") }),
+        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
+      ])
+    )
+    expect(state.allocations).toHaveLength(0)
+    expect(state.lot?.remainingAmount).toContain("0.15000000")
+    expect(state.review).toEqual(
+      expect.objectContaining({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+      })
+    )
+  })
+
   it("moves a replayed fee movement to the leg's current transaction and raw record", async () => {
     const newRawRecordId = "00000000-0000-0000-0000-000000000710"
     const openingTransactionId = "00000000-0000-0000-0000-000000000711"

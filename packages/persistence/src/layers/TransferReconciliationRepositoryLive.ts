@@ -617,6 +617,7 @@ const make = Effect.gen(function* () {
                     eq(schema.fifoLots.principalId, lotPrincipalId),
                     eq(schema.fifoLots.sourceId, sourceId),
                     eq(schema.fifoLots.assetId, assetId),
+                    sql`${schema.fifoLots.sourceLegId} is not null`,
                     gt(schema.fifoLots.remainingAmount, "0"),
                     lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
                   )
@@ -798,7 +799,7 @@ const make = Effect.gen(function* () {
                     return yield* Effect.fail(
                       new SyncEngineStorageError({
                         operation:
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.remainingAmount",
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyAmountMismatch",
                         cause: `Custody allocations differ from internal transfer amount by ${BigDecimal.format(remainingToMove)}`,
                       })
                     )

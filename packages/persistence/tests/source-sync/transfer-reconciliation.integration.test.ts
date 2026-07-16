@@ -711,7 +711,7 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
 
-    await runPg(
+    const providerOriginLotId = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         const [leg] = yield* db
@@ -786,6 +786,29 @@ describe("TransferReconciliationServiceLive", () => {
           fifoLotId: lot.id,
           matchedAmount: "0.10000000",
         })
+
+        const [providerOriginLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-03-01T10:00:00.000Z"),
+            originalAmount: "0.20000000",
+            remainingAmount: "0.20000000",
+            costBasisPerToken: "0",
+            costBasisCurrency: "EUR",
+            sourceLegId: null,
+            sourceProviderTransferId: firstProviderTransferId,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+
+        if (providerOriginLot === undefined) {
+          return yield* Effect.dieMessage("Failed to create provider-origin lot fixture")
+        }
+
+        return providerOriginLot.id
       })
     )
 
@@ -827,7 +850,11 @@ describe("TransferReconciliationServiceLive", () => {
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.providerTransferId, firstProviderTransferId))
         const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
-        return { lots, movement, allocations }
+        const [providerOriginLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, providerOriginLotId))
+        return { lots, movement, allocations, providerOriginLot }
       })
     )
 
@@ -838,6 +865,7 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
     expect(state.allocations).toHaveLength(0)
+    expect(state.providerOriginLot?.remainingAmount).toContain("0.20000000")
     expect(state.lots).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -854,6 +882,185 @@ describe("TransferReconciliationServiceLive", () => {
         }),
       ])
     )
+  })
+
+  it("rolls back canonicalization when custody allocations do not match the transfer amount", async () => {
+    const walletAddress = "bc1qownedwalletcustodymismatch000000000000000"
+    const timestamp = new Date("2025-04-15T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-asset-custody-mismatch" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-custody-mismatch",
+        timestamp,
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: "btc-custody-mismatch-hash",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-custody-mismatch",
+        txHash: "btc-custody-mismatch-hash",
+        timestamp: new Date("2025-04-15T10:05:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    const fixtureIds = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, providerTransferId))
+          .limit(1)
+        const [reconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId,
+            canonicalTransferId: receipt.transferId,
+            canonicalTransactionId: receipt.transactionId,
+            status: "approved",
+            matchReason: "custody_mismatch_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+        const [leg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "custody-mismatch-opening-leg",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "50000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (providerTransfer === undefined || reconciliation === undefined || leg === undefined) {
+          return yield* Effect.dieMessage("Failed to create custody mismatch fixtures")
+        }
+
+        const [lot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "0.95000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: leg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+
+        if (lot === undefined) {
+          return yield* Effect.dieMessage("Failed to create custody mismatch lot")
+        }
+
+        const [movement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId,
+            transactionLegId: null,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.05000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (movement === undefined) {
+          return yield* Effect.dieMessage("Failed to create custody mismatch movement")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: movement.id,
+          fifoLotId: lot.id,
+          matchedAmount: "0.05000000",
+        })
+
+        return {
+          reconciliationId: reconciliation.id,
+          providerTransactionId: providerTransfer.transactionId,
+          lotId: lot.id,
+        }
+      })
+    )
+
+    await expect(
+      runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            reconciliationId: fixtureIds.reconciliationId,
+          })
+        )
+      )
+    ).rejects.toThrow("Custody allocations differ from internal transfer amount")
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransaction] = yield* db
+          .select({ transactionType: schema.transactions.transactionType })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.id, fixtureIds.providerTransactionId))
+        const [canonicalTransaction] = yield* db
+          .select({ transactionType: schema.transactions.transactionType })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.id, receipt.transactionId))
+        const legs = yield* db.select().from(schema.transactionLegs)
+        const reviews = yield* db.select().from(schema.transactionReviews)
+        const matches = yield* db.select().from(schema.disposalMatches)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        const [lot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, fixtureIds.lotId))
+        return {
+          providerTransaction,
+          canonicalTransaction,
+          legs,
+          reviews,
+          matches,
+          allocations,
+          lot,
+        }
+      })
+    )
+
+    expect(state.providerTransaction?.transactionType).toBeNull()
+    expect(state.canonicalTransaction?.transactionType).toBeNull()
+    expect(state.legs).toHaveLength(1)
+    expect(state.reviews).toHaveLength(0)
+    expect(state.matches).toHaveLength(0)
+    expect(state.allocations).toHaveLength(1)
+    expect(state.lot?.remainingAmount).toContain("0.95000000")
   })
 
   it("uses the canonical outbound custody movement and removes the redundant inbound lot", async () => {

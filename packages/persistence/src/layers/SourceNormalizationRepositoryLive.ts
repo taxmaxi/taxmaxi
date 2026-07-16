@@ -1918,13 +1918,18 @@ const make = Effect.gen(function* () {
             Effect.as(params.transactionReview),
             Effect.catchTag("SyncEngineStorageError", (error) =>
               isInsufficientFifoInventoryError(error)
-                ? Effect.succeed(
-                    buildInsufficientInventoryReview({
-                      transaction: persistedTransaction,
-                      existingReview: params.transactionReview,
-                      resolvedTransactionType: params.resolvedTransactionType,
-                      error,
-                    })
+                ? resetInventoryMovementAllocationsForTransaction({
+                    executor: tx,
+                    transactionId: persistedTransaction.id,
+                  }).pipe(
+                    Effect.as(
+                      buildInsufficientInventoryReview({
+                        transaction: persistedTransaction,
+                        existingReview: params.transactionReview,
+                        resolvedTransactionType: params.resolvedTransactionType,
+                        error,
+                      })
+                    )
                   )
                 : Effect.fail(error)
             )
