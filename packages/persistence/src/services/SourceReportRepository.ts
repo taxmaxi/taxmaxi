@@ -189,7 +189,8 @@ export interface SourceFifoLotRow {
   readonly remainingAmount: string
   readonly costBasisPerToken: string
   readonly costBasisCurrency: string
-  readonly sourceLegId: string
+  readonly sourceLegId: string | null
+  readonly sourceProviderTransferId: string | null
   readonly disposalMatches: ReadonlyArray<SourceFifoLotDisposalSummary>
 }
 

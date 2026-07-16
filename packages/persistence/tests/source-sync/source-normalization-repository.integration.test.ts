@@ -226,9 +226,13 @@ const buildSeededRawRecord = ({
 const persistCoinbaseNormalization = ({
   source,
   sourceRecord,
+  skipLegDerivation = false,
+  providerTransferRole,
 }: {
   readonly source: SourceSyncSource
   readonly sourceRecord: SourceRawRecord
+  readonly skipLegDerivation?: boolean
+  readonly providerTransferRole?: "principal" | "fee"
 }) =>
   Effect.gen(function* () {
     const referenceDataService = yield* CoinbaseReferenceDataService
@@ -242,13 +246,20 @@ const persistCoinbaseNormalization = ({
       sourceRecord,
       lookups,
     })
+    const providerTransfers = prepared.providerTransfers.map((providerTransfer) => ({
+      ...providerTransfer,
+      metadata:
+        providerTransferRole === undefined
+          ? providerTransfer.metadata
+          : { role: providerTransferRole },
+    }))
 
     return yield* sourceNormalizationRepository.persistNormalizedArtifacts(
-      prepared.legDerivationStrategy === "derive"
+      prepared.legDerivationStrategy === "derive" && !skipLegDerivation
         ? {
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
-            providerTransfers: prepared.providerTransfers,
+            providerTransfers,
             feeTransfers: prepared.feeTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
@@ -263,7 +274,7 @@ const persistCoinbaseNormalization = ({
         : {
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
-            providerTransfers: prepared.providerTransfers,
+            providerTransfers,
             feeTransfers: prepared.feeTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
@@ -1046,6 +1057,61 @@ describe("SourceNormalizationRepositoryLive", () => {
         needsReview: true,
       })
     )
+
+    const feeRoleRawRecordId = "00000000-0000-0000-0000-000000000698"
+    const feeRoleAt = new Date("2025-03-03T10:00:00.000Z")
+    const feeRolePayload = {
+      ...payload,
+      id: "tx-provider-fee-role-1",
+      amount: { amount: "-0.01000000", currency: "BTC" },
+      native_amount: { amount: "-150.00", currency: "EUR" },
+      created_at: feeRoleAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-fee-role-1",
+      network: {
+        ...payload.network,
+        hash: "tx-provider-fee-role-hash-1",
+      },
+    }
+
+    await runPg(
+      seedRawRecord({
+        rawRecordId: feeRoleRawRecordId,
+        externalRecordId: "raw-provider-fee-role-1",
+        occurredAt: feeRoleAt,
+        payload: feeRolePayload,
+      })
+    )
+    const feeRoleResult = await runCoinbaseNormalization(
+      persistCoinbaseNormalization({
+        source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+        sourceRecord: buildSeededRawRecord({
+          rawRecordId: feeRoleRawRecordId,
+          externalRecordId: "raw-provider-fee-role-1",
+          occurredAt: feeRoleAt,
+          payload: feeRolePayload,
+        }),
+        providerTransferRole: "fee",
+      })
+    )
+    const feeRoleProviderTransfer = feeRoleResult.providerTransfers[0]
+    const [feeRoleMovement] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(
+            eq(schema.inventoryMovements.providerTransferId, feeRoleProviderTransfer?.id ?? "")
+          )
+      })
+    )
+
+    expect(feeRoleMovement).toEqual(
+      expect.objectContaining({
+        direction: "outbound",
+        purpose: "fee",
+      })
+    )
   })
 
   it("does not allocate an internal-transfer outflow after its disposal leg consumed inventory", async () => {
@@ -1386,6 +1452,8 @@ describe("SourceNormalizationRepositoryLive", () => {
           occurredAt,
           payload,
         }),
+        skipLegDerivation: true,
+        providerTransferRole: "principal",
       })
     )
 
@@ -1401,14 +1469,17 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
     expect(result.providerTransfers[0]?.amount).toContain("0.25000000")
 
-    const [providerTransfer] = await runPg(
+    const state = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        return yield* db.select().from(schema.providerTransfers)
+        const [providerTransfer] = yield* db.select().from(schema.providerTransfers)
+        const [movement] = yield* db.select().from(schema.inventoryMovements)
+        const lots = yield* db.select().from(schema.fifoLots)
+        return { providerTransfer, movement, lots }
       })
     )
 
-    expect(providerTransfer).toEqual(
+    expect(state.providerTransfer).toEqual(
       expect.objectContaining({
         externalId: "tx-receive-provider-transfer-1:principal",
         direction: "inbound",
@@ -1416,6 +1487,22 @@ describe("SourceNormalizationRepositoryLive", () => {
         toAccountRef: "coinbase-account-1",
       })
     )
+    expect(state.movement).toEqual(
+      expect.objectContaining({
+        providerTransferId: state.providerTransfer?.id,
+        direction: "inbound",
+        purpose: "principal",
+        amount: expect.stringContaining("0.25000000"),
+      })
+    )
+    expect(state.lots).toEqual([
+      expect.objectContaining({
+        sourceProviderTransferId: state.providerTransfer?.id,
+        sourceLegId: null,
+        originalAmount: expect.stringContaining("0.25000000"),
+        remainingAmount: expect.stringContaining("0.25000000"),
+      }),
+    ])
   })
 
   it("projects the exact SOL balance after instant unstaking and an unmatched send", async () => {

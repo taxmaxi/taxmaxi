@@ -939,6 +939,7 @@ const make = Effect.gen(function* () {
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
           sourceLegId: schema.fifoLots.sourceLegId,
+          sourceProviderTransferId: schema.fifoLots.sourceProviderTransferId,
         })
         .from(schema.fifoLots)
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
@@ -1031,6 +1032,7 @@ const make = Effect.gen(function* () {
             costBasisPerToken: formatDecimal(costBasisPerToken),
             costBasisCurrency: row.costBasisCurrency,
             sourceLegId: row.sourceLegId,
+            sourceProviderTransferId: row.sourceProviderTransferId,
             disposalMatches: matchesByLot.get(row.lotId) ?? [],
           } satisfies SourceFifoLotRow
         })

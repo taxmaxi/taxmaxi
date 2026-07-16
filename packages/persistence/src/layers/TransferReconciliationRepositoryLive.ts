@@ -314,20 +314,27 @@ const make = Effect.gen(function* () {
                 )
               )
 
-            const loadDependentMatchCount = (legId: string) =>
+            const loadDependentUsageCount = (legId: string) =>
               // A leg with no FIFO lots should not block canonicalization. The aggregate returns
               // a single total count across all lots linked to the acquisition leg when they exist.
               tx
-                .select({ count: count(schema.disposalMatches.id) })
+                .select({
+                  disposalMatchCount: count(schema.disposalMatches.id),
+                  custodyAllocationCount: count(schema.inventoryMovementAllocations.id),
+                })
                 .from(schema.fifoLots)
                 .leftJoin(
                   schema.disposalMatches,
                   eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id)
                 )
+                .leftJoin(
+                  schema.inventoryMovementAllocations,
+                  eq(schema.inventoryMovementAllocations.fifoLotId, schema.fifoLots.id)
+                )
                 .where(eq(schema.fifoLots.sourceLegId, legId))
                 .pipe(
                   wrapSyncEngineSqlError(
-                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadDependentMatchCount"
+                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadDependentUsageCount"
                   )
                 )
 
@@ -429,8 +436,11 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 for (const leg of legs) {
                   if (leg.kind === "acquisition" || leg.kind === "income") {
-                    const [dependent] = yield* loadDependentMatchCount(leg.id)
-                    if (Number(dependent?.count ?? 0) > 0) {
+                    const [dependent] = yield* loadDependentUsageCount(leg.id)
+                    if (
+                      Number(dependent?.disposalMatchCount ?? 0) > 0 ||
+                      Number(dependent?.custodyAllocationCount ?? 0) > 0
+                    ) {
                       return false
                     }
                   }
@@ -562,7 +572,7 @@ const make = Effect.gen(function* () {
 
             const ensureInternalTransferDisposition = ({
               originLegId,
-              providerTransferId,
+              custodyProviderTransferId,
               principalId: lotPrincipalId,
               sourceId,
               assetId,
@@ -570,7 +580,7 @@ const make = Effect.gen(function* () {
               maxAcquiredAt,
             }: {
               readonly originLegId: string
-              readonly providerTransferId: string
+              readonly custodyProviderTransferId: string | null
               readonly principalId: string
               readonly sourceId: string
               readonly assetId: string
@@ -620,34 +630,42 @@ const make = Effect.gen(function* () {
                   }
                 }
 
-                const custodyAllocations = yield* tx
-                  .select({
-                    movementId: schema.inventoryMovements.id,
-                    fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
-                    matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
-                    acquiredAt: schema.fifoLots.acquiredAt,
-                    costBasisPerToken: schema.fifoLots.costBasisPerToken,
-                    costBasisCurrency: schema.fifoLots.costBasisCurrency,
-                  })
-                  .from(schema.inventoryMovements)
-                  .innerJoin(
-                    schema.inventoryMovementAllocations,
-                    eq(
-                      schema.inventoryMovementAllocations.inventoryMovementId,
-                      schema.inventoryMovements.id
-                    )
-                  )
-                  .innerJoin(
-                    schema.fifoLots,
-                    eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
-                  )
-                  .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
-                  .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
-                  .pipe(
-                    wrapSyncEngineSqlError(
-                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.loadCustodyAllocations"
-                    )
-                  )
+                const custodyAllocations =
+                  custodyProviderTransferId === null
+                    ? []
+                    : yield* tx
+                        .select({
+                          movementId: schema.inventoryMovements.id,
+                          fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
+                          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+                          acquiredAt: schema.fifoLots.acquiredAt,
+                          costBasisPerToken: schema.fifoLots.costBasisPerToken,
+                          costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                        })
+                        .from(schema.inventoryMovements)
+                        .innerJoin(
+                          schema.inventoryMovementAllocations,
+                          eq(
+                            schema.inventoryMovementAllocations.inventoryMovementId,
+                            schema.inventoryMovements.id
+                          )
+                        )
+                        .innerJoin(
+                          schema.fifoLots,
+                          eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+                        )
+                        .where(
+                          eq(
+                            schema.inventoryMovements.providerTransferId,
+                            custodyProviderTransferId
+                          )
+                        )
+                        .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.loadCustodyAllocations"
+                          )
+                        )
 
                 if (custodyAllocations.length > 0) {
                   const custodyMovementId = custodyAllocations[0]?.movementId
@@ -706,29 +724,6 @@ const make = Effect.gen(function* () {
                       )
                     }
 
-                    yield* tx
-                      .insert(schema.disposalMatches)
-                      .values({
-                        disposalLegId: originLegId,
-                        fifoLotId: allocation.fifoLotId,
-                        matchedAmount: BigDecimal.format(matchedAmount),
-                        costBasis: roundFiatAmount(costBasis),
-                        proceeds: roundFiatAmount(costBasis),
-                        gainLoss: "0",
-                        createdAt: nowDate(),
-                      })
-                      .onConflictDoNothing({
-                        target: [
-                          schema.disposalMatches.fifoLotId,
-                          schema.disposalMatches.disposalLegId,
-                        ],
-                      })
-                      .pipe(
-                        wrapSyncEngineSqlError(
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.insertCustodyMatch"
-                        )
-                      )
-
                     allocations.push({
                       fifoLotId: allocation.fifoLotId,
                       matchedAmount: BigDecimal.format(matchedAmount),
@@ -750,6 +745,31 @@ const make = Effect.gen(function* () {
                       })
                     )
                   }
+
+                  yield* Effect.forEach(allocations, (allocation) =>
+                    tx
+                      .insert(schema.disposalMatches)
+                      .values({
+                        disposalLegId: originLegId,
+                        fifoLotId: allocation.fifoLotId,
+                        matchedAmount: allocation.matchedAmount,
+                        costBasis: allocation.costBasis,
+                        proceeds: allocation.costBasis,
+                        gainLoss: "0",
+                        createdAt: nowDate(),
+                      })
+                      .onConflictDoNothing({
+                        target: [
+                          schema.disposalMatches.fifoLotId,
+                          schema.disposalMatches.disposalLegId,
+                        ],
+                      })
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.insertCustodyMatch"
+                        )
+                      )
+                  )
 
                   yield* tx
                     .delete(schema.inventoryMovementAllocations)
@@ -1145,6 +1165,7 @@ const make = Effect.gen(function* () {
                     })
                     .onConflictDoNothing({
                       target: [schema.fifoLots.sourceLegId, schema.fifoLots.sourceLegSequence],
+                      where: sql`${schema.fifoLots.sourceLegId} is not null`,
                     })
                     .pipe(
                       wrapSyncEngineSqlError(
@@ -1221,6 +1242,32 @@ const make = Effect.gen(function* () {
                   originTransaction.id === canonicalTransactionId ? canonicalTransferId : null
                 const destinationSourceTransferId =
                   destinationTransaction.id === canonicalTransactionId ? canonicalTransferId : null
+
+                const custodyProviderTransferId =
+                  row.providerDirection === "outbound"
+                    ? row.providerTransferId
+                    : yield* tx
+                        .select({
+                          providerTransferId: schema.inventoryMovements.providerTransferId,
+                        })
+                        .from(schema.inventoryMovements)
+                        .where(
+                          and(
+                            eq(schema.inventoryMovements.transactionId, originTransaction.id),
+                            eq(schema.inventoryMovements.assetId, row.assetId),
+                            eq(schema.inventoryMovements.direction, "outbound"),
+                            eq(schema.inventoryMovements.purpose, "principal"),
+                            eq(schema.inventoryMovements.amount, amount),
+                            sql`${schema.inventoryMovements.providerTransferId} is not null`
+                          )
+                        )
+                        .limit(1)
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.findOriginCustodyMovement"
+                          ),
+                          Effect.map((rows) => rows[0]?.providerTransferId ?? null)
+                        )
 
                 const originPrincipalLegs = yield* loadPrincipalLegs({
                   transactionId: originTransaction.id,
@@ -1378,7 +1425,7 @@ const make = Effect.gen(function* () {
 
                 const disposition = yield* ensureInternalTransferDisposition({
                   originLegId,
-                  providerTransferId: row.providerTransferId,
+                  custodyProviderTransferId,
                   principalId: originTransaction.principalId,
                   sourceId: originTransaction.sourceId,
                   assetId: row.assetId,
@@ -1414,6 +1461,12 @@ const make = Effect.gen(function* () {
                   disposition,
                 })
 
+                const matchedProviderTransferIds =
+                  custodyProviderTransferId === null ||
+                  custodyProviderTransferId === row.providerTransferId
+                    ? [row.providerTransferId]
+                    : [row.providerTransferId, custodyProviderTransferId]
+
                 yield* tx
                   .update(schema.inventoryMovements)
                   .set({
@@ -1421,10 +1474,15 @@ const make = Effect.gen(function* () {
                     reconciliationStatus: "matched",
                     updatedAt: nowDate(),
                   })
-                  .where(eq(schema.inventoryMovements.providerTransferId, row.providerTransferId))
+                  .where(
+                    inArray(
+                      schema.inventoryMovements.providerTransferId,
+                      matchedProviderTransferIds
+                    )
+                  )
                   .pipe(
                     wrapSyncEngineSqlError(
-                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.markCustodyMovementMatched"
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.markCustodyMovementsMatched"
                     )
                   )
 

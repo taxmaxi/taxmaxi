@@ -365,7 +365,8 @@ export class SourceFifoLotRow extends Schema.Class<SourceFifoLotRow>("SourceFifo
   remainingAmount: SourceReportAmount,
   costBasisPerToken: SourceReportAmount,
   costBasisCurrency: Schema.String,
-  sourceLegId: Schema.String,
+  sourceLegId: Schema.NullOr(Schema.String),
+  sourceProviderTransferId: Schema.NullOr(Schema.String),
   disposalMatches: Schema.Array(SourceFifoLotDisposalSummary),
 }) {}
 
