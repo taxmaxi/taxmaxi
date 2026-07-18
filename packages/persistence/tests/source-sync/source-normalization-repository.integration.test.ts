@@ -1195,23 +1195,16 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.lots).toEqual([
       expect.objectContaining({
         sourceId: TEST_SOURCE_ID,
-        remainingAmount: expect.stringContaining("0.89990000"),
+        remainingAmount: expect.stringContaining("0.90000000"),
       }),
     ])
-    expect(counts.inventoryMovements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          direction: "outbound",
-          purpose: "principal",
-          taxTreatment: "pending_review",
-        }),
-        expect.objectContaining({
-          direction: "outbound",
-          purpose: "fee",
-          taxTreatment: "pending_review",
-        }),
-      ])
-    )
+    expect(counts.inventoryMovements).toEqual([
+      expect.objectContaining({
+        direction: "outbound",
+        purpose: "principal",
+        taxTreatment: "pending_review",
+      }),
+    ])
     expect(counts.reviews).toContainEqual(
       expect.objectContaining({
         reviewStatus: "needs_review",
@@ -1503,30 +1496,18 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(changedState.lot?.remainingAmount).toContain("0.78000000")
-    expect(changedState.movements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          purpose: "principal",
-          amount: expect.stringContaining("0.2"),
-          taxTreatment: "pending_review",
-          reconciliationStatus: "unmatched",
-        }),
-        expect.objectContaining({
-          purpose: "fee",
-          amount: expect.stringContaining("0.02"),
-          taxTreatment: "pending_review",
-          reconciliationStatus: "unmatched",
-        }),
-      ])
-    )
-    expect(changedState.allocations).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
-        expect.objectContaining({ matchedAmount: expect.stringContaining("0.02") }),
-      ])
-    )
-    expect(changedState.allocations).toHaveLength(2)
+    expect(changedState.lot?.remainingAmount).toContain("0.80000000")
+    expect(changedState.movements).toEqual([
+      expect.objectContaining({
+        purpose: "principal",
+        amount: expect.stringContaining("0.2"),
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+      }),
+    ])
+    expect(changedState.allocations).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
+    ])
 
     await normalizeSend(
       buildSendPayload({
@@ -1546,9 +1527,9 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(succeededState.lot?.remainingAmount).toContain("0.78000000")
-    expect(succeededState.movements).toHaveLength(2)
-    expect(succeededState.allocations).toHaveLength(2)
+    expect(succeededState.lot?.remainingAmount).toContain("0.80000000")
+    expect(succeededState.movements).toHaveLength(1)
+    expect(succeededState.allocations).toHaveLength(1)
 
     await normalizeSend(
       buildSendPayload({
@@ -1829,7 +1810,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
-  it("restores earlier movement allocations when a later movement lacks inventory", async () => {
+  it("does not allocate a completed Coinbase send network fee twice", async () => {
     const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000720"
     const sendRawRecordId = "00000000-0000-0000-0000-000000000721"
     const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
@@ -1922,20 +1903,127 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(state.movements).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.1") }),
-        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
-      ])
-    )
-    expect(state.allocations).toHaveLength(0)
-    expect(state.lot?.remainingAmount).toContain("0.15000000")
+    expect(state.movements).toEqual([
+      expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.1") }),
+    ])
+    expect(state.allocations).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
+    ])
+    expect(state.lot?.remainingAmount).toContain("0.05000000")
     expect(state.review).toEqual(
       expect.objectContaining({
         reviewStatus: "needs_review",
-        matchedLayer: "fifo_inventory",
+        matchedLayer: "coinbase_reference_mapping",
         needsReview: true,
       })
+    )
+  })
+
+  it("allocates a completed Coinbase send network fee paid in another asset", async () => {
+    const btcOpeningAt = new Date("2025-04-01T10:00:00.000Z")
+    const solOpeningAt = new Date("2025-04-01T11:00:00.000Z")
+    const sentAt = new Date("2025-04-02T10:00:00.000Z")
+    const records = [
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000722",
+        externalRecordId: "btc-opening-for-cross-asset-fee",
+        occurredAt: btcOpeningAt,
+        payload: {
+          id: "btc-opening-for-cross-asset-fee",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "1.00000000", currency: "BTC" },
+          native_amount: { amount: "10000.00", currency: "EUR" },
+          created_at: btcOpeningAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-account-1/transactions/btc-opening-for-cross-asset-fee",
+        },
+      },
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000723",
+        externalRecordId: "sol-opening-for-cross-asset-fee",
+        occurredAt: solOpeningAt,
+        payload: {
+          id: "sol-opening-for-cross-asset-fee",
+          type: "buy",
+          status: "completed",
+          amount: { amount: "1.000000000", currency: "SOL" },
+          native_amount: { amount: "100.00", currency: "EUR" },
+          created_at: solOpeningAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-account-1/transactions/sol-opening-for-cross-asset-fee",
+        },
+      },
+      {
+        rawRecordId: "00000000-0000-0000-0000-000000000724",
+        externalRecordId: "btc-send-with-sol-network-fee",
+        occurredAt: sentAt,
+        payload: {
+          id: "btc-send-with-sol-network-fee",
+          type: "send",
+          status: "completed",
+          amount: { amount: "-0.10000000", currency: "BTC" },
+          native_amount: { amount: "-1000.00", currency: "EUR" },
+          created_at: sentAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-account-1/transactions/btc-send-with-sol-network-fee",
+          network: {
+            status: "confirmed",
+            hash: "btc-send-with-sol-network-fee-hash",
+            network_name: "bitcoin",
+            transaction_fee: { amount: "0.010000000", currency: "SOL" },
+          },
+          to: {
+            address: "bc1qcrossassetfeedestination",
+            resource: "address",
+          },
+        },
+      },
+    ] as const
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values({
+          id: TEST_SOL_ASSET_ID,
+          blockchainId: fixture.baseBlockchainId,
+          contractAddress: "sync-engine-sol-cross-asset-fee-fixture",
+          name: "Sync Engine Solana Cross-Asset Fee Fixture",
+          symbol: "SOL",
+          decimals: 9,
+          type: "token",
+        })
+
+        yield* Effect.forEach(records, (record) => seedRawRecord(record))
+      })
+    )
+
+    for (const record of records) {
+      await runCoinbaseNormalization(
+        persistCoinbaseNormalization({
+          source: buildCoinbaseSource({ cexAccountId: fixture.cexAccountId }),
+          sourceRecord: buildSeededRawRecord(record),
+        })
+      )
+    }
+
+    const positions = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(PortfolioRepository, (repository) =>
+          repository.listAssetPositions({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        ),
+        layer: PortfolioRepositoryLive,
+      })
+    )
+
+    expect(positions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ assetId: TEST_BTC_ASSET_ID, amount: "0.9" }),
+        expect.objectContaining({ assetId: TEST_SOL_ASSET_ID, amount: "0.99" }),
+      ])
     )
   })
 
@@ -2320,8 +2408,7 @@ describe("SourceNormalizationRepositoryLive", () => {
 
   it("projects the exact SOL balance after instant unstaking and an unmatched send", async () => {
     const openingAt = new Date("2025-05-01T09:00:00.000Z")
-    const unstakingCreditAt = new Date("2025-05-02T10:00:00.000Z")
-    const unstakingReleaseAt = new Date("2025-05-02T10:00:30.000Z")
+    const unstakingAt = new Date("2025-05-02T10:00:00.000Z")
     const sendAt = new Date("2025-05-03T11:00:00.000Z")
     const records = [
       {
@@ -2334,25 +2421,27 @@ describe("SourceNormalizationRepositoryLive", () => {
           id: "sol-opening-inventory",
           type: "buy",
           status: "completed",
-          amount: { amount: "46.039172889", currency: "SOL" },
-          native_amount: { amount: "4603.91728890", currency: "EUR" },
+          amount: { amount: "45.99611069037", currency: "SOL" },
+          native_amount: { amount: "4599.611069037", currency: "EUR" },
           created_at: openingAt.toISOString(),
           resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-opening-inventory",
         },
       },
       {
+        // Live instant-unstaking rows can omit both `idem` and an order id, so
+        // neither side has a durable provider group identifier.
         rawRecordId: "00000000-0000-0000-0000-000000000695",
         externalRecordId: "sol-instant-unstaking-credit",
         externalAccountId: "coinbase-sol-primary",
-        externalParentId: "sol-instant-unstaking-group",
-        occurredAt: unstakingCreditAt,
+        externalParentId: null,
+        occurredAt: unstakingAt,
         payload: {
           id: "sol-instant-unstaking-credit",
-          type: "unstaking_transfer",
+          type: "retail_instant_unstaking",
           status: "completed",
-          amount: { amount: "0.956937564", currency: "SOL" },
-          native_amount: { amount: "95.69375640", currency: "EUR" },
-          created_at: unstakingCreditAt.toISOString(),
+          amount: { amount: "0.95693779863", currency: "SOL" },
+          native_amount: { amount: "99.08", currency: "EUR" },
+          created_at: unstakingAt.toISOString(),
           resource_path:
             "/v2/accounts/coinbase-sol-primary/transactions/sol-instant-unstaking-credit",
         },
@@ -2361,15 +2450,15 @@ describe("SourceNormalizationRepositoryLive", () => {
         rawRecordId: "00000000-0000-0000-0000-000000000696",
         externalRecordId: "sol-instant-unstaking-release",
         externalAccountId: "coinbase-sol-staking",
-        externalParentId: "sol-instant-unstaking-group",
-        occurredAt: unstakingReleaseAt,
+        externalParentId: null,
+        occurredAt: unstakingAt,
         payload: {
           id: "sol-instant-unstaking-release",
           type: "retail_instant_unstaking",
           status: "completed",
-          amount: { amount: "-0.966603600", currency: "SOL" },
-          native_amount: { amount: "-96.66036000", currency: "EUR" },
-          created_at: unstakingReleaseAt.toISOString(),
+          amount: { amount: "-0.966603837", currency: "SOL" },
+          native_amount: { amount: "-100.08", currency: "EUR" },
+          created_at: unstakingAt.toISOString(),
           resource_path:
             "/v2/accounts/coinbase-sol-staking/transactions/sol-instant-unstaking-release",
         },
@@ -2384,14 +2473,15 @@ describe("SourceNormalizationRepositoryLive", () => {
           id: "sol-external-send",
           type: "send",
           status: "completed",
-          amount: { amount: "-1.000000000", currency: "SOL" },
-          native_amount: { amount: "-100.00", currency: "EUR" },
+          amount: { amount: "-0.956937799", currency: "SOL" },
+          native_amount: { amount: "-99.06", currency: "EUR" },
           created_at: sendAt.toISOString(),
           resource_path: "/v2/accounts/coinbase-sol-primary/transactions/sol-external-send",
           network: {
             status: "confirmed",
             hash: "sol-external-send-hash",
             network_name: "solana",
+            transaction_fee: { amount: "0.0001", currency: "SOL" },
           },
           to: {
             address: "sol-external-destination",
@@ -2466,10 +2556,13 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
     expect(state.movements).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.009666036") }),
+        expect.objectContaining({
+          purpose: "fee",
+          amount: expect.stringContaining("0.00966603837"),
+        }),
         expect.objectContaining({
           purpose: "principal",
-          amount: expect.stringContaining("1.000000000"),
+          amount: expect.stringContaining("0.956937799"),
           taxTreatment: "pending_review",
         }),
       ])

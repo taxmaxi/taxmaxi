@@ -52,6 +52,7 @@ interface PersistedSourceLegRecord {
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
   readonly fiatAmount: string | null
   readonly fiatCurrency: string | null
+  readonly derivationRule: string | null
 }
 
 interface OpenFifoLotRecord {
@@ -363,6 +364,7 @@ const make = Effect.gen(function* () {
     kind: schema.transactionLegs.kind,
     fiatAmount: schema.transactionLegs.fiatAmount,
     fiatCurrency: schema.transactionLegs.fiatCurrency,
+    derivationRule: schema.transactionLegs.derivationRule,
   } as const
 
   const upsertTransaction = ({
@@ -1364,6 +1366,43 @@ const make = Effect.gen(function* () {
         )
     })
 
+  const removeInventoryMovementForTransactionLeg = ({
+    executor,
+    transactionLegId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionLegId: string
+  }) =>
+    Effect.gen(function* () {
+      const [movement] = yield* executor
+        .select({ id: schema.inventoryMovements.id })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionLegId, transactionLegId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementForTransactionLeg.selectMovement"
+          )
+        )
+
+      if (movement === undefined) {
+        return
+      }
+
+      yield* resetInventoryMovementAllocations({
+        executor,
+        movementId: movement.id,
+      })
+      yield* executor
+        .delete(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.id, movement.id))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementForTransactionLeg.deleteMovement"
+          )
+        )
+    })
+
   const removeStaleProviderInventoryMovements = ({
     executor,
     transactionId,
@@ -1699,6 +1738,34 @@ const make = Effect.gen(function* () {
                 error: "fee leg is missing its transaction",
               })
             )
+          }
+
+          if (leg.derivationRule === "coinbase_network_fee") {
+            const [principalMovement] = yield* executor
+              .select({ id: schema.inventoryMovements.id })
+              .from(schema.inventoryMovements)
+              .where(
+                and(
+                  eq(schema.inventoryMovements.transactionId, leg.transactionId),
+                  eq(schema.inventoryMovements.direction, "outbound"),
+                  eq(schema.inventoryMovements.purpose, "principal"),
+                  eq(schema.inventoryMovements.assetId, leg.assetId),
+                  sql`${schema.inventoryMovements.providerTransferId} is not null`
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.selectCoinbasePrincipalMovement"
+                )
+              )
+
+            if (principalMovement !== undefined) {
+              return yield* removeInventoryMovementForTransactionLeg({
+                executor,
+                transactionLegId: leg.id,
+              })
+            }
           }
 
           const now = nowDate()

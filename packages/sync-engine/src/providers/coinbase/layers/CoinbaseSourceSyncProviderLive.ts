@@ -5,6 +5,7 @@
  */
 
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -52,6 +53,7 @@ const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_RECORD_TYPE_ACCOUNT = "coinbase_account"
 const COINBASE_RECORD_TYPE_TRANSACTION = "coinbase_transaction"
 const PROVIDER_ASSET_REVIEW_LAYER = "provider_asset_mapping"
+const UNGROUPED_PAIRED_SPREAD_WINDOW_MILLIS = 60 * 1000
 
 const CoinbaseNormalizedMetadataSchema = Schema.Struct({
   amount: Schema.Struct({
@@ -72,6 +74,7 @@ type CoinbaseNormalizedMetadata = Schema.Schema.Type<typeof CoinbaseNormalizedMe
 const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
   id: Schema.String,
   type: Schema.String,
+  status: Schema.String,
   amount: Schema.Struct({
     amount: Schema.String,
     currency: Schema.String,
@@ -81,6 +84,8 @@ const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
     currency: Schema.String,
   }),
 })
+
+type CoinbasePairedSpreadPayload = Schema.Schema.Type<typeof CoinbasePairedSpreadPayloadSchema>
 
 /**
  * CoinbasePairedSpreadRecord - Sibling principal row used to derive a spread fee.
@@ -93,6 +98,31 @@ interface CoinbasePairedSpreadRecord {
   readonly externalId: string
   readonly amount: { readonly amount: string; readonly currency: string }
   readonly nativeAmount: { readonly amount: string; readonly currency: string }
+}
+
+const SUCCESSFUL_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
+
+const hasSuccessfulProviderStatus = (status: string | null): boolean =>
+  status !== null && SUCCESSFUL_PROVIDER_STATUSES.has(status.toLowerCase())
+
+const isPositiveAmountSmallerThanRelease = ({
+  candidateAmount,
+  releaseAmount,
+}: {
+  readonly candidateAmount: string
+  readonly releaseAmount: string
+}): boolean => {
+  const candidate = BigDecimal.fromString(candidateAmount.trim())
+  const release = BigDecimal.fromString(releaseAmount.trim())
+
+  if (Option.isNone(candidate) || Option.isNone(release)) {
+    return false
+  }
+
+  return (
+    BigDecimal.greaterThan(candidate.value, BigDecimal.fromBigInt(0n)) &&
+    BigDecimal.lessThan(candidate.value, BigDecimal.abs(release.value))
+  )
 }
 
 const makeRawBatchResult = ({
@@ -318,17 +348,19 @@ const make = Effect.gen(function* () {
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.
-   * Provider group identifiers allow siblings across provider accounts.
-   * Compatible type and timestamp proximity handle the remaining provider
-   * variation. Ungrouped rows remain pending because Coinbase does not expose
-   * enough information to pair them safely.
+   * Provider group identifiers allow siblings across provider accounts. When
+   * Coinbase omits a group identifier, a unique row from a different account
+   * may pair when it has the same type and exact timestamp, or a complementary
+   * unstaking type inside a narrow time window.
    * Fails recoverably when the sibling is missing or ambiguous so the row is
    * retried on a later replay pass once all sibling rows are cached.
    */
   const resolvePairedSpreadRecord = ({
     sourceRecord,
     providerTransactionType,
+    providerStatus,
     amount,
+    nativeAmount,
   }: {
     readonly sourceRecord: {
       readonly id: string
@@ -339,12 +371,22 @@ const make = Effect.gen(function* () {
       readonly occurredAt: Date
     }
     readonly providerTransactionType: string | null
+    readonly providerStatus: string | null
     readonly amount: CoinbaseNormalizedMetadata["amount"]
+    readonly nativeAmount: CoinbaseNormalizedMetadata["nativeAmount"]
   }): Effect.Effect<
     CoinbasePairedSpreadRecord,
     CoinbaseRecordNormalizationError | SyncEngineStorageError
   > =>
     Effect.gen(function* () {
+      if (!hasSuccessfulProviderStatus(providerStatus)) {
+        return yield* Effect.fail(
+          new CoinbaseRecordNormalizationError({
+            message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found 0`,
+          })
+        )
+      }
+
       const siblingRecords = yield* sourceRawRecordRepository.listRawRecordsByOccurredAt({
         sourceId: sourceRecord.sourceId,
         recordType: sourceRecord.recordType,
@@ -364,6 +406,61 @@ const make = Effect.gen(function* () {
         )
       }
 
+      const isUngroupedPairMatch = ({
+        releaseRecord,
+        releaseType,
+        releaseAmount,
+        releaseNativeAmount,
+        creditRecord,
+        creditPayload,
+      }: {
+        readonly releaseRecord: {
+          readonly externalAccountId: string | null
+          readonly externalParentId: string | null
+          readonly occurredAt: Date
+        }
+        readonly releaseType: string | null
+        readonly releaseAmount: { readonly amount: string; readonly currency: string }
+        readonly releaseNativeAmount: { readonly amount: string; readonly currency: string }
+        readonly creditRecord: {
+          readonly externalAccountId: string | null
+          readonly externalParentId: string | null
+          readonly occurredAt: Date
+        }
+        readonly creditPayload: CoinbasePairedSpreadPayload
+      }): boolean => {
+        const timestampDistance = Math.abs(
+          creditRecord.occurredAt.getTime() - releaseRecord.occurredAt.getTime()
+        )
+        const hasSafeTypeAndTiming =
+          (creditPayload.type === releaseType && timestampDistance === 0) ||
+          (((releaseType === "retail_instant_unstaking" &&
+            creditPayload.type === "unstaking_transfer") ||
+            (releaseType === "unstaking_transfer" &&
+              creditPayload.type === "retail_instant_unstaking")) &&
+            timestampDistance <= UNGROUPED_PAIRED_SPREAD_WINDOW_MILLIS)
+
+        return (
+          releaseRecord.externalParentId === null &&
+          creditRecord.externalParentId === null &&
+          releaseRecord.externalAccountId !== null &&
+          creditRecord.externalAccountId !== null &&
+          creditRecord.externalAccountId !== releaseRecord.externalAccountId &&
+          hasSafeTypeAndTiming &&
+          creditPayload.amount.currency.toUpperCase() === releaseAmount.currency.toUpperCase() &&
+          creditPayload.native_amount.currency.toUpperCase() ===
+            releaseNativeAmount.currency.toUpperCase() &&
+          isPositiveAmountSmallerThanRelease({
+            candidateAmount: creditPayload.amount.amount,
+            releaseAmount: releaseAmount.amount,
+          }) &&
+          isPositiveAmountSmallerThanRelease({
+            candidateAmount: creditPayload.native_amount.amount,
+            releaseAmount: releaseNativeAmount.amount,
+          })
+        )
+      }
+
       const candidates = siblingRecords.flatMap((sibling) => {
         if (sibling.id === sourceRecord.id) {
           return []
@@ -377,6 +474,7 @@ const make = Effect.gen(function* () {
           onNone: () => [],
           onSome: (payload) => {
             if (
+              !hasSuccessfulProviderStatus(payload.status) ||
               !isCompatibleType(payload.type) ||
               payload.amount.currency.toUpperCase() !== amount.currency.toUpperCase() ||
               isNegativeAmount(payload.amount.amount)
@@ -387,7 +485,19 @@ const make = Effect.gen(function* () {
             const groupMatches =
               sourceRecord.externalParentId !== null &&
               sibling.externalParentId === sourceRecord.externalParentId
-            if (!groupMatches) {
+            const timestampDistance = Math.abs(
+              sibling.occurredAt.getTime() - sourceRecord.occurredAt.getTime()
+            )
+            const ungroupedFallbackMatches = isUngroupedPairMatch({
+              releaseRecord: sourceRecord,
+              releaseType: providerTransactionType,
+              releaseAmount: amount,
+              releaseNativeAmount: nativeAmount,
+              creditRecord: sibling,
+              creditPayload: payload,
+            })
+
+            if (!groupMatches && !ungroupedFallbackMatches) {
               return []
             }
 
@@ -397,17 +507,62 @@ const make = Effect.gen(function* () {
             return [
               {
                 payload,
+                record: sibling,
+                pairingKind: groupMatches ? "grouped" : "ungrouped",
                 score: (groupMatches ? 100 : 0) + (sameType ? 10 : 0) + (sameAccount ? 5 : 0),
-                timestampDistance: Math.abs(
-                  sibling.occurredAt.getTime() - sourceRecord.occurredAt.getTime()
-                ),
+                timestampDistance,
               },
             ]
           },
         })
       })
 
-      const rankedCandidates = candidates.sort(
+      const groupedCandidates = candidates.filter(
+        (candidate) => candidate.pairingKind === "grouped"
+      )
+      const ungroupedCandidates = candidates.filter(
+        (candidate) => candidate.pairingKind === "ungrouped"
+      )
+      const [ungroupedCandidate] = ungroupedCandidates
+      const hasCompetingUngroupedRelease = (
+        candidate: (typeof ungroupedCandidates)[number]
+      ): boolean =>
+        siblingRecords.some((possibleRelease) => {
+          if (
+            possibleRelease.id === sourceRecord.id ||
+            possibleRelease.id === candidate.record.id
+          ) {
+            return false
+          }
+
+          const decoded = Schema.decodeUnknownOption(CoinbasePairedSpreadPayloadSchema)(
+            possibleRelease.payload
+          )
+
+          return Option.match(decoded, {
+            onNone: () => false,
+            onSome: (payload) =>
+              hasSuccessfulProviderStatus(payload.status) &&
+              isNegativeAmount(payload.amount.amount) &&
+              isUngroupedPairMatch({
+                releaseRecord: possibleRelease,
+                releaseType: payload.type,
+                releaseAmount: payload.amount,
+                releaseNativeAmount: payload.native_amount,
+                creditRecord: candidate.record,
+                creditPayload: candidate.payload,
+              }),
+          })
+        })
+      const eligibleCandidates =
+        groupedCandidates.length > 0
+          ? groupedCandidates
+          : ungroupedCandidate !== undefined &&
+              ungroupedCandidates.length === 1 &&
+              !hasCompetingUngroupedRelease(ungroupedCandidate)
+            ? ungroupedCandidates
+            : []
+      const rankedCandidates = eligibleCandidates.sort(
         (left, right) =>
           right.score - left.score || left.timestampDistance - right.timestampDistance
       )
@@ -902,7 +1057,9 @@ const make = Effect.gen(function* () {
           ? yield* resolvePairedSpreadRecord({
               sourceRecord,
               providerTransactionType: normalized.transaction.providerTransactionType,
+              providerStatus: normalized.transaction.providerStatus,
               amount: normalizedMetadata.amount,
+              nativeAmount: normalizedMetadata.nativeAmount,
             })
           : null
 
