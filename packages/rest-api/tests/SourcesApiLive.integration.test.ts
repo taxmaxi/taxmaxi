@@ -475,6 +475,8 @@ const reportFixtureIds = {
   taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
   taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
   internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
+  custodyProviderTransferId: "00000000-0000-0000-0000-000000046401",
+  custodyMovementId: "00000000-0000-0000-0000-000000046402",
 } as const
 
 const seedSourceReportRows = ({
@@ -734,6 +736,41 @@ describe("SourcesApiLive", () => {
         principalId: fixture.principalId,
         sourceId: fixture.sourceId,
       })
+      const db = yield* drizzle
+      yield* db.insert(schema.providerTransfers).values({
+        id: reportFixtureIds.custodyProviderTransferId,
+        sourceId: fixture.sourceId,
+        transactionId: reportFixtureIds.sellTransactionId,
+        externalId: "report-custody-outflow-1",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        direction: "outbound",
+        fromAccountRef: "coinbase-account-1",
+        toAddress: "bc1qreportcustodydestination",
+        amount: "0.1",
+      })
+      yield* db.insert(schema.inventoryMovements).values({
+        id: reportFixtureIds.custodyMovementId,
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        transactionId: reportFixtureIds.sellTransactionId,
+        providerTransferId: reportFixtureIds.custodyProviderTransferId,
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        direction: "outbound",
+        purpose: "principal",
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+        amount: "0.1",
+      })
+      yield* db.insert(schema.inventoryMovementAllocations).values({
+        inventoryMovementId: reportFixtureIds.custodyMovementId,
+        fifoLotId: reportFixtureIds.taxableFifoLotId,
+        matchedAmount: "0.1",
+      })
+      yield* db
+        .update(schema.fifoLots)
+        .set({ remainingAmount: "0.5" })
+        .where(eq(schema.fifoLots.id, reportFixtureIds.taxableFifoLotId))
 
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
@@ -752,9 +789,9 @@ describe("SourcesApiLive", () => {
       expect(assetPnl.assets).toHaveLength(1)
       expect(assetPnl.assets[0]).toMatchObject({
         acquiredAmount: "1",
-        disposedAmount: "0.4",
-        openAmount: "0.6",
-        costBasis: "9000",
+        disposedAmount: "0.5",
+        openAmount: "0.5",
+        costBasis: "7500",
         proceeds: "6000",
         realizedGainLoss: "2000",
         currency: "EUR",

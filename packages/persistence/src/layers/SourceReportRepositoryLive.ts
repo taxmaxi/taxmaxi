@@ -581,6 +581,28 @@ const make = Effect.gen(function* () {
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.matches"))
 
+      const custodyAllocationRows = yield* db
+        .select({
+          assetId: schema.inventoryMovements.assetId,
+          symbol: schema.assets.symbol,
+          name: schema.assets.name,
+          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+        })
+        .from(schema.inventoryMovementAllocations)
+        .innerJoin(
+          schema.inventoryMovements,
+          eq(schema.inventoryMovementAllocations.inventoryMovementId, schema.inventoryMovements.id)
+        )
+        .innerJoin(schema.assets, eq(schema.inventoryMovements.assetId, schema.assets.id))
+        .where(
+          and(
+            eq(schema.inventoryMovements.sourceId, params.sourceId),
+            eq(schema.inventoryMovements.direction, "outbound"),
+            eq(schema.inventoryMovements.purpose, "principal")
+          )
+        )
+        .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.custodyAllocations"))
+
       const accumulators = new Map<string, AssetAccumulator>()
       const getAccumulator = (asset: SourceReportAsset): AssetAccumulator => {
         const existing = accumulators.get(asset.assetId)
@@ -644,6 +666,15 @@ const make = Effect.gen(function* () {
           BigDecimal.round(BigDecimal.multiply(remainingAmount, costBasisPerToken), { scale: 8 })
         )
         accumulator.currency = emptyCurrency(accumulator.currency, row.costBasisCurrency)
+      }
+
+      for (const row of custodyAllocationRows) {
+        const accumulator = getAccumulator(assetFromRow(row))
+        const matchedAmount = yield* decodeDecimal({
+          operation: "sourceReportRepository.listAssetPnl.custodyAllocationAmount",
+          value: row.matchedAmount,
+        })
+        accumulator.disposedAmount = BigDecimal.sum(accumulator.disposedAmount, matchedAmount)
       }
 
       for (const row of matchRows) {

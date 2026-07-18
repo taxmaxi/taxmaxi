@@ -93,6 +93,7 @@ export const inventoryMovements = pgTable(
       .where(sql`${table.transactionLegId} is not null`),
     index("idx_inventory_movements_source_timestamp").on(table.sourceId, table.timestamp),
     index("idx_inventory_movements_principal_asset").on(table.principalId, table.assetId),
+    index("idx_inventory_movements_transaction").on(table.transactionId),
   ]
 )
 
@@ -117,6 +118,7 @@ export const inventoryMovementAllocations = pgTable(
       table.fifoLotId
     ),
     index("idx_inventory_movement_allocations_movement").on(table.inventoryMovementId),
+    index("idx_inventory_movement_allocations_fifo_lot").on(table.fifoLotId),
   ]
 )
 
