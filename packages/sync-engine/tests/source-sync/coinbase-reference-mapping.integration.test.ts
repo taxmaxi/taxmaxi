@@ -1151,6 +1151,64 @@ describe("coinbase reference mappings", () => {
     }
   )
 
+  it("pairs zero-spread ungrouped unstaking rows", async () => {
+    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-zero-spread-release",
+        occurredAt,
+        payload: {
+          id: "tx-zero-spread-release",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "-1.00000000", currency: "ETH2" },
+          native_amount: { amount: "-2000.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-zero-spread-release",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-zero-spread-credit",
+        externalAccountId: "coinbase-account-2",
+        occurredAt,
+        payload: {
+          id: "tx-zero-spread-credit",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "1.00000000", currency: "ETH2" },
+          native_amount: { amount: "2000.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-zero-spread-credit",
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedCoinbaseSource()
+        yield* runSync()
+        const state = yield* fetchNormalizationState()
+
+        expect(state.rawRows.every((row) => row.normalizationError === null)).toBe(true)
+        expect(state.transactions.map((row) => row.externalId).sort()).toEqual([
+          "tx-zero-spread-credit",
+          "tx-zero-spread-release",
+        ])
+        expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
+      })
+    )
+  })
+
   it("normalizes retail_instant_unstaking and retail_eth2_deprecation with mapping-driven behavior", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

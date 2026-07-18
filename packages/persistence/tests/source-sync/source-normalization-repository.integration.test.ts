@@ -1195,16 +1195,23 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.lots).toEqual([
       expect.objectContaining({
         sourceId: TEST_SOURCE_ID,
-        remainingAmount: expect.stringContaining("0.90000000"),
+        remainingAmount: expect.stringContaining("0.89990000"),
       }),
     ])
-    expect(counts.inventoryMovements).toEqual([
-      expect.objectContaining({
-        direction: "outbound",
-        purpose: "principal",
-        taxTreatment: "pending_review",
-      }),
-    ])
+    expect(counts.inventoryMovements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          direction: "outbound",
+          purpose: "principal",
+          taxTreatment: "pending_review",
+        }),
+        expect.objectContaining({
+          direction: "outbound",
+          purpose: "fee",
+          amount: expect.stringContaining("0.0001"),
+        }),
+      ])
+    )
     expect(counts.reviews).toContainEqual(
       expect.objectContaining({
         reviewStatus: "needs_review",
@@ -1496,18 +1503,24 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(changedState.lot?.remainingAmount).toContain("0.80000000")
-    expect(changedState.movements).toEqual([
-      expect.objectContaining({
-        purpose: "principal",
-        amount: expect.stringContaining("0.2"),
-        taxTreatment: "pending_review",
-        reconciliationStatus: "unmatched",
-      }),
-    ])
-    expect(changedState.allocations).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
-    ])
+    expect(changedState.lot?.remainingAmount).toContain("0.78000000")
+    expect(changedState.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          purpose: "principal",
+          amount: expect.stringContaining("0.2"),
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        }),
+        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.02") }),
+      ])
+    )
+    expect(changedState.allocations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
+        expect.objectContaining({ matchedAmount: expect.stringContaining("0.02") }),
+      ])
+    )
 
     await normalizeSend(
       buildSendPayload({
@@ -1527,9 +1540,9 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(succeededState.lot?.remainingAmount).toContain("0.80000000")
-    expect(succeededState.movements).toHaveLength(1)
-    expect(succeededState.allocations).toHaveLength(1)
+    expect(succeededState.lot?.remainingAmount).toContain("0.78000000")
+    expect(succeededState.movements).toHaveLength(2)
+    expect(succeededState.allocations).toHaveLength(2)
 
     await normalizeSend(
       buildSendPayload({
@@ -1810,7 +1823,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
-  it("does not allocate a completed Coinbase send network fee twice", async () => {
+  it("allocates a completed Coinbase send network fee separately from its principal", async () => {
     const acquisitionRawRecordId = "00000000-0000-0000-0000-000000000720"
     const sendRawRecordId = "00000000-0000-0000-0000-000000000721"
     const acquiredAt = new Date("2025-04-01T10:00:00.000Z")
@@ -1819,8 +1832,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       id: "tx-partial-movement-opening-inventory",
       type: "buy",
       status: "completed",
-      amount: { amount: "0.15000000", currency: "BTC" },
-      native_amount: { amount: "1500.00", currency: "EUR" },
+      amount: { amount: "0.25000000", currency: "BTC" },
+      native_amount: { amount: "2500.00", currency: "EUR" },
       created_at: acquiredAt.toISOString(),
       resource_path:
         "/v2/accounts/coinbase-account-1/transactions/tx-partial-movement-opening-inventory",
@@ -1903,10 +1916,14 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(state.movements).toEqual([
-      expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.1") }),
-    ])
+    expect(state.movements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.1") }),
+        expect.objectContaining({ purpose: "fee", amount: expect.stringContaining("0.1") }),
+      ])
+    )
     expect(state.allocations).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
       expect.objectContaining({ matchedAmount: expect.stringContaining("0.1") }),
     ])
     expect(state.lot?.remainingAmount).toContain("0.05000000")
@@ -2551,7 +2568,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       expect.objectContaining({
         assetId: TEST_SOL_ASSET_ID,
         symbol: "SOL",
-        amount: "45.029506853",
+        amount: "45.029406853",
       }),
     ])
     expect(state.movements).toEqual(

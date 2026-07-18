@@ -121,7 +121,7 @@ const isPositiveAmountSmallerThanRelease = ({
 
   return (
     BigDecimal.greaterThan(candidate.value, BigDecimal.fromBigInt(0n)) &&
-    BigDecimal.lessThan(candidate.value, BigDecimal.abs(release.value))
+    BigDecimal.lessThanOrEqualTo(candidate.value, BigDecimal.abs(release.value))
   )
 }
 
