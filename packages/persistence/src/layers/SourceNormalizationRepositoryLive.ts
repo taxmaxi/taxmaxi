@@ -1488,6 +1488,7 @@ const make = Effect.gen(function* () {
             target: schema.inventoryMovements.providerTransferId,
             targetWhere: sql`${schema.inventoryMovements.providerTransferId} is not null`,
             set: {
+              principalId: sql.raw("excluded.principal_id"),
               sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
               transactionId: sql.raw("excluded.transaction_id"),
               assetId: sql.raw("excluded.asset_id"),
@@ -1727,6 +1728,7 @@ const make = Effect.gen(function* () {
               target: schema.inventoryMovements.transactionLegId,
               targetWhere: sql`${schema.inventoryMovements.transactionLegId} is not null`,
               set: {
+                principalId: sql.raw("excluded.principal_id"),
                 sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
                 transactionId: sql.raw("excluded.transaction_id"),
                 assetId: sql.raw("excluded.asset_id"),

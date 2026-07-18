@@ -639,6 +639,16 @@ const make = Effect.gen(function* () {
               )
 
             yield* tx
+              .update(schema.inventoryMovements)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.inventoryMovements.sourceId, params.sourceId),
+                  eq(schema.inventoryMovements.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
               .update(schema.processingJobs)
               .set({ principalId: params.userPrincipalId, updatedAt: now })
               .where(
@@ -840,6 +850,16 @@ const make = Effect.gen(function* () {
                 and(
                   eq(schema.fifoLots.sourceId, params.sourceId),
                   eq(schema.fifoLots.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.inventoryMovements)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.inventoryMovements.sourceId, params.sourceId),
+                  eq(schema.inventoryMovements.principalId, params.anonymousPrincipalId)
                 )
               )
 

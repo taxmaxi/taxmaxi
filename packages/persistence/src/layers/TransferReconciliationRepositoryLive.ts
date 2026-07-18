@@ -651,44 +651,6 @@ const make = Effect.gen(function* () {
                   disposalLegId: originLegId,
                 })
 
-                if (existingMatches.length > 0) {
-                  let totalCostBasis = BigDecimal.fromBigInt(0n)
-                  let fiatCurrency: string | null = null
-
-                  for (const match of existingMatches) {
-                    const costBasis = yield* decodeBigDecimal({
-                      value: yield* formatDecimal({
-                        value: match.costBasis,
-                        operation:
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCostBasis",
-                      }),
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCostBasis",
-                    })
-
-                    totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
-
-                    if (fiatCurrency === null) {
-                      fiatCurrency = match.costBasisCurrency
-                    } else if (fiatCurrency !== match.costBasisCurrency) {
-                      return yield* Effect.fail(
-                        new SyncEngineStorageError({
-                          operation:
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCurrency",
-                          cause:
-                            "Internal transfer disposal matches use multiple cost basis currencies",
-                        })
-                      )
-                    }
-                  }
-
-                  return {
-                    matches: existingMatches,
-                    fiatAmount: roundFiatAmount(totalCostBasis),
-                    fiatCurrency,
-                  }
-                }
-
                 const custodyAllocations =
                   custodyProviderTransferId === null
                     ? []
@@ -725,6 +687,75 @@ const make = Effect.gen(function* () {
                             "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.loadCustodyAllocations"
                           )
                         )
+
+                if (existingMatches.length > 0) {
+                  yield* Effect.forEach(custodyAllocations, (allocation) =>
+                    tx
+                      .update(schema.fifoLots)
+                      .set({
+                        remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
+                        updatedAt: nowDate(),
+                      })
+                      .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.restoreDuplicateCustodyAllocation"
+                        )
+                      )
+                  )
+
+                  if (custodyAllocations.length > 0) {
+                    yield* tx
+                      .delete(schema.inventoryMovementAllocations)
+                      .where(
+                        inArray(
+                          schema.inventoryMovementAllocations.inventoryMovementId,
+                          custodyAllocations.map((allocation) => allocation.movementId)
+                        )
+                      )
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.clearDuplicateCustodyAllocations"
+                        )
+                      )
+                  }
+
+                  let totalCostBasis = BigDecimal.fromBigInt(0n)
+                  let fiatCurrency: string | null = null
+
+                  for (const match of existingMatches) {
+                    const costBasis = yield* decodeBigDecimal({
+                      value: yield* formatDecimal({
+                        value: match.costBasis,
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCostBasis",
+                      }),
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCostBasis",
+                    })
+
+                    totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
+
+                    if (fiatCurrency === null) {
+                      fiatCurrency = match.costBasisCurrency
+                    } else if (fiatCurrency !== match.costBasisCurrency) {
+                      return yield* Effect.fail(
+                        new SyncEngineStorageError({
+                          operation:
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCurrency",
+                          cause:
+                            "Internal transfer disposal matches use multiple cost basis currencies",
+                        })
+                      )
+                    }
+                  }
+
+                  return {
+                    matches: existingMatches,
+                    fiatAmount: roundFiatAmount(totalCostBasis),
+                    fiatCurrency,
+                  }
+                }
 
                 if (custodyAllocations.length > 0) {
                   const custodyMovementId = custodyAllocations[0]?.movementId

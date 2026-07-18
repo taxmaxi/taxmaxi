@@ -551,9 +551,11 @@ const make = Effect.gen(function* () {
           assetId: schema.fifoLots.assetId,
           symbol: schema.assets.symbol,
           name: schema.assets.name,
+          originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          sourceLegId: schema.fifoLots.sourceLegId,
         })
         .from(schema.fifoLots)
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
@@ -621,6 +623,13 @@ const make = Effect.gen(function* () {
 
       for (const row of lotRows) {
         const accumulator = getAccumulator(assetFromRow(row))
+        if (row.sourceLegId === null) {
+          const originalAmount = yield* decodeDecimal({
+            operation: "sourceReportRepository.listAssetPnl.originalAmount",
+            value: row.originalAmount,
+          })
+          accumulator.acquiredAmount = BigDecimal.sum(accumulator.acquiredAmount, originalAmount)
+        }
         const remainingAmount = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.remainingAmount",
           value: row.remainingAmount,
