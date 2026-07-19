@@ -1,2 +1,0 @@
-CREATE INDEX "idx_inventory_movement_allocations_fifo_lot" ON "inventory_movement_allocations" ("fifo_lot_id");--> statement-breakpoint
-CREATE INDEX "idx_inventory_movements_transaction" ON "inventory_movements" ("transaction_id");

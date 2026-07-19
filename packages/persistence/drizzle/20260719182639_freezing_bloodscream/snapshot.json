@@ -1,8 +1,8 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "616c1e0b-b9d3-4687-8eac-e23fef21859d",
-  "prevIds": ["78b0396d-c07d-4715-84ea-52f22e1df865"],
+  "id": "531aa06b-3fa9-4690-8a96-41ed5c017952",
+  "prevIds": ["57e87596-4a19-4c3c-9e74-4150aef0fa8a"],
   "ddl": [
     {
       "values": ["evm", "solana", "bitcoin"],
@@ -8254,6 +8254,27 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "fifo_lot_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movement_allocations_fifo_lot",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "provider_transfer_id",
           "isExpression": false,
           "asc": true,
@@ -8344,6 +8365,27 @@
       "method": "btree",
       "concurrently": false,
       "name": "idx_inventory_movements_principal_asset",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "transaction_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movements_transaction",
       "entityType": "indexes",
       "schema": "public",
       "table": "inventory_movements"
