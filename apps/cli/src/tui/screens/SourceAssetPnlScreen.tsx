@@ -196,7 +196,11 @@ export function SourceAssetPnlScreen(props: {
                   />
                   <Field
                     label="open cost basis"
-                    value={`${formatAmount(row.costBasis)} ${row.currency ?? ""}`.trim()}
+                    value={
+                      row.costBasis === null
+                        ? "Pending review"
+                        : `${formatAmount(row.costBasis)} ${row.currency ?? ""}`.trim()
+                    }
                   />
                   <Field
                     label="proceeds"

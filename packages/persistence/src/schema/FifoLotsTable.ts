@@ -3,6 +3,7 @@ import {
   index,
   integer,
   numeric,
+  pgEnum,
   pgTable,
   text,
   timestamp,
@@ -15,6 +16,11 @@ import { principals } from "./PrincipalsTable.ts"
 import { providerTransfers } from "./ProviderTransfersTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactionLegs } from "./TransactionLegsTable.ts"
+
+export const fifoLotCostBasisStatusEnum = pgEnum("fifo_lot_cost_basis_status", [
+  "known",
+  "pending_review",
+])
 
 export const fifoLots = pgTable(
   "fifo_lots",
@@ -38,6 +44,7 @@ export const fifoLots = pgTable(
     // Cost basis information
     costBasisPerToken: numeric("cost_basis_per_token", { precision: 36, scale: 18 }).notNull(),
     costBasisCurrency: text("cost_basis_currency").notNull(),
+    costBasisStatus: fifoLotCostBasisStatusEnum("cost_basis_status").notNull().default("known"),
 
     // Exactly one durable acquisition origin: a derived leg or an inbound provider transfer.
     sourceLegId: uuid("source_leg_id").references(() => transactionLegs.id, {

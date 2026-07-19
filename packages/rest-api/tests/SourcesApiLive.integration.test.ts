@@ -829,6 +829,7 @@ describe("SourcesApiLive", () => {
         lotId: reportFixtureIds.taxFreeFifoLotId,
         originalAmount: "0.2",
         remainingAmount: "0",
+        costBasisStatus: "known",
       })
       expect(fifoLots.fifoLots[0]?.disposalMatches[0]).toMatchObject({
         disposalLegId: reportFixtureIds.disposalLegId,

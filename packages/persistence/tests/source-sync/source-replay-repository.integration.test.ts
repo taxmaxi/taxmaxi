@@ -353,13 +353,21 @@ describe("SourceReplayRepositoryLive", () => {
       })
     )
 
-    await expect(
-      runReplayRepository(
-        Effect.flatMap(SourceReplayRepository, (repository) =>
-          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
-        )
-      )
-    ).rejects.toThrow("another source has an inventory movement allocated")
+    const replayResult = await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      ).pipe(Effect.either)
+    )
+
+    expect(replayResult).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "SourceReplayDependencyError",
+        sourceId: TEST_SOURCE_ID,
+        dependentSourceIds: [dependentSourceId],
+        affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+      },
+    })
 
     const state = await runPg(
       Effect.gen(function* () {

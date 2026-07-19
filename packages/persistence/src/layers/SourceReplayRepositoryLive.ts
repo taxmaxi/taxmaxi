@@ -9,12 +9,15 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
-import { SourceReplayRepository, type SourceReplayRepositoryShape } from "@my/sync-engine/services"
+import {
+  SourceReplayDependencyError,
+  SourceReplayRepository,
+  type SourceReplayRepositoryShape,
+} from "@my/sync-engine/services"
 import {
   nowDate,
   toSyncEngineStorageError,
   wrapSyncEngineSqlError,
-  wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
 
 const make = Effect.gen(function* () {
@@ -26,8 +29,55 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const [crossSourceAllocation] = yield* tx
-            .select({ id: schema.inventoryMovementAllocations.id })
+          const [source] = yield* tx
+            .select({ principalId: schema.sources.principalId })
+            .from(schema.sources)
+            .where(eq(schema.sources.id, sourceId))
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.selectSourcePrincipal"
+              )
+            )
+
+          if (source !== undefined) {
+            yield* tx
+              .select({ id: schema.principals.id })
+              .from(schema.principals)
+              .where(eq(schema.principals.id, source.principalId))
+              .for("update")
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayRepository.resetSourceDerivedState.lockPrincipalInventory"
+                )
+              )
+
+            const [sourceAfterLock] = yield* tx
+              .select({ principalId: schema.sources.principalId })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, sourceId))
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayRepository.resetSourceDerivedState.verifySourcePrincipal"
+                )
+              )
+
+            if (sourceAfterLock?.principalId !== source.principalId) {
+              return yield* Effect.fail(
+                toSyncEngineStorageError({
+                  operation: "sourceReplayRepository.resetSourceDerivedState.verifySourcePrincipal",
+                  error: `Source ${sourceId} changed principal while replay was starting`,
+                })
+              )
+            }
+          }
+
+          const crossSourceAllocations = yield* tx
+            .select({
+              dependentSourceId: schema.inventoryMovements.sourceId,
+              affectedPrincipalId: schema.fifoLots.principalId,
+            })
             .from(schema.inventoryMovementAllocations)
             .innerJoin(
               schema.inventoryMovements,
@@ -46,19 +96,22 @@ const make = Effect.gen(function* () {
                 ne(schema.inventoryMovements.sourceId, sourceId)
               )
             )
-            .limit(1)
             .pipe(
               wrapSyncEngineSqlError(
                 "sourceReplayRepository.resetSourceDerivedState.selectCrossSourceAllocation"
               )
             )
 
-          if (crossSourceAllocation !== undefined) {
+          if (crossSourceAllocations.length > 0) {
             return yield* Effect.fail(
-              toSyncEngineStorageError({
-                operation: "sourceReplayRepository.resetSourceDerivedState.crossSourceAllocation",
-                error:
-                  "Cannot replay a source while another source has an inventory movement allocated to its FIFO lots",
+              new SourceReplayDependencyError({
+                sourceId,
+                dependentSourceIds: Array.from(
+                  new Set(crossSourceAllocations.map((row) => row.dependentSourceId))
+                ).sort(),
+                affectedPrincipalIds: Array.from(
+                  new Set(crossSourceAllocations.map((row) => row.affectedPrincipalId))
+                ).sort(),
               })
             )
           }
@@ -169,7 +222,14 @@ const make = Effect.gen(function* () {
         })
       )
       .pipe(
-        wrapSyncEngineStorageError("sourceReplayRepository.resetSourceDerivedState.transaction")
+        Effect.mapError((error) =>
+          error instanceof SourceReplayDependencyError
+            ? error
+            : toSyncEngineStorageError({
+                error,
+                operation: "sourceReplayRepository.resetSourceDerivedState.transaction",
+              })
+        )
       )
 
   return SourceReplayRepository.of({

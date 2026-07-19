@@ -74,6 +74,7 @@ interface AssetAccumulator {
   proceeds: BigDecimal.BigDecimal
   realizedGainLoss: BigDecimal.BigDecimal
   currency: string | null
+  hasPendingCostBasis: boolean
 }
 
 interface ReviewProjectionRow {
@@ -555,6 +556,7 @@ const make = Effect.gen(function* () {
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
           sourceLegId: schema.fifoLots.sourceLegId,
         })
         .from(schema.fifoLots)
@@ -618,6 +620,7 @@ const make = Effect.gen(function* () {
           proceeds: zeroDecimal(),
           realizedGainLoss: zeroDecimal(),
           currency: null,
+          hasPendingCostBasis: false,
         }
         accumulators.set(asset.assetId, created)
         return created
@@ -656,6 +659,12 @@ const make = Effect.gen(function* () {
           operation: "sourceReportRepository.listAssetPnl.remainingAmount",
           value: row.remainingAmount,
         })
+        if (
+          row.costBasisStatus === "pending_review" &&
+          BigDecimal.greaterThan(remainingAmount, zeroDecimal())
+        ) {
+          accumulator.hasPendingCostBasis = true
+        }
         const costBasisPerToken = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.costBasisPerToken",
           value: row.costBasisPerToken,
@@ -712,7 +721,8 @@ const make = Effect.gen(function* () {
             acquiredAmount: formatDecimal(row.acquiredAmount),
             disposedAmount: formatDecimal(row.disposedAmount),
             openAmount: formatDecimal(row.openAmount),
-            costBasis: formatDecimal(row.openCostBasis),
+            costBasis: row.hasPendingCostBasis ? null : formatDecimal(row.openCostBasis),
+            costBasisStatus: row.hasPendingCostBasis ? "pending_review" : "known",
             proceeds: formatDecimal(row.proceeds),
             realizedGainLoss: formatDecimal(row.realizedGainLoss),
             currency: row.currency,
@@ -978,6 +988,7 @@ const make = Effect.gen(function* () {
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
           sourceLegId: schema.fifoLots.sourceLegId,
           sourceProviderTransferId: schema.fifoLots.sourceProviderTransferId,
         })
@@ -1058,10 +1069,13 @@ const make = Effect.gen(function* () {
             operation: "sourceReportRepository.listFifoLots.remainingAmount",
             value: row.remainingAmount,
           })
-          const costBasisPerToken = yield* decodeDecimal({
-            operation: "sourceReportRepository.listFifoLots.costBasisPerToken",
-            value: row.costBasisPerToken,
-          })
+          const costBasisPerToken =
+            row.costBasisStatus === "known"
+              ? yield* decodeDecimal({
+                  operation: "sourceReportRepository.listFifoLots.costBasisPerToken",
+                  value: row.costBasisPerToken,
+                })
+              : null
 
           return {
             lotId: row.lotId,
@@ -1069,8 +1083,9 @@ const make = Effect.gen(function* () {
             acquiredAt: row.acquiredAt.toISOString(),
             originalAmount: formatDecimal(originalAmount),
             remainingAmount: formatDecimal(remainingAmount),
-            costBasisPerToken: formatDecimal(costBasisPerToken),
-            costBasisCurrency: row.costBasisCurrency,
+            costBasisPerToken: costBasisPerToken === null ? null : formatDecimal(costBasisPerToken),
+            costBasisCurrency: row.costBasisStatus === "known" ? row.costBasisCurrency : null,
+            costBasisStatus: row.costBasisStatus,
             sourceLegId: row.sourceLegId,
             sourceProviderTransferId: row.sourceProviderTransferId,
             disposalMatches: matchesByLot.get(row.lotId) ?? [],

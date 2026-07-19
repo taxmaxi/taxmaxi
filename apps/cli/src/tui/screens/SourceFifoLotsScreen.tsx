@@ -44,7 +44,11 @@ function FifoLotLine(props: {
         {`${formatAmount(props.row.remainingAmount)} of ${formatAmount(props.row.originalAmount)} left`}
       </ListItemText>
       <ListItemText selected={props.selected} muted>
-        {`@ ${formatFiat(props.row.costBasisPerToken, props.row.costBasisCurrency)}`}
+        {props.row.costBasisStatus === "known" &&
+        props.row.costBasisPerToken !== null &&
+        props.row.costBasisCurrency !== null
+          ? `@ ${formatFiat(props.row.costBasisPerToken, props.row.costBasisCurrency)}`
+          : "@ basis pending review"}
       </ListItemText>
     </ListItem>
   )
@@ -291,7 +295,13 @@ export function SourceFifoLotsScreen(props: {
                       />
                       <Field
                         label="cost basis"
-                        value={`${formatFiat(row.costBasisPerToken, row.costBasisCurrency)} per token`}
+                        value={
+                          row.costBasisStatus === "known" &&
+                          row.costBasisPerToken !== null &&
+                          row.costBasisCurrency !== null
+                            ? `${formatFiat(row.costBasisPerToken, row.costBasisCurrency)} per token`
+                            : "Pending review"
+                        }
                       />
                       <Show
                         when={row.disposalMatches.length > 0}

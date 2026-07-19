@@ -126,7 +126,8 @@ export interface SourceAssetPnlRow {
   readonly acquiredAmount: string
   readonly disposedAmount: string
   readonly openAmount: string
-  readonly costBasis: string
+  readonly costBasis: string | null
+  readonly costBasisStatus: "known" | "pending_review"
   readonly proceeds: string
   readonly realizedGainLoss: string
   readonly currency: string | null
@@ -187,8 +188,9 @@ export interface SourceFifoLotRow {
   readonly acquiredAt: string
   readonly originalAmount: string
   readonly remainingAmount: string
-  readonly costBasisPerToken: string
-  readonly costBasisCurrency: string
+  readonly costBasisPerToken: string | null
+  readonly costBasisCurrency: string | null
+  readonly costBasisStatus: "known" | "pending_review"
   readonly sourceLegId: string | null
   readonly sourceProviderTransferId: string | null
   readonly disposalMatches: ReadonlyArray<SourceFifoLotDisposalSummary>

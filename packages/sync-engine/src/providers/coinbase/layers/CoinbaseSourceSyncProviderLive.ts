@@ -54,6 +54,7 @@ const COINBASE_RECORD_TYPE_ACCOUNT = "coinbase_account"
 const COINBASE_RECORD_TYPE_TRANSACTION = "coinbase_transaction"
 const PROVIDER_ASSET_REVIEW_LAYER = "provider_asset_mapping"
 const UNGROUPED_PAIRED_SPREAD_WINDOW_MILLIS = 60 * 1000
+const COINBASE_UNSTAKING_PAIRING_RULE = "coinbase_unstaking_pair_v1" as const
 
 const CoinbaseNormalizedMetadataSchema = Schema.Struct({
   amount: Schema.Struct({
@@ -98,6 +99,9 @@ interface CoinbasePairedSpreadRecord {
   readonly externalId: string
   readonly amount: { readonly amount: string; readonly currency: string }
   readonly nativeAmount: { readonly amount: string; readonly currency: string }
+  readonly pairingRule: typeof COINBASE_UNSTAKING_PAIRING_RULE
+  readonly pairingKind: "provider_group" | "exact_time_same_type" | "timed_complementary_type"
+  readonly timestampDistanceMillis: number
 }
 
 const SUCCESSFUL_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
@@ -508,7 +512,11 @@ const make = Effect.gen(function* () {
               {
                 payload,
                 record: sibling,
-                pairingKind: groupMatches ? "grouped" : "ungrouped",
+                pairingKind: groupMatches
+                  ? ("provider_group" as const)
+                  : sameType
+                    ? ("exact_time_same_type" as const)
+                    : ("timed_complementary_type" as const),
                 score: (groupMatches ? 100 : 0) + (sameType ? 10 : 0) + (sameAccount ? 5 : 0),
                 timestampDistance,
               },
@@ -518,10 +526,10 @@ const make = Effect.gen(function* () {
       })
 
       const groupedCandidates = candidates.filter(
-        (candidate) => candidate.pairingKind === "grouped"
+        (candidate) => candidate.pairingKind === "provider_group"
       )
       const ungroupedCandidates = candidates.filter(
-        (candidate) => candidate.pairingKind === "ungrouped"
+        (candidate) => candidate.pairingKind !== "provider_group"
       )
       const [ungroupedCandidate] = ungroupedCandidates
       const hasCompetingUngroupedRelease = (
@@ -585,6 +593,9 @@ const make = Effect.gen(function* () {
         externalId: paired.payload.id,
         amount: paired.payload.amount,
         nativeAmount: paired.payload.native_amount,
+        pairingRule: COINBASE_UNSTAKING_PAIRING_RULE,
+        pairingKind: paired.pairingKind,
+        timestampDistanceMillis: paired.timestampDistance,
       }
     })
 

@@ -964,6 +964,155 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
+  it("serializes concurrent FIFO allocations for one principal", async () => {
+    const firstRawRecordId = "00000000-0000-0000-0000-000000000721"
+    const secondRawRecordId = "00000000-0000-0000-0000-000000000722"
+    const openingTransactionId = "00000000-0000-0000-0000-000000000723"
+    const occurredAt = new Date("2025-03-02T10:00:00.000Z")
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* Effect.forEach(
+          [
+            { id: firstRawRecordId, externalId: "raw-concurrent-fee-1" },
+            { id: secondRawRecordId, externalId: "raw-concurrent-fee-2" },
+          ],
+          (record) =>
+            seedRawRecord({
+              rawRecordId: record.id,
+              externalRecordId: record.externalId,
+              occurredAt,
+            })
+        )
+        yield* db.insert(schema.transactions).values({
+          id: openingTransactionId,
+          sourceId: TEST_SOURCE_ID,
+          externalId: "tx-concurrent-opening",
+          timestamp: new Date("2025-03-01T10:00:00.000Z"),
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "leg-concurrent-opening",
+            timestamp: new Date("2025-03-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            transactionId: openingTransactionId,
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (openingLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to seed concurrent FIFO opening leg")
+        }
+
+        yield* db.insert(schema.fifoLots).values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: new Date("2025-03-01T10:00:00.000Z"),
+          originalAmount: "1.00000000",
+          remainingAmount: "1.00000000",
+          costBasisPerToken: "10000.00",
+          costBasisCurrency: "EUR",
+          sourceLegId: openingLeg.id,
+        })
+      })
+    )
+
+    const persistFee = ({ rawRecordId, sequence }: { rawRecordId: string; sequence: number }) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: rawRecordId,
+              externalId: `tx-concurrent-fee-${sequence}`,
+              externalGroupId: null,
+              timestamp: occurredAt,
+              transactionType: "fee",
+              providerTransactionType: "fee",
+              providerStatus: "completed",
+              providerResourcePath: null,
+              providerDescription: "Concurrent fee fixture",
+              providerCreatedAt: occurredAt,
+              providerUpdatedAt: occurredAt,
+              metadata: { provider: "fixture" },
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "coinbase-account-1",
+              externalOrderId: null,
+              externalFillId: null,
+              side: null,
+              instrument: null,
+              fillPrice: null,
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: { provider: "fixture" },
+            },
+            providerTransfers: [],
+            feeTransfers: [],
+            deriveLegs: ({ transaction }) =>
+              Effect.succeed([
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: rawRecordId,
+                  externalId: `leg-concurrent-fee-${sequence}`,
+                  txHash: null,
+                  timestamp: occurredAt,
+                  principalId: TEST_PRINCIPAL_ID,
+                  addressId: null,
+                  assetId: TEST_BTC_ASSET_ID,
+                  amount: "0.60000000",
+                  kind: "fee",
+                  provenance: "deterministic",
+                  derivationRule: "fixture_fee",
+                  metadata: { provider: "fixture" },
+                  transactionId: transaction.id,
+                  sourceTransferId: null,
+                  fiatAmount: null,
+                  fiatCurrency: null,
+                  feeForTransactionId: null,
+                },
+              ]),
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+
+    await Promise.all([
+      persistFee({ rawRecordId: firstRawRecordId, sequence: 1 }),
+      persistFee({ rawRecordId: secondRawRecordId, sequence: 2 }),
+    ])
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        const reviews = yield* db
+          .select()
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
+        return { lot, allocations, reviews }
+      })
+    )
+
+    expect(state.lot?.remainingAmount).toContain("0.40000000")
+    expect(state.allocations).toHaveLength(1)
+    expect(state.allocations[0]?.matchedAmount).toContain("0.60000000")
+    expect(state.reviews).toHaveLength(1)
+  })
+
   it("persists a reviewable partial normalization with no canonical legs", async () => {
     const partialRawRecordId = "00000000-0000-0000-0000-000000000591"
 
@@ -1654,6 +1803,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       expect.objectContaining({
         sourceProviderTransferId: state.providerTransfer?.id,
         sourceLegId: null,
+        costBasisStatus: "pending_review",
         originalAmount: expect.stringContaining("0.25000000"),
         remainingAmount: expect.stringContaining("0.25000000"),
       }),

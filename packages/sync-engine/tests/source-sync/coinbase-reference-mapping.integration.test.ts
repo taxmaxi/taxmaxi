@@ -1204,6 +1204,18 @@ describe("coinbase reference mappings", () => {
           "tx-zero-spread-credit",
           "tx-zero-spread-release",
         ])
+        expect(
+          state.transactions.find((row) => row.externalId === "tx-zero-spread-release")?.metadata
+        ).toEqual(
+          expect.objectContaining({
+            pairedRecord: expect.objectContaining({
+              externalId: "tx-zero-spread-credit",
+              pairingRule: "coinbase_unstaking_pair_v1",
+              pairingKind: "exact_time_same_type",
+              timestampDistanceMillis: 0,
+            }),
+          })
+        )
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
     )
@@ -1308,6 +1320,9 @@ describe("coinbase reference mappings", () => {
             }),
             pairedRecord: expect.objectContaining({
               externalId: "tx-unstake-credit",
+              pairingRule: "coinbase_unstaking_pair_v1",
+              pairingKind: "provider_group",
+              timestampDistanceMillis: 0,
             }),
           })
         )
@@ -1317,6 +1332,9 @@ describe("coinbase reference mappings", () => {
           expect.objectContaining({
             pairedRecord: expect.objectContaining({
               externalId: "tx-unstake-alt-credit",
+              pairingRule: "coinbase_unstaking_pair_v1",
+              pairingKind: "provider_group",
+              timestampDistanceMillis: 0,
             }),
           })
         )

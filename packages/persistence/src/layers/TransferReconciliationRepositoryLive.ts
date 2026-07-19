@@ -246,6 +246,17 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const now = nowDate()
 
+            yield* tx
+              .select({ id: schema.principals.id })
+              .from(schema.principals)
+              .where(eq(schema.principals.id, principalId))
+              .for("update")
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockPrincipalInventory"
+                )
+              )
+
             const reconciliations = yield* tx
               .select({
                 providerTransferId: schema.providerTransfers.id,

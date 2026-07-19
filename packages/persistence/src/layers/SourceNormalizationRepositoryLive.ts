@@ -1,6 +1,10 @@
 /**
  * SourceNormalizationRepositoryLive - Atomic canonical persistence for normalized sync artifacts.
  *
+ * Tax disposals consume FIFO lots through disposal matches. Factual custody outflows consume
+ * them through inventory movement allocations. A normalized quantity must use exactly one path;
+ * provider movements equivalent to a persisted tax leg are therefore not allocated again.
+ *
  * @module SourceNormalizationRepositoryLive
  */
 
@@ -1585,6 +1589,7 @@ const make = Effect.gen(function* () {
               remainingAmount: providerTransfer.amount,
               costBasisPerToken: "0",
               costBasisCurrency: "EUR",
+              costBasisStatus: "pending_review",
               sourceLegId: null,
               sourceProviderTransferId: providerTransfer.id,
               sourceLegSequence: 0,
@@ -1834,6 +1839,43 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* tx
+            .select({ id: schema.principals.id })
+            .from(schema.principals)
+            .where(eq(schema.principals.id, params.transaction.principalId))
+            .for("update")
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipalInventory"
+              )
+            )
+
+          const [ownedSource] = yield* tx
+            .select({ id: schema.sources.id })
+            .from(schema.sources)
+            .where(
+              and(
+                eq(schema.sources.id, params.transaction.sourceId),
+                eq(schema.sources.principalId, params.transaction.principalId)
+              )
+            )
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal"
+              )
+            )
+
+          if (ownedSource === undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal",
+                error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
+              })
+            )
+          }
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,

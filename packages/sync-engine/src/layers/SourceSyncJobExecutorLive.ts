@@ -21,6 +21,7 @@ import {
   SourceNormalizationRepository,
   SourceNotFoundError,
   SourceRawRecordRepository,
+  SourceReplayDependencyError,
   SourceReplayRepository,
   SourceRepository,
   type SourceRawRecord,
@@ -81,6 +82,7 @@ interface ClassificationResult {
 type SourceSyncExecutionError =
   | UnsupportedProviderError
   | SourceProviderModuleError
+  | SourceReplayDependencyError
   | SyncEngineStorageError
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
