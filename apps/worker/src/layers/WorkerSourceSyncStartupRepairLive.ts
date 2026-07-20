@@ -14,6 +14,8 @@ import {
   SourceSyncQueuePayload,
   type SourceSyncJobExecutionRecordConflictError,
   type SourceSyncJobExecutionRecordNotFoundError,
+  type SourceSyncJobDetails,
+  type SourceSyncExecutionJob,
   type SourceSyncJobRepositoryShape,
   type SourceSyncRepairableActiveJob,
   type SyncEngineStorageError,
@@ -83,8 +85,20 @@ export class WorkerSourceSyncStartupRepair extends Context.Tag("WorkerSourceSync
       WorkerSourceSyncStartupRepairSummary,
       WorkerSourceSyncStartupRepairError
     >
+    readonly dispatchFollowUp: (
+      params: DispatchSourceSyncFollowUpParams
+    ) => Effect.Effect<void, WorkerSourceSyncStartupRepairError>
   }
 >() {}
+
+/**
+ * DispatchSourceSyncFollowUpParams - Completed job identity used to find its linked follow-up.
+ */
+export interface DispatchSourceSyncFollowUpParams {
+  readonly jobId: string
+  readonly sourceId: string
+  readonly principalId: string
+}
 
 /**
  * WorkerSourceSyncStartupRepairSummary - Count of actions taken during one repair pass.
@@ -305,6 +319,81 @@ const enqueuePendingJob = ({
     })
 
     return queueJob.id ?? job.id
+  })
+
+const toRepairError = ({
+  operation,
+  cause,
+}: {
+  readonly operation: string
+  readonly cause: unknown
+}): WorkerSourceSyncStartupRepairError =>
+  cause instanceof WorkerSourceSyncStartupRepairError
+    ? cause
+    : new WorkerSourceSyncStartupRepairError({ operation, cause })
+
+const dispatchLinkedFollowUp = ({
+  params,
+  visibleJob,
+  executionJob,
+  queue,
+  repository,
+  config,
+  now,
+}: {
+  readonly params: DispatchSourceSyncFollowUpParams
+  readonly visibleJob: SourceSyncJobDetails
+  readonly executionJob: SourceSyncExecutionJob
+  readonly queue: WorkerSourceSyncStartupRepairQueue
+  readonly repository: SourceSyncJobRepositoryShape
+  readonly config: WorkerSourceSyncStartupRepairConfig
+  readonly now: Date
+}) =>
+  Effect.gen(function* () {
+    if (visibleJob.jobId === params.jobId || executionJob.status !== "pending") return
+
+    const queueJobId = yield* enqueuePendingJob({
+      job: {
+        ...executionJob,
+        startedAt: null,
+        heartbeatAt: null,
+        updatedAt: now,
+        workerId: null,
+        queueName: null,
+        queueJobId: null,
+      },
+      queue,
+      config,
+    })
+
+    yield* repository
+      .attachQueueMetadata({
+        jobId: executionJob.id,
+        queueName: SOURCE_SYNC_QUEUE_NAME,
+        queueJobId,
+        queuedAt: now,
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          toRepairError({
+            operation: "workerSourceSyncStartupRepair.dispatchFollowUp.attachQueueMetadata",
+            cause,
+          })
+        )
+      )
+
+    yield* Effect.logInfo(
+      {
+        completedJobId: params.jobId,
+        followUpJobId: executionJob.id,
+        sourceId: executionJob.sourceId,
+        principalId: executionJob.principalId,
+        mode: executionJob.mode,
+        queueName: SOURCE_SYNC_QUEUE_NAME,
+        queueJobId,
+      },
+      "source-sync-worker:follow-up-dispatched"
+    )
   })
 
 const repairPendingJob = ({
@@ -537,7 +626,12 @@ export const makeWorkerSourceSyncStartupRepairLive = (
             // A full batch containing an errored row can return the same row at
             // the head of the next SQL page. Stop this boot pass and leave the
             // remaining backlog for the next repair run instead of spinning.
-            if (batchSummary.scannedJobs < config.batchSize || batchSummary.stoppedAfterErrors) {
+            const mayHaveMaterializedFollowUp = batchSummary.failedProcessing > 0
+
+            if (
+              (!mayHaveMaterializedFollowUp && batchSummary.scannedJobs < config.batchSize) ||
+              batchSummary.stoppedAfterErrors
+            ) {
               return Effect.succeed(nextSummary)
             }
 
@@ -572,7 +666,55 @@ export const makeWorkerSourceSyncStartupRepairLive = (
         })
       )
 
-      return WorkerSourceSyncStartupRepair.of({ repair })
+      const dispatchFollowUp = (params: DispatchSourceSyncFollowUpParams) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const visibleJob = yield* repository.getJob(params).pipe(
+              Effect.mapError((cause) =>
+                toRepairError({
+                  operation: "workerSourceSyncStartupRepair.dispatchFollowUp.getJob",
+                  cause,
+                })
+              )
+            )
+
+            if (visibleJob.jobId === params.jobId || visibleJob.status !== "queued") return
+
+            const executionJob = yield* repository
+              .getExecutionJob({ jobId: visibleJob.jobId })
+              .pipe(
+                Effect.mapError((cause) =>
+                  toRepairError({
+                    operation: "workerSourceSyncStartupRepair.dispatchFollowUp.getExecutionJob",
+                    cause,
+                  })
+                )
+              )
+            const now = yield* currentDate
+            const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
+              queueToClose.close.pipe(
+                Effect.catchAll((error) =>
+                  Effect.logWarning(
+                    { operation: error.operation, cause: error.cause },
+                    "source-sync-worker:follow-up-queue-close-failed"
+                  )
+                )
+              )
+            )
+
+            yield* dispatchLinkedFollowUp({
+              params,
+              visibleJob,
+              executionJob,
+              queue,
+              repository,
+              config,
+              now,
+            })
+          })
+        )
+
+      return WorkerSourceSyncStartupRepair.of({ repair, dispatchFollowUp })
     })
   )
 

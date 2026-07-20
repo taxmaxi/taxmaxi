@@ -157,6 +157,15 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     name: "Cardano",
     exponent: 6,
     providerType: "crypto",
+    evidenceSource: {
+      providerName: "Coinbase",
+      apiName: "Coinbase App API",
+      endpoint: "GET /v2/currencies/crypto",
+      documentationUrl: "https://docs.cdp.coinbase.com/coinbase-app/track-apis/currencies",
+      payloadKind: "direct_response",
+      typeSource: "provider",
+      typeExplanation: "Coinbase reports this classification in its currency response.",
+    },
     rawProviderPayload: { code: "ADA" },
     discoveredAt: "2026-07-20T08:00:00.000Z",
     retrievedAt: "2026-07-20T09:00:00.000Z",
@@ -195,6 +204,7 @@ const assetCanonicalizationResponseBody = JSON.stringify({
 const assetCandidateResponseBody = JSON.stringify({
   candidates: [
     {
+      availability: "actionable",
       coinId: "cardano",
       coinName: "Cardano",
       coinSymbol: "ADA",
@@ -202,7 +212,11 @@ const assetCandidateResponseBody = JSON.stringify({
       platformName: "Cardano",
       contractAddress: null,
       exactContractMatch: false,
-      evidenceStrength: "symbol_only",
+      evidenceStrength: "exact_name_and_symbol",
+      representation: "native",
+      matchReasons: ["Symbol matches ADA.", "Name matches the provider exactly."],
+      warnings: [],
+      unavailableReason: null,
       proposedAsset: {
         blockchainName: "cardano",
         contractAddress: null,

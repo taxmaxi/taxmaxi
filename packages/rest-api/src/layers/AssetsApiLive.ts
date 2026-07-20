@@ -10,6 +10,7 @@ import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/syn
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as DateTime from "effect/DateTime"
+import * as Schema from "effect/Schema"
 import { CurrentUser } from "../definitions/AuthMiddleware.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
@@ -37,6 +38,72 @@ const defaultAssetLimit = 500
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 
+const ProviderPayloadSource = Schema.Struct({ source: Schema.String })
+const isProviderPayloadSource = Schema.is(ProviderPayloadSource)
+
+const providerAssetEvidenceSource = (row: ProviderAssetReviewRecord) => {
+  const provider = row.providerAsset.provider.trim().toLowerCase()
+  const payloadSource = isProviderPayloadSource(row.providerAsset.rawProviderPayload)
+    ? row.providerAsset.rawProviderPayload.source
+    : null
+
+  if (provider === "coinbase") {
+    const directResponse =
+      row.providerAsset.name !== null || row.providerAsset.providerType !== null
+    const providerSuppliedType =
+      directResponse &&
+      row.providerAsset.providerType !== null &&
+      row.providerAsset.providerType !== "fiat"
+    return {
+      providerName: "Coinbase",
+      apiName: "Coinbase App API",
+      endpoint:
+        row.providerAsset.providerType === "fiat"
+          ? "GET /v2/currencies"
+          : directResponse
+            ? "GET /v2/currencies/crypto"
+            : "Observed in a Coinbase transaction",
+      documentationUrl: "https://docs.cdp.coinbase.com/coinbase-app/track-apis/currencies",
+      payloadKind: directResponse ? ("direct_response" as const) : ("derived_observation" as const),
+      typeSource: providerSuppliedType ? ("provider" as const) : ("taxmaxi_inferred" as const),
+      typeExplanation: providerSuppliedType
+        ? "Coinbase reports this classification in its currency response."
+        : row.providerAsset.providerType === "fiat"
+          ? "TaxMaxi classifies entries from Coinbase's fiat currency endpoint as fiat."
+          : "Coinbase did not report a currency classification for this observation.",
+    }
+  }
+
+  if (provider === "helius-solana") {
+    const fallback = payloadSource === "helius_das_get_asset_batch_missing"
+    const builtIn = payloadSource === "taxmaxi_builtin_solana_asset_mapping"
+    return {
+      providerName: "Helius",
+      apiName: "Helius Digital Asset Standard API",
+      endpoint: builtIn ? null : "DAS getAssetBatch",
+      documentationUrl: "https://www.helius.dev/docs/api-reference/das/getassetbatch",
+      payloadKind: fallback
+        ? ("fallback" as const)
+        : builtIn
+          ? ("fallback" as const)
+          : ("direct_response" as const),
+      typeSource: "taxmaxi_inferred" as const,
+      typeExplanation:
+        "TaxMaxi infers native coin, fungible token, Token-2022 token, or NFT from Helius DAS metadata and the Solana token program.",
+    }
+  }
+
+  return {
+    providerName: row.providerAsset.provider,
+    apiName: row.providerAsset.provider,
+    endpoint: null,
+    documentationUrl: null,
+    payloadKind: "derived_observation" as const,
+    typeSource: "taxmaxi_inferred" as const,
+    typeExplanation: "TaxMaxi could not determine how this provider classification was produced.",
+  }
+}
+
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
   ProviderAssetReviewRow.make({
     id: row.providerAsset.id,
@@ -47,6 +114,7 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     name: row.providerAsset.name,
     exponent: row.providerAsset.exponent,
     providerType: row.providerAsset.providerType,
+    evidenceSource: providerAssetEvidenceSource(row),
     rawProviderPayload: row.providerAsset.rawProviderPayload,
     discoveredAt: DateTime.unsafeMake(row.providerAsset.discoveredAt),
     retrievedAt: DateTime.unsafeMake(row.providerAsset.retrievedAt),

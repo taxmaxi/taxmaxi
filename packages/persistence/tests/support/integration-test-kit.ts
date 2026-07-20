@@ -12,8 +12,7 @@ import {
   runSqlUnsafe,
 } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
-
-const MIGRATED_TEMPLATE_DATABASE_NAME = "taxmaxi_template"
+import { MIGRATED_TEST_DATABASE_TEMPLATE_NAME } from "./test-database-name.ts"
 
 const testDatabaseConfig = Effect.runSync(
   Effect.gen(function* () {
@@ -141,7 +140,7 @@ export const makeIntegrationTestDatabaseContext = ({
       })
       yield* runAdminSql({
         statement: `CREATE DATABASE ${quoteIdentifier(databaseName)} TEMPLATE ${quoteIdentifier(
-          MIGRATED_TEMPLATE_DATABASE_NAME
+          MIGRATED_TEST_DATABASE_TEMPLATE_NAME
         )}`,
       })
     })

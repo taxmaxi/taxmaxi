@@ -24,6 +24,18 @@ export const mergeProviderAssetReplayUpdates = <Replay extends { readonly source
   return current.map((replay) => updatesBySource.get(replay.sourceId) ?? replay)
 }
 
+export const loadSettledProviderAssetReplayUpdates = async <Replay, Update>({
+  replays,
+  load,
+}: {
+  readonly replays: ReadonlyArray<Replay>
+  readonly load: (replay: Replay) => Promise<Update>
+}): Promise<ReadonlyArray<Update>> => {
+  const settled = await Promise.allSettled(replays.map(load))
+
+  return settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
+}
+
 export const appendUniqueProviderAssetReviews = <Row extends { readonly id: string }>({
   current,
   incoming,

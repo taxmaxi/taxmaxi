@@ -690,7 +690,33 @@ const make = Effect.gen(function* () {
           providerAsset,
         })
       } else {
-        yield* ensurePendingProviderAssetMapping(providerAsset)
+        const exactCanonicalAsset =
+          reference.mintAddress === null
+            ? Option.none()
+            : yield* assetRepository.findAssetByBlockchainAndContractAddress({
+                blockchainName: SOLANA_BLOCKCHAIN_NAME,
+                contractAddress: reference.mintAddress,
+              })
+
+        if (Option.isSome(exactCanonicalAsset)) {
+          yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: exactCanonicalAsset.value.id,
+                canonicalAssetSymbol: exactCanonicalAsset.value.symbol,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes:
+                  "Automatically approved from an exact Solana mint match to an existing canonical asset.",
+              },
+            ],
+          })
+        } else {
+          yield* ensurePendingProviderAssetMapping(providerAsset)
+        }
       }
 
       const mapping = yield* loadProviderAssetMapping({

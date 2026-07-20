@@ -13,6 +13,8 @@ import {
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
   type AttachSourceSyncQueueMetadataParams,
+  type SourceSyncExecutionJob,
+  type SourceSyncJobDetails,
   type RecoverStaleSourceSyncJobParams,
   type SourceSyncJobRepositoryShape,
   type SourceSyncQueuePayload,
@@ -69,6 +71,9 @@ const makeRepositoryLayer = ({
   attachFailureKind = "not-found",
   recoverFailureJobId,
   recoverFailureKind = "conflict",
+  materializedOnRecover,
+  visibleJob,
+  executionJob,
 }: {
   readonly repairableJobs: ReadonlyArray<SourceSyncRepairableActiveJob>
   readonly attached: Array<AttachSourceSyncQueueMetadataParams>
@@ -77,6 +82,9 @@ const makeRepositoryLayer = ({
   readonly attachFailureKind?: RepairFailureKind
   readonly recoverFailureJobId?: string
   readonly recoverFailureKind?: RepairFailureKind
+  readonly materializedOnRecover?: SourceSyncRepairableActiveJob
+  readonly visibleJob?: SourceSyncJobDetails
+  readonly executionJob?: SourceSyncExecutionJob
 }) => {
   let remainingJobs = [...repairableJobs]
   const removeRepairableJob = (jobId: string): void => {
@@ -122,12 +130,21 @@ const makeRepositoryLayer = ({
       return Effect.sync(() => {
         recovered.push(params)
         removeRepairableJob(params.jobId)
+        if (materializedOnRecover !== undefined) {
+          remainingJobs.push(materializedOnRecover)
+        }
       })
     },
     failJob: () => Effect.dieMessage("failJob should not be called"),
     completeJob: () => Effect.dieMessage("completeJob should not be called"),
-    getJob: () => Effect.dieMessage("getJob should not be called"),
-    getExecutionJob: () => Effect.dieMessage("getExecutionJob should not be called"),
+    getJob: () =>
+      visibleJob === undefined
+        ? Effect.dieMessage("getJob should not be called")
+        : Effect.succeed(visibleJob),
+    getExecutionJob: () =>
+      executionJob === undefined
+        ? Effect.dieMessage("getExecutionJob should not be called")
+        : Effect.succeed(executionJob),
     listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
     listRepairableActiveJobs: ({ limit }) => Effect.sync(() => remainingJobs.slice(0, limit)),
   } satisfies SourceSyncJobRepositoryShape)
@@ -161,6 +178,7 @@ const runRepair = ({
   attachFailureKind,
   recoverFailureJobId,
   recoverFailureKind,
+  materializedOnRecover,
   queueOptions,
   configOverrides,
 }: {
@@ -172,6 +190,7 @@ const runRepair = ({
   readonly attachFailureKind?: RepairFailureKind
   readonly recoverFailureJobId?: string
   readonly recoverFailureKind?: RepairFailureKind
+  readonly materializedOnRecover?: SourceSyncRepairableActiveJob
   readonly queueOptions?: {
     readonly rejectJobIds?: ReadonlySet<string>
     readonly returnedJobIds?: ReadonlyMap<string, string>
@@ -198,6 +217,7 @@ const runRepair = ({
                 ...(attachFailureKind === undefined ? {} : { attachFailureKind }),
                 ...(recoverFailureJobId === undefined ? {} : { recoverFailureJobId }),
                 ...(recoverFailureKind === undefined ? {} : { recoverFailureKind }),
+                ...(materializedOnRecover === undefined ? {} : { materializedOnRecover }),
               })
             )
           )
@@ -207,7 +227,89 @@ const runRepair = ({
     )
   )
 
+const runDispatchFollowUp = ({
+  enqueued,
+  attached,
+}: {
+  readonly enqueued: Array<SourceSyncQueuePayload>
+  readonly attached: Array<AttachSourceSyncQueueMetadataParams>
+}) => {
+  const visibleJob = {
+    sourceId: "source-1",
+    jobId: "job-follow-up",
+    status: "queued",
+    phase: null,
+    processedRecords: null,
+    totalRecords: null,
+    progressPercent: null,
+    importedRecords: null,
+    normalizedRecords: null,
+    failedRecords: null,
+    message: null,
+  } satisfies SourceSyncJobDetails
+  const executionJob = {
+    id: "job-follow-up",
+    sourceId: "source-1",
+    principalId: "principal-1",
+    mode: "replay",
+    status: "pending",
+  } satisfies SourceSyncExecutionJob
+
+  return Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const repair = yield* WorkerSourceSyncStartupRepair
+        yield* repair.dispatchFollowUp({
+          jobId: "job-completed",
+          sourceId: "source-1",
+          principalId: "principal-1",
+        })
+      }).pipe(
+        Effect.provide(
+          makeWorkerSourceSyncStartupRepairLive({
+            acquireQueue: () => Effect.succeed(makeQueue(enqueued)),
+          }).pipe(
+            Layer.provideMerge(
+              makeRepositoryLayer({
+                repairableJobs: [],
+                attached,
+                recovered: [],
+                visibleJob,
+                executionJob,
+              })
+            )
+          )
+        ),
+        Effect.withConfigProvider(makeConfigProvider())
+      )
+    )
+  )
+}
+
 describe("WorkerSourceSyncStartupRepairLive", () => {
+  it("dispatches only the follow-up linked to a completed job", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+
+    await runDispatchFollowUp({ enqueued, attached })
+
+    expect(enqueued).toEqual([
+      {
+        jobId: "job-follow-up",
+        sourceId: "source-1",
+        principalId: "principal-1",
+        mode: "replay",
+      },
+    ])
+    expect(attached).toEqual([
+      expect.objectContaining({
+        jobId: "job-follow-up",
+        queueName: SOURCE_SYNC_QUEUE_NAME,
+        queueJobId: "job-follow-up",
+      }),
+    ])
+  })
+
   it("requeues a pending job without queue metadata and records durable metadata", async () => {
     const enqueued: Array<SourceSyncQueuePayload> = []
     const attached: Array<AttachSourceSyncQueueMetadataParams> = []
@@ -404,6 +506,28 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
       skippedJobs: 0,
       erroredJobs: 0,
       stoppedAfterErrors: false,
+    })
+  })
+
+  it("repairs follow-up work materialized while recovering a stale job", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+    const summary = await runRepair({
+      repairableJobs: [makeRepairableJob({ id: "job-processing", status: "processing" })],
+      materializedOnRecover: makeRepairableJob({ id: "job-follow-up", status: "pending" }),
+      enqueued,
+      attached,
+      recovered,
+    })
+
+    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-follow-up"])
+    expect(attached.map((params) => params.jobId)).toEqual(["job-follow-up"])
+    expect(summary).toMatchObject({
+      scannedJobs: 2,
+      requeuedPending: 1,
+      failedProcessing: 1,
     })
   })
 

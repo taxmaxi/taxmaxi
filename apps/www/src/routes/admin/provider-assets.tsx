@@ -49,6 +49,7 @@ import {
   appendUniqueProviderAssetReviews,
   formatProviderAssetReviewDate,
   isCurrentExistingAssetSearchRequest,
+  loadSettledProviderAssetReplayUpdates,
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
@@ -127,8 +128,24 @@ export const Route = createFileRoute("/admin/provider-assets")({
       throw error
     }
   },
+  notFoundComponent: AdminAccessRequired,
   component: ProviderAssetWorkbench,
 })
+
+function AdminAccessRequired() {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-2xl items-center p-6">
+      <Card className="w-full">
+        <CardHeader>
+          <CardTitle>Admin access required</CardTitle>
+          <CardDescription>
+            This provider-asset review workbench is only available to TaxMaxi administrators.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    </main>
+  )
+}
 
 function ProviderAssetWorkbench() {
   const initial = Route.useLoaderData()
@@ -165,6 +182,7 @@ function ProviderAssetWorkbench() {
   } | null>(null)
 
   const selected = rows.find((row) => row.id === selectedId) ?? null
+  const selectedCurrencyCode = selected?.currencyCode ?? null
   const activeFilterKey = providerAssetReviewFilterKey({
     provider: search.provider,
     query: search.q,
@@ -217,15 +235,17 @@ function ProviderAssetWorkbench() {
     if (selectedId === null) {
       return
     }
+    if (selectedCurrencyCode !== null) {
+      activeExistingQueryRef.current = selectedCurrencyCode
+      setExistingQuery(selectedCurrencyCode)
+    }
     let active = true
     internalTaxmaxi()
       .assets.listProviderAssetCandidates({ id: selectedId })
       .then((result) => {
         if (!active) return
         setCandidates(result.candidates)
-        setSelectedCoinId(
-          result.candidates.length === 1 ? (result.candidates[0]?.coinId ?? null) : null
-        )
+        setSelectedCoinId(null)
       })
       .catch((error: unknown) => {
         if (active) setActionError(messageFor(error))
@@ -233,7 +253,7 @@ function ProviderAssetWorkbench() {
     return () => {
       active = false
     }
-  }, [internalTaxmaxi, resetDecisionState, selectedId])
+  }, [internalTaxmaxi, resetDecisionState, selectedCurrencyCode, selectedId])
 
   useEffect(() => {
     if (existingQuery.trim().length < 2) {
@@ -275,8 +295,9 @@ function ProviderAssetWorkbench() {
     )
     if (activeReplays.length === 0) return
     const timer = window.setInterval(() => {
-      void Promise.all(
-        activeReplays.map(async (replay) => {
+      void loadSettledProviderAssetReplayUpdates({
+        replays: activeReplays,
+        load: async (replay) => {
           if (replay.jobId === null) return replay
           const job = await internalTaxmaxi().assets.getProviderAssetReplay({
             id: replay.providerAssetId,
@@ -284,8 +305,8 @@ function ProviderAssetWorkbench() {
             jobId: replay.jobId,
           })
           return { ...replay, jobId: job.jobId, status: job.status, message: job.message }
-        })
-      ).then((updates) =>
+        },
+      }).then((updates) =>
         setReplays((current) => mergeProviderAssetReplayUpdates({ current, updates }))
       )
     }, 2000)
@@ -671,26 +692,77 @@ function ProviderAssetWorkbench() {
                       <Badge variant="outline">{formatStatus(selected.mappingStatus)}</Badge>
                     </div>
                   </CardHeader>
-                  <CardContent className="grid gap-4 md:grid-cols-2">
-                    <Evidence label="Provider identifier" value={selected.providerAssetId} copy />
-                    <Evidence label="Natural key" value={selected.naturalKey} copy />
-                    <Evidence label="Decimals" value={selected.exponent?.toString() ?? null} />
-                    <Evidence label="Observed type" value={selected.providerType} />
-                    <Evidence
-                      label="Discovered"
-                      value={formatProviderAssetReviewDate(selected.discoveredAt)}
-                    />
-                    <Evidence
-                      label="Retrieved"
-                      value={formatProviderAssetReviewDate(selected.retrievedAt)}
-                    />
-                    <details className="md:col-span-2 rounded-2xl border p-3">
-                      <summary className="cursor-pointer text-sm font-medium">
-                        Raw provider payload
+                  <CardContent className="flex flex-col gap-4">
+                    <dl className="grid gap-4 md:grid-cols-2">
+                      <Evidence
+                        label="Asset classification"
+                        value={formatProviderAssetType(selected)}
+                      />
+                      <Evidence label="Decimals" value={selected.exponent?.toString() ?? null} />
+                    </dl>
+
+                    <section className="rounded-2xl border p-4" aria-labelledby="evidence-source">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-medium" id="evidence-source">
+                            {selected.evidenceSource.apiName}
+                          </h3>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {selected.evidenceSource.endpoint ?? "TaxMaxi built-in reference data"}{" "}
+                            · {formatPayloadKind(selected.evidenceSource.payloadKind)}
+                          </p>
+                        </div>
+                        {selected.evidenceSource.documentationUrl === null ? null : (
+                          <Button asChild size="sm" type="button" variant="outline">
+                            <a
+                              href={selected.evidenceSource.documentationUrl}
+                              rel="noreferrer"
+                              target="_blank"
+                            >
+                              API documentation
+                            </a>
+                          </Button>
+                        )}
+                      </div>
+                      <p className="mt-3 text-sm">{selected.evidenceSource.typeExplanation}</p>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Retrieved {formatProviderAssetReviewDate(selected.retrievedAt)}
+                      </p>
+                    </section>
+
+                    <details className="rounded-2xl border p-4">
+                      <summary className="min-h-11 cursor-pointer content-center text-sm font-medium">
+                        Raw payload from {selected.evidenceSource.providerName}
                       </summary>
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        This is the evidence TaxMaxi stored from the source shown above.
+                      </p>
                       <pre className="mt-3 max-h-64 overflow-auto rounded-xl bg-muted p-3 text-xs">
                         {JSON.stringify(selected.rawProviderPayload, null, 2)}
                       </pre>
+                    </details>
+
+                    <details className="rounded-2xl border p-4">
+                      <summary className="min-h-11 cursor-pointer content-center text-sm font-medium">
+                        Technical details
+                      </summary>
+                      <dl className="mt-3 grid gap-3 md:grid-cols-2">
+                        <Evidence
+                          label="Provider identifier"
+                          value={selected.providerAssetId}
+                          copy
+                        />
+                        <Evidence
+                          label="TaxMaxi fallback identity"
+                          value={selected.naturalKey}
+                          copy
+                        />
+                        <Evidence label="Raw observed type" value={selected.providerType} />
+                        <Evidence
+                          label="First discovered"
+                          value={formatProviderAssetReviewDate(selected.discoveredAt)}
+                        />
+                      </dl>
                     </details>
                   </CardContent>
                 </Card>
@@ -700,57 +772,143 @@ function ProviderAssetWorkbench() {
                     <CardHeader>
                       <CardTitle>Review decision</CardTitle>
                       <CardDescription>
-                        Choose exactly one outcome. The server validates all evidence again.
+                        Choose one outcome using the provider and identity evidence above.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-5">
                       <section className="flex flex-col gap-2">
-                        <h3 className="text-sm font-medium">
-                          Create from reviewed CoinGecko evidence
-                        </h3>
-                        {candidates.length === 0 ? (
+                        <div>
+                          <h3 className="text-sm font-medium">
+                            Add a new TaxMaxi asset using CoinGecko
+                          </h3>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            TaxMaxi searches CoinGecko, loads each matching coin, and separates its
+                            native asset from token or bridged representations.
+                          </p>
+                        </div>
+                        {candidates.filter((candidate) => candidate.availability === "actionable")
+                          .length === 0 ? (
                           <p className="text-sm text-muted-foreground">
-                            No safe candidate was found.
+                            CoinGecko did not provide enough evidence to safely create an asset.
                           </p>
                         ) : (
-                          candidates.map((candidate) => (
-                            <button
-                              aria-pressed={selectedCoinId === candidate.coinId}
-                              className={cn(
-                                "flex min-h-16 items-center gap-3 rounded-2xl border p-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                                selectedCoinId === candidate.coinId && "bg-accent"
-                              )}
-                              key={candidate.coinId}
-                              onClick={() => setSelectedCoinId(candidate.coinId)}
-                              type="button"
-                            >
-                              <Badge
-                                variant={candidate.exactContractMatch ? "default" : "secondary"}
-                              >
-                                {candidate.evidenceStrength === "exact_contract"
-                                  ? "Exact contract"
-                                  : "Symbol only"}
-                              </Badge>
-                              <span className="min-w-0 flex-1">
-                                <span className="block font-medium">
-                                  {candidate.coinName} ({candidate.coinSymbol})
-                                </span>
-                                <span className="block truncate text-xs text-muted-foreground">
-                                  {candidate.platformName} ·{" "}
-                                  {candidate.contractAddress ?? "native asset"}
-                                </span>
-                              </span>
-                              {selectedCoinId === candidate.coinId ? (
-                                <Check aria-hidden="true" />
-                              ) : null}
-                            </button>
-                          ))
+                          candidates
+                            .filter((candidate) => candidate.availability === "actionable")
+                            .map((candidate) => (
+                              <div className="rounded-2xl border" key={candidate.coinId}>
+                                <button
+                                  aria-pressed={selectedCoinId === candidate.coinId}
+                                  className={cn(
+                                    "flex min-h-16 w-full items-center gap-3 rounded-2xl p-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                    selectedCoinId === candidate.coinId && "bg-accent"
+                                  )}
+                                  onClick={() => setSelectedCoinId(candidate.coinId)}
+                                  type="button"
+                                >
+                                  <Badge
+                                    variant={candidate.exactContractMatch ? "default" : "secondary"}
+                                  >
+                                    {formatCandidateEvidence(candidate.evidenceStrength)}
+                                  </Badge>
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block font-medium">
+                                      {candidate.coinName} ({candidate.coinSymbol})
+                                    </span>
+                                    <span className="block truncate text-xs text-muted-foreground">
+                                      {candidate.platformName ?? "Unresolved platform"} ·{" "}
+                                      {candidate.contractAddress ?? "native asset"}
+                                    </span>
+                                  </span>
+                                  {selectedCoinId === candidate.coinId ? (
+                                    <Check aria-hidden="true" />
+                                  ) : null}
+                                </button>
+                                <div className="space-y-2 px-3 pb-3 text-xs text-muted-foreground">
+                                  <ul className="list-disc space-y-1 pl-4">
+                                    {candidate.matchReasons.map((reason) => (
+                                      <li key={reason}>{reason}</li>
+                                    ))}
+                                    {candidate.warnings.map((warning) => (
+                                      <li className="text-foreground" key={warning}>
+                                        {warning}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  {candidate.proposedAsset === null ? null : (
+                                    <p>
+                                      Creates {candidate.proposedAsset.type}{" "}
+                                      <span className="font-medium text-foreground">
+                                        {candidate.proposedAsset.symbol}
+                                      </span>{" "}
+                                      on {candidate.proposedAsset.blockchainName}.
+                                    </p>
+                                  )}
+                                  <a
+                                    className="inline-flex min-h-11 items-center underline underline-offset-4"
+                                    href={`https://www.coingecko.com/en/coins/${candidate.coinId}`}
+                                    rel="noreferrer"
+                                    target="_blank"
+                                  >
+                                    Open CoinGecko record
+                                  </a>
+                                </div>
+                              </div>
+                            ))
                         )}
+                        {candidates.some(
+                          (candidate) => candidate.availability === "unavailable"
+                        ) ? (
+                          <details className="rounded-2xl border p-3">
+                            <summary className="min-h-11 cursor-pointer content-center text-sm font-medium">
+                              Other CoinGecko results
+                            </summary>
+                            <div className="mt-2 flex flex-col gap-2">
+                              {candidates
+                                .filter((candidate) => candidate.availability === "unavailable")
+                                .map((candidate) => (
+                                  <div className="rounded-xl bg-muted p-3" key={candidate.coinId}>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge variant="outline">
+                                        {formatCandidateEvidence(candidate.evidenceStrength)}
+                                      </Badge>
+                                      <span className="font-medium">
+                                        {candidate.coinName} ({candidate.coinSymbol})
+                                      </span>
+                                    </div>
+                                    <p className="mt-2 text-sm text-muted-foreground">
+                                      {candidate.unavailableReason ??
+                                        "TaxMaxi could not safely use this result."}
+                                    </p>
+                                    <a
+                                      className="mt-1 inline-flex min-h-11 items-center text-sm underline underline-offset-4"
+                                      href={`https://www.coingecko.com/en/coins/${candidate.coinId}`}
+                                      rel="noreferrer"
+                                      target="_blank"
+                                    >
+                                      Open CoinGecko record
+                                    </a>
+                                  </div>
+                                ))}
+                            </div>
+                          </details>
+                        ) : null}
+                        <p className="text-xs text-muted-foreground">
+                          Before creation, TaxMaxi reloads the selected CoinGecko record and
+                          verifies its coin identity, native blockchain or exact token contract, and
+                          decimals.
+                        </p>
                       </section>
                       <section className="flex flex-col gap-2">
-                        <label className="text-sm font-medium" htmlFor="existing-asset-search">
-                          Map to an existing TaxMaxi asset
-                        </label>
+                        <div>
+                          <label className="text-sm font-medium" htmlFor="existing-asset-search">
+                            Use an existing TaxMaxi asset
+                          </label>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Exact Solana mint matches are approved automatically during provider
+                            sync. Choose a target here only when the remaining evidence requires an
+                            admin decision.
+                          </p>
+                        </div>
                         <Input
                           id="existing-asset-search"
                           onChange={(event) => {
@@ -786,6 +944,10 @@ function ProviderAssetWorkbench() {
                             </span>
                           </button>
                         ))}
+                        <p className="text-xs text-muted-foreground">
+                          Before mapping, TaxMaxi verifies that the target still exists, is not
+                          marked as spam, and does not conflict with an observed token contract.
+                        </p>
                       </section>
                       <label
                         className="flex flex-col gap-2 text-sm font-medium"
@@ -1016,6 +1178,49 @@ function formatStatus(status: ProviderAssetReview["mappingStatus"]): string {
   if (status === "approved") return "Approved"
   if (status === "rejected") return "Rejected"
   return "Pending review"
+}
+
+function formatProviderAssetType(providerAsset: ProviderAssetReview): string {
+  const providerType = providerAsset.providerType?.trim().toLowerCase()
+  const classification = (() => {
+    switch (providerType) {
+      case "crypto":
+        return "Crypto asset"
+      case "fiat":
+        return "Fiat currency"
+      case "native":
+        return "Native coin"
+      case "nft":
+        return "NFT"
+      case "spl-token":
+        return "Solana fungible token"
+      case "spl-token-2022":
+        return "Solana Token-2022 token"
+      default:
+        return providerType === undefined || providerType === ""
+          ? "Not classified"
+          : (providerAsset.providerType ?? "Not classified")
+    }
+  })()
+  const source =
+    providerAsset.evidenceSource.typeSource === "provider"
+      ? "reported by provider"
+      : "inferred by TaxMaxi"
+  return `${classification} · ${source}`
+}
+
+function formatPayloadKind(kind: ProviderAssetReview["evidenceSource"]["payloadKind"]): string {
+  if (kind === "direct_response") return "direct provider response"
+  if (kind === "fallback") return "TaxMaxi fallback evidence"
+  return "derived from a provider observation"
+}
+
+function formatCandidateEvidence(
+  evidence: ProviderAssetCandidates["candidates"][number]["evidenceStrength"]
+): string {
+  if (evidence === "exact_contract") return "Exact chain and contract"
+  if (evidence === "exact_name_and_symbol") return "Exact name and symbol"
+  return "Symbol only"
 }
 
 function messageFor(error: unknown): string {

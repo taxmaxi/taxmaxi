@@ -261,7 +261,7 @@ const processJob = ({
       yield* Effect.logInfo(logPayload, "source-sync-worker:job-succeeded")
     }
 
-    return summary
+    return { payload, summary }
   }).pipe(
     Effect.withSpan("worker.source-sync.process", {
       attributes: {
@@ -348,16 +348,22 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
 
         if (result._tag === "Right") {
           await runPromise(
-            startupRepair.repair.pipe(
-              Effect.catchAll((error) =>
-                Effect.logWarning(
-                  { operation: error.operation, cause: error.cause },
-                  "source-sync-worker:follow-up-repair-failed"
+            startupRepair
+              .dispatchFollowUp({
+                jobId: result.right.payload.jobId,
+                sourceId: result.right.payload.sourceId,
+                principalId: result.right.payload.principalId,
+              })
+              .pipe(
+                Effect.catchAll((error) =>
+                  Effect.logWarning(
+                    { operation: error.operation, cause: error.cause },
+                    "source-sync-worker:follow-up-dispatch-failed"
+                  )
                 )
               )
-            )
           )
-          return result.right
+          return result.right.summary
         }
 
         const error = result.left

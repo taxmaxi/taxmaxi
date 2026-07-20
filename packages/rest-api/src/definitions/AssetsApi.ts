@@ -43,6 +43,15 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   name: Schema.NullOr(Schema.String),
   exponent: Schema.NullOr(Schema.Number),
   providerType: Schema.NullOr(Schema.String),
+  evidenceSource: Schema.Struct({
+    providerName: Schema.String,
+    apiName: Schema.String,
+    endpoint: Schema.NullOr(Schema.String),
+    documentationUrl: Schema.NullOr(Schema.String),
+    payloadKind: Schema.Literal("direct_response", "derived_observation", "fallback"),
+    typeSource: Schema.Literal("provider", "taxmaxi_inferred"),
+    typeExplanation: Schema.String,
+  }),
   rawProviderPayload: Schema.Unknown,
   discoveredAt: Schema.DateTimeUtc,
   retrievedAt: Schema.DateTimeUtc,
@@ -144,23 +153,30 @@ export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicaliz
 export class CoinGeckoAssetCandidateResponse extends Schema.Class<CoinGeckoAssetCandidateResponse>(
   "CoinGeckoAssetCandidateResponse"
 )({
+  availability: Schema.Literal("actionable", "unavailable"),
   coinId: Schema.String,
   coinName: Schema.String,
   coinSymbol: Schema.String,
-  platformId: Schema.String,
-  platformName: Schema.String,
+  platformId: Schema.NullOr(Schema.String),
+  platformName: Schema.NullOr(Schema.String),
   contractAddress: Schema.NullOr(Schema.String),
   exactContractMatch: Schema.Boolean,
-  evidenceStrength: Schema.Literal("exact_contract", "symbol_only"),
-  proposedAsset: Schema.Struct({
-    blockchainName: Schema.String,
-    contractAddress: Schema.NullOr(Schema.String),
-    name: Schema.String,
-    symbol: Schema.String,
-    decimals: Schema.Number,
-    logoUrl: Schema.NullOr(Schema.String),
-    type: Schema.Literal("native", "token", "nft"),
-  }),
+  evidenceStrength: Schema.Literal("exact_contract", "exact_name_and_symbol", "symbol_only"),
+  representation: Schema.Literal("native", "token", "unknown"),
+  matchReasons: Schema.Array(Schema.String),
+  warnings: Schema.Array(Schema.String),
+  unavailableReason: Schema.NullOr(Schema.String),
+  proposedAsset: Schema.NullOr(
+    Schema.Struct({
+      blockchainName: Schema.String,
+      contractAddress: Schema.NullOr(Schema.String),
+      name: Schema.String,
+      symbol: Schema.String,
+      decimals: Schema.Number,
+      logoUrl: Schema.NullOr(Schema.String),
+      type: Schema.Literal("native", "token", "nft"),
+    })
+  ),
 }) {}
 
 export class CoinGeckoAssetCandidateListResponse extends Schema.Class<CoinGeckoAssetCandidateListResponse>(

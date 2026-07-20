@@ -24,6 +24,7 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   ProviderAssetDecisionResponse,
+  ProviderAssetReviewListResponse,
 } from "../src/definitions/AssetsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
@@ -223,6 +224,63 @@ describe("AssetsApiLive", () => {
     )
 
     expect(status).toBe(401)
+  })
+
+  it("returns provider API provenance with review evidence", async () => {
+    const userId = crypto.randomUUID()
+    const providerAssetId = crypto.randomUUID()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: userId,
+          email: `${userId}@asset-review.test`,
+          role: "admin",
+        })
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "1d3c2625-a8d9-5458-84d0-437d75540421",
+          currencyCode: "ZEC",
+          name: "Zcash",
+          exponent: 8,
+          providerType: "crypto",
+          rawProviderPayload: { code: "ZEC", name: "Zcash", type: "crypto" },
+          retrievedAt: new Date("2026-07-20T09:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+      })
+    )
+
+    const response = await Effect.runPromise(
+      Effect.gen(function* () {
+        const request = HttpClientRequest.get("/v1/assets/provider-assets?q=ZEC").pipe(
+          HttpClientRequest.bearerToken(`user_${userId}_admin`)
+        )
+        const result = yield* HttpClient.execute(request)
+        const body = yield* result.json
+        return {
+          status: result.status,
+          body: yield* Schema.decodeUnknown(ProviderAssetReviewListResponse)(body),
+        }
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.providerAssets[0]).toMatchObject({
+      id: providerAssetId,
+      evidenceSource: {
+        providerName: "Coinbase",
+        apiName: "Coinbase App API",
+        endpoint: "GET /v2/currencies/crypto",
+        payloadKind: "direct_response",
+        typeSource: "provider",
+      },
+    })
   })
 
   it("does not allow an admin to map a fiat provider row to a crypto asset", async () => {

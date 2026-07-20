@@ -3,6 +3,7 @@ import {
   appendUniqueProviderAssetReviews,
   formatProviderAssetReviewDate,
   isCurrentExistingAssetSearchRequest,
+  loadSettledProviderAssetReplayUpdates,
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
@@ -40,6 +41,18 @@ describe("provider asset review progression", () => {
       { sourceId: "failed", status: "failed_to_queue" },
       { sourceId: "active", status: "queued", jobId: "deferred-replay" },
     ])
+  })
+
+  it("preserves successful replay updates when another replay poll fails", async () => {
+    const updates = await loadSettledProviderAssetReplayUpdates({
+      replays: [{ sourceId: "healthy" }, { sourceId: "unavailable" }],
+      load: ({ sourceId }) =>
+        sourceId === "healthy"
+          ? Promise.resolve({ sourceId, status: "completed" })
+          : Promise.reject(new Error("Replay status unavailable")),
+    })
+
+    expect(updates).toEqual([{ sourceId: "healthy", status: "completed" }])
   })
 
   it("does not append duplicate review rows from a repeated cursor request", () => {

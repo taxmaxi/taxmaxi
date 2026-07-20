@@ -47,6 +47,24 @@ type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 
 const normalize = (value: string) => value.trim().toLowerCase()
 
+export const isObservedProviderChainMatch = ({
+  blockchainChainType,
+  provider,
+  providerType,
+}: {
+  readonly blockchainChainType: string
+  readonly provider: string
+  readonly providerType: string | null
+}): boolean => {
+  const normalizedProviderType = providerType === null ? "" : normalize(providerType)
+  const isSolanaObservation =
+    normalize(provider).includes("solana") ||
+    normalizedProviderType.startsWith("spl-token") ||
+    normalizedProviderType === "nft"
+
+  return !isSolanaObservation || normalize(blockchainChainType) === "solana"
+}
+
 export const hasStrongProviderIdentityEvidence = ({
   candidateContractAddress,
   coinName,
@@ -58,9 +76,11 @@ export const hasStrongProviderIdentityEvidence = ({
   readonly observedTokenId: string | null
   readonly providerName: string | null
 }): boolean =>
-  observedTokenId !== null
-    ? candidateContractAddress !== null
-    : providerName !== null && normalize(providerName) === normalize(coinName)
+  candidateContractAddress === null
+    ? observedTokenId === null &&
+      providerName !== null &&
+      normalize(providerName) === normalize(coinName)
+    : observedTokenId !== null
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
@@ -144,6 +164,30 @@ export const providerTokenIdentifiersMatch = ({
     ? observedTokenId.trim().toLowerCase() === canonicalTokenId.trim().toLowerCase()
     : observedTokenId.trim() === canonicalTokenId.trim()
 
+export const selectExactTokenPlatform = ({
+  assetPlatforms,
+  observedTokenId,
+  tokenPlatforms,
+}: {
+  readonly assetPlatforms: ReadonlyArray<CoinGeckoAssetPlatform>
+  readonly observedTokenId: string
+  readonly tokenPlatforms: ReadonlyArray<readonly [string, string]>
+}): readonly [string, string] | null => {
+  const matches = tokenPlatforms.filter(([platformId, contractAddress]) => {
+    const platform = assetPlatforms.find((candidate) => candidate.id === platformId)
+    return (
+      platform !== undefined &&
+      providerTokenIdentifiersMatch({
+        chainType: deriveChainType(platform),
+        observedTokenId,
+        canonicalTokenId: contractAddress,
+      })
+    )
+  })
+
+  return matches.length === 1 ? (matches[0] ?? null) : null
+}
+
 export const deriveNativeAssetDecimals = ({
   coinId,
   platform,
@@ -178,6 +222,25 @@ export const deriveNativeAssetDecimals = ({
   }
 }
 
+export const resolveNativeAssetDecimals = ({
+  coinId,
+  platform,
+  providerExponent,
+}: {
+  readonly coinId: string
+  readonly platform: CoinGeckoAssetPlatform
+  readonly providerExponent: number | null
+}): number | null => {
+  const knownDecimals = deriveNativeAssetDecimals({ coinId, platform })
+  if (knownDecimals !== null) {
+    return knownDecimals
+  }
+
+  return providerExponent !== null && Number.isInteger(providerExponent) && providerExponent >= 0
+    ? providerExponent
+    : null
+}
+
 const makeBadRequest = (message: string) => new AssetCanonicalizationBadRequestError({ message })
 
 export const optionalCandidateResolution = <A>(
@@ -188,8 +251,11 @@ export const optionalCandidateResolution = <A>(
 ) =>
   effect.pipe(
     Effect.map((candidate) => ({ _tag: "Candidate" as const, candidate })),
-    Effect.catchTag("AssetCanonicalizationBadRequestError", () =>
-      Effect.succeed({ _tag: "InvalidCandidate" as const })
+    Effect.catchTag("AssetCanonicalizationBadRequestError", (error) =>
+      Effect.succeed({
+        _tag: "UnavailableCandidate" as const,
+        reason: error.message,
+      })
     )
   )
 
@@ -229,6 +295,31 @@ export const selectNativePlatform = ({
   }
 
   return null
+}
+
+export const selectNativeCoinPlatform = ({
+  coin,
+  assetPlatforms,
+}: {
+  readonly coin: CoinGeckoCoin
+  readonly assetPlatforms: ReadonlyArray<CoinGeckoAssetPlatform>
+}): CoinGeckoAssetPlatform | null => {
+  const knownPlatform = selectNativePlatform({ coinId: coin.id, assetPlatforms })
+  if (knownPlatform !== null) {
+    return knownPlatform
+  }
+
+  if (coin.asset_platform_id !== null) {
+    return null
+  }
+
+  return {
+    id: coin.id,
+    chain_identifier: null,
+    name: coin.name,
+    shortname: upperSymbol(coin.symbol),
+    native_coin_id: coin.id,
+  }
 }
 
 const trimOrNull = (value: string | null): string | null => {
@@ -413,7 +504,7 @@ const make = Effect.gen(function* () {
       const nativePlatforms = assetPlatforms.filter(
         (platform) => platform.native_coin_id === coin.id
       )
-      const nativePlatform = selectNativePlatform({ coinId: coin.id, assetPlatforms })
+      const nativePlatform = selectNativeCoinPlatform({ coin, assetPlatforms })
 
       if (nativePlatform !== null) {
         if (
@@ -430,9 +521,10 @@ const make = Effect.gen(function* () {
             )
           )
         }
-        const nativeDecimals = deriveNativeAssetDecimals({
+        const nativeDecimals = resolveNativeAssetDecimals({
           coinId: coin.id,
           platform: nativePlatform,
+          providerExponent: providerAsset.exponent,
         })
         if (nativeDecimals === null) {
           return yield* Effect.fail(
@@ -448,6 +540,11 @@ const make = Effect.gen(function* () {
             decimals: nativeDecimals,
             platform: nativePlatform,
           }),
+          warnings: Object.values(coin.platforms).some(isNonEmptyString)
+            ? [
+                "CoinGecko also lists token or bridged representations. They were ignored because the provider supplied no matching chain and contract.",
+              ]
+            : [],
           evidence: {
             source: "coingecko" as const,
             coinId: coin.id,
@@ -472,19 +569,23 @@ const make = Effect.gen(function* () {
         isNonEmptyString(contractAddress)
       )
 
-      if (tokenPlatforms.length !== 1) {
+      if (observedTokenId === null) {
         return yield* Effect.fail(
           makeBadRequest(
-            `CoinGecko did not identify a single canonical platform for ${providerAsset.currencyCode}.`
+            `CoinGecko only identified token or bridged representations for ${providerAsset.currencyCode}, but the provider supplied no chain and contract evidence.`
           )
         )
       }
 
-      const tokenPlatformEntry = tokenPlatforms[0]
-      if (tokenPlatformEntry === undefined) {
+      const tokenPlatformEntry = selectExactTokenPlatform({
+        assetPlatforms,
+        observedTokenId,
+        tokenPlatforms,
+      })
+      if (tokenPlatformEntry === null) {
         return yield* Effect.fail(
           makeBadRequest(
-            `CoinGecko did not identify a canonical platform for ${providerAsset.currencyCode}.`
+            `No single CoinGecko chain and contract matches the observed provider asset id for ${providerAsset.currencyCode}.`
           )
         )
       }
@@ -523,6 +624,7 @@ const make = Effect.gen(function* () {
           contractAddress,
           providerAsset,
         }),
+        warnings: [],
         evidence: {
           source: "coingecko" as const,
           coinId: coin.id,
@@ -693,12 +795,40 @@ const make = Effect.gen(function* () {
             selectedCoin: match,
             providerAsset: review.providerAsset,
           })
-        )
+        ).pipe(Effect.map((resolution) => ({ match, resolution })))
       )
 
-      return candidates.flatMap((result) => {
-        if (result._tag === "InvalidCandidate") return []
-        const candidate = result.candidate
+      return candidates.map(({ match, resolution }) => {
+        const exactNameMatch =
+          review.providerAsset.name !== null &&
+          normalize(review.providerAsset.name) === normalize(match.name)
+        const basicEvidenceStrength: "exact_name_and_symbol" | "symbol_only" = exactNameMatch
+          ? "exact_name_and_symbol"
+          : "symbol_only"
+        const basicMatchReasons = [
+          `Symbol matches ${review.providerAsset.currencyCode.toUpperCase()}.`,
+          ...(exactNameMatch ? ["Name matches the provider exactly."] : []),
+        ]
+
+        if (resolution._tag === "UnavailableCandidate") {
+          return {
+            availability: "unavailable" as const,
+            coinId: match.id,
+            coinName: match.name,
+            coinSymbol: upperSymbol(match.symbol),
+            platformId: null,
+            platformName: null,
+            contractAddress: null,
+            exactContractMatch: false,
+            evidenceStrength: basicEvidenceStrength,
+            representation: "unknown" as const,
+            matchReasons: basicMatchReasons,
+            warnings: [],
+            unavailableReason: resolution.reason,
+            proposedAsset: null,
+          }
+        }
+        const candidate = resolution.candidate
 
         const observedTokenId = observedProviderTokenId(review.providerAsset)
         const evidencePlatform = coinGeckoAssetPlatformSnapshot.find(
@@ -713,31 +843,36 @@ const make = Effect.gen(function* () {
             observedTokenId,
             canonicalTokenId: candidate.evidence.contractAddress,
           })
-        const evidenceStrength: "exact_contract" | "symbol_only" = exactContractMatch
-          ? "exact_contract"
-          : "symbol_only"
+        const evidenceStrength: "exact_contract" | "exact_name_and_symbol" | "symbol_only" =
+          exactContractMatch ? "exact_contract" : basicEvidenceStrength
 
-        return [
-          {
-            coinId: candidate.evidence.coinId,
-            coinName: candidate.evidence.coinName,
-            coinSymbol: candidate.evidence.coinSymbol,
-            platformId: candidate.evidence.platformId,
-            platformName: candidate.evidence.platformName,
-            contractAddress: candidate.evidence.contractAddress,
-            exactContractMatch,
-            evidenceStrength,
-            proposedAsset: {
-              blockchainName: candidate.blockchain.name,
-              contractAddress: candidate.asset.contractAddress,
-              name: candidate.asset.name,
-              symbol: candidate.asset.symbol,
-              decimals: candidate.asset.decimals,
-              logoUrl: candidate.asset.logoUrl,
-              type: candidate.asset.type,
-            },
+        return {
+          availability: "actionable" as const,
+          coinId: candidate.evidence.coinId,
+          coinName: candidate.evidence.coinName,
+          coinSymbol: candidate.evidence.coinSymbol,
+          platformId: candidate.evidence.platformId,
+          platformName: candidate.evidence.platformName,
+          contractAddress: candidate.evidence.contractAddress,
+          exactContractMatch,
+          evidenceStrength,
+          representation:
+            candidate.asset.type === "native" ? ("native" as const) : ("token" as const),
+          matchReasons: exactContractMatch
+            ? [...basicMatchReasons, "Chain and contract match the provider observation."]
+            : basicMatchReasons,
+          warnings: candidate.warnings,
+          unavailableReason: null,
+          proposedAsset: {
+            blockchainName: candidate.blockchain.name,
+            contractAddress: candidate.asset.contractAddress,
+            name: candidate.asset.name,
+            symbol: candidate.asset.symbol,
+            decimals: candidate.asset.decimals,
+            logoUrl: candidate.asset.logoUrl,
+            type: candidate.asset.type,
           },
-        ]
+        }
       })
     })
 
@@ -812,7 +947,12 @@ const make = Effect.gen(function* () {
         const observedTokenId = observedProviderTokenId(review.providerAsset)
         if (
           observedTokenId !== null &&
-          (target.value.contractAddress === null ||
+          (!isObservedProviderChainMatch({
+            blockchainChainType: target.value.blockchainChainType,
+            provider: review.providerAsset.provider,
+            providerType: review.providerAsset.providerType,
+          }) ||
+            target.value.contractAddress === null ||
             !providerTokenIdentifiersMatch({
               chainType: target.value.blockchainChainType,
               observedTokenId,
@@ -820,7 +960,9 @@ const make = Effect.gen(function* () {
             }))
         ) {
           return yield* Effect.fail(
-            makeBadRequest("Canonical asset contract does not match the provider observation.")
+            makeBadRequest(
+              "Canonical asset chain and contract do not match the provider observation."
+            )
           )
         }
         const decision = yield* decide({

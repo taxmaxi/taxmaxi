@@ -4,10 +4,14 @@ import {
   deriveChainType,
   deriveNativeAssetDecimals,
   hasStrongProviderIdentityEvidence,
+  isObservedProviderChainMatch,
   optionalCandidateResolution,
   providerAssetCanonicalType,
   providerTokenIdentifiersMatch,
+  resolveNativeAssetDecimals,
   selectCoinCandidate,
+  selectExactTokenPlatform,
+  selectNativeCoinPlatform,
   selectNativePlatform,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import {
@@ -68,6 +72,17 @@ describe("AssetCanonicalizationService", () => {
         providerName: "Token",
       })
     ).toBe(true)
+  })
+
+  it("does not accept a token or bridge without an observed token identifier", () => {
+    expect(
+      hasStrongProviderIdentityEvidence({
+        candidateContractAddress: "zec.omft.near",
+        coinName: "Zcash",
+        observedTokenId: null,
+        providerName: "Zcash",
+      })
+    ).toBe(false)
   })
 
   it("preserves NFT provider observations in canonical asset drafts", () => {
@@ -148,6 +163,47 @@ describe("AssetCanonicalizationService", () => {
     ).toBeNull()
   })
 
+  it("keeps Zcash native when CoinGecko also reports a bridged NEAR contract", () => {
+    const platform = selectNativeCoinPlatform({
+      coin: {
+        id: "zcash",
+        name: "Zcash",
+        symbol: "zec",
+        asset_platform_id: null,
+        platforms: { "": "", "near-protocol": "zec.omft.near" },
+        detail_platforms: {
+          "": { decimal_place: null, contract_address: "" },
+          "near-protocol": { decimal_place: 8, contract_address: "zec.omft.near" },
+        },
+      },
+      assetPlatforms: coinGeckoAssetPlatformSnapshot,
+    })
+
+    expect(platform).toEqual({
+      id: "zcash",
+      name: "Zcash",
+      chain_identifier: null,
+      shortname: "ZEC",
+      native_coin_id: "zcash",
+    })
+  })
+
+  it("uses provider precision for native chains CoinGecko does not catalog", () => {
+    expect(
+      resolveNativeAssetDecimals({
+        coinId: "zcash",
+        platform: {
+          id: "zcash",
+          name: "Zcash",
+          chain_identifier: null,
+          shortname: "ZEC",
+          native_coin_id: "zcash",
+        },
+        providerExponent: 8,
+      })
+    ).toBe(8)
+  })
+
   it("uses explicit chain identifiers before platform name heuristics", () => {
     expect(
       deriveChainType({
@@ -177,6 +233,39 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(true)
   })
 
+  it("requires an observed Solana token to map to the Solana chain", () => {
+    expect(
+      isObservedProviderChainMatch({
+        blockchainChainType: "solana",
+        provider: "helius-solana",
+        providerType: "spl-token",
+      })
+    ).toBe(true)
+    expect(
+      isObservedProviderChainMatch({
+        blockchainChainType: "other",
+        provider: "helius-solana",
+        providerType: "spl-token",
+      })
+    ).toBe(false)
+  })
+
+  it("selects the exact observed token from a multi-platform CoinGecko coin", () => {
+    const solanaMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+    expect(
+      selectExactTokenPlatform({
+        assetPlatforms: coinGeckoAssetPlatformSnapshot,
+        observedTokenId: solanaMint,
+        tokenPlatforms: [
+          ["ethereum", "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"],
+          ["solana", solanaMint],
+          ["base", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"],
+        ],
+      })
+    ).toEqual(["solana", solanaMint])
+  })
+
   it("suppresses candidate validation failures but preserves provider outages", async () => {
     await expect(
       Effect.runPromise(
@@ -186,7 +275,10 @@ describe("AssetCanonicalizationService", () => {
           )
         )
       )
-    ).resolves.toEqual({ _tag: "InvalidCandidate" })
+    ).resolves.toEqual({
+      _tag: "UnavailableCandidate",
+      reason: "Candidate is ambiguous.",
+    })
 
     await expect(
       Effect.runPromise(

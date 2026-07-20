@@ -97,6 +97,7 @@ const runWithConsumer = <A>({
   acquireWorker,
   configOverrides,
   repair,
+  dispatchFollowUp,
 }: {
   readonly effect: Effect.Effect<A>
   readonly executor: SourceSyncJobExecutorShape
@@ -109,6 +110,11 @@ const runWithConsumer = <A>({
     WorkerSourceSyncStartupRepairSummary,
     WorkerSourceSyncStartupRepairError
   >
+  readonly dispatchFollowUp?: (params: {
+    readonly jobId: string
+    readonly sourceId: string
+    readonly principalId: string
+  }) => Effect.Effect<void, WorkerSourceSyncStartupRepairError>
 }) =>
   Effect.runPromise(
     Effect.scoped(
@@ -129,6 +135,7 @@ const runWithConsumer = <A>({
                       erroredJobs: 0,
                       stoppedAfterErrors: false,
                     }),
+                  dispatchFollowUp: dispatchFollowUp ?? (() => Effect.void),
                 })
               )
             )
@@ -199,9 +206,10 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
     expect(syncExecution.retryPolicy?.nextRetryAt).toBeInstanceOf(Date)
   })
 
-  it("repairs the queue after a completed job materializes follow-up work", async () => {
+  it("dispatches only the completed job's materialized follow-up work", async () => {
     let processor: WorkerBullMqSourceSyncProcessor | null = null
     let repairCount = 0
+    const dispatched: Array<{ jobId: string; sourceId: string; principalId: string }> = []
 
     await runWithConsumer({
       executor: {
@@ -218,6 +226,10 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
           stoppedAfterErrors: false,
         }
       }),
+      dispatchFollowUp: (params) =>
+        Effect.sync(() => {
+          dispatched.push(params)
+        }),
       acquireWorker: (_config, acquiredProcessor) =>
         Effect.sync(() => {
           processor = acquiredProcessor
@@ -230,7 +242,10 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
       }),
     })
 
-    expect(repairCount).toBe(2)
+    expect(repairCount).toBe(1)
+    expect(dispatched).toEqual([
+      { jobId: "job-1", sourceId: "source-1", principalId: "principal-1" },
+    ])
   })
 
   it("fails malformed payloads terminally without calling the executor", async () => {

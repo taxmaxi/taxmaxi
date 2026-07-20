@@ -79,14 +79,19 @@ export interface ProviderAssetReplayResult {
 }
 
 export interface CoinGeckoAssetCandidate {
+  readonly availability: "actionable" | "unavailable"
   readonly coinId: string
   readonly coinName: string
   readonly coinSymbol: string
-  readonly platformId: string
-  readonly platformName: string
+  readonly platformId: string | null
+  readonly platformName: string | null
   readonly contractAddress: string | null
   readonly exactContractMatch: boolean
-  readonly evidenceStrength: "exact_contract" | "symbol_only"
+  readonly evidenceStrength: "exact_contract" | "exact_name_and_symbol" | "symbol_only"
+  readonly representation: "native" | "token" | "unknown"
+  readonly matchReasons: ReadonlyArray<string>
+  readonly warnings: ReadonlyArray<string>
+  readonly unavailableReason: string | null
   readonly proposedAsset: {
     readonly blockchainName: string
     readonly contractAddress: string | null
@@ -95,7 +100,7 @@ export interface CoinGeckoAssetCandidate {
     readonly decimals: number
     readonly logoUrl: string | null
     readonly type: "native" | "token" | "nft"
-  }
+  } | null
 }
 
 export interface ReviewProviderAssetResult {
