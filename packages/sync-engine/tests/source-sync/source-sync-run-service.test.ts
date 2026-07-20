@@ -307,7 +307,7 @@ describe("SourceSyncRunService", () => {
     ])
     expect(
       result.items
-        .map((item) => item.processingJobId)
+        .flatMap((item) => (item.processingJobId === null ? [] : [item.processingJobId]))
         .sort((left, right) => left.localeCompare(right))
     ).toEqual(["job-source-1", "job-source-2"])
   })
