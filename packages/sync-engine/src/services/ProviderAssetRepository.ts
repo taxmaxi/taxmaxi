@@ -7,6 +7,11 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
+import type {
+  CanonicalAssetDraft,
+  CanonicalAssetRecord,
+  CanonicalBlockchainDraft,
+} from "./AssetRepository.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -88,6 +93,15 @@ export interface ProviderAssetReviewMapping extends ProviderAssetMappingState {
 export interface ProviderAssetAffectedSource {
   readonly sourceId: string
   readonly principalId: string
+}
+
+/**
+ * ProviderAssetDecisionResult - Atomic review decision and durable replay work.
+ */
+export interface ProviderAssetDecisionResult {
+  readonly updated: boolean
+  readonly canonicalAsset: CanonicalAssetRecord | null
+  readonly affectedSources: ReadonlyArray<ProviderAssetAffectedSource>
 }
 
 /**
@@ -201,12 +215,17 @@ export interface ProviderAssetRepositoryShape {
     readonly mappingKind: "asset"
     readonly canonicalAssetId: string | null
     readonly canonicalAssetSymbol: string | null
+    readonly canonicalAssetDraft: {
+      readonly blockchain: CanonicalBlockchainDraft
+      readonly asset: CanonicalAssetDraft
+    } | null
     readonly mappingStatus: "approved" | "rejected"
     readonly reviewerNotes: string | null
     readonly sourceNotes: string | null
     readonly reviewedBy: string
     readonly reviewedAt: Date
-  }) => Effect.Effect<boolean, SyncEngineStorageError>
+    readonly createReplayJobs: boolean
+  }) => Effect.Effect<ProviderAssetDecisionResult, SyncEngineStorageError>
 
   readonly listAffectedSources: (params: {
     readonly providerAssetRowId: string

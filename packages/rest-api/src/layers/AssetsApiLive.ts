@@ -27,6 +27,7 @@ import {
   CoinGeckoAssetCandidateResponse,
   ProviderAssetDecisionResponse,
 } from "../definitions/AssetsApi.ts"
+import { SourceSyncJobResponse, SourceSyncStartResponse } from "../definitions/SourcesApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
 
@@ -215,6 +216,29 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
+      .handle("getProviderAssetReplay", ({ path }) =>
+        assetCanonicalizationService
+          .getProviderAssetReplay({
+            providerAssetRowId: path.id,
+            sourceId: path.sourceId,
+            jobId: path.jobId,
+          })
+          .pipe(
+            Effect.map((job) => SourceSyncJobResponse.make(job)),
+            Effect.mapError(mapReplayError)
+          )
+      )
+      .handle("retryProviderAssetReplay", ({ path }) =>
+        assetCanonicalizationService
+          .retryProviderAssetReplay({
+            providerAssetRowId: path.id,
+            sourceId: path.sourceId,
+          })
+          .pipe(
+            Effect.map((job) => SourceSyncStartResponse.make(job)),
+            Effect.mapError(mapReplayError)
+          )
+      )
   })
 )
 
@@ -230,3 +254,8 @@ const mapReviewError = (error: { readonly _tag: string; readonly message: string
       return toInternalServerError(error.message)
   }
 }
+
+const mapReplayError = (error: { readonly _tag: string; readonly message: string }) =>
+  error._tag === "AssetCanonicalizationNotFoundError"
+    ? new AssetNotFoundError({ message: error.message })
+    : toInternalServerError(error.message)

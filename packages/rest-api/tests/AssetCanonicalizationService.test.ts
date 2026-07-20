@@ -4,9 +4,15 @@ import {
   deriveChainType,
   deriveNativeAssetDecimals,
   hasStrongProviderIdentityEvidence,
+  optionalCandidateResolution,
+  providerTokenIdentifiersMatch,
   selectCoinCandidate,
   selectNativePlatform,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
+import {
+  AssetCanonicalizationBadRequestError,
+  AssetCanonicalizationProviderError,
+} from "../src/services/AssetCanonicalizationService.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 describe("AssetCanonicalizationService", () => {
@@ -123,5 +129,47 @@ describe("AssetCanonicalizationService", () => {
         native_coin_id: "bitcoin",
       })
     ).toBe("evm")
+  })
+
+  it("preserves case for non-EVM token identifiers", () => {
+    expect(
+      providerTokenIdentifiersMatch({
+        chainType: "solana",
+        observedTokenId: "CaseSensitiveMint",
+        canonicalTokenId: "casesensitivemint",
+      })
+    ).toBe(false)
+    expect(
+      providerTokenIdentifiersMatch({
+        chainType: "evm",
+        observedTokenId: "0xAbCd",
+        canonicalTokenId: "0xabcd",
+      })
+    ).toBe(true)
+  })
+
+  it("suppresses candidate validation failures but preserves provider outages", async () => {
+    await expect(
+      Effect.runPromise(
+        optionalCandidateResolution(
+          Effect.fail(
+            new AssetCanonicalizationBadRequestError({ message: "Candidate is ambiguous." })
+          )
+        )
+      )
+    ).resolves.toEqual({ _tag: "InvalidCandidate" })
+
+    await expect(
+      Effect.runPromise(
+        optionalCandidateResolution(
+          Effect.fail(
+            new AssetCanonicalizationProviderError({ message: "CoinGecko is unavailable." })
+          )
+        )
+      )
+    ).rejects.toMatchObject({
+      message: "CoinGecko is unavailable.",
+      name: "(FiberFailure) AssetCanonicalizationProviderError",
+    })
   })
 })

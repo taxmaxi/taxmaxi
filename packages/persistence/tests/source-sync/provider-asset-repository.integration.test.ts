@@ -7,6 +7,8 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_PRINCIPAL_ID,
+  TEST_SOURCE_ID,
   TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
@@ -490,11 +492,13 @@ describe("ProviderAssetRepositoryLive", () => {
             mappingKind: "asset" as const,
             canonicalAssetId: TEST_BTC_ASSET_ID,
             canonicalAssetSymbol: "BTC",
+            canonicalAssetDraft: null,
             mappingStatus: "approved" as const,
             reviewerNotes: "Verified evidence",
             sourceNotes: "Mapped in review",
             reviewedBy: TEST_USER_ID,
             reviewedAt,
+            createReplayJobs: false,
           }
           const first = yield* repository.decideProviderAssetMapping(decision)
           const second = yield* repository.decideProviderAssetMapping(decision)
@@ -517,8 +521,8 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(firstDecision).toBe(true)
-      expect(secondDecision).toBe(false)
+      expect(firstDecision.updated).toBe(true)
+      expect(secondDecision.updated).toBe(false)
       expect(searched).toHaveLength(1)
       expect(count).toBe(1)
       expect(Option.getOrNull(review)?.mapping).toMatchObject({
@@ -526,6 +530,155 @@ describe("ProviderAssetRepositoryLive", () => {
         reviewedAt,
         reviewerNotes: "Verified evidence",
       })
+    })
+
+    it("publishes a canonical asset and durable replay job in the review transaction", async () => {
+      const providerAssetId = crypto.randomUUID()
+      const transactionId = crypto.randomUUID()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: providerAssetId,
+            provider: "helius-solana",
+            providerAssetId: "ReviewMint111111111111111111111111111111111",
+            currencyCode: "RVT",
+            name: "Review Token",
+            providerType: "spl-token",
+            rawProviderPayload: { symbol: "RVT" },
+            retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+          })
+          yield* db.insert(schema.transactions).values({
+            id: transactionId,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            externalId: "provider-asset-review-replay",
+            timestamp: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerTransfers).values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId,
+            providerAssetId,
+            externalId: "provider-asset-review-replay",
+            timestamp: new Date("2026-07-20T10:00:00.000Z"),
+            direction: "inbound",
+            fromAddress: "external",
+            toAddress: "owned",
+            amount: "1",
+          })
+        })
+      )
+
+      const reviewedAt = new Date("2026-07-20T11:00:00.000Z")
+      const decision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.decideProviderAssetMapping({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            canonicalAssetId: null,
+            canonicalAssetSymbol: null,
+            canonicalAssetDraft: {
+              blockchain: {
+                name: "review-chain",
+                chainType: "solana",
+                chainId: null,
+                nativeAssetSymbol: "SOL",
+                explorerUrl: null,
+                logoUrl: null,
+                coingeckoPlatformId: "review-chain",
+              },
+              asset: {
+                contractAddress: "ReviewMint111111111111111111111111111111111",
+                name: "Review Token",
+                symbol: "RVT",
+                decimals: 9,
+                coingeckoCoinId: "review-token",
+                logoUrl: null,
+                type: "token",
+                isSpam: false,
+              },
+            },
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Reviewed",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt,
+            createReplayJobs: true,
+          })
+        )
+      )
+      const staleDecision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.decideProviderAssetMapping({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            canonicalAssetId: null,
+            canonicalAssetSymbol: null,
+            canonicalAssetDraft: {
+              blockchain: {
+                name: "wrong-review-chain",
+                chainType: "solana",
+                chainId: null,
+                nativeAssetSymbol: "SOL",
+                explorerUrl: null,
+                logoUrl: null,
+                coingeckoPlatformId: "wrong-review-chain",
+              },
+              asset: {
+                contractAddress: "WrongMint1111111111111111111111111111111111",
+                name: "Wrong Review Token",
+                symbol: "WRONG",
+                decimals: 9,
+                coingeckoCoinId: "wrong-review-token",
+                logoUrl: null,
+                type: "token",
+                isSpam: false,
+              },
+            },
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Stale review",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt,
+            createReplayJobs: true,
+          })
+        )
+      )
+
+      const persisted = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const jobs = yield* db
+            .select({ sourceId: schema.processingJobs.sourceId, mode: schema.processingJobs.mode })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const mappings = yield* db
+            .select({ canonicalAssetId: schema.providerAssetMappings.canonicalAssetId })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetId))
+          const staleAssets = yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.coingeckoCoinId, "wrong-review-token"))
+          return { jobs, mappings, staleAssets }
+        })
+      )
+
+      expect(decision).toMatchObject({
+        updated: true,
+        canonicalAsset: { symbol: "RVT" },
+        affectedSources: [{ sourceId: TEST_SOURCE_ID, principalId: TEST_PRINCIPAL_ID }],
+      })
+      expect(persisted.jobs).toEqual([{ sourceId: TEST_SOURCE_ID, mode: "replay" }])
+      expect(persisted.mappings[0]?.canonicalAssetId).toBe(decision.canonicalAsset?.id)
+      expect(staleDecision.updated).toBe(false)
+      expect(persisted.staleAssets).toHaveLength(0)
     })
   })
 })

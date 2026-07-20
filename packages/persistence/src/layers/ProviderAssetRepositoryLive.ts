@@ -4,12 +4,15 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, ilike, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, ilike, isNull, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
   ProviderAssetRepository,
+  type CanonicalAssetDraft,
+  type CanonicalAssetRecord,
+  type CanonicalBlockchainDraft,
   type ProviderAssetRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
@@ -41,6 +44,169 @@ const makeMissingIdentityError = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type ProviderAssetExecutor = Pick<typeof db, "insert" | "select" | "update">
+
+  const normalizeContractAddress = ({
+    chainType,
+    contractAddress,
+  }: {
+    readonly chainType: string
+    readonly contractAddress: string | null
+  }): string | null =>
+    chainType === "evm" && contractAddress !== null
+      ? contractAddress.toLowerCase()
+      : contractAddress
+
+  const upsertCanonicalAsset = ({
+    executor,
+    blockchain,
+    asset,
+    now,
+  }: {
+    readonly executor: ProviderAssetExecutor
+    readonly blockchain: CanonicalBlockchainDraft
+    readonly asset: CanonicalAssetDraft
+    readonly now: Date
+  }): Effect.Effect<CanonicalAssetRecord, SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      yield* executor
+        .insert(schema.blockchains)
+        .values({
+          name: blockchain.name,
+          chainType: blockchain.chainType,
+          chainId: blockchain.chainId,
+          nativeAssetSymbol: blockchain.nativeAssetSymbol,
+          explorerUrl: blockchain.explorerUrl,
+          logoUrl: blockchain.logoUrl,
+          coingeckoPlatformId: blockchain.coingeckoPlatformId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: schema.blockchains.name,
+          set: {
+            chainType: sql.raw("excluded.chain_type"),
+            chainId: sql.raw("excluded.chain_id"),
+            coingeckoPlatformId: sql.raw("excluded.coingecko_platform_id"),
+            updatedAt: now,
+          },
+        })
+        .pipe(
+          wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping.blockchain")
+        )
+
+      const [persistedBlockchain] = yield* executor
+        .select({ id: schema.blockchains.id, name: schema.blockchains.name })
+        .from(schema.blockchains)
+        .where(eq(schema.blockchains.name, blockchain.name))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "providerAssetRepository.decideProviderAssetMapping.loadBlockchain"
+          )
+        )
+
+      if (persistedBlockchain === undefined) {
+        return yield* Effect.fail(
+          new SyncEngineStorageError({
+            operation: "providerAssetRepository.decideProviderAssetMapping.loadBlockchain",
+            cause: { blockchainName: blockchain.name },
+          })
+        )
+      }
+
+      const contractAddress = normalizeContractAddress({
+        chainType: blockchain.chainType,
+        contractAddress: asset.contractAddress,
+      })
+      const assetFilter =
+        contractAddress === null
+          ? and(
+              eq(schema.assets.blockchainId, persistedBlockchain.id),
+              eq(sql<string>`upper(${schema.assets.symbol})`, asset.symbol.toUpperCase()),
+              eq(schema.assets.type, asset.type),
+              isNull(schema.assets.contractAddress)
+            )
+          : blockchain.chainType === "evm"
+            ? and(
+                eq(schema.assets.blockchainId, persistedBlockchain.id),
+                eq(sql<string>`lower(${schema.assets.contractAddress})`, contractAddress)
+              )
+            : and(
+                eq(schema.assets.blockchainId, persistedBlockchain.id),
+                eq(schema.assets.contractAddress, contractAddress)
+              )
+
+      const [existingAsset] = yield* executor
+        .select({ id: schema.assets.id })
+        .from(schema.assets)
+        .where(assetFilter)
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping.findAsset")
+        )
+      const assetValues = {
+        blockchainId: persistedBlockchain.id,
+        contractAddress,
+        name: asset.name,
+        symbol: asset.symbol.toUpperCase(),
+        decimals: asset.decimals,
+        coingeckoCoinId: asset.coingeckoCoinId,
+        type: asset.type,
+        isSpam: asset.isSpam,
+        updatedAt: now,
+      } as const
+      const [persistedAsset] =
+        existingAsset === undefined
+          ? yield* executor
+              .insert(schema.assets)
+              .values({ ...assetValues, logoUrl: asset.logoUrl, createdAt: now })
+              .returning({
+                id: schema.assets.id,
+                blockchainId: schema.assets.blockchainId,
+                name: schema.assets.name,
+                symbol: schema.assets.symbol,
+                decimals: schema.assets.decimals,
+                contractAddress: schema.assets.contractAddress,
+                type: schema.assets.type,
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.decideProviderAssetMapping.insertAsset"
+                )
+              )
+          : yield* executor
+              .update(schema.assets)
+              .set(
+                asset.logoUrl === null ? assetValues : { ...assetValues, logoUrl: asset.logoUrl }
+              )
+              .where(eq(schema.assets.id, existingAsset.id))
+              .returning({
+                id: schema.assets.id,
+                blockchainId: schema.assets.blockchainId,
+                name: schema.assets.name,
+                symbol: schema.assets.symbol,
+                decimals: schema.assets.decimals,
+                contractAddress: schema.assets.contractAddress,
+                type: schema.assets.type,
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.decideProviderAssetMapping.updateAsset"
+                )
+              )
+
+      if (persistedAsset === undefined) {
+        return yield* Effect.fail(
+          new SyncEngineStorageError({
+            operation: "providerAssetRepository.decideProviderAssetMapping.persistAsset",
+            cause: { assetSymbol: asset.symbol },
+          })
+        )
+      }
+
+      return { ...persistedAsset, blockchainName: persistedBlockchain.name }
+    })
 
   const upsertProviderAssets: ProviderAssetRepositoryShape["upsertProviderAssets"] = ({
     providerKey,
@@ -510,30 +676,113 @@ const make = Effect.gen(function* () {
     params
   ) =>
     db
-      .update(schema.providerAssetMappings)
-      .set({
-        mappingKind: params.mappingKind,
-        canonicalAssetId: params.canonicalAssetId,
-        canonicalAssetSymbol: params.canonicalAssetSymbol,
-        canonicalFiatCurrency: null,
-        mappingStatus: params.mappingStatus,
-        reviewerNotes: params.reviewerNotes,
-        sourceNotes: params.sourceNotes,
-        reviewedBy: params.reviewedBy,
-        reviewedAt: params.reviewedAt,
-        updatedAt: params.reviewedAt,
-      })
-      .where(
-        and(
-          eq(schema.providerAssetMappings.providerAssetRowId, params.providerAssetRowId),
-          eq(schema.providerAssetMappings.mappingStatus, "pending_review")
-        )
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const [mapping] = yield* tx
+            .select({ mappingStatus: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, params.providerAssetRowId))
+            .limit(1)
+            .for("update")
+            .pipe(wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping.lock"))
+
+          if (mapping?.mappingStatus !== "pending_review") {
+            return { updated: false, canonicalAsset: null, affectedSources: [] }
+          }
+
+          const canonicalAsset =
+            params.canonicalAssetDraft === null
+              ? null
+              : yield* upsertCanonicalAsset({
+                  executor: tx,
+                  blockchain: params.canonicalAssetDraft.blockchain,
+                  asset: params.canonicalAssetDraft.asset,
+                  now: params.reviewedAt,
+                })
+          const canonicalAssetId = canonicalAsset?.id ?? params.canonicalAssetId
+          const canonicalAssetSymbol = canonicalAsset?.symbol ?? params.canonicalAssetSymbol
+
+          const updated = yield* tx
+            .update(schema.providerAssetMappings)
+            .set({
+              mappingKind: params.mappingKind,
+              canonicalAssetId,
+              canonicalAssetSymbol,
+              canonicalFiatCurrency: null,
+              mappingStatus: params.mappingStatus,
+              reviewerNotes: params.reviewerNotes,
+              sourceNotes: params.sourceNotes,
+              reviewedBy: params.reviewedBy,
+              reviewedAt: params.reviewedAt,
+              updatedAt: params.reviewedAt,
+            })
+            .where(
+              and(
+                eq(schema.providerAssetMappings.providerAssetRowId, params.providerAssetRowId),
+                eq(schema.providerAssetMappings.mappingStatus, "pending_review")
+              )
+            )
+            .returning({ id: schema.providerAssetMappings.id })
+            .pipe(
+              wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping.update")
+            )
+
+          if (updated.length !== 1) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "providerAssetRepository.decideProviderAssetMapping.update",
+                cause: { providerAssetRowId: params.providerAssetRowId },
+              })
+            )
+          }
+
+          const affectedSources =
+            params.createReplayJobs && params.mappingStatus === "approved"
+              ? yield* tx
+                  .selectDistinct({
+                    sourceId: schema.providerTransfers.sourceId,
+                    principalId: schema.sources.principalId,
+                  })
+                  .from(schema.providerTransfers)
+                  .innerJoin(
+                    schema.sources,
+                    eq(schema.sources.id, schema.providerTransfers.sourceId)
+                  )
+                  .where(eq(schema.providerTransfers.providerAssetId, params.providerAssetRowId))
+                  .orderBy(asc(schema.providerTransfers.sourceId))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "providerAssetRepository.decideProviderAssetMapping.affectedSources"
+                    )
+                  )
+              : []
+
+          yield* Effect.forEach(affectedSources, (source) =>
+            tx
+              .insert(schema.processingJobs)
+              .values({
+                sourceId: source.sourceId,
+                principalId: source.principalId,
+                mode: "replay",
+                status: "pending",
+                attemptCount: 0,
+                maxAttempts: 3,
+                progressDetails: { mode: "replay" },
+                createdAt: params.reviewedAt,
+                updatedAt: params.reviewedAt,
+              })
+              .onConflictDoNothing()
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.decideProviderAssetMapping.createReplayJob"
+                )
+              )
+          )
+
+          return { updated: true, canonicalAsset, affectedSources }
+        })
       )
-      .returning({ id: schema.providerAssetMappings.id })
-      .pipe(
-        Effect.map((rows) => rows.length === 1),
-        wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping")
-      )
+      .pipe(wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping"))
 
   const listAffectedSources: ProviderAssetRepositoryShape["listAffectedSources"] = ({
     providerAssetRowId,

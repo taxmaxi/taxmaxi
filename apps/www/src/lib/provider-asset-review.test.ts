@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { nextProviderAssetSelection } from "./provider-asset-review"
+import {
+  appendUniqueProviderAssetReviews,
+  mergeProviderAssetReplayUpdates,
+  nextProviderAssetSelection,
+} from "./provider-asset-review"
 
 describe("provider asset review progression", () => {
   it("selects the row that moves into the reviewed row's position", () => {
@@ -18,5 +22,29 @@ describe("provider asset review progression", () => {
         rowIds: ["asset-a", "asset-b", "asset-c"],
       })
     ).toEqual({ remainingIds: ["asset-a", "asset-b"], selectedId: "asset-b" })
+  })
+
+  it("preserves failed replay entries while active jobs are refreshed", () => {
+    expect(
+      mergeProviderAssetReplayUpdates({
+        current: [
+          { sourceId: "failed", status: "failed_to_queue" },
+          { sourceId: "active", status: "queued" },
+        ],
+        updates: [{ sourceId: "active", status: "completed" }],
+      })
+    ).toEqual([
+      { sourceId: "failed", status: "failed_to_queue" },
+      { sourceId: "active", status: "completed" },
+    ])
+  })
+
+  it("does not append duplicate review rows from a repeated cursor request", () => {
+    expect(
+      appendUniqueProviderAssetReviews({
+        current: [{ id: "asset-a" }, { id: "asset-b" }],
+        incoming: [{ id: "asset-b" }, { id: "asset-c" }],
+      })
+    ).toEqual([{ id: "asset-a" }, { id: "asset-b" }, { id: "asset-c" }])
   })
 })

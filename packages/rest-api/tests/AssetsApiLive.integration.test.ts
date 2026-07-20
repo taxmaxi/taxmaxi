@@ -225,6 +225,56 @@ describe("AssetsApiLive", () => {
     expect(status).toBe(401)
   })
 
+  it("does not allow an admin to map a fiat provider row to a crypto asset", async () => {
+    const userId = crypto.randomUUID()
+    const providerAssetId = crypto.randomUUID()
+    const canonicalAssetId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: userId,
+          email: `${userId}@asset-review.test`,
+          role: "admin",
+        })
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "fiat-eur",
+          currencyCode: "EUR",
+          name: "Euro",
+          providerType: "fiat",
+          rawProviderPayload: { code: "EUR" },
+          retrievedAt: new Date("2026-07-20T09:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+        const assets = yield* db
+          .select({ id: schema.assets.id, symbol: schema.assets.symbol })
+          .from(schema.assets)
+        const asset = assets[0]
+        if (asset === undefined) return yield* Effect.dieMessage("Asset fixture is missing")
+        return asset.id
+      })
+    )
+
+    const response = await Effect.runPromise(
+      Effect.gen(function* () {
+        const request = HttpClientRequest.post(
+          `/v1/assets/provider-assets/${providerAssetId}/map`
+        ).pipe(
+          HttpClientRequest.bearerToken(`user_${userId}_admin`),
+          HttpClientRequest.bodyUnsafeJson({ canonicalAssetId })
+        )
+        return yield* HttpClient.execute(request)
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(400)
+  })
+
   it("records an admin rejection once and returns a conflict for a stale decision", async () => {
     const userId = crypto.randomUUID()
     const providerAssetId = crypto.randomUUID()

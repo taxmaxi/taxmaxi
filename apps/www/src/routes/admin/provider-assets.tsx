@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
+import { isTaxMaxiUnauthorizedError } from "taxmaxi"
 import type {
   ProviderAssetCandidates,
   ProviderAssetDecision,
@@ -45,7 +46,11 @@ import {
 import { Textarea } from "#/components/ui/textarea"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { cn } from "#/lib/utils"
-import { nextProviderAssetSelection } from "#/lib/provider-asset-review"
+import {
+  appendUniqueProviderAssetReviews,
+  mergeProviderAssetReplayUpdates,
+  nextProviderAssetSelection,
+} from "#/lib/provider-asset-review"
 
 /* ─────────────────────────────────────────────────────────
  * ANIMATION STORYBOARD
@@ -86,6 +91,7 @@ const AdminProviderAssetSearch = Schema.Struct({
 
 type AdminProviderAssetSearch = typeof AdminProviderAssetSearch.Type
 type ReplayView = {
+  readonly providerAssetId: string
   readonly sourceId: string
   readonly jobId: string | null
   readonly status: "completed" | "failed" | "failed_to_queue" | "queued" | "running"
@@ -113,7 +119,7 @@ export const Route = createFileRoute("/admin/provider-assets")({
         limit: 40,
       })
     } catch (error) {
-      if (isUnauthorized(error)) {
+      if (isTaxMaxiUnauthorizedError(error)) {
         await clearAuthSessionCookie()
         throw redirect({ to: "/login" })
       }
@@ -148,9 +154,21 @@ function ProviderAssetWorkbench() {
   const [submitting, setSubmitting] = useState<"create" | "map" | "reject" | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [replays, setReplays] = useState<ReadonlyArray<ReplayView>>([])
+  const [loadingMore, setLoadingMore] = useState(false)
   const rowRefs = useRef(new Map<string, HTMLButtonElement>())
+  const loadingCursorRef = useRef<string | null>(null)
 
   const selected = rows.find((row) => row.id === selectedId) ?? null
+
+  const resetDecisionState = useCallback(() => {
+    setCandidates([])
+    setSelectedCoinId(null)
+    setSelectedExistingId(null)
+    setExistingQuery("")
+    setExistingAssets([])
+    setReviewerNotes("")
+    setActionError(null)
+  }, [])
 
   useEffect(() => {
     if (reduceMotion) {
@@ -175,8 +193,9 @@ function ProviderAssetWorkbench() {
   }, [initial, search.asset])
 
   useEffect(() => {
+    resetDecisionState()
+
     if (selectedId === null) {
-      setCandidates([])
       return
     }
     let active = true
@@ -195,7 +214,7 @@ function ProviderAssetWorkbench() {
     return () => {
       active = false
     }
-  }, [internalTaxmaxi, selectedId])
+  }, [internalTaxmaxi, resetDecisionState, selectedId])
 
   useEffect(() => {
     if (existingQuery.trim().length < 2) {
@@ -221,28 +240,30 @@ function ProviderAssetWorkbench() {
       void Promise.all(
         activeReplays.map(async (replay) => {
           if (replay.jobId === null) return replay
-          const job = await taxmaxi().sources.getSyncJob({
+          const job = await internalTaxmaxi().assets.getProviderAssetReplay({
+            id: replay.providerAssetId,
             sourceId: replay.sourceId,
             jobId: replay.jobId,
           })
           return { ...replay, status: job.status, message: job.message }
         })
-      ).then(setReplays)
+      ).then((updates) =>
+        setReplays((current) => mergeProviderAssetReplayUpdates({ current, updates }))
+      )
     }, 2000)
     return () => window.clearInterval(timer)
-  }, [replays, taxmaxi])
+  }, [internalTaxmaxi, replays])
 
   const choose = useCallback(
     (id: string, keyboard = false) => {
+      resetDecisionState()
       setSelectedId(id)
-      setActionError(null)
-      setReviewerNotes("")
       void navigate({ search: (previous) => ({ ...previous, asset: id }), replace: keyboard })
       rowRefs.current
         .get(id)
         ?.scrollIntoView({ block: "nearest", behavior: keyboard ? "instant" : "smooth" })
     },
-    [navigate]
+    [navigate, resetDecisionState]
   )
 
   const moveSelection = useCallback(
@@ -267,7 +288,13 @@ function ProviderAssetWorkbench() {
 
   const applyDecision = useCallback(
     (decision: ProviderAssetDecision) => {
-      setReplays(decision.replays)
+      setReplays(
+        decision.replays.map((replay) => ({
+          ...replay,
+          providerAssetId: decision.providerAsset.id,
+        }))
+      )
+      resetDecisionState()
       if ((search.status ?? "pending_review") === "pending_review") {
         const progression = nextProviderAssetSelection({
           reviewedId: decision.providerAsset.id,
@@ -289,10 +316,8 @@ function ProviderAssetWorkbench() {
           )
         )
       }
-      setReviewerNotes("")
-      setActionError(null)
     },
-    [navigate, rows, search.status]
+    [navigate, resetDecisionState, rows, search.status]
   )
 
   const runAction = useCallback(
@@ -345,16 +370,27 @@ function ProviderAssetWorkbench() {
   )
 
   const loadMore = async () => {
-    if (nextCursor === null) return
-    const page = await internalTaxmaxi().assets.listProviderAssetReviews({
-      provider: search.provider,
-      query: search.q,
-      status: search.status ?? "pending_review",
-      cursor: nextCursor,
-      limit: 40,
-    })
-    setRows((current) => [...current, ...page.providerAssets])
-    setNextCursor(page.page.nextCursor)
+    if (nextCursor === null || loadingCursorRef.current === nextCursor) return
+    loadingCursorRef.current = nextCursor
+    setLoadingMore(true)
+    try {
+      const page = await internalTaxmaxi().assets.listProviderAssetReviews({
+        provider: search.provider,
+        query: search.q,
+        status: search.status ?? "pending_review",
+        cursor: nextCursor,
+        limit: 40,
+      })
+      setRows((current) =>
+        appendUniqueProviderAssetReviews({ current, incoming: page.providerAssets })
+      )
+      setNextCursor(page.page.nextCursor)
+    } catch (error) {
+      setActionError(messageFor(error))
+    } finally {
+      loadingCursorRef.current = null
+      setLoadingMore(false)
+    }
   }
 
   return (
@@ -529,12 +565,13 @@ function ProviderAssetWorkbench() {
               {nextCursor !== null ? (
                 <Button
                   className="mt-2 min-h-11 w-full"
+                  disabled={loadingMore}
                   onClick={() => void loadMore()}
                   type="button"
                   variant="outline"
                 >
                   <ArrowDown data-icon="inline-start" />
-                  Load more
+                  {loadingMore ? "Loading…" : "Load more"}
                 </Button>
               ) : null}
             </CardContent>
@@ -791,8 +828,11 @@ function ProviderAssetWorkbench() {
                 <Button
                   aria-label={`Retry replay for source ${replay.sourceId}`}
                   onClick={() =>
-                    void taxmaxi()
-                      .sources.replaySync({ sourceId: replay.sourceId })
+                    void internalTaxmaxi()
+                      .assets.retryProviderAssetReplay({
+                        id: replay.providerAssetId,
+                        sourceId: replay.sourceId,
+                      })
                       .then((job) =>
                         setReplays((current) =>
                           current.map((item) =>
@@ -920,14 +960,6 @@ function formatStatus(status: ProviderAssetReview["mappingStatus"]): string {
 function formatDate(value: DateTime.Utc): string {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
     DateTime.toDateUtc(value)
-  )
-}
-
-function isUnauthorized(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.name === "TaxMaxiError" &&
-    error.message.toLowerCase().includes("unauthorized")
   )
 }
 

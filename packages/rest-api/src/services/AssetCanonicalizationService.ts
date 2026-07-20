@@ -4,7 +4,12 @@
  * @module AssetCanonicalizationService
  */
 
-import type { CanonicalAssetRecord, ProviderAssetReviewRecord } from "@my/sync-engine/services"
+import type {
+  CanonicalAssetRecord,
+  ProviderAssetReviewRecord,
+  SourceSyncJobDetails,
+  SourceSyncJobSummary,
+} from "@my/sync-engine/services"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -122,6 +127,17 @@ export interface AssetCanonicalizationServiceShape {
     readonly rejectionReason: string
     readonly reviewedBy: string
   }) => Effect.Effect<ReviewProviderAssetResult, AssetCanonicalizationError>
+
+  readonly getProviderAssetReplay: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Effect.Effect<SourceSyncJobDetails, AssetCanonicalizationError>
+
+  readonly retryProviderAssetReplay: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceId: string
+  }) => Effect.Effect<SourceSyncJobSummary, AssetCanonicalizationError>
 }
 
 export class AssetCanonicalizationService extends Context.Tag("AssetCanonicalizationService")<

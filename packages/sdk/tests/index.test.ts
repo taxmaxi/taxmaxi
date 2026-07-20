@@ -221,6 +221,27 @@ const providerAssetDecisionResponseBody = JSON.stringify({
   replays: [],
 })
 
+const providerAssetReplayStartResponseBody = JSON.stringify({
+  sourceId: "00000000-0000-4000-8000-000000000020",
+  jobId: "00000000-0000-4000-8000-000000000021",
+  status: "queued",
+  message: null,
+})
+
+const providerAssetReplayJobResponseBody = JSON.stringify({
+  sourceId: "00000000-0000-4000-8000-000000000020",
+  jobId: "00000000-0000-4000-8000-000000000021",
+  status: "running",
+  phase: "classifying",
+  processedRecords: 2,
+  totalRecords: 10,
+  progressPercent: 20,
+  importedRecords: 10,
+  normalizedRecords: 2,
+  failedRecords: 0,
+  message: null,
+})
+
 const emptySourceTransactionsResponseBody = JSON.stringify({
   transactions: [],
   page: { nextCursor: null, hasMore: false },
@@ -657,6 +678,8 @@ describe("TaxMaxi Promise client", () => {
       assetCanonicalizationResponseBody,
       providerAssetDecisionResponseBody,
       providerAssetDecisionResponseBody,
+      providerAssetReplayJobResponseBody,
+      providerAssetReplayStartResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
       apiKey: "tm_assets",
@@ -721,6 +744,19 @@ describe("TaxMaxi Promise client", () => {
         rejectionReason: "Spam token",
       })
     ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
+    await expect(
+      taxmaxi.assets.getProviderAssetReplay({
+        id: providerAssetId,
+        sourceId: "00000000-0000-4000-8000-000000000020",
+        jobId: "00000000-0000-4000-8000-000000000021",
+      })
+    ).resolves.toMatchObject({ status: "running", progressPercent: 20 })
+    await expect(
+      taxmaxi.assets.retryProviderAssetReplay({
+        id: providerAssetId,
+        sourceId: "00000000-0000-4000-8000-000000000020",
+      })
+    ).resolves.toMatchObject({ status: "queued" })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
@@ -737,6 +773,12 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/reject",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020/jobs/00000000-0000-4000-8000-000000000021",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020",
       }),
     ])
   })

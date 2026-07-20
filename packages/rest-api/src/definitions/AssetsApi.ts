@@ -8,6 +8,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/p
 import * as Schema from "effect/Schema"
 import { AdminAuthMiddleware } from "./AuthMiddleware.ts"
 import { InternalServerError } from "./ApiErrors.ts"
+import { SourceSyncJobResponse, SourceSyncStartResponse } from "./SourcesApi.ts"
 
 export class AssetBadRequestError extends Schema.TaggedError<AssetBadRequestError>()(
   "AssetBadRequestError",
@@ -317,6 +318,31 @@ const rejectProviderAsset = HttpApiEndpoint.post(
   .addError(InternalServerError)
   .middleware(AdminAuthMiddleware)
 
+const ProviderAssetReplayPath = Schema.Struct({
+  id: Schema.UUID,
+  sourceId: Schema.UUID,
+})
+
+const getProviderAssetReplay = HttpApiEndpoint.get(
+  "getProviderAssetReplay",
+  "/assets/provider-assets/:id/replays/:sourceId/jobs/:jobId"
+)
+  .setPath(Schema.Struct({ ...ProviderAssetReplayPath.fields, jobId: Schema.UUID }))
+  .addSuccess(SourceSyncJobResponse)
+  .addError(AssetNotFoundError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
+const retryProviderAssetReplay = HttpApiEndpoint.post(
+  "retryProviderAssetReplay",
+  "/assets/provider-assets/:id/replays/:sourceId"
+)
+  .setPath(ProviderAssetReplayPath)
+  .addSuccess(SourceSyncStartResponse)
+  .addError(AssetNotFoundError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
@@ -325,6 +351,8 @@ export class AssetsApi extends HttpApiGroup.make("assets")
   .add(canonicalizeProviderAsset)
   .add(mapProviderAsset)
   .add(rejectProviderAsset)
+  .add(getProviderAssetReplay)
+  .add(retryProviderAssetReplay)
   .prefix("/v1")
   .annotateContext(
     OpenApi.annotations({
