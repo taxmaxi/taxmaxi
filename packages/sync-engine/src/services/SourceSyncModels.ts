@@ -157,6 +157,13 @@ export interface SourceSyncRepairableActiveJob {
 }
 
 /**
+ * SourceSyncPendingDispatchJob - Pending DB job that must be present in the source-sync queue.
+ */
+export interface SourceSyncPendingDispatchJob extends SourceSyncRepairableActiveJob {
+  readonly status: "pending"
+}
+
+/**
  * SourceSyncJobSummary - Public sync job creation/reuse result.
  */
 export interface SourceSyncJobSummary {

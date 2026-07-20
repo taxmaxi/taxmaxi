@@ -15,6 +15,7 @@ import {
   type AttachSourceSyncQueueMetadataParams,
   type SourceSyncExecutionJob,
   type SourceSyncJobDetails,
+  type SourceSyncPendingDispatchJob,
   type RecoverStaleSourceSyncJobParams,
   type SourceSyncJobRepositoryShape,
   type SourceSyncQueuePayload,
@@ -38,6 +39,10 @@ const makeConfigProvider = (overrides: Record<string, string> = {}) =>
   )
 
 const baseUpdatedAt = new Date("2026-01-01T00:00:00.000Z")
+
+const isPendingDispatchJob = (
+  job: SourceSyncRepairableActiveJob
+): job is SourceSyncPendingDispatchJob => job.status === "pending"
 
 const makeRepairableJob = ({
   id,
@@ -147,6 +152,8 @@ const makeRepositoryLayer = ({
         : Effect.succeed(executionJob),
     listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
     listRepairableActiveJobs: ({ limit }) => Effect.sync(() => remainingJobs.slice(0, limit)),
+    listPendingJobsNeedingDispatch: ({ limit }) =>
+      Effect.sync(() => remainingJobs.filter(isPendingDispatchJob).slice(0, limit)),
   } satisfies SourceSyncJobRepositoryShape)
 }
 
@@ -227,6 +234,33 @@ const runRepair = ({
     )
   )
 
+const runPendingDispatch = ({
+  repairableJobs,
+  enqueued,
+  attached,
+  recovered,
+}: {
+  readonly repairableJobs: ReadonlyArray<SourceSyncRepairableActiveJob>
+  readonly enqueued: Array<SourceSyncQueuePayload>
+  readonly attached: Array<AttachSourceSyncQueueMetadataParams>
+  readonly recovered: Array<RecoverStaleSourceSyncJobParams>
+}) =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const repair = yield* WorkerSourceSyncStartupRepair
+        return yield* repair.dispatchPending
+      }).pipe(
+        Effect.provide(
+          makeWorkerSourceSyncStartupRepairLive({
+            acquireQueue: () => Effect.succeed(makeQueue(enqueued)),
+          }).pipe(Layer.provideMerge(makeRepositoryLayer({ repairableJobs, attached, recovered })))
+        ),
+        Effect.withConfigProvider(makeConfigProvider())
+      )
+    )
+  )
+
 const runDispatchFollowUp = ({
   enqueued,
   attached,
@@ -287,6 +321,27 @@ const runDispatchFollowUp = ({
 }
 
 describe("WorkerSourceSyncStartupRepairLive", () => {
+  it("continuously dispatches pending jobs without recovering processing jobs", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const attached: Array<AttachSourceSyncQueueMetadataParams> = []
+    const recovered: Array<RecoverStaleSourceSyncJobParams> = []
+
+    const summary = await runPendingDispatch({
+      repairableJobs: [
+        makeRepairableJob({ id: "job-pending", status: "pending" }),
+        makeRepairableJob({ id: "job-processing", status: "processing" }),
+      ],
+      enqueued,
+      attached,
+      recovered,
+    })
+
+    expect(enqueued.map((payload) => payload.jobId)).toEqual(["job-pending"])
+    expect(attached.map((params) => params.jobId)).toEqual(["job-pending"])
+    expect(recovered).toEqual([])
+    expect(summary).toMatchObject({ scannedJobs: 1, requeuedPending: 1, failedProcessing: 0 })
+  })
+
   it("dispatches only the follow-up linked to a completed job", async () => {
     const enqueued: Array<SourceSyncQueuePayload> = []
     const attached: Array<AttachSourceSyncQueueMetadataParams> = []

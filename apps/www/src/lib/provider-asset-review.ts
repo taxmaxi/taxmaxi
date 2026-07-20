@@ -57,6 +57,19 @@ export const providerAssetReviewFilterKey = ({
   readonly status: "approved" | "pending_review" | "rejected"
 }): string => JSON.stringify([provider ?? null, query ?? null, status])
 
+export const providerAssetReviewLoaderDeps = ({
+  cursor,
+  provider,
+  q,
+  status,
+}: {
+  readonly asset?: string
+  readonly cursor?: string
+  readonly provider?: string
+  readonly q?: string
+  readonly status?: "approved" | "pending_review" | "rejected"
+}) => ({ cursor, provider, q, status })
+
 export const isCurrentExistingAssetSearchRequest = ({
   currentQuery,
   requestQuery,

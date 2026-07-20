@@ -623,6 +623,19 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(repairableJobIds).not.toContain(recentHeartbeat.id)
     expect(repairableJobIds).not.toContain(completed.id)
     expect(repairableJobIds).not.toContain(failed.id)
+
+    const pendingJobsNeedingDispatch = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.listPendingJobsNeedingDispatch({ staleBefore, limit: 20 })
+      )
+    )
+    const pendingJobIds = pendingJobsNeedingDispatch.map((job) => job.id)
+
+    expect(pendingJobIds).toContain(pendingMissingMetadata.id)
+    expect(pendingJobIds).toContain(stalePending.id)
+    expect(pendingJobIds).not.toContain(freshPending.id)
+    expect(pendingJobIds).not.toContain(staleHeartbeat.id)
+    expect(pendingJobIds).not.toContain(nullHeartbeat.id)
   })
 
   it("recovers a stale active job and allows a fresh job to start", async () => {

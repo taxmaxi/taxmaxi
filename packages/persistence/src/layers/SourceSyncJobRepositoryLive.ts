@@ -24,6 +24,7 @@ import {
   SourceSyncJobRepository,
   SyncEngineStorageError,
   type SourceSyncJobRepositoryShape,
+  type SourceSyncPendingDispatchJob,
   type SourceSyncRepairableActiveJob,
   type SourceSyncStaleActiveJob,
 } from "@my/sync-engine/services"
@@ -813,6 +814,52 @@ const make = Effect.gen(function* () {
         )
       )
 
+  const listPendingJobsNeedingDispatch: SourceSyncJobRepositoryShape["listPendingJobsNeedingDispatch"] =
+    ({ staleBefore, limit }) =>
+      db
+        .select({
+          id: schema.processingJobs.id,
+          sourceId: schema.processingJobs.sourceId,
+          principalId: schema.processingJobs.principalId,
+          mode: schema.processingJobs.mode,
+          status: schema.processingJobs.status,
+          startedAt: schema.processingJobs.startedAt,
+          heartbeatAt: schema.processingJobs.heartbeatAt,
+          updatedAt: schema.processingJobs.updatedAt,
+          workerId: schema.processingJobs.workerId,
+          queueName: schema.processingJobs.queueName,
+          queueJobId: schema.processingJobs.queueJobId,
+        })
+        .from(schema.processingJobs)
+        .where(
+          and(
+            isNotNull(schema.processingJobs.principalId),
+            eq(schema.processingJobs.status, "pending"),
+            or(
+              isNull(schema.processingJobs.queueName),
+              isNull(schema.processingJobs.queueJobId),
+              lt(schema.processingJobs.updatedAt, staleBefore)
+            )
+          )
+        )
+        .orderBy(asc(schema.processingJobs.updatedAt))
+        .limit(limit)
+        .pipe(
+          wrapSyncEngineSqlError("sourceSyncJobRepository.listPendingJobsNeedingDispatch"),
+          Effect.map((jobs) =>
+            jobs.flatMap((job) => {
+              if (job.status !== "pending") return []
+
+              return [
+                {
+                  ...job,
+                  status: job.status,
+                } satisfies SourceSyncPendingDispatchJob,
+              ]
+            })
+          )
+        )
+
   return SourceSyncJobRepository.of({
     findActiveJob,
     createOrReuseJob,
@@ -827,6 +874,7 @@ const make = Effect.gen(function* () {
     getExecutionJob,
     listStaleActiveJobs,
     listRepairableActiveJobs,
+    listPendingJobsNeedingDispatch,
   } satisfies SourceSyncJobRepositoryShape)
 })
 

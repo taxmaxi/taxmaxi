@@ -4,7 +4,7 @@
  * @module WorkerBullMqSourceSyncConsumerLive
  */
 
-import { Config, Effect, Layer, Runtime, Schema } from "effect"
+import { Config, Effect, Layer, Runtime, Schedule, Schema } from "effect"
 import { UnrecoverableError, Worker, type Job, type JobsOptions, type Processor } from "bullmq"
 import { Redis } from "ioredis"
 import { randomUUID } from "node:crypto"
@@ -21,6 +21,7 @@ import { WorkerSourceSyncStartupRepair } from "./WorkerSourceSyncStartupRepairLi
 const DEFAULT_QUEUE_PREFIX = "taxmaxi"
 const DEFAULT_SYNC_WORKER_CONCURRENCY = 1
 const DEFAULT_SYNC_WORKER_LOCK_DURATION_MS = 30_000
+const DEFAULT_PENDING_DISPATCH_INTERVAL_MS = 5_000
 const DEFAULT_RETRY_DELAY_MS = 5_000
 const PROCESS_WORKER_ID = `worker-${randomUUID()}`
 
@@ -32,6 +33,7 @@ export interface WorkerBullMqSourceSyncConsumerConfig {
   readonly queuePrefix: string
   readonly concurrency: number
   readonly lockDurationMs: number
+  readonly pendingDispatchIntervalMs: number
   readonly workerId: string
 }
 
@@ -117,6 +119,10 @@ const loadConfig = Effect.gen(function* () {
     lockDurationMs: yield* positiveConfig({
       name: "SYNC_WORKER_LOCK_DURATION_MS",
       defaultValue: DEFAULT_SYNC_WORKER_LOCK_DURATION_MS,
+    }),
+    pendingDispatchIntervalMs: yield* positiveConfig({
+      name: "SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS",
+      defaultValue: DEFAULT_PENDING_DISPATCH_INTERVAL_MS,
     }),
     workerId: yield* Config.string("WORKER_ID").pipe(
       Config.withDefault(PROCESS_WORKER_ID),
@@ -423,6 +429,20 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
             )
           )
       )
+      const dispatchPending = startupRepair.dispatchPending.pipe(
+        Effect.catchAll((error) =>
+          Effect.logWarning(
+            { operation: error.operation, cause: error.cause },
+            "source-sync-worker:pending-dispatch-failed"
+          )
+        ),
+        Effect.asVoid
+      )
+
+      yield* dispatchPending.pipe(
+        Effect.repeat(Schedule.spaced(config.pendingDispatchIntervalMs)),
+        Effect.forkScoped
+      )
 
       yield* Effect.logInfo(
         {
@@ -430,6 +450,7 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
           workerId: config.workerId,
           concurrency: config.concurrency,
           lockDurationMs: config.lockDurationMs,
+          pendingDispatchIntervalMs: config.pendingDispatchIntervalMs,
           queuePrefix: config.queuePrefix,
         },
         "source-sync-worker:started"

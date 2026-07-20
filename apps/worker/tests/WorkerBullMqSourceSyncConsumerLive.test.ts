@@ -98,6 +98,7 @@ const runWithConsumer = <A>({
   configOverrides,
   repair,
   dispatchFollowUp,
+  dispatchPending,
 }: {
   readonly effect: Effect.Effect<A>
   readonly executor: SourceSyncJobExecutorShape
@@ -115,6 +116,10 @@ const runWithConsumer = <A>({
     readonly sourceId: string
     readonly principalId: string
   }) => Effect.Effect<void, WorkerSourceSyncStartupRepairError>
+  readonly dispatchPending?: Effect.Effect<
+    WorkerSourceSyncStartupRepairSummary,
+    WorkerSourceSyncStartupRepairError
+  >
 }) =>
   Effect.runPromise(
     Effect.scoped(
@@ -136,6 +141,16 @@ const runWithConsumer = <A>({
                       stoppedAfterErrors: false,
                     }),
                   dispatchFollowUp: dispatchFollowUp ?? (() => Effect.void),
+                  dispatchPending:
+                    dispatchPending ??
+                    Effect.succeed({
+                      scannedJobs: 0,
+                      requeuedPending: 0,
+                      failedProcessing: 0,
+                      skippedJobs: 0,
+                      erroredJobs: 0,
+                      stoppedAfterErrors: false,
+                    }),
                 })
               )
             )
@@ -147,6 +162,32 @@ const runWithConsumer = <A>({
   )
 
 describe("WorkerBullMqSourceSyncConsumerLive", () => {
+  it("keeps dispatching pending database jobs while the worker is running", async () => {
+    let dispatchCount = 0
+
+    await runWithConsumer({
+      executor: {
+        execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "completed" })),
+      },
+      dispatchPending: Effect.sync(() => {
+        dispatchCount += 1
+        return {
+          scannedJobs: 0,
+          requeuedPending: 0,
+          failedProcessing: 0,
+          skippedJobs: 0,
+          erroredJobs: 0,
+          stoppedAfterErrors: false,
+        }
+      }),
+      configOverrides: { SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS: "1" },
+      acquireWorker: () => Effect.succeed({ close: Effect.void }),
+      effect: Effect.sleep("10 millis"),
+    })
+
+    expect(dispatchCount).toBeGreaterThan(1)
+  })
+
   it("decodes valid sync and replay payloads and passes the DB job id to the executor", async () => {
     const executed: Array<ExecuteSourceSyncJobParams> = []
     let processor: WorkerBullMqSourceSyncProcessor | null = null

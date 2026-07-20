@@ -7,6 +7,7 @@ import {
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
+  providerAssetReviewLoaderDeps,
 } from "./provider-asset-review"
 
 describe("provider asset review progression", () => {
@@ -88,6 +89,19 @@ describe("provider asset review progression", () => {
     expect(
       providerAssetReviewFilterKey({ provider: "coinbase", query: "BTC", status: "approved" })
     ).not.toBe(current)
+  })
+
+  it("does not reload review rows when only the selected asset changes", () => {
+    const filters = {
+      cursor: "00000000-0000-0000-0000-000000000001",
+      provider: "coinbase",
+      q: "ZEC",
+      status: "pending_review" as const,
+    }
+
+    expect(providerAssetReviewLoaderDeps({ ...filters, asset: "asset-a" })).toEqual(
+      providerAssetReviewLoaderDeps({ ...filters, asset: "asset-b" })
+    )
   })
 
   it("discards existing-asset results from an old query", () => {

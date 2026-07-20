@@ -53,6 +53,7 @@ import {
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
+  providerAssetReviewLoaderDeps,
 } from "#/lib/provider-asset-review"
 
 /* ─────────────────────────────────────────────────────────
@@ -107,7 +108,7 @@ export const Route = createFileRoute("/admin/provider-assets")({
     const { isAuthenticated } = await getAuthStatus()
     if (!isAuthenticated) throw redirect({ to: "/login" })
   },
-  loaderDeps: ({ search }) => search,
+  loaderDeps: ({ search }) => providerAssetReviewLoaderDeps(search),
   loader: async ({ context, deps }) => {
     try {
       const currentUser = await context.taxmaxi().auth.me()
@@ -225,9 +226,11 @@ function ProviderAssetWorkbench() {
     setRows(initial.providerAssets)
     setTotalCount(initial.totalCount)
     setNextCursor(initial.page.nextCursor)
-    const nextSelected = search.asset ?? null
-    setSelectedId(nextSelected)
-  }, [initial, search.asset])
+  }, [initial])
+
+  useEffect(() => {
+    setSelectedId(search.asset ?? null)
+  }, [search.asset])
 
   useEffect(() => {
     resetDecisionState()

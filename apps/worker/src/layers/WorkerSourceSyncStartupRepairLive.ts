@@ -88,6 +88,10 @@ export class WorkerSourceSyncStartupRepair extends Context.Tag("WorkerSourceSync
     readonly dispatchFollowUp: (
       params: DispatchSourceSyncFollowUpParams
     ) => Effect.Effect<void, WorkerSourceSyncStartupRepairError>
+    readonly dispatchPending: Effect.Effect<
+      WorkerSourceSyncStartupRepairSummary,
+      WorkerSourceSyncStartupRepairError
+    >
   }
 >() {}
 
@@ -615,6 +619,32 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           })
         })
 
+      const dispatchPendingBatch = (
+        queue: WorkerSourceSyncStartupRepairQueue
+      ): Effect.Effect<WorkerSourceSyncStartupRepairSummary, WorkerSourceSyncStartupRepairError> =>
+        Effect.gen(function* () {
+          const now = yield* currentDate
+          const staleBefore = new Date(now.getTime() - config.staleAfterMs)
+          const jobs = yield* repository
+            .listPendingJobsNeedingDispatch({ staleBefore, limit: config.batchSize })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new WorkerSourceSyncStartupRepairError({
+                    operation: "workerSourceSyncStartupRepair.listPendingJobsNeedingDispatch",
+                    cause,
+                  })
+              )
+            )
+          const outcomes = yield* Effect.forEach(
+            jobs,
+            (job) => repairJob({ job, queue, repository, config, now }),
+            { concurrency: 1 }
+          )
+
+          return countOutcomes({ jobs, outcomes, batchSize: config.batchSize })
+        })
+
       const repairUntilDrained = (
         queue: WorkerSourceSyncStartupRepairQueue,
         accumulated: WorkerSourceSyncStartupRepairSummary
@@ -714,7 +744,30 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           })
         )
 
-      return WorkerSourceSyncStartupRepair.of({ repair, dispatchFollowUp })
+      const dispatchPending = Effect.scoped(
+        Effect.gen(function* () {
+          const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
+            queueToClose.close.pipe(
+              Effect.catchAll((error) =>
+                Effect.logWarning(
+                  { operation: error.operation, cause: error.cause },
+                  "source-sync-worker:pending-dispatch-queue-close-failed"
+                )
+              )
+            )
+          )
+          const summary = yield* dispatchPendingBatch(queue)
+
+          yield* Effect.logInfo(
+            { ...summary, staleAfterMs: config.staleAfterMs, batchSize: config.batchSize },
+            "source-sync-worker:pending-dispatch-completed"
+          )
+
+          return summary
+        })
+      )
+
+      return WorkerSourceSyncStartupRepair.of({ repair, dispatchFollowUp, dispatchPending })
     })
   )
 

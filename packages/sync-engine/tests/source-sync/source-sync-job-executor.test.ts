@@ -77,6 +77,8 @@ const unusedJobLifecycleMethods = {
   listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
   listRepairableActiveJobs: () =>
     Effect.dieMessage("listRepairableActiveJobs should not be called"),
+  listPendingJobsNeedingDispatch: () =>
+    Effect.dieMessage("listPendingJobsNeedingDispatch should not be called"),
 }
 
 const makeExecutorLayer = ({
@@ -170,6 +172,7 @@ const makeExecutorLayer = ({
       }),
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
+    listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     completeJob: ({ state }) =>
       Effect.sync(() => {
         events.push(`complete:${state.importedRecords}:${state.normalizedRecords}`)

@@ -33,6 +33,8 @@ const unusedJobLifecycleMethods = {
   listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
   listRepairableActiveJobs: () =>
     Effect.dieMessage("listRepairableActiveJobs should not be called"),
+  listPendingJobsNeedingDispatch: () =>
+    Effect.dieMessage("listPendingJobsNeedingDispatch should not be called"),
 }
 
 const makeActiveJob = ({
@@ -100,6 +102,7 @@ const makeServiceLayer = ({
     recordRetryableFailure: unusedJobLifecycleMethods.recordRetryableFailure,
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
+    listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     failJob: () => Effect.dieMessage("failJob should not be called"),
     completeJob: () => Effect.dieMessage("completeJob should not be called"),
     getJob: () => Effect.dieMessage("getJob should not be called"),
