@@ -507,7 +507,6 @@ const make = Effect.gen(function* () {
               return []
             }
 
-            const sameAccount = sibling.externalAccountId === sourceRecord.externalAccountId
             const sameType = payload.type === providerTransactionType
 
             return [
@@ -519,7 +518,6 @@ const make = Effect.gen(function* () {
                   : sameType
                     ? ("exact_time_same_type" as const)
                     : ("timed_complementary_type" as const),
-                score: (groupMatches ? 100 : 0) + (sameType ? 10 : 0) + (sameAccount ? 5 : 0),
                 timestampDistance,
               },
             ]
@@ -566,24 +564,17 @@ const make = Effect.gen(function* () {
         })
       const eligibleCandidates =
         groupedCandidates.length > 0
-          ? groupedCandidates
+          ? groupedCandidates.length === 1
+            ? groupedCandidates
+            : []
           : ungroupedCandidate !== undefined &&
               ungroupedCandidates.length === 1 &&
               !hasCompetingUngroupedRelease(ungroupedCandidate)
             ? ungroupedCandidates
             : []
-      const rankedCandidates = eligibleCandidates.sort(
-        (left, right) =>
-          right.score - left.score || left.timestampDistance - right.timestampDistance
-      )
-      const [paired, runnerUp] = rankedCandidates
-      const isAmbiguous =
-        paired !== undefined &&
-        runnerUp !== undefined &&
-        paired.score === runnerUp.score &&
-        paired.timestampDistance === runnerUp.timestampDistance
+      const [paired] = eligibleCandidates
 
-      if (paired === undefined || isAmbiguous) {
+      if (paired === undefined) {
         return yield* Effect.fail(
           new CoinbaseRecordNormalizationError({
             message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,

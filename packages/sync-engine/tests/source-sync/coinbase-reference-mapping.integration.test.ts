@@ -876,6 +876,87 @@ describe("coinbase reference mappings", () => {
     )
   })
 
+  it("does not pair a grouped unstaking row with multiple compatible credits", async () => {
+    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-ambiguous-grouped-release",
+        externalParentId: "ambiguous-unstake-group",
+        occurredAt,
+        payload: {
+          id: "tx-ambiguous-grouped-release",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "-1.00000000", currency: "ETH2" },
+          native_amount: { amount: "-2000.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path:
+            "/v2/accounts/coinbase-account-1/transactions/tx-ambiguous-grouped-release",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-first-grouped-credit",
+        externalParentId: "ambiguous-unstake-group",
+        occurredAt,
+        payload: {
+          id: "tx-first-grouped-credit",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "0.99000000", currency: "ETH2" },
+          native_amount: { amount: "1980.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-first-grouped-credit",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-second-grouped-credit",
+        externalParentId: "ambiguous-unstake-group",
+        occurredAt: new Date("2025-05-01T10:00:01.000Z"),
+        payload: {
+          id: "tx-second-grouped-credit",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "0.98000000", currency: "ETH2" },
+          native_amount: { amount: "1960.00", currency: "EUR" },
+          created_at: "2025-05-01T10:00:01.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-second-grouped-credit",
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedCoinbaseSource()
+        yield* runSync()
+        const state = yield* fetchNormalizationState()
+        const releaseRow = state.rawRows.find(
+          (row) => row.externalRecordId === "tx-ambiguous-grouped-release"
+        )
+
+        expect(releaseRow?.normalizedAt).toBeNull()
+        expect(releaseRow?.normalizationError).toContain(
+          "Expected one unambiguous paired principal row"
+        )
+        expect(
+          state.transactions
+            .map((row) => row.externalId)
+            .sort((left, right) => left.localeCompare(right))
+        ).toEqual(["tx-first-grouped-credit", "tx-second-grouped-credit"])
+        expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
+      })
+    )
+  })
+
   it.each([
     {
       caseName: "a candidate from a provider group",

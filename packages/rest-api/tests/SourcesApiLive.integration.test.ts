@@ -757,7 +757,7 @@ describe("SourcesApiLive", () => {
         assetId: TEST_BTC_ASSET_ID,
         timestamp: new Date("2025-03-10T12:00:00.000Z"),
         direction: "outbound",
-        purpose: "principal",
+        purpose: "fee",
         taxTreatment: "pending_review",
         reconciliationStatus: "unmatched",
         amount: "0.1",

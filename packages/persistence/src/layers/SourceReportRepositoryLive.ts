@@ -599,8 +599,7 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.inventoryMovements.sourceId, params.sourceId),
-            eq(schema.inventoryMovements.direction, "outbound"),
-            eq(schema.inventoryMovements.purpose, "principal")
+            eq(schema.inventoryMovements.direction, "outbound")
           )
         )
         .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.custodyAllocations"))
