@@ -456,11 +456,11 @@ const make = Effect.gen(function* () {
         .from(schema.transactionLegs)
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.getOverview.legs"))
-      const [fifoLotCount] = yield* db
-        .select({ count: count(schema.fifoLots.id) })
+      const fifoLotRows = yield* db
+        .select({ assetId: schema.fifoLots.assetId })
         .from(schema.fifoLots)
         .where(eq(schema.fifoLots.sourceId, params.sourceId))
-        .pipe(wrapSqlError("sourceReportRepository.getOverview.fifoLotCount"))
+        .pipe(wrapSqlError("sourceReportRepository.getOverview.fifoLots"))
       const matchRows = yield* db
         .select({
           gainLoss: schema.disposalMatches.gainLoss,
@@ -511,12 +511,15 @@ const make = Effect.gen(function* () {
           }
         }
       }
+      for (const row of fifoLotRows) {
+        assetIds.add(row.assetId)
+      }
 
       const totals = {
         transactionCount: transactionCount?.count ?? 0,
         legCount: legRows.length,
         assetCount: assetIds.size,
-        fifoLotCount: fifoLotCount?.count ?? 0,
+        fifoLotCount: fifoLotRows.length,
         disposalCount,
         incomeCount,
         feeCount,

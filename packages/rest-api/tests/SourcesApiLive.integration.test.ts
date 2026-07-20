@@ -969,6 +969,63 @@ describe("SourcesApiLive", () => {
     }).pipe(Effect.provide(HttpLive))
   )
 
+  it.effect("counts provider-origin FIFO lot assets in the source overview", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+
+      const transactionId = "00000000-0000-0000-0000-000000046501"
+      const providerTransferId = "00000000-0000-0000-0000-000000046502"
+      const db = yield* drizzle
+
+      yield* db.insert(schema.transactions).values({
+        id: transactionId,
+        sourceId: fixture.sourceId,
+        externalId: "provider-only-receive",
+        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        principalId: fixture.principalId,
+      })
+      yield* db.insert(schema.providerTransfers).values({
+        id: providerTransferId,
+        sourceId: fixture.sourceId,
+        transactionId,
+        externalId: "provider-only-receive:principal",
+        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        direction: "inbound",
+        fromAddress: "bc1qprovideronlysource",
+        toAccountRef: "coinbase-account-1",
+        amount: "0.25",
+      })
+      yield* db.insert(schema.fifoLots).values({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-03-11T12:00:00.000Z"),
+        originalAmount: "0.25",
+        remainingAmount: "0.25",
+        costBasisPerToken: "0",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+        sourceProviderTransferId: providerTransferId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+
+      expect(overview.totals).toMatchObject({
+        transactionCount: 1,
+        legCount: 0,
+        assetCount: 1,
+        fifoLotCount: 1,
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
   it.effect(
     "labels deductible fees and internal transfer disposals without taxable treatment",
     () =>

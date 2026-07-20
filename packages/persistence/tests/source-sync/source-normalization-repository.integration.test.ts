@@ -957,7 +957,6 @@ describe("SourceNormalizationRepositoryLive", () => {
         return { lot, matches }
       })
     )
-
     expect(state.lot?.remainingAmount).toContain("0.60000000")
     expect(state.matches).toEqual([
       expect.objectContaining({ matchedAmount: expect.stringContaining("0.40000000") }),
@@ -1782,6 +1781,17 @@ describe("SourceNormalizationRepositoryLive", () => {
         return { providerTransfer, movement, lots }
       })
     )
+    const positions = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(PortfolioRepository, (repository) =>
+          repository.listAssetPositions({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        ),
+        layer: PortfolioRepositoryLive,
+      })
+    )
 
     expect(state.providerTransfer).toEqual(
       expect.objectContaining({
@@ -1806,6 +1816,15 @@ describe("SourceNormalizationRepositoryLive", () => {
         costBasisStatus: "pending_review",
         originalAmount: expect.stringContaining("0.25000000"),
         remainingAmount: expect.stringContaining("0.25000000"),
+      }),
+    ])
+    expect(positions).toEqual([
+      expect.objectContaining({
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.25",
+        costBasis: null,
+        costBasisCurrency: null,
+        costBasisStatus: "pending_review",
       }),
     ])
   })
