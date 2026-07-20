@@ -1699,6 +1699,42 @@ const make = Effect.gen(function* () {
       legs.filter((leg) => leg.kind === "fee"),
       (leg) =>
         Effect.gen(function* () {
+          const amountComparison = yield* compareDecimalQuantities({
+            left: leg.amount,
+            right: "0",
+          })
+
+          if (amountComparison === 0) {
+            const [existingMovement] = yield* executor
+              .select({ id: schema.inventoryMovements.id })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionLegId, leg.id))
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.selectZeroMovement"
+                )
+              )
+
+            if (existingMovement === undefined) {
+              return
+            }
+
+            yield* resetInventoryMovementAllocations({
+              executor,
+              movementId: existingMovement.id,
+            })
+            yield* executor
+              .delete(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.id, existingMovement.id))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.deleteZeroMovement"
+                )
+              )
+            return
+          }
+
           if (leg.transactionId === null) {
             return yield* Effect.fail(
               toSyncEngineStorageError({

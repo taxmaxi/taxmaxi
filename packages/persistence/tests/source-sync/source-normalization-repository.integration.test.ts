@@ -1694,6 +1694,32 @@ describe("SourceNormalizationRepositoryLive", () => {
 
     await normalizeSend(
       buildSendPayload({
+        status: "completed",
+        amount: "-0.20000000",
+        feeAmount: "0",
+      })
+    )
+
+    const zeroFeeState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots)
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        return { lot, movements, allocations }
+      })
+    )
+
+    expect(zeroFeeState.lot?.remainingAmount).toContain("0.80000000")
+    expect(zeroFeeState.movements).toEqual([
+      expect.objectContaining({ purpose: "principal", amount: expect.stringContaining("0.2") }),
+    ])
+    expect(zeroFeeState.allocations).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.2") }),
+    ])
+
+    await normalizeSend(
+      buildSendPayload({
         status: "pending",
         amount: "-0.20000000",
         feeAmount: "0.02000000",
