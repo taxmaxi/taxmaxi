@@ -950,7 +950,7 @@ describe("coinbase reference mappings", () => {
         expect(
           state.transactions
             .map((row) => row.externalId)
-            .sort((left, right) => left.localeCompare(right))
+            .sort((left, right) => (left ?? "").localeCompare(right ?? ""))
         ).toEqual(["tx-first-grouped-credit", "tx-second-grouped-credit"])
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
