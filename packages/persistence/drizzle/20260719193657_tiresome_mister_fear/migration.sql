@@ -1,2 +1,0 @@
-CREATE TYPE "fifo_lot_cost_basis_status" AS ENUM('known', 'pending_review');--> statement-breakpoint
-ALTER TABLE "fifo_lots" ADD COLUMN "cost_basis_status" "fifo_lot_cost_basis_status" DEFAULT 'known'::"fifo_lot_cost_basis_status" NOT NULL;

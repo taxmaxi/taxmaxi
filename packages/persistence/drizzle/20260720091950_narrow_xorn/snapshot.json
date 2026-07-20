@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "531aa06b-3fa9-4690-8a96-41ed5c017952",
+  "id": "0ff64779-a659-446c-a1cf-f1790730275e",
   "prevIds": ["57e87596-4a19-4c3c-9e74-4150aef0fa8a"],
   "ddl": [
     {
@@ -13,6 +13,12 @@
     {
       "values": ["native", "token", "nft"],
       "name": "asset_type",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["known", "pending_review"],
+      "name": "fifo_lot_cost_basis_status",
       "entityType": "enums",
       "schema": "public"
     },
@@ -1644,6 +1650,19 @@
       "generated": null,
       "identity": null,
       "name": "cost_basis_currency",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "fifo_lots"
+    },
+    {
+      "type": "fifo_lot_cost_basis_status",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'known'",
+      "generated": null,
+      "identity": null,
+      "name": "cost_basis_status",
       "entityType": "columns",
       "schema": "public",
       "table": "fifo_lots"

@@ -1,3 +1,4 @@
+CREATE TYPE "fifo_lot_cost_basis_status" AS ENUM('known', 'pending_review');--> statement-breakpoint
 CREATE TYPE "inventory_movement_direction" AS ENUM('inbound', 'outbound');--> statement-breakpoint
 CREATE TYPE "inventory_movement_purpose" AS ENUM('principal', 'fee', 'reward');--> statement-breakpoint
 CREATE TYPE "inventory_movement_reconciliation_status" AS ENUM('unmatched', 'matched', 'needs_review');--> statement-breakpoint
@@ -32,6 +33,7 @@ CREATE TABLE "inventory_movements" (
 	CONSTRAINT "inventory_movements_origin_present" CHECK (num_nonnulls("provider_transfer_id", "transaction_leg_id") = 1)
 );
 --> statement-breakpoint
+ALTER TABLE "fifo_lots" ADD COLUMN "cost_basis_status" "fifo_lot_cost_basis_status" DEFAULT 'known'::"fifo_lot_cost_basis_status" NOT NULL;--> statement-breakpoint
 ALTER TABLE "fifo_lots" ADD COLUMN "source_provider_transfer_id" uuid;--> statement-breakpoint
 ALTER TABLE "fifo_lots" ALTER COLUMN "source_leg_id" DROP NOT NULL;--> statement-breakpoint
 DROP INDEX "idx_fifo_lots_source_leg";--> statement-breakpoint
