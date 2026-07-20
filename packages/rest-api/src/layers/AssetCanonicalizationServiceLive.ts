@@ -64,6 +64,9 @@ export const hasStrongProviderIdentityEvidence = ({
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
+export const providerAssetCanonicalType = (providerType: string | null): "nft" | "token" =>
+  providerType?.trim().toLowerCase() === "nft" ? "nft" : "token"
+
 const isNonEmptyString = (value: string) => value.trim() !== ""
 
 const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
@@ -379,7 +382,7 @@ const buildTokenCanonicalDrafts = ({
       decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
       coingeckoCoinId: coin.id,
       logoUrl: coin.image?.small ?? null,
-      type: "token",
+      type: providerAssetCanonicalType(providerAsset.providerType),
       isSpam: false,
     },
   }

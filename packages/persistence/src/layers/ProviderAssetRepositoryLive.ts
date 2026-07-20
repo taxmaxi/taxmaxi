@@ -161,6 +161,24 @@ const make = Effect.gen(function* () {
           ? yield* executor
               .insert(schema.assets)
               .values({ ...assetValues, logoUrl: asset.logoUrl, createdAt: now })
+              .onConflictDoUpdate(
+                contractAddress === null
+                  ? {
+                      target: schema.assets.blockchainId,
+                      targetWhere: sql`${schema.assets.contractAddress} is null`,
+                      set:
+                        asset.logoUrl === null
+                          ? assetValues
+                          : { ...assetValues, logoUrl: asset.logoUrl },
+                    }
+                  : {
+                      target: [schema.assets.blockchainId, schema.assets.contractAddress],
+                      set:
+                        asset.logoUrl === null
+                          ? assetValues
+                          : { ...assetValues, logoUrl: asset.logoUrl },
+                    }
+              )
               .returning({
                 id: schema.assets.id,
                 blockchainId: schema.assets.blockchainId,

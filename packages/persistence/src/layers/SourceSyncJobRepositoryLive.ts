@@ -22,6 +22,7 @@ import {
   SourceSyncJobExecutionRecordNotFoundError,
   SourceSyncJobRecordNotVisibleError,
   SourceSyncJobRepository,
+  SyncEngineStorageError,
   type SourceSyncJobRepositoryShape,
   type SourceSyncRepairableActiveJob,
   type SourceSyncStaleActiveJob,
@@ -90,7 +91,7 @@ const toExecutionJob = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
-  type SourceSyncJobExecutor = Pick<typeof db, "insert">
+  type SourceSyncJobExecutor = Pick<typeof db, "insert" | "update">
 
   const preserveExpectedExecutionError = (operation: string) =>
     Effect.mapError((error: unknown) =>
@@ -102,37 +103,56 @@ const make = Effect.gen(function* () {
 
   const materializeFollowUpJob = ({
     executor,
+    jobId,
     sourceId,
     principalId,
     followUpMode,
     createdAt,
   }: {
     readonly executor: SourceSyncJobExecutor
+    readonly jobId: string
     readonly sourceId: string
     readonly principalId: string
     readonly followUpMode: SourceSyncJobMode | null
     readonly createdAt: Date
   }) =>
-    followUpMode === null
-      ? Effect.void
-      : executor
-          .insert(schema.processingJobs)
-          .values({
-            sourceId,
-            principalId,
-            mode: followUpMode,
-            status: "pending",
-            attemptCount: 0,
-            maxAttempts: 3,
-            progressDetails: { mode: followUpMode },
-            createdAt,
-            updatedAt: createdAt,
+    Effect.gen(function* () {
+      if (followUpMode === null) return
+
+      const [followUpJob] = yield* executor
+        .insert(schema.processingJobs)
+        .values({
+          sourceId,
+          principalId,
+          mode: followUpMode,
+          status: "pending",
+          attemptCount: 0,
+          maxAttempts: 3,
+          progressDetails: { mode: followUpMode },
+          createdAt,
+          updatedAt: createdAt,
+        })
+        .returning({ id: schema.processingJobs.id })
+        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.insert"))
+
+      if (followUpJob === undefined) {
+        return yield* Effect.fail(
+          new SyncEngineStorageError({
+            operation: "sourceSyncJobRepository.materializeFollowUpJob.insert",
+            cause: { sourceId, jobId },
           })
-          .onConflictDoNothing()
-          .pipe(
-            Effect.asVoid,
-            wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob")
-          )
+        )
+      }
+
+      yield* executor
+        .update(schema.processingJobs)
+        .set({ followUpJobId: followUpJob.id })
+        .where(eq(schema.processingJobs.id, jobId))
+        .pipe(
+          Effect.asVoid,
+          wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.link")
+        )
+    })
 
   const selectActiveJobFields = {
     id: schema.processingJobs.id,
@@ -481,6 +501,7 @@ const make = Effect.gen(function* () {
 
           yield* materializeFollowUpJob({
             executor: tx,
+            jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
             followUpMode: job.followUpMode,
@@ -531,6 +552,7 @@ const make = Effect.gen(function* () {
 
           yield* materializeFollowUpJob({
             executor: tx,
+            jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
             followUpMode: job.followUpMode,
@@ -589,6 +611,7 @@ const make = Effect.gen(function* () {
 
           yield* materializeFollowUpJob({
             executor: tx,
+            jobId: job.id,
             sourceId: job.sourceId,
             principalId: job.principalId,
             followUpMode: job.followUpMode,
@@ -601,47 +624,57 @@ const make = Effect.gen(function* () {
 
   const getJob: SourceSyncJobRepositoryShape["getJob"] = ({ principalId, sourceId, jobId }) =>
     Effect.gen(function* () {
-      const [job] = yield* db
-        .select({
-          id: schema.processingJobs.id,
-          sourceId: schema.processingJobs.sourceId,
-          status: schema.processingJobs.status,
-          errorMessage: schema.processingJobs.errorMessage,
-          progressDetails: schema.processingJobs.progressDetails,
-        })
-        .from(schema.processingJobs)
-        .where(
-          and(
-            eq(schema.processingJobs.id, jobId),
-            eq(schema.processingJobs.sourceId, sourceId),
-            eq(schema.processingJobs.principalId, principalId)
+      let visibleJobId = jobId
+
+      while (true) {
+        const [job] = yield* db
+          .select({
+            id: schema.processingJobs.id,
+            sourceId: schema.processingJobs.sourceId,
+            status: schema.processingJobs.status,
+            errorMessage: schema.processingJobs.errorMessage,
+            progressDetails: schema.processingJobs.progressDetails,
+            followUpJobId: schema.processingJobs.followUpJobId,
+          })
+          .from(schema.processingJobs)
+          .where(
+            and(
+              eq(schema.processingJobs.id, visibleJobId),
+              eq(schema.processingJobs.sourceId, sourceId),
+              eq(schema.processingJobs.principalId, principalId)
+            )
           )
-        )
-        .limit(1)
-        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.getJob.select"))
+          .limit(1)
+          .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.getJob.select"))
 
-      if (job === undefined) {
-        return yield* Effect.fail(new SourceSyncJobRecordNotVisibleError({ sourceId, jobId }))
-      }
+        if (job === undefined) {
+          return yield* Effect.fail(new SourceSyncJobRecordNotVisibleError({ sourceId, jobId }))
+        }
 
-      const progress = yield* decodeSourceSyncJobProgressSnapshot(job.progressDetails)
+        if (job.followUpJobId !== null) {
+          visibleJobId = job.followUpJobId
+          continue
+        }
 
-      return {
-        sourceId: job.sourceId,
-        jobId: job.id,
-        status: toPublicStatus(job.status),
-        phase: progress?.phase ?? null,
-        processedRecords: progress?.processedRecords ?? null,
-        totalRecords: progress?.totalRecords ?? null,
-        progressPercent: getSourceSyncProgressPercent({
+        const progress = yield* decodeSourceSyncJobProgressSnapshot(job.progressDetails)
+
+        return {
+          sourceId: job.sourceId,
+          jobId: job.id,
+          status: toPublicStatus(job.status),
           phase: progress?.phase ?? null,
           processedRecords: progress?.processedRecords ?? null,
           totalRecords: progress?.totalRecords ?? null,
-        }),
-        importedRecords: progress?.importedRecords ?? null,
-        normalizedRecords: progress?.normalizedRecords ?? null,
-        failedRecords: progress?.failedRecords ?? null,
-        message: job.errorMessage,
+          progressPercent: getSourceSyncProgressPercent({
+            phase: progress?.phase ?? null,
+            processedRecords: progress?.processedRecords ?? null,
+            totalRecords: progress?.totalRecords ?? null,
+          }),
+          importedRecords: progress?.importedRecords ?? null,
+          normalizedRecords: progress?.normalizedRecords ?? null,
+          failedRecords: progress?.failedRecords ?? null,
+          message: job.errorMessage,
+        }
       }
     })
 

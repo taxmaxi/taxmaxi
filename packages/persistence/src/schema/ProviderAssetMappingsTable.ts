@@ -35,7 +35,7 @@ export const providerAssetMappings = pgTable(
     mappingStatus: providerMappingStatusEnum("mapping_status").notNull().default("pending_review"),
     reviewerNotes: text("reviewer_notes"),
     sourceNotes: text("source_notes"),
-    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedBy: uuid("reviewed_by").references(() => users.id, { onDelete: "set null" }),
     reviewedAt: timestamp("reviewed_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),

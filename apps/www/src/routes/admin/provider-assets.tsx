@@ -47,6 +47,8 @@ import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { cn } from "#/lib/utils"
 import {
   appendUniqueProviderAssetReviews,
+  formatProviderAssetReviewDate,
+  isCurrentExistingAssetSearchRequest,
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
@@ -147,6 +149,8 @@ function ProviderAssetWorkbench() {
   const [existingAssets, setExistingAssets] = useState<
     Awaited<ReturnType<ReturnType<typeof taxmaxi>["assets"]["list"]>>["assets"]
   >([])
+  const activeExistingQueryRef = useRef(existingQuery)
+  activeExistingQueryRef.current = existingQuery
   const [selectedExistingId, setSelectedExistingId] = useState<string | null>(null)
   const [rejectionOpen, setRejectionOpen] = useState(false)
   const [rejectionReason, setRejectionReason] = useState("")
@@ -178,6 +182,7 @@ function ProviderAssetWorkbench() {
     setCandidates([])
     setSelectedCoinId(null)
     setSelectedExistingId(null)
+    activeExistingQueryRef.current = ""
     setExistingQuery("")
     setExistingAssets([])
     setReviewerNotes("")
@@ -236,10 +241,29 @@ function ProviderAssetWorkbench() {
       return
     }
     const timer = window.setTimeout(() => {
+      const requestQuery = existingQuery
       taxmaxi()
-        .assets.list({ query: existingQuery, limit: 12 })
-        .then((result) => setExistingAssets(result.assets))
-        .catch((error: unknown) => setActionError(messageFor(error)))
+        .assets.list({ query: requestQuery, limit: 12 })
+        .then((result) => {
+          if (
+            isCurrentExistingAssetSearchRequest({
+              currentQuery: activeExistingQueryRef.current,
+              requestQuery,
+            })
+          ) {
+            setExistingAssets(result.assets)
+          }
+        })
+        .catch((error: unknown) => {
+          if (
+            isCurrentExistingAssetSearchRequest({
+              currentQuery: activeExistingQueryRef.current,
+              requestQuery,
+            })
+          ) {
+            setActionError(messageFor(error))
+          }
+        })
     }, 180)
     return () => window.clearTimeout(timer)
   }, [existingQuery, taxmaxi])
@@ -259,7 +283,7 @@ function ProviderAssetWorkbench() {
             sourceId: replay.sourceId,
             jobId: replay.jobId,
           })
-          return { ...replay, status: job.status, message: job.message }
+          return { ...replay, jobId: job.jobId, status: job.status, message: job.message }
         })
       ).then((updates) =>
         setReplays((current) => mergeProviderAssetReplayUpdates({ current, updates }))
@@ -652,8 +676,14 @@ function ProviderAssetWorkbench() {
                     <Evidence label="Natural key" value={selected.naturalKey} copy />
                     <Evidence label="Decimals" value={selected.exponent?.toString() ?? null} />
                     <Evidence label="Observed type" value={selected.providerType} />
-                    <Evidence label="Discovered" value={formatDate(selected.discoveredAt)} />
-                    <Evidence label="Retrieved" value={formatDate(selected.retrievedAt)} />
+                    <Evidence
+                      label="Discovered"
+                      value={formatProviderAssetReviewDate(selected.discoveredAt)}
+                    />
+                    <Evidence
+                      label="Retrieved"
+                      value={formatProviderAssetReviewDate(selected.retrievedAt)}
+                    />
                     <details className="md:col-span-2 rounded-2xl border p-3">
                       <summary className="cursor-pointer text-sm font-medium">
                         Raw provider payload
@@ -724,7 +754,9 @@ function ProviderAssetWorkbench() {
                         <Input
                           id="existing-asset-search"
                           onChange={(event) => {
-                            setExistingQuery(event.currentTarget.value)
+                            const query = event.currentTarget.value
+                            activeExistingQueryRef.current = query
+                            setExistingQuery(query)
                             setSelectedExistingId(null)
                           }}
                           placeholder="Search canonical assets"
@@ -823,7 +855,7 @@ function ProviderAssetWorkbench() {
                         Reviewed by {selected.reviewedBy ?? "an administrator"}{" "}
                         {selected.reviewedAt === null
                           ? ""
-                          : `on ${formatDate(selected.reviewedAt)}`}
+                          : `on ${formatProviderAssetReviewDate(selected.reviewedAt)}`}
                         .
                       </CardDescription>
                     </CardHeader>
@@ -984,12 +1016,6 @@ function formatStatus(status: ProviderAssetReview["mappingStatus"]): string {
   if (status === "approved") return "Approved"
   if (status === "rejected") return "Rejected"
   return "Pending review"
-}
-
-function formatDate(value: ProviderAssetReview["discoveredAt"]): string {
-  return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
-    new Date(value.epochMillis)
-  )
 }
 
 function messageFor(error: unknown): string {

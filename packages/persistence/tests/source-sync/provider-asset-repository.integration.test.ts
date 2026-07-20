@@ -692,5 +692,128 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(staleDecision.updated).toBe(false)
       expect(persisted.staleAssets).toHaveLength(0)
     })
+
+    it("uses one canonical asset for concurrent native approvals", async () => {
+      const providerAssetIds = [crypto.randomUUID(), crypto.randomUUID()] as const
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values(
+            providerAssetIds.map((id, index) => ({
+              id,
+              provider: "coinbase",
+              providerAssetId: `native-review-${index}`,
+              currencyCode: "RNC",
+              name: "Review Native Coin",
+              providerType: "crypto",
+              rawProviderPayload: { symbol: "RNC" },
+              retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+            }))
+          )
+          yield* db.insert(schema.providerAssetMappings).values(
+            providerAssetIds.map((providerAssetRowId) => ({
+              providerAssetRowId,
+              mappingKind: "asset" as const,
+              mappingStatus: "pending_review" as const,
+            }))
+          )
+        })
+      )
+
+      const decide = (providerAssetRowId: string) =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.decideProviderAssetMapping({
+              providerAssetRowId,
+              mappingKind: "asset",
+              canonicalAssetId: null,
+              canonicalAssetSymbol: null,
+              canonicalAssetDraft: {
+                blockchain: {
+                  name: "review-native-chain",
+                  chainType: "other",
+                  chainId: null,
+                  nativeAssetSymbol: "RNC",
+                  explorerUrl: null,
+                  logoUrl: null,
+                  coingeckoPlatformId: "review-native-chain",
+                },
+                asset: {
+                  contractAddress: null,
+                  name: "Review Native Coin",
+                  symbol: "RNC",
+                  decimals: 8,
+                  coingeckoCoinId: "review-native-coin",
+                  logoUrl: null,
+                  type: "native",
+                  isSpam: false,
+                },
+              },
+              mappingStatus: "approved",
+              reviewerNotes: null,
+              sourceNotes: "Concurrent review",
+              reviewedBy: TEST_USER_ID,
+              reviewedAt: new Date("2026-07-20T12:00:00.000Z"),
+              createReplayJobs: false,
+            })
+          )
+        )
+
+      const decisions = await Promise.all(providerAssetIds.map(decide))
+
+      expect(decisions[0]?.canonicalAsset?.id).toBe(decisions[1]?.canonicalAsset?.id)
+
+      const nativeAssets = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.coingeckoCoinId, "review-native-coin"))
+        })
+      )
+      expect(nativeAssets).toHaveLength(1)
+    })
+
+    it("preserves review history when the administrator is deleted", async () => {
+      const providerAssetId = crypto.randomUUID()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: providerAssetId,
+            provider: "coinbase",
+            providerAssetId: "reviewed-before-user-deletion",
+            currencyCode: "DEL",
+            name: "Deletion Review",
+            providerType: "crypto",
+            rawProviderPayload: {},
+            retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "rejected",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt: new Date("2026-07-20T12:00:00.000Z"),
+          })
+          yield* db.delete(schema.users).where(eq(schema.users.id, TEST_USER_ID))
+        })
+      )
+
+      const [mapping] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ reviewedBy: schema.providerAssetMappings.reviewedBy })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetId))
+        })
+      )
+
+      expect(mapping?.reviewedBy).toBeNull()
+    })
   })
 })

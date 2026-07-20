@@ -1,0 +1,4 @@
+ALTER TABLE "processing_jobs" ADD COLUMN "follow_up_job_id" uuid;--> statement-breakpoint
+CREATE UNIQUE INDEX "assets_native_blockchain_unique" ON "assets" ("blockchain_id") WHERE "contract_address" is null;--> statement-breakpoint
+ALTER TABLE "processing_jobs" ADD CONSTRAINT "processing_jobs_follow_up_job_id_fk" FOREIGN KEY ("follow_up_job_id") REFERENCES "processing_jobs"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "provider_asset_mappings" DROP CONSTRAINT "provider_asset_mappings_reviewed_by_users_id_fkey", ADD CONSTRAINT "provider_asset_mappings_reviewed_by_users_id_fkey" FOREIGN KEY ("reviewed_by") REFERENCES "users"("id") ON DELETE SET NULL;

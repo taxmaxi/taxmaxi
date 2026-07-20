@@ -5,6 +5,7 @@ import {
   deriveNativeAssetDecimals,
   hasStrongProviderIdentityEvidence,
   optionalCandidateResolution,
+  providerAssetCanonicalType,
   providerTokenIdentifiersMatch,
   selectCoinCandidate,
   selectNativePlatform,
@@ -67,6 +68,13 @@ describe("AssetCanonicalizationService", () => {
         providerName: "Token",
       })
     ).toBe(true)
+  })
+
+  it("preserves NFT provider observations in canonical asset drafts", () => {
+    expect(providerAssetCanonicalType("nft")).toBe("nft")
+    expect(providerAssetCanonicalType(" NFT ")).toBe("nft")
+    expect(providerAssetCanonicalType("spl-token")).toBe("token")
+    expect(providerAssetCanonicalType(null)).toBe("token")
   })
 
   it("includes Cardano native platform metadata from CoinGecko", () => {

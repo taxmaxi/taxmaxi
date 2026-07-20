@@ -790,15 +790,32 @@ describe("SourceSyncJobRepositoryLive", () => {
             id: schema.processingJobs.id,
             mode: schema.processingJobs.mode,
             status: schema.processingJobs.status,
+            followUpJobId: schema.processingJobs.followUpJobId,
           })
           .from(schema.processingJobs)
           .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
       })
     )
 
-    expect(jobs).toEqual([
-      { id: activeJobId, mode: "sync", status: "completed" },
-      { id: expect.any(String), mode: "replay", status: "pending" },
-    ])
+    const followUpJob = jobs.find((job) => job.mode === "replay")
+    expect(followUpJob).toMatchObject({ mode: "replay", status: "pending" })
+    expect(jobs.find((job) => job.id === activeJobId)).toEqual({
+      id: activeJobId,
+      mode: "sync",
+      status: "completed",
+      followUpJobId: followUpJob?.id,
+    })
+
+    const visibleJob = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.getJob({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          jobId: activeJobId,
+        })
+      )
+    )
+
+    expect(visibleJob).toMatchObject({ jobId: followUpJob?.id, status: "queued" })
   })
 })

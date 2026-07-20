@@ -44,3 +44,18 @@ export const providerAssetReviewFilterKey = ({
   readonly query?: string
   readonly status: "approved" | "pending_review" | "rejected"
 }): string => JSON.stringify([provider ?? null, query ?? null, status])
+
+export const isCurrentExistingAssetSearchRequest = ({
+  currentQuery,
+  requestQuery,
+}: {
+  readonly currentQuery: string
+  readonly requestQuery: string
+}): boolean => currentQuery === requestQuery
+
+export const formatProviderAssetReviewDate = (value: { readonly epochMillis: number }): string =>
+  new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(new Date(value.epochMillis))

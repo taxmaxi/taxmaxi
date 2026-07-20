@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest"
 import {
   appendUniqueProviderAssetReviews,
+  formatProviderAssetReviewDate,
+  isCurrentExistingAssetSearchRequest,
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
@@ -30,13 +32,13 @@ describe("provider asset review progression", () => {
       mergeProviderAssetReplayUpdates({
         current: [
           { sourceId: "failed", status: "failed_to_queue" },
-          { sourceId: "active", status: "queued" },
+          { sourceId: "active", status: "queued", jobId: "active-sync" },
         ],
-        updates: [{ sourceId: "active", status: "completed" }],
+        updates: [{ sourceId: "active", status: "queued", jobId: "deferred-replay" }],
       })
     ).toEqual([
       { sourceId: "failed", status: "failed_to_queue" },
-      { sourceId: "active", status: "completed" },
+      { sourceId: "active", status: "queued", jobId: "deferred-replay" },
     ])
   })
 
@@ -73,5 +75,20 @@ describe("provider asset review progression", () => {
     expect(
       providerAssetReviewFilterKey({ provider: "coinbase", query: "BTC", status: "approved" })
     ).not.toBe(current)
+  })
+
+  it("discards existing-asset results from an old query", () => {
+    expect(
+      isCurrentExistingAssetSearchRequest({ currentQuery: "ether", requestQuery: "bitcoin" })
+    ).toBe(false)
+    expect(
+      isCurrentExistingAssetSearchRequest({ currentQuery: "bitcoin", requestQuery: "bitcoin" })
+    ).toBe(true)
+  })
+
+  it("formats review timestamps in UTC for stable server hydration", () => {
+    expect(formatProviderAssetReviewDate({ epochMillis: Date.UTC(2026, 6, 20, 12, 30) })).toBe(
+      "Jul 20, 2026, 12:30 PM"
+    )
   })
 })

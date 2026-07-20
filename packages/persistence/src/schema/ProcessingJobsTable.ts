@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -37,6 +38,7 @@ export const processingJobs = pgTable(
       .references(() => principals.id, { onDelete: "cascade" }),
     mode: jobModeEnum("mode").notNull().default("sync"),
     followUpMode: jobModeEnum("follow_up_mode"),
+    followUpJobId: uuid("follow_up_job_id"),
     status: jobStatusEnum("status").notNull().default("pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(3),
@@ -67,6 +69,11 @@ export const processingJobs = pgTable(
     uniqueIndex("processing_jobs_queue_job_unique")
       .on(table.queueName, table.queueJobId)
       .where(sql`${table.queueName} is not null and ${table.queueJobId} is not null`),
+    foreignKey({
+      columns: [table.followUpJobId],
+      foreignColumns: [table.id],
+      name: "processing_jobs_follow_up_job_id_fk",
+    }).onDelete("set null"),
     check("processing_jobs_attempt_count_non_negative", sql`${table.attemptCount} >= 0`),
     check("processing_jobs_max_attempts_positive", sql`${table.maxAttempts} > 0`),
   ]

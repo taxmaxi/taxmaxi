@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm"
 import {
   boolean,
   index,
@@ -7,6 +8,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
 import { blockchains } from "./BlockchainsTable.ts"
@@ -36,10 +38,9 @@ export const assets = pgTable(
   (table) => [
     // Unique constraint for tokens (blockchainId + contractAddress)
     unique("unique_token_idx").on(table.blockchainId, table.contractAddress),
-    // Unique constraint for native assets (blockchainId + symbol, where contractAddress is NULL)
-    // This might need a partial index or a more complex check depending on Drizzle ORM capabilities for NULLs in unique constraints.
-    // For now, we'll rely on application logic or a simpler unique constraint on symbol if truly global symbols are unique enough.
-    // A common pattern is to ensure contractAddress is an empty string for native assets if the DB doesn't support NULL in unique constraints well.
+    uniqueIndex("assets_native_blockchain_unique")
+      .on(table.blockchainId)
+      .where(sql`${table.contractAddress} is null`),
     index("asset_symbol_idx").on(table.symbol),
     index("asset_coingecko_coin_id_idx").on(table.coingeckoCoinId),
   ]
