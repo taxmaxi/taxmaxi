@@ -14,6 +14,7 @@ import * as legalRules from "./LegalRulesTable.ts"
 import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
 import * as principalReplayReviewSnapshots from "./PrincipalReplayReviewSnapshotsTable.ts"
+import * as principalReplayTransferReconciliationSnapshots from "./PrincipalReplayTransferReconciliationSnapshotsTable.ts"
 import * as principalClaims from "./PrincipalClaimsTable.ts"
 import * as principals from "./PrincipalsTable.ts"
 import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
@@ -60,6 +61,7 @@ export const schema = {
   ...oauthStates,
   ...processingJobs,
   ...principalReplayReviewSnapshots,
+  ...principalReplayTransferReconciliationSnapshots,
   ...principalClaims,
   ...principals,
   ...protocolCandidateObservations,

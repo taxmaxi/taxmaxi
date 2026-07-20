@@ -8,10 +8,12 @@ The replay always rebuilds the full principal. This keeps FIFO correct when sour
 chains or cycles. Source-only replay remains available at `POST /v1/sources/:sourceId/replay` when the
 source has no cross-source FIFO dependency.
 
-Before reset, the run snapshots reviews with status `approved` or `changed`, plus reviews containing
-user notes. After normalization, it restores those decisions when the transaction has the same source
-and provider identity. If a reviewed transaction is no longer produced, the run fails with the
-unmatched identity instead of silently discarding the decision.
+Before reset, the run snapshots transaction reviews with status `approved` or `changed`, reviews
+containing user notes, and transfer reconciliations with status `approved` or `rejected`. After
+normalization, it restores those decisions when the rebuilt records have the same source and provider
+identity. If a reviewed record is no longer produced, the run fails instead of silently discarding
+the decision.
 
-Every retry starts by resetting the full principal again and reuses the original review snapshot. A
-failed attempt therefore cannot be resumed from a mixture of old and new inventory state.
+Every retry starts by reclaiming the whole plan, resetting the full principal again, and reusing the
+original decision snapshot. A failed attempt therefore cannot be resumed from a mixture of old and
+new inventory state.

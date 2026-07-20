@@ -460,7 +460,6 @@ const make = Effect.gen(function* () {
                 and(
                   eq(schema.syncRunItems.processingJobId, jobId),
                   eq(schema.syncRunItems.sourceId, sourceId),
-                  eq(schema.syncRunItems.isCoordinator, true),
                   eq(schema.syncRuns.mode, "replay"),
                   inArray(schema.syncRuns.status, ["queued", "running"])
                 )
@@ -475,7 +474,7 @@ const make = Effect.gen(function* () {
                 return {
                   runId: replay.runId,
                   result: {
-                    _tag: "SkippedPrincipalReplayCoordinator" as const,
+                    _tag: "SkippedPrincipalReplayJob" as const,
                     runId: replay.runId,
                   },
                 }
@@ -589,7 +588,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      if (recovery.result._tag === "SkippedPrincipalReplayCoordinator") {
+      if (recovery.result._tag === "SkippedPrincipalReplayJob") {
         yield* Effect.logInfo(
           {
             sourceId,

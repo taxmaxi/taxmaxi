@@ -1161,6 +1161,7 @@ const make = Effect.gen(function* () {
         if (canRetry) {
           yield* principalReplayRepository.recordRetryableFailure({
             runId: plan.runId,
+            workerId,
             message,
             attemptCount: retryPolicy.attemptNumber,
             nextRetryAt: retryPolicy.nextRetryAt,
@@ -1178,6 +1179,7 @@ const make = Effect.gen(function* () {
 
         yield* principalReplayRepository.failPlan({
           runId: plan.runId,
+          workerId,
           message,
           completedAt: nowDate(),
         })
@@ -1191,6 +1193,7 @@ const make = Effect.gen(function* () {
 
       yield* principalReplayRepository.completePlan({
         runId: plan.runId,
+        workerId,
         sourceResults: result.right.map(({ source, jobId, state }) => ({
           sourceId: source.id,
           jobId,

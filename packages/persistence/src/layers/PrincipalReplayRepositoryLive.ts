@@ -15,7 +15,7 @@ import {
   type PrincipalReplayPlan,
   type PrincipalReplayRepositoryShape,
 } from "@my/sync-engine/services"
-import { schema } from "../schema/index.ts"
+import { schema, type TransferType } from "../schema/index.ts"
 import { drizzle } from "./PgClientLive.ts"
 import {
   highWatermarkToIso,
@@ -51,6 +51,89 @@ const transactionIdentity = ({
     new SyncEngineStorageError({
       operation: "principalReplayRepository.transactionIdentity",
       cause: "Canonical transaction has no replay-stable identity.",
+    })
+  )
+}
+
+const providerTransferIdentity = ({
+  externalId,
+  networkHash,
+  direction,
+  providerAssetId,
+  amount,
+  fromAccountRef,
+  toAccountRef,
+  fromAddress,
+  toAddress,
+}: {
+  readonly externalId: string | null
+  readonly networkHash: string | null
+  readonly direction: "inbound" | "outbound"
+  readonly providerAssetId: string | null
+  readonly amount: string
+  readonly fromAccountRef: string | null
+  readonly toAccountRef: string | null
+  readonly fromAddress: string | null
+  readonly toAddress: string | null
+}): Effect.Effect<string, SyncEngineStorageError> => {
+  if (externalId !== null) {
+    return Effect.succeed(`external:${externalId}`)
+  }
+
+  if (networkHash !== null) {
+    return Effect.succeed(
+      `network:${JSON.stringify([
+        networkHash,
+        direction,
+        providerAssetId,
+        amount,
+        fromAccountRef,
+        toAccountRef,
+        fromAddress,
+        toAddress,
+      ])}`
+    )
+  }
+
+  return Effect.fail(
+    new SyncEngineStorageError({
+      operation: "principalReplayRepository.providerTransferIdentity",
+      cause: "Provider transfer has no replay-stable identity.",
+    })
+  )
+}
+
+const canonicalTransferIdentity = ({
+  externalId,
+  txHash,
+  addressId,
+  type,
+  fromAddress,
+  toAddress,
+  assetId,
+}: {
+  readonly externalId: string | null
+  readonly txHash: string | null
+  readonly addressId: string | null
+  readonly type: TransferType | null
+  readonly fromAddress: string | null
+  readonly toAddress: string | null
+  readonly assetId: string | null
+}): Effect.Effect<string, SyncEngineStorageError> => {
+  if (externalId !== null) {
+    return Effect.succeed(`external:${externalId}`)
+  }
+
+  if (txHash !== null && type !== null && assetId !== null) {
+    return Effect.succeed(
+      `network:${JSON.stringify([txHash, addressId, type, fromAddress, toAddress, assetId])}`
+    )
+  }
+
+  return Effect.fail(
+    new SyncEngineStorageError({
+      operation: "principalReplayRepository.canonicalTransferIdentity",
+      cause: "Canonical transfer has no replay-stable identity.",
     })
   )
 }
@@ -330,7 +413,7 @@ const make = Effect.gen(function* () {
             .where(
               and(
                 inArray(schema.processingJobs.id, jobIds),
-                eq(schema.processingJobs.status, "pending")
+                inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
               )
             )
             .returning({ id: schema.processingJobs.id })
@@ -340,7 +423,7 @@ const make = Effect.gen(function* () {
             return yield* Effect.fail(
               new SyncEngineStorageError({
                 operation: "principalReplayRepository.claimPlan",
-                cause: `Replay run ${runId} contains a source job that is not pending.`,
+                cause: `Replay run ${runId} contains a source job that is not active.`,
               })
             )
           }
@@ -371,30 +454,45 @@ const make = Effect.gen(function* () {
     workerId,
     heartbeatAt,
   }) =>
-    Effect.gen(function* () {
-      const jobIds = yield* db
-        .select({ id: schema.syncRunItems.processingJobId })
-        .from(schema.syncRunItems)
-        .where(eq(schema.syncRunItems.runId, runId))
-        .pipe(wrapSyncEngineSqlError("principalReplayRepository.heartbeatPlan.selectJobs"))
-      const ids = jobIds.flatMap((job) => (job.id === null ? [] : [job.id]))
-      if (ids.length === 0) return
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const jobIds = yield* tx
+            .select({ id: schema.syncRunItems.processingJobId })
+            .from(schema.syncRunItems)
+            .where(eq(schema.syncRunItems.runId, runId))
+            .pipe(wrapSyncEngineSqlError("principalReplayRepository.heartbeatPlan.selectJobs"))
+          const ids = jobIds.flatMap((job) => (job.id === null ? [] : [job.id]))
+          if (ids.length === 0) return
 
-      yield* db
-        .update(schema.processingJobs)
-        .set({ heartbeatAt, updatedAt: heartbeatAt })
-        .where(
-          and(
-            inArray(schema.processingJobs.id, ids),
-            eq(schema.processingJobs.status, "processing"),
-            eq(schema.processingJobs.workerId, workerId)
-          )
-        )
-        .pipe(wrapSyncEngineSqlError("principalReplayRepository.heartbeatPlan.updateJobs"))
-    })
+          const heartbeated = yield* tx
+            .update(schema.processingJobs)
+            .set({ heartbeatAt, updatedAt: heartbeatAt })
+            .where(
+              and(
+                inArray(schema.processingJobs.id, ids),
+                eq(schema.processingJobs.status, "processing"),
+                eq(schema.processingJobs.workerId, workerId)
+              )
+            )
+            .returning({ id: schema.processingJobs.id })
+            .pipe(wrapSyncEngineSqlError("principalReplayRepository.heartbeatPlan.updateJobs"))
+
+          if (heartbeated.length !== ids.length) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "principalReplayRepository.heartbeatPlan.ownership",
+                cause: `Worker ${workerId} no longer owns replay run ${runId}.`,
+              })
+            )
+          }
+        })
+      )
+      .pipe(mapTransactionError("principalReplayRepository.heartbeatPlan.transaction"))
 
   const recordRetryableFailure: PrincipalReplayRepositoryShape["recordRetryableFailure"] = ({
     runId,
+    workerId,
     message,
     attemptCount,
     nextRetryAt,
@@ -413,7 +511,7 @@ const make = Effect.gen(function* () {
           const ids = jobIds.flatMap((job) => (job.id === null ? [] : [job.id]))
 
           if (ids.length > 0) {
-            yield* tx
+            const released = yield* tx
               .update(schema.processingJobs)
               .set({
                 status: "pending",
@@ -425,12 +523,28 @@ const make = Effect.gen(function* () {
                 workerId: null,
                 updatedAt: now,
               })
-              .where(inArray(schema.processingJobs.id, ids))
+              .where(
+                and(
+                  inArray(schema.processingJobs.id, ids),
+                  eq(schema.processingJobs.status, "processing"),
+                  eq(schema.processingJobs.workerId, workerId)
+                )
+              )
+              .returning({ id: schema.processingJobs.id })
               .pipe(
                 wrapSyncEngineSqlError(
                   "principalReplayRepository.recordRetryableFailure.updateJobs"
                 )
               )
+
+            if (released.length !== ids.length) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "principalReplayRepository.recordRetryableFailure.ownership",
+                  cause: `Worker ${workerId} no longer owns replay run ${runId}.`,
+                })
+              )
+            }
           }
 
           yield* tx
@@ -457,7 +571,12 @@ const make = Effect.gen(function* () {
       )
       .pipe(mapTransactionError("principalReplayRepository.recordRetryableFailure.transaction"))
 
-  const failPlan: PrincipalReplayRepositoryShape["failPlan"] = ({ runId, message, completedAt }) =>
+  const failPlan: PrincipalReplayRepositoryShape["failPlan"] = ({
+    runId,
+    workerId,
+    message,
+    completedAt,
+  }) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
@@ -468,11 +587,27 @@ const make = Effect.gen(function* () {
             .pipe(wrapSyncEngineSqlError("principalReplayRepository.failPlan.selectJobs"))
           const ids = jobIds.flatMap((job) => (job.id === null ? [] : [job.id]))
           if (ids.length > 0) {
-            yield* tx
+            const failed = yield* tx
               .update(schema.processingJobs)
               .set({ status: "failed", errorMessage: message, completedAt, updatedAt: completedAt })
-              .where(inArray(schema.processingJobs.id, ids))
+              .where(
+                and(
+                  inArray(schema.processingJobs.id, ids),
+                  eq(schema.processingJobs.status, "processing"),
+                  eq(schema.processingJobs.workerId, workerId)
+                )
+              )
+              .returning({ id: schema.processingJobs.id })
               .pipe(wrapSyncEngineSqlError("principalReplayRepository.failPlan.updateJobs"))
+
+            if (failed.length !== ids.length) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "principalReplayRepository.failPlan.ownership",
+                  cause: `Worker ${workerId} no longer owns replay run ${runId}.`,
+                })
+              )
+            }
           }
           yield* tx
             .update(schema.syncRunItems)
@@ -498,6 +633,7 @@ const make = Effect.gen(function* () {
 
   const completePlan: PrincipalReplayRepositoryShape["completePlan"] = ({
     runId,
+    workerId,
     sourceResults,
     completedAt,
   }) =>
@@ -506,7 +642,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* Effect.forEach(sourceResults, ({ sourceId, jobId, state }) =>
             Effect.gen(function* () {
-              yield* tx
+              const [completed] = yield* tx
                 .update(schema.processingJobs)
                 .set({
                   status: "completed",
@@ -529,10 +665,22 @@ const make = Effect.gen(function* () {
                 .where(
                   and(
                     eq(schema.processingJobs.id, jobId),
-                    eq(schema.processingJobs.status, "processing")
+                    eq(schema.processingJobs.status, "processing"),
+                    eq(schema.processingJobs.workerId, workerId)
                   )
                 )
+                .returning({ id: schema.processingJobs.id })
                 .pipe(wrapSyncEngineSqlError("principalReplayRepository.completePlan.updateJob"))
+
+              if (completed === undefined) {
+                return yield* Effect.fail(
+                  new SyncEngineStorageError({
+                    operation: "principalReplayRepository.completePlan.ownership",
+                    cause: `Worker ${workerId} no longer owns replay job ${jobId}.`,
+                  })
+                )
+              }
+
               yield* tx
                 .update(schema.syncRunItems)
                 .set({ status: "completed", message: null, updatedAt: completedAt })
@@ -671,6 +819,126 @@ const make = Effect.gen(function* () {
                 )
             }
 
+            const reviewedReconciliations = yield* tx
+              .select({
+                providerSourceId: schema.providerTransfers.sourceId,
+                providerExternalId: schema.providerTransfers.externalId,
+                providerNetworkHash: schema.providerTransfers.networkHash,
+                providerDirection: schema.providerTransfers.direction,
+                providerAssetId: schema.providerTransfers.providerAssetId,
+                providerAmount: schema.providerTransfers.amount,
+                providerFromAccountRef: schema.providerTransfers.fromAccountRef,
+                providerToAccountRef: schema.providerTransfers.toAccountRef,
+                providerFromAddress: schema.providerTransfers.fromAddress,
+                providerToAddress: schema.providerTransfers.toAddress,
+                canonicalTransferId: schema.transfers.id,
+                canonicalTransferSourceId: schema.transfers.sourceId,
+                canonicalTransferExternalId: schema.transfers.externalId,
+                canonicalTransferTxHash: schema.transfers.txHash,
+                canonicalTransferAddressId: schema.transfers.addressId,
+                canonicalTransferType: schema.transfers.type,
+                canonicalTransferFromAddress: schema.transfers.fromAddress,
+                canonicalTransferToAddress: schema.transfers.toAddress,
+                canonicalTransferAssetId: schema.transfers.assetId,
+                canonicalTransactionId: schema.transactions.id,
+                canonicalTransactionSourceId: schema.transactions.sourceId,
+                canonicalTransactionExternalId: schema.transactions.externalId,
+                canonicalTransactionSourceRawRecordId: schema.transactions.sourceRawRecordId,
+                status: schema.transferReconciliations.status,
+                matchReason: schema.transferReconciliations.matchReason,
+                confidence: schema.transferReconciliations.confidence,
+                deterministic: schema.transferReconciliations.deterministic,
+                reviewMetadata: schema.transferReconciliations.reviewMetadata,
+              })
+              .from(schema.transferReconciliations)
+              .innerJoin(
+                schema.providerTransfers,
+                eq(schema.providerTransfers.id, schema.transferReconciliations.providerTransferId)
+              )
+              .leftJoin(
+                schema.transfers,
+                eq(schema.transfers.id, schema.transferReconciliations.canonicalTransferId)
+              )
+              .leftJoin(
+                schema.transactions,
+                eq(schema.transactions.id, schema.transferReconciliations.canonicalTransactionId)
+              )
+              .where(
+                and(
+                  eq(schema.transferReconciliations.principalId, principalId),
+                  inArray(schema.transferReconciliations.status, ["approved", "rejected"])
+                )
+              )
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalReplayRepository.preparePrincipalReplay.selectTransferReconciliations"
+                )
+              )
+
+            const reconciliationSnapshots = yield* Effect.forEach(
+              reviewedReconciliations,
+              (reconciliation) =>
+                Effect.gen(function* () {
+                  const providerIdentity = yield* providerTransferIdentity({
+                    externalId: reconciliation.providerExternalId,
+                    networkHash: reconciliation.providerNetworkHash,
+                    direction: reconciliation.providerDirection,
+                    providerAssetId: reconciliation.providerAssetId,
+                    amount: reconciliation.providerAmount,
+                    fromAccountRef: reconciliation.providerFromAccountRef,
+                    toAccountRef: reconciliation.providerToAccountRef,
+                    fromAddress: reconciliation.providerFromAddress,
+                    toAddress: reconciliation.providerToAddress,
+                  })
+                  const canonicalTransferIdentityValue =
+                    reconciliation.canonicalTransferId === null
+                      ? null
+                      : yield* canonicalTransferIdentity({
+                          externalId: reconciliation.canonicalTransferExternalId,
+                          txHash: reconciliation.canonicalTransferTxHash,
+                          addressId: reconciliation.canonicalTransferAddressId,
+                          type: reconciliation.canonicalTransferType,
+                          fromAddress: reconciliation.canonicalTransferFromAddress,
+                          toAddress: reconciliation.canonicalTransferToAddress,
+                          assetId: reconciliation.canonicalTransferAssetId,
+                        })
+                  const canonicalTransactionIdentityValue =
+                    reconciliation.canonicalTransactionId === null
+                      ? null
+                      : yield* transactionIdentity({
+                          externalId: reconciliation.canonicalTransactionExternalId,
+                          sourceRawRecordId: reconciliation.canonicalTransactionSourceRawRecordId,
+                        })
+
+                  return {
+                    runId,
+                    principalId,
+                    providerSourceId: reconciliation.providerSourceId,
+                    providerTransferIdentity: providerIdentity,
+                    canonicalTransferSourceId: reconciliation.canonicalTransferSourceId,
+                    canonicalTransferIdentity: canonicalTransferIdentityValue,
+                    canonicalTransactionSourceId: reconciliation.canonicalTransactionSourceId,
+                    canonicalTransactionIdentity: canonicalTransactionIdentityValue,
+                    status: reconciliation.status,
+                    matchReason: reconciliation.matchReason,
+                    confidence: reconciliation.confidence,
+                    deterministic: reconciliation.deterministic,
+                    reviewMetadata: reconciliation.reviewMetadata,
+                  }
+                })
+            )
+
+            if (reconciliationSnapshots.length > 0) {
+              yield* tx
+                .insert(schema.principalReplayTransferReconciliationSnapshots)
+                .values(reconciliationSnapshots)
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "principalReplayRepository.preparePrincipalReplay.insertTransferReconciliationSnapshots"
+                  )
+                )
+            }
+
             yield* tx
               .update(schema.syncRuns)
               .set({ reviewSnapshotInitializedAt: nowDate(), updatedAt: nowDate() })
@@ -777,6 +1045,41 @@ const make = Effect.gen(function* () {
             "principalReplayRepository.restorePrincipalReviews.selectSnapshots"
           )
         )
+      const reconciliationSnapshots = yield* db
+        .select({
+          providerSourceId: schema.principalReplayTransferReconciliationSnapshots.providerSourceId,
+          providerTransferIdentity:
+            schema.principalReplayTransferReconciliationSnapshots.providerTransferIdentity,
+          canonicalTransferSourceId:
+            schema.principalReplayTransferReconciliationSnapshots.canonicalTransferSourceId,
+          canonicalTransferIdentity:
+            schema.principalReplayTransferReconciliationSnapshots.canonicalTransferIdentity,
+          canonicalTransactionSourceId:
+            schema.principalReplayTransferReconciliationSnapshots.canonicalTransactionSourceId,
+          canonicalTransactionIdentity:
+            schema.principalReplayTransferReconciliationSnapshots.canonicalTransactionIdentity,
+          status: schema.principalReplayTransferReconciliationSnapshots.status,
+          matchReason: schema.principalReplayTransferReconciliationSnapshots.matchReason,
+          confidence: schema.principalReplayTransferReconciliationSnapshots.confidence,
+          deterministic: schema.principalReplayTransferReconciliationSnapshots.deterministic,
+          reviewMetadata: schema.principalReplayTransferReconciliationSnapshots.reviewMetadata,
+        })
+        .from(schema.principalReplayTransferReconciliationSnapshots)
+        .where(
+          and(
+            eq(schema.principalReplayTransferReconciliationSnapshots.runId, runId),
+            eq(schema.principalReplayTransferReconciliationSnapshots.principalId, principalId)
+          )
+        )
+        .orderBy(
+          asc(schema.principalReplayTransferReconciliationSnapshots.providerSourceId),
+          asc(schema.principalReplayTransferReconciliationSnapshots.providerTransferIdentity)
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalReplayRepository.restorePrincipalReviews.selectTransferReconciliationSnapshots"
+          )
+        )
       const transactions = yield* db
         .select({
           id: schema.transactions.id,
@@ -797,6 +1100,73 @@ const make = Effect.gen(function* () {
         )
       )
       const transactionByIdentity: ReadonlyMap<string, string> = new Map(transactionEntries)
+      const providerTransfers = yield* db
+        .select({
+          id: schema.providerTransfers.id,
+          sourceId: schema.providerTransfers.sourceId,
+          externalId: schema.providerTransfers.externalId,
+          networkHash: schema.providerTransfers.networkHash,
+          direction: schema.providerTransfers.direction,
+          providerAssetId: schema.providerTransfers.providerAssetId,
+          amount: schema.providerTransfers.amount,
+          fromAccountRef: schema.providerTransfers.fromAccountRef,
+          toAccountRef: schema.providerTransfers.toAccountRef,
+          fromAddress: schema.providerTransfers.fromAddress,
+          toAddress: schema.providerTransfers.toAddress,
+        })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.transactions,
+          eq(schema.transactions.id, schema.providerTransfers.transactionId)
+        )
+        .where(eq(schema.transactions.principalId, principalId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalReplayRepository.restorePrincipalReviews.selectProviderTransfers"
+          )
+        )
+      const providerTransferEntries = yield* Effect.forEach(providerTransfers, (providerTransfer) =>
+        providerTransferIdentity(providerTransfer).pipe(
+          Effect.map(
+            (identity) => [`${providerTransfer.sourceId}:${identity}`, providerTransfer.id] as const
+          )
+        )
+      )
+      const providerTransferByIdentity: ReadonlyMap<string, string> = new Map(
+        providerTransferEntries
+      )
+      const canonicalTransfers = yield* db
+        .select({
+          id: schema.transfers.id,
+          sourceId: schema.transfers.sourceId,
+          externalId: schema.transfers.externalId,
+          txHash: schema.transfers.txHash,
+          addressId: schema.transfers.addressId,
+          type: schema.transfers.type,
+          fromAddress: schema.transfers.fromAddress,
+          toAddress: schema.transfers.toAddress,
+          assetId: schema.transfers.assetId,
+        })
+        .from(schema.transfers)
+        .where(eq(schema.transfers.principalId, principalId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "principalReplayRepository.restorePrincipalReviews.selectCanonicalTransfers"
+          )
+        )
+      const canonicalTransferEntries = yield* Effect.forEach(
+        canonicalTransfers,
+        (canonicalTransfer) =>
+          canonicalTransferIdentity(canonicalTransfer).pipe(
+            Effect.map(
+              (identity) =>
+                [`${canonicalTransfer.sourceId}:${identity}`, canonicalTransfer.id] as const
+            )
+          )
+      )
+      const canonicalTransferByIdentity: ReadonlyMap<string, string> = new Map(
+        canonicalTransferEntries
+      )
       const unmatchedTransactionIdentities: Array<string> = []
       let restoredCount = 0
 
@@ -871,6 +1241,128 @@ const make = Effect.gen(function* () {
             )
         })
       })
+
+      yield* Effect.forEach(reconciliationSnapshots, (snapshot) =>
+        Effect.gen(function* () {
+          if (snapshot.status !== "approved" && snapshot.status !== "rejected") {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation:
+                  "principalReplayRepository.restorePrincipalReviews.validateTransferReconciliationStatus",
+                cause: `Replay transfer reconciliation snapshot has non-reviewed status ${snapshot.status}.`,
+              })
+            )
+          }
+
+          const providerKey = `${snapshot.providerSourceId}:${snapshot.providerTransferIdentity}`
+          const providerTransferId = providerTransferByIdentity.get(providerKey)
+          if (providerTransferId === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation:
+                  "principalReplayRepository.restorePrincipalReviews.resolveProviderTransfer",
+                cause: `Reviewed provider transfer was not rebuilt: ${providerKey}.`,
+              })
+            )
+          }
+
+          let canonicalTransferId: string | null = null
+          if (
+            snapshot.canonicalTransferSourceId !== null &&
+            snapshot.canonicalTransferIdentity !== null
+          ) {
+            const canonicalTransferKey = `${snapshot.canonicalTransferSourceId}:${snapshot.canonicalTransferIdentity}`
+            const rebuiltCanonicalTransferId = canonicalTransferByIdentity.get(canonicalTransferKey)
+            if (rebuiltCanonicalTransferId === undefined) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "principalReplayRepository.restorePrincipalReviews.resolveCanonicalTransfer",
+                  cause: `Reviewed canonical transfer was not rebuilt: ${canonicalTransferKey}.`,
+                })
+              )
+            }
+            canonicalTransferId = rebuiltCanonicalTransferId
+          } else if (
+            snapshot.canonicalTransferSourceId !== null ||
+            snapshot.canonicalTransferIdentity !== null
+          ) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation:
+                  "principalReplayRepository.restorePrincipalReviews.validateCanonicalTransferIdentity",
+                cause: `Reviewed provider transfer has an incomplete canonical transfer identity: ${providerKey}.`,
+              })
+            )
+          }
+
+          let canonicalTransactionId: string | null = null
+          if (
+            snapshot.canonicalTransactionSourceId !== null &&
+            snapshot.canonicalTransactionIdentity !== null
+          ) {
+            const canonicalTransactionKey = `${snapshot.canonicalTransactionSourceId}:${snapshot.canonicalTransactionIdentity}`
+            const rebuiltCanonicalTransactionId = transactionByIdentity.get(canonicalTransactionKey)
+            if (rebuiltCanonicalTransactionId === undefined) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "principalReplayRepository.restorePrincipalReviews.resolveCanonicalTransaction",
+                  cause: `Reviewed canonical transaction was not rebuilt: ${canonicalTransactionKey}.`,
+                })
+              )
+            }
+            canonicalTransactionId = rebuiltCanonicalTransactionId
+          } else if (
+            snapshot.canonicalTransactionSourceId !== null ||
+            snapshot.canonicalTransactionIdentity !== null
+          ) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation:
+                  "principalReplayRepository.restorePrincipalReviews.validateCanonicalTransactionIdentity",
+                cause: `Reviewed provider transfer has an incomplete canonical transaction identity: ${providerKey}.`,
+              })
+            )
+          }
+
+          const now = nowDate()
+          yield* db
+            .insert(schema.transferReconciliations)
+            .values({
+              principalId,
+              providerTransferId,
+              canonicalTransferId,
+              canonicalTransactionId,
+              status: snapshot.status,
+              matchReason: snapshot.matchReason,
+              confidence: snapshot.confidence,
+              deterministic: snapshot.deterministic,
+              reviewMetadata: snapshot.reviewMetadata,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: schema.transferReconciliations.providerTransferId,
+              set: {
+                principalId,
+                canonicalTransferId,
+                canonicalTransactionId,
+                status: snapshot.status,
+                matchReason: snapshot.matchReason,
+                confidence: snapshot.confidence,
+                deterministic: snapshot.deterministic,
+                reviewMetadata: snapshot.reviewMetadata,
+                updatedAt: now,
+              },
+            })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalReplayRepository.restorePrincipalReviews.upsertTransferReconciliation"
+              )
+            )
+        })
+      )
 
       return { restoredCount, unmatchedTransactionIdentities }
     })

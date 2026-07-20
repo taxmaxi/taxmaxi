@@ -141,7 +141,7 @@ export interface RecoverStaleSourceSyncJobParams {
 /** Result of attempting to recover one stale source job. */
 export type SourceSyncStaleRecoveryResult =
   | { readonly _tag: "RecoveredSourceJob" }
-  | { readonly _tag: "SkippedPrincipalReplayCoordinator"; readonly runId: string }
+  | { readonly _tag: "SkippedPrincipalReplayJob"; readonly runId: string }
 
 /**
  * GetSourceSyncJobRecordParams - Input for loading one visible processing job.

@@ -98,7 +98,7 @@ const makeServiceLayer = ({
           `recover:${jobId}:${allowPrincipalReplayRecovery ? "plan" : "source"}`
         )
         return skipPrincipalReplayRecovery
-          ? { _tag: "SkippedPrincipalReplayCoordinator", runId: "run-1" }
+          ? { _tag: "SkippedPrincipalReplayJob", runId: "run-1" }
           : { _tag: "RecoveredSourceJob" }
       }),
     attachQueueMetadata: unusedJobLifecycleMethods.attachQueueMetadata,

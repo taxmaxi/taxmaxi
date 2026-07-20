@@ -31,7 +31,7 @@ export interface PrincipalReplayDispatch {
   readonly coordinatorSourceId: string | null
 }
 
-/** User-review restoration result after canonical transactions are rebuilt. */
+/** User-decision restoration result after canonical records are rebuilt. */
 export interface PrincipalReplayReviewRestoreResult {
   readonly restoredCount: number
   readonly unmatchedTransactionIdentities: ReadonlyArray<string>
@@ -51,7 +51,7 @@ export interface PrincipalReplayRepositoryShape {
     readonly jobId: string
   }) => Effect.Effect<Option.Option<PrincipalReplayPlan>, SyncEngineStorageError>
 
-  /** Atomically claim every reserved source job in a replay plan. */
+  /** Atomically claim or reclaim every active source job in a replay plan. */
   readonly claimPlan: (params: {
     readonly runId: string
     readonly workerId: string
@@ -68,6 +68,7 @@ export interface PrincipalReplayRepositoryShape {
   /** Return every child job to pending before BullMQ retries the coordinator. */
   readonly recordRetryableFailure: (params: {
     readonly runId: string
+    readonly workerId: string
     readonly message: string
     readonly attemptCount: number
     readonly nextRetryAt: Date
@@ -76,6 +77,7 @@ export interface PrincipalReplayRepositoryShape {
   /** Mark all child jobs and the aggregate run terminally failed. */
   readonly failPlan: (params: {
     readonly runId: string
+    readonly workerId: string
     readonly message: string
     readonly completedAt: Date
   }) => Effect.Effect<void, SyncEngineStorageError>
@@ -83,6 +85,7 @@ export interface PrincipalReplayRepositoryShape {
   /** Complete every source child job and the aggregate replay run atomically. */
   readonly completePlan: (params: {
     readonly runId: string
+    readonly workerId: string
     readonly sourceResults: ReadonlyArray<{
       readonly sourceId: string
       readonly jobId: string
@@ -91,13 +94,13 @@ export interface PrincipalReplayRepositoryShape {
     readonly completedAt: Date
   }) => Effect.Effect<void, SyncEngineStorageError>
 
-  /** Snapshot reviewed decisions once, then clear all principal-derived canonical state. */
+  /** Snapshot reviewed transaction and transfer decisions, then clear principal-derived state. */
   readonly preparePrincipalReplay: (params: {
     readonly runId: string
     readonly principalId: string
   }) => Effect.Effect<void, SyncEngineStorageError>
 
-  /** Restore reviewed decisions onto transactions that retained stable provider identity. */
+  /** Restore reviewed decisions onto rebuilt transactions and transfer reconciliations. */
   readonly restorePrincipalReviews: (params: {
     readonly runId: string
     readonly principalId: string
