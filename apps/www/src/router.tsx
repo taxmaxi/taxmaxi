@@ -5,9 +5,6 @@ import { createIsomorphicFn } from "@tanstack/react-start"
 import { getRequestHeader } from "@tanstack/react-start/server"
 import { TaxMaxi } from "taxmaxi"
 import { TaxMaxiInternal } from "taxmaxi/internal"
-import * as Config from "effect/Config"
-import * as Effect from "effect/Effect"
-import * as Option from "effect/Option"
 
 import { routeTree } from "./routeTree.gen"
 import { deLocalizeUrl, localizeUrl } from "./paraglide/runtime"
@@ -23,12 +20,6 @@ const nonEmptyBaseUrl = (value: string | undefined): string | undefined => {
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed
 }
 
-const getServerApiBaseUrl = (): string | undefined =>
-  Effect.runSync(Config.option(Config.string("TAXMAXI_API_BASE_URL"))).pipe(
-    Option.getOrUndefined,
-    nonEmptyBaseUrl
-  )
-
 export function getRouter() {
   const queryClient = new QueryClient()
   let browserTaxMaxi: TaxMaxi | undefined
@@ -39,7 +30,7 @@ export function getRouter() {
 
     if (cookieHeader !== undefined) {
       return TaxMaxi.fromRequest({
-        baseUrl: getServerApiBaseUrl(),
+        baseUrl: nonEmptyBaseUrl(process.env.TAXMAXI_API_BASE_URL),
         cookieHeader,
       })
     }
@@ -52,16 +43,18 @@ export function getRouter() {
 
   const internalTaxmaxi = () => {
     const cookieHeader = getServerCookieHeader()
-    const baseUrl =
-      cookieHeader === undefined
-        ? nonEmptyBaseUrl(import.meta.env.VITE_TAXMAXI_API_BASE_URL)
-        : getServerApiBaseUrl()
 
     if (cookieHeader !== undefined) {
-      return new TaxMaxiInternal({ baseUrl, headers: { cookie: cookieHeader } })
+      return new TaxMaxiInternal({
+        baseUrl: nonEmptyBaseUrl(process.env.TAXMAXI_API_BASE_URL),
+        headers: { cookie: cookieHeader },
+      })
     }
 
-    browserInternalTaxMaxi ??= new TaxMaxiInternal({ baseUrl, credentials: "include" })
+    browserInternalTaxMaxi ??= new TaxMaxiInternal({
+      baseUrl: nonEmptyBaseUrl(import.meta.env.VITE_TAXMAXI_API_BASE_URL),
+      credentials: "include",
+    })
     return browserInternalTaxMaxi
   }
 

@@ -1,7 +1,5 @@
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import * as DateTime from "effect/DateTime"
-import * as Schema from "effect/Schema"
 import {
   ArrowDown,
   Check,
@@ -20,6 +18,7 @@ import type {
   ProviderAssetDecision,
   ProviderAssetReview,
 } from "taxmaxi/internal"
+import { z } from "zod"
 
 import { Logo } from "#/components/logo"
 import { Badge } from "#/components/ui/badge"
@@ -81,15 +80,15 @@ const EVIDENCE = {
   spring: { type: "spring" as const, stiffness: 420, damping: 38 },
 } as const
 
-const AdminProviderAssetSearch = Schema.Struct({
-  asset: Schema.optional(Schema.UUID),
-  cursor: Schema.optional(Schema.UUID),
-  provider: Schema.optional(Schema.String),
-  q: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.Literal("pending_review", "approved", "rejected")),
+const AdminProviderAssetSearch = z.object({
+  asset: z.uuid().optional(),
+  cursor: z.uuid().optional(),
+  provider: z.string().optional(),
+  q: z.string().optional(),
+  status: z.enum(["pending_review", "approved", "rejected"]).optional(),
 })
 
-type AdminProviderAssetSearch = typeof AdminProviderAssetSearch.Type
+type AdminProviderAssetSearch = z.infer<typeof AdminProviderAssetSearch>
 type ReplayView = {
   readonly providerAssetId: string
   readonly sourceId: string
@@ -99,8 +98,7 @@ type ReplayView = {
 }
 
 export const Route = createFileRoute("/admin/provider-assets")({
-  validateSearch: (search): AdminProviderAssetSearch =>
-    Schema.decodeUnknownSync(AdminProviderAssetSearch)(search),
+  validateSearch: (search): AdminProviderAssetSearch => AdminProviderAssetSearch.parse(search),
   beforeLoad: async () => {
     const { isAuthenticated } = await getAuthStatus()
     if (!isAuthenticated) throw redirect({ to: "/login" })
@@ -957,9 +955,9 @@ function formatStatus(status: ProviderAssetReview["mappingStatus"]): string {
   return "Pending review"
 }
 
-function formatDate(value: DateTime.Utc): string {
+function formatDate(value: ProviderAssetReview["discoveredAt"]): string {
   return new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(
-    DateTime.toDateUtc(value)
+    new Date(value.epochMillis)
   )
 }
 
