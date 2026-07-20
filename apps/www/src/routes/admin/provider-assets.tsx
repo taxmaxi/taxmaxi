@@ -49,6 +49,7 @@ import {
   appendUniqueProviderAssetReviews,
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
+  providerAssetReviewFilterKey,
 } from "#/lib/provider-asset-review"
 
 /* ─────────────────────────────────────────────────────────
@@ -154,9 +155,24 @@ function ProviderAssetWorkbench() {
   const [replays, setReplays] = useState<ReadonlyArray<ReplayView>>([])
   const [loadingMore, setLoadingMore] = useState(false)
   const rowRefs = useRef(new Map<string, HTMLButtonElement>())
-  const loadingCursorRef = useRef<string | null>(null)
+  const loadingPageRequestRef = useRef<{
+    readonly cursor: string
+    readonly filterKey: string
+  } | null>(null)
 
   const selected = rows.find((row) => row.id === selectedId) ?? null
+  const activeFilterKey = providerAssetReviewFilterKey({
+    provider: search.provider,
+    query: search.q,
+    status: search.status ?? "pending_review",
+  })
+  const activeFilterKeyRef = useRef(activeFilterKey)
+  activeFilterKeyRef.current = activeFilterKey
+
+  const invalidatePageRequest = useCallback(() => {
+    loadingPageRequestRef.current = null
+    setLoadingMore(false)
+  }, [])
 
   const resetDecisionState = useCallback(() => {
     setCandidates([])
@@ -368,8 +384,14 @@ function ProviderAssetWorkbench() {
   )
 
   const loadMore = async () => {
-    if (nextCursor === null || loadingCursorRef.current === nextCursor) return
-    loadingCursorRef.current = nextCursor
+    if (
+      nextCursor === null ||
+      (loadingPageRequestRef.current?.cursor === nextCursor &&
+        loadingPageRequestRef.current.filterKey === activeFilterKey)
+    )
+      return
+    const request = { cursor: nextCursor, filterKey: activeFilterKey }
+    loadingPageRequestRef.current = request
     setLoadingMore(true)
     try {
       const page = await internalTaxmaxi().assets.listProviderAssetReviews({
@@ -379,15 +401,18 @@ function ProviderAssetWorkbench() {
         cursor: nextCursor,
         limit: 40,
       })
+      if (activeFilterKeyRef.current !== request.filterKey) return
       setRows((current) =>
         appendUniqueProviderAssetReviews({ current, incoming: page.providerAssets })
       )
       setNextCursor(page.page.nextCursor)
     } catch (error) {
-      setActionError(messageFor(error))
+      if (activeFilterKeyRef.current === request.filterKey) setActionError(messageFor(error))
     } finally {
-      loadingCursorRef.current = null
-      setLoadingMore(false)
+      if (loadingPageRequestRef.current === request) {
+        loadingPageRequestRef.current = null
+        setLoadingMore(false)
+      }
     }
   }
 
@@ -420,6 +445,7 @@ function ProviderAssetWorkbench() {
           className="grid gap-3 rounded-3xl border bg-card/80 p-3 shadow-sm md:grid-cols-[minmax(14rem,1fr)_12rem_12rem_auto]"
           onSubmit={(event) => {
             event.preventDefault()
+            invalidatePageRequest()
             void navigate({
               search: (previous) => ({
                 ...previous,
@@ -447,7 +473,8 @@ function ProviderAssetWorkbench() {
             />
           </label>
           <Select
-            onValueChange={(value) =>
+            onValueChange={(value) => {
+              invalidatePageRequest()
               void navigate({
                 search: (previous) => ({
                   ...previous,
@@ -455,7 +482,7 @@ function ProviderAssetWorkbench() {
                   cursor: undefined,
                 }),
               })
-            }
+            }}
             value={search.provider ?? "all"}
           >
             <SelectTrigger className="h-11 w-full">
@@ -470,11 +497,12 @@ function ProviderAssetWorkbench() {
             </SelectContent>
           </Select>
           <Select
-            onValueChange={(value: "approved" | "pending_review" | "rejected") =>
+            onValueChange={(value: "approved" | "pending_review" | "rejected") => {
+              invalidatePageRequest()
               void navigate({
                 search: (previous) => ({ ...previous, status: value, cursor: undefined }),
               })
-            }
+            }}
             value={search.status ?? "pending_review"}
           >
             <SelectTrigger className="h-11 w-full">
@@ -695,7 +723,10 @@ function ProviderAssetWorkbench() {
                         </label>
                         <Input
                           id="existing-asset-search"
-                          onChange={(event) => setExistingQuery(event.currentTarget.value)}
+                          onChange={(event) => {
+                            setExistingQuery(event.currentTarget.value)
+                            setSelectedExistingId(null)
+                          }}
                           placeholder="Search canonical assets"
                           type="search"
                           value={existingQuery}

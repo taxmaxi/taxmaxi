@@ -572,6 +572,12 @@ describe("ProviderAssetRepositoryLive", () => {
             toAddress: "owned",
             amount: "1",
           })
+          yield* db.insert(schema.processingJobs).values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync",
+            status: "pending",
+          })
         })
       )
 
@@ -655,7 +661,11 @@ describe("ProviderAssetRepositoryLive", () => {
         Effect.gen(function* () {
           const db = yield* drizzle
           const jobs = yield* db
-            .select({ sourceId: schema.processingJobs.sourceId, mode: schema.processingJobs.mode })
+            .select({
+              sourceId: schema.processingJobs.sourceId,
+              mode: schema.processingJobs.mode,
+              followUpMode: schema.processingJobs.followUpMode,
+            })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
           const mappings = yield* db
@@ -675,7 +685,9 @@ describe("ProviderAssetRepositoryLive", () => {
         canonicalAsset: { symbol: "RVT" },
         affectedSources: [{ sourceId: TEST_SOURCE_ID, principalId: TEST_PRINCIPAL_ID }],
       })
-      expect(persisted.jobs).toEqual([{ sourceId: TEST_SOURCE_ID, mode: "replay" }])
+      expect(persisted.jobs).toEqual([
+        { sourceId: TEST_SOURCE_ID, mode: "sync", followUpMode: "replay" },
+      ])
       expect(persisted.mappings[0]?.canonicalAssetId).toBe(decision.canonicalAsset?.id)
       expect(staleDecision.updated).toBe(false)
       expect(persisted.staleAssets).toHaveLength(0)

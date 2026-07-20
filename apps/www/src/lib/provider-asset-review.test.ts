@@ -3,6 +3,7 @@ import {
   appendUniqueProviderAssetReviews,
   mergeProviderAssetReplayUpdates,
   nextProviderAssetSelection,
+  providerAssetReviewFilterKey,
 } from "./provider-asset-review"
 
 describe("provider asset review progression", () => {
@@ -46,5 +47,31 @@ describe("provider asset review progression", () => {
         incoming: [{ id: "asset-b" }, { id: "asset-c" }],
       })
     ).toEqual([{ id: "asset-a" }, { id: "asset-b" }, { id: "asset-c" }])
+  })
+
+  it("changes the page request key when any review filter changes", () => {
+    const current = providerAssetReviewFilterKey({
+      provider: "coinbase",
+      query: "BTC",
+      status: "pending_review",
+    })
+
+    expect(
+      providerAssetReviewFilterKey({
+        provider: "helius-solana",
+        query: "BTC",
+        status: "pending_review",
+      })
+    ).not.toBe(current)
+    expect(
+      providerAssetReviewFilterKey({
+        provider: "coinbase",
+        query: "ETH",
+        status: "pending_review",
+      })
+    ).not.toBe(current)
+    expect(
+      providerAssetReviewFilterKey({ provider: "coinbase", query: "BTC", status: "approved" })
+    ).not.toBe(current)
   })
 })

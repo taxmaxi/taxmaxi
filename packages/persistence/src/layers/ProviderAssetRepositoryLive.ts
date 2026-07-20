@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, ilike, isNull, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -758,25 +758,66 @@ const make = Effect.gen(function* () {
               : []
 
           yield* Effect.forEach(affectedSources, (source) =>
-            tx
-              .insert(schema.processingJobs)
-              .values({
-                sourceId: source.sourceId,
-                principalId: source.principalId,
-                mode: "replay",
-                status: "pending",
-                attemptCount: 0,
-                maxAttempts: 3,
-                progressDetails: { mode: "replay" },
-                createdAt: params.reviewedAt,
-                updatedAt: params.reviewedAt,
-              })
-              .onConflictDoNothing()
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "providerAssetRepository.decideProviderAssetMapping.createReplayJob"
+            Effect.gen(function* () {
+              const inserted = yield* tx
+                .insert(schema.processingJobs)
+                .values({
+                  sourceId: source.sourceId,
+                  principalId: source.principalId,
+                  mode: "replay",
+                  status: "pending",
+                  attemptCount: 0,
+                  maxAttempts: 3,
+                  progressDetails: { mode: "replay" },
+                  createdAt: params.reviewedAt,
+                  updatedAt: params.reviewedAt,
+                })
+                .onConflictDoNothing()
+                .returning({ id: schema.processingJobs.id })
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "providerAssetRepository.decideProviderAssetMapping.createReplayJob"
+                  )
                 )
-              )
+
+              if (inserted.length === 1) return
+
+              const [activeJob] = yield* tx
+                .select({
+                  id: schema.processingJobs.id,
+                  mode: schema.processingJobs.mode,
+                  status: schema.processingJobs.status,
+                })
+                .from(schema.processingJobs)
+                .where(
+                  and(
+                    eq(schema.processingJobs.sourceId, source.sourceId),
+                    inArray(schema.processingJobs.status, ["pending", "processing"])
+                  )
+                )
+                .limit(1)
+                .for("update")
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "providerAssetRepository.decideProviderAssetMapping.loadActiveReplayJob"
+                  )
+                )
+
+              if (
+                activeJob !== undefined &&
+                !(activeJob.status === "pending" && activeJob.mode === "replay")
+              ) {
+                yield* tx
+                  .update(schema.processingJobs)
+                  .set({ followUpMode: "replay", updatedAt: params.reviewedAt })
+                  .where(eq(schema.processingJobs.id, activeJob.id))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "providerAssetRepository.decideProviderAssetMapping.deferReplayJob"
+                    )
+                  )
+              }
+            })
           )
 
           return { updated: true, canonicalAsset, affectedSources }

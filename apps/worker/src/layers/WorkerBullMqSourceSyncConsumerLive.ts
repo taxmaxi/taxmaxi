@@ -347,6 +347,16 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
         const result = await runPromise(processJob({ job, config }).pipe(Effect.either))
 
         if (result._tag === "Right") {
+          await runPromise(
+            startupRepair.repair.pipe(
+              Effect.catchAll((error) =>
+                Effect.logWarning(
+                  { operation: error.operation, cause: error.cause },
+                  "source-sync-worker:follow-up-repair-failed"
+                )
+              )
+            )
+          )
           return result.right
         }
 

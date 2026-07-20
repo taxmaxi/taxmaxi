@@ -755,4 +755,50 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     expect(executionJob.mode).toBe("sync")
   })
+
+  it("materializes a durable replay follow-up when an active job completes", async () => {
+    const activeJobId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync",
+            status: "processing",
+            followUpMode: "replay",
+          })
+          .returning({ id: schema.processingJobs.id })
+
+        if (job === undefined) return yield* Effect.dieMessage("Failed to create active sync job")
+        return job.id
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.completeJob({ jobId: activeJobId, state: completedState })
+      )
+    )
+
+    const jobs = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            id: schema.processingJobs.id,
+            mode: schema.processingJobs.mode,
+            status: schema.processingJobs.status,
+          })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    expect(jobs).toEqual([
+      { id: activeJobId, mode: "sync", status: "completed" },
+      { id: expect.any(String), mode: "replay", status: "pending" },
+    ])
+  })
 })

@@ -48,16 +48,19 @@ type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 const normalize = (value: string) => value.trim().toLowerCase()
 
 export const hasStrongProviderIdentityEvidence = ({
+  candidateContractAddress,
   coinName,
   observedTokenId,
   providerName,
 }: {
+  readonly candidateContractAddress: string | null
   readonly coinName: string
   readonly observedTokenId: string | null
   readonly providerName: string | null
 }): boolean =>
-  observedTokenId !== null ||
-  (providerName !== null && normalize(providerName) === normalize(coinName))
+  observedTokenId !== null
+    ? candidateContractAddress !== null
+    : providerName !== null && normalize(providerName) === normalize(coinName)
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
@@ -391,39 +394,18 @@ const make = Effect.gen(function* () {
   const mapCoinGeckoError = (error: { readonly message: string }) =>
     new AssetCanonicalizationProviderError({ message: error.message })
 
-  const resolveCoinGeckoDrafts = ({
-    coinId,
+  const resolveSelectedCoinGeckoDrafts = ({
+    selectedCoin,
     providerAsset,
   }: {
-    readonly coinId: string
+    readonly selectedCoin: CoinGeckoSearchCoin
     readonly providerAsset: ProviderAssetRecord
   }) =>
     Effect.gen(function* () {
-      const searchCoins = yield* coinGeckoClient
-        .searchCoins({ query: providerAsset.currencyCode })
-        .pipe(Effect.mapError(mapCoinGeckoError))
-      const selectedCoin = yield* selectCoinCandidate({
-        coinId,
-        providerAssetSymbol: providerAsset.currencyCode,
-        searchCoins,
-      })
       const coin = yield* coinGeckoClient
         .getCoin({ coinId: selectedCoin.id })
         .pipe(Effect.mapError(mapCoinGeckoError))
       const observedTokenId = observedProviderTokenId(providerAsset)
-      if (
-        !hasStrongProviderIdentityEvidence({
-          coinName: coin.name,
-          observedTokenId,
-          providerName: providerAsset.name,
-        })
-      ) {
-        return yield* Effect.fail(
-          makeBadRequest(
-            `CoinGecko symbol ${providerAsset.currencyCode} is not sufficient without matching provider name or contract evidence.`
-          )
-        )
-      }
       const assetPlatforms: ReadonlyArray<CoinGeckoAssetPlatform> = coinGeckoAssetPlatformSnapshot
       const nativePlatforms = assetPlatforms.filter(
         (platform) => platform.native_coin_id === coin.id
@@ -431,6 +413,20 @@ const make = Effect.gen(function* () {
       const nativePlatform = selectNativePlatform({ coinId: coin.id, assetPlatforms })
 
       if (nativePlatform !== null) {
+        if (
+          !hasStrongProviderIdentityEvidence({
+            candidateContractAddress: null,
+            coinName: coin.name,
+            observedTokenId,
+            providerName: providerAsset.name,
+          })
+        ) {
+          return yield* Effect.fail(
+            makeBadRequest(
+              `CoinGecko symbol ${providerAsset.currencyCode} is not sufficient without matching provider name or contract evidence.`
+            )
+          )
+        }
         const nativeDecimals = deriveNativeAssetDecimals({
           coinId: coin.id,
           platform: nativePlatform,
@@ -491,6 +487,20 @@ const make = Effect.gen(function* () {
       }
 
       const [platformId, contractAddress] = tokenPlatformEntry
+      if (
+        !hasStrongProviderIdentityEvidence({
+          candidateContractAddress: contractAddress,
+          coinName: coin.name,
+          observedTokenId,
+          providerName: providerAsset.name,
+        })
+      ) {
+        return yield* Effect.fail(
+          makeBadRequest(
+            `CoinGecko symbol ${providerAsset.currencyCode} is not sufficient without matching provider name or contract evidence.`
+          )
+        )
+      }
       const tokenPlatform = assetPlatforms.find((platform) => platform.id === platformId)
       if (tokenPlatform === undefined) {
         return yield* Effect.fail(
@@ -520,6 +530,25 @@ const make = Effect.gen(function* () {
           contractAddress,
         },
       }
+    })
+
+  const resolveCoinGeckoDrafts = ({
+    coinId,
+    providerAsset,
+  }: {
+    readonly coinId: string
+    readonly providerAsset: ProviderAssetRecord
+  }) =>
+    Effect.gen(function* () {
+      const searchCoins = yield* coinGeckoClient
+        .searchCoins({ query: providerAsset.currencyCode })
+        .pipe(Effect.mapError(mapCoinGeckoError))
+      const selectedCoin = yield* selectCoinCandidate({
+        coinId,
+        providerAssetSymbol: providerAsset.currencyCode,
+        searchCoins,
+      })
+      return yield* resolveSelectedCoinGeckoDrafts({ selectedCoin, providerAsset })
     })
 
   const loadPendingReview = (providerAssetRowId: string) =>
@@ -657,8 +686,8 @@ const make = Effect.gen(function* () {
 
       const candidates = yield* Effect.forEach(symbolMatches, (match) =>
         optionalCandidateResolution(
-          resolveCoinGeckoDrafts({
-            coinId: match.id,
+          resolveSelectedCoinGeckoDrafts({
+            selectedCoin: match,
             providerAsset: review.providerAsset,
           })
         )

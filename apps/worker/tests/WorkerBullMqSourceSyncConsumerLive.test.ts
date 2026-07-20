@@ -8,7 +8,11 @@ import {
   type WorkerBullMqSourceSyncJob,
   type WorkerBullMqSourceSyncProcessor,
 } from "../src/layers/WorkerBullMqSourceSyncConsumerLive.ts"
-import { WorkerSourceSyncStartupRepair } from "../src/layers/WorkerSourceSyncStartupRepairLive.ts"
+import {
+  WorkerSourceSyncStartupRepair,
+  type WorkerSourceSyncStartupRepairError,
+  type WorkerSourceSyncStartupRepairSummary,
+} from "../src/layers/WorkerSourceSyncStartupRepairLive.ts"
 import {
   SOURCE_SYNC_JOB_NAME,
   SourceSyncJobExecutionNotFoundError,
@@ -92,6 +96,7 @@ const runWithConsumer = <A>({
   executor,
   acquireWorker,
   configOverrides,
+  repair,
 }: {
   readonly effect: Effect.Effect<A>
   readonly executor: SourceSyncJobExecutorShape
@@ -100,6 +105,10 @@ const runWithConsumer = <A>({
     processor: WorkerBullMqSourceSyncProcessor
   ) => Effect.Effect<BullMqSourceSyncWorker>
   readonly configOverrides?: Record<string, string>
+  readonly repair?: Effect.Effect<
+    WorkerSourceSyncStartupRepairSummary,
+    WorkerSourceSyncStartupRepairError
+  >
 }) =>
   Effect.runPromise(
     Effect.scoped(
@@ -110,14 +119,16 @@ const runWithConsumer = <A>({
               Layer.mergeAll(
                 Layer.succeed(SourceSyncJobExecutor, executor),
                 Layer.succeed(WorkerSourceSyncStartupRepair, {
-                  repair: Effect.succeed({
-                    scannedJobs: 0,
-                    requeuedPending: 0,
-                    failedProcessing: 0,
-                    skippedJobs: 0,
-                    erroredJobs: 0,
-                    stoppedAfterErrors: false,
-                  }),
+                  repair:
+                    repair ??
+                    Effect.succeed({
+                      scannedJobs: 0,
+                      requeuedPending: 0,
+                      failedProcessing: 0,
+                      skippedJobs: 0,
+                      erroredJobs: 0,
+                      stoppedAfterErrors: false,
+                    }),
                 })
               )
             )
@@ -186,6 +197,40 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
       },
     })
     expect(syncExecution.retryPolicy?.nextRetryAt).toBeInstanceOf(Date)
+  })
+
+  it("repairs the queue after a completed job materializes follow-up work", async () => {
+    let processor: WorkerBullMqSourceSyncProcessor | null = null
+    let repairCount = 0
+
+    await runWithConsumer({
+      executor: {
+        execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "completed" })),
+      },
+      repair: Effect.sync(() => {
+        repairCount += 1
+        return {
+          scannedJobs: 0,
+          requeuedPending: 0,
+          failedProcessing: 0,
+          skippedJobs: 0,
+          erroredJobs: 0,
+          stoppedAfterErrors: false,
+        }
+      }),
+      acquireWorker: (_config, acquiredProcessor) =>
+        Effect.sync(() => {
+          processor = acquiredProcessor
+          return { close: Effect.void }
+        }),
+      effect: Effect.gen(function* () {
+        if (processor === null) return yield* Effect.dieMessage("Processor was not acquired")
+        const acquiredProcessor = processor
+        yield* Effect.promise(() => acquiredProcessor(makeJob({ data: syncPayload })))
+      }),
+    })
+
+    expect(repairCount).toBe(2)
   })
 
   it("fails malformed payloads terminally without calling the executor", async () => {

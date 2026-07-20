@@ -36,6 +36,7 @@ export const processingJobs = pgTable(
       .notNull()
       .references(() => principals.id, { onDelete: "cascade" }),
     mode: jobModeEnum("mode").notNull().default("sync"),
+    followUpMode: jobModeEnum("follow_up_mode"),
     status: jobStatusEnum("status").notNull().default("pending"),
     attemptCount: integer("attempt_count").notNull().default(0),
     maxAttempts: integer("max_attempts").notNull().default(3),

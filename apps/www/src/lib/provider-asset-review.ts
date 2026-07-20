@@ -34,3 +34,13 @@ export const appendUniqueProviderAssetReviews = <Row extends { readonly id: stri
   const knownIds = new Set(current.map((row) => row.id))
   return [...current, ...incoming.filter((row) => !knownIds.has(row.id))]
 }
+
+export const providerAssetReviewFilterKey = ({
+  provider,
+  query,
+  status,
+}: {
+  readonly provider?: string
+  readonly query?: string
+  readonly status: "approved" | "pending_review" | "rejected"
+}): string => JSON.stringify([provider ?? null, query ?? null, status])

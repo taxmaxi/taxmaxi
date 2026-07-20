@@ -4,7 +4,7 @@ import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query
 import { createIsomorphicFn } from "@tanstack/react-start"
 import { getRequestHeader } from "@tanstack/react-start/server"
 import { TaxMaxi } from "taxmaxi"
-import { TaxMaxiInternal } from "taxmaxi/internal"
+import { getTaxMaxiApiBaseUrlFromConfig, TaxMaxiInternal } from "taxmaxi/internal"
 
 import { routeTree } from "./routeTree.gen"
 import { deLocalizeUrl, localizeUrl } from "./paraglide/runtime"
@@ -30,7 +30,7 @@ export function getRouter() {
 
     if (cookieHeader !== undefined) {
       return TaxMaxi.fromRequest({
-        baseUrl: nonEmptyBaseUrl(process.env.TAXMAXI_API_BASE_URL),
+        baseUrl: getTaxMaxiApiBaseUrlFromConfig(),
         cookieHeader,
       })
     }
@@ -46,7 +46,7 @@ export function getRouter() {
 
     if (cookieHeader !== undefined) {
       return new TaxMaxiInternal({
-        baseUrl: nonEmptyBaseUrl(process.env.TAXMAXI_API_BASE_URL),
+        baseUrl: getTaxMaxiApiBaseUrlFromConfig(),
         headers: { cookie: cookieHeader },
       })
     }

@@ -1,0 +1,1 @@
+ALTER TABLE "processing_jobs" ADD COLUMN "follow_up_mode" "job_mode";

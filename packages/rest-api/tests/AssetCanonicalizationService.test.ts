@@ -34,6 +34,7 @@ describe("AssetCanonicalizationService", () => {
   it("does not treat a symbol-only candidate as strong identity evidence", () => {
     expect(
       hasStrongProviderIdentityEvidence({
+        candidateContractAddress: null,
         coinName: "Unrelated Dollar Coin",
         observedTokenId: null,
         providerName: "USD Coin",
@@ -41,9 +42,29 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(false)
     expect(
       hasStrongProviderIdentityEvidence({
+        candidateContractAddress: null,
         coinName: "USD Coin",
         observedTokenId: null,
         providerName: "USD Coin",
+      })
+    ).toBe(true)
+  })
+
+  it("does not accept a native candidate for an observed token identifier", () => {
+    expect(
+      hasStrongProviderIdentityEvidence({
+        candidateContractAddress: null,
+        coinName: "Solana",
+        observedTokenId: "ImpersonatingMint",
+        providerName: "Solana",
+      })
+    ).toBe(false)
+    expect(
+      hasStrongProviderIdentityEvidence({
+        candidateContractAddress: "MatchingMint",
+        coinName: "Token",
+        observedTokenId: "MatchingMint",
+        providerName: "Token",
       })
     ).toBe(true)
   })
