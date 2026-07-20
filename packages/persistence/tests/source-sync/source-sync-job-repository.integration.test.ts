@@ -20,6 +20,9 @@ const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_source_sync_job_repo",
 })
 
+const SECOND_SOURCE_ID = "00000000-0000-0000-0000-000000000902"
+const REPLAY_RUN_ID = "00000000-0000-0000-0000-000000000903"
+
 const runPg = context.runPg
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -654,6 +657,146 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     expect(nextJob._tag).toBe("CreatedSourceSyncJob")
     expect(nextJob.id).not.toBe(created.id)
+  })
+
+  it("blocks a new source job while a principal replay is active", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.syncRuns).values({
+          id: REPLAY_RUN_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "replay",
+          status: "running",
+          requestedSourceCount: 1,
+        })
+      })
+    )
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* SourceSyncJobRepository
+        return yield* repository
+          .createOrReuseJob({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync",
+            maxAttempts: 3,
+          })
+          .pipe(Effect.either)
+      })
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "SyncEngineStorageError",
+        operation: "sourceSyncJobRepository.createOrReuseJob.activePrincipalReplay",
+      })
+    }
+  })
+
+  it("fails every child job and the run when a stale replay coordinator is recovered", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "bc1qstale-principal-replay",
+            type: "bitcoin",
+            name: "Stale principal replay",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.addresses.id })
+        if (address === undefined) {
+          return yield* Effect.dieMessage("Failed to seed stale replay source address")
+        }
+        yield* db.insert(schema.sources).values({
+          id: SECOND_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Stale principal replay source",
+          providerKey: "bitcoin-rpc",
+          sourceableType: "onchain",
+          addressId: address.id,
+          cexAccountId: null,
+        })
+      })
+    )
+    const coordinator = await createJob({ mode: "replay" })
+    const child = await createJob({ mode: "replay", sourceId: SECOND_SOURCE_ID })
+    await claimJob({ jobId: coordinator.id, workerId: "principal-worker" })
+    await claimJob({ jobId: child.id, workerId: "principal-worker" })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.syncRuns).values({
+          id: REPLAY_RUN_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "replay",
+          status: "running",
+          requestedSourceCount: 2,
+          runningSourceCount: 2,
+        })
+        yield* db.insert(schema.syncRunItems).values([
+          {
+            runId: REPLAY_RUN_ID,
+            sourceId: TEST_SOURCE_ID,
+            processingJobId: coordinator.id,
+            isCoordinator: true,
+            status: "running",
+          },
+          {
+            runId: REPLAY_RUN_ID,
+            sourceId: SECOND_SOURCE_ID,
+            processingJobId: child.id,
+            isCoordinator: false,
+            status: "running",
+          },
+        ])
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recoverStaleActiveJob({
+          sourceId: TEST_SOURCE_ID,
+          jobId: coordinator.id,
+          message: "Recovered stale principal replay after timeout.",
+          completedAt: new Date("2025-01-04T00:00:00.000Z"),
+        })
+      )
+    )
+
+    const recovered = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return {
+          jobs: yield* db
+            .select()
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.principalId, TEST_PRINCIPAL_ID)),
+          items: yield* db
+            .select()
+            .from(schema.syncRunItems)
+            .where(eq(schema.syncRunItems.runId, REPLAY_RUN_ID)),
+          run: yield* db
+            .select()
+            .from(schema.syncRuns)
+            .where(eq(schema.syncRuns.id, REPLAY_RUN_ID)),
+        }
+      })
+    )
+
+    expect(recovered.jobs).toHaveLength(2)
+    expect(recovered.jobs.every((job) => job.status === "failed")).toBe(true)
+    expect(recovered.items.every((item) => item.status === "failed")).toBe(true)
+    expect(recovered.run[0]).toMatchObject({
+      status: "failed",
+      runningSourceCount: 0,
+      failedSourceCount: 2,
+    })
   })
 
   it("maps persisted job states to API-visible queued, running, completed, and failed statuses", async () => {

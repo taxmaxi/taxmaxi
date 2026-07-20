@@ -728,6 +728,51 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).not.toContain("principal:complete:1")
   })
 
+  it("retries the principal replay when a cached row cannot be rebuilt", async () => {
+    const events: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          retryPolicy: {
+            attemptNumber: 1,
+            maxAttempts: 3,
+            nextRetryAt: new Date("2026-01-01T00:05:00.000Z"),
+          },
+        })
+      }).pipe(
+        Effect.either,
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            sourceProviderKey: "stub-chain",
+            principalReplayPlan: {
+              runId: "run-1",
+              principalId: source.principalId,
+              sourceJobs: [{ sourceId: source.id, jobId: "job-1", isCoordinator: true }],
+            },
+            replayRawRecords: [
+              {
+                ...replayRawRecord,
+                provider: "stub-chain",
+                recordType: "stub_transaction",
+              },
+            ],
+            failNormalizeOnce: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Left")
+    expect(events).toContain("mark-raw-failed:Paired sibling row is not cached yet.")
+    expect(events).toContain("principal:retry:1")
+    expect(events).not.toContain("principal:restore-reviews")
+    expect(events).not.toContain("principal:complete:1")
+  })
+
   it("records retry metadata and returns a retryable error before the final attempt", async () => {
     const events: Array<string> = []
     const nextRetryAt = new Date("2026-01-01T00:05:00.000Z")

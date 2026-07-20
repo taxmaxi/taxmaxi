@@ -42,6 +42,7 @@ export const syncRuns = pgTable(
     runningSourceCount: integer("running_source_count").notNull().default(0),
     completedSourceCount: integer("completed_source_count").notNull().default(0),
     failedSourceCount: integer("failed_source_count").notNull().default(0),
+    reviewSnapshotInitializedAt: timestamp("review_snapshot_initialized_at"),
     startedAt: timestamp("started_at"),
     completedAt: timestamp("completed_at"),
     message: text("message"),

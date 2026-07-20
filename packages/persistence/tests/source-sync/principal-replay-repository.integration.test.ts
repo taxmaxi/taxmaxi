@@ -384,6 +384,95 @@ describe("PrincipalReplayRepositoryLive", () => {
     })
   })
 
+  it("records an empty review snapshot before the first reset", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.syncRuns).values({
+          id: RUN_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "replay",
+          status: "running",
+          requestedSourceCount: 1,
+        })
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.preparePrincipalReplay({ runId: RUN_ID, principalId: TEST_PRINCIPAL_ID })
+      )
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [rawRecord] = yield* db
+          .insert(schema.sourceRecordsRaw)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            provider: "coinbase",
+            recordType: "transaction",
+            externalRecordId: "retry-review",
+            occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+            payload: { id: "retry-review" },
+            importedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.sourceRecordsRaw.id })
+        if (rawRecord === undefined) {
+          return yield* Effect.dieMessage("Failed to seed retry review raw record")
+        }
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: rawRecord.id,
+            externalId: "retry-review",
+            timestamp: new Date("2025-01-01T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to seed retry review transaction")
+        }
+        yield* db.insert(schema.transactionReviews).values({
+          transactionId: transaction.id,
+          principalId: TEST_PRINCIPAL_ID,
+          reviewStatus: "approved",
+          currentTypeKey: "buy_fiat",
+          needsReview: false,
+          reviewedAt: new Date("2025-01-02T00:00:00.000Z"),
+        })
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.preparePrincipalReplay({ runId: RUN_ID, principalId: TEST_PRINCIPAL_ID })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [run] = yield* db
+          .select({ initializedAt: schema.syncRuns.reviewSnapshotInitializedAt })
+          .from(schema.syncRuns)
+          .where(eq(schema.syncRuns.id, RUN_ID))
+        return {
+          initializedAt: run?.initializedAt ?? null,
+          snapshots: yield* db
+            .select()
+            .from(schema.principalReplayReviewSnapshots)
+            .where(eq(schema.principalReplayReviewSnapshots.runId, RUN_ID)),
+        }
+      })
+    )
+
+    expect(state.initializedAt).not.toBeNull()
+    expect(state.snapshots).toHaveLength(0)
+  })
+
   it("creates one reusable principal run with a coordinator and reserved source jobs", async () => {
     await runPg(
       Effect.gen(function* () {
@@ -468,5 +557,41 @@ describe("PrincipalReplayRepositoryLive", () => {
     expect(jobs.find((job) => job.id !== coordinatorJobId)).toMatchObject({
       queueName: "principal-replay-child",
     })
+  })
+
+  it("does not start from a stale source snapshot while another principal job is active", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.processingJobs).values({
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "sync",
+          status: "pending",
+          maxAttempts: 3,
+        })
+      })
+    )
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* PrincipalReplayRepository
+        return yield* repository
+          .createOrReuseReplayRun({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceIds: [],
+            maxAttempts: 3,
+          })
+          .pipe(Effect.either)
+      })
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "SyncEngineStorageError",
+        operation: "principalReplayRepository.createOrReuseReplayRun.busySources",
+      })
+    }
   })
 })

@@ -110,34 +110,31 @@ const make = Effect.gen(function* () {
           }
 
           const orderedSourceIds = Array.from(new Set(sourceIds)).sort()
-          if (orderedSourceIds.length > 0) {
-            const busyJobs = yield* tx
-              .select({ sourceId: schema.processingJobs.sourceId })
-              .from(schema.processingJobs)
-              .where(
-                and(
-                  eq(schema.processingJobs.principalId, principalId),
-                  inArray(schema.processingJobs.sourceId, orderedSourceIds),
-                  inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
-                )
+          const busyJobs = yield* tx
+            .select({ sourceId: schema.processingJobs.sourceId })
+            .from(schema.processingJobs)
+            .where(
+              and(
+                eq(schema.processingJobs.principalId, principalId),
+                inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
               )
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "principalReplayRepository.createOrReuseReplayRun.selectBusyJobs"
-                )
+            )
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalReplayRepository.createOrReuseReplayRun.selectBusyJobs"
               )
+            )
 
-            if (busyJobs.length > 0) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation: "principalReplayRepository.createOrReuseReplayRun.busySources",
-                  cause: `Sources already have active jobs: ${busyJobs
-                    .map((job) => job.sourceId)
-                    .sort()
-                    .join(", ")}`,
-                })
-              )
-            }
+          if (busyJobs.length > 0) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "principalReplayRepository.createOrReuseReplayRun.busySources",
+                cause: `Sources already have active jobs: ${busyJobs
+                  .map((job) => job.sourceId)
+                  .sort()
+                  .join(", ")}`,
+              })
+            )
           }
 
           const now = nowDate()
@@ -585,18 +582,27 @@ const make = Effect.gen(function* () {
               )
             )
 
-          const [existingSnapshot] = yield* tx
-            .select({ id: schema.principalReplayReviewSnapshots.id })
-            .from(schema.principalReplayReviewSnapshots)
-            .where(eq(schema.principalReplayReviewSnapshots.runId, runId))
+          const [run] = yield* tx
+            .select({
+              reviewSnapshotInitializedAt: schema.syncRuns.reviewSnapshotInitializedAt,
+            })
+            .from(schema.syncRuns)
+            .where(and(eq(schema.syncRuns.id, runId), eq(schema.syncRuns.principalId, principalId)))
             .limit(1)
             .pipe(
-              wrapSyncEngineSqlError(
-                "principalReplayRepository.preparePrincipalReplay.selectSnapshot"
-              )
+              wrapSyncEngineSqlError("principalReplayRepository.preparePrincipalReplay.selectRun")
             )
 
-          if (existingSnapshot === undefined) {
+          if (run === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "principalReplayRepository.preparePrincipalReplay.selectRun",
+                cause: `Replay run ${runId} does not belong to principal ${principalId}.`,
+              })
+            )
+          }
+
+          if (run.reviewSnapshotInitializedAt === null) {
             const reviews = yield* tx
               .select({
                 sourceId: schema.transactions.sourceId,
@@ -664,6 +670,16 @@ const make = Effect.gen(function* () {
                   )
                 )
             }
+
+            yield* tx
+              .update(schema.syncRuns)
+              .set({ reviewSnapshotInitializedAt: nowDate(), updatedAt: nowDate() })
+              .where(eq(schema.syncRuns.id, runId))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalReplayRepository.preparePrincipalReplay.markSnapshotInitialized"
+                )
+              )
           }
 
           const sourceRows = yield* tx

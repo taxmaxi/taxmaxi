@@ -21,6 +21,7 @@ import {
   SourceSyncJobExecutionRecordNotFoundError,
   SourceSyncJobRecordNotVisibleError,
   SourceSyncJobRepository,
+  SyncEngineStorageError,
   type SourceSyncJobRepositoryShape,
   type SourceSyncRepairableActiveJob,
   type SourceSyncStaleActiveJob,
@@ -195,33 +196,75 @@ const make = Effect.gen(function* () {
     readonly principalId: string
     readonly mode: "sync" | "replay"
     readonly maxAttempts: number
-  }): Effect.Effect<string, PersistenceError> =>
-    Effect.gen(function* () {
-      const [job] = yield* db
-        .insert(schema.processingJobs)
-        .values({
-          sourceId,
-          principalId,
-          mode,
-          status: "pending",
-          attemptCount: 0,
-          maxAttempts,
-          progressDetails: { mode },
+  }): Effect.Effect<string, PersistenceError | SyncEngineStorageError> =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx
+            .select({ id: schema.principals.id })
+            .from(schema.principals)
+            .where(eq(schema.principals.id, principalId))
+            .for("update")
+            .pipe(wrapSqlError("sourceSyncJobRepository.createOrReuseJob.lockPrincipal"))
+
+          const [activeReplay] = yield* tx
+            .select({ id: schema.syncRuns.id })
+            .from(schema.syncRuns)
+            .where(
+              and(
+                eq(schema.syncRuns.principalId, principalId),
+                eq(schema.syncRuns.mode, "replay"),
+                inArray(schema.syncRuns.status, ["queued", "running"])
+              )
+            )
+            .limit(1)
+            .pipe(wrapSqlError("sourceSyncJobRepository.createOrReuseJob.selectActiveReplay"))
+
+          if (activeReplay !== undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "sourceSyncJobRepository.createOrReuseJob.activePrincipalReplay",
+                cause: `Principal replay ${activeReplay.id} blocks new source jobs.`,
+              })
+            )
+          }
+
+          const [job] = yield* tx
+            .insert(schema.processingJobs)
+            .values({
+              sourceId,
+              principalId,
+              mode,
+              status: "pending",
+              attemptCount: 0,
+              maxAttempts,
+              progressDetails: { mode },
+            })
+            .returning({ id: schema.processingJobs.id })
+            .pipe(wrapSqlError("sourceSyncJobRepository.createProcessingJob.insert"))
+
+          if (job === undefined) {
+            return yield* Effect.fail(
+              new PersistenceError({
+                operation: "sourceSyncJobRepository.createProcessingJob.insert",
+                cause: "failed to create processing job",
+              })
+            )
+          }
+
+          return job.id
         })
-        .returning({ id: schema.processingJobs.id })
-        .pipe(wrapSqlError("sourceSyncJobRepository.createProcessingJob.insert"))
-
-      if (job === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceSyncJobRepository.createProcessingJob.insert",
-            cause: "failed to create processing job",
-          })
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error instanceof PersistenceError || error instanceof SyncEngineStorageError
+            ? error
+            : new PersistenceError({
+                operation: "sourceSyncJobRepository.createOrReuseJob.transaction",
+                cause: error,
+              })
         )
-      }
-
-      return job.id
-    })
+      )
 
   const createOrReuseJob: SourceSyncJobRepositoryShape["createOrReuseJob"] = ({
     sourceId,
@@ -237,6 +280,10 @@ const make = Effect.gen(function* () {
         })
       ),
       Effect.catchAll((error) => {
+        if (error instanceof SyncEngineStorageError) {
+          return Effect.fail(error)
+        }
+
         if (!isActiveProcessingJobConflict(error)) {
           return Effect.fail(toSyncEngineStorageError({ error }))
         }
@@ -401,26 +448,124 @@ const make = Effect.gen(function* () {
     completedAt,
   }) =>
     Effect.gen(function* () {
-      const [job] = yield* db
-        .update(schema.processingJobs)
-        .set({
-          status: "failed",
-          completedAt,
-          errorMessage: message,
-          workerId: null,
-          updatedAt: completedAt,
-        })
-        .where(
-          and(
-            eq(schema.processingJobs.id, jobId),
-            eq(schema.processingJobs.sourceId, sourceId),
-            inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
+      const recovery = yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [replay] = yield* tx
+              .select({ runId: schema.syncRuns.id })
+              .from(schema.syncRunItems)
+              .innerJoin(schema.syncRuns, eq(schema.syncRuns.id, schema.syncRunItems.runId))
+              .where(
+                and(
+                  eq(schema.syncRunItems.processingJobId, jobId),
+                  eq(schema.syncRunItems.sourceId, sourceId),
+                  eq(schema.syncRunItems.isCoordinator, true),
+                  eq(schema.syncRuns.mode, "replay"),
+                  inArray(schema.syncRuns.status, ["queued", "running"])
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError("sourceSyncJobRepository.recoverStaleActiveJob.selectReplay")
+              )
+
+            if (replay !== undefined) {
+              const childJobs = yield* tx
+                .select({ id: schema.syncRunItems.processingJobId })
+                .from(schema.syncRunItems)
+                .where(eq(schema.syncRunItems.runId, replay.runId))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceSyncJobRepository.recoverStaleActiveJob.selectReplayJobs"
+                  )
+                )
+              const childJobIds = childJobs.flatMap((childJob) =>
+                childJob.id === null ? [] : [childJob.id]
+              )
+
+              if (childJobIds.length > 0) {
+                yield* tx
+                  .update(schema.processingJobs)
+                  .set({
+                    status: "failed",
+                    completedAt,
+                    errorMessage: message,
+                    workerId: null,
+                    updatedAt: completedAt,
+                  })
+                  .where(inArray(schema.processingJobs.id, childJobIds))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceSyncJobRepository.recoverStaleActiveJob.failReplayJobs"
+                    )
+                  )
+              }
+
+              yield* tx
+                .update(schema.syncRunItems)
+                .set({ status: "failed", message, updatedAt: completedAt })
+                .where(eq(schema.syncRunItems.runId, replay.runId))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceSyncJobRepository.recoverStaleActiveJob.failReplayItems"
+                  )
+                )
+              yield* tx
+                .update(schema.syncRuns)
+                .set({
+                  status: "failed",
+                  queuedSourceCount: 0,
+                  runningSourceCount: 0,
+                  completedSourceCount: 0,
+                  failedSourceCount: childJobIds.length,
+                  message,
+                  completedAt,
+                  updatedAt: completedAt,
+                })
+                .where(eq(schema.syncRuns.id, replay.runId))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceSyncJobRepository.recoverStaleActiveJob.failReplayRun"
+                  )
+                )
+
+              return { runId: replay.runId }
+            }
+
+            const [job] = yield* tx
+              .update(schema.processingJobs)
+              .set({
+                status: "failed",
+                completedAt,
+                errorMessage: message,
+                workerId: null,
+                updatedAt: completedAt,
+              })
+              .where(
+                and(
+                  eq(schema.processingJobs.id, jobId),
+                  eq(schema.processingJobs.sourceId, sourceId),
+                  inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
+                )
+              )
+              .returning({ id: schema.processingJobs.id })
+              .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.recoverStaleActiveJob.update"))
+
+            return job === undefined ? null : { runId: null }
+          })
+        )
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SyncEngineStorageError
+              ? error
+              : toSyncEngineStorageError({
+                  operation: "sourceSyncJobRepository.recoverStaleActiveJob.transaction",
+                  error,
+                })
           )
         )
-        .returning({ id: schema.processingJobs.id })
-        .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.recoverStaleActiveJob.update"))
 
-      if (job === undefined) {
+      if (recovery === null) {
         return yield* failExpectedState({
           jobId,
           operation: "sourceSyncJobRepository.recoverStaleActiveJob.select",
@@ -429,7 +574,12 @@ const make = Effect.gen(function* () {
       }
 
       yield* Effect.logWarning(
-        { sourceId, jobId, completedAt: completedAt.toISOString() },
+        {
+          sourceId,
+          jobId,
+          replayRunId: recovery.runId,
+          completedAt: completedAt.toISOString(),
+        },
         "source-sync:stale-active-job-recovered"
       )
     })

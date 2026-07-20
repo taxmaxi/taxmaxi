@@ -1021,6 +1021,20 @@ const make = Effect.gen(function* () {
         { concurrency: 1 }
       )
 
+      const failedSources = Array.from(stateBySourceId.entries()).flatMap(([sourceId, state]) =>
+        state.failedRecords === 0 ? [] : [{ sourceId, failedRecords: state.failedRecords }]
+      )
+      if (failedSources.length > 0) {
+        return yield* Effect.fail(
+          new SyncEngineStorageError({
+            operation: "sourceSyncJobExecutor.runPrincipalReplay.normalizeRawRecords",
+            cause: `Principal replay could not rebuild cached rows: ${failedSources
+              .map(({ sourceId, failedRecords }) => `${sourceId} (${failedRecords})`)
+              .join(", ")}`,
+          })
+        )
+      }
+
       const reviewRestore = yield* principalReplayRepository.restorePrincipalReviews({
         runId: plan.runId,
         principalId: plan.principalId,
