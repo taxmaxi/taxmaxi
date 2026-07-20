@@ -475,6 +475,8 @@ const reportFixtureIds = {
   taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
   taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
   internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
+  custodyProviderTransferId: "00000000-0000-0000-0000-000000046401",
+  custodyMovementId: "00000000-0000-0000-0000-000000046402",
 } as const
 
 const seedSourceReportRows = ({
@@ -734,6 +736,41 @@ describe("SourcesApiLive", () => {
         principalId: fixture.principalId,
         sourceId: fixture.sourceId,
       })
+      const db = yield* drizzle
+      yield* db.insert(schema.providerTransfers).values({
+        id: reportFixtureIds.custodyProviderTransferId,
+        sourceId: fixture.sourceId,
+        transactionId: reportFixtureIds.sellTransactionId,
+        externalId: "report-custody-outflow-1",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        direction: "outbound",
+        fromAccountRef: "coinbase-account-1",
+        toAddress: "bc1qreportcustodydestination",
+        amount: "0.1",
+      })
+      yield* db.insert(schema.inventoryMovements).values({
+        id: reportFixtureIds.custodyMovementId,
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        transactionId: reportFixtureIds.sellTransactionId,
+        providerTransferId: reportFixtureIds.custodyProviderTransferId,
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        direction: "outbound",
+        purpose: "fee",
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+        amount: "0.1",
+      })
+      yield* db.insert(schema.inventoryMovementAllocations).values({
+        inventoryMovementId: reportFixtureIds.custodyMovementId,
+        fifoLotId: reportFixtureIds.taxableFifoLotId,
+        matchedAmount: "0.1",
+      })
+      yield* db
+        .update(schema.fifoLots)
+        .set({ remainingAmount: "0.5" })
+        .where(eq(schema.fifoLots.id, reportFixtureIds.taxableFifoLotId))
 
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
@@ -752,9 +789,9 @@ describe("SourcesApiLive", () => {
       expect(assetPnl.assets).toHaveLength(1)
       expect(assetPnl.assets[0]).toMatchObject({
         acquiredAmount: "1",
-        disposedAmount: "0.4",
-        openAmount: "0.6",
-        costBasis: "9000",
+        disposedAmount: "0.5",
+        openAmount: "0.5",
+        costBasis: "7500",
         proceeds: "6000",
         realizedGainLoss: "2000",
         currency: "EUR",
@@ -792,6 +829,7 @@ describe("SourcesApiLive", () => {
         lotId: reportFixtureIds.taxFreeFifoLotId,
         originalAmount: "0.2",
         remainingAmount: "0",
+        costBasisStatus: "known",
       })
       expect(fifoLots.fifoLots[0]?.disposalMatches[0]).toMatchObject({
         disposalLegId: reportFixtureIds.disposalLegId,
@@ -928,6 +966,63 @@ describe("SourcesApiLive", () => {
         urlParams: { limit: 10 },
       })
       expect(fifoLots.fifoLots).toEqual([])
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("counts provider-origin FIFO lot assets in the source overview", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+
+      const transactionId = "00000000-0000-0000-0000-000000046501"
+      const providerTransferId = "00000000-0000-0000-0000-000000046502"
+      const db = yield* drizzle
+
+      yield* db.insert(schema.transactions).values({
+        id: transactionId,
+        sourceId: fixture.sourceId,
+        externalId: "provider-only-receive",
+        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        principalId: fixture.principalId,
+      })
+      yield* db.insert(schema.providerTransfers).values({
+        id: providerTransferId,
+        sourceId: fixture.sourceId,
+        transactionId,
+        externalId: "provider-only-receive:principal",
+        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        direction: "inbound",
+        fromAddress: "bc1qprovideronlysource",
+        toAccountRef: "coinbase-account-1",
+        amount: "0.25",
+      })
+      yield* db.insert(schema.fifoLots).values({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-03-11T12:00:00.000Z"),
+        originalAmount: "0.25",
+        remainingAmount: "0.25",
+        costBasisPerToken: "0",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+        sourceProviderTransferId: providerTransferId,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const overview = yield* client.sources.getSourceOverview({
+        path: { sourceId: fixture.sourceId },
+      })
+
+      expect(overview.totals).toMatchObject({
+        transactionCount: 1,
+        legCount: 0,
+        assetCount: 1,
+        fifoLotCount: 1,
+      })
     }).pipe(Effect.provide(HttpLive))
   )
 

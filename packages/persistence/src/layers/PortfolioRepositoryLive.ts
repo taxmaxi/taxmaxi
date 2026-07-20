@@ -27,6 +27,7 @@ interface PositionAccumulator {
   amount: BigDecimal.BigDecimal
   costBasis: BigDecimal.BigDecimal
   costBasisCurrency: string | null
+  hasPendingCostBasis: boolean
 }
 
 const decodeDecimal = (value: string, operation: string) =>
@@ -73,6 +74,7 @@ const make = Effect.gen(function* () {
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
         })
         .from(schema.fifoLots)
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
@@ -95,11 +97,6 @@ const make = Effect.gen(function* () {
           "portfolioRepository.listAssetPositions.remainingAmount"
         ).pipe(wrapSqlError("portfolioRepository.listAssetPositions.remainingAmount"))
 
-        const costBasisPerToken = yield* decodeDecimal(
-          row.costBasisPerToken,
-          "portfolioRepository.listAssetPositions.costBasisPerToken"
-        ).pipe(wrapSqlError("portfolioRepository.listAssetPositions.costBasisPerToken"))
-
         const existing = positions.get(row.assetId) ?? {
           assetId: row.assetId,
           symbol: row.symbol,
@@ -109,19 +106,29 @@ const make = Effect.gen(function* () {
           amount: BigDecimal.fromBigInt(0n),
           costBasis: BigDecimal.fromBigInt(0n),
           costBasisCurrency: null,
+          hasPendingCostBasis: false,
         }
 
         existing.amount = BigDecimal.sum(existing.amount, amount)
 
-        existing.costBasis = BigDecimal.sum(
-          existing.costBasis,
-          BigDecimal.multiply(amount, costBasisPerToken)
-        )
+        if (row.costBasisStatus === "pending_review") {
+          existing.hasPendingCostBasis = true
+        } else {
+          const costBasisPerToken = yield* decodeDecimal(
+            row.costBasisPerToken,
+            "portfolioRepository.listAssetPositions.costBasisPerToken"
+          ).pipe(wrapSqlError("portfolioRepository.listAssetPositions.costBasisPerToken"))
 
-        existing.costBasisCurrency = mergeCurrency(
-          existing.costBasisCurrency,
-          row.costBasisCurrency
-        )
+          existing.costBasis = BigDecimal.sum(
+            existing.costBasis,
+            BigDecimal.multiply(amount, costBasisPerToken)
+          )
+
+          existing.costBasisCurrency = mergeCurrency(
+            existing.costBasisCurrency,
+            row.costBasisCurrency
+          )
+        }
 
         positions.set(row.assetId, existing)
       }
@@ -130,7 +137,11 @@ const make = Effect.gen(function* () {
         (position): PortfolioAssetPosition => ({
           ...position,
           amount: BigDecimal.format(position.amount),
-          costBasis: BigDecimal.format(BigDecimal.round(position.costBasis, { scale: 8 })),
+          costBasis: position.hasPendingCostBasis
+            ? null
+            : BigDecimal.format(BigDecimal.round(position.costBasis, { scale: 8 })),
+          costBasisCurrency: position.hasPendingCostBasis ? null : position.costBasisCurrency,
+          costBasisStatus: position.hasPendingCostBasis ? "pending_review" : "known",
         })
       )
     })

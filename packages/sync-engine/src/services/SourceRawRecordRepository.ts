@@ -62,8 +62,8 @@ export interface SourceRawRecordRepositoryShape {
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
   /**
-   * Load all cached raw rows of one record type that occurred at one provider timestamp.
-   * Used to find sibling rows of multi-row provider events (e.g. paired unstaking rows).
+   * Load cached raw rows near one provider timestamp. Used to find sibling rows
+   * of multi-row provider events when provider accounts record slightly different times.
    */
   readonly listRawRecordsByOccurredAt: (params: {
     readonly sourceId: string

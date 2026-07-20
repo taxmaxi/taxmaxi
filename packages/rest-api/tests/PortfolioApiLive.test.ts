@@ -6,9 +6,10 @@ import {
   PortfolioCurrency,
   PortfolioSummary,
 } from "../src/definitions/PortfolioApi.ts"
-import { makePortfolioSummary } from "../src/layers/PortfolioApiLive.ts"
+import { makePortfolioAssetRow, makePortfolioSummary } from "../src/layers/PortfolioApiLive.ts"
 
 const encodeSummary = Schema.encodeSync(PortfolioSummary)
+const encodeAsset = Schema.encodeSync(PortfolioAssetRow)
 
 const decodeDecimal = Schema.decodeSync(Schema.BigDecimal)
 
@@ -84,6 +85,33 @@ describe("makePortfolioSummary", () => {
       costBasis: null,
       profitLoss: null,
       profitLossPercentage: null,
+    })
+  })
+})
+
+describe("makePortfolioAssetRow", () => {
+  it("suppresses unrealized profit when the position has pending cost basis", () => {
+    const asset = makePortfolioAssetRow({
+      position: {
+        assetId: "btc",
+        symbol: "BTC",
+        name: "Bitcoin",
+        logoUrl: null,
+        coingeckoCoinId: "bitcoin",
+        amount: "0.25",
+        costBasis: null,
+        costBasisCurrency: null,
+        costBasisStatus: "pending_review",
+      },
+      market: { price: "50000", logoUrl: "https://example.com/btc.png" },
+      currency: "eur",
+    })
+
+    expect(encodeAsset(asset)).toMatchObject({
+      amount: "0.25",
+      currentPrice: "50000",
+      totalValue: "12500",
+      profitLoss: null,
     })
   })
 })

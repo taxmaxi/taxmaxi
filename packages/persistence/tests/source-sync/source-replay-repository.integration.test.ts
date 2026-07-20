@@ -229,4 +229,182 @@ describe("SourceReplayRepositoryLive", () => {
     expect(snapshot.rawRows[0]?.normalizedAt).toBeNull()
     expect(snapshot.rawRows[0]?.normalizationError).toBeNull()
   })
+
+  it.each([
+    { dependencyKind: "inventory allocation", dependentLegKind: "fee" },
+    { dependencyKind: "disposal match", dependentLegKind: "disposal" },
+  ] as const)(
+    "blocks replay when another source has a $dependencyKind consuming one of its FIFO lots",
+    async ({ dependencyKind, dependentLegKind }) => {
+      const dependentSourceId = "00000000-0000-0000-0000-000000000282"
+      const replayTransactionId = "00000000-0000-0000-0000-000000000283"
+      const dependentTransactionId = "00000000-0000-0000-0000-000000000284"
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [address] = yield* db
+            .insert(schema.addresses)
+            .values({
+              address: "bc1qsource-replay-dependent",
+              type: "bitcoin",
+              name: "Replay dependent source",
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.addresses.id })
+
+          if (address === undefined) {
+            return yield* Effect.dieMessage("Failed to create dependent replay source address")
+          }
+
+          yield* db.insert(schema.sources).values({
+            id: dependentSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            name: "Replay dependent source",
+            providerKey: "bitcoin-rpc",
+            sourceableType: "onchain",
+            cexAccountId: null,
+            addressId: address.id,
+          })
+          yield* db.insert(schema.transactions).values([
+            {
+              id: replayTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-lot-origin",
+              timestamp: new Date("2025-01-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            {
+              id: dependentTransactionId,
+              sourceId: dependentSourceId,
+              externalId: "dependent-movement-origin",
+              timestamp: new Date("2025-01-02T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ])
+          const [acquisitionLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-lot-origin-leg",
+              timestamp: new Date("2025-01-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1.00000000",
+              kind: "acquisition",
+              provenance: "deterministic",
+              transactionId: replayTransactionId,
+            })
+            .returning({ id: schema.transactionLegs.id })
+          const [dependentLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values({
+              sourceId: dependentSourceId,
+              externalId: "dependent-consumption-leg",
+              timestamp: new Date("2025-01-02T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: dependentLegKind === "disposal" ? "-0.40000000" : "0.40000000",
+              kind: dependentLegKind,
+              provenance: "deterministic",
+              transactionId: dependentTransactionId,
+            })
+            .returning({ id: schema.transactionLegs.id })
+
+          if (acquisitionLeg === undefined || dependentLeg === undefined) {
+            return yield* Effect.dieMessage("Failed to create cross-source replay legs")
+          }
+
+          const [lot] = yield* db
+            .insert(schema.fifoLots)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+              originalAmount: "1.00000000",
+              remainingAmount: "0.60000000",
+              costBasisPerToken: "10000.00",
+              costBasisCurrency: "EUR",
+              sourceLegId: acquisitionLeg.id,
+            })
+            .returning({ id: schema.fifoLots.id })
+          if (lot === undefined) {
+            return yield* Effect.dieMessage("Failed to create cross-source replay lot")
+          }
+
+          if (dependencyKind === "inventory allocation") {
+            const [movement] = yield* db
+              .insert(schema.inventoryMovements)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: dependentSourceId,
+                transactionId: dependentTransactionId,
+                transactionLegId: dependentLeg.id,
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: new Date("2025-01-02T10:00:00.000Z"),
+                direction: "outbound",
+                purpose: "fee",
+                taxTreatment: "pending_review",
+                reconciliationStatus: "unmatched",
+                amount: "0.40000000",
+              })
+              .returning({ id: schema.inventoryMovements.id })
+
+            if (movement === undefined) {
+              return yield* Effect.dieMessage("Failed to create cross-source replay allocation")
+            }
+
+            yield* db.insert(schema.inventoryMovementAllocations).values({
+              inventoryMovementId: movement.id,
+              fifoLotId: lot.id,
+              matchedAmount: "0.40000000",
+            })
+          } else {
+            yield* db.insert(schema.disposalMatches).values({
+              disposalLegId: dependentLeg.id,
+              fifoLotId: lot.id,
+              matchedAmount: "0.40000000",
+              costBasis: "4000.00",
+              proceeds: "5000.00",
+              gainLoss: "1000.00",
+            })
+          }
+        })
+      )
+
+      const replayResult = await runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+        ).pipe(Effect.either)
+      )
+
+      expect(replayResult).toMatchObject({
+        _tag: "Left",
+        left: {
+          _tag: "SourceReplayDependencyError",
+          sourceId: TEST_SOURCE_ID,
+          dependentSourceIds: [dependentSourceId],
+          affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+        },
+      })
+
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const lots = yield* db.select().from(schema.fifoLots)
+          const movements = yield* db.select().from(schema.inventoryMovements)
+          const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+          const matches = yield* db.select().from(schema.disposalMatches)
+          return { lots, movements, allocations, matches }
+        })
+      )
+
+      expect(state.lots).toHaveLength(1)
+      expect(state.movements).toHaveLength(dependencyKind === "inventory allocation" ? 1 : 0)
+      expect(state.allocations).toHaveLength(dependencyKind === "inventory allocation" ? 1 : 0)
+      expect(state.matches).toHaveLength(dependencyKind === "disposal match" ? 1 : 0)
+      expect(state.lots[0]?.remainingAmount).toContain("0.60000000")
+    }
+  )
 })

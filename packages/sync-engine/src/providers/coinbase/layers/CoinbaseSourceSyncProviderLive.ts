@@ -5,6 +5,7 @@
  */
 
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -52,6 +53,8 @@ const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_RECORD_TYPE_ACCOUNT = "coinbase_account"
 const COINBASE_RECORD_TYPE_TRANSACTION = "coinbase_transaction"
 const PROVIDER_ASSET_REVIEW_LAYER = "provider_asset_mapping"
+const UNGROUPED_PAIRED_SPREAD_WINDOW_MILLIS = 60 * 1000
+const COINBASE_UNSTAKING_PAIRING_RULE = "coinbase_unstaking_pair_v1" as const
 
 const CoinbaseNormalizedMetadataSchema = Schema.Struct({
   amount: Schema.Struct({
@@ -72,6 +75,7 @@ type CoinbaseNormalizedMetadata = Schema.Schema.Type<typeof CoinbaseNormalizedMe
 const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
   id: Schema.String,
   type: Schema.String,
+  status: Schema.String,
   amount: Schema.Struct({
     amount: Schema.String,
     currency: Schema.String,
@@ -81,6 +85,8 @@ const CoinbasePairedSpreadPayloadSchema = Schema.Struct({
     currency: Schema.String,
   }),
 })
+
+type CoinbasePairedSpreadPayload = Schema.Schema.Type<typeof CoinbasePairedSpreadPayloadSchema>
 
 /**
  * CoinbasePairedSpreadRecord - Sibling principal row used to derive a spread fee.
@@ -93,6 +99,34 @@ interface CoinbasePairedSpreadRecord {
   readonly externalId: string
   readonly amount: { readonly amount: string; readonly currency: string }
   readonly nativeAmount: { readonly amount: string; readonly currency: string }
+  readonly pairingRule: typeof COINBASE_UNSTAKING_PAIRING_RULE
+  readonly pairingKind: "provider_group" | "exact_time_same_type" | "timed_complementary_type"
+  readonly timestampDistanceMillis: number
+}
+
+const SUCCESSFUL_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
+
+const hasSuccessfulProviderStatus = (status: string | null): boolean =>
+  status !== null && SUCCESSFUL_PROVIDER_STATUSES.has(status.toLowerCase())
+
+const isPositiveAmountSmallerThanRelease = ({
+  candidateAmount,
+  releaseAmount,
+}: {
+  readonly candidateAmount: string
+  readonly releaseAmount: string
+}): boolean => {
+  const candidate = BigDecimal.fromString(candidateAmount.trim())
+  const release = BigDecimal.fromString(releaseAmount.trim())
+
+  if (Option.isNone(candidate) || Option.isNone(release)) {
+    return false
+  }
+
+  return (
+    BigDecimal.greaterThan(candidate.value, BigDecimal.fromBigInt(0n)) &&
+    BigDecimal.lessThanOrEqualTo(candidate.value, BigDecimal.abs(release.value))
+  )
 }
 
 const makeRawBatchResult = ({
@@ -318,15 +352,19 @@ const make = Effect.gen(function* () {
 
   /**
    * Find the positive principal sibling row of a negative paired-spread row.
-   * Siblings must belong to the same account and provider group so two
-   * unrelated unstakings at the same second do not pair with each other.
+   * Provider group identifiers allow siblings across provider accounts. When
+   * Coinbase omits a group identifier, a unique row from a different account
+   * may pair when it has the same type and exact timestamp, or a complementary
+   * unstaking type inside a narrow time window.
    * Fails recoverably when the sibling is missing or ambiguous so the row is
    * retried on a later replay pass once all sibling rows are cached.
    */
   const resolvePairedSpreadRecord = ({
     sourceRecord,
     providerTransactionType,
+    providerStatus,
     amount,
+    nativeAmount,
   }: {
     readonly sourceRecord: {
       readonly id: string
@@ -337,24 +375,98 @@ const make = Effect.gen(function* () {
       readonly occurredAt: Date
     }
     readonly providerTransactionType: string | null
+    readonly providerStatus: string | null
     readonly amount: CoinbaseNormalizedMetadata["amount"]
+    readonly nativeAmount: CoinbaseNormalizedMetadata["nativeAmount"]
   }): Effect.Effect<
     CoinbasePairedSpreadRecord,
     CoinbaseRecordNormalizationError | SyncEngineStorageError
   > =>
     Effect.gen(function* () {
+      if (!hasSuccessfulProviderStatus(providerStatus)) {
+        return yield* Effect.fail(
+          new CoinbaseRecordNormalizationError({
+            message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found 0`,
+          })
+        )
+      }
+
       const siblingRecords = yield* sourceRawRecordRepository.listRawRecordsByOccurredAt({
         sourceId: sourceRecord.sourceId,
         recordType: sourceRecord.recordType,
         occurredAt: sourceRecord.occurredAt,
       })
 
+      const isCompatibleType = (candidateType: string): boolean => {
+        if (candidateType === providerTransactionType) {
+          return true
+        }
+
+        return (
+          (providerTransactionType === "retail_instant_unstaking" &&
+            candidateType === "unstaking_transfer") ||
+          (providerTransactionType === "unstaking_transfer" &&
+            candidateType === "retail_instant_unstaking")
+        )
+      }
+
+      const isUngroupedPairMatch = ({
+        releaseRecord,
+        releaseType,
+        releaseAmount,
+        releaseNativeAmount,
+        creditRecord,
+        creditPayload,
+      }: {
+        readonly releaseRecord: {
+          readonly externalAccountId: string | null
+          readonly externalParentId: string | null
+          readonly occurredAt: Date
+        }
+        readonly releaseType: string | null
+        readonly releaseAmount: { readonly amount: string; readonly currency: string }
+        readonly releaseNativeAmount: { readonly amount: string; readonly currency: string }
+        readonly creditRecord: {
+          readonly externalAccountId: string | null
+          readonly externalParentId: string | null
+          readonly occurredAt: Date
+        }
+        readonly creditPayload: CoinbasePairedSpreadPayload
+      }): boolean => {
+        const timestampDistance = Math.abs(
+          creditRecord.occurredAt.getTime() - releaseRecord.occurredAt.getTime()
+        )
+        const hasSafeTypeAndTiming =
+          (creditPayload.type === releaseType && timestampDistance === 0) ||
+          (((releaseType === "retail_instant_unstaking" &&
+            creditPayload.type === "unstaking_transfer") ||
+            (releaseType === "unstaking_transfer" &&
+              creditPayload.type === "retail_instant_unstaking")) &&
+            timestampDistance <= UNGROUPED_PAIRED_SPREAD_WINDOW_MILLIS)
+
+        return (
+          releaseRecord.externalParentId === null &&
+          creditRecord.externalParentId === null &&
+          releaseRecord.externalAccountId !== null &&
+          creditRecord.externalAccountId !== null &&
+          creditRecord.externalAccountId !== releaseRecord.externalAccountId &&
+          hasSafeTypeAndTiming &&
+          creditPayload.amount.currency.toUpperCase() === releaseAmount.currency.toUpperCase() &&
+          creditPayload.native_amount.currency.toUpperCase() ===
+            releaseNativeAmount.currency.toUpperCase() &&
+          isPositiveAmountSmallerThanRelease({
+            candidateAmount: creditPayload.amount.amount,
+            releaseAmount: releaseAmount.amount,
+          }) &&
+          isPositiveAmountSmallerThanRelease({
+            candidateAmount: creditPayload.native_amount.amount,
+            releaseAmount: releaseNativeAmount.amount,
+          })
+        )
+      }
+
       const candidates = siblingRecords.flatMap((sibling) => {
-        if (
-          sibling.id === sourceRecord.id ||
-          sibling.externalAccountId !== sourceRecord.externalAccountId ||
-          sibling.externalParentId !== sourceRecord.externalParentId
-        ) {
+        if (sibling.id === sourceRecord.id) {
           return []
         }
 
@@ -364,28 +476,119 @@ const make = Effect.gen(function* () {
 
         return Option.match(decoded, {
           onNone: () => [],
-          onSome: (payload) =>
-            payload.type === providerTransactionType &&
-            payload.amount.currency.toUpperCase() === amount.currency.toUpperCase() &&
-            !isNegativeAmount(payload.amount.amount)
-              ? [payload]
-              : [],
+          onSome: (payload) => {
+            if (
+              !hasSuccessfulProviderStatus(payload.status) ||
+              !isCompatibleType(payload.type) ||
+              payload.amount.currency.toUpperCase() !== amount.currency.toUpperCase() ||
+              payload.native_amount.currency.toUpperCase() !==
+                nativeAmount.currency.toUpperCase() ||
+              isNegativeAmount(payload.amount.amount)
+            ) {
+              return []
+            }
+
+            const groupMatches =
+              sourceRecord.externalParentId !== null &&
+              sibling.externalParentId === sourceRecord.externalParentId
+            const timestampDistance = Math.abs(
+              sibling.occurredAt.getTime() - sourceRecord.occurredAt.getTime()
+            )
+            const ungroupedFallbackMatches = isUngroupedPairMatch({
+              releaseRecord: sourceRecord,
+              releaseType: providerTransactionType,
+              releaseAmount: amount,
+              releaseNativeAmount: nativeAmount,
+              creditRecord: sibling,
+              creditPayload: payload,
+            })
+
+            if (!groupMatches && !ungroupedFallbackMatches) {
+              return []
+            }
+
+            const sameType = payload.type === providerTransactionType
+
+            return [
+              {
+                payload,
+                record: sibling,
+                pairingKind: groupMatches
+                  ? ("provider_group" as const)
+                  : sameType
+                    ? ("exact_time_same_type" as const)
+                    : ("timed_complementary_type" as const),
+                timestampDistance,
+              },
+            ]
+          },
         })
       })
 
-      const [paired] = candidates
-      if (paired === undefined || candidates.length > 1) {
+      const groupedCandidates = candidates.filter(
+        (candidate) => candidate.pairingKind === "provider_group"
+      )
+      const ungroupedCandidates = candidates.filter(
+        (candidate) => candidate.pairingKind !== "provider_group"
+      )
+      const [ungroupedCandidate] = ungroupedCandidates
+      const hasCompetingUngroupedRelease = (
+        candidate: (typeof ungroupedCandidates)[number]
+      ): boolean =>
+        siblingRecords.some((possibleRelease) => {
+          if (
+            possibleRelease.id === sourceRecord.id ||
+            possibleRelease.id === candidate.record.id
+          ) {
+            return false
+          }
+
+          const decoded = Schema.decodeUnknownOption(CoinbasePairedSpreadPayloadSchema)(
+            possibleRelease.payload
+          )
+
+          return Option.match(decoded, {
+            onNone: () => false,
+            onSome: (payload) =>
+              hasSuccessfulProviderStatus(payload.status) &&
+              isNegativeAmount(payload.amount.amount) &&
+              isUngroupedPairMatch({
+                releaseRecord: possibleRelease,
+                releaseType: payload.type,
+                releaseAmount: payload.amount,
+                releaseNativeAmount: payload.native_amount,
+                creditRecord: candidate.record,
+                creditPayload: candidate.payload,
+              }),
+          })
+        })
+      const eligibleCandidates =
+        groupedCandidates.length > 0
+          ? groupedCandidates.length === 1
+            ? groupedCandidates
+            : []
+          : ungroupedCandidate !== undefined &&
+              ungroupedCandidates.length === 1 &&
+              !hasCompetingUngroupedRelease(ungroupedCandidate)
+            ? ungroupedCandidates
+            : []
+      const [paired] = eligibleCandidates
+
+      if (paired === undefined) {
         return yield* Effect.fail(
           new CoinbaseRecordNormalizationError({
-            message: `Expected exactly one paired principal row for ${providerTransactionType ?? "unknown"} at ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
+            message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
           })
         )
       }
 
       return {
-        externalId: paired.id,
-        amount: paired.amount,
-        nativeAmount: paired.native_amount,
+        externalId: paired.payload.id,
+        amount: paired.payload.amount,
+        nativeAmount: paired.payload.native_amount,
+        pairingRule: COINBASE_UNSTAKING_PAIRING_RULE,
+        pairingKind: paired.pairingKind,
+        timestampDistanceMillis: paired.timestampDistance,
       }
     })
 
@@ -858,7 +1061,9 @@ const make = Effect.gen(function* () {
           ? yield* resolvePairedSpreadRecord({
               sourceRecord,
               providerTransactionType: normalized.transaction.providerTransactionType,
+              providerStatus: normalized.transaction.providerStatus,
               amount: normalizedMetadata.amount,
+              nativeAmount: normalizedMetadata.nativeAmount,
             })
           : null
 

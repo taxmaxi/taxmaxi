@@ -74,6 +74,7 @@ interface AssetAccumulator {
   proceeds: BigDecimal.BigDecimal
   realizedGainLoss: BigDecimal.BigDecimal
   currency: string | null
+  hasPendingCostBasis: boolean
 }
 
 interface ReviewProjectionRow {
@@ -455,11 +456,11 @@ const make = Effect.gen(function* () {
         .from(schema.transactionLegs)
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.getOverview.legs"))
-      const [fifoLotCount] = yield* db
-        .select({ count: count(schema.fifoLots.id) })
+      const fifoLotRows = yield* db
+        .select({ assetId: schema.fifoLots.assetId })
         .from(schema.fifoLots)
         .where(eq(schema.fifoLots.sourceId, params.sourceId))
-        .pipe(wrapSqlError("sourceReportRepository.getOverview.fifoLotCount"))
+        .pipe(wrapSqlError("sourceReportRepository.getOverview.fifoLots"))
       const matchRows = yield* db
         .select({
           gainLoss: schema.disposalMatches.gainLoss,
@@ -510,12 +511,15 @@ const make = Effect.gen(function* () {
           }
         }
       }
+      for (const row of fifoLotRows) {
+        assetIds.add(row.assetId)
+      }
 
       const totals = {
         transactionCount: transactionCount?.count ?? 0,
         legCount: legRows.length,
         assetCount: assetIds.size,
-        fifoLotCount: fifoLotCount?.count ?? 0,
+        fifoLotCount: fifoLotRows.length,
         disposalCount,
         incomeCount,
         feeCount,
@@ -551,9 +555,12 @@ const make = Effect.gen(function* () {
           assetId: schema.fifoLots.assetId,
           symbol: schema.assets.symbol,
           name: schema.assets.name,
+          originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
+          sourceLegId: schema.fifoLots.sourceLegId,
         })
         .from(schema.fifoLots)
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
@@ -579,6 +586,27 @@ const make = Effect.gen(function* () {
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.matches"))
 
+      const custodyAllocationRows = yield* db
+        .select({
+          assetId: schema.inventoryMovements.assetId,
+          symbol: schema.assets.symbol,
+          name: schema.assets.name,
+          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+        })
+        .from(schema.inventoryMovementAllocations)
+        .innerJoin(
+          schema.inventoryMovements,
+          eq(schema.inventoryMovementAllocations.inventoryMovementId, schema.inventoryMovements.id)
+        )
+        .innerJoin(schema.assets, eq(schema.inventoryMovements.assetId, schema.assets.id))
+        .where(
+          and(
+            eq(schema.inventoryMovements.sourceId, params.sourceId),
+            eq(schema.inventoryMovements.direction, "outbound")
+          )
+        )
+        .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.custodyAllocations"))
+
       const accumulators = new Map<string, AssetAccumulator>()
       const getAccumulator = (asset: SourceReportAsset): AssetAccumulator => {
         const existing = accumulators.get(asset.assetId)
@@ -594,6 +622,7 @@ const make = Effect.gen(function* () {
           proceeds: zeroDecimal(),
           realizedGainLoss: zeroDecimal(),
           currency: null,
+          hasPendingCostBasis: false,
         }
         accumulators.set(asset.assetId, created)
         return created
@@ -621,10 +650,23 @@ const make = Effect.gen(function* () {
 
       for (const row of lotRows) {
         const accumulator = getAccumulator(assetFromRow(row))
+        if (row.sourceLegId === null) {
+          const originalAmount = yield* decodeDecimal({
+            operation: "sourceReportRepository.listAssetPnl.originalAmount",
+            value: row.originalAmount,
+          })
+          accumulator.acquiredAmount = BigDecimal.sum(accumulator.acquiredAmount, originalAmount)
+        }
         const remainingAmount = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.remainingAmount",
           value: row.remainingAmount,
         })
+        if (
+          row.costBasisStatus === "pending_review" &&
+          BigDecimal.greaterThan(remainingAmount, zeroDecimal())
+        ) {
+          accumulator.hasPendingCostBasis = true
+        }
         const costBasisPerToken = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.costBasisPerToken",
           value: row.costBasisPerToken,
@@ -635,6 +677,15 @@ const make = Effect.gen(function* () {
           BigDecimal.round(BigDecimal.multiply(remainingAmount, costBasisPerToken), { scale: 8 })
         )
         accumulator.currency = emptyCurrency(accumulator.currency, row.costBasisCurrency)
+      }
+
+      for (const row of custodyAllocationRows) {
+        const accumulator = getAccumulator(assetFromRow(row))
+        const matchedAmount = yield* decodeDecimal({
+          operation: "sourceReportRepository.listAssetPnl.custodyAllocationAmount",
+          value: row.matchedAmount,
+        })
+        accumulator.disposedAmount = BigDecimal.sum(accumulator.disposedAmount, matchedAmount)
       }
 
       for (const row of matchRows) {
@@ -672,7 +723,8 @@ const make = Effect.gen(function* () {
             acquiredAmount: formatDecimal(row.acquiredAmount),
             disposedAmount: formatDecimal(row.disposedAmount),
             openAmount: formatDecimal(row.openAmount),
-            costBasis: formatDecimal(row.openCostBasis),
+            costBasis: row.hasPendingCostBasis ? null : formatDecimal(row.openCostBasis),
+            costBasisStatus: row.hasPendingCostBasis ? "pending_review" : "known",
             proceeds: formatDecimal(row.proceeds),
             realizedGainLoss: formatDecimal(row.realizedGainLoss),
             currency: row.currency,
@@ -938,7 +990,9 @@ const make = Effect.gen(function* () {
           remainingAmount: schema.fifoLots.remainingAmount,
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
           sourceLegId: schema.fifoLots.sourceLegId,
+          sourceProviderTransferId: schema.fifoLots.sourceProviderTransferId,
         })
         .from(schema.fifoLots)
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
@@ -1017,10 +1071,13 @@ const make = Effect.gen(function* () {
             operation: "sourceReportRepository.listFifoLots.remainingAmount",
             value: row.remainingAmount,
           })
-          const costBasisPerToken = yield* decodeDecimal({
-            operation: "sourceReportRepository.listFifoLots.costBasisPerToken",
-            value: row.costBasisPerToken,
-          })
+          const costBasisPerToken =
+            row.costBasisStatus === "known"
+              ? yield* decodeDecimal({
+                  operation: "sourceReportRepository.listFifoLots.costBasisPerToken",
+                  value: row.costBasisPerToken,
+                })
+              : null
 
           return {
             lotId: row.lotId,
@@ -1028,9 +1085,11 @@ const make = Effect.gen(function* () {
             acquiredAt: row.acquiredAt.toISOString(),
             originalAmount: formatDecimal(originalAmount),
             remainingAmount: formatDecimal(remainingAmount),
-            costBasisPerToken: formatDecimal(costBasisPerToken),
-            costBasisCurrency: row.costBasisCurrency,
+            costBasisPerToken: costBasisPerToken === null ? null : formatDecimal(costBasisPerToken),
+            costBasisCurrency: row.costBasisStatus === "known" ? row.costBasisCurrency : null,
+            costBasisStatus: row.costBasisStatus,
             sourceLegId: row.sourceLegId,
+            sourceProviderTransferId: row.sourceProviderTransferId,
             disposalMatches: matchesByLot.get(row.lotId) ?? [],
           } satisfies SourceFifoLotRow
         })

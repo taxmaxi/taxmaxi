@@ -2020,7 +2020,7 @@ describe("coinbase normalization persistence", () => {
         ])
         expect(counts.fifoLots.map((row) => String(row.remainingAmount)).sort()).toEqual([
           "0.020123619236000000000000000000",
-          "0.600000000000000000000000000000",
+          "0.499900000000000000000000000000",
         ])
         expect(counts.disposalMatches.map((row) => String(row.gainLoss)).sort()).toEqual([
           "2000.00000000",

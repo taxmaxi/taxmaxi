@@ -28,8 +28,9 @@ export interface PortfolioAssetPosition {
   readonly logoUrl: string | null
   readonly coingeckoCoinId: string | null
   readonly amount: string
-  readonly costBasis: string
+  readonly costBasis: string | null
   readonly costBasisCurrency: string | null
+  readonly costBasisStatus: "known" | "pending_review"
 }
 
 export interface PortfolioRepositoryShape {

@@ -1,10 +1,14 @@
 /**
  * SourceNormalizationRepositoryLive - Atomic canonical persistence for normalized sync artifacts.
  *
+ * Tax disposals consume FIFO lots through disposal matches. Factual custody outflows consume
+ * them through inventory movement allocations. A normalized quantity must use exactly one path;
+ * provider movements equivalent to a persisted tax leg are therefore not allocated again.
+ *
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, sql } from "drizzle-orm"
+import { and, asc, eq, gt, lte, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -21,6 +25,7 @@ import {
   type PersistNormalizedSourceArtifactsParams,
   type PersistNormalizedSourceArtifactsResult,
   type PersistedSourceProviderTransfer,
+  type PersistedSourceTransaction,
   type SourceOnchainContextDraft,
   SourceNormalizationRepository,
   type SourceProviderTransferDraft,
@@ -42,6 +47,8 @@ import {
 interface PersistedSourceLegRecord {
   readonly id: string
   readonly sourceId: string
+  readonly sourceRawRecordId: string | null
+  readonly transactionId: string | null
   readonly timestamp: Date
   readonly principalId: string
   readonly assetId: string
@@ -49,6 +56,7 @@ interface PersistedSourceLegRecord {
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
   readonly fiatAmount: string | null
   readonly fiatCurrency: string | null
+  readonly derivationRule: string | null
 }
 
 interface OpenFifoLotRecord {
@@ -70,6 +78,24 @@ interface FifoLotAllocation {
 
 const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
+
+const COMPLETED_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
+
+const hasCompletedProviderStatus = (providerStatus: string | null): boolean =>
+  providerStatus !== null && COMPLETED_PROVIDER_STATUSES.has(providerStatus.toLowerCase())
+
+const hasFailedProviderStatus = (providerStatus: string | null): boolean =>
+  providerStatus?.toLowerCase() === "failed"
+
+const ProviderTransferMetadataSchema = Schema.Struct({
+  role: Schema.optional(Schema.Literal("principal", "fee", "rent")),
+})
+
+const decodeProviderTransferPurpose = (metadata: unknown) =>
+  Schema.decodeUnknown(ProviderTransferMetadataSchema)(metadata).pipe(
+    Effect.map((decoded) => (decoded.role === "fee" ? ("fee" as const) : ("principal" as const))),
+    Effect.catchAll(() => Effect.succeed("principal" as const))
+  )
 
 const NumericStringSchema = Schema.Union(
   Schema.String,
@@ -117,7 +143,7 @@ const buildInsufficientInventoryReview = ({
   const principalId = transaction.principalId
 
   const inventoryReason =
-    "Tax review required because the transaction disposes more inventory than the synced FIFO lots currently cover. " +
+    "Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover. " +
     "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
     String(error.cause)
   const categorizationReason =
@@ -333,6 +359,8 @@ const make = Effect.gen(function* () {
   const selectPersistedLegFields = {
     id: schema.transactionLegs.id,
     sourceId: schema.transactionLegs.sourceId,
+    sourceRawRecordId: schema.transactionLegs.sourceRawRecordId,
+    transactionId: schema.transactionLegs.transactionId,
     timestamp: schema.transactionLegs.timestamp,
     principalId: schema.transactionLegs.principalId,
     assetId: schema.transactionLegs.assetId,
@@ -340,6 +368,7 @@ const make = Effect.gen(function* () {
     kind: schema.transactionLegs.kind,
     fiatAmount: schema.transactionLegs.fiatAmount,
     fiatCurrency: schema.transactionLegs.fiatCurrency,
+    derivationRule: schema.transactionLegs.derivationRule,
   } as const
 
   const upsertTransaction = ({
@@ -782,10 +811,12 @@ const make = Effect.gen(function* () {
     executor,
     principalId,
     assetId,
+    maxAcquiredAt,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly principalId: string
     readonly assetId: string
+    readonly maxAcquiredAt: Date
   }) =>
     Effect.gen(function* () {
       const rows = yield* executor
@@ -801,7 +832,9 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.fifoLots.principalId, principalId),
             eq(schema.fifoLots.assetId, assetId),
-            gt(schema.fifoLots.remainingAmount, "0")
+            sql`${schema.fifoLots.sourceLegId} is not null`,
+            gt(schema.fifoLots.remainingAmount, "0"),
+            lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
           )
         )
         .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
@@ -920,7 +953,7 @@ const make = Effect.gen(function* () {
         return yield* Effect.fail(
           toSyncEngineStorageError({
             operation: "sourceNormalizationRepository.buildFifoLotAllocations",
-            error: `Insufficient FIFO inventory for disposal amount ${allocations.remainingAmount}`,
+            error: `Insufficient FIFO inventory for outbound amount ${allocations.remainingAmount}`,
           })
         )
       }
@@ -964,6 +997,7 @@ const make = Effect.gen(function* () {
         })
         .onConflictDoNothing({
           target: [schema.fifoLots.sourceLegId, schema.fifoLots.sourceLegSequence],
+          where: sql`${schema.fifoLots.sourceLegId} is not null`,
         })
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.ensureFifoLotForLeg"))
     })
@@ -995,6 +1029,7 @@ const make = Effect.gen(function* () {
         executor,
         principalId: leg.principalId,
         assetId: leg.assetId,
+        maxAcquiredAt: leg.timestamp,
       })
       const allocations = yield* buildFifoLotAllocations({
         lots: openLots,
@@ -1052,12 +1087,831 @@ const make = Effect.gen(function* () {
       })
     )
 
+  const resetInventoryMovementAllocations = ({
+    executor,
+    movementId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly movementId: string
+  }) =>
+    Effect.gen(function* () {
+      const allocations = yield* executor
+        .select({
+          fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
+          matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+        })
+        .from(schema.inventoryMovementAllocations)
+        .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.resetInventoryMovementAllocations.selectAllocations"
+          )
+        )
+
+      yield* Effect.forEach(allocations, (allocation) =>
+        executor
+          .update(schema.fifoLots)
+          .set({
+            remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${allocation.matchedAmount}`,
+            updatedAt: nowDate(),
+          })
+          .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.resetInventoryMovementAllocations.restoreLot"
+            )
+          )
+      )
+
+      yield* executor
+        .delete(schema.inventoryMovementAllocations)
+        .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.resetInventoryMovementAllocations.deleteAllocations"
+          )
+        )
+    })
+
+  const deleteUnusedInboundProviderLot = ({
+    executor,
+    providerTransferId,
+    operation,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransferId: string
+    readonly operation: string
+  }) =>
+    Effect.gen(function* () {
+      const [existingLot] = yield* executor
+        .select({ id: schema.fifoLots.id })
+        .from(schema.fifoLots)
+        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
+        .limit(1)
+        .pipe(wrapSyncEngineSqlError(`${operation}.selectLot`))
+
+      if (existingLot === undefined) {
+        return
+      }
+
+      const [deletedLot] = yield* executor
+        .delete(schema.fifoLots)
+        .where(
+          and(
+            eq(schema.fifoLots.id, existingLot.id),
+            eq(schema.fifoLots.remainingAmount, schema.fifoLots.originalAmount),
+            sql`not exists (
+              select 1
+              from ${schema.disposalMatches}
+              where ${schema.disposalMatches.fifoLotId} = ${schema.fifoLots.id}
+            )`,
+            sql`not exists (
+              select 1
+              from ${schema.inventoryMovementAllocations}
+              where ${schema.inventoryMovementAllocations.fifoLotId} = ${schema.fifoLots.id}
+            )`
+          )
+        )
+        .returning({ id: schema.fifoLots.id })
+        .pipe(wrapSyncEngineSqlError(`${operation}.deleteLot`))
+
+      if (deletedLot === undefined) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation,
+            error: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+          })
+        )
+      }
+    })
+
+  const ensureInboundProviderLotCanChangeAmount = ({
+    executor,
+    providerTransferId,
+    assetId,
+    amount,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransferId: string
+    readonly assetId: string
+    readonly amount: string
+  }) =>
+    Effect.gen(function* () {
+      const [existingLot] = yield* executor
+        .select({
+          id: schema.fifoLots.id,
+          assetId: schema.fifoLots.assetId,
+          originalAmount: schema.fifoLots.originalAmount,
+          remainingAmount: schema.fifoLots.remainingAmount,
+        })
+        .from(schema.fifoLots)
+        .where(eq(schema.fifoLots.sourceProviderTransferId, providerTransferId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.selectLot"
+          )
+        )
+
+      if (existingLot === undefined) {
+        return
+      }
+
+      const consumedAmount = yield* subtractDecimalQuantities({
+        left: existingLot.originalAmount,
+        right: existingLot.remainingAmount,
+      })
+      const consumedComparison = yield* compareDecimalQuantities({
+        left: consumedAmount,
+        right: "0",
+      })
+
+      if (existingLot.assetId !== assetId && consumedComparison > 0) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation:
+              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAsset",
+            error: `Cannot change asset of inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+          })
+        )
+      }
+
+      const comparison = yield* compareDecimalQuantities({ left: amount, right: consumedAmount })
+
+      if (comparison < 0) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation:
+              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAmount",
+            error: `Cannot reduce inbound provider lot ${existingLot.id} below its consumed amount ${consumedAmount}`,
+          })
+        )
+      }
+    })
+
+  const removeInventoryMovementsForTransaction = ({
+    executor,
+    transactionId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* executor
+        .select({
+          id: schema.inventoryMovements.id,
+          providerTransferId: schema.inventoryMovements.providerTransferId,
+        })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementsForTransaction.selectMovements"
+          )
+        )
+
+      yield* Effect.forEach(movements, (movement) =>
+        resetInventoryMovementAllocations({
+          executor,
+          movementId: movement.id,
+        })
+      )
+
+      yield* Effect.forEach(
+        movements.flatMap((movement) =>
+          movement.providerTransferId === null ? [] : [movement.providerTransferId]
+        ),
+        (providerTransferId) =>
+          deleteUnusedInboundProviderLot({
+            executor,
+            providerTransferId,
+            operation:
+              "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteInboundLot",
+          })
+      )
+
+      yield* executor
+        .delete(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementsForTransaction.deleteMovements"
+          )
+        )
+    })
+
+  const resetInventoryMovementAllocationsForTransaction = ({
+    executor,
+    transactionId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* executor
+        .select({ id: schema.inventoryMovements.id })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.resetInventoryMovementAllocationsForTransaction.selectMovements"
+          )
+        )
+
+      yield* Effect.forEach(movements, (movement) =>
+        resetInventoryMovementAllocations({
+          executor,
+          movementId: movement.id,
+        })
+      )
+    })
+
+  const removeInventoryMovementForProviderTransfer = ({
+    executor,
+    providerTransferId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransferId: string
+  }) =>
+    Effect.gen(function* () {
+      const [movement] = yield* executor
+        .select({ id: schema.inventoryMovements.id })
+        .from(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.selectMovement"
+          )
+        )
+
+      yield* deleteUnusedInboundProviderLot({
+        executor,
+        providerTransferId,
+        operation:
+          "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteInboundLot",
+      })
+
+      if (movement === undefined) {
+        return
+      }
+
+      yield* resetInventoryMovementAllocations({
+        executor,
+        movementId: movement.id,
+      })
+      yield* executor
+        .delete(schema.inventoryMovements)
+        .where(eq(schema.inventoryMovements.id, movement.id))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeInventoryMovementForProviderTransfer.deleteMovement"
+          )
+        )
+    })
+
+  const removeStaleProviderInventoryMovements = ({
+    executor,
+    transactionId,
+    currentProviderTransferIds,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+    readonly currentProviderTransferIds: ReadonlySet<string>
+  }) =>
+    Effect.gen(function* () {
+      const movements = yield* executor
+        .select({ providerTransferId: schema.inventoryMovements.providerTransferId })
+        .from(schema.inventoryMovements)
+        .where(
+          and(
+            eq(schema.inventoryMovements.transactionId, transactionId),
+            sql`${schema.inventoryMovements.providerTransferId} is not null`
+          )
+        )
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.removeStaleProviderInventoryMovements.selectMovements"
+          )
+        )
+
+      yield* Effect.forEach(
+        movements.flatMap(({ providerTransferId }) =>
+          providerTransferId !== null && !currentProviderTransferIds.has(providerTransferId)
+            ? [providerTransferId]
+            : []
+        ),
+        (providerTransferId) =>
+          removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId,
+          })
+      )
+    })
+
+  const allocateProviderInventoryMovements = ({
+    executor,
+    transaction,
+    providerTransfers,
+    legs,
+    feesOnly,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transaction: PersistedSourceTransaction
+    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+    readonly feesOnly: boolean
+  }) => {
+    const orderedProviderTransfers = [
+      ...providerTransfers.filter((providerTransfer) => providerTransfer.direction === "inbound"),
+      ...providerTransfers.filter((providerTransfer) => providerTransfer.direction === "outbound"),
+    ]
+
+    return Effect.forEach(orderedProviderTransfers, (providerTransfer) =>
+      Effect.gen(function* () {
+        const purpose = yield* decodeProviderTransferPurpose(providerTransfer.metadata)
+
+        if (feesOnly && purpose !== "fee") {
+          return yield* removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId: providerTransfer.id,
+          })
+        }
+
+        if (providerTransfer.providerAssetId === null) {
+          return yield* removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId: providerTransfer.id,
+          })
+        }
+
+        const [assetMapping] = yield* executor
+          .select({ assetId: schema.providerAssetMappings.canonicalAssetId })
+          .from(schema.providerAssetMappings)
+          .where(
+            and(
+              eq(schema.providerAssetMappings.providerAssetRowId, providerTransfer.providerAssetId),
+              eq(schema.providerAssetMappings.mappingKind, "asset"),
+              eq(schema.providerAssetMappings.mappingStatus, "approved")
+            )
+          )
+          .limit(1)
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.allocateOutboundInventoryMovements.assetMapping"
+            )
+          )
+
+        if (assetMapping?.assetId === null || assetMapping?.assetId === undefined) {
+          return yield* removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId: providerTransfer.id,
+          })
+        }
+
+        const now = nowDate()
+        const [movement] = yield* executor
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: transaction.principalId,
+            sourceId: providerTransfer.sourceId,
+            sourceRawRecordId: providerTransfer.sourceRawRecordId,
+            transactionId: transaction.id,
+            providerTransferId: providerTransfer.id,
+            assetId: assetMapping.assetId,
+            timestamp: providerTransfer.timestamp,
+            direction: providerTransfer.direction,
+            purpose,
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: providerTransfer.amount,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoUpdate({
+            target: schema.inventoryMovements.providerTransferId,
+            targetWhere: sql`${schema.inventoryMovements.providerTransferId} is not null`,
+            set: {
+              principalId: sql.raw("excluded.principal_id"),
+              sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
+              transactionId: sql.raw("excluded.transaction_id"),
+              assetId: sql.raw("excluded.asset_id"),
+              timestamp: sql.raw("excluded.timestamp"),
+              direction: sql.raw("excluded.direction"),
+              purpose: sql.raw("excluded.purpose"),
+              taxTreatment: sql`case
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.direction} is distinct from excluded.direction
+                    or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'pending_review'::inventory_movement_tax_treatment
+                  else ${schema.inventoryMovements.taxTreatment}
+                end`,
+              reconciliationStatus: sql`case
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.direction} is distinct from excluded.direction
+                    or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'unmatched'::inventory_movement_reconciliation_status
+                  else ${schema.inventoryMovements.reconciliationStatus}
+                end`,
+              amount: sql.raw("excluded.amount"),
+              updatedAt: now,
+            },
+          })
+          .returning({ id: schema.inventoryMovements.id })
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement"
+            )
+          )
+
+        if (movement === undefined) {
+          return yield* Effect.fail(
+            toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement",
+              error: "failed to persist inventory movement",
+            })
+          )
+        }
+
+        yield* resetInventoryMovementAllocations({
+          executor,
+          movementId: movement.id,
+        })
+
+        if (providerTransfer.direction === "inbound") {
+          const matchingAcquisitionResults = yield* Effect.forEach(
+            legs.filter(
+              (leg) =>
+                (leg.kind === "acquisition" || leg.kind === "income") &&
+                leg.assetId === assetMapping.assetId
+            ),
+            (leg) =>
+              compareDecimalQuantities({
+                left: leg.amount,
+                right: providerTransfer.amount,
+              })
+          )
+
+          if (matchingAcquisitionResults.some((comparison) => comparison === 0)) {
+            yield* deleteUnusedInboundProviderLot({
+              executor,
+              providerTransferId: providerTransfer.id,
+              operation:
+                "sourceNormalizationRepository.allocateProviderInventoryMovements.removeRedundantInboundLot",
+            })
+            return
+          }
+
+          yield* ensureInboundProviderLotCanChangeAmount({
+            executor,
+            providerTransferId: providerTransfer.id,
+            assetId: assetMapping.assetId,
+            amount: providerTransfer.amount,
+          })
+
+          yield* executor
+            .insert(schema.fifoLots)
+            .values({
+              principalId: transaction.principalId,
+              sourceId: providerTransfer.sourceId,
+              assetId: assetMapping.assetId,
+              acquiredAt: providerTransfer.timestamp,
+              originalAmount: providerTransfer.amount,
+              remainingAmount: providerTransfer.amount,
+              costBasisPerToken: "0",
+              costBasisCurrency: "EUR",
+              costBasisStatus: "pending_review",
+              sourceLegId: null,
+              sourceProviderTransferId: providerTransfer.id,
+              sourceLegSequence: 0,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: schema.fifoLots.sourceProviderTransferId,
+              targetWhere: sql`${schema.fifoLots.sourceProviderTransferId} is not null`,
+              set: {
+                sourceId: sql.raw("excluded.source_id"),
+                assetId: sql.raw("excluded.asset_id"),
+                acquiredAt: sql.raw("excluded.acquired_at"),
+                originalAmount: sql.raw("excluded.original_amount"),
+                remainingAmount: sql`${schema.fifoLots.remainingAmount} + excluded.original_amount - ${schema.fifoLots.originalAmount}`,
+                updatedAt: now,
+              },
+            })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertInboundLot"
+              )
+            )
+          return
+        }
+
+        yield* deleteUnusedInboundProviderLot({
+          executor,
+          providerTransferId: providerTransfer.id,
+          operation:
+            "sourceNormalizationRepository.allocateProviderInventoryMovements.removeStaleInboundLot",
+        })
+
+        const matchingDisposalResults = yield* Effect.forEach(
+          legs.filter((leg) => leg.kind === "disposal" && leg.assetId === assetMapping.assetId),
+          (leg) =>
+            compareDecimalQuantities({
+              left: leg.amount,
+              right: providerTransfer.amount,
+            })
+        )
+
+        if (matchingDisposalResults.some((comparison) => comparison === 0)) {
+          return
+        }
+
+        const openLots = yield* loadOpenFifoLots({
+          executor,
+          principalId: transaction.principalId,
+          assetId: assetMapping.assetId,
+          maxAcquiredAt: providerTransfer.timestamp,
+        })
+        const allocations = yield* buildFifoLotAllocations({
+          lots: openLots,
+          disposalAmount: providerTransfer.amount,
+          disposalFiatAmount: null,
+        })
+
+        yield* Effect.forEach(allocations, (allocation) =>
+          Effect.gen(function* () {
+            yield* executor
+              .insert(schema.inventoryMovementAllocations)
+              .values({
+                inventoryMovementId: movement.id,
+                fifoLotId: allocation.fifoLotId,
+                matchedAmount: allocation.matchedAmount,
+                createdAt: now,
+              })
+              .onConflictDoNothing({
+                target: [
+                  schema.inventoryMovementAllocations.inventoryMovementId,
+                  schema.inventoryMovementAllocations.fifoLotId,
+                ],
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateOutboundInventoryMovements.insertAllocation"
+                )
+              )
+
+            yield* executor
+              .update(schema.fifoLots)
+              .set({
+                remainingAmount: allocation.remainingAmount,
+                updatedAt: now,
+              })
+              .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateOutboundInventoryMovements.updateLot"
+                )
+              )
+          })
+        )
+      })
+    )
+  }
+
+  const allocateFeeInventoryMovements = ({
+    executor,
+    legs,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly legs: ReadonlyArray<PersistedSourceLegRecord>
+  }) =>
+    Effect.forEach(
+      legs.filter((leg) => leg.kind === "fee"),
+      (leg) =>
+        Effect.gen(function* () {
+          const amountComparison = yield* compareDecimalQuantities({
+            left: leg.amount,
+            right: "0",
+          })
+
+          if (amountComparison === 0) {
+            const [existingMovement] = yield* executor
+              .select({ id: schema.inventoryMovements.id })
+              .from(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.transactionLegId, leg.id))
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.selectZeroMovement"
+                )
+              )
+
+            if (existingMovement === undefined) {
+              return
+            }
+
+            yield* resetInventoryMovementAllocations({
+              executor,
+              movementId: existingMovement.id,
+            })
+            yield* executor
+              .delete(schema.inventoryMovements)
+              .where(eq(schema.inventoryMovements.id, existingMovement.id))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.deleteZeroMovement"
+                )
+              )
+            return
+          }
+
+          if (leg.transactionId === null) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.transactionId",
+                error: "fee leg is missing its transaction",
+              })
+            )
+          }
+
+          const now = nowDate()
+          const [movement] = yield* executor
+            .insert(schema.inventoryMovements)
+            .values({
+              principalId: leg.principalId,
+              sourceId: leg.sourceId,
+              sourceRawRecordId: leg.sourceRawRecordId,
+              transactionId: leg.transactionId,
+              providerTransferId: null,
+              transactionLegId: leg.id,
+              assetId: leg.assetId,
+              timestamp: leg.timestamp,
+              direction: "outbound",
+              purpose: "fee",
+              taxTreatment: "pending_review",
+              reconciliationStatus: "unmatched",
+              amount: leg.amount,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: schema.inventoryMovements.transactionLegId,
+              targetWhere: sql`${schema.inventoryMovements.transactionLegId} is not null`,
+              set: {
+                principalId: sql.raw("excluded.principal_id"),
+                sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
+                transactionId: sql.raw("excluded.transaction_id"),
+                assetId: sql.raw("excluded.asset_id"),
+                timestamp: sql.raw("excluded.timestamp"),
+                taxTreatment: sql`case
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'pending_review'::inventory_movement_tax_treatment
+                  else ${schema.inventoryMovements.taxTreatment}
+                end`,
+                reconciliationStatus: sql`case
+                  when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
+                    or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
+                    or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
+                    or ${schema.inventoryMovements.amount} is distinct from excluded.amount
+                  then 'unmatched'::inventory_movement_reconciliation_status
+                  else ${schema.inventoryMovements.reconciliationStatus}
+                end`,
+                amount: sql.raw("excluded.amount"),
+                updatedAt: now,
+              },
+            })
+            .returning({ id: schema.inventoryMovements.id })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement"
+              )
+            )
+
+          if (movement === undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement",
+                error: "failed to persist fee inventory movement",
+              })
+            )
+          }
+
+          yield* resetInventoryMovementAllocations({
+            executor,
+            movementId: movement.id,
+          })
+
+          const openLots = yield* loadOpenFifoLots({
+            executor,
+            principalId: leg.principalId,
+            assetId: leg.assetId,
+            maxAcquiredAt: leg.timestamp,
+          })
+          const allocations = yield* buildFifoLotAllocations({
+            lots: openLots,
+            disposalAmount: leg.amount,
+            disposalFiatAmount: null,
+          })
+
+          yield* Effect.forEach(allocations, (allocation) =>
+            Effect.gen(function* () {
+              yield* executor
+                .insert(schema.inventoryMovementAllocations)
+                .values({
+                  inventoryMovementId: movement.id,
+                  fifoLotId: allocation.fifoLotId,
+                  matchedAmount: allocation.matchedAmount,
+                  createdAt: now,
+                })
+                .onConflictDoNothing({
+                  target: [
+                    schema.inventoryMovementAllocations.inventoryMovementId,
+                    schema.inventoryMovementAllocations.fifoLotId,
+                  ],
+                })
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceNormalizationRepository.allocateFeeInventoryMovements.insertAllocation"
+                  )
+                )
+
+              yield* executor
+                .update(schema.fifoLots)
+                .set({
+                  remainingAmount: allocation.remainingAmount,
+                  updatedAt: now,
+                })
+                .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceNormalizationRepository.allocateFeeInventoryMovements.updateLot"
+                  )
+                )
+            })
+          )
+        })
+    )
+
   const persistNormalizedArtifacts = <E>(
     params: PersistNormalizedSourceArtifactsParams<E>
   ): Effect.Effect<PersistNormalizedSourceArtifactsResult, E | SyncEngineStorageError> =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          yield* tx
+            .select({ id: schema.principals.id })
+            .from(schema.principals)
+            .where(eq(schema.principals.id, params.transaction.principalId))
+            .for("update")
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipalInventory"
+              )
+            )
+
+          const [ownedSource] = yield* tx
+            .select({ id: schema.sources.id })
+            .from(schema.sources)
+            .where(
+              and(
+                eq(schema.sources.id, params.transaction.sourceId),
+                eq(schema.sources.principalId, params.transaction.principalId)
+              )
+            )
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal"
+              )
+            )
+
+          if (ownedSource === undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal",
+                error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
+              })
+            )
+          }
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,
@@ -1097,20 +1951,67 @@ const make = Effect.gen(function* () {
             legs: derivedLegs,
           })
 
+          const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
+          const hasFailedStatus = hasFailedProviderStatus(params.transaction.providerStatus)
+          const materializesProviderMovements = hasCompletedStatus || hasFailedStatus
+
+          if (materializesProviderMovements) {
+            yield* resetInventoryMovementAllocationsForTransaction({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+            })
+            yield* removeStaleProviderInventoryMovements({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+              currentProviderTransferIds: new Set(
+                persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
+              ),
+            })
+          } else {
+            yield* removeInventoryMovementsForTransaction({
+              executor: tx,
+              transactionId: persistedTransaction.id,
+            })
+          }
+
           const transactionReview = yield* feedFifoLegs({
             executor: tx,
             legs: persistedLegs,
           }).pipe(
+            Effect.zipRight(
+              materializesProviderMovements
+                ? allocateProviderInventoryMovements({
+                    executor: tx,
+                    transaction: persistedTransaction,
+                    providerTransfers: persistedProviderTransfers,
+                    legs: persistedLegs,
+                    feesOnly: hasFailedStatus,
+                  })
+                : Effect.void
+            ),
+            Effect.zipRight(
+              materializesProviderMovements
+                ? allocateFeeInventoryMovements({
+                    executor: tx,
+                    legs: persistedLegs,
+                  })
+                : Effect.void
+            ),
             Effect.as(params.transactionReview),
             Effect.catchTag("SyncEngineStorageError", (error) =>
               isInsufficientFifoInventoryError(error)
-                ? Effect.succeed(
-                    buildInsufficientInventoryReview({
-                      transaction: persistedTransaction,
-                      existingReview: params.transactionReview,
-                      resolvedTransactionType: params.resolvedTransactionType,
-                      error,
-                    })
+                ? resetInventoryMovementAllocationsForTransaction({
+                    executor: tx,
+                    transactionId: persistedTransaction.id,
+                  }).pipe(
+                    Effect.as(
+                      buildInsufficientInventoryReview({
+                        transaction: persistedTransaction,
+                        existingReview: params.transactionReview,
+                        resolvedTransactionType: params.resolvedTransactionType,
+                        error,
+                      })
+                    )
                   )
                 : Effect.fail(error)
             )

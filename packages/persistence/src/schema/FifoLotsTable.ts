@@ -1,17 +1,26 @@
 import {
+  check,
   index,
   integer,
   numeric,
+  pgEnum,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
 import { assets } from "./AssetsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
+import { providerTransfers } from "./ProviderTransfersTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { transactionLegs } from "./TransactionLegsTable.ts"
+
+export const fifoLotCostBasisStatusEnum = pgEnum("fifo_lot_cost_basis_status", [
+  "known",
+  "pending_review",
+])
 
 export const fifoLots = pgTable(
   "fifo_lots",
@@ -35,21 +44,35 @@ export const fifoLots = pgTable(
     // Cost basis information
     costBasisPerToken: numeric("cost_basis_per_token", { precision: 36, scale: 18 }).notNull(),
     costBasisCurrency: text("cost_basis_currency").notNull(),
+    costBasisStatus: fifoLotCostBasisStatusEnum("cost_basis_status").notNull().default("known"),
 
-    // Link to the acquisition leg
-    sourceLegId: uuid("source_leg_id")
-      .notNull()
-      .references(() => transactionLegs.id, {
+    // Exactly one durable acquisition origin: a derived leg or an inbound provider transfer.
+    sourceLegId: uuid("source_leg_id").references(() => transactionLegs.id, {
+      onDelete: "cascade",
+    }),
+    sourceProviderTransferId: uuid("source_provider_transfer_id").references(
+      () => providerTransfers.id,
+      {
         onDelete: "cascade",
-      }),
+      }
+    ),
     sourceLegSequence: integer("source_leg_sequence").notNull().default(0),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
+    check(
+      "fifo_lots_origin_present",
+      sql`num_nonnulls(${table.sourceLegId}, ${table.sourceProviderTransferId}) = 1`
+    ),
     // One FIFO lot per acquisition leg - prevents duplicates on retry
-    uniqueIndex("idx_fifo_lots_source_leg").on(table.sourceLegId, table.sourceLegSequence),
+    uniqueIndex("idx_fifo_lots_source_leg")
+      .on(table.sourceLegId, table.sourceLegSequence)
+      .where(sql`${table.sourceLegId} is not null`),
+    uniqueIndex("idx_fifo_lots_source_provider_transfer")
+      .on(table.sourceProviderTransferId)
+      .where(sql`${table.sourceProviderTransferId} is not null`),
     // Index for principal + asset lookups in portfolio queries
     index("idx_fifo_lots_principal_asset_remaining").on(
       table.principalId,
