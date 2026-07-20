@@ -4,7 +4,7 @@
  * @module PrincipalReplayRepositoryLive
  */
 
-import { and, asc, eq, inArray, isNotNull, or } from "drizzle-orm"
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -57,42 +57,19 @@ const transactionIdentity = ({
 
 const providerTransferIdentity = ({
   externalId,
-  networkHash,
-  direction,
-  providerAssetId,
-  amount,
-  fromAccountRef,
-  toAccountRef,
-  fromAddress,
-  toAddress,
+  sourceRawRecordId,
+  sourceRecordPosition,
 }: {
   readonly externalId: string | null
-  readonly networkHash: string | null
-  readonly direction: "inbound" | "outbound"
-  readonly providerAssetId: string | null
-  readonly amount: string
-  readonly fromAccountRef: string | null
-  readonly toAccountRef: string | null
-  readonly fromAddress: string | null
-  readonly toAddress: string | null
+  readonly sourceRawRecordId: string | null
+  readonly sourceRecordPosition: number
 }): Effect.Effect<string, SyncEngineStorageError> => {
   if (externalId !== null) {
     return Effect.succeed(`external:${externalId}`)
   }
 
-  if (networkHash !== null) {
-    return Effect.succeed(
-      `network:${JSON.stringify([
-        networkHash,
-        direction,
-        providerAssetId,
-        amount,
-        fromAccountRef,
-        toAccountRef,
-        fromAddress,
-        toAddress,
-      ])}`
-    )
+  if (sourceRawRecordId !== null) {
+    return Effect.succeed(`raw:${sourceRawRecordId}:position:${sourceRecordPosition}`)
   }
 
   return Effect.fail(
@@ -220,6 +197,24 @@ const make = Effect.gen(function* () {
             )
           }
 
+          const [previousReplay] = yield* tx
+            .select({
+              id: schema.syncRuns.id,
+              status: schema.syncRuns.status,
+              reviewSnapshotInitializedAt: schema.syncRuns.reviewSnapshotInitializedAt,
+            })
+            .from(schema.syncRuns)
+            .where(
+              and(eq(schema.syncRuns.principalId, principalId), eq(schema.syncRuns.mode, "replay"))
+            )
+            .orderBy(desc(schema.syncRuns.createdAt), desc(schema.syncRuns.id))
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalReplayRepository.createOrReuseReplayRun.selectPreviousReplay"
+              )
+            )
+
           const now = nowDate()
           const [run] = yield* tx
             .insert(schema.syncRuns)
@@ -241,6 +236,92 @@ const make = Effect.gen(function* () {
 
           if (run === undefined) {
             return yield* Effect.dieMessage("Failed to create principal replay run")
+          }
+
+          if (
+            previousReplay !== undefined &&
+            previousReplay.reviewSnapshotInitializedAt !== null &&
+            (previousReplay.status === "failed" || previousReplay.status === "partially_failed")
+          ) {
+            const reviewSnapshots = yield* tx
+              .select({
+                principalId: schema.principalReplayReviewSnapshots.principalId,
+                sourceId: schema.principalReplayReviewSnapshots.sourceId,
+                transactionIdentity: schema.principalReplayReviewSnapshots.transactionIdentity,
+                reviewStatus: schema.principalReplayReviewSnapshots.reviewStatus,
+                originalTypeKey: schema.principalReplayReviewSnapshots.originalTypeKey,
+                originalConfidence: schema.principalReplayReviewSnapshots.originalConfidence,
+                currentTypeKey: schema.principalReplayReviewSnapshots.currentTypeKey,
+                legalRuleSetVersion: schema.principalReplayReviewSnapshots.legalRuleSetVersion,
+                categorizationReason: schema.principalReplayReviewSnapshots.categorizationReason,
+                matchedLayer: schema.principalReplayReviewSnapshots.matchedLayer,
+                needsReview: schema.principalReplayReviewSnapshots.needsReview,
+                userNotes: schema.principalReplayReviewSnapshots.userNotes,
+                reviewedAt: schema.principalReplayReviewSnapshots.reviewedAt,
+              })
+              .from(schema.principalReplayReviewSnapshots)
+              .where(eq(schema.principalReplayReviewSnapshots.runId, previousReplay.id))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalReplayRepository.createOrReuseReplayRun.selectPreviousReviewSnapshots"
+                )
+              )
+
+            if (reviewSnapshots.length > 0) {
+              yield* tx
+                .insert(schema.principalReplayReviewSnapshots)
+                .values(reviewSnapshots.map((snapshot) => ({ ...snapshot, runId: run.id })))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "principalReplayRepository.createOrReuseReplayRun.copyPreviousReviewSnapshots"
+                  )
+                )
+            }
+
+            const transferSnapshots = yield* tx
+              .select({
+                principalId: schema.principalReplayTransferReconciliationSnapshots.principalId,
+                providerSourceId:
+                  schema.principalReplayTransferReconciliationSnapshots.providerSourceId,
+                providerTransferIdentity:
+                  schema.principalReplayTransferReconciliationSnapshots.providerTransferIdentity,
+                canonicalTransferSourceId:
+                  schema.principalReplayTransferReconciliationSnapshots.canonicalTransferSourceId,
+                canonicalTransferIdentity:
+                  schema.principalReplayTransferReconciliationSnapshots.canonicalTransferIdentity,
+                canonicalTransactionSourceId:
+                  schema.principalReplayTransferReconciliationSnapshots
+                    .canonicalTransactionSourceId,
+                canonicalTransactionIdentity:
+                  schema.principalReplayTransferReconciliationSnapshots
+                    .canonicalTransactionIdentity,
+                status: schema.principalReplayTransferReconciliationSnapshots.status,
+                matchReason: schema.principalReplayTransferReconciliationSnapshots.matchReason,
+                confidence: schema.principalReplayTransferReconciliationSnapshots.confidence,
+                deterministic: schema.principalReplayTransferReconciliationSnapshots.deterministic,
+                reviewMetadata:
+                  schema.principalReplayTransferReconciliationSnapshots.reviewMetadata,
+              })
+              .from(schema.principalReplayTransferReconciliationSnapshots)
+              .where(
+                eq(schema.principalReplayTransferReconciliationSnapshots.runId, previousReplay.id)
+              )
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalReplayRepository.createOrReuseReplayRun.selectPreviousTransferSnapshots"
+                )
+              )
+
+            if (transferSnapshots.length > 0) {
+              yield* tx
+                .insert(schema.principalReplayTransferReconciliationSnapshots)
+                .values(transferSnapshots.map((snapshot) => ({ ...snapshot, runId: run.id })))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "principalReplayRepository.createOrReuseReplayRun.copyPreviousTransferSnapshots"
+                  )
+                )
+            }
           }
 
           const sourceJobs = yield* Effect.forEach(orderedSourceIds, (sourceId, index) =>
@@ -378,7 +459,12 @@ const make = Effect.gen(function* () {
         } satisfies PrincipalReplayPlan)
       })
 
-  const claimPlan: PrincipalReplayRepositoryShape["claimPlan"] = ({ runId, workerId, startedAt }) =>
+  const claimPlan: PrincipalReplayRepositoryShape["claimPlan"] = ({
+    runId,
+    workerId,
+    startedAt,
+    staleBefore,
+  }) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
@@ -413,7 +499,19 @@ const make = Effect.gen(function* () {
             .where(
               and(
                 inArray(schema.processingJobs.id, jobIds),
-                inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
+                or(
+                  eq(schema.processingJobs.status, "pending"),
+                  and(
+                    eq(schema.processingJobs.status, "processing"),
+                    or(
+                      lt(schema.processingJobs.heartbeatAt, staleBefore),
+                      and(
+                        isNull(schema.processingJobs.heartbeatAt),
+                        lt(schema.processingJobs.updatedAt, staleBefore)
+                      )
+                    )
+                  )
+                )
               )
             )
             .returning({ id: schema.processingJobs.id })
@@ -812,6 +910,25 @@ const make = Effect.gen(function* () {
               yield* tx
                 .insert(schema.principalReplayReviewSnapshots)
                 .values(snapshots)
+                .onConflictDoUpdate({
+                  target: [
+                    schema.principalReplayReviewSnapshots.runId,
+                    schema.principalReplayReviewSnapshots.sourceId,
+                    schema.principalReplayReviewSnapshots.transactionIdentity,
+                  ],
+                  set: {
+                    reviewStatus: sql.raw("excluded.review_status"),
+                    originalTypeKey: sql.raw("excluded.original_type_key"),
+                    originalConfidence: sql.raw("excluded.original_confidence"),
+                    currentTypeKey: sql.raw("excluded.current_type_key"),
+                    legalRuleSetVersion: sql.raw("excluded.legal_rule_set_version"),
+                    categorizationReason: sql.raw("excluded.categorization_reason"),
+                    matchedLayer: sql.raw("excluded.matched_layer"),
+                    needsReview: sql.raw("excluded.needs_review"),
+                    userNotes: sql.raw("excluded.user_notes"),
+                    reviewedAt: sql.raw("excluded.reviewed_at"),
+                  },
+                })
                 .pipe(
                   wrapSyncEngineSqlError(
                     "principalReplayRepository.preparePrincipalReplay.insertSnapshots"
@@ -823,14 +940,8 @@ const make = Effect.gen(function* () {
               .select({
                 providerSourceId: schema.providerTransfers.sourceId,
                 providerExternalId: schema.providerTransfers.externalId,
-                providerNetworkHash: schema.providerTransfers.networkHash,
-                providerDirection: schema.providerTransfers.direction,
-                providerAssetId: schema.providerTransfers.providerAssetId,
-                providerAmount: schema.providerTransfers.amount,
-                providerFromAccountRef: schema.providerTransfers.fromAccountRef,
-                providerToAccountRef: schema.providerTransfers.toAccountRef,
-                providerFromAddress: schema.providerTransfers.fromAddress,
-                providerToAddress: schema.providerTransfers.toAddress,
+                providerSourceRawRecordId: schema.providerTransfers.sourceRawRecordId,
+                providerSourceRecordPosition: schema.providerTransfers.sourceRecordPosition,
                 canonicalTransferId: schema.transfers.id,
                 canonicalTransferSourceId: schema.transfers.sourceId,
                 canonicalTransferExternalId: schema.transfers.externalId,
@@ -881,14 +992,8 @@ const make = Effect.gen(function* () {
                 Effect.gen(function* () {
                   const providerIdentity = yield* providerTransferIdentity({
                     externalId: reconciliation.providerExternalId,
-                    networkHash: reconciliation.providerNetworkHash,
-                    direction: reconciliation.providerDirection,
-                    providerAssetId: reconciliation.providerAssetId,
-                    amount: reconciliation.providerAmount,
-                    fromAccountRef: reconciliation.providerFromAccountRef,
-                    toAccountRef: reconciliation.providerToAccountRef,
-                    fromAddress: reconciliation.providerFromAddress,
-                    toAddress: reconciliation.providerToAddress,
+                    sourceRawRecordId: reconciliation.providerSourceRawRecordId,
+                    sourceRecordPosition: reconciliation.providerSourceRecordPosition,
                   })
                   const canonicalTransferIdentityValue =
                     reconciliation.canonicalTransferId === null
@@ -932,6 +1037,28 @@ const make = Effect.gen(function* () {
               yield* tx
                 .insert(schema.principalReplayTransferReconciliationSnapshots)
                 .values(reconciliationSnapshots)
+                .onConflictDoUpdate({
+                  target: [
+                    schema.principalReplayTransferReconciliationSnapshots.runId,
+                    schema.principalReplayTransferReconciliationSnapshots.providerSourceId,
+                    schema.principalReplayTransferReconciliationSnapshots.providerTransferIdentity,
+                  ],
+                  set: {
+                    canonicalTransferSourceId: sql.raw("excluded.canonical_transfer_source_id"),
+                    canonicalTransferIdentity: sql.raw("excluded.canonical_transfer_identity"),
+                    canonicalTransactionSourceId: sql.raw(
+                      "excluded.canonical_transaction_source_id"
+                    ),
+                    canonicalTransactionIdentity: sql.raw(
+                      "excluded.canonical_transaction_identity"
+                    ),
+                    status: sql.raw("excluded.status"),
+                    matchReason: sql.raw("excluded.match_reason"),
+                    confidence: sql.raw("excluded.confidence"),
+                    deterministic: sql.raw("excluded.deterministic"),
+                    reviewMetadata: sql.raw("excluded.review_metadata"),
+                  },
+                })
                 .pipe(
                   wrapSyncEngineSqlError(
                     "principalReplayRepository.preparePrincipalReplay.insertTransferReconciliationSnapshots"
@@ -1105,14 +1232,8 @@ const make = Effect.gen(function* () {
           id: schema.providerTransfers.id,
           sourceId: schema.providerTransfers.sourceId,
           externalId: schema.providerTransfers.externalId,
-          networkHash: schema.providerTransfers.networkHash,
-          direction: schema.providerTransfers.direction,
-          providerAssetId: schema.providerTransfers.providerAssetId,
-          amount: schema.providerTransfers.amount,
-          fromAccountRef: schema.providerTransfers.fromAccountRef,
-          toAccountRef: schema.providerTransfers.toAccountRef,
-          fromAddress: schema.providerTransfers.fromAddress,
-          toAddress: schema.providerTransfers.toAddress,
+          sourceRawRecordId: schema.providerTransfers.sourceRawRecordId,
+          sourceRecordPosition: schema.providerTransfers.sourceRecordPosition,
         })
         .from(schema.providerTransfers)
         .innerJoin(

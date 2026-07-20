@@ -238,6 +238,7 @@ const processJob = ({
     const summary = yield* executor.execute({
       jobId: payload.jobId,
       workerId: config.workerId,
+      leaseDurationMs: config.lockDurationMs,
       retryPolicy: {
         attemptNumber,
         maxAttempts,

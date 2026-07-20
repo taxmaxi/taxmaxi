@@ -4,7 +4,7 @@
  * @module SourceRawRecordRepositoryLive
  */
 
-import { and, asc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
+import { and, asc, count, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -127,19 +127,67 @@ const make = Effect.gen(function* () {
       .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listAllRawRowsForReplay"))
 
   const listPrincipalRawRowsForReplay: SourceRawRecordRepositoryShape["listPrincipalRawRowsForReplay"] =
+    ({ principalId, cursor, limit }) =>
+      Effect.gen(function* () {
+        const rows = yield* db
+          .select(selectRawRecordFields)
+          .from(schema.sourceRecordsRaw)
+          .innerJoin(schema.sources, eq(schema.sources.id, schema.sourceRecordsRaw.sourceId))
+          .where(
+            and(
+              eq(schema.sources.principalId, principalId),
+              cursor === null
+                ? sql`true`
+                : sql`(
+                  ${schema.sourceRecordsRaw.occurredAt},
+                  ${schema.sourceRecordsRaw.sourceId},
+                  ${schema.sourceRecordsRaw.externalRecordId},
+                  ${schema.sourceRecordsRaw.id}
+                ) > (
+                  ${cursor.occurredAt},
+                  ${cursor.sourceId},
+                  ${cursor.externalRecordId},
+                  ${cursor.id}
+                )`
+            )
+          )
+          .orderBy(
+            asc(schema.sourceRecordsRaw.occurredAt),
+            asc(schema.sourceRecordsRaw.sourceId),
+            asc(schema.sourceRecordsRaw.externalRecordId),
+            asc(schema.sourceRecordsRaw.id)
+          )
+          .limit(limit + 1)
+          .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listPrincipalRawRowsForReplay"))
+
+        const rawRecords = rows.slice(0, limit)
+        const lastRecord = rawRecords[rawRecords.length - 1]
+        return {
+          rawRecords,
+          nextCursor:
+            rows.length > limit && lastRecord !== undefined
+              ? {
+                  occurredAt: lastRecord.occurredAt,
+                  sourceId: lastRecord.sourceId,
+                  externalRecordId: lastRecord.externalRecordId,
+                  id: lastRecord.id,
+                }
+              : null,
+        }
+      })
+
+  const countPrincipalRawRowsForReplay: SourceRawRecordRepositoryShape["countPrincipalRawRowsForReplay"] =
     ({ principalId }) =>
       db
-        .select(selectRawRecordFields)
+        .select({
+          sourceId: schema.sourceRecordsRaw.sourceId,
+          totalRecords: count(schema.sourceRecordsRaw.id),
+        })
         .from(schema.sourceRecordsRaw)
         .innerJoin(schema.sources, eq(schema.sources.id, schema.sourceRecordsRaw.sourceId))
         .where(eq(schema.sources.principalId, principalId))
-        .orderBy(
-          asc(schema.sourceRecordsRaw.occurredAt),
-          asc(schema.sourceRecordsRaw.sourceId),
-          asc(schema.sourceRecordsRaw.externalRecordId),
-          asc(schema.sourceRecordsRaw.id)
-        )
-        .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listPrincipalRawRowsForReplay"))
+        .groupBy(schema.sourceRecordsRaw.sourceId)
+        .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.countPrincipalRawRowsForReplay"))
 
   const listPendingNormalizationRecordIds: SourceRawRecordRepositoryShape["listPendingNormalizationRecordIds"] =
     ({ sourceId }) =>
@@ -244,6 +292,7 @@ const make = Effect.gen(function* () {
     listReplayCandidates,
     listAllRawRowsForReplay,
     listPrincipalRawRowsForReplay,
+    countPrincipalRawRowsForReplay,
     listPendingNormalizationRecordIds,
     listRawRecordsByIds,
     listRawRecordsByOccurredAt,

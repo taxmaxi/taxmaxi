@@ -698,6 +698,259 @@ describe("PrincipalReplayRepositoryLive", () => {
     expect(state.snapshots).toHaveLength(0)
   })
 
+  it("preserves reviewed decisions when a failed replay is replaced", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.syncRuns).values({
+          id: RUN_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "replay",
+          status: "failed",
+          requestedSourceCount: 1,
+          reviewSnapshotInitializedAt: new Date("2025-01-01T00:00:00.000Z"),
+          completedAt: new Date("2025-01-01T00:01:00.000Z"),
+        })
+        yield* db.insert(schema.principalReplayReviewSnapshots).values({
+          runId: RUN_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          transactionIdentity: "external:review-from-failed-run",
+          reviewStatus: "changed",
+          currentTypeKey: "transfer",
+          needsReview: false,
+          userNotes: "Preserve across replacement replay",
+          reviewedAt: new Date("2024-12-31T00:00:00.000Z"),
+        })
+      })
+    )
+
+    const replacement = await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.createOrReuseReplayRun({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceIds: [TEST_SOURCE_ID],
+          maxAttempts: 3,
+        })
+      )
+    )
+
+    await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.preparePrincipalReplay({
+          runId: replacement.runId,
+          principalId: TEST_PRINCIPAL_ID,
+        })
+      )
+    )
+
+    const transactionId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "review-from-failed-run",
+            timestamp: new Date("2025-01-02T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to seed replacement replay transaction")
+        }
+        return transaction.id
+      })
+    )
+
+    const restored = await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.restorePrincipalReviews({
+          runId: replacement.runId,
+          principalId: TEST_PRINCIPAL_ID,
+        })
+      )
+    )
+    const review = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            reviewStatus: schema.transactionReviews.reviewStatus,
+            currentTypeKey: schema.transactionReviews.currentTypeKey,
+            needsReview: schema.transactionReviews.needsReview,
+            userNotes: schema.transactionReviews.userNotes,
+          })
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, transactionId))
+        return row
+      })
+    )
+
+    expect(restored).toEqual({ restoredCount: 1, unmatchedTransactionIdentities: [] })
+    expect(review).toEqual({
+      reviewStatus: "changed",
+      currentTypeKey: "transfer",
+      needsReview: false,
+      userNotes: "Preserve across replacement replay",
+    })
+  })
+
+  it("restores a reviewed provider transfer to the same raw-record position", async () => {
+    const rawRecordId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [rawRecord] = yield* db
+          .insert(schema.sourceRecordsRaw)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            provider: "coinbase",
+            recordType: "transaction",
+            externalRecordId: "duplicate-provider-movements",
+            occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+            payload: { id: "duplicate-provider-movements" },
+            importedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.sourceRecordsRaw.id })
+        if (rawRecord === undefined) {
+          return yield* Effect.dieMessage("Failed to seed duplicate movement raw record")
+        }
+
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: rawRecord.id,
+            externalId: "duplicate-provider-movements",
+            timestamp: new Date("2025-01-01T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to seed duplicate movement transaction")
+        }
+
+        const providerTransfers = yield* db
+          .insert(schema.providerTransfers)
+          .values(
+            ["position-0", "position-1"].map((externalGroupId, sourceRecordPosition) => ({
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: rawRecord.id,
+              transactionId: transaction.id,
+              externalId: null,
+              externalGroupId,
+              sourceRecordPosition,
+              timestamp: new Date("2025-01-01T00:00:00.000Z"),
+              direction: "outbound" as const,
+              fromAccountRef: "coinbase-account",
+              toAddress: "bc1qduplicate-destination",
+              networkHash: "duplicate-network-hash",
+              amount: "0.50000000",
+            }))
+          )
+          .returning({
+            id: schema.providerTransfers.id,
+            externalGroupId: schema.providerTransfers.externalGroupId,
+          })
+        const reviewed = providerTransfers.find(
+          (transfer) => transfer.externalGroupId === "position-0"
+        )
+        if (reviewed === undefined) {
+          return yield* Effect.dieMessage("Failed to seed reviewed duplicate movement")
+        }
+        yield* db.insert(schema.transferReconciliations).values({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId: reviewed.id,
+          status: "rejected",
+          matchReason: "reviewed-specific-position",
+          confidence: "0.2500",
+          deterministic: false,
+        })
+        yield* db.insert(schema.syncRuns).values({
+          id: RUN_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "replay",
+          status: "running",
+          requestedSourceCount: 1,
+        })
+        return rawRecord.id
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.preparePrincipalReplay({ runId: RUN_ID, principalId: TEST_PRINCIPAL_ID })
+      )
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: rawRecordId,
+            externalId: "duplicate-provider-movements",
+            timestamp: new Date("2025-01-01T00:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to rebuild duplicate movement transaction")
+        }
+        yield* db.insert(schema.providerTransfers).values(
+          ["position-0", "position-1"].map((externalGroupId, sourceRecordPosition) => ({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: rawRecordId,
+            transactionId: transaction.id,
+            externalId: null,
+            externalGroupId,
+            sourceRecordPosition,
+            timestamp: new Date("2025-01-01T00:00:00.000Z"),
+            direction: "outbound" as const,
+            fromAccountRef: "coinbase-account",
+            toAddress: "bc1qduplicate-destination",
+            networkHash: "duplicate-network-hash",
+            amount: "0.50000000",
+          }))
+        )
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(PrincipalReplayRepository, (repository) =>
+        repository.restorePrincipalReviews({ runId: RUN_ID, principalId: TEST_PRINCIPAL_ID })
+      )
+    )
+
+    const restored = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            externalGroupId: schema.providerTransfers.externalGroupId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .innerJoin(
+            schema.providerTransfers,
+            eq(schema.providerTransfers.id, schema.transferReconciliations.providerTransferId)
+          )
+          .where(eq(schema.transferReconciliations.principalId, TEST_PRINCIPAL_ID))
+      })
+    )
+
+    expect(restored).toEqual([
+      {
+        externalGroupId: "position-0",
+        status: "rejected",
+        matchReason: "reviewed-specific-position",
+      },
+    ])
+  })
+
   it("creates one reusable principal run with a coordinator and reserved source jobs", async () => {
     await runPg(
       Effect.gen(function* () {
@@ -784,7 +1037,7 @@ describe("PrincipalReplayRepositoryLive", () => {
     })
   })
 
-  it("reclaims a processing replay plan when BullMQ redelivers its coordinator", async () => {
+  it("reclaims a processing replay plan only after its heartbeat is stale", async () => {
     const dispatch = await runRepository(
       Effect.flatMap(PrincipalReplayRepository, (repository) =>
         repository.createOrReuseReplayRun({
@@ -803,8 +1056,23 @@ describe("PrincipalReplayRepositoryLive", () => {
           runId: dispatch.runId,
           workerId: "worker-before-redelivery",
           startedAt: firstClaimAt,
+          staleBefore: new Date("2024-12-31T23:59:00.000Z"),
         })
       )
+    )
+
+    const freshTakeover = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* PrincipalReplayRepository
+        return yield* repository
+          .claimPlan({
+            runId: dispatch.runId,
+            workerId: "worker-before-lease-expiry",
+            startedAt: redeliveryClaimAt,
+            staleBefore: new Date("2024-12-31T23:59:59.000Z"),
+          })
+          .pipe(Effect.either)
+      })
     )
 
     await runRepository(
@@ -813,6 +1081,7 @@ describe("PrincipalReplayRepositoryLive", () => {
           runId: dispatch.runId,
           workerId: "worker-after-redelivery",
           startedAt: redeliveryClaimAt,
+          staleBefore: new Date("2025-01-01T00:00:01.000Z"),
         })
       )
     )
@@ -859,6 +1128,13 @@ describe("PrincipalReplayRepositoryLive", () => {
       })
     )
 
+    expect(freshTakeover).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "SyncEngineStorageError",
+        operation: "principalReplayRepository.claimPlan",
+      },
+    })
     expect(jobs).toEqual([
       {
         status: "processing",

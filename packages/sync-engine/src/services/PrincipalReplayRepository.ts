@@ -51,11 +51,12 @@ export interface PrincipalReplayRepositoryShape {
     readonly jobId: string
   }) => Effect.Effect<Option.Option<PrincipalReplayPlan>, SyncEngineStorageError>
 
-  /** Atomically claim or reclaim every active source job in a replay plan. */
+  /** Atomically claim pending jobs or reclaim a replay plan after its lease becomes stale. */
   readonly claimPlan: (params: {
     readonly runId: string
     readonly workerId: string
     readonly startedAt: Date
+    readonly staleBefore: Date
   }) => Effect.Effect<void, SyncEngineStorageError>
 
   /** Heartbeat every child job owned by the principal replay worker. */

@@ -48,6 +48,7 @@ export class SourceSyncJobExecutionPayloadError extends Schema.TaggedError<Sourc
 export interface ExecuteSourceSyncJobParams {
   readonly jobId: string
   readonly workerId?: string
+  readonly leaseDurationMs?: number
   readonly retryPolicy?: SourceSyncJobExecutionRetryPolicy
 }
 

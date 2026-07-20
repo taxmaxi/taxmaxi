@@ -130,11 +130,11 @@ export interface TransferReconciliationRepositoryShape {
 
   /**
    * Replace false provider/onchain tax-visible state with canonical internal-transfer
-   * legs and review rows for deterministic reconciliations belonging to one source.
+   * legs and review rows, optionally scoped to one source.
    */
   readonly applyDeterministicInternalTransferCanonicalization: (params: {
     readonly principalId: string
-    readonly sourceId: string
+    readonly sourceId?: string
     readonly reconciliationId?: string
   }) => Effect.Effect<DeterministicTransferCanonicalizationSummary, SyncEngineStorageError>
 }

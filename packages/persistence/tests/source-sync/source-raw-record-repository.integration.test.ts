@@ -5,6 +5,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
+  TEST_PRINCIPAL_ID,
   TEST_SOURCE_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
@@ -222,5 +223,41 @@ describe("SourceRawRecordRepositoryLive", () => {
       payload: { transaction: { signatures: [signature] }, version: 2 },
     })
     expect(rows[0]?.occurredAt.toISOString()).toBe("2025-01-01T00:01:00.000Z")
+  })
+
+  it("pages principal replay rows with a stable chronological cursor", async () => {
+    await runRepository(
+      Effect.flatMap(SourceRawRecordRepository, (repository) =>
+        repository.upsertRawBatch({ sourceId: TEST_SOURCE_ID, records: firstBatch })
+      )
+    )
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* SourceRawRecordRepository
+        const counts = yield* repository.countPrincipalRawRowsForReplay({
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        const firstPage = yield* repository.listPrincipalRawRowsForReplay({
+          principalId: TEST_PRINCIPAL_ID,
+          cursor: null,
+          limit: 1,
+        })
+        const secondPage = yield* repository.listPrincipalRawRowsForReplay({
+          principalId: TEST_PRINCIPAL_ID,
+          cursor: firstPage.nextCursor,
+          limit: 1,
+        })
+        return { counts, firstPage, secondPage }
+      })
+    )
+
+    expect(result.counts).toEqual([{ sourceId: TEST_SOURCE_ID, totalRecords: 2 }])
+    expect(result.firstPage.rawRecords.map((row) => row.externalRecordId)).toEqual([
+      "coinbase-account-1",
+    ])
+    expect(result.firstPage.nextCursor).not.toBeNull()
+    expect(result.secondPage.rawRecords.map((row) => row.externalRecordId)).toEqual(["tx-1"])
+    expect(result.secondPage.nextCursor).toBeNull()
   })
 })

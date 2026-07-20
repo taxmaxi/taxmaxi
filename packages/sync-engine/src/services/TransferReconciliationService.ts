@@ -20,9 +20,11 @@ export interface ReconcileTransferCandidatesParams {
 
 /**
  * ApplyDeterministicInternalTransferCanonicalizationParams - Scope canonicalization
- * to a source, optionally narrowed to one reviewed reconciliation.
+ * to a principal, optionally narrowed to one source or reviewed reconciliation.
  */
-export interface ApplyDeterministicInternalTransferCanonicalizationParams extends ReconcileTransferCandidatesParams {
+export interface ApplyDeterministicInternalTransferCanonicalizationParams {
+  readonly principalId: string
+  readonly sourceId?: string
   readonly reconciliationId?: string
 }
 

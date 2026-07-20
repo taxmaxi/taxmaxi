@@ -172,6 +172,7 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
     expect(syncExecution).toMatchObject({
       jobId: "job-1",
       workerId: "worker-test-1",
+      leaseDurationMs: 30_000,
       retryPolicy: {
         attemptNumber: 1,
         maxAttempts: 5,
@@ -180,6 +181,7 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
     expect(replayExecution).toMatchObject({
       jobId: "job-2",
       workerId: "worker-test-1",
+      leaseDurationMs: 30_000,
       retryPolicy: {
         attemptNumber: 2,
         maxAttempts: 5,

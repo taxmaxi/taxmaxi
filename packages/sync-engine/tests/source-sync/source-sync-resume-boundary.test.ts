@@ -165,6 +165,8 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("listAllRawRowsForReplay should not be called"),
             listPrincipalRawRowsForReplay: () =>
               Effect.dieMessage("listPrincipalRawRowsForReplay should not be called"),
+            countPrincipalRawRowsForReplay: () =>
+              Effect.dieMessage("countPrincipalRawRowsForReplay should not be called"),
             listPendingNormalizationRecordIds: () =>
               Effect.dieMessage("listPendingNormalizationRecordIds should not be called"),
             listRawRecordsByIds: () =>

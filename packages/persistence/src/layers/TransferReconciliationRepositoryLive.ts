@@ -301,7 +301,9 @@ const make = Effect.gen(function* () {
               .where(
                 and(
                   eq(schema.transferReconciliations.principalId, principalId),
-                  eq(schema.providerTransfers.sourceId, sourceId),
+                  sourceId === undefined
+                    ? sql`true`
+                    : eq(schema.providerTransfers.sourceId, sourceId),
                   reconciliationId === undefined
                     ? sql`true`
                     : eq(schema.transferReconciliations.id, reconciliationId),
@@ -319,7 +321,7 @@ const make = Effect.gen(function* () {
                   sql`${schema.transferReconciliations.canonicalTransactionId} is not null`
                 )
               )
-              .orderBy(asc(schema.providerTransfers.timestamp))
+              .orderBy(asc(schema.providerTransfers.timestamp), asc(schema.providerTransfers.id))
               .pipe(
                 wrapSyncEngineSqlError(
                   "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.selectReconciliations"

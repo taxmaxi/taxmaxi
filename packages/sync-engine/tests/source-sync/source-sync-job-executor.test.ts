@@ -88,6 +88,7 @@ const makeExecutorLayer = ({
   fetchedProviderRecords = [],
   checkpointRawRecords = [],
   replayRawRecords = [],
+  replayPageSize,
   replayCandidates = [],
   failNormalizeOnce = false,
   principalReplayPlan,
@@ -102,6 +103,7 @@ const makeExecutorLayer = ({
   readonly fetchedProviderRecords?: ReadonlyArray<ProviderRawRecord>
   readonly checkpointRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
+  readonly replayPageSize?: number
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
   readonly principalReplayPlan?: {
@@ -202,11 +204,14 @@ const makeExecutorLayer = ({
 
   const SourceSyncStateRepositoryTestLive = Layer.succeed(SourceSyncStateRepository, {
     getExecutionState: () => Effect.succeed(initialExecution),
-    persistProgress: ({ state, lastSyncedAt }) =>
+    persistProgress: ({ sourceId, state, lastSyncedAt }) =>
       Effect.sync(() => {
         events.push(`progress:${state.importedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
         events.push(
           `phase:${state.phase}:${state.processedRecords}:${state.totalRecords ?? "unknown"}`
+        )
+        events.push(
+          `progress-source:${sourceId}:${state.phase}:${state.processedRecords}:${state.totalRecords ?? "unknown"}`
         )
       }),
     persistFailureMetadata: ({ lastErrorMessage }) =>
@@ -228,7 +233,39 @@ const makeExecutorLayer = ({
       }),
     listReplayCandidates: () => Effect.succeed(replayCandidates),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
-    listPrincipalRawRowsForReplay: () => Effect.succeed(replayRawRecords),
+    listPrincipalRawRowsForReplay: ({ cursor, limit }) =>
+      Effect.sync(() => {
+        const startIndex =
+          cursor === null
+            ? 0
+            : replayRawRecords.findIndex((rawRecord) => rawRecord.id === cursor.id) + 1
+        const pageLimit = Math.min(limit, replayPageSize ?? limit)
+        const rawRecords = replayRawRecords.slice(startIndex, startIndex + pageLimit)
+        const lastRecord = rawRecords[rawRecords.length - 1]
+        const hasMore = startIndex + rawRecords.length < replayRawRecords.length
+        events.push(`principal-page:${cursor?.id ?? "start"}:${rawRecords.length}`)
+        return {
+          rawRecords,
+          nextCursor:
+            hasMore && lastRecord !== undefined
+              ? {
+                  occurredAt: lastRecord.occurredAt,
+                  sourceId: lastRecord.sourceId,
+                  externalRecordId: lastRecord.externalRecordId,
+                  id: lastRecord.id,
+                }
+              : null,
+        }
+      }),
+    countPrincipalRawRowsForReplay: () =>
+      Effect.succeed(
+        Array.from(
+          replayRawRecords.reduce((counts, rawRecord) => {
+            counts.set(rawRecord.sourceId, (counts.get(rawRecord.sourceId) ?? 0) + 1)
+            return counts
+          }, new Map<string, number>())
+        ).map(([sourceId, totalRecords]) => ({ sourceId, totalRecords }))
+      ),
     listPendingNormalizationRecordIds: () =>
       Effect.succeed(checkpointRawRecords.map((rawRecord) => rawRecord.id)),
     listRawRecordsByIds: ({ rawRecordIds }) =>
@@ -413,15 +450,21 @@ const makeExecutorLayer = ({
   })
 
   const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
-    reconcileTransferCandidates: () =>
-      Effect.succeed({
-        evaluatedProviderTransfers: 0,
-        pending: 0,
-        needsReview: 0,
-        autoApplied: 0,
+    reconcileTransferCandidates: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`reconcile:${sourceId}`)
+        return {
+          evaluatedProviderTransfers: 0,
+          pending: 0,
+          needsReview: 0,
+          autoApplied: 0,
+        }
       }),
-    applyDeterministicInternalTransferCanonicalization: () =>
-      Effect.succeed({ canonicalizedPairs: 0 }),
+    applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`canonicalize:${sourceId ?? "principal"}`)
+        return { canonicalizedPairs: 0 }
+      }),
   })
 
   return SourceSyncJobExecutorLive.pipe(
@@ -683,6 +726,66 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("principal:prepare")
     expect(events).toContain("principal:restore-reviews")
     expect(events).toContain("principal:complete:2")
+    expect(events.filter((event) => /^(reconcile|canonicalize):/.test(event))).toEqual([
+      "reconcile:source-a",
+      "reconcile:source-b",
+      "canonicalize:principal",
+    ])
+  })
+
+  it("checkpoints principal replay progress once per bounded page", async () => {
+    const events: Array<string> = []
+    const replaySource: SourceSyncSource = {
+      ...source,
+      id: "source-page",
+      providerKey: "stub-chain",
+    }
+    const replayRows = [0, 1, 2].map(
+      (index): SourceRawRecord => ({
+        ...replayRawRecord,
+        id: `raw-page-${index}`,
+        sourceId: replaySource.id,
+        externalRecordId: `row-page-${index}`,
+        occurredAt: new Date(`2025-01-0${index + 1}T00:00:00.000Z`),
+      })
+    )
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-page" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            sourceProviderKey: "stub-chain",
+            principalSources: [replaySource],
+            principalReplayPlan: {
+              runId: "run-page",
+              principalId: source.principalId,
+              sourceJobs: [{ sourceId: replaySource.id, jobId: "job-page", isCoordinator: true }],
+            },
+            replayRawRecords: replayRows,
+            replayPageSize: 2,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events.filter((event) => event.startsWith("principal-page:"))).toEqual([
+      "principal-page:start:2",
+      "principal-page:raw-page-1:1",
+    ])
+    expect(
+      events.filter((event) => event.startsWith("progress-source:source-page:classifying:"))
+    ).toEqual([
+      "progress-source:source-page:classifying:0:3",
+      "progress-source:source-page:classifying:2:3",
+      "progress-source:source-page:classifying:3:3",
+    ])
+    expect(events.filter((event) => event === "principal:heartbeat")).toHaveLength(3)
   })
 
   it("returns every principal child job to pending when a partial replay must retry", async () => {

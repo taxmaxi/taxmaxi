@@ -17,6 +17,26 @@ export interface UpsertSourceRawBatchResult extends SourceSyncCheckpoint {
   readonly rawRecords: ReadonlyArray<SourceRawRecord>
 }
 
+/** Stable keyset cursor for principal-wide chronological replay. */
+export interface PrincipalReplayRawRowCursor {
+  readonly occurredAt: Date
+  readonly sourceId: string
+  readonly externalRecordId: string
+  readonly id: string
+}
+
+/** One bounded page of principal raw rows and its continuation cursor. */
+export interface PrincipalReplayRawRowPage {
+  readonly rawRecords: ReadonlyArray<SourceRawRecord>
+  readonly nextCursor: PrincipalReplayRawRowCursor | null
+}
+
+/** Cached raw-row total used to initialize one source child job. */
+export interface PrincipalReplayRawRowCount {
+  readonly sourceId: string
+  readonly totalRecords: number
+}
+
 /**
  * SourceRawRecordRepositoryShape - Cached raw-row operations used by sync and replay.
  */
@@ -45,10 +65,17 @@ export interface SourceRawRecordRepositoryShape {
     readonly sourceId: string
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
-  /** Load every cached principal row in global deterministic replay order. */
+  /** Load one cached principal page in global deterministic replay order. */
   readonly listPrincipalRawRowsForReplay: (params: {
     readonly principalId: string
-  }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
+    readonly cursor: PrincipalReplayRawRowCursor | null
+    readonly limit: number
+  }) => Effect.Effect<PrincipalReplayRawRowPage, SyncEngineStorageError>
+
+  /** Count cached principal rows by source without loading their payloads. */
+  readonly countPrincipalRawRowsForReplay: (params: {
+    readonly principalId: string
+  }) => Effect.Effect<ReadonlyArray<PrincipalReplayRawRowCount>, SyncEngineStorageError>
 
   /**
    * List ids for raw rows that still require normalization.

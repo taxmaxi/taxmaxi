@@ -19,6 +19,8 @@ import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { FetchProviderRawBatchParams } from "../shared/SourceProviderRawBatch.ts"
 import {
   PrincipalReplayRepository,
+  type PrincipalReplayRawRowCursor,
+  type PrincipalReplayRawRowPage,
   type PrincipalReplayPlan,
   SourceNormalizationRepository,
   SourceNotFoundError,
@@ -937,13 +939,12 @@ const make = Effect.gen(function* () {
         heartbeatAt: nowDate(),
       })
 
-      const rawRecords = yield* sourceRawRecordRepository.listPrincipalRawRowsForReplay({
+      const rawRowCounts = yield* sourceRawRecordRepository.countPrincipalRawRowsForReplay({
         principalId: plan.principalId,
       })
-      const totalBySourceId = rawRecords.reduce((totals, rawRecord) => {
-        totals.set(rawRecord.sourceId, (totals.get(rawRecord.sourceId) ?? 0) + 1)
-        return totals
-      }, new Map<string, number>())
+      const totalBySourceId = new Map(
+        rawRowCounts.map(({ sourceId, totalRecords }) => [sourceId, totalRecords] as const)
+      )
       const stateBySourceId = new Map<string, SourceSyncExecutionState>(
         initialStateEntries.map(([sourceId, initialState]) => [
           sourceId,
@@ -977,49 +978,81 @@ const make = Effect.gen(function* () {
             })
       })
 
-      yield* Effect.forEach(
-        rawRecords,
-        (rawRecord) =>
-          Effect.gen(function* () {
-            const sourceEntry = sourceById.get(rawRecord.sourceId)
-            const normalizeRecord = normalizerBySourceId.get(rawRecord.sourceId)
-            const state = stateBySourceId.get(rawRecord.sourceId)
-            if (sourceEntry === undefined || normalizeRecord === undefined || state === undefined) {
-              return yield* Effect.fail(
+      let cursor: PrincipalReplayRawRowCursor | null = null
+      let hasMore = true
+      while (hasMore) {
+        const page: PrincipalReplayRawRowPage =
+          yield* sourceRawRecordRepository.listPrincipalRawRowsForReplay({
+            principalId: plan.principalId,
+            cursor,
+            limit: pageSize,
+          })
+        const touchedSourceIds = new Set<string>()
+        yield* Effect.forEach(
+          page.rawRecords,
+          (rawRecord) =>
+            Effect.gen(function* () {
+              const sourceEntry = sourceById.get(rawRecord.sourceId)
+              const normalizeRecord = normalizerBySourceId.get(rawRecord.sourceId)
+              const state = stateBySourceId.get(rawRecord.sourceId)
+              if (
+                sourceEntry === undefined ||
+                normalizeRecord === undefined ||
+                state === undefined
+              ) {
+                return yield* Effect.fail(
+                  new SyncEngineStorageError({
+                    operation: "sourceSyncJobExecutor.runPrincipalReplay.resolveSource",
+                    cause: `Replay row ${rawRecord.id} references unavailable source ${rawRecord.sourceId}.`,
+                  })
+                )
+              }
+
+              const summary = yield* normalizeRawRecord({
+                source: sourceEntry.source,
+                rawRecord,
+                normalizeRecord,
+              })
+              const nextState: SourceSyncExecutionState = {
+                ...state,
+                processedRecords: state.processedRecords + 1,
+                normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
+                failedRecords: state.failedRecords + summary.failedRecords,
+              }
+              stateBySourceId.set(rawRecord.sourceId, nextState)
+              touchedSourceIds.add(rawRecord.sourceId)
+            }),
+          { concurrency: 1 }
+        )
+
+        yield* Effect.forEach(Array.from(touchedSourceIds).sort(), (sourceId) => {
+          const sourceEntry = sourceById.get(sourceId)
+          const state = stateBySourceId.get(sourceId)
+          return sourceEntry === undefined || state === undefined
+            ? Effect.fail(
                 new SyncEngineStorageError({
-                  operation: "sourceSyncJobExecutor.runPrincipalReplay.resolveSource",
-                  cause: `Replay row ${rawRecord.id} references unavailable source ${rawRecord.sourceId}.`,
+                  operation: "sourceSyncJobExecutor.runPrincipalReplay.persistPageProgress",
+                  cause: `Missing replay state for source ${sourceId}.`,
                 })
               )
-            }
-
-            const summary = yield* normalizeRawRecord({
-              source: sourceEntry.source,
-              rawRecord,
-              normalizeRecord,
-            })
-            const nextState: SourceSyncExecutionState = {
-              ...state,
-              processedRecords: state.processedRecords + 1,
-              normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
-              failedRecords: state.failedRecords + summary.failedRecords,
-            }
-            stateBySourceId.set(rawRecord.sourceId, nextState)
-            yield* sourceSyncStateRepository.persistProgress({
-              sourceId: rawRecord.sourceId,
-              jobId: sourceEntry.jobId,
-              state: nextState,
-              lastSyncedAt: null,
-              lastErrorMessage: null,
-            })
-            yield* principalReplayRepository.heartbeatPlan({
-              runId: plan.runId,
-              workerId,
-              heartbeatAt: nowDate(),
-            })
-          }),
-        { concurrency: 1 }
-      )
+            : sourceSyncStateRepository.persistProgress({
+                sourceId,
+                jobId: sourceEntry.jobId,
+                state,
+                lastSyncedAt: null,
+                lastErrorMessage: null,
+              })
+        })
+        if (page.rawRecords.length > 0) {
+          yield* principalReplayRepository.heartbeatPlan({
+            runId: plan.runId,
+            workerId,
+            heartbeatAt: nowDate(),
+          })
+        }
+        cursor = page.nextCursor
+        hasMore = cursor !== null
+      }
 
       const failedSources = Array.from(stateBySourceId.entries()).flatMap(([sourceId, state]) =>
         state.failedRecords === 0 ? [] : [{ sourceId, failedRecords: state.failedRecords }]
@@ -1077,12 +1110,11 @@ const make = Effect.gen(function* () {
             principalId: plan.principalId,
             sourceId: source.id,
           })
-          yield* transferReconciliationService.applyDeterministicInternalTransferCanonicalization({
-            principalId: plan.principalId,
-            sourceId: source.id,
-          })
         })
       )
+      yield* transferReconciliationService.applyDeterministicInternalTransferCanonicalization({
+        principalId: plan.principalId,
+      })
 
       const completedAt = nowDate()
       return yield* Effect.forEach(sourceEntries, ({ source, jobId }) =>
@@ -1124,10 +1156,12 @@ const make = Effect.gen(function* () {
   const executePrincipalReplay = ({
     plan,
     workerId,
+    leaseDurationMs,
     retryPolicy,
   }: {
     readonly plan: PrincipalReplayPlan
     readonly workerId: string
+    readonly leaseDurationMs: number
     readonly retryPolicy:
       | {
           readonly attemptNumber: number
@@ -1147,10 +1181,12 @@ const make = Effect.gen(function* () {
         )
       }
 
+      const startedAt = nowDate()
       yield* principalReplayRepository.claimPlan({
         runId: plan.runId,
         workerId,
-        startedAt: nowDate(),
+        startedAt,
+        staleBefore: new Date(startedAt.getTime() - leaseDurationMs),
       })
       const result = yield* runPrincipalReplay({ plan, workerId }).pipe(Effect.either)
 
@@ -1373,6 +1409,7 @@ const make = Effect.gen(function* () {
   const execute: SourceSyncJobExecutorShape["execute"] = ({
     jobId,
     workerId = DEFAULT_SOURCE_SYNC_WORKER_ID,
+    leaseDurationMs = 30_000,
     retryPolicy,
   }) =>
     Effect.gen(function* () {
@@ -1383,6 +1420,7 @@ const make = Effect.gen(function* () {
         return yield* executePrincipalReplay({
           plan: principalReplayPlan.value,
           workerId,
+          leaseDurationMs,
           retryPolicy,
         })
       }

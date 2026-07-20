@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm"
 import {
   check,
   index,
+  integer,
   jsonb,
   numeric,
   pgEnum,
@@ -43,6 +44,7 @@ export const providerTransfers = pgTable(
       .references(() => transactions.id, { onDelete: "cascade" }),
     externalId: text("external_id"),
     externalGroupId: text("external_group_id"),
+    sourceRecordPosition: integer("source_record_position").notNull().default(0),
 
     providerAssetId: uuid("provider_asset_id").references(() => providerAssets.id, {
       onDelete: "set null",

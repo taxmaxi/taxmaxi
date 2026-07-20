@@ -621,7 +621,7 @@ const make = Effect.gen(function* () {
     readonly transactionId: string
     readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
   }) =>
-    Effect.forEach(providerTransfers, (providerTransfer) =>
+    Effect.forEach(providerTransfers, (providerTransfer, sourceRecordPosition) =>
       Effect.gen(function* () {
         const now = nowDate()
         const [persisted] = yield* executor
@@ -629,6 +629,7 @@ const make = Effect.gen(function* () {
           .values({
             ...providerTransfer,
             transactionId,
+            sourceRecordPosition,
             createdAt: now,
             updatedAt: now,
           })
@@ -639,6 +640,7 @@ const make = Effect.gen(function* () {
               sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
               transactionId: sql.raw("excluded.transaction_id"),
               externalGroupId: sql.raw("excluded.external_group_id"),
+              sourceRecordPosition: sql.raw("excluded.source_record_position"),
               providerAssetId: sql.raw("excluded.provider_asset_id"),
               timestamp: sql.raw("excluded.timestamp"),
               direction: sql.raw("excluded.direction"),
