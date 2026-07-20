@@ -102,15 +102,40 @@ const make = Effect.gen(function* () {
               )
             )
 
-          if (crossSourceAllocations.length > 0) {
+          const crossSourceDisposalMatches = yield* tx
+            .select({
+              dependentSourceId: schema.transactionLegs.sourceId,
+              affectedPrincipalId: schema.fifoLots.principalId,
+            })
+            .from(schema.disposalMatches)
+            .innerJoin(
+              schema.transactionLegs,
+              eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+            )
+            .innerJoin(schema.fifoLots, eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId))
+            .where(
+              and(
+                eq(schema.fifoLots.sourceId, sourceId),
+                ne(schema.transactionLegs.sourceId, sourceId)
+              )
+            )
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.selectCrossSourceDisposalMatch"
+              )
+            )
+
+          const crossSourceDependencies = [...crossSourceAllocations, ...crossSourceDisposalMatches]
+
+          if (crossSourceDependencies.length > 0) {
             return yield* Effect.fail(
               new SourceReplayDependencyError({
                 sourceId,
                 dependentSourceIds: Array.from(
-                  new Set(crossSourceAllocations.map((row) => row.dependentSourceId))
+                  new Set(crossSourceDependencies.map((row) => row.dependentSourceId))
                 ).sort(),
                 affectedPrincipalIds: Array.from(
-                  new Set(crossSourceAllocations.map((row) => row.affectedPrincipalId))
+                  new Set(crossSourceDependencies.map((row) => row.affectedPrincipalId))
                 ).sort(),
               })
             )
