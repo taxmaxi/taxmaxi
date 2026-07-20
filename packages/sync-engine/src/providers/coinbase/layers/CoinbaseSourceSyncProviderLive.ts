@@ -481,6 +481,8 @@ const make = Effect.gen(function* () {
               !hasSuccessfulProviderStatus(payload.status) ||
               !isCompatibleType(payload.type) ||
               payload.amount.currency.toUpperCase() !== amount.currency.toUpperCase() ||
+              payload.native_amount.currency.toUpperCase() !==
+                nativeAmount.currency.toUpperCase() ||
               isNegativeAmount(payload.amount.amount)
             ) {
               return []

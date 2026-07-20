@@ -206,6 +206,16 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
           min_size: "0.01",
         },
       },
+      {
+        currencyCode: "USD",
+        name: "US Dollar",
+        minSize: "0.01",
+        payload: {
+          id: "USD",
+          name: "US Dollar",
+          min_size: "0.01",
+        },
+      },
     ] as const),
   fetchCryptoCurrencies: () =>
     Effect.succeed([
@@ -798,6 +808,70 @@ describe("coinbase reference mappings", () => {
         expect(state.transactions.map((row) => row.externalId)).toEqual([
           "tx-unrelated-ungrouped-credit",
         ])
+      })
+    )
+  })
+
+  it("does not pair grouped unstaking rows with different native currencies", async () => {
+    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-mixed-native-release",
+        externalAccountId: "coinbase-account-1",
+        externalParentId: "mixed-native-group",
+        occurredAt,
+        payload: {
+          id: "tx-mixed-native-release",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "-1.00000000", currency: "ETH2" },
+          native_amount: { amount: "-2000.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-mixed-native-release",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-mixed-native-credit",
+        externalAccountId: "coinbase-account-2",
+        externalParentId: "mixed-native-group",
+        occurredAt,
+        payload: {
+          id: "tx-mixed-native-credit",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "0.99000000", currency: "ETH2" },
+          native_amount: { amount: "1980.00", currency: "USD" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-mixed-native-credit",
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedCoinbaseSource()
+        yield* runSync()
+        const state = yield* fetchNormalizationState()
+        const releaseRow = state.rawRows.find(
+          (row) => row.externalRecordId === "tx-mixed-native-release"
+        )
+
+        expect(releaseRow?.normalizedAt).toBeNull()
+        expect(releaseRow?.normalizationError).toContain(
+          "Expected one unambiguous paired principal row"
+        )
+        expect(state.transactions.map((row) => row.externalId)).toEqual(["tx-mixed-native-credit"])
+        expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
       })
     )
   })
