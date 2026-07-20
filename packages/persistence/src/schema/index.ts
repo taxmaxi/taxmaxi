@@ -13,6 +13,7 @@ import * as inventoryMovements from "./InventoryMovementsTable.ts"
 import * as legalRules from "./LegalRulesTable.ts"
 import * as oauthStates from "./OAuthStatesTable.ts"
 import * as processingJobs from "./ProcessingJobsTable.ts"
+import * as principalReplayReviewSnapshots from "./PrincipalReplayReviewSnapshotsTable.ts"
 import * as principalClaims from "./PrincipalClaimsTable.ts"
 import * as principals from "./PrincipalsTable.ts"
 import * as protocolCandidateObservations from "./ProtocolCandidateObservationsTable.ts"
@@ -58,6 +59,7 @@ export const schema = {
   ...legalRules,
   ...oauthStates,
   ...processingJobs,
+  ...principalReplayReviewSnapshots,
   ...principalClaims,
   ...principals,
   ...protocolCandidateObservations,
@@ -126,6 +128,10 @@ export type {
 } from "./LegalRulesTable.ts"
 export type { OAuthStateRow } from "./OAuthStatesTable.ts"
 export type { ProcessingJob, ProcessingJobInsert } from "./ProcessingJobsTable.ts"
+export type {
+  PrincipalReplayReviewSnapshot,
+  PrincipalReplayReviewSnapshotInsert,
+} from "./PrincipalReplayReviewSnapshotsTable.ts"
 export type { PrincipalClaimInsert, PrincipalClaimRow } from "./PrincipalClaimsTable.ts"
 export type { PrincipalInsert, PrincipalRow } from "./PrincipalsTable.ts"
 export type {

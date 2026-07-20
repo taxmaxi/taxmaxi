@@ -37,6 +37,7 @@ const SyncRuntimeLive = SourceSyncServiceLive.pipe(
 
 const SyncRunRuntimeLive = SourceSyncRunServiceLive.pipe(
   Layer.provide(SyncRuntimeLive),
+  Layer.provide(ApiBullMqSourceSyncQueueLive),
   Layer.provide(RepositoriesLive)
 )
 

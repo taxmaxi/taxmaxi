@@ -4,7 +4,9 @@ import * as Option from "effect/Option"
 import { describe, expect, it } from "vitest"
 import { SourceSyncRunServiceLive } from "../../src/layers/SourceSyncRunServiceLive.ts"
 import {
+  PrincipalReplayRepository,
   SourceRepository,
+  SourceSyncQueue,
   SourceSyncQueueError,
   SourceSyncRunRepository,
   SourceSyncRunService,
@@ -60,6 +62,7 @@ const makeRun = ({
 }): SyncRunRecord => ({
   id,
   principalId: "principal-1",
+  mode: "sync",
   status,
   requestedSourceCount,
   queuedSourceCount,
@@ -141,10 +144,12 @@ const makeLayer = ({
   listedSources = sources,
   sourceSyncService,
   repositoryOverrides = {},
+  replayEvents,
 }: {
   readonly listedSources?: ReadonlyArray<SourceSyncSource>
   readonly sourceSyncService: SourceSyncServiceShape
   readonly repositoryOverrides?: Partial<SourceSyncRunRepositoryShape>
+  readonly replayEvents?: Array<string>
 }) => {
   const attachedItems: Array<SyncRunItemRecord> = []
   const createdRun = makeRun({ requestedSourceCount: listedSources.length })
@@ -155,6 +160,29 @@ const makeLayer = ({
   })
 
   const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, sourceSyncService)
+  const PrincipalReplayRepositoryTestLive = Layer.succeed(PrincipalReplayRepository, {
+    createOrReuseReplayRun: () =>
+      Effect.sync(() => {
+        replayEvents?.push("create-replay-run")
+        return {
+          runId: "replay-run-1",
+          coordinatorJobId: "replay-job-1",
+          coordinatorSourceId: listedSources[0]?.id ?? null,
+        }
+      }),
+    findPlanByCoordinatorJobId: () => Effect.succeed(Option.none()),
+    claimPlan: () => Effect.void,
+    heartbeatPlan: () => Effect.void,
+    recordRetryableFailure: () => Effect.void,
+    failPlan: () => Effect.void,
+    completePlan: () => Effect.void,
+    preparePrincipalReplay: () => Effect.void,
+    restorePrincipalReviews: () =>
+      Effect.succeed({ restoredCount: 0, unmatchedTransactionIdentities: [] }),
+  })
+  const SourceSyncQueueTestLive = Layer.succeed(SourceSyncQueue, {
+    enqueueSourceSyncJob: ({ jobId }) => Effect.sync(() => replayEvents?.push(`enqueue:${jobId}`)),
+  })
 
   const defaultRepository: SourceSyncRunRepositoryShape = {
     createRun: () => Effect.succeed(createdRun),
@@ -214,7 +242,9 @@ const makeLayer = ({
   return SourceSyncRunServiceLive.pipe(
     Layer.provide(SourceRepositoryTestLive),
     Layer.provide(SourceSyncServiceTestLive),
-    Layer.provide(SourceSyncRunRepositoryTestLive)
+    Layer.provide(SourceSyncRunRepositoryTestLive),
+    Layer.provide(PrincipalReplayRepositoryTestLive),
+    Layer.provide(SourceSyncQueueTestLive)
   )
 }
 
@@ -225,7 +255,30 @@ const runWithLayer = (layer: Layer.Layer<SourceSyncRunService>) =>
     ).pipe(Effect.provide(layer))
   )
 
+const runReplayWithLayer = (layer: Layer.Layer<SourceSyncRunService>) =>
+  Effect.runPromise(
+    Effect.flatMap(SourceSyncRunService, (service) =>
+      service.startReplayRun({ principalId: "principal-1" })
+    ).pipe(Effect.provide(layer))
+  )
+
 describe("SourceSyncRunService", () => {
+  it("starts one principal replay coordinator while reserving the principal source set", async () => {
+    const replayEvents: Array<string> = []
+    await runReplayWithLayer(
+      makeLayer({
+        replayEvents,
+        sourceSyncService: {
+          startSourceSyncJob: () => Effect.dieMessage("startSourceSyncJob should not be called"),
+          replaySourceSyncJob: () => Effect.dieMessage("replaySourceSyncJob should not be called"),
+          getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+        },
+      })
+    )
+
+    expect(replayEvents).toEqual(["create-replay-run", "enqueue:replay-job-1"])
+  })
+
   it("starts one child source job per source and links run items", async () => {
     const startedSources: Array<string> = []
 
@@ -248,11 +301,15 @@ describe("SourceSyncRunService", () => {
       })
     )
 
-    expect([...startedSources].sort()).toEqual(["source-1", "source-2"])
-    expect(result.items.map((item) => item.processingJobId).sort()).toEqual([
-      "job-source-1",
-      "job-source-2",
+    expect([...startedSources].sort((left, right) => left.localeCompare(right))).toEqual([
+      "source-1",
+      "source-2",
     ])
+    expect(
+      result.items
+        .map((item) => item.processingJobId)
+        .sort((left, right) => left.localeCompare(right))
+    ).toEqual(["job-source-1", "job-source-2"])
   })
 
   it("returns a completed zero-source run", async () => {

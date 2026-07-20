@@ -16,6 +16,9 @@ import type { SourceSyncPhase } from "./SourceSyncModels.ts"
  */
 export type SyncRunStatus = "queued" | "running" | "completed" | "failed" | "partially_failed"
 
+/** Principal run execution mode. */
+export type SyncRunMode = "sync" | "replay"
+
 /**
  * SyncRunItemStatus - Per-source item status within a principal-wide source sync run.
  */
@@ -27,6 +30,7 @@ export type SyncRunItemStatus = "queued" | "running" | "completed" | "failed"
 export interface SyncRunRecord {
   readonly id: string
   readonly principalId: string
+  readonly mode: SyncRunMode
   readonly status: SyncRunStatus
   readonly requestedSourceCount: number
   readonly queuedSourceCount: number

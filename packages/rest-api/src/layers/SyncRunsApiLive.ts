@@ -27,6 +27,7 @@ const toDateTimeUtcOrNull = (date: Date | null): DateTime.Utc | null =>
 const toSyncRunResponse = (run: SourceSyncRunDetails): SyncRunResponse =>
   SyncRunResponse.make({
     runId: run.id,
+    mode: run.mode,
     status: run.status,
     requestedSourceCount: run.requestedSourceCount,
     queuedSourceCount: run.queuedSourceCount,
@@ -81,11 +82,34 @@ export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (han
             Effect.mapError((error) => {
               switch (error._tag) {
                 case "SourceSyncRunNotFoundError":
+                case "SourceSyncQueueError":
                 case "SyncEngineStorageError":
                   return toInternalServerError("Failed to start sync run.")
               }
             })
           )
+
+          return toSyncRunResponse(run)
+        })
+      )
+      .handle("startReplayRun", () =>
+        Effect.gen(function* () {
+          const { currentUser, principal } = yield* resolvePrincipal
+          const run = yield* sourceSyncRunService
+            .startReplayRun({ principalId: principal.id })
+            .pipe(
+              Effect.tapError((error) =>
+                Effect.logError(
+                  {
+                    userId: currentUser.userId,
+                    principalId: principal.id,
+                    errorTag: error._tag,
+                  },
+                  "sync-runs-api:replay-start-failed"
+                )
+              ),
+              Effect.mapError(() => toInternalServerError("Failed to start principal replay."))
+            )
 
           return toSyncRunResponse(run)
         })

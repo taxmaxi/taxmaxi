@@ -121,6 +121,7 @@ const countItems = (items: ReadonlyArray<{ readonly status: SyncRunItemStatus }>
 const rowToRun = (row: {
   readonly id: string
   readonly principalId: string
+  readonly mode: "sync" | "replay"
   readonly status: SyncRunStatus
   readonly requestedSourceCount: number
   readonly queuedSourceCount: number
@@ -135,6 +136,7 @@ const rowToRun = (row: {
 }): SyncRunRecord => ({
   id: row.id,
   principalId: row.principalId,
+  mode: row.mode,
   status: row.status,
   requestedSourceCount: row.requestedSourceCount,
   queuedSourceCount: row.queuedSourceCount,
@@ -198,6 +200,7 @@ const make = Effect.gen(function* () {
   const selectRunFields = {
     id: schema.syncRuns.id,
     principalId: schema.syncRuns.principalId,
+    mode: schema.syncRuns.mode,
     status: schema.syncRuns.status,
     requestedSourceCount: schema.syncRuns.requestedSourceCount,
     queuedSourceCount: schema.syncRuns.queuedSourceCount,

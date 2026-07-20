@@ -18,6 +18,8 @@ import * as Schema from "effect/Schema"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { FetchProviderRawBatchParams } from "../shared/SourceProviderRawBatch.ts"
 import {
+  PrincipalReplayRepository,
+  type PrincipalReplayPlan,
   SourceNormalizationRepository,
   SourceNotFoundError,
   SourceRawRecordRepository,
@@ -81,6 +83,7 @@ interface ClassificationResult {
 
 type SourceSyncExecutionError =
   | UnsupportedProviderError
+  | SourceNotFoundError
   | SourceProviderModuleError
   | SourceReplayDependencyError
   | SyncEngineStorageError
@@ -129,6 +132,7 @@ const isRetryableExecutionError = (error: SourceSyncExecutionError): boolean =>
 
 const make = Effect.gen(function* () {
   const sourceProviderRegistry = yield* SourceProviderRegistry
+  const principalReplayRepository = yield* PrincipalReplayRepository
   const sourceRepository = yield* SourceRepository
   const sourceSyncJobRepository = yield* SourceSyncJobRepository
   const sourceSyncStateRepository = yield* SourceSyncStateRepository
@@ -887,6 +891,308 @@ const make = Effect.gen(function* () {
       })
     )
 
+  const runPrincipalReplay = ({
+    plan,
+    workerId,
+  }: {
+    readonly plan: PrincipalReplayPlan
+    readonly workerId: string
+  }): Effect.Effect<
+    ReadonlyArray<{
+      readonly source: SourceSyncSource
+      readonly jobId: string
+      readonly state: SourceSyncExecutionState
+    }>,
+    SourceSyncExecutionError
+  > =>
+    Effect.gen(function* () {
+      const sourceEntries = yield* Effect.forEach(plan.sourceJobs, (sourceJob) =>
+        loadSource({ principalId: plan.principalId, sourceId: sourceJob.sourceId }).pipe(
+          Effect.map((source) => ({ source, jobId: sourceJob.jobId }))
+        )
+      )
+      const sourceById = new Map(sourceEntries.map((entry) => [entry.source.id, entry] as const))
+      const normalizerEntries = yield* Effect.forEach(sourceEntries, ({ source }) =>
+        Effect.gen(function* () {
+          const provider = source.providerKey ?? "unknown"
+          const providerModule = yield* resolveProviderModule({ providerKey: provider })
+          const normalizer = yield* providerModule.makeRawRecordNormalizer()
+          return [source.id, normalizer] as const
+        })
+      )
+      const normalizerBySourceId = new Map(normalizerEntries)
+      const initialStateEntries = yield* Effect.forEach(sourceEntries, ({ source }) =>
+        sourceSyncStateRepository
+          .getExecutionState({ sourceId: source.id })
+          .pipe(Effect.map((state) => [source.id, state] as const))
+      )
+
+      yield* principalReplayRepository.preparePrincipalReplay({
+        runId: plan.runId,
+        principalId: plan.principalId,
+      })
+      yield* principalReplayRepository.heartbeatPlan({
+        runId: plan.runId,
+        workerId,
+        heartbeatAt: nowDate(),
+      })
+
+      const rawRecords = yield* sourceRawRecordRepository.listPrincipalRawRowsForReplay({
+        principalId: plan.principalId,
+      })
+      const totalBySourceId = rawRecords.reduce((totals, rawRecord) => {
+        totals.set(rawRecord.sourceId, (totals.get(rawRecord.sourceId) ?? 0) + 1)
+        return totals
+      }, new Map<string, number>())
+      const stateBySourceId = new Map<string, SourceSyncExecutionState>(
+        initialStateEntries.map(([sourceId, initialState]) => [
+          sourceId,
+          {
+            ...initialState,
+            phase: "classifying" as const,
+            processedRecords: 0,
+            totalRecords: totalBySourceId.get(sourceId) ?? 0,
+            importedRecords: totalBySourceId.get(sourceId) ?? 0,
+            normalizedRecords: 0,
+            failedRecords: 0,
+          },
+        ])
+      )
+
+      yield* Effect.forEach(sourceEntries, ({ source, jobId }) => {
+        const state = stateBySourceId.get(source.id)
+        return state === undefined
+          ? Effect.fail(
+              new SyncEngineStorageError({
+                operation: "sourceSyncJobExecutor.runPrincipalReplay.initializeState",
+                cause: `Missing replay state for source ${source.id}.`,
+              })
+            )
+          : sourceSyncStateRepository.persistProgress({
+              sourceId: source.id,
+              jobId,
+              state,
+              lastSyncedAt: null,
+              lastErrorMessage: null,
+            })
+      })
+
+      yield* Effect.forEach(
+        rawRecords,
+        (rawRecord) =>
+          Effect.gen(function* () {
+            const sourceEntry = sourceById.get(rawRecord.sourceId)
+            const normalizeRecord = normalizerBySourceId.get(rawRecord.sourceId)
+            const state = stateBySourceId.get(rawRecord.sourceId)
+            if (sourceEntry === undefined || normalizeRecord === undefined || state === undefined) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "sourceSyncJobExecutor.runPrincipalReplay.resolveSource",
+                  cause: `Replay row ${rawRecord.id} references unavailable source ${rawRecord.sourceId}.`,
+                })
+              )
+            }
+
+            const summary = yield* normalizeRawRecord({
+              source: sourceEntry.source,
+              rawRecord,
+              normalizeRecord,
+            })
+            const nextState: SourceSyncExecutionState = {
+              ...state,
+              processedRecords: state.processedRecords + 1,
+              normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
+              failedRecords: state.failedRecords + summary.failedRecords,
+            }
+            stateBySourceId.set(rawRecord.sourceId, nextState)
+            yield* sourceSyncStateRepository.persistProgress({
+              sourceId: rawRecord.sourceId,
+              jobId: sourceEntry.jobId,
+              state: nextState,
+              lastSyncedAt: null,
+              lastErrorMessage: null,
+            })
+            yield* principalReplayRepository.heartbeatPlan({
+              runId: plan.runId,
+              workerId,
+              heartbeatAt: nowDate(),
+            })
+          }),
+        { concurrency: 1 }
+      )
+
+      const reviewRestore = yield* principalReplayRepository.restorePrincipalReviews({
+        runId: plan.runId,
+        principalId: plan.principalId,
+      })
+      if (reviewRestore.unmatchedTransactionIdentities.length > 0) {
+        return yield* Effect.fail(
+          new SyncEngineStorageError({
+            operation: "sourceSyncJobExecutor.runPrincipalReplay.restoreReviews",
+            cause: `Reviewed transactions were not rebuilt: ${reviewRestore.unmatchedTransactionIdentities.join(", ")}`,
+          })
+        )
+      }
+
+      yield* Effect.forEach(sourceEntries, ({ source, jobId }) =>
+        Effect.gen(function* () {
+          const state = stateBySourceId.get(source.id)
+          if (state === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "sourceSyncJobExecutor.runPrincipalReplay.reconcileState",
+                cause: `Missing replay state for source ${source.id}.`,
+              })
+            )
+          }
+          const reconcilingState: SourceSyncExecutionState = {
+            ...state,
+            phase: "reconciling",
+            processedRecords: 0,
+            totalRecords: null,
+          }
+          stateBySourceId.set(source.id, reconcilingState)
+          yield* sourceSyncStateRepository.persistProgress({
+            sourceId: source.id,
+            jobId,
+            state: reconcilingState,
+            lastSyncedAt: null,
+            lastErrorMessage: null,
+          })
+          yield* transferReconciliationService.reconcileTransferCandidates({
+            principalId: plan.principalId,
+            sourceId: source.id,
+          })
+          yield* transferReconciliationService.applyDeterministicInternalTransferCanonicalization({
+            principalId: plan.principalId,
+            sourceId: source.id,
+          })
+        })
+      )
+
+      const completedAt = nowDate()
+      return yield* Effect.forEach(sourceEntries, ({ source, jobId }) =>
+        Effect.gen(function* () {
+          const state = stateBySourceId.get(source.id)
+          if (state === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "sourceSyncJobExecutor.runPrincipalReplay.completeState",
+                cause: `Missing replay state for source ${source.id}.`,
+              })
+            )
+          }
+          const totalRecords = totalBySourceId.get(source.id) ?? 0
+          const completedState: SourceSyncExecutionState = {
+            ...state,
+            phase: "completed",
+            processedRecords: totalRecords,
+            totalRecords,
+          }
+          yield* sourceSyncStateRepository.clearReplayFailureMetadata({ sourceId: source.id })
+          yield* sourceSyncStateRepository.persistProgress({
+            sourceId: source.id,
+            jobId,
+            state: completedState,
+            lastSyncedAt: completedAt,
+            lastErrorMessage: null,
+          })
+          return { source, jobId, state: completedState }
+        })
+      )
+    }).pipe(
+      sourceSyncSpan({
+        name: "principal-replay.run",
+        attributes: { runId: plan.runId, principalId: plan.principalId },
+      })
+    )
+
+  const executePrincipalReplay = ({
+    plan,
+    workerId,
+    retryPolicy,
+  }: {
+    readonly plan: PrincipalReplayPlan
+    readonly workerId: string
+    readonly retryPolicy:
+      | {
+          readonly attemptNumber: number
+          readonly maxAttempts: number
+          readonly nextRetryAt: Date
+        }
+      | undefined
+  }): ReturnType<SourceSyncJobExecutorShape["execute"]> =>
+    Effect.gen(function* () {
+      const coordinator = plan.sourceJobs.find((job) => job.isCoordinator)
+      if (coordinator === undefined) {
+        return yield* Effect.fail(
+          new SourceSyncJobExecutionPayloadError({
+            jobId: "unknown",
+            reason: `Principal replay run ${plan.runId} has no coordinator.`,
+          })
+        )
+      }
+
+      yield* principalReplayRepository.claimPlan({
+        runId: plan.runId,
+        workerId,
+        startedAt: nowDate(),
+      })
+      const result = yield* runPrincipalReplay({ plan, workerId }).pipe(Effect.either)
+
+      if (Either.isLeft(result)) {
+        const message = errorMessage(result.left)
+        const canRetry =
+          retryPolicy !== undefined && retryPolicy.attemptNumber < retryPolicy.maxAttempts
+        if (canRetry) {
+          yield* principalReplayRepository.recordRetryableFailure({
+            runId: plan.runId,
+            message,
+            attemptCount: retryPolicy.attemptNumber,
+            nextRetryAt: retryPolicy.nextRetryAt,
+          })
+          return yield* Effect.fail(
+            new SourceSyncJobRetryableExecutionError({
+              jobId: coordinator.jobId,
+              message,
+              attemptNumber: retryPolicy.attemptNumber,
+              maxAttempts: retryPolicy.maxAttempts,
+              nextRetryAt: retryPolicy.nextRetryAt,
+            })
+          )
+        }
+
+        yield* principalReplayRepository.failPlan({
+          runId: plan.runId,
+          message,
+          completedAt: nowDate(),
+        })
+        return {
+          sourceId: coordinator.sourceId,
+          jobId: coordinator.jobId,
+          status: "failed",
+          message,
+        } satisfies SourceSyncJobSummary
+      }
+
+      yield* principalReplayRepository.completePlan({
+        runId: plan.runId,
+        sourceResults: result.right.map(({ source, jobId, state }) => ({
+          sourceId: source.id,
+          jobId,
+          state,
+        })),
+        completedAt: nowDate(),
+      })
+
+      return {
+        sourceId: coordinator.sourceId,
+        jobId: coordinator.jobId,
+        status: "completed",
+        message: "Principal replay finished successfully.",
+      } satisfies SourceSyncJobSummary
+    })
+
   const finalizeSyncFailure = ({
     sourceId,
     jobId,
@@ -1053,6 +1359,17 @@ const make = Effect.gen(function* () {
     retryPolicy,
   }) =>
     Effect.gen(function* () {
+      const principalReplayPlan = yield* principalReplayRepository.findPlanByCoordinatorJobId({
+        jobId,
+      })
+      if (Option.isSome(principalReplayPlan)) {
+        return yield* executePrincipalReplay({
+          plan: principalReplayPlan.value,
+          workerId,
+          retryPolicy,
+        })
+      }
+
       yield* sourceSyncJobRepository.getExecutionJob({ jobId }).pipe(
         Effect.catchTag("SourceSyncJobExecutionRecordNotFoundError", () =>
           Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId }))

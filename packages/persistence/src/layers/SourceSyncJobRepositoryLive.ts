@@ -4,7 +4,7 @@
  * @module SourceSyncJobRepositoryLive
  */
 
-import { and, asc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm"
+import { and, asc, eq, inArray, isNotNull, isNull, lt, notExists, or } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { isActiveProcessingJobConflict } from "../errors/ProcessingJobConflict.ts"
@@ -568,6 +568,20 @@ const make = Effect.gen(function* () {
       .where(
         and(
           isNotNull(schema.processingJobs.principalId),
+          notExists(
+            db
+              .select({ id: schema.syncRunItems.id })
+              .from(schema.syncRunItems)
+              .innerJoin(schema.syncRuns, eq(schema.syncRuns.id, schema.syncRunItems.runId))
+              .where(
+                and(
+                  eq(schema.syncRunItems.processingJobId, schema.processingJobs.id),
+                  eq(schema.syncRunItems.isCoordinator, false),
+                  eq(schema.syncRuns.mode, "replay"),
+                  inArray(schema.syncRuns.status, ["queued", "running"])
+                )
+              )
+          ),
           inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES),
           or(
             lt(schema.processingJobs.heartbeatAt, staleBefore),
@@ -627,6 +641,20 @@ const make = Effect.gen(function* () {
       .where(
         and(
           isNotNull(schema.processingJobs.principalId),
+          notExists(
+            db
+              .select({ id: schema.syncRunItems.id })
+              .from(schema.syncRunItems)
+              .innerJoin(schema.syncRuns, eq(schema.syncRuns.id, schema.syncRunItems.runId))
+              .where(
+                and(
+                  eq(schema.syncRunItems.processingJobId, schema.processingJobs.id),
+                  eq(schema.syncRunItems.isCoordinator, false),
+                  eq(schema.syncRuns.mode, "replay"),
+                  inArray(schema.syncRuns.status, ["queued", "running"])
+                )
+              )
+          ),
           or(
             and(
               eq(schema.processingJobs.status, "pending"),

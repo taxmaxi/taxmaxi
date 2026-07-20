@@ -132,6 +132,8 @@ const SourceSyncQueueFailureTestLive = Layer.succeed(SourceSyncQueue, {
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
   startSyncRun: () =>
     Effect.dieMessage("SourceSyncRunService test stub: startSyncRun not implemented"),
+  startReplayRun: () =>
+    Effect.dieMessage("SourceSyncRunService test stub: startReplayRun not implemented"),
   getSyncRun: () => Effect.dieMessage("SourceSyncRunService test stub: getSyncRun not implemented"),
 } satisfies SourceSyncRunServiceShape)
 

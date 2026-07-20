@@ -55,6 +55,7 @@ import { ProtocolTransactionTypeMappingRepositoryLive } from "./ProtocolTransact
 import { SourceNormalizationRepositoryLive } from "./SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "./SourceRawRecordRepositoryLive.ts"
 import { SourceReplayRepositoryLive } from "./SourceReplayRepositoryLive.ts"
+import { PrincipalReplayRepositoryLive } from "./PrincipalReplayRepositoryLive.ts"
 import { SourceSyncJobRepositoryLive } from "./SourceSyncJobRepositoryLive.ts"
 import { SourceSyncRunRepositoryLive } from "./SourceSyncRunRepositoryLive.ts"
 import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.ts"
@@ -121,6 +122,7 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceNormalizationRepositoryLive,
   SourceRawRecordRepositoryLive,
   SourceReplayRepositoryLive,
+  PrincipalReplayRepositoryLive,
   SourceSyncJobRepositoryLive,
   SourceSyncRunRepositoryLive,
   SourceSyncStateRepositoryLive,

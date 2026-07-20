@@ -1,4 +1,13 @@
-import { index, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
+import {
+  boolean,
+  index,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { processingJobs } from "./ProcessingJobsTable.ts"
 import { sources } from "./SourcesTable.ts"
 import { syncRuns } from "./SyncRunsTable.ts"
@@ -26,6 +35,7 @@ export const syncRunItems = pgTable(
     processingJobId: uuid("processing_job_id").references(() => processingJobs.id, {
       onDelete: "set null",
     }),
+    isCoordinator: boolean("is_coordinator").notNull().default(false),
     status: syncRunItemStatusEnum("status").notNull().default("queued"),
     message: text("message"),
     createdAt: timestamp("created_at").notNull().defaultNow(),

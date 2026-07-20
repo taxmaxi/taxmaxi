@@ -45,6 +45,11 @@ export interface SourceRawRecordRepositoryShape {
     readonly sourceId: string
   }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
 
+  /** Load every cached principal row in global deterministic replay order. */
+  readonly listPrincipalRawRowsForReplay: (params: {
+    readonly principalId: string
+  }) => Effect.Effect<ReadonlyArray<SourceRawRecord>, SyncEngineStorageError>
+
   /**
    * List ids for raw rows that still require normalization.
    *

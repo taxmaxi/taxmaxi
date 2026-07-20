@@ -7,16 +7,21 @@
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
+  PrincipalReplayRepository,
   SourceRepository,
   SourceSyncRunNotFoundError,
   SourceSyncRunRepository,
   SourceSyncRunService,
+  SourceSyncQueue,
+  SourceSyncQueuePayload,
   SourceSyncService,
   type SourceSyncRunDetails,
   type SourceSyncRunServiceShape,
   type SourceSyncServiceError,
 } from "../services/index.ts"
 import { sourceSyncSpan } from "./internal/SourceSyncTelemetry.ts"
+
+const DEFAULT_PRINCIPAL_REPLAY_MAX_ATTEMPTS = 3
 
 const makeRunDetails = ({
   run,
@@ -48,6 +53,8 @@ const make = Effect.gen(function* () {
   const sourceRepository = yield* SourceRepository
   const sourceSyncRunRepository = yield* SourceSyncRunRepository
   const sourceSyncService = yield* SourceSyncService
+  const principalReplayRepository = yield* PrincipalReplayRepository
+  const sourceSyncQueue = yield* SourceSyncQueue
 
   const recordRunItemDispatchFailure = ({
     runId,
@@ -184,6 +191,38 @@ const make = Effect.gen(function* () {
       return yield* refreshRunDetails({ runId: run.id, principalId })
     }).pipe(sourceSyncSpan({ name: "source-sync-run.start", attributes: { principalId } }))
 
+  const startReplayRun: SourceSyncRunServiceShape["startReplayRun"] = ({ principalId }) =>
+    Effect.gen(function* () {
+      const sources = yield* sourceRepository.listPrincipalSourceSyncContexts({ principalId })
+      const dispatch = yield* principalReplayRepository.createOrReuseReplayRun({
+        principalId,
+        sourceIds: sources.map((source) => source.id),
+        maxAttempts: DEFAULT_PRINCIPAL_REPLAY_MAX_ATTEMPTS,
+      })
+
+      if (dispatch.coordinatorJobId !== null && dispatch.coordinatorSourceId !== null) {
+        yield* sourceSyncQueue.enqueueSourceSyncJob(
+          SourceSyncQueuePayload.make({
+            jobId: dispatch.coordinatorJobId,
+            sourceId: dispatch.coordinatorSourceId,
+            principalId,
+            mode: "replay",
+          })
+        )
+      }
+
+      yield* Effect.logInfo(
+        {
+          runId: dispatch.runId,
+          principalId,
+          sourceCount: sources.length,
+        },
+        "principal-replay-run:started"
+      )
+
+      return yield* refreshRunDetails({ runId: dispatch.runId, principalId })
+    }).pipe(sourceSyncSpan({ name: "principal-replay-run.start", attributes: { principalId } }))
+
   const getSyncRun: SourceSyncRunServiceShape["getSyncRun"] = ({ principalId, runId }) =>
     refreshRunDetails({ runId, principalId }).pipe(
       sourceSyncSpan({ name: "source-sync-run.get", attributes: { principalId, runId } })
@@ -191,6 +230,7 @@ const make = Effect.gen(function* () {
 
   return SourceSyncRunService.of({
     startSyncRun,
+    startReplayRun,
     getSyncRun,
   } satisfies SourceSyncRunServiceShape)
 })

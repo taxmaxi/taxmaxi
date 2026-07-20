@@ -1,4 +1,14 @@
-import { index, integer, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
+import {
+  index,
+  integer,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core"
 import { principals } from "./PrincipalsTable.ts"
 
 export const syncRunStatusEnum = pgEnum("sync_run_status", [
@@ -8,6 +18,8 @@ export const syncRunStatusEnum = pgEnum("sync_run_status", [
   "failed",
   "partially_failed",
 ])
+
+export const syncRunModeEnum = pgEnum("sync_run_mode", ["sync", "replay"])
 
 /**
  * User-wide source sync orchestration run.
@@ -23,6 +35,7 @@ export const syncRuns = pgTable(
     principalId: uuid("principal_id")
       .notNull()
       .references(() => principals.id, { onDelete: "cascade" }),
+    mode: syncRunModeEnum("mode").notNull().default("sync"),
     status: syncRunStatusEnum("status").notNull().default("queued"),
     requestedSourceCount: integer("requested_source_count").notNull().default(0),
     queuedSourceCount: integer("queued_source_count").notNull().default(0),
@@ -39,6 +52,9 @@ export const syncRuns = pgTable(
     index("idx_sync_runs_principal_id").on(table.principalId),
     index("idx_sync_runs_status").on(table.status),
     index("idx_sync_runs_created_at").on(table.createdAt),
+    uniqueIndex("sync_runs_active_principal_replay_unique")
+      .on(table.principalId)
+      .where(sql`${table.mode} = 'replay' and ${table.status} in ('queued', 'running')`),
   ]
 )
 

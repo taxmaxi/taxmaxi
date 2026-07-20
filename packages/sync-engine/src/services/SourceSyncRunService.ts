@@ -9,6 +9,7 @@ import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 import type { SyncRunItemRecord, SyncRunRecord } from "./SourceSyncRunRepository.ts"
+import type { SourceSyncQueueError } from "./SourceSyncQueue.ts"
 
 /**
  * SourceSyncRunNotFoundError - Requested principal-wide sync run was not found for the principal.
@@ -24,6 +25,11 @@ export class SourceSyncRunNotFoundError extends Schema.TaggedError<SourceSyncRun
  * StartSourceSyncRunParams - Input for starting a principal-wide sync run.
  */
 export interface StartSourceSyncRunParams {
+  readonly principalId: string
+}
+
+/** Input for starting a dependency-aware principal replay. */
+export interface StartPrincipalReplayRunParams {
   readonly principalId: string
 }
 
@@ -45,7 +51,10 @@ export interface SourceSyncRunDetails extends SyncRunRecord {
 /**
  * SourceSyncRunServiceError - Union of principal-wide sync run service failures.
  */
-export type SourceSyncRunServiceError = SourceSyncRunNotFoundError | SyncEngineStorageError
+export type SourceSyncRunServiceError =
+  | SourceSyncRunNotFoundError
+  | SourceSyncQueueError
+  | SyncEngineStorageError
 
 /**
  * SourceSyncRunServiceShape - API-facing principal-wide sync run operations.
@@ -56,6 +65,11 @@ export interface SourceSyncRunServiceShape {
    */
   readonly startSyncRun: (
     params: StartSourceSyncRunParams
+  ) => Effect.Effect<SourceSyncRunDetails, SourceSyncRunServiceError>
+
+  /** Start or reuse one principal replay that rebuilds every source chronologically. */
+  readonly startReplayRun: (
+    params: StartPrincipalReplayRunParams
   ) => Effect.Effect<SourceSyncRunDetails, SourceSyncRunServiceError>
 
   /**

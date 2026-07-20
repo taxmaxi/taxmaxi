@@ -34,6 +34,7 @@ export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("Sync
 
 export class SyncRunResponse extends Schema.Class<SyncRunResponse>("SyncRunResponse")({
   runId: Schema.String,
+  mode: Schema.Literal("sync", "replay"),
   status: Schema.Literal("queued", "running", "completed", "failed", "partially_failed"),
   requestedSourceCount: Schema.Number,
   queuedSourceCount: Schema.Number,
@@ -53,6 +54,17 @@ const startSyncRun = HttpApiEndpoint.post("startSyncRun", "/sync-runs")
     OpenApi.annotations({
       summary: "Start user-wide sync run",
       description: "Starts source sync jobs for every configured source owned by the user.",
+    })
+  )
+
+const startReplayRun = HttpApiEndpoint.post("startReplayRun", "/sync-runs/replay")
+  .addSuccess(SyncRunResponse)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Start principal inventory replay",
+      description:
+        "Resets and rebuilds all configured sources for the user in deterministic chronological order.",
     })
   )
 
@@ -77,6 +89,7 @@ const getSyncRun = HttpApiEndpoint.get("getSyncRun", "/sync-runs/:runId")
  */
 export class SyncRunsApi extends HttpApiGroup.make("syncRuns")
   .add(startSyncRun)
+  .add(startReplayRun)
   .add(getSyncRun)
   .middleware(AuthMiddleware)
   .prefix("/v1")

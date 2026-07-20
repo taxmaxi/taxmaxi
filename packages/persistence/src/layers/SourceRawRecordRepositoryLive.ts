@@ -126,6 +126,21 @@ const make = Effect.gen(function* () {
       .orderBy(asc(schema.sourceRecordsRaw.occurredAt), asc(schema.sourceRecordsRaw.createdAt))
       .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listAllRawRowsForReplay"))
 
+  const listPrincipalRawRowsForReplay: SourceRawRecordRepositoryShape["listPrincipalRawRowsForReplay"] =
+    ({ principalId }) =>
+      db
+        .select(selectRawRecordFields)
+        .from(schema.sourceRecordsRaw)
+        .innerJoin(schema.sources, eq(schema.sources.id, schema.sourceRecordsRaw.sourceId))
+        .where(eq(schema.sources.principalId, principalId))
+        .orderBy(
+          asc(schema.sourceRecordsRaw.occurredAt),
+          asc(schema.sourceRecordsRaw.sourceId),
+          asc(schema.sourceRecordsRaw.externalRecordId),
+          asc(schema.sourceRecordsRaw.id)
+        )
+        .pipe(wrapSyncEngineSqlError("sourceRawRecordRepository.listPrincipalRawRowsForReplay"))
+
   const listPendingNormalizationRecordIds: SourceRawRecordRepositoryShape["listPendingNormalizationRecordIds"] =
     ({ sourceId }) =>
       db
@@ -228,6 +243,7 @@ const make = Effect.gen(function* () {
     upsertRawBatch,
     listReplayCandidates,
     listAllRawRowsForReplay,
+    listPrincipalRawRowsForReplay,
     listPendingNormalizationRecordIds,
     listRawRecordsByIds,
     listRawRecordsByOccurredAt,

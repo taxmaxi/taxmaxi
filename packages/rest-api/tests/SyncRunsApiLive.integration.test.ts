@@ -18,6 +18,7 @@ import {
 } from "@my/sync-engine/services"
 import { SourceSyncRunServiceLive, SourceSyncServiceLive } from "@my/sync-engine/layers"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle, runSqlUnsafe } from "../../persistence/src/layers/PgClientLive.ts"
@@ -39,6 +40,9 @@ const TestPgClientLive = context.TestPgClientLive
 
 const queuedAt = new Date("2026-01-01T00:00:00.000Z")
 const queueEvents: Array<SourceSyncQueuePayload> = []
+const TestConfigProvider = ConfigProvider.fromMap(
+  new Map([["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"]])
+)
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
@@ -121,6 +125,7 @@ const SourceSyncServiceWithDepsTestLive = SourceSyncServiceLive.pipe(
 
 const SourceSyncRunServiceWithDepsTestLive = SourceSyncRunServiceLive.pipe(
   Layer.provide(SourceSyncServiceWithDepsTestLive),
+  Layer.provide(SourceSyncQueueTestLive),
   Layer.provide(RepositoriesLive)
 )
 
@@ -298,7 +303,27 @@ describe("SyncRunsApiLive", () => {
       expect(run.items.every((item) => item.provider === "coinbase")).toBe(true)
       expect(run.items.every((item) => item.status === "queued")).toBe(true)
       expect(queueEvents).toHaveLength(2)
-    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    }).pipe(Effect.provide(HttpLive), Effect.withConfigProvider(TestConfigProvider), Effect.scoped)
+  )
+
+  it.effect("starts one principal replay coordinator with reserved source child jobs", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const sourceIds = [crypto.randomUUID(), crypto.randomUUID()]
+      yield* seedCoinbaseSources({ userId, principalId, sourceIds })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const run = yield* client.syncRuns.startReplayRun(undefined)
+
+      expect(run.mode).toBe("replay")
+      expect(run.status).toBe("queued")
+      expect(run.requestedSourceCount).toBe(2)
+      expect(run.items).toHaveLength(2)
+      expect(run.items.every((item) => item.status === "queued")).toBe(true)
+      expect(queueEvents).toHaveLength(1)
+      expect(run.items.map((item) => item.jobId)).toContain(queueEvents[0]?.jobId)
+    }).pipe(Effect.provide(HttpLive), Effect.withConfigProvider(TestConfigProvider), Effect.scoped)
   )
 
   it.effect("returns the current user's run", () =>
@@ -321,7 +346,7 @@ describe("SyncRunsApiLive", () => {
       expect(loadedJobId).toBeDefined()
       expect(startedJobId).toBeDefined()
       expect(loadedJobId).toBe(startedJobId)
-    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    }).pipe(Effect.provide(HttpLive), Effect.withConfigProvider(TestConfigProvider), Effect.scoped)
   )
 
   it.effect("rejects another user's run", () =>
@@ -348,7 +373,7 @@ describe("SyncRunsApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("SyncRunNotFoundError")
       }
-    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    }).pipe(Effect.provide(HttpLive), Effect.withConfigProvider(TestConfigProvider), Effect.scoped)
   )
 
   it.effect("refreshes child completion into aggregate API status", () =>
@@ -382,6 +407,6 @@ describe("SyncRunsApiLive", () => {
       expect(loaded.completedSourceCount).toBe(1)
       expect(loaded.failedSourceCount).toBe(1)
       expect(loaded.items.map((item) => item.status).sort()).toEqual(["completed", "failed"])
-    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    }).pipe(Effect.provide(HttpLive), Effect.withConfigProvider(TestConfigProvider), Effect.scoped)
   )
 })

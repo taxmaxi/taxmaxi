@@ -10,6 +10,7 @@ import {
   UnsupportedSyncProviderError,
 } from "../../src/shared/SourceProviderRawBatch.ts"
 import {
+  PrincipalReplayRepository,
   SourceNormalizationRepository,
   SourceProviderRecoverableNormalizationError,
   SourceProviderRegistry,
@@ -89,6 +90,9 @@ const makeExecutorLayer = ({
   replayRawRecords = [],
   replayCandidates = [],
   failNormalizeOnce = false,
+  principalReplayPlan,
+  principalSources,
+  unmatchedReviewIdentities = [],
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -100,6 +104,17 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
+  readonly principalReplayPlan?: {
+    readonly runId: string
+    readonly principalId: string
+    readonly sourceJobs: ReadonlyArray<{
+      readonly sourceId: string
+      readonly jobId: string
+      readonly isCoordinator: boolean
+    }>
+  }
+  readonly principalSources?: ReadonlyArray<SourceSyncSource>
+  readonly unmatchedReviewIdentities?: ReadonlyArray<string>
   readonly events: Array<string>
 }) => {
   const syncSource = {
@@ -110,9 +125,13 @@ const makeExecutorLayer = ({
         ? "So11111111111111111111111111111111111111112"
         : source.walletAddress,
   }
+  const replaySources = principalSources ?? [syncSource]
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
-    findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
-    listPrincipalSourceSyncContexts: () => Effect.succeed([syncSource]),
+    findOwnedSourceSyncContext: ({ sourceId }) =>
+      Effect.succeed(
+        Option.fromNullable(replaySources.find((candidate) => candidate.id === sourceId))
+      ),
+    listPrincipalSourceSyncContexts: () => Effect.succeed(replaySources),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -209,6 +228,7 @@ const makeExecutorLayer = ({
       }),
     listReplayCandidates: () => Effect.succeed(replayCandidates),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
+    listPrincipalRawRowsForReplay: () => Effect.succeed(replayRawRecords),
     listPendingNormalizationRecordIds: () =>
       Effect.succeed(checkpointRawRecords.map((rawRecord) => rawRecord.id)),
     listRawRecordsByIds: ({ rawRecordIds }) =>
@@ -291,6 +311,7 @@ const makeExecutorLayer = ({
           Effect.gen(function* () {
             normalizeAttempts += 1
             events.push(`stub:normalize:${source.providerKey}:${sourceRecord.recordType}`)
+            events.push(`source:${source.id}:normalize:${sourceRecord.externalRecordId}`)
 
             if (failNormalizeOnce && normalizeAttempts === 1) {
               return yield* Effect.fail(
@@ -368,6 +389,24 @@ const makeExecutorLayer = ({
       }),
   })
 
+  const PrincipalReplayRepositoryTestLive = Layer.succeed(PrincipalReplayRepository, {
+    createOrReuseReplayRun: () => Effect.dieMessage("createOrReuseReplayRun should not be called"),
+    findPlanByCoordinatorJobId: () => Effect.succeed(Option.fromNullable(principalReplayPlan)),
+    claimPlan: () => Effect.sync(() => events.push("principal:claim")),
+    heartbeatPlan: () => Effect.sync(() => events.push("principal:heartbeat")),
+    recordRetryableFailure: ({ attemptCount }) =>
+      Effect.sync(() => events.push(`principal:retry:${attemptCount}`)),
+    failPlan: () => Effect.sync(() => events.push("principal:fail")),
+    completePlan: ({ sourceResults }) =>
+      Effect.sync(() => events.push(`principal:complete:${sourceResults.length}`)),
+    preparePrincipalReplay: () => Effect.sync(() => events.push("principal:prepare")),
+    restorePrincipalReviews: () =>
+      Effect.sync(() => {
+        events.push("principal:restore-reviews")
+        return { restoredCount: 0, unmatchedTransactionIdentities: unmatchedReviewIdentities }
+      }),
+  })
+
   const SourceNormalizationRepositoryTestLive = Layer.succeed(SourceNormalizationRepository, {
     persistNormalizedArtifacts: () =>
       Effect.dieMessage("persistNormalizedArtifacts should not be called"),
@@ -392,6 +431,7 @@ const makeExecutorLayer = ({
     Layer.provide(SourceRawRecordRepositoryTestLive),
     Layer.provide(SourceProviderRegistryTestLive),
     Layer.provide(SourceReplayRepositoryTestLive),
+    Layer.provide(PrincipalReplayRepositoryTestLive),
     Layer.provide(SourceNormalizationRepositoryTestLive),
     Layer.provide(TransferReconciliationServiceTestLive)
   )
@@ -579,6 +619,113 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("mark-raw-normalized")
     expect(events).toContain("clear-replay-failure-metadata")
     expect(events).toContain("complete:1:1")
+  })
+
+  it("replays principal rows in one chronological stream across source child jobs", async () => {
+    const events: Array<string> = []
+    const sourceA: SourceSyncSource = {
+      ...source,
+      id: "source-a",
+      providerKey: "stub-chain",
+    }
+    const sourceB: SourceSyncSource = {
+      ...source,
+      id: "source-b",
+      providerKey: "stub-chain",
+    }
+    const rowB: SourceRawRecord = {
+      ...replayRawRecord,
+      id: "raw-b",
+      sourceId: sourceB.id,
+      externalRecordId: "row-b-first",
+      occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+    }
+    const rowA: SourceRawRecord = {
+      ...replayRawRecord,
+      id: "raw-a",
+      sourceId: sourceA.id,
+      externalRecordId: "row-a-second",
+      occurredAt: new Date("2025-01-02T00:00:00.000Z"),
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-a" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            sourceProviderKey: "stub-chain",
+            principalSources: [sourceA, sourceB],
+            principalReplayPlan: {
+              runId: "run-1",
+              principalId: source.principalId,
+              sourceJobs: [
+                { sourceId: sourceA.id, jobId: "job-a", isCoordinator: true },
+                { sourceId: sourceB.id, jobId: "job-b", isCoordinator: false },
+              ],
+            },
+            replayRawRecords: [rowB, rowA],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result).toMatchObject({
+      status: "completed",
+      message: "Principal replay finished successfully.",
+    })
+    expect(
+      events.filter((event) => event.startsWith("source:") && event.includes(":normalize:"))
+    ).toEqual(["source:source-b:normalize:row-b-first", "source:source-a:normalize:row-a-second"])
+    expect(events).toContain("principal:prepare")
+    expect(events).toContain("principal:restore-reviews")
+    expect(events).toContain("principal:complete:2")
+  })
+
+  it("returns every principal child job to pending when a partial replay must retry", async () => {
+    const events: Array<string> = []
+    const replayPlan = {
+      runId: "run-1",
+      principalId: source.principalId,
+      sourceJobs: [{ sourceId: source.id, jobId: "job-1", isCoordinator: true }],
+    }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({
+          jobId: "job-1",
+          retryPolicy: {
+            attemptNumber: 1,
+            maxAttempts: 3,
+            nextRetryAt: new Date("2026-01-01T00:05:00.000Z"),
+          },
+        })
+      }).pipe(
+        Effect.either,
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            principalReplayPlan: replayPlan,
+            replayRawRecords: [replayRawRecord],
+            unmatchedReviewIdentities: ["source-1:external:missing-reviewed-transaction"],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "SourceSyncJobRetryableExecutionError",
+        attemptNumber: 1,
+      })
+    }
+    expect(events).toContain("principal:retry:1")
+    expect(events).not.toContain("principal:complete:1")
   })
 
   it("records retry metadata and returns a retryable error before the final attempt", async () => {
