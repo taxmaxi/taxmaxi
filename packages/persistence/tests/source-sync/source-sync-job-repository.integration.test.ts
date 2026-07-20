@@ -491,6 +491,7 @@ describe("SourceSyncJobRepositoryLive", () => {
           jobId: heartbeatJob.id,
           message: "Recovered stale heartbeat",
           completedAt: new Date("2025-01-02T00:30:00.000Z"),
+          allowPrincipalReplayRecovery: false,
         })
       )
     )
@@ -638,6 +639,7 @@ describe("SourceSyncJobRepositoryLive", () => {
           jobId: created.id,
           message: "Recovered stale source sync job after timeout.",
           completedAt: new Date("2025-01-04T00:00:00.000Z"),
+          allowPrincipalReplayRecovery: false,
         })
       )
     )
@@ -758,6 +760,25 @@ describe("SourceSyncJobRepositoryLive", () => {
       })
     )
 
+    const skipped = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recoverStaleActiveJob({
+          sourceId: TEST_SOURCE_ID,
+          jobId: coordinator.id,
+          message: "Recovered stale principal replay after timeout.",
+          completedAt: new Date("2025-01-04T00:00:00.000Z"),
+          allowPrincipalReplayRecovery: false,
+        })
+      )
+    )
+
+    expect(skipped).toEqual({
+      _tag: "SkippedPrincipalReplayCoordinator",
+      runId: REPLAY_RUN_ID,
+    })
+    expect((await selectProcessingJob({ jobId: coordinator.id })).status).toBe("processing")
+    expect((await selectProcessingJob({ jobId: child.id })).status).toBe("processing")
+
     await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.recoverStaleActiveJob({
@@ -765,6 +786,7 @@ describe("SourceSyncJobRepositoryLive", () => {
           jobId: coordinator.id,
           message: "Recovered stale principal replay after timeout.",
           completedAt: new Date("2025-01-04T00:00:00.000Z"),
+          allowPrincipalReplayRecovery: true,
         })
       )
     )

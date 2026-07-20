@@ -135,7 +135,13 @@ export interface RecoverStaleSourceSyncJobParams {
   readonly jobId: string
   readonly message: string
   readonly completedAt: Date
+  readonly allowPrincipalReplayRecovery: boolean
 }
+
+/** Result of attempting to recover one stale source job. */
+export type SourceSyncStaleRecoveryResult =
+  | { readonly _tag: "RecoveredSourceJob" }
+  | { readonly _tag: "SkippedPrincipalReplayCoordinator"; readonly runId: string }
 
 /**
  * GetSourceSyncJobRecordParams - Input for loading one visible processing job.
@@ -236,7 +242,7 @@ export interface SourceSyncJobRepositoryShape {
   readonly recoverStaleActiveJob: (
     params: RecoverStaleSourceSyncJobParams
   ) => Effect.Effect<
-    void,
+    SourceSyncStaleRecoveryResult,
     | SourceSyncJobExecutionRecordNotFoundError
     | SourceSyncJobExecutionRecordConflictError
     | SyncEngineStorageError

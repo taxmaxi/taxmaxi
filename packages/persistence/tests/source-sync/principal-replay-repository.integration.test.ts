@@ -50,6 +50,10 @@ describe("PrincipalReplayRepositoryLive", () => {
     await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        yield* db
+          .insert(schema.transactionTypes)
+          .values({ typeKey: "transfer", labelEn: "Transfer", labelDe: "Transfer" })
+          .onConflictDoNothing()
         const [address] = yield* db
           .insert(schema.addresses)
           .values({
@@ -171,6 +175,19 @@ describe("PrincipalReplayRepositoryLive", () => {
               transactionId: transactionB.id,
             },
             {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: rawA.id,
+              externalId: "standalone-acquisition",
+              timestamp: new Date("2025-01-05T00:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.25000000",
+              kind: "acquisition",
+              provenance: "deterministic",
+              transactionId: null,
+              sourceTransferId: null,
+            },
+            {
               sourceId: SECOND_SOURCE_ID,
               sourceRawRecordId: rawB.id,
               externalId: "cycle-b-fee",
@@ -192,11 +209,13 @@ describe("PrincipalReplayRepositoryLive", () => {
         const feeA = leg("cycle-a-fee")
         const acquisitionB = leg("cycle-b-acquisition")
         const feeB = leg("cycle-b-fee")
+        const standaloneAcquisition = leg("standalone-acquisition")
         if (
           acquisitionA === undefined ||
           feeA === undefined ||
           acquisitionB === undefined ||
-          feeB === undefined
+          feeB === undefined ||
+          standaloneAcquisition === undefined
         ) {
           return yield* Effect.dieMessage("Failed to seed replay legs")
         }
@@ -225,6 +244,17 @@ describe("PrincipalReplayRepositoryLive", () => {
               costBasisPerToken: "11000.00",
               costBasisCurrency: "EUR",
               sourceLegId: acquisitionB.id,
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: new Date("2025-01-05T00:00:00.000Z"),
+              originalAmount: "0.25000000",
+              remainingAmount: "0.25000000",
+              costBasisPerToken: "12000.00",
+              costBasisCurrency: "EUR",
+              sourceLegId: standaloneAcquisition.id,
             },
           ])
           .returning({ id: schema.fifoLots.id, sourceId: schema.fifoLots.sourceId })
@@ -315,6 +345,7 @@ describe("PrincipalReplayRepositoryLive", () => {
         const db = yield* drizzle
         return {
           transactions: yield* db.select().from(schema.transactions),
+          legs: yield* db.select().from(schema.transactionLegs),
           lots: yield* db.select().from(schema.fifoLots),
           movements: yield* db.select().from(schema.inventoryMovements),
           allocations: yield* db.select().from(schema.inventoryMovementAllocations),
@@ -324,6 +355,7 @@ describe("PrincipalReplayRepositoryLive", () => {
       })
     )
     expect(resetState.transactions).toHaveLength(0)
+    expect(resetState.legs).toHaveLength(0)
     expect(resetState.lots).toHaveLength(0)
     expect(resetState.movements).toHaveLength(0)
     expect(resetState.allocations).toHaveLength(0)
@@ -365,23 +397,34 @@ describe("PrincipalReplayRepositoryLive", () => {
         repository.restorePrincipalReviews({ runId: RUN_ID, principalId: TEST_PRINCIPAL_ID })
       )
     )
-    const [review] = await runPg(
+    const restoredState = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        return yield* db
-          .select()
+        const [review] = yield* db
+          .select({
+            reviewStatus: schema.transactionReviews.reviewStatus,
+            currentTypeKey: schema.transactionReviews.currentTypeKey,
+            needsReview: schema.transactionReviews.needsReview,
+            userNotes: schema.transactionReviews.userNotes,
+          })
           .from(schema.transactionReviews)
           .where(eq(schema.transactionReviews.principalId, TEST_PRINCIPAL_ID))
+        const [transaction] = yield* db
+          .select({ transactionType: schema.transactions.transactionType })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.externalId, "cycle-a"))
+        return { review, transaction }
       })
     )
 
     expect(restored).toEqual({ restoredCount: 1, unmatchedTransactionIdentities: [] })
-    expect(review).toMatchObject({
+    expect(restoredState.review).toMatchObject({
       reviewStatus: "changed",
       currentTypeKey: "transfer",
       needsReview: false,
       userNotes: "Keep my reviewed classification",
     })
+    expect(restoredState.transaction).toEqual({ transactionType: "transfer" })
   })
 
   it("records an empty review snapshot before the first reset", async () => {

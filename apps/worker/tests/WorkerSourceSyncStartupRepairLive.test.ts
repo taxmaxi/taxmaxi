@@ -122,6 +122,7 @@ const makeRepositoryLayer = ({
       return Effect.sync(() => {
         recovered.push(params)
         removeRepairableJob(params.jobId)
+        return { _tag: "RecoveredSourceJob" as const }
       })
     },
     failJob: () => Effect.dieMessage("failJob should not be called"),
@@ -395,6 +396,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
         sourceId: "source-1",
         jobId: "job-processing",
         message: "Startup repair failed stale processing source sync job.",
+        allowPrincipalReplayRecovery: true,
       }),
     ])
     expect(summary).toMatchObject({

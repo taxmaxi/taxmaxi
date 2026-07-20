@@ -446,6 +446,7 @@ const make = Effect.gen(function* () {
     jobId,
     message,
     completedAt,
+    allowPrincipalReplayRecovery,
   }) =>
     Effect.gen(function* () {
       const recovery = yield* db
@@ -470,6 +471,16 @@ const make = Effect.gen(function* () {
               )
 
             if (replay !== undefined) {
+              if (!allowPrincipalReplayRecovery) {
+                return {
+                  runId: replay.runId,
+                  result: {
+                    _tag: "SkippedPrincipalReplayCoordinator" as const,
+                    runId: replay.runId,
+                  },
+                }
+              }
+
               const childJobs = yield* tx
                 .select({ id: schema.syncRunItems.processingJobId })
                 .from(schema.syncRunItems)
@@ -529,7 +540,10 @@ const make = Effect.gen(function* () {
                   )
                 )
 
-              return { runId: replay.runId }
+              return {
+                runId: replay.runId,
+                result: { _tag: "RecoveredSourceJob" as const },
+              }
             }
 
             const [job] = yield* tx
@@ -551,7 +565,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.processingJobs.id })
               .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.recoverStaleActiveJob.update"))
 
-            return job === undefined ? null : { runId: null }
+            return job === undefined
+              ? null
+              : { runId: null, result: { _tag: "RecoveredSourceJob" as const } }
           })
         )
         .pipe(
@@ -573,15 +589,29 @@ const make = Effect.gen(function* () {
         })
       }
 
-      yield* Effect.logWarning(
-        {
-          sourceId,
-          jobId,
-          replayRunId: recovery.runId,
-          completedAt: completedAt.toISOString(),
-        },
-        "source-sync:stale-active-job-recovered"
-      )
+      if (recovery.result._tag === "SkippedPrincipalReplayCoordinator") {
+        yield* Effect.logInfo(
+          {
+            sourceId,
+            jobId,
+            replayRunId: recovery.runId,
+            completedAt: completedAt.toISOString(),
+          },
+          "source-sync:principal-replay-recovery-skipped"
+        )
+      } else {
+        yield* Effect.logWarning(
+          {
+            sourceId,
+            jobId,
+            replayRunId: recovery.runId,
+            completedAt: completedAt.toISOString(),
+          },
+          "source-sync:stale-active-job-recovered"
+        )
+      }
+
+      return recovery.result
     })
 
   const failJob: SourceSyncJobRepositoryShape["failJob"] = ({ jobId, message, completedAt }) =>

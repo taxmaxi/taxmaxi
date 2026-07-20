@@ -702,6 +702,14 @@ const make = Effect.gen(function* () {
               )
             )
           yield* tx
+            .delete(schema.transactionLegs)
+            .where(eq(schema.transactionLegs.principalId, principalId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalReplayRepository.preparePrincipalReplay.deleteTransactionLegs"
+              )
+            )
+          yield* tx
             .delete(schema.transfers)
             .where(eq(schema.transfers.principalId, principalId))
             .pipe(
@@ -739,7 +747,20 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const snapshots = yield* db
-        .select()
+        .select({
+          sourceId: schema.principalReplayReviewSnapshots.sourceId,
+          transactionIdentity: schema.principalReplayReviewSnapshots.transactionIdentity,
+          reviewStatus: schema.principalReplayReviewSnapshots.reviewStatus,
+          originalTypeKey: schema.principalReplayReviewSnapshots.originalTypeKey,
+          originalConfidence: schema.principalReplayReviewSnapshots.originalConfidence,
+          currentTypeKey: schema.principalReplayReviewSnapshots.currentTypeKey,
+          legalRuleSetVersion: schema.principalReplayReviewSnapshots.legalRuleSetVersion,
+          categorizationReason: schema.principalReplayReviewSnapshots.categorizationReason,
+          matchedLayer: schema.principalReplayReviewSnapshots.matchedLayer,
+          needsReview: schema.principalReplayReviewSnapshots.needsReview,
+          userNotes: schema.principalReplayReviewSnapshots.userNotes,
+          reviewedAt: schema.principalReplayReviewSnapshots.reviewedAt,
+        })
         .from(schema.principalReplayReviewSnapshots)
         .where(
           and(
@@ -789,26 +810,32 @@ const make = Effect.gen(function* () {
 
         restoredCount += 1
         const now = nowDate()
-        return db
-          .insert(schema.transactionReviews)
-          .values({
-            transactionId,
-            principalId,
-            reviewStatus: snapshot.reviewStatus,
-            originalTypeKey: snapshot.originalTypeKey,
-            originalConfidence: snapshot.originalConfidence,
-            currentTypeKey: snapshot.currentTypeKey,
-            legalRuleSetVersion: snapshot.legalRuleSetVersion,
-            categorizationReason: snapshot.categorizationReason,
-            matchedLayer: snapshot.matchedLayer,
-            needsReview: snapshot.needsReview,
-            userNotes: snapshot.userNotes,
-            reviewedAt: snapshot.reviewedAt,
-            updatedAt: now,
-          })
-          .onConflictDoUpdate({
-            target: schema.transactionReviews.transactionId,
-            set: {
+        return Effect.gen(function* () {
+          if (
+            (snapshot.reviewStatus === "approved" || snapshot.reviewStatus === "changed") &&
+            snapshot.currentTypeKey !== null
+          ) {
+            yield* db
+              .update(schema.transactions)
+              .set({ transactionType: snapshot.currentTypeKey, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.transactions.id, transactionId),
+                  eq(schema.transactions.principalId, principalId)
+                )
+              )
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "principalReplayRepository.restorePrincipalReviews.updateTransactionType"
+                )
+              )
+          }
+
+          yield* db
+            .insert(schema.transactionReviews)
+            .values({
+              transactionId,
+              principalId,
               reviewStatus: snapshot.reviewStatus,
               originalTypeKey: snapshot.originalTypeKey,
               originalConfidence: snapshot.originalConfidence,
@@ -820,14 +847,29 @@ const make = Effect.gen(function* () {
               userNotes: snapshot.userNotes,
               reviewedAt: snapshot.reviewedAt,
               updatedAt: now,
-            },
-          })
-          .pipe(
-            wrapSyncEngineSqlError(
-              "principalReplayRepository.restorePrincipalReviews.upsertReview"
-            ),
-            Effect.asVoid
-          )
+            })
+            .onConflictDoUpdate({
+              target: schema.transactionReviews.transactionId,
+              set: {
+                reviewStatus: snapshot.reviewStatus,
+                originalTypeKey: snapshot.originalTypeKey,
+                originalConfidence: snapshot.originalConfidence,
+                currentTypeKey: snapshot.currentTypeKey,
+                legalRuleSetVersion: snapshot.legalRuleSetVersion,
+                categorizationReason: snapshot.categorizationReason,
+                matchedLayer: snapshot.matchedLayer,
+                needsReview: snapshot.needsReview,
+                userNotes: snapshot.userNotes,
+                reviewedAt: snapshot.reviewedAt,
+                updatedAt: now,
+              },
+            })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "principalReplayRepository.restorePrincipalReviews.upsertReview"
+              )
+            )
+        })
       })
 
       return { restoredCount, unmatchedTransactionIdentities }

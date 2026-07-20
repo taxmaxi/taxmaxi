@@ -104,19 +104,26 @@ const make = Effect.gen(function* () {
         "source-sync:recovering-stale-job"
       )
 
-      yield* sourceSyncJobRepository
+      return yield* sourceSyncJobRepository
         .recoverStaleActiveJob({
           sourceId,
           jobId,
           message,
           completedAt,
+          allowPrincipalReplayRecovery: false,
         })
         .pipe(
+          Effect.map((result) => result._tag === "RecoveredSourceJob"),
           Effect.catchTags({
             SourceSyncJobExecutionRecordNotFoundError: (error) =>
-              Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-found"),
+              Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-found").pipe(
+                Effect.as(true)
+              ),
             SourceSyncJobExecutionRecordConflictError: (error) =>
-              Effect.logWarning({ sourceId, jobId, error }, "source-sync:stale-job-not-active"),
+              Effect.logWarning(
+                { sourceId, jobId, error },
+                "source-sync:stale-job-not-active"
+              ).pipe(Effect.as(true)),
           })
         )
     }).pipe(
@@ -195,13 +202,23 @@ const make = Effect.gen(function* () {
           activeJob.status === "processing" &&
           isStaleActiveProcessingJob({ updatedAt: activeJob.updatedAt, now: nowDate() })
         ) {
-          yield* recoverStaleActiveJob({
+          const recovered = yield* recoverStaleActiveJob({
             sourceId: source.id,
             jobId: activeJob.id,
             updatedAt: activeJob.updatedAt,
           })
 
-          yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "recovered-stale-job" })
+          if (recovered) {
+            yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "recovered-stale-job" })
+          } else {
+            yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "already-running" })
+            return {
+              sourceId: source.id,
+              jobId: activeJob.id,
+              status: "running",
+              message: null,
+            } satisfies SourceSyncJobSummary
+          }
         } else {
           if (activeJob.status === "pending") {
             if (

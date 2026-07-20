@@ -66,12 +66,14 @@ const makeServiceLayer = ({
   enqueued,
   repositoryEvents,
   enqueueFailure = false,
+  skipPrincipalReplayRecovery = false,
 }: {
   readonly activeJobs?: ReadonlyArray<SourceSyncActiveJob>
   readonly createResult?: CreateOrReuseSourceSyncJobResult
   readonly enqueued: Array<SourceSyncQueuePayload>
   readonly repositoryEvents: Array<string>
   readonly enqueueFailure?: boolean
+  readonly skipPrincipalReplayRecovery?: boolean
 }) => {
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(source)),
@@ -90,9 +92,14 @@ const makeServiceLayer = ({
           }
         )
       }),
-    recoverStaleActiveJob: ({ jobId }) =>
+    recoverStaleActiveJob: ({ jobId, allowPrincipalReplayRecovery }) =>
       Effect.sync(() => {
-        repositoryEvents.push(`recover:${jobId}`)
+        repositoryEvents.push(
+          `recover:${jobId}:${allowPrincipalReplayRecovery ? "plan" : "source"}`
+        )
+        return skipPrincipalReplayRecovery
+          ? { _tag: "SkippedPrincipalReplayCoordinator", runId: "run-1" }
+          : { _tag: "RecoveredSourceJob" }
       }),
     attachQueueMetadata: unusedJobLifecycleMethods.attachQueueMetadata,
     claimJob: unusedJobLifecycleMethods.claimJob,
@@ -393,11 +400,42 @@ describe("SourceSyncService queue orchestration", () => {
       status: "queued",
       message: null,
     })
-    expect(repositoryEvents).toEqual(["recover:job-stale", "create:sync"])
+    expect(repositoryEvents).toEqual(["recover:job-stale:source", "create:sync"])
     expect(enqueued).toHaveLength(1)
     expect(enqueued[0]).toMatchObject({
       jobId: "job-sync",
       mode: "sync",
     })
+  })
+
+  it("does not revoke a stale-looking principal replay coordinator from the API path", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const repositoryEvents: Array<string> = []
+
+    const result = await runStart({
+      mode: "sync",
+      layer: makeServiceLayer({
+        activeJobs: [
+          makeActiveJob({
+            id: "principal-replay-coordinator",
+            mode: "replay",
+            status: "processing",
+            updatedAt: new Date(Date.now() - 31_000),
+          }),
+        ],
+        enqueued,
+        repositoryEvents,
+        skipPrincipalReplayRecovery: true,
+      }),
+    })
+
+    expect(result).toEqual({
+      sourceId: source.id,
+      jobId: "principal-replay-coordinator",
+      status: "running",
+      message: null,
+    })
+    expect(repositoryEvents).toEqual(["recover:principal-replay-coordinator:source"])
+    expect(enqueued).toEqual([])
   })
 })

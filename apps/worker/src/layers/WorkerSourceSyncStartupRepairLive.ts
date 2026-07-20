@@ -364,6 +364,7 @@ const recoverStaleProcessingJob = ({
       jobId: job.id,
       message: "Startup repair failed stale processing source sync job.",
       completedAt: now,
+      allowPrincipalReplayRecovery: true,
     })
 
     yield* Effect.logWarning(
