@@ -485,6 +485,15 @@ const fetchNormalizationState = () =>
       .from(schema.transactionLegs)
       .where(eq(schema.transactionLegs.sourceId, sourceId))
 
+    const inventoryMovements = yield* db
+      .select({
+        direction: schema.inventoryMovements.direction,
+        purpose: schema.inventoryMovements.purpose,
+        amount: schema.inventoryMovements.amount,
+      })
+      .from(schema.inventoryMovements)
+      .where(eq(schema.inventoryMovements.sourceId, sourceId))
+
     const [eth2Mapping] = yield* db
       .select({
         canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
@@ -502,6 +511,7 @@ const fetchNormalizationState = () =>
       rawRows,
       transactions,
       legs,
+      inventoryMovements,
       eth2Mapping,
     }
   }).pipe(Effect.provide(TestPgClientLive))
@@ -872,6 +882,71 @@ describe("coinbase reference mappings", () => {
         )
         expect(state.transactions.map((row) => row.externalId)).toEqual(["tx-mixed-native-credit"])
         expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
+      })
+    )
+  })
+
+  it("does not pair a grouped unstaking release with a zero-valued credit", async () => {
+    const occurredAt = new Date("2025-05-01T10:00:00.000Z")
+    activeSyncRecords = [
+      makeCoinbaseRecord({
+        recordType: "coinbase_account",
+        externalRecordId: "coinbase-account-1",
+        occurredAt: new Date("2025-01-01T00:00:00.000Z"),
+        payload: {
+          id: "coinbase-account-1",
+          created_at: "2025-01-01T00:00:00.000Z",
+          updated_at: "2025-01-01T00:00:00.000Z",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-zero-credit-release",
+        externalAccountId: "coinbase-account-1",
+        externalParentId: "zero-credit-group",
+        occurredAt,
+        payload: {
+          id: "tx-zero-credit-release",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "-1.00000000", currency: "ETH2" },
+          native_amount: { amount: "-2000.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-zero-credit-release",
+        },
+      }),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-zero-credit",
+        externalAccountId: "coinbase-account-2",
+        externalParentId: "zero-credit-group",
+        occurredAt,
+        payload: {
+          id: "tx-zero-credit",
+          type: "retail_instant_unstaking",
+          status: "completed",
+          amount: { amount: "0.00000000", currency: "ETH2" },
+          native_amount: { amount: "0.00", currency: "EUR" },
+          created_at: occurredAt.toISOString(),
+          resource_path: "/v2/accounts/coinbase-account-2/transactions/tx-zero-credit",
+        },
+      }),
+    ]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedCoinbaseSource()
+        yield* runSync()
+        const state = yield* fetchNormalizationState()
+        const releaseRow = state.rawRows.find(
+          (row) => row.externalRecordId === "tx-zero-credit-release"
+        )
+
+        expect(releaseRow?.normalizedAt).toBeNull()
+        expect(releaseRow?.normalizationError).toContain(
+          "Expected one unambiguous paired principal row"
+        )
+        expect(state.transactions.map((row) => row.externalId)).toEqual(["tx-zero-credit"])
+        expect(state.legs.filter((leg) => leg.kind === "fee")).toHaveLength(0)
+        expect(state.inventoryMovements).toHaveLength(0)
       })
     )
   })

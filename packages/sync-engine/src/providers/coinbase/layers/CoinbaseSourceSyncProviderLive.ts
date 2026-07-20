@@ -483,7 +483,14 @@ const make = Effect.gen(function* () {
               payload.amount.currency.toUpperCase() !== amount.currency.toUpperCase() ||
               payload.native_amount.currency.toUpperCase() !==
                 nativeAmount.currency.toUpperCase() ||
-              isNegativeAmount(payload.amount.amount)
+              !isPositiveAmountSmallerThanRelease({
+                candidateAmount: payload.amount.amount,
+                releaseAmount: amount.amount,
+              }) ||
+              !isPositiveAmountSmallerThanRelease({
+                candidateAmount: payload.native_amount.amount,
+                releaseAmount: nativeAmount.amount,
+              })
             ) {
               return []
             }
