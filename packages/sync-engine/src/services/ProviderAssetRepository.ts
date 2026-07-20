@@ -81,6 +81,13 @@ export interface ProviderAssetMappingState {
 export interface ProviderAssetReviewMapping extends ProviderAssetMappingState {
   readonly reviewerNotes: string | null
   readonly sourceNotes: string | null
+  readonly reviewedBy: string | null
+  readonly reviewedAt: Date | null
+}
+
+export interface ProviderAssetAffectedSource {
+  readonly sourceId: string
+  readonly principalId: string
 }
 
 /**
@@ -178,9 +185,32 @@ export interface ProviderAssetRepositoryShape {
   readonly listProviderAssetReviews: (params: {
     readonly providerKey: string | null
     readonly mappingStatus: ProviderAssetMappingStatus
+    readonly query: string | null
     readonly cursorProviderAssetRowId: string | null
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<ProviderAssetReviewRecord>, SyncEngineStorageError>
+
+  readonly countProviderAssetReviews: (params: {
+    readonly providerKey: string | null
+    readonly mappingStatus: ProviderAssetMappingStatus
+    readonly query: string | null
+  }) => Effect.Effect<number, SyncEngineStorageError>
+
+  readonly decideProviderAssetMapping: (params: {
+    readonly providerAssetRowId: string
+    readonly mappingKind: "asset"
+    readonly canonicalAssetId: string | null
+    readonly canonicalAssetSymbol: string | null
+    readonly mappingStatus: "approved" | "rejected"
+    readonly reviewerNotes: string | null
+    readonly sourceNotes: string | null
+    readonly reviewedBy: string
+    readonly reviewedAt: Date
+  }) => Effect.Effect<boolean, SyncEngineStorageError>
+
+  readonly listAffectedSources: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<ReadonlyArray<ProviderAssetAffectedSource>, SyncEngineStorageError>
 
   /**
    * Load the current mapping for one provider asset.

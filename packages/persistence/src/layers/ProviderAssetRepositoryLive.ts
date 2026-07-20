@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, ilike, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -365,6 +365,8 @@ const make = Effect.gen(function* () {
       mappingStatus: schema.providerAssetMappings.mappingStatus,
       reviewerNotes: schema.providerAssetMappings.reviewerNotes,
       sourceNotes: schema.providerAssetMappings.sourceNotes,
+      reviewedBy: schema.providerAssetMappings.reviewedBy,
+      reviewedAt: schema.providerAssetMappings.reviewedAt,
     },
   } as const
 
@@ -388,6 +390,7 @@ const make = Effect.gen(function* () {
   const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
     providerKey,
     mappingStatus,
+    query,
     cursorProviderAssetRowId,
     limit,
   }) =>
@@ -436,6 +439,17 @@ const make = Effect.gen(function* () {
       const predicates = [
         eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
         ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
+        ...(query === null || query.trim() === ""
+          ? []
+          : [
+              or(
+                ilike(schema.providerAssets.currencyCode, `%${query.trim()}%`),
+                ilike(schema.providerAssets.name, `%${query.trim()}%`),
+                ilike(schema.providerAssets.providerAssetId, `%${query.trim()}%`),
+                ilike(schema.providerAssets.naturalKey, `%${query.trim()}%`),
+                sql`${schema.providerAssets.rawProviderPayload}::text ilike ${`%${query.trim()}%`}`
+              ),
+            ]),
         ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
       ]
 
@@ -455,6 +469,85 @@ const make = Effect.gen(function* () {
         .limit(limit)
         .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews"))
     })
+
+  const countProviderAssetReviews: ProviderAssetRepositoryShape["countProviderAssetReviews"] = ({
+    providerKey,
+    mappingStatus,
+    query,
+  }) => {
+    const search = query?.trim() ?? ""
+    const predicates = [
+      eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
+      ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
+      ...(search === ""
+        ? []
+        : [
+            or(
+              ilike(schema.providerAssets.currencyCode, `%${search}%`),
+              ilike(schema.providerAssets.name, `%${search}%`),
+              ilike(schema.providerAssets.providerAssetId, `%${search}%`),
+              ilike(schema.providerAssets.naturalKey, `%${search}%`),
+              sql`${schema.providerAssets.rawProviderPayload}::text ilike ${`%${search}%`}`
+            ),
+          ]),
+    ]
+
+    return db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(schema.providerAssets)
+      .innerJoin(
+        schema.providerAssetMappings,
+        eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+      )
+      .where(and(...predicates))
+      .pipe(
+        Effect.map(([row]) => row?.count ?? 0),
+        wrapSyncEngineSqlError("providerAssetRepository.countProviderAssetReviews")
+      )
+  }
+
+  const decideProviderAssetMapping: ProviderAssetRepositoryShape["decideProviderAssetMapping"] = (
+    params
+  ) =>
+    db
+      .update(schema.providerAssetMappings)
+      .set({
+        mappingKind: params.mappingKind,
+        canonicalAssetId: params.canonicalAssetId,
+        canonicalAssetSymbol: params.canonicalAssetSymbol,
+        canonicalFiatCurrency: null,
+        mappingStatus: params.mappingStatus,
+        reviewerNotes: params.reviewerNotes,
+        sourceNotes: params.sourceNotes,
+        reviewedBy: params.reviewedBy,
+        reviewedAt: params.reviewedAt,
+        updatedAt: params.reviewedAt,
+      })
+      .where(
+        and(
+          eq(schema.providerAssetMappings.providerAssetRowId, params.providerAssetRowId),
+          eq(schema.providerAssetMappings.mappingStatus, "pending_review")
+        )
+      )
+      .returning({ id: schema.providerAssetMappings.id })
+      .pipe(
+        Effect.map((rows) => rows.length === 1),
+        wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping")
+      )
+
+  const listAffectedSources: ProviderAssetRepositoryShape["listAffectedSources"] = ({
+    providerAssetRowId,
+  }) =>
+    db
+      .selectDistinct({
+        sourceId: schema.providerTransfers.sourceId,
+        principalId: schema.sources.principalId,
+      })
+      .from(schema.providerTransfers)
+      .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+      .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+      .orderBy(asc(schema.providerTransfers.sourceId))
+      .pipe(wrapSyncEngineSqlError("providerAssetRepository.listAffectedSources"))
 
   const findProviderAssetMapping: ProviderAssetRepositoryShape["findProviderAssetMapping"] = ({
     providerAssetRowId,
@@ -487,6 +580,9 @@ const make = Effect.gen(function* () {
     findProviderAssetByCurrencyCode,
     findProviderAssetReviewById,
     listProviderAssetReviews,
+    countProviderAssetReviews,
+    decideProviderAssetMapping,
+    listAffectedSources,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })

@@ -7,6 +7,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -283,6 +284,7 @@ describe("ProviderAssetRepositoryLive", () => {
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
+            query: null,
             cursorProviderAssetRowId: null,
             limit: 2,
           })
@@ -296,6 +298,7 @@ describe("ProviderAssetRepositoryLive", () => {
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
+            query: null,
             cursorProviderAssetRowId: firstPage[1]?.providerAsset.id ?? null,
             limit: 2,
           })
@@ -436,6 +439,93 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
       expect(providerAssetRows).toHaveLength(0)
+    })
+
+    it("searches review evidence and applies one attributed decision atomically", async () => {
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "review-usdc",
+                naturalKey: "currency_code:USDC",
+                currencyCode: "USDC",
+                name: "USD Coin",
+                exponent: 6,
+                providerType: "crypto",
+                payload: { contract_address: "0xreview" },
+              },
+            ],
+          })
+          const asset = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "review-usdc",
+          })
+          if (Option.isNone(asset)) return yield* Effect.dieMessage("missing provider asset")
+          yield* repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: asset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                canonicalAssetSymbol: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: "Needs review",
+              },
+            ],
+          })
+          return asset.value
+        })
+      )
+      const reviewedAt = new Date("2026-07-20T10:00:00.000Z")
+      const [firstDecision, secondDecision, searched, count, review] = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          const decision = {
+            providerAssetRowId: providerAsset.id,
+            mappingKind: "asset" as const,
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            canonicalAssetSymbol: "BTC",
+            mappingStatus: "approved" as const,
+            reviewerNotes: "Verified evidence",
+            sourceNotes: "Mapped in review",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt,
+          }
+          const first = yield* repository.decideProviderAssetMapping(decision)
+          const second = yield* repository.decideProviderAssetMapping(decision)
+          const rows = yield* repository.listProviderAssetReviews({
+            providerKey: null,
+            mappingStatus: "approved",
+            query: "0xreview",
+            cursorProviderAssetRowId: null,
+            limit: 10,
+          })
+          const total = yield* repository.countProviderAssetReviews({
+            providerKey: null,
+            mappingStatus: "approved",
+            query: "USD Coin",
+          })
+          const loaded = yield* repository.findProviderAssetReviewById({
+            providerAssetRowId: providerAsset.id,
+          })
+          return [first, second, rows, total, loaded] as const
+        })
+      )
+
+      expect(firstDecision).toBe(true)
+      expect(secondDecision).toBe(false)
+      expect(searched).toHaveLength(1)
+      expect(count).toBe(1)
+      expect(Option.getOrNull(review)?.mapping).toMatchObject({
+        reviewedBy: TEST_USER_ID,
+        reviewedAt,
+        reviewerNotes: "Verified evidence",
+      })
     })
   })
 })

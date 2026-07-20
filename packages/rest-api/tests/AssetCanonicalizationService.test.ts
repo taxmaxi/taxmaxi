@@ -1,12 +1,47 @@
+import * as Effect from "effect/Effect"
 import { describe, expect, it } from "vitest"
 import {
   deriveChainType,
   deriveNativeAssetDecimals,
+  hasStrongProviderIdentityEvidence,
+  selectCoinCandidate,
   selectNativePlatform,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 describe("AssetCanonicalizationService", () => {
+  it("uses the explicitly reviewed CoinGecko candidate", async () => {
+    const selected = await Effect.runPromise(
+      selectCoinCandidate({
+        coinId: "usd-coin",
+        providerAssetSymbol: "USDC",
+        searchCoins: [
+          { id: "bridged-usdc", name: "Bridged USDC", symbol: "USDC" },
+          { id: "usd-coin", name: "USD Coin", symbol: "USDC" },
+        ],
+      })
+    )
+
+    expect(selected.id).toBe("usd-coin")
+  })
+
+  it("does not treat a symbol-only candidate as strong identity evidence", () => {
+    expect(
+      hasStrongProviderIdentityEvidence({
+        coinName: "Unrelated Dollar Coin",
+        observedTokenId: null,
+        providerName: "USD Coin",
+      })
+    ).toBe(false)
+    expect(
+      hasStrongProviderIdentityEvidence({
+        coinName: "USD Coin",
+        observedTokenId: null,
+        providerName: "USD Coin",
+      })
+    ).toBe(true)
+  })
+
   it("includes Cardano native platform metadata from CoinGecko", () => {
     const cardanoPlatform = coinGeckoAssetPlatformSnapshot.find(
       (platform) => platform.id === "cardano"

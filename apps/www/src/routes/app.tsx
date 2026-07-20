@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import { useSuspenseQueries, useSuspenseQuery } from "@tanstack/react-query"
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
@@ -35,14 +35,17 @@ export const Route = createFileRoute("/app")({
   loader: async ({ context }) => {
     const taxmaxi = context.taxmaxi()
     try {
-      const sourceList = await taxmaxi.sources.list()
+      const [sourceList, currentUser] = await Promise.all([
+        taxmaxi.sources.list(),
+        taxmaxi.auth.me(),
+      ])
       context.queryClient.setQueryData(queryKeys.sourceList(), sourceList)
       await Promise.all(
         sourceList.sources.map((source) =>
           context.queryClient.ensureQueryData(queries.sourceOverview(taxmaxi, source.id))
         )
       )
-      return sourceList
+      return { sourceList, currentUser }
     } catch (error) {
       if (!isTaxMaxiUnauthorizedError(error)) {
         throw error
@@ -188,6 +191,7 @@ function formatLastSync(lastSyncedAt: string | null): string {
 }
 
 function AppHeader() {
+  const { currentUser } = Route.useLoaderData()
   const [isCompact, setIsCompact] = useState(false)
   const frameRef = useRef<number | null>(null)
 
@@ -251,6 +255,14 @@ function AppHeader() {
             )}
           >
             <Logo theme="dark" size="small" />
+            {currentUser.user.role === "admin" ? (
+              <Link
+                className="ml-auto inline-flex min-h-11 items-center rounded-full px-4 text-sm text-marketing-foreground outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+                to="/admin/provider-assets"
+              >
+                Review assets
+              </Link>
+            ) : null}
           </div>
         </div>
       </div>

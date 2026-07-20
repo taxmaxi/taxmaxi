@@ -29,6 +29,8 @@ export type {
   ProviderAssetReview,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
+  ProviderAssetCandidates,
+  ProviderAssetDecision,
 } from "./assets/index.ts"
 
 export type TaxMaxiInternalEffectClient =

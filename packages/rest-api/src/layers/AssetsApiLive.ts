@@ -9,17 +9,23 @@ import { AssetCatalogRepository, type AssetCatalogAssetRecord } from "@my/persis
 import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
+import * as DateTime from "effect/DateTime"
+import { CurrentUser } from "../definitions/AuthMiddleware.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   AssetBadRequestError,
+  AssetConflictError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
   AssetNotFoundError,
   CanonicalAssetResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
+  CoinGeckoAssetCandidateListResponse,
+  CoinGeckoAssetCandidateResponse,
+  ProviderAssetDecisionResponse,
 } from "../definitions/AssetsApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
@@ -40,6 +46,9 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     name: row.providerAsset.name,
     exponent: row.providerAsset.exponent,
     providerType: row.providerAsset.providerType,
+    rawProviderPayload: row.providerAsset.rawProviderPayload,
+    discoveredAt: DateTime.unsafeMake(row.providerAsset.discoveredAt),
+    retrievedAt: DateTime.unsafeMake(row.providerAsset.retrievedAt),
     mappingKind: row.mapping?.mappingKind ?? null,
     canonicalAssetId: row.mapping?.canonicalAssetId ?? null,
     canonicalAssetSymbol: row.mapping?.canonicalAssetSymbol ?? null,
@@ -47,6 +56,11 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     mappingStatus: row.mapping?.mappingStatus ?? null,
     reviewerNotes: row.mapping?.reviewerNotes ?? null,
     sourceNotes: row.mapping?.sourceNotes ?? null,
+    reviewedBy: row.mapping?.reviewedBy ?? null,
+    reviewedAt:
+      row.mapping?.reviewedAt === null || row.mapping?.reviewedAt === undefined
+        ? null
+        : DateTime.unsafeMake(row.mapping.reviewedAt),
   })
 
 const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
@@ -106,10 +120,18 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             .listProviderAssetReviews({
               providerKey: urlParams.provider ?? null,
               mappingStatus: urlParams.status ?? "pending_review",
+              query: urlParams.q ?? null,
               cursorProviderAssetRowId: urlParams.cursor ?? null,
               limit: (urlParams.limit ?? defaultLimit) + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list provider assets.")))
+          const totalCount = yield* providerAssetRepository
+            .countProviderAssetReviews({
+              providerKey: urlParams.provider ?? null,
+              mappingStatus: urlParams.status ?? "pending_review",
+              query: urlParams.q ?? null,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to count provider assets.")))
           const limit = urlParams.limit ?? defaultLimit
           const visibleProviderAssets = providerAssets.slice(0, limit)
           const lastProviderAsset = visibleProviderAssets.at(-1)
@@ -124,37 +146,87 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
                   : null,
               hasMore,
             },
+            totalCount,
+          })
+        })
+      )
+      .handle("listProviderAssetCandidates", ({ path }) =>
+        Effect.gen(function* () {
+          const candidates = yield* assetCanonicalizationService
+            .listCoinGeckoCandidates({ providerAssetRowId: path.id })
+            .pipe(Effect.mapError(mapReviewError))
+          return CoinGeckoAssetCandidateListResponse.make({
+            candidates: candidates.map((candidate) =>
+              CoinGeckoAssetCandidateResponse.make(candidate)
+            ),
           })
         })
       )
       .handle("canonicalizeProviderAsset", ({ path, payload }) =>
         Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
           const result = yield* assetCanonicalizationService
             .canonicalizeProviderAssetFromCoinGecko({
               providerAssetRowId: path.id,
+              coinId: payload.coinId,
               reviewerNotes: payload.reviewerNotes ?? null,
+              reviewedBy: currentUser.userId,
             })
-            .pipe(
-              Effect.mapError((error) => {
-                switch (error._tag) {
-                  case "AssetCanonicalizationBadRequestError":
-                    return new AssetBadRequestError({ message: error.message })
-                  case "AssetCanonicalizationProviderError":
-                    return toInternalServerError(error.message)
-                  case "AssetCanonicalizationNotFoundError":
-                    return new AssetNotFoundError({ message: error.message })
-                  case "AssetCanonicalizationInternalError":
-                    return toInternalServerError(error.message)
-                }
-              })
-            )
+            .pipe(Effect.mapError(mapReviewError))
 
           return AssetCanonicalizationResponse.make({
             providerAsset: toProviderAssetReviewRow(result.providerAsset),
             canonicalAsset: CanonicalAssetResponse.make(result.canonicalAsset),
             evidence: AssetCanonicalizationEvidenceResponse.make(result.evidence),
+            replays: [...result.replays],
+          })
+        })
+      )
+      .handle("mapProviderAsset", ({ path, payload }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* assetCanonicalizationService
+            .mapProviderAssetToExisting({
+              providerAssetRowId: path.id,
+              canonicalAssetId: payload.canonicalAssetId,
+              reviewerNotes: payload.reviewerNotes ?? null,
+              reviewedBy: currentUser.userId,
+            })
+            .pipe(Effect.mapError(mapReviewError))
+          return ProviderAssetDecisionResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            replays: [...result.replays],
+          })
+        })
+      )
+      .handle("rejectProviderAsset", ({ path, payload }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* assetCanonicalizationService
+            .rejectProviderAsset({
+              providerAssetRowId: path.id,
+              rejectionReason: payload.rejectionReason,
+              reviewedBy: currentUser.userId,
+            })
+            .pipe(Effect.mapError(mapReviewError))
+          return ProviderAssetDecisionResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            replays: [],
           })
         })
       )
   })
 )
+
+const mapReviewError = (error: { readonly _tag: string; readonly message: string }) => {
+  switch (error._tag) {
+    case "AssetCanonicalizationBadRequestError":
+      return new AssetBadRequestError({ message: error.message })
+    case "AssetCanonicalizationNotFoundError":
+      return new AssetNotFoundError({ message: error.message })
+    case "AssetCanonicalizationConflictError":
+      return new AssetConflictError({ message: error.message })
+    default:
+      return toInternalServerError(error.message)
+  }
+}

@@ -15,6 +15,7 @@ import {
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -22,11 +23,14 @@ import { afterAll, describe, expect, it } from "vitest"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
+  ProviderAssetDecisionResponse,
 } from "../src/definitions/AssetsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
+import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
+import { schema } from "../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
@@ -38,6 +42,9 @@ const TestPgClientLive = context.TestPgClientLive
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
+const TestConfigProvider = ConfigProvider.fromMap(
+  new Map([["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"]])
+)
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
@@ -107,7 +114,8 @@ const HttpLive = HttpApiBuilder.serve().pipe(
   Layer.provide(X402PaymentValidatorTestLive),
   Layer.provide(SimpleTokenValidatorLive),
   Layer.provideMerge(PersistenceLayer),
-  Layer.provideMerge(NodeHttpServer.layerTest)
+  Layer.provideMerge(NodeHttpServer.layerTest),
+  Layer.provideMerge(Layer.setConfigProvider(TestConfigProvider))
 )
 
 const getJson = <Response, Encoded, Requirements>({
@@ -126,13 +134,13 @@ const getJson = <Response, Encoded, Requirements>({
       status: response.status,
       body: decodedBody,
     }
-  })
+  }).pipe(Effect.withConfigProvider(TestConfigProvider))
 
 const getStatus = (path: string) =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get(path).pipe(HttpClient.execute)
     return response.status
-  })
+  }).pipe(Effect.withConfigProvider(TestConfigProvider))
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -144,7 +152,11 @@ describe("AssetsApiLive", () => {
       getJson({
         path: "/v1/assets",
         responseSchema: AssetCatalogListResponse,
-      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      }).pipe(
+        Effect.withConfigProvider(TestConfigProvider),
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
     )
 
     const symbols = response.body.assets.map((asset) => asset.symbol)
@@ -211,5 +223,67 @@ describe("AssetsApiLive", () => {
     )
 
     expect(status).toBe(401)
+  })
+
+  it("records an admin rejection once and returns a conflict for a stale decision", async () => {
+    const userId = crypto.randomUUID()
+    const providerAssetId = crypto.randomUUID()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: userId,
+          email: `${userId}@asset-review.test`,
+          role: "admin",
+        })
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "spam-observation",
+          currencyCode: "SCAM",
+          name: "Misleading token",
+          providerType: "crypto",
+          rawProviderPayload: { warning: "spam" },
+          retrievedAt: new Date("2026-07-20T09:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+      })
+    )
+
+    const reject = () =>
+      Effect.gen(function* () {
+        const request = HttpClientRequest.post(
+          `/v1/assets/provider-assets/${providerAssetId}/reject`
+        ).pipe(
+          HttpClientRequest.bearerToken(`user_${userId}_admin`),
+          HttpClientRequest.bodyUnsafeJson({ rejectionReason: "Confirmed spam" })
+        )
+        const response = yield* HttpClient.execute(request)
+        const body = yield* response.json
+        return {
+          status: response.status,
+          body:
+            response.status === 200
+              ? yield* Schema.decodeUnknown(ProviderAssetDecisionResponse)(body)
+              : body,
+        }
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+
+    const first = await Effect.runPromise(reject())
+    const second = await Effect.runPromise(reject())
+
+    expect(first.status).toBe(200)
+    expect(first.body).toMatchObject({
+      providerAsset: {
+        mappingStatus: "rejected",
+        reviewerNotes: "Confirmed spam",
+        reviewedBy: userId,
+      },
+    })
+    expect(second.status).toBe(409)
   })
 })
