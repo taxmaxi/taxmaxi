@@ -69,6 +69,7 @@ Test files use naming conventions:
 mise x -- pnpm run lint              # Run oxlint across all packages
 mise x -- pnpm run format            # Run oxfmt across all packages
 mise x -- pnpm run type-check        # TypeScript type checking
+mise x -- pnpm run type-check:tests  # TypeScript type checking for test files
 ```
 
 ### Database
