@@ -769,6 +769,7 @@ describe("TaxMaxi Promise client", () => {
       taxmaxi.assets.retryProviderAssetReplay({
         id: providerAssetId,
         sourceId: "00000000-0000-4000-8000-000000000020",
+        jobId: "00000000-0000-4000-8000-000000000021",
       })
     ).resolves.toMatchObject({ status: "queued" })
 
@@ -792,7 +793,7 @@ describe("TaxMaxi Promise client", () => {
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020/jobs/00000000-0000-4000-8000-000000000021",
       }),
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020",
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020/jobs/00000000-0000-4000-8000-000000000021/retry",
       }),
     ])
   })

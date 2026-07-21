@@ -321,6 +321,45 @@ const runDispatchFollowUp = ({
 }
 
 describe("WorkerSourceSyncStartupRepairLive", () => {
+  it("reuses one queue connection across pending dispatch passes", async () => {
+    let acquireCount = 0
+    let closeCount = 0
+    const enqueued: Array<SourceSyncQueuePayload> = []
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const repair = yield* WorkerSourceSyncStartupRepair
+          yield* repair.dispatchPending
+          yield* repair.dispatchPending
+        }).pipe(
+          Effect.provide(
+            makeWorkerSourceSyncStartupRepairLive({
+              acquireQueue: () =>
+                Effect.sync(() => {
+                  acquireCount += 1
+                  return {
+                    ...makeQueue(enqueued),
+                    close: Effect.sync(() => {
+                      closeCount += 1
+                    }),
+                  }
+                }),
+            }).pipe(
+              Layer.provideMerge(
+                makeRepositoryLayer({ repairableJobs: [], attached: [], recovered: [] })
+              )
+            )
+          ),
+          Effect.withConfigProvider(makeConfigProvider())
+        )
+      )
+    )
+
+    expect(acquireCount).toBe(1)
+    expect(closeCount).toBe(1)
+  })
+
   it("continuously dispatches pending jobs without recovering processing jobs", async () => {
     const enqueued: Array<SourceSyncQueuePayload> = []
     const attached: Array<AttachSourceSyncQueueMetadataParams> = []

@@ -54,6 +54,7 @@ import {
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
   providerAssetReviewLoaderDeps,
+  rejectionReasonAfterDialogChange,
 } from "#/lib/provider-asset-review"
 
 /* ─────────────────────────────────────────────────────────
@@ -205,7 +206,14 @@ function ProviderAssetWorkbench() {
     setExistingQuery("")
     setExistingAssets([])
     setReviewerNotes("")
+    setRejectionOpen(false)
+    setRejectionReason("")
     setActionError(null)
+  }, [])
+
+  const updateRejectionDialog = useCallback((open: boolean) => {
+    setRejectionOpen(open)
+    setRejectionReason((currentReason) => rejectionReasonAfterDialogChange({ currentReason, open }))
   }, [])
 
   useEffect(() => {
@@ -1050,7 +1058,7 @@ function ProviderAssetWorkbench() {
               />
               <span className="min-w-0 flex-1 truncate">{replay.sourceId}</span>
               <Badge variant="secondary">{replay.status}</Badge>
-              {replay.status === "failed" || replay.status === "failed_to_queue" ? (
+              {replay.status === "failed" && replay.jobId !== null ? (
                 <Button
                   aria-label={`Retry replay for source ${replay.sourceId}`}
                   onClick={() =>
@@ -1058,6 +1066,7 @@ function ProviderAssetWorkbench() {
                       .assets.retryProviderAssetReplay({
                         id: replay.providerAssetId,
                         sourceId: replay.sourceId,
+                        jobId: replay.jobId,
                       })
                       .then((job) =>
                         setReplays((current) =>
@@ -1086,7 +1095,7 @@ function ProviderAssetWorkbench() {
         </aside>
       ) : null}
 
-      <Dialog open={rejectionOpen} onOpenChange={setRejectionOpen}>
+      <Dialog open={rejectionOpen} onOpenChange={updateRejectionDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Reject provider asset?</DialogTitle>

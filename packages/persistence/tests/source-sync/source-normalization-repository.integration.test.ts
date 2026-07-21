@@ -22,7 +22,7 @@ import {
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
-import { SourceNormalizationRepository } from "@my/sync-engine/services"
+import { ProviderAssetRepository, SourceNormalizationRepository } from "@my/sync-engine/services"
 import {
   CoinbaseLegDerivationServiceLive,
   CoinbaseRecordNormalizerLive,
@@ -46,6 +46,9 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
+
+const runProviderAssetRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
 
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
   fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
@@ -306,6 +309,137 @@ describe("SourceNormalizationRepositoryLive", () => {
 
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
+  })
+
+  it("makes an approval wait for in-flight normalization before discovering replay sources", async () => {
+    const providerAssetId = crypto.randomUUID()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "approval-race-asset",
+          currencyCode: "RACE",
+          name: "Approval Race Asset",
+          providerType: "crypto",
+          rawProviderPayload: { symbol: "RACE" },
+          retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+      })
+    )
+
+    let signalMappingsLocked: () => void = () => undefined
+    const mappingsLocked = new Promise<void>((resolve) => {
+      signalMappingsLocked = resolve
+    })
+    let releaseNormalization: () => void = () => undefined
+    const normalizationReleased = new Promise<void>((resolve) => {
+      releaseNormalization = resolve
+    })
+
+    const normalization = runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "approval-race-transaction",
+            externalGroupId: null,
+            timestamp: new Date("2026-07-20T10:00:00.000Z"),
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: null,
+            providerUpdatedAt: null,
+            metadata: {},
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "approval-race-account",
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: {},
+          },
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "approval-race-transfer",
+              externalGroupId: null,
+              providerAssetId,
+              timestamp: new Date("2026-07-20T10:00:00.000Z"),
+              direction: "outbound",
+              fromAccountRef: "approval-race-account",
+              toAccountRef: null,
+              fromAddress: null,
+              toAddress: "external",
+              networkName: null,
+              networkHash: null,
+              amount: "1",
+              metadata: {},
+            },
+          ],
+          feeTransfers: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+          deriveLegs: () =>
+            Effect.sync(signalMappingsLocked).pipe(
+              Effect.zipRight(Effect.promise(() => normalizationReleased)),
+              Effect.as([])
+            ),
+        })
+      )
+    )
+
+    await mappingsLocked
+
+    const decision = runProviderAssetRepository(
+      Effect.flatMap(ProviderAssetRepository, (repository) =>
+        repository.decideProviderAssetMapping({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "asset",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          canonicalAssetSymbol: "BTC",
+          canonicalAssetDraft: null,
+          mappingStatus: "approved",
+          reviewerNotes: null,
+          sourceNotes: "Approved during normalization",
+          reviewedBy: fixture.userId,
+          reviewedAt: new Date("2026-07-20T10:01:00.000Z"),
+          createReplayJobs: true,
+        })
+      )
+    )
+
+    const decisionSettledEarly = await Promise.race([
+      decision.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 50)),
+    ])
+    releaseNormalization()
+    await normalization
+    const decisionResult = await decision
+
+    expect(decisionSettledEarly).toBe(false)
+    expect(decisionResult).toMatchObject({
+      affectedSources: [
+        { sourceId: TEST_SOURCE_ID, principalId: TEST_PRINCIPAL_ID, jobId: expect.any(String) },
+      ],
+    })
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

@@ -70,6 +70,14 @@ export const providerAssetReviewLoaderDeps = ({
   readonly status?: "approved" | "pending_review" | "rejected"
 }) => ({ cursor, provider, q, status })
 
+export const rejectionReasonAfterDialogChange = ({
+  currentReason,
+  open,
+}: {
+  readonly currentReason: string
+  readonly open: boolean
+}): string => (open ? currentReason : "")
+
 export const isCurrentExistingAssetSearchRequest = ({
   currentQuery,
   requestQuery,

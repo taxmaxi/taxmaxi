@@ -583,6 +583,16 @@ export const makeWorkerSourceSyncStartupRepairLive = (
       const repository = yield* SourceSyncJobRepository
       const config = yield* loadConfig
       const acquireQueue = options.acquireQueue ?? acquireLiveQueue
+      const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
+        queueToClose.close.pipe(
+          Effect.catchAll((error) =>
+            Effect.logWarning(
+              { operation: error.operation, cause: error.cause },
+              "source-sync-worker:repair-queue-close-failed"
+            )
+          )
+        )
+      )
 
       const repairBatch = (
         queue: WorkerSourceSyncStartupRepairQueue
@@ -669,103 +679,65 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           })
         )
 
-      const repair = Effect.scoped(
-        Effect.gen(function* () {
-          const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
-            queueToClose.close.pipe(
-              Effect.catchAll((error) =>
-                Effect.logWarning(
-                  { operation: error.operation, cause: error.cause },
-                  "source-sync-worker:startup-repair-queue-close-failed"
-                )
-              )
-            )
-          )
-          const summary = yield* repairUntilDrained(queue, emptySummary)
+      const repair = Effect.gen(function* () {
+        const summary = yield* repairUntilDrained(queue, emptySummary)
 
-          yield* Effect.logInfo(
-            {
-              ...summary,
-              staleAfterMs: config.staleAfterMs,
-              batchSize: config.batchSize,
-            },
-            "source-sync-worker:startup-repair-completed"
-          )
-
-          return summary
-        })
-      )
-
-      const dispatchFollowUp = (params: DispatchSourceSyncFollowUpParams) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const visibleJob = yield* repository.getJob(params).pipe(
-              Effect.mapError((cause) =>
-                toRepairError({
-                  operation: "workerSourceSyncStartupRepair.dispatchFollowUp.getJob",
-                  cause,
-                })
-              )
-            )
-
-            if (visibleJob.jobId === params.jobId || visibleJob.status !== "queued") return
-
-            const executionJob = yield* repository
-              .getExecutionJob({ jobId: visibleJob.jobId })
-              .pipe(
-                Effect.mapError((cause) =>
-                  toRepairError({
-                    operation: "workerSourceSyncStartupRepair.dispatchFollowUp.getExecutionJob",
-                    cause,
-                  })
-                )
-              )
-            const now = yield* currentDate
-            const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
-              queueToClose.close.pipe(
-                Effect.catchAll((error) =>
-                  Effect.logWarning(
-                    { operation: error.operation, cause: error.cause },
-                    "source-sync-worker:follow-up-queue-close-failed"
-                  )
-                )
-              )
-            )
-
-            yield* dispatchLinkedFollowUp({
-              params,
-              visibleJob,
-              executionJob,
-              queue,
-              repository,
-              config,
-              now,
-            })
-          })
+        yield* Effect.logInfo(
+          {
+            ...summary,
+            staleAfterMs: config.staleAfterMs,
+            batchSize: config.batchSize,
+          },
+          "source-sync-worker:startup-repair-completed"
         )
 
-      const dispatchPending = Effect.scoped(
+        return summary
+      })
+
+      const dispatchFollowUp = (params: DispatchSourceSyncFollowUpParams) =>
         Effect.gen(function* () {
-          const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
-            queueToClose.close.pipe(
-              Effect.catchAll((error) =>
-                Effect.logWarning(
-                  { operation: error.operation, cause: error.cause },
-                  "source-sync-worker:pending-dispatch-queue-close-failed"
-                )
-              )
+          const visibleJob = yield* repository.getJob(params).pipe(
+            Effect.mapError((cause) =>
+              toRepairError({
+                operation: "workerSourceSyncStartupRepair.dispatchFollowUp.getJob",
+                cause,
+              })
             )
           )
-          const summary = yield* dispatchPendingBatch(queue)
 
-          yield* Effect.logInfo(
-            { ...summary, staleAfterMs: config.staleAfterMs, batchSize: config.batchSize },
-            "source-sync-worker:pending-dispatch-completed"
+          if (visibleJob.jobId === params.jobId || visibleJob.status !== "queued") return
+
+          const executionJob = yield* repository.getExecutionJob({ jobId: visibleJob.jobId }).pipe(
+            Effect.mapError((cause) =>
+              toRepairError({
+                operation: "workerSourceSyncStartupRepair.dispatchFollowUp.getExecutionJob",
+                cause,
+              })
+            )
           )
+          const now = yield* currentDate
 
-          return summary
+          yield* dispatchLinkedFollowUp({
+            params,
+            visibleJob,
+            executionJob,
+            queue,
+            repository,
+            config,
+            now,
+          })
         })
-      )
+
+      const dispatchPending = Effect.gen(function* () {
+        const summary = yield* dispatchPendingBatch(queue)
+
+        yield* Effect.logInfo(
+          { ...summary, staleAfterMs: config.staleAfterMs, batchSize: config.batchSize },
+          "source-sync-worker:pending-dispatch-completed"
+        )
+
+        return summary
+      })
 
       return WorkerSourceSyncStartupRepair.of({ repair, dispatchFollowUp, dispatchPending })
     })

@@ -8,9 +8,25 @@ import {
   nextProviderAssetSelection,
   providerAssetReviewFilterKey,
   providerAssetReviewLoaderDeps,
+  rejectionReasonAfterDialogChange,
 } from "./provider-asset-review"
 
 describe("provider asset review progression", () => {
+  it("clears a rejection reason when the dialog closes", () => {
+    expect(
+      rejectionReasonAfterDialogChange({
+        currentReason: "Wrong token",
+        open: false,
+      })
+    ).toBe("")
+    expect(
+      rejectionReasonAfterDialogChange({
+        currentReason: "Wrong token",
+        open: true,
+      })
+    ).toBe("Wrong token")
+  })
+
   it("selects the row that moves into the reviewed row's position", () => {
     expect(
       nextProviderAssetSelection({

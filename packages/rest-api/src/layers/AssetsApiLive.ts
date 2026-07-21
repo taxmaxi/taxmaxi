@@ -301,6 +301,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           .retryProviderAssetReplay({
             providerAssetRowId: path.id,
             sourceId: path.sourceId,
+            jobId: path.jobId,
           })
           .pipe(
             Effect.map((job) => SourceSyncStartResponse.make(job)),

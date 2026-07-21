@@ -351,9 +351,9 @@ const getProviderAssetReplay = HttpApiEndpoint.get(
 
 const retryProviderAssetReplay = HttpApiEndpoint.post(
   "retryProviderAssetReplay",
-  "/assets/provider-assets/:id/replays/:sourceId"
+  "/assets/provider-assets/:id/replays/:sourceId/jobs/:jobId/retry"
 )
-  .setPath(ProviderAssetReplayPath)
+  .setPath(Schema.Struct({ ...ProviderAssetReplayPath.fields, jobId: Schema.UUID }))
   .addSuccess(SourceSyncStartResponse)
   .addError(AssetNotFoundError)
   .addError(InternalServerError)

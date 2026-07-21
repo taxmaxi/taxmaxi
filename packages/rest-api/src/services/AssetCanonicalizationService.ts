@@ -142,6 +142,7 @@ export interface AssetCanonicalizationServiceShape {
   readonly retryProviderAssetReplay: (params: {
     readonly providerAssetRowId: string
     readonly sourceId: string
+    readonly jobId: string
   }) => Effect.Effect<SourceSyncJobSummary, AssetCanonicalizationError>
 }
 

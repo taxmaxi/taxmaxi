@@ -105,6 +105,7 @@ export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly retryProviderAssetReplay: (input: {
     readonly id: string
     readonly sourceId: string
+    readonly jobId: string
   }) => Effect.Effect<ProviderAssetReplayStart, unknown, never>
 }
 
@@ -132,6 +133,7 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly retryProviderAssetReplay: (input: {
     readonly id: string
     readonly sourceId: string
+    readonly jobId: string
   }) => Promise<ProviderAssetReplayStart>
 }
 
@@ -234,9 +236,9 @@ export const makeInternalAssetsEffectResource = (
     Effect.flatMap(client, (resolved) =>
       resolved.assets.getProviderAssetReplay({ path: { id, sourceId, jobId } })
     ),
-  retryProviderAssetReplay: ({ id, sourceId }) =>
+  retryProviderAssetReplay: ({ id, sourceId, jobId }) =>
     Effect.flatMap(client, (resolved) =>
-      resolved.assets.retryProviderAssetReplay({ path: { id, sourceId } })
+      resolved.assets.retryProviderAssetReplay({ path: { id, sourceId, jobId } })
     ),
 })
 

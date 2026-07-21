@@ -9,6 +9,7 @@ import {
   SourceSyncService,
   type CanonicalAssetDraft,
   type CanonicalBlockchainDraft,
+  type ProviderAssetAffectedSource,
   type ProviderAssetRecord,
 } from "@my/sync-engine/services"
 import { AssetCatalogRepository } from "@my/persistence/services"
@@ -33,6 +34,14 @@ import {
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
+
+export const providerAssetReplayResults = (sources: ReadonlyArray<ProviderAssetAffectedSource>) =>
+  sources.map((source) => ({
+    sourceId: source.sourceId,
+    jobId: source.jobId,
+    status: "queued" as const,
+    message: null,
+  }))
 
 const CoinGeckoAssetPlatform = Schema.Struct({
   id: Schema.String,
@@ -86,6 +95,14 @@ const upperSymbol = (value: string) => value.trim().toUpperCase()
 
 export const providerAssetCanonicalType = (providerType: string | null): "nft" | "token" =>
   providerType?.trim().toLowerCase() === "nft" ? "nft" : "token"
+
+export const resolveTokenAssetDecimals = ({
+  coinGeckoDecimals,
+  providerExponent,
+}: {
+  readonly coinGeckoDecimals: number | null
+  readonly providerExponent: number | null
+}): number | null => coinGeckoDecimals ?? providerExponent
 
 const isNonEmptyString = (value: string) => value.trim() !== ""
 
@@ -445,17 +462,18 @@ const buildTokenCanonicalDrafts = ({
   coin,
   platform,
   contractAddress,
+  decimals,
   providerAsset,
 }: {
   readonly coin: CoinGeckoCoin
   readonly platform: CoinGeckoAssetPlatform
   readonly contractAddress: string
+  readonly decimals: number
   readonly providerAsset: ProviderAssetRecord
 }): {
   readonly blockchain: CanonicalBlockchainDraft
   readonly asset: CanonicalAssetDraft
 } => {
-  const detail = coin.detail_platforms[platform.id]
   return {
     blockchain: {
       name: platform.id,
@@ -470,7 +488,7 @@ const buildTokenCanonicalDrafts = ({
       contractAddress,
       name: coin.name,
       symbol: upperSymbol(coin.symbol),
-      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
+      decimals,
       coingeckoCoinId: coin.id,
       logoUrl: coin.image?.small ?? null,
       type: providerAssetCanonicalType(providerAsset.providerType),
@@ -616,12 +634,24 @@ const make = Effect.gen(function* () {
         platform: tokenPlatform,
         providerAsset,
       })
+      const decimals = resolveTokenAssetDecimals({
+        coinGeckoDecimals: coin.detail_platforms[tokenPlatform.id]?.decimal_place ?? null,
+        providerExponent: providerAsset.exponent,
+      })
+      if (decimals === null) {
+        return yield* Effect.fail(
+          makeBadRequest(
+            `CoinGecko and the provider did not identify token decimals for ${providerAsset.currencyCode}; manual review is required.`
+          )
+        )
+      }
 
       return {
         ...buildTokenCanonicalDrafts({
           coin,
           platform: tokenPlatform,
           contractAddress,
+          decimals,
           providerAsset,
         }),
         warnings: [],
@@ -702,33 +732,6 @@ const make = Effect.gen(function* () {
           onSome: Effect.succeed,
         })
       )
-    )
-
-  const queueAffectedSourceReplays = (
-    sources: ReadonlyArray<{ readonly sourceId: string; readonly principalId: string }>
-  ) =>
-    Effect.forEach(sources, (source) =>
-      sourceSyncService
-        .replaySourceSyncJob({
-          principalId: source.principalId,
-          sourceId: source.sourceId,
-        })
-        .pipe(
-          Effect.match({
-            onFailure: (error) => ({
-              sourceId: source.sourceId,
-              jobId: null,
-              status: "failed_to_queue" as const,
-              message: error._tag,
-            }),
-            onSuccess: (job) => ({
-              sourceId: source.sourceId,
-              jobId: job.jobId,
-              status: "queued" as const,
-              message: job.message,
-            }),
-          })
-        )
     )
 
   const decide = (
@@ -910,7 +913,7 @@ const make = Effect.gen(function* () {
           )
         }
         const approvedProviderAsset = yield* loadReviewAfterDecision(providerAssetRowId)
-        const replays = yield* queueAffectedSourceReplays(decision.affectedSources)
+        const replays = providerAssetReplayResults(decision.affectedSources)
 
         return {
           providerAsset: approvedProviderAsset,
@@ -978,7 +981,7 @@ const make = Effect.gen(function* () {
           createReplayJobs: true,
         })
         const providerAsset = yield* loadReviewAfterDecision(providerAssetRowId)
-        const replays = yield* queueAffectedSourceReplays(decision.affectedSources)
+        const replays = providerAssetReplayResults(decision.affectedSources)
         return { providerAsset, replays }
       })
 
@@ -1009,31 +1012,36 @@ const make = Effect.gen(function* () {
       return { providerAsset, replays: [] }
     })
 
-  const loadAffectedSource = ({
+  const loadReplaySource = ({
     providerAssetRowId,
     sourceId,
+    jobId,
   }: {
     readonly providerAssetRowId: string
     readonly sourceId: string
+    readonly jobId: string
   }) =>
-    providerAssetRepository.listAffectedSources({ providerAssetRowId }).pipe(
-      Effect.mapError(
-        () =>
-          new AssetCanonicalizationInternalError({
-            message: "Failed to load the provider asset's affected sources.",
+    providerAssetRepository
+      .findProviderAssetReplaySource({ providerAssetRowId, sourceId, jobId })
+      .pipe(
+        Effect.mapError(
+          () =>
+            new AssetCanonicalizationInternalError({
+              message: "Failed to load the provider asset replay source.",
+            })
+        ),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new AssetCanonicalizationNotFoundError({
+                  message: "Replay source was not found for this reviewed provider asset.",
+                })
+              ),
+            onSome: Effect.succeed,
           })
-      ),
-      Effect.flatMap((sources) => {
-        const source = sources.find((candidate) => candidate.sourceId === sourceId)
-        return source === undefined
-          ? Effect.fail(
-              new AssetCanonicalizationNotFoundError({
-                message: "Affected source was not found for this provider asset.",
-              })
-            )
-          : Effect.succeed(source)
-      })
-    )
+        )
+      )
 
   const getProviderAssetReplay: AssetCanonicalizationServiceShape["getProviderAssetReplay"] = ({
     providerAssetRowId,
@@ -1041,7 +1049,7 @@ const make = Effect.gen(function* () {
     jobId,
   }) =>
     Effect.gen(function* () {
-      const source = yield* loadAffectedSource({ providerAssetRowId, sourceId })
+      const source = yield* loadReplaySource({ providerAssetRowId, sourceId, jobId })
       return yield* sourceSyncService
         .getSourceSyncJob({ principalId: source.principalId, sourceId, jobId })
         .pipe(
@@ -1058,9 +1066,10 @@ const make = Effect.gen(function* () {
   const retryProviderAssetReplay: AssetCanonicalizationServiceShape["retryProviderAssetReplay"] = ({
     providerAssetRowId,
     sourceId,
+    jobId,
   }) =>
     Effect.gen(function* () {
-      const source = yield* loadAffectedSource({ providerAssetRowId, sourceId })
+      const source = yield* loadReplaySource({ providerAssetRowId, sourceId, jobId })
       return yield* sourceSyncService
         .replaySourceSyncJob({ principalId: source.principalId, sourceId })
         .pipe(

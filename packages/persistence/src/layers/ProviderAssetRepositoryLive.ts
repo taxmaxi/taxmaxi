@@ -754,7 +754,7 @@ const make = Effect.gen(function* () {
             )
           }
 
-          const affectedSources =
+          const sourceCandidates =
             params.createReplayJobs && params.mappingStatus === "approved"
               ? yield* tx
                   .selectDistinct({
@@ -775,9 +775,9 @@ const make = Effect.gen(function* () {
                   )
               : []
 
-          yield* Effect.forEach(affectedSources, (source) =>
+          const affectedSources = yield* Effect.forEach(sourceCandidates, (source) =>
             Effect.gen(function* () {
-              const inserted = yield* tx
+              const [insertedJob] = yield* tx
                 .insert(schema.processingJobs)
                 .values({
                   sourceId: source.sourceId,
@@ -798,7 +798,9 @@ const make = Effect.gen(function* () {
                   )
                 )
 
-              if (inserted.length === 1) return
+              if (insertedJob !== undefined) {
+                return { ...source, jobId: insertedJob.id }
+              }
 
               const [activeJob] = yield* tx
                 .select({
@@ -821,10 +823,17 @@ const make = Effect.gen(function* () {
                   )
                 )
 
-              if (
-                activeJob !== undefined &&
-                !(activeJob.status === "pending" && activeJob.mode === "replay")
-              ) {
+              if (activeJob === undefined) {
+                return yield* Effect.fail(
+                  new SyncEngineStorageError({
+                    operation:
+                      "providerAssetRepository.decideProviderAssetMapping.loadActiveReplayJob",
+                    cause: { sourceId: source.sourceId },
+                  })
+                )
+              }
+
+              if (!(activeJob.status === "pending" && activeJob.mode === "replay")) {
                 yield* tx
                   .update(schema.processingJobs)
                   .set({ followUpMode: "replay", updatedAt: params.reviewedAt })
@@ -835,6 +844,8 @@ const make = Effect.gen(function* () {
                     )
                   )
               }
+
+              return { ...source, jobId: activeJob.id }
             })
           )
 
@@ -843,19 +854,47 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSyncEngineSqlError("providerAssetRepository.decideProviderAssetMapping"))
 
-  const listAffectedSources: ProviderAssetRepositoryShape["listAffectedSources"] = ({
-    providerAssetRowId,
-  }) =>
-    db
-      .selectDistinct({
-        sourceId: schema.providerTransfers.sourceId,
-        principalId: schema.sources.principalId,
+  const findProviderAssetReplaySource: ProviderAssetRepositoryShape["findProviderAssetReplaySource"] =
+    ({ providerAssetRowId, sourceId, jobId }) =>
+      Effect.gen(function* () {
+        const [review] = yield* db
+          .select({ providerAssetRowId: schema.providerAssetMappings.providerAssetRowId })
+          .from(schema.providerAssetMappings)
+          .where(
+            and(
+              eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId),
+              eq(schema.providerAssetMappings.mappingStatus, "approved")
+            )
+          )
+          .limit(1)
+          .pipe(
+            wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetReplaySource.review")
+          )
+
+        if (review === undefined) return Option.none()
+
+        const [job] = yield* db
+          .select({
+            sourceId: schema.processingJobs.sourceId,
+            principalId: schema.processingJobs.principalId,
+            jobId: schema.processingJobs.id,
+          })
+          .from(schema.processingJobs)
+          .where(
+            and(
+              eq(schema.processingJobs.id, jobId),
+              eq(schema.processingJobs.sourceId, sourceId),
+              or(
+                eq(schema.processingJobs.mode, "replay"),
+                eq(schema.processingJobs.followUpMode, "replay")
+              )
+            )
+          )
+          .limit(1)
+          .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetReplaySource.job"))
+
+        return Option.fromNullable(job)
       })
-      .from(schema.providerTransfers)
-      .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
-      .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
-      .orderBy(asc(schema.providerTransfers.sourceId))
-      .pipe(wrapSyncEngineSqlError("providerAssetRepository.listAffectedSources"))
 
   const findProviderAssetMapping: ProviderAssetRepositoryShape["findProviderAssetMapping"] = ({
     providerAssetRowId,
@@ -890,7 +929,7 @@ const make = Effect.gen(function* () {
     listProviderAssetReviews,
     countProviderAssetReviews,
     decideProviderAssetMapping,
-    listAffectedSources,
+    findProviderAssetReplaySource,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })

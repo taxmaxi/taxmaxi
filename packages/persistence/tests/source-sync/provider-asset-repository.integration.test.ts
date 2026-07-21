@@ -683,7 +683,13 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(decision).toMatchObject({
         updated: true,
         canonicalAsset: { symbol: "RVT" },
-        affectedSources: [{ sourceId: TEST_SOURCE_ID, principalId: TEST_PRINCIPAL_ID }],
+        affectedSources: [
+          {
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            jobId: expect.any(String),
+          },
+        ],
       })
       expect(persisted.jobs).toEqual([
         { sourceId: TEST_SOURCE_ID, mode: "sync", followUpMode: "replay" },
@@ -691,6 +697,54 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(persisted.mappings[0]?.canonicalAssetId).toBe(decision.canonicalAsset?.id)
       expect(staleDecision.updated).toBe(false)
       expect(persisted.staleAssets).toHaveLength(0)
+
+      const replayJobId = decision.affectedSources[0]?.jobId
+      expect(replayJobId).toBeDefined()
+
+      if (replayJobId !== undefined) {
+        const unrelatedJobId = crypto.randomUUID()
+        await runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.transactions).where(eq(schema.transactions.id, transactionId))
+            yield* db.insert(schema.processingJobs).values({
+              id: unrelatedJobId,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "sync",
+              status: "completed",
+              completedAt: new Date("2026-07-20T12:00:00.000Z"),
+            })
+          })
+        )
+
+        const replaySource = await runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.findProviderAssetReplaySource({
+              providerAssetRowId: providerAssetId,
+              sourceId: TEST_SOURCE_ID,
+              jobId: replayJobId,
+            })
+          )
+        )
+
+        expect(Option.getOrNull(replaySource)).toEqual({
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          jobId: replayJobId,
+        })
+
+        const unrelatedSource = await runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.findProviderAssetReplaySource({
+              providerAssetRowId: providerAssetId,
+              sourceId: TEST_SOURCE_ID,
+              jobId: unrelatedJobId,
+            })
+          )
+        )
+        expect(Option.isNone(unrelatedSource)).toBe(true)
+      }
     })
 
     it("uses one canonical asset for concurrent native approvals", async () => {

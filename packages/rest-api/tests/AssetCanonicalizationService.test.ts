@@ -7,8 +7,10 @@ import {
   isObservedProviderChainMatch,
   optionalCandidateResolution,
   providerAssetCanonicalType,
+  providerAssetReplayResults,
   providerTokenIdentifiersMatch,
   resolveNativeAssetDecimals,
+  resolveTokenAssetDecimals,
   selectCoinCandidate,
   selectExactTokenPlatform,
   selectNativeCoinPlatform,
@@ -202,6 +204,36 @@ describe("AssetCanonicalizationService", () => {
         providerExponent: 8,
       })
     ).toBe(8)
+  })
+
+  it("does not guess token precision when CoinGecko and the provider omit it", () => {
+    expect(
+      resolveTokenAssetDecimals({
+        coinGeckoDecimals: null,
+        providerExponent: null,
+      })
+    ).toBeNull()
+    expect(
+      resolveTokenAssetDecimals({
+        coinGeckoDecimals: 6,
+        providerExponent: null,
+      })
+    ).toBe(6)
+  })
+
+  it("reports the durable replay job created by the review decision", () => {
+    expect(
+      providerAssetReplayResults([
+        { sourceId: "source-1", principalId: "principal-1", jobId: "job-1" },
+      ])
+    ).toEqual([
+      {
+        sourceId: "source-1",
+        jobId: "job-1",
+        status: "queued",
+        message: null,
+      },
+    ])
   })
 
   it("uses explicit chain identifiers before platform name heuristics", () => {

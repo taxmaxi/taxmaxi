@@ -93,6 +93,7 @@ export interface ProviderAssetReviewMapping extends ProviderAssetMappingState {
 export interface ProviderAssetAffectedSource {
   readonly sourceId: string
   readonly principalId: string
+  readonly jobId: string
 }
 
 /**
@@ -227,9 +228,12 @@ export interface ProviderAssetRepositoryShape {
     readonly createReplayJobs: boolean
   }) => Effect.Effect<ProviderAssetDecisionResult, SyncEngineStorageError>
 
-  readonly listAffectedSources: (params: {
+  /** Resolve a reviewed provider asset replay through its durable processing job. */
+  readonly findProviderAssetReplaySource: (params: {
     readonly providerAssetRowId: string
-  }) => Effect.Effect<ReadonlyArray<ProviderAssetAffectedSource>, SyncEngineStorageError>
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Effect.Effect<Option.Option<ProviderAssetAffectedSource>, SyncEngineStorageError>
 
   /**
    * Load the current mapping for one provider asset.

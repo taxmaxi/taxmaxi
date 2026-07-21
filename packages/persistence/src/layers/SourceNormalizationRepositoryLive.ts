@@ -8,7 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -676,6 +676,36 @@ const make = Effect.gen(function* () {
         } satisfies PersistedSourceProviderTransfer
       })
     )
+
+  const lockProviderAssetMappingsForNormalization = ({
+    executor,
+    providerTransfers,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+  }) => {
+    const providerAssetRowIds = [
+      ...new Set(
+        providerTransfers.flatMap((providerTransfer) =>
+          providerTransfer.providerAssetId === null ? [] : [providerTransfer.providerAssetId]
+        )
+      ),
+    ]
+
+    if (providerAssetRowIds.length === 0) return Effect.void
+
+    return executor
+      .select({ id: schema.providerAssetMappings.id })
+      .from(schema.providerAssetMappings)
+      .where(inArray(schema.providerAssetMappings.providerAssetRowId, providerAssetRowIds))
+      .for("share")
+      .pipe(
+        Effect.asVoid,
+        wrapSyncEngineSqlError(
+          "sourceNormalizationRepository.lockProviderAssetMappingsForNormalization"
+        )
+      )
+  }
 
   const upsertTransactionLegs = ({
     executor,
@@ -1932,6 +1962,10 @@ const make = Effect.gen(function* () {
             executor: tx,
             transactionId: persistedTransaction.id,
             providerTransfers: params.providerTransfers,
+          })
+          yield* lockProviderAssetMappingsForNormalization({
+            executor: tx,
+            providerTransfers: persistedProviderTransfers,
           })
           const persistedFeeTransfers = yield* upsertFeeTransfers({
             executor: tx,
