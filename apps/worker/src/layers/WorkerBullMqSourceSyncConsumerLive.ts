@@ -197,79 +197,76 @@ const isRetryableWorkerError = (
 ): boolean =>
   error._tag === "SourceSyncJobRetryableExecutionError" || error._tag === "SyncEngineStorageError"
 
-const processJob = ({
+const processJob = Effect.fn("worker.source-sync.process", {
+  attributes: {
+    queueName: SOURCE_SYNC_QUEUE_NAME,
+  },
+  kind: "consumer",
+})(function* ({
   job,
   config,
 }: {
   readonly job: WorkerBullMqSourceSyncJob
   readonly config: WorkerBullMqSourceSyncConsumerConfig
-}) =>
-  Effect.gen(function* () {
-    const executor = yield* SourceSyncJobExecutor
-    const payload = yield* decodePayload(job.data).pipe(
-      Effect.mapError(
-        (cause) =>
-          new WorkerBullMqMalformedSourceSyncPayloadError({
-            queueJobId: job.id ?? null,
-            cause,
-          })
-      )
+}) {
+  const executor = yield* SourceSyncJobExecutor
+  const payload = yield* decodePayload(job.data).pipe(
+    Effect.mapError(
+      (cause) =>
+        new WorkerBullMqMalformedSourceSyncPayloadError({
+          queueJobId: job.id ?? null,
+          cause,
+        })
     )
-    const now = yield* currentDate
-    const attemptNumber = job.attemptsMade + 1
-    const maxAttempts = resolveMaxAttempts(job)
-    const nextRetryAt = new Date(now.getTime() + resolveBackoffDelayMs(job))
+  )
+  const now = yield* currentDate
+  const attemptNumber = job.attemptsMade + 1
+  const maxAttempts = resolveMaxAttempts(job)
+  const nextRetryAt = new Date(now.getTime() + resolveBackoffDelayMs(job))
 
-    yield* Effect.logInfo(
-      {
-        queueName: SOURCE_SYNC_QUEUE_NAME,
-        queueJobId: job.id ?? null,
-        workerId: config.workerId,
-        jobId: payload.jobId,
-        sourceId: payload.sourceId,
-        principalId: payload.principalId,
-        mode: payload.mode,
-        attemptNumber,
-        maxAttempts,
-      },
-      "source-sync-worker:job-started"
-    )
-
-    const summary = yield* executor.execute({
-      jobId: payload.jobId,
-      workerId: config.workerId,
-      retryPolicy: {
-        attemptNumber,
-        maxAttempts,
-        nextRetryAt,
-      },
-    })
-
-    const logPayload = {
+  yield* Effect.logInfo(
+    {
       queueName: SOURCE_SYNC_QUEUE_NAME,
       queueJobId: job.id ?? null,
       workerId: config.workerId,
       jobId: payload.jobId,
-      sourceId: summary.sourceId,
+      sourceId: payload.sourceId,
+      principalId: payload.principalId,
       mode: payload.mode,
-      status: summary.status,
-    }
-
-    if (summary.status === "failed") {
-      yield* Effect.logError(logPayload, "source-sync-worker:job-failed")
-    } else {
-      yield* Effect.logInfo(logPayload, "source-sync-worker:job-succeeded")
-    }
-
-    return summary
-  }).pipe(
-    Effect.withSpan("worker.source-sync.process", {
-      attributes: {
-        queueName: SOURCE_SYNC_QUEUE_NAME,
-      },
-      kind: "consumer",
-    })
+      attemptNumber,
+      maxAttempts,
+    },
+    "source-sync-worker:job-started"
   )
+
+  const summary = yield* executor.execute({
+    jobId: payload.jobId,
+    workerId: config.workerId,
+    retryPolicy: {
+      attemptNumber,
+      maxAttempts,
+      nextRetryAt,
+    },
+  })
+
+  const logPayload = {
+    queueName: SOURCE_SYNC_QUEUE_NAME,
+    queueJobId: job.id ?? null,
+    workerId: config.workerId,
+    jobId: payload.jobId,
+    sourceId: summary.sourceId,
+    mode: payload.mode,
+    status: summary.status,
+  }
+
+  if (summary.status === "failed") {
+    yield* Effect.logError(logPayload, "source-sync-worker:job-failed")
+  } else {
+    yield* Effect.logInfo(logPayload, "source-sync-worker:job-succeeded")
+  }
+
+  return summary
+})
 
 const acquireLiveWorker = (
   config: WorkerBullMqSourceSyncConsumerConfig,
