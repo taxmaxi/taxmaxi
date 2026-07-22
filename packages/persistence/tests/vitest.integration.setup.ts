@@ -7,8 +7,7 @@ import {
   runSqlUnsafe,
 } from "../src/layers/PgClientLive.ts"
 import { seedData } from "../src/seed/data.ts"
-
-const TEMPLATE_DATABASE_NAME = "taxmaxi_template"
+import { MIGRATED_TEST_DATABASE_TEMPLATE_NAME } from "./support/test-database-name.ts"
 
 const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `""`)}"`
 
@@ -30,7 +29,7 @@ export const setup = async () => {
     `postgresql://${user}:${passwordValue}@${host}:${port}/postgres`
   )
   const templateDatabaseUrl = Redacted.make(
-    `postgresql://${user}:${passwordValue}@${host}:${port}/${TEMPLATE_DATABASE_NAME}`
+    `postgresql://${user}:${passwordValue}@${host}:${port}/${MIGRATED_TEST_DATABASE_TEMPLATE_NAME}`
   )
   const AdminPgClientLive = makePgClientLayer({
     url: adminDatabaseUrl,
@@ -62,13 +61,13 @@ export const setup = async () => {
           WHERE datname = $1
             AND pid <> pg_backend_pid()
         `,
-        params: [TEMPLATE_DATABASE_NAME],
+        params: [MIGRATED_TEST_DATABASE_TEMPLATE_NAME],
       })
       yield* runAdminSql({
-        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(TEMPLATE_DATABASE_NAME)}`,
+        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(MIGRATED_TEST_DATABASE_TEMPLATE_NAME)}`,
       })
       yield* runAdminSql({
-        statement: `CREATE DATABASE ${quoteIdentifier(TEMPLATE_DATABASE_NAME)}`,
+        statement: `CREATE DATABASE ${quoteIdentifier(MIGRATED_TEST_DATABASE_TEMPLATE_NAME)}`,
       })
       yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
       yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
@@ -79,8 +78,27 @@ export const setup = async () => {
           WHERE datname = $1
             AND pid <> pg_backend_pid()
         `,
-        params: [TEMPLATE_DATABASE_NAME],
+        params: [MIGRATED_TEST_DATABASE_TEMPLATE_NAME],
       })
     })
   )
+
+  return async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runAdminSql({
+          statement: `
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = $1
+              AND pid <> pg_backend_pid()
+          `,
+          params: [MIGRATED_TEST_DATABASE_TEMPLATE_NAME],
+        })
+        yield* runAdminSql({
+          statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(MIGRATED_TEST_DATABASE_TEMPLATE_NAME)}`,
+        })
+      })
+    )
+  }
 }

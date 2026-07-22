@@ -12,8 +12,10 @@ import {
   runSqlUnsafe,
 } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
-
-const MIGRATED_TEMPLATE_DATABASE_NAME = "taxmaxi_template"
+import {
+  makeIntegrationTestDatabaseName,
+  MIGRATED_TEST_DATABASE_TEMPLATE_NAME,
+} from "./test-database-name.ts"
 
 const testDatabaseConfig = Effect.runSync(
   Effect.gen(function* () {
@@ -83,7 +85,7 @@ export const makeIntegrationTestDatabaseContext = ({
 }: {
   readonly databaseNamePrefix: string
 }) => {
-  const databaseName = `${databaseNamePrefix}_${workerId}`
+  const databaseName = makeIntegrationTestDatabaseName({ databaseNamePrefix, workerId })
   let defaultSchemaMigrated = false
 
   const testDatabaseUrl = Redacted.make(
@@ -141,7 +143,7 @@ export const makeIntegrationTestDatabaseContext = ({
       })
       yield* runAdminSql({
         statement: `CREATE DATABASE ${quoteIdentifier(databaseName)} TEMPLATE ${quoteIdentifier(
-          MIGRATED_TEMPLATE_DATABASE_NAME
+          MIGRATED_TEST_DATABASE_TEMPLATE_NAME
         )}`,
       })
     })
@@ -206,7 +208,11 @@ export const makeIntegrationTestDatabaseContext = ({
     })
 
   const destroyTestDatabase = () =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
+      yield* terminateTestDatabaseConnections()
+      yield* runAdminSql({
+        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`,
+      })
       defaultSchemaMigrated = false
     })
 
