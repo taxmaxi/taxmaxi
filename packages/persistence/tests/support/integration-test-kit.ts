@@ -5,6 +5,7 @@ import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
+import { inject } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import {
   makePgClientLayer,
@@ -12,8 +13,10 @@ import {
   runSqlUnsafe,
 } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
-
-const MIGRATED_TEMPLATE_DATABASE_NAME = "taxmaxi_template"
+import {
+  makeIntegrationTestDatabaseName,
+  makeTestDatabaseTemplateName,
+} from "./test-database-name.ts"
 
 const testDatabaseConfig = Effect.runSync(
   Effect.gen(function* () {
@@ -30,6 +33,8 @@ const testDatabaseConfig = Effect.runSync(
 )
 
 const workerId = testDatabaseConfig.workerId.replace(/[^a-zA-Z0-9_]/g, "_")
+const testRunId = inject("integrationTestRunId")
+const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
 const pgHost = testDatabaseConfig.host
 const pgPort = testDatabaseConfig.port
 const pgUser = testDatabaseConfig.user
@@ -83,7 +88,11 @@ export const makeIntegrationTestDatabaseContext = ({
 }: {
   readonly databaseNamePrefix: string
 }) => {
-  const databaseName = `${databaseNamePrefix}_${workerId}`
+  const databaseName = makeIntegrationTestDatabaseName({
+    databaseNamePrefix,
+    testRunId,
+    workerId,
+  })
   let defaultSchemaMigrated = false
 
   const testDatabaseUrl = Redacted.make(
@@ -141,7 +150,7 @@ export const makeIntegrationTestDatabaseContext = ({
       })
       yield* runAdminSql({
         statement: `CREATE DATABASE ${quoteIdentifier(databaseName)} TEMPLATE ${quoteIdentifier(
-          MIGRATED_TEMPLATE_DATABASE_NAME
+          migratedTestDatabaseTemplateName
         )}`,
       })
     })
@@ -206,7 +215,11 @@ export const makeIntegrationTestDatabaseContext = ({
     })
 
   const destroyTestDatabase = () =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
+      yield* terminateTestDatabaseConnections()
+      yield* runAdminSql({
+        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`,
+      })
       defaultSchemaMigrated = false
     })
 
