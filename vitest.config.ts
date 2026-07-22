@@ -35,7 +35,7 @@ export default defineConfig({
           exclude: ["**/node_modules/**"],
           name: { label: "integration", color: "magenta" },
           env: loadEnv("test", "./apps/server", ""),
-          globalSetup: ["./packages/persistence/tests/vitest.integration.setup.ts"],
+          globalSetup: ["./packages/persistence/tests/support/vitest.integration.setup.ts"],
         },
       },
     ],

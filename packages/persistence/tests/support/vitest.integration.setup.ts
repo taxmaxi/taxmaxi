@@ -7,9 +7,9 @@ import {
   makePgClientLayer,
   runDrizzleMigrations,
   runSqlUnsafe,
-} from "../src/layers/PgClientLive.ts"
-import { seedData } from "../src/seed/data.ts"
-import { makeTestDatabaseTemplateName } from "./support/test-database-name.ts"
+} from "../../src/layers/PgClientLive.ts"
+import { seedData } from "../../src/seed/data.ts"
+import { makeTestDatabaseTemplateName } from "./test-database-name.ts"
 
 const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `""`)}"`
 
