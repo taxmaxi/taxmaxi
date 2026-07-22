@@ -127,6 +127,11 @@ export interface AssetCanonicalizationServiceShape {
     readonly reviewedBy: string
   }) => Effect.Effect<ReviewProviderAssetResult, AssetCanonicalizationError>
 
+  readonly approveProviderAssetAsFiat: (params: {
+    readonly providerAssetRowId: string
+    readonly reviewedBy: string
+  }) => Effect.Effect<ReviewProviderAssetResult, AssetCanonicalizationError>
+
   readonly rejectProviderAsset: (params: {
     readonly providerAssetRowId: string
     readonly rejectionReason: string

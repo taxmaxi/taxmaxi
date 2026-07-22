@@ -692,6 +692,7 @@ describe("TaxMaxi Promise client", () => {
       assetCanonicalizationResponseBody,
       providerAssetDecisionResponseBody,
       providerAssetDecisionResponseBody,
+      providerAssetDecisionResponseBody,
       providerAssetReplayJobResponseBody,
       providerAssetReplayStartResponseBody,
     ]
@@ -753,6 +754,9 @@ describe("TaxMaxi Promise client", () => {
       })
     ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
     await expect(
+      taxmaxi.assets.approveProviderAssetAsFiat({ id: providerAssetId })
+    ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
+    await expect(
       taxmaxi.assets.rejectProviderAsset({
         id: providerAssetId,
         rejectionReason: "Spam token",
@@ -785,6 +789,9 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/map",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve-fiat",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/reject",

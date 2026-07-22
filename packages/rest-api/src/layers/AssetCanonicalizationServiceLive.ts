@@ -985,6 +985,55 @@ const make = Effect.gen(function* () {
         return { providerAsset, replays }
       })
 
+  const approveProviderAssetAsFiat: AssetCanonicalizationServiceShape["approveProviderAssetAsFiat"] =
+    ({ providerAssetRowId, reviewedBy }) =>
+      Effect.gen(function* () {
+        const review = yield* loadPendingReview(providerAssetRowId)
+        if (review.providerAsset.providerType?.trim().toLowerCase() !== "fiat") {
+          return yield* Effect.fail(makeBadRequest("Only fiat provider assets can become fiat."))
+        }
+
+        const canonicalFiatCurrency = review.providerAsset.currencyCode.trim().toUpperCase()
+        if (canonicalFiatCurrency === "") {
+          return yield* Effect.fail(makeBadRequest("Fiat currency code is missing."))
+        }
+
+        const decision = yield* providerAssetRepository
+          .decideProviderAssetMapping({
+            providerAssetRowId,
+            mappingKind: "fiat",
+            canonicalFiatCurrency,
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Approved as a canonical fiat currency by an administrator.",
+            reviewedBy,
+            reviewedAt: new Date(),
+            createReplayJobs: true,
+          })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to persist provider asset review decision.",
+                })
+            ),
+            Effect.flatMap((result) =>
+              result.updated
+                ? Effect.succeed(result)
+                : Effect.fail(
+                    new AssetCanonicalizationConflictError({
+                      message: "Provider asset mapping was reviewed by another administrator.",
+                    })
+                  )
+            )
+          )
+
+        return {
+          providerAsset: yield* loadReviewAfterDecision(providerAssetRowId),
+          replays: providerAssetReplayResults(decision.affectedSources),
+        }
+      })
+
   const rejectProviderAsset: AssetCanonicalizationServiceShape["rejectProviderAsset"] = ({
     providerAssetRowId,
     rejectionReason,
@@ -1086,6 +1135,7 @@ const make = Effect.gen(function* () {
     listCoinGeckoCandidates,
     canonicalizeProviderAssetFromCoinGecko,
     mapProviderAssetToExisting,
+    approveProviderAssetAsFiat,
     rejectProviderAsset,
     getProviderAssetReplay,
     retryProviderAssetReplay,

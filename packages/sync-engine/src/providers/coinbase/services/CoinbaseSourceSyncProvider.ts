@@ -9,6 +9,7 @@ import type * as Effect from "effect/Effect"
 import type { SyncEngineAsset } from "../../../services/AssetRepository.ts"
 import type {
   SourceProviderTransferDraft,
+  SourceProviderAssetObservationDraft,
   PersistedSourceTransaction,
   PersistedSourceTransfer,
   PersistedSourceVenueContext,
@@ -60,6 +61,7 @@ export interface PreparedCoinbaseNormalization {
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  readonly providerAssetObservations: ReadonlyArray<SourceProviderAssetObservationDraft>
   readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping

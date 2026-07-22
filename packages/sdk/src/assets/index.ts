@@ -94,6 +94,9 @@ export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly mapProviderAsset: (
     input: { readonly id: string } & MapProviderAssetRequest
   ) => Effect.Effect<ProviderAssetDecision, unknown, never>
+  readonly approveProviderAssetAsFiat: (input: {
+    readonly id: string
+  }) => Effect.Effect<ProviderAssetDecision, unknown, never>
   readonly rejectProviderAsset: (
     input: { readonly id: string } & RejectProviderAssetRequest
   ) => Effect.Effect<ProviderAssetDecision, unknown, never>
@@ -122,6 +125,9 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly mapProviderAsset: (
     input: { readonly id: string } & MapProviderAssetRequest
   ) => Promise<ProviderAssetDecision>
+  readonly approveProviderAssetAsFiat: (input: {
+    readonly id: string
+  }) => Promise<ProviderAssetDecision>
   readonly rejectProviderAsset: (
     input: { readonly id: string } & RejectProviderAssetRequest
   ) => Promise<ProviderAssetDecision>
@@ -225,6 +231,10 @@ export const makeInternalAssetsEffectResource = (
         payload: { canonicalAssetId, reviewerNotes },
       })
     ),
+  approveProviderAssetAsFiat: ({ id }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.approveProviderAssetAsFiat({ path: { id } })
+    ),
   rejectProviderAsset: ({ id, rejectionReason }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.rejectProviderAsset({
@@ -259,6 +269,7 @@ export const makeInternalAssetsPromiseResource = (
   canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
   listProviderAssetCandidates: (input) => run(effect.listProviderAssetCandidates(input)),
   mapProviderAsset: (input) => run(effect.mapProviderAsset(input)),
+  approveProviderAssetAsFiat: (input) => run(effect.approveProviderAssetAsFiat(input)),
   rejectProviderAsset: (input) => run(effect.rejectProviderAsset(input)),
   getProviderAssetReplay: (input) => run(effect.getProviderAssetReplay(input)),
   retryProviderAssetReplay: (input) => run(effect.retryProviderAssetReplay(input)),

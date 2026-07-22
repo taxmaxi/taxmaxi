@@ -333,6 +333,61 @@ describe("AssetsApiLive", () => {
     expect(response.status).toBe(400)
   })
 
+  it("allows an admin to approve a fiat provider row as its canonical currency", async () => {
+    const userId = crypto.randomUUID()
+    const providerAssetId = crypto.randomUUID()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: userId,
+          email: `${userId}@asset-review.test`,
+          role: "admin",
+        })
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "fiat-usd",
+          currencyCode: "usd",
+          name: "US Dollar",
+          providerType: "fiat",
+          rawProviderPayload: { code: "USD" },
+          retrievedAt: new Date("2026-07-20T09:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "fiat",
+          mappingStatus: "pending_review",
+        })
+      })
+    )
+
+    const response = await Effect.runPromise(
+      Effect.gen(function* () {
+        const request = HttpClientRequest.post(
+          `/v1/assets/provider-assets/${providerAssetId}/approve-fiat`
+        ).pipe(HttpClientRequest.bearerToken(`user_${userId}_admin`))
+        const result = yield* HttpClient.execute(request)
+        const body = yield* result.json
+        return {
+          status: result.status,
+          body: yield* Schema.decodeUnknown(ProviderAssetDecisionResponse)(body),
+        }
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.providerAsset).toMatchObject({
+      id: providerAssetId,
+      mappingKind: "fiat",
+      canonicalAssetId: null,
+      canonicalAssetSymbol: null,
+      canonicalFiatCurrency: "USD",
+      mappingStatus: "approved",
+      reviewedBy: userId,
+    })
+  })
+
   it("records an admin rejection once and returns a conflict for a stale decision", async () => {
     const userId = crypto.randomUUID()
     const providerAssetId = crypto.randomUUID()

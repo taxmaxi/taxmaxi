@@ -263,6 +263,7 @@ const persistCoinbaseNormalization = ({
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
             providerTransfers,
+            providerAssetObservations: prepared.providerAssetObservations,
             feeTransfers: prepared.feeTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
@@ -278,6 +279,7 @@ const persistCoinbaseNormalization = ({
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
             providerTransfers,
+            providerAssetObservations: prepared.providerAssetObservations,
             feeTransfers: prepared.feeTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
@@ -440,6 +442,98 @@ describe("SourceNormalizationRepositoryLive", () => {
         { sourceId: TEST_SOURCE_ID, principalId: TEST_PRINCIPAL_ID, jobId: expect.any(String) },
       ],
     })
+  })
+
+  it("schedules replay when a prepared pending mapping is approved before persistence", async () => {
+    const providerAssetId = crypto.randomUUID()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "late-approved-asset",
+          currencyCode: "LATE",
+          name: "Late Approved Asset",
+          providerType: "crypto",
+          rawProviderPayload: { symbol: "LATE" },
+          retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            canonicalAssetSymbol: "BTC",
+            mappingStatus: "approved",
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetId))
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "late-approved-transaction",
+            externalGroupId: null,
+            timestamp: new Date("2026-07-20T10:00:00.000Z"),
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: null,
+            providerUpdatedAt: null,
+            metadata: {},
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "late-approved-account",
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: {},
+          },
+          providerTransfers: [],
+          providerAssetObservations: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              providerAssetId,
+            },
+          ],
+          feeTransfers: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+          legs: [],
+        })
+      )
+    )
+
+    const jobs = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    expect(jobs).toEqual([{ mode: "replay", status: "pending" }])
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

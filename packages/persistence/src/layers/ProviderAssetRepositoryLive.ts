@@ -709,7 +709,7 @@ const make = Effect.gen(function* () {
           }
 
           const canonicalAsset =
-            params.canonicalAssetDraft === null
+            params.mappingKind === "fiat" || params.canonicalAssetDraft === null
               ? null
               : yield* upsertCanonicalAsset({
                   executor: tx,
@@ -717,8 +717,14 @@ const make = Effect.gen(function* () {
                   asset: params.canonicalAssetDraft.asset,
                   now: params.reviewedAt,
                 })
-          const canonicalAssetId = canonicalAsset?.id ?? params.canonicalAssetId
-          const canonicalAssetSymbol = canonicalAsset?.symbol ?? params.canonicalAssetSymbol
+          const canonicalAssetId =
+            params.mappingKind === "asset" ? (canonicalAsset?.id ?? params.canonicalAssetId) : null
+          const canonicalAssetSymbol =
+            params.mappingKind === "asset"
+              ? (canonicalAsset?.symbol ?? params.canonicalAssetSymbol)
+              : null
+          const canonicalFiatCurrency =
+            params.mappingKind === "fiat" ? params.canonicalFiatCurrency : null
 
           const updated = yield* tx
             .update(schema.providerAssetMappings)
@@ -726,7 +732,7 @@ const make = Effect.gen(function* () {
               mappingKind: params.mappingKind,
               canonicalAssetId,
               canonicalAssetSymbol,
-              canonicalFiatCurrency: null,
+              canonicalFiatCurrency,
               mappingStatus: params.mappingStatus,
               reviewerNotes: params.reviewerNotes,
               sourceNotes: params.sourceNotes,
@@ -756,23 +762,56 @@ const make = Effect.gen(function* () {
 
           const sourceCandidates =
             params.createReplayJobs && params.mappingStatus === "approved"
-              ? yield* tx
-                  .selectDistinct({
-                    sourceId: schema.providerTransfers.sourceId,
-                    principalId: schema.sources.principalId,
-                  })
-                  .from(schema.providerTransfers)
-                  .innerJoin(
-                    schema.sources,
-                    eq(schema.sources.id, schema.providerTransfers.sourceId)
-                  )
-                  .where(eq(schema.providerTransfers.providerAssetId, params.providerAssetRowId))
-                  .orderBy(asc(schema.providerTransfers.sourceId))
-                  .pipe(
-                    wrapSyncEngineSqlError(
-                      "providerAssetRepository.decideProviderAssetMapping.affectedSources"
+              ? yield* Effect.gen(function* () {
+                  const transferSources = yield* tx
+                    .selectDistinct({
+                      sourceId: schema.providerTransfers.sourceId,
+                      principalId: schema.sources.principalId,
+                    })
+                    .from(schema.providerTransfers)
+                    .innerJoin(
+                      schema.sources,
+                      eq(schema.sources.id, schema.providerTransfers.sourceId)
                     )
-                  )
+                    .where(eq(schema.providerTransfers.providerAssetId, params.providerAssetRowId))
+                    .orderBy(asc(schema.providerTransfers.sourceId))
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "providerAssetRepository.decideProviderAssetMapping.affectedSources"
+                      )
+                    )
+                  const observationSources = yield* tx
+                    .selectDistinct({
+                      sourceId: schema.providerAssetObservations.sourceId,
+                      principalId: schema.sources.principalId,
+                    })
+                    .from(schema.providerAssetObservations)
+                    .innerJoin(
+                      schema.sources,
+                      eq(schema.sources.id, schema.providerAssetObservations.sourceId)
+                    )
+                    .where(
+                      eq(
+                        schema.providerAssetObservations.providerAssetId,
+                        params.providerAssetRowId
+                      )
+                    )
+                    .orderBy(asc(schema.providerAssetObservations.sourceId))
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "providerAssetRepository.decideProviderAssetMapping.observedSources"
+                      )
+                    )
+
+                  return [
+                    ...new Map(
+                      [...transferSources, ...observationSources].map((source) => [
+                        source.sourceId,
+                        source,
+                      ])
+                    ).values(),
+                  ].sort((left, right) => left.sourceId.localeCompare(right.sourceId))
+                })
               : []
 
           const affectedSources = yield* Effect.forEach(sourceCandidates, (source) =>

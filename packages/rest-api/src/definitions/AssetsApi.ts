@@ -321,6 +321,25 @@ const mapProviderAsset = HttpApiEndpoint.post("mapProviderAsset", "/assets/provi
   .addError(InternalServerError)
   .middleware(AdminAuthMiddleware)
 
+const approveProviderAssetAsFiat = HttpApiEndpoint.post(
+  "approveProviderAssetAsFiat",
+  "/assets/provider-assets/:id/approve-fiat"
+)
+  .setPath(Schema.Struct({ id: Schema.UUID }))
+  .addSuccess(ProviderAssetDecisionResponse)
+  .addError(AssetBadRequestError)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Approve provider fiat currency",
+      description:
+        "Approves a fiat provider observation using its normalized currency code as the canonical fiat target.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
 const rejectProviderAsset = HttpApiEndpoint.post(
   "rejectProviderAsset",
   "/assets/provider-assets/:id/reject"
@@ -366,6 +385,7 @@ export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listProviderAssetCandidates)
   .add(canonicalizeProviderAsset)
   .add(mapProviderAsset)
+  .add(approveProviderAssetAsFiat)
   .add(rejectProviderAsset)
   .add(getProviderAssetReplay)
   .add(retryProviderAssetReplay)

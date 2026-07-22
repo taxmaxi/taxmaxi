@@ -28,6 +28,7 @@ import {
   type PersistedSourceTransaction,
   type SourceOnchainContextDraft,
   SourceNormalizationRepository,
+  type SourceProviderAssetObservationDraft,
   type SourceProviderTransferDraft,
   type SourceTransactionDraft,
   type SourceTransactionLegDraft,
@@ -677,19 +678,51 @@ const make = Effect.gen(function* () {
       })
     )
 
+  const upsertProviderAssetObservations = ({
+    executor,
+    observations,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly observations: ReadonlyArray<SourceProviderAssetObservationDraft>
+  }) =>
+    Effect.forEach(
+      observations,
+      (observation) => {
+        const now = nowDate()
+        return executor
+          .insert(schema.providerAssetObservations)
+          .values({ ...observation, createdAt: now, updatedAt: now })
+          .onConflictDoUpdate({
+            target: [
+              schema.providerAssetObservations.sourceRawRecordId,
+              schema.providerAssetObservations.providerAssetId,
+            ],
+            set: { sourceId: observation.sourceId, updatedAt: now },
+          })
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError("sourceNormalizationRepository.upsertProviderAssetObservations")
+          )
+      },
+      { discard: true }
+    )
+
   const lockProviderAssetMappingsForNormalization = ({
     executor,
     providerTransfers,
+    providerAssetObservations,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+    readonly providerAssetObservations: ReadonlyArray<SourceProviderAssetObservationDraft>
   }) => {
     const providerAssetRowIds = [
-      ...new Set(
-        providerTransfers.flatMap((providerTransfer) =>
+      ...new Set([
+        ...providerTransfers.flatMap((providerTransfer) =>
           providerTransfer.providerAssetId === null ? [] : [providerTransfer.providerAssetId]
-        )
-      ),
+        ),
+        ...providerAssetObservations.map((observation) => observation.providerAssetId),
+      ]),
     ]
 
     if (providerAssetRowIds.length === 0) return Effect.void
@@ -705,6 +738,103 @@ const make = Effect.gen(function* () {
           "sourceNormalizationRepository.lockProviderAssetMappingsForNormalization"
         )
       )
+  }
+
+  const scheduleReplayForLateApprovedObservation = ({
+    executor,
+    sourceId,
+    principalId,
+    providerAssetObservations,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly sourceId: string
+    readonly principalId: string
+    readonly providerAssetObservations: ReadonlyArray<SourceProviderAssetObservationDraft>
+  }) => {
+    if (providerAssetObservations.length === 0) return Effect.void
+
+    return Effect.gen(function* () {
+      const approvedMappings = yield* executor
+        .select({ id: schema.providerAssetMappings.id })
+        .from(schema.providerAssetMappings)
+        .where(
+          and(
+            inArray(
+              schema.providerAssetMappings.providerAssetRowId,
+              providerAssetObservations.map((observation) => observation.providerAssetId)
+            ),
+            eq(schema.providerAssetMappings.mappingStatus, "approved")
+          )
+        )
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.loadMapping"
+          )
+        )
+
+      if (approvedMappings.length === 0) return
+
+      const now = nowDate()
+      const [insertedJob] = yield* executor
+        .insert(schema.processingJobs)
+        .values({
+          sourceId,
+          principalId,
+          mode: "replay",
+          status: "pending",
+          attemptCount: 0,
+          maxAttempts: 3,
+          progressDetails: { mode: "replay" },
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing()
+        .returning({ id: schema.processingJobs.id })
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.createReplayJob"
+          )
+        )
+
+      if (insertedJob !== undefined) return
+
+      const [activeJob] = yield* executor
+        .select({
+          id: schema.processingJobs.id,
+          mode: schema.processingJobs.mode,
+          status: schema.processingJobs.status,
+        })
+        .from(schema.processingJobs)
+        .where(
+          and(
+            eq(schema.processingJobs.sourceId, sourceId),
+            inArray(schema.processingJobs.status, ["pending", "processing"])
+          )
+        )
+        .limit(1)
+        .for("update")
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.loadActiveJob"
+          )
+        )
+
+      if (
+        activeJob !== undefined &&
+        !(activeJob.mode === "replay" && activeJob.status === "pending")
+      ) {
+        yield* executor
+          .update(schema.processingJobs)
+          .set({ followUpMode: "replay", updatedAt: now })
+          .where(eq(schema.processingJobs.id, activeJob.id))
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.deferReplayJob"
+            )
+          )
+      }
+    })
   }
 
   const upsertTransactionLegs = ({
@@ -1963,9 +2093,21 @@ const make = Effect.gen(function* () {
             transactionId: persistedTransaction.id,
             providerTransfers: params.providerTransfers,
           })
+          const providerAssetObservations = params.providerAssetObservations ?? []
+          yield* upsertProviderAssetObservations({
+            executor: tx,
+            observations: providerAssetObservations,
+          })
           yield* lockProviderAssetMappingsForNormalization({
             executor: tx,
             providerTransfers: persistedProviderTransfers,
+            providerAssetObservations,
+          })
+          yield* scheduleReplayForLateApprovedObservation({
+            executor: tx,
+            sourceId: params.transaction.sourceId,
+            principalId: params.transaction.principalId,
+            providerAssetObservations,
           })
           const persistedFeeTransfers = yield* upsertFeeTransfers({
             executor: tx,

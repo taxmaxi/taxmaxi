@@ -1091,6 +1091,20 @@ const make = Effect.gen(function* () {
         ? [normalized.primaryAssetCurrency.toUpperCase(), ...normalized.unresolvedAssetCurrencies]
         : normalized.unresolvedAssetCurrencies
       const unresolvedAssetCurrencies = Array.from(new Set(reviewableAssetCurrencies)).sort()
+      const providerAssetObservations = (yield* Effect.forEach(
+        unresolvedAssetCurrencies,
+        (currencyCode) => loadProviderAssetIdentity({ currencyCode })
+      )).flatMap((providerAssetId) =>
+        providerAssetId === null
+          ? []
+          : [
+              {
+                sourceId: source.id,
+                sourceRawRecordId: sourceRecord.id,
+                providerAssetId,
+              },
+            ]
+      )
       const transactionReview =
         unresolvedAssetCurrencies.length === 0
           ? baseTransactionReview
@@ -1116,6 +1130,7 @@ const make = Effect.gen(function* () {
           ...providerTransfer,
           providerAssetId: providerTransfer.providerAssetId ?? primaryProviderAssetId,
         })),
+        providerAssetObservations,
         feeTransfers: normalized.feeTransfers,
         transactionReview,
         resolvedTransactionType,

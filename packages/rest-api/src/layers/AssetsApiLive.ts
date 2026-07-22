@@ -268,6 +268,21 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
+      .handle("approveProviderAssetAsFiat", ({ path }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* assetCanonicalizationService
+            .approveProviderAssetAsFiat({
+              providerAssetRowId: path.id,
+              reviewedBy: currentUser.userId,
+            })
+            .pipe(Effect.mapError(mapReviewError))
+          return ProviderAssetDecisionResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            replays: [...result.replays],
+          })
+        })
+      )
       .handle("rejectProviderAsset", ({ path, payload }) =>
         Effect.gen(function* () {
           const currentUser = yield* CurrentUser

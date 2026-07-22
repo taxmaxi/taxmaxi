@@ -173,7 +173,7 @@ function ProviderAssetWorkbench() {
   const [selectedExistingId, setSelectedExistingId] = useState<string | null>(null)
   const [rejectionOpen, setRejectionOpen] = useState(false)
   const [rejectionReason, setRejectionReason] = useState("")
-  const [submitting, setSubmitting] = useState<"create" | "map" | "reject" | null>(null)
+  const [submitting, setSubmitting] = useState<"create" | "fiat" | "map" | "reject" | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [replays, setReplays] = useState<ReadonlyArray<ReplayView>>([])
   const [loadingMore, setLoadingMore] = useState(false)
@@ -185,6 +185,7 @@ function ProviderAssetWorkbench() {
 
   const selected = rows.find((row) => row.id === selectedId) ?? null
   const selectedCurrencyCode = selected?.currencyCode ?? null
+  const selectedIsFiat = selected?.providerType?.trim().toLowerCase() === "fiat"
   const activeFilterKey = providerAssetReviewFilterKey({
     provider: search.provider,
     query: search.q,
@@ -243,7 +244,7 @@ function ProviderAssetWorkbench() {
   useEffect(() => {
     resetDecisionState()
 
-    if (selectedId === null) {
+    if (selectedId === null || selectedIsFiat) {
       return
     }
     if (selectedCurrencyCode !== null) {
@@ -264,7 +265,7 @@ function ProviderAssetWorkbench() {
     return () => {
       active = false
     }
-  }, [internalTaxmaxi, resetDecisionState, selectedCurrencyCode, selectedId])
+  }, [internalTaxmaxi, resetDecisionState, selectedCurrencyCode, selectedId, selectedIsFiat])
 
   useEffect(() => {
     if (existingQuery.trim().length < 2) {
@@ -391,7 +392,7 @@ function ProviderAssetWorkbench() {
   )
 
   const runAction = useCallback(
-    async (action: "create" | "map" | "reject") => {
+    async (action: "create" | "fiat" | "map" | "reject") => {
       if (selected === null) return
       setSubmitting(action)
       setActionError(null)
@@ -411,6 +412,11 @@ function ProviderAssetWorkbench() {
             id: selected.id,
             canonicalAssetId: selectedExistingId,
             reviewerNotes: reviewerNotes || null,
+          })
+          applyDecision(result)
+        } else if (action === "fiat") {
+          const result = await internalTaxmaxi().assets.approveProviderAssetAsFiat({
+            id: selected.id,
           })
           applyDecision(result)
         } else {
@@ -787,7 +793,16 @@ function ProviderAssetWorkbench() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-5">
-                      <section className="flex flex-col gap-2">
+                      {selectedIsFiat ? (
+                        <section className="rounded-2xl border bg-muted/40 p-4">
+                          <h3 className="text-sm font-medium">Approve as fiat currency</h3>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            This maps the provider observation to canonical fiat currency{" "}
+                            {selected.currencyCode.trim().toUpperCase()}.
+                          </p>
+                        </section>
+                      ) : null}
+                      <section className={cn("flex flex-col gap-2", selectedIsFiat && "hidden")}>
                         <div>
                           <h3 className="text-sm font-medium">
                             Add a new TaxMaxi asset using CoinGecko
@@ -909,7 +924,7 @@ function ProviderAssetWorkbench() {
                           decimals.
                         </p>
                       </section>
-                      <section className="flex flex-col gap-2">
+                      <section className={cn("flex flex-col gap-2", selectedIsFiat && "hidden")}>
                         <div>
                           <label className="text-sm font-medium" htmlFor="existing-asset-search">
                             Use an existing TaxMaxi asset
@@ -961,7 +976,10 @@ function ProviderAssetWorkbench() {
                         </p>
                       </section>
                       <label
-                        className="flex flex-col gap-2 text-sm font-medium"
+                        className={cn(
+                          "flex flex-col gap-2 text-sm font-medium",
+                          selectedIsFiat && "hidden"
+                        )}
                         htmlFor="reviewer-notes"
                       >
                         Reviewer notes{" "}
@@ -987,9 +1005,28 @@ function ProviderAssetWorkbench() {
                           {actionError}
                         </p>
                       ) : null}
-                      <div className="grid gap-2 sm:grid-cols-3">
+                      <div
+                        className={cn(
+                          "grid gap-2",
+                          selectedIsFiat ? "sm:grid-cols-2" : "sm:grid-cols-3"
+                        )}
+                      >
+                        {selectedIsFiat ? (
+                          <Button
+                            className="min-h-11 active:scale-[0.97] motion-reduce:transition-none"
+                            disabled={submitting !== null}
+                            onClick={() => void runAction("fiat")}
+                            type="button"
+                          >
+                            <Check data-icon="inline-start" />
+                            {submitting === "fiat" ? "Approving…" : "Approve fiat"}
+                          </Button>
+                        ) : null}
                         <Button
-                          className="min-h-11 active:scale-[0.97] motion-reduce:transition-none"
+                          className={cn(
+                            "min-h-11 active:scale-[0.97] motion-reduce:transition-none",
+                            selectedIsFiat && "hidden"
+                          )}
                           disabled={submitting !== null || selectedCoinId === null}
                           onClick={() => void runAction("create")}
                           type="button"
@@ -998,7 +1035,10 @@ function ProviderAssetWorkbench() {
                           {submitting === "create" ? "Approving…" : "Create & approve"}
                         </Button>
                         <Button
-                          className="min-h-11 active:scale-[0.97] motion-reduce:transition-none"
+                          className={cn(
+                            "min-h-11 active:scale-[0.97] motion-reduce:transition-none",
+                            selectedIsFiat && "hidden"
+                          )}
                           disabled={submitting !== null || selectedExistingId === null}
                           onClick={() => void runAction("map")}
                           type="button"
@@ -1061,12 +1101,14 @@ function ProviderAssetWorkbench() {
               {replay.status === "failed" && replay.jobId !== null ? (
                 <Button
                   aria-label={`Retry replay for source ${replay.sourceId}`}
-                  onClick={() =>
+                  onClick={() => {
+                    const jobId = replay.jobId
+                    if (jobId === null) return
                     void internalTaxmaxi()
                       .assets.retryProviderAssetReplay({
                         id: replay.providerAssetId,
                         sourceId: replay.sourceId,
-                        jobId: replay.jobId,
+                        jobId,
                       })
                       .then((job) =>
                         setReplays((current) =>
@@ -1082,7 +1124,7 @@ function ProviderAssetWorkbench() {
                           )
                         )
                       )
-                  }
+                  }}
                   size="icon-lg"
                   type="button"
                   variant="ghost"

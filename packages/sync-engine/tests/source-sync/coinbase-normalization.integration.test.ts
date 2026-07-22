@@ -1119,6 +1119,18 @@ const fetchCounts = () =>
       .from(schema.providerAssets)
       .where(eq(schema.providerAssets.provider, "coinbase"))
 
+    const providerAssetObservations = yield* db
+      .select({
+        currencyCode: schema.providerAssets.currencyCode,
+        sourceRawRecordId: schema.providerAssetObservations.sourceRawRecordId,
+      })
+      .from(schema.providerAssetObservations)
+      .innerJoin(
+        schema.providerAssets,
+        eq(schema.providerAssets.id, schema.providerAssetObservations.providerAssetId)
+      )
+      .where(eq(schema.providerAssetObservations.sourceId, sourceId))
+
     return {
       rawRows,
       transactions,
@@ -1131,6 +1143,7 @@ const fetchCounts = () =>
       disposalMatches,
       transactionTypeCatalogCount: transactionTypeCatalogRows.length,
       providerAssetCatalogCount: providerAssetRows.length,
+      providerAssetObservations,
     }
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -1867,6 +1880,53 @@ describe("coinbase normalization persistence", () => {
           mappingStatus: "pending_review",
           mappingKind: "asset",
         })
+      })
+    )
+  })
+
+  it("tracks a pending fee-only provider asset observation for later replay", async () => {
+    activeSyncRecords = [
+      ...defaultSyncRecords.filter((record) => record.recordType === "coinbase_account"),
+      makeCoinbaseRecord({
+        externalRecordId: "tx-fee-only-hype",
+        occurredAt: new Date("2025-04-15T10:00:00.000Z"),
+        payload: {
+          id: "tx-fee-only-hype",
+          type: "send",
+          status: "completed",
+          amount: { amount: "-0.10000000", currency: "BTC" },
+          native_amount: { amount: "-1000.00", currency: "EUR" },
+          created_at: "2025-04-15T10:00:00.000Z",
+          resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-fee-only-hype",
+          network: {
+            status: "confirmed",
+            transaction_fee: { amount: "0.01000000", currency: "HYPE" },
+          },
+        },
+      }),
+    ]
+    activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedPendingProviderAssetMapping({
+          currencyCode: "HYPE",
+          providerAssetId: "hype-provider-asset",
+          providerType: "crypto",
+        })
+
+        const summary = yield* runSync()
+        const job = yield* fetchJobDetails({ jobId: summary.jobId })
+        const counts = yield* fetchCounts()
+
+        expect(job.status).toBe("completed")
+        expect(counts.legs).toHaveLength(0)
+        expect(counts.providerAssetObservations).toEqual([
+          {
+            currencyCode: "HYPE",
+            sourceRawRecordId: expect.any(String),
+          },
+        ])
       })
     )
   })

@@ -142,6 +142,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
         },
         providerTransfers: [],
+        providerAssetObservations: [],
         feeTransfers: [],
         transactionReview: null,
         resolvedTransactionType: {

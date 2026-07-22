@@ -105,6 +105,39 @@ export interface ProviderAssetDecisionResult {
   readonly affectedSources: ReadonlyArray<ProviderAssetAffectedSource>
 }
 
+/** Shared audit and replay fields for an atomic provider asset decision. */
+export interface DecideProviderAssetMappingBase {
+  readonly providerAssetRowId: string
+  readonly mappingStatus: "approved" | "rejected"
+  readonly reviewerNotes: string | null
+  readonly sourceNotes: string | null
+  readonly reviewedBy: string
+  readonly reviewedAt: Date
+  readonly createReplayJobs: boolean
+}
+
+/** Asset-target approval or rejection decision. */
+export interface DecideProviderAssetMappingAsAsset extends DecideProviderAssetMappingBase {
+  readonly mappingKind: "asset"
+  readonly canonicalAssetId: string | null
+  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetDraft: {
+    readonly blockchain: CanonicalBlockchainDraft
+    readonly asset: CanonicalAssetDraft
+  } | null
+}
+
+/** Fiat-target approval decision. */
+export interface DecideProviderAssetMappingAsFiat extends DecideProviderAssetMappingBase {
+  readonly mappingKind: "fiat"
+  readonly canonicalFiatCurrency: string
+}
+
+/** Atomic provider asset review decision input. */
+export type DecideProviderAssetMappingParams =
+  | DecideProviderAssetMappingAsAsset
+  | DecideProviderAssetMappingAsFiat
+
 /**
  * ResolvedProviderAssetMapping - Deterministic provider-asset mapping result.
  */
@@ -211,22 +244,9 @@ export interface ProviderAssetRepositoryShape {
     readonly query: string | null
   }) => Effect.Effect<number, SyncEngineStorageError>
 
-  readonly decideProviderAssetMapping: (params: {
-    readonly providerAssetRowId: string
-    readonly mappingKind: "asset"
-    readonly canonicalAssetId: string | null
-    readonly canonicalAssetSymbol: string | null
-    readonly canonicalAssetDraft: {
-      readonly blockchain: CanonicalBlockchainDraft
-      readonly asset: CanonicalAssetDraft
-    } | null
-    readonly mappingStatus: "approved" | "rejected"
-    readonly reviewerNotes: string | null
-    readonly sourceNotes: string | null
-    readonly reviewedBy: string
-    readonly reviewedAt: Date
-    readonly createReplayJobs: boolean
-  }) => Effect.Effect<ProviderAssetDecisionResult, SyncEngineStorageError>
+  readonly decideProviderAssetMapping: (
+    params: DecideProviderAssetMappingParams
+  ) => Effect.Effect<ProviderAssetDecisionResult, SyncEngineStorageError>
 
   /** Resolve a reviewed provider asset replay through its durable processing job. */
   readonly findProviderAssetReplaySource: (params: {

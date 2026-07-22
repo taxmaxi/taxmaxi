@@ -8,6 +8,7 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_PRINCIPAL_ID,
+  TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
   TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
@@ -828,6 +829,72 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
       expect(nativeAssets).toHaveLength(1)
+    })
+
+    it("creates replay work for a source that only observed the reviewed asset as a fee", async () => {
+      const providerAssetId = crypto.randomUUID()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: providerAssetId,
+            provider: "coinbase",
+            providerAssetId: "fee-only-review-asset",
+            currencyCode: "FEE",
+            name: "Fee-only review asset",
+            providerType: "crypto",
+            rawProviderPayload: { symbol: "FEE" },
+            retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+          })
+          yield* db.insert(schema.sourceRecordsRaw).values({
+            id: TEST_RAW_RECORD_ID,
+            sourceId: TEST_SOURCE_ID,
+            provider: "coinbase",
+            recordType: "coinbase_transaction",
+            externalRecordId: "fee-only-review-record",
+            occurredAt: new Date("2026-07-20T10:00:00.000Z"),
+            payload: {},
+            importedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetObservations).values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            providerAssetId,
+          })
+        })
+      )
+
+      const decision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.decideProviderAssetMapping({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            canonicalAssetSymbol: "BTC",
+            canonicalAssetDraft: null,
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Approved fee currency",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt: new Date("2026-07-20T12:00:00.000Z"),
+            createReplayJobs: true,
+          })
+        )
+      )
+
+      expect(decision.affectedSources).toEqual([
+        {
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          jobId: expect.any(String),
+        },
+      ])
     })
 
     it("preserves review history when the administrator is deleted", async () => {
