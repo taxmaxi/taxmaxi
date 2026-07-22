@@ -24,6 +24,14 @@ const getDatabaseConfig = Effect.gen(function* () {
   return { host, port, user, password } as const
 })
 
+export const prepareTemplateDatabase = <E, R, R2>({
+  cleanupTemplate,
+  prepareTemplate,
+}: {
+  readonly cleanupTemplate: Effect.Effect<void, never, R2>
+  readonly prepareTemplate: Effect.Effect<void, E, R>
+}) => prepareTemplate.pipe(Effect.onError(() => cleanupTemplate))
+
 export const setup = async (project: TestProject) => {
   const testRunId = randomUUID()
   const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
@@ -58,53 +66,53 @@ export const setup = async (project: TestProject) => {
       Effect.scoped
     )
 
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      yield* runAdminSql({
-        statement: `
-          SELECT pg_terminate_backend(pid)
-          FROM pg_stat_activity
-          WHERE datname = $1
-            AND pid <> pg_backend_pid()
-        `,
-        params: [migratedTestDatabaseTemplateName],
-      })
-      yield* runAdminSql({
-        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
-      })
-      yield* runAdminSql({
-        statement: `CREATE DATABASE ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
-      })
-      yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
-      yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
-      yield* runAdminSql({
-        statement: `
-          SELECT pg_terminate_backend(pid)
-          FROM pg_stat_activity
-          WHERE datname = $1
-            AND pid <> pg_backend_pid()
-        `,
-        params: [migratedTestDatabaseTemplateName],
-      })
+  const cleanupTemplate = Effect.gen(function* () {
+    yield* runAdminSql({
+      statement: `
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = $1
+          AND pid <> pg_backend_pid()
+      `,
+      params: [migratedTestDatabaseTemplateName],
     })
-  )
+    yield* runAdminSql({
+      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
+    })
+  }).pipe(Effect.orDie)
+
+  const prepareTemplate = Effect.gen(function* () {
+    yield* runAdminSql({
+      statement: `
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = $1
+          AND pid <> pg_backend_pid()
+      `,
+      params: [migratedTestDatabaseTemplateName],
+    })
+    yield* runAdminSql({
+      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
+    })
+    yield* runAdminSql({
+      statement: `CREATE DATABASE ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
+    })
+    yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
+    yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
+    yield* runAdminSql({
+      statement: `
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE datname = $1
+          AND pid <> pg_backend_pid()
+      `,
+      params: [migratedTestDatabaseTemplateName],
+    })
+  })
+
+  await Effect.runPromise(prepareTemplateDatabase({ cleanupTemplate, prepareTemplate }))
 
   return async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* runAdminSql({
-          statement: `
-            SELECT pg_terminate_backend(pid)
-            FROM pg_stat_activity
-            WHERE datname = $1
-              AND pid <> pg_backend_pid()
-          `,
-          params: [migratedTestDatabaseTemplateName],
-        })
-        yield* runAdminSql({
-          statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
-        })
-      })
-    )
+    await Effect.runPromise(cleanupTemplate)
   }
 }
