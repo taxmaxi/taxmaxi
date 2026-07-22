@@ -5,6 +5,7 @@ import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
+import { inject } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import {
   makePgClientLayer,
@@ -14,7 +15,7 @@ import {
 import { schema } from "../../src/schema/index.ts"
 import {
   makeIntegrationTestDatabaseName,
-  MIGRATED_TEST_DATABASE_TEMPLATE_NAME,
+  makeTestDatabaseTemplateName,
 } from "./test-database-name.ts"
 
 const testDatabaseConfig = Effect.runSync(
@@ -32,6 +33,8 @@ const testDatabaseConfig = Effect.runSync(
 )
 
 const workerId = testDatabaseConfig.workerId.replace(/[^a-zA-Z0-9_]/g, "_")
+const testRunId = inject("integrationTestRunId")
+const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
 const pgHost = testDatabaseConfig.host
 const pgPort = testDatabaseConfig.port
 const pgUser = testDatabaseConfig.user
@@ -85,7 +88,11 @@ export const makeIntegrationTestDatabaseContext = ({
 }: {
   readonly databaseNamePrefix: string
 }) => {
-  const databaseName = makeIntegrationTestDatabaseName({ databaseNamePrefix, workerId })
+  const databaseName = makeIntegrationTestDatabaseName({
+    databaseNamePrefix,
+    testRunId,
+    workerId,
+  })
   let defaultSchemaMigrated = false
 
   const testDatabaseUrl = Redacted.make(
@@ -143,7 +150,7 @@ export const makeIntegrationTestDatabaseContext = ({
       })
       yield* runAdminSql({
         statement: `CREATE DATABASE ${quoteIdentifier(databaseName)} TEMPLATE ${quoteIdentifier(
-          MIGRATED_TEST_DATABASE_TEMPLATE_NAME
+          migratedTestDatabaseTemplateName
         )}`,
       })
     })

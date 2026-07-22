@@ -1,13 +1,15 @@
+import { randomUUID } from "node:crypto"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Redacted from "effect/Redacted"
+import type { TestProject } from "vitest/node"
 import {
   makePgClientLayer,
   runDrizzleMigrations,
   runSqlUnsafe,
 } from "../src/layers/PgClientLive.ts"
 import { seedData } from "../src/seed/data.ts"
-import { MIGRATED_TEST_DATABASE_TEMPLATE_NAME } from "./support/test-database-name.ts"
+import { makeTestDatabaseTemplateName } from "./support/test-database-name.ts"
 
 const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `""`)}"`
 
@@ -22,14 +24,18 @@ const getDatabaseConfig = Effect.gen(function* () {
   return { host, port, user, password } as const
 })
 
-export const setup = async () => {
+export const setup = async (project: TestProject) => {
+  const testRunId = randomUUID()
+  const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
+  project.provide("integrationTestRunId", testRunId)
+
   const { host, port, user, password } = Effect.runSync(getDatabaseConfig)
   const passwordValue = Redacted.value(password)
   const adminDatabaseUrl = Redacted.make(
     `postgresql://${user}:${passwordValue}@${host}:${port}/postgres`
   )
   const templateDatabaseUrl = Redacted.make(
-    `postgresql://${user}:${passwordValue}@${host}:${port}/${MIGRATED_TEST_DATABASE_TEMPLATE_NAME}`
+    `postgresql://${user}:${passwordValue}@${host}:${port}/${migratedTestDatabaseTemplateName}`
   )
   const AdminPgClientLive = makePgClientLayer({
     url: adminDatabaseUrl,
@@ -61,13 +67,13 @@ export const setup = async () => {
           WHERE datname = $1
             AND pid <> pg_backend_pid()
         `,
-        params: [MIGRATED_TEST_DATABASE_TEMPLATE_NAME],
+        params: [migratedTestDatabaseTemplateName],
       })
       yield* runAdminSql({
-        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(MIGRATED_TEST_DATABASE_TEMPLATE_NAME)}`,
+        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
       })
       yield* runAdminSql({
-        statement: `CREATE DATABASE ${quoteIdentifier(MIGRATED_TEST_DATABASE_TEMPLATE_NAME)}`,
+        statement: `CREATE DATABASE ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
       })
       yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
       yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
@@ -78,7 +84,7 @@ export const setup = async () => {
           WHERE datname = $1
             AND pid <> pg_backend_pid()
         `,
-        params: [MIGRATED_TEST_DATABASE_TEMPLATE_NAME],
+        params: [migratedTestDatabaseTemplateName],
       })
     })
   )
@@ -93,10 +99,10 @@ export const setup = async () => {
             WHERE datname = $1
               AND pid <> pg_backend_pid()
           `,
-          params: [MIGRATED_TEST_DATABASE_TEMPLATE_NAME],
+          params: [migratedTestDatabaseTemplateName],
         })
         yield* runAdminSql({
-          statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(MIGRATED_TEST_DATABASE_TEMPLATE_NAME)}`,
+          statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
         })
       })
     )
