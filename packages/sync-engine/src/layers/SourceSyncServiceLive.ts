@@ -203,6 +203,38 @@ const make = Effect.gen(function* () {
 
           yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "recovered-stale-job" })
         } else {
+          // A replay needs follow-up handling only behind a non-replay job.
+          // An active replay already satisfies the request and can be reused as-is.
+          if (mode === "replay" && activeJob.mode !== "replay") {
+            // If the active job still exists, the repository reuses it and records
+            // the replay as follow-up work instead of losing the replay request.
+            const replayRequest = yield* sourceSyncJobRepository.createOrReuseJob({
+              sourceId: source.id,
+              principalId,
+              mode,
+              maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
+            })
+
+            if (replayRequest._tag === "CreatedSourceSyncJob") {
+              // The active job may finish after findActiveJob. In that race, the
+              // repository creates the replay directly, so it must be queued here.
+              yield* enqueuePendingJob({
+                jobId: replayRequest.id,
+                sourceId: source.id,
+                principalId,
+                mode,
+              })
+              yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "queued" })
+
+              return {
+                sourceId: source.id,
+                jobId: replayRequest.id,
+                status: "queued",
+                message: null,
+              } satisfies SourceSyncJobSummary
+            }
+          }
+
           if (activeJob.status === "pending") {
             if (
               shouldEnqueuePendingJob({

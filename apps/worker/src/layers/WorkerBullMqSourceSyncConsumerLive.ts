@@ -4,7 +4,7 @@
  * @module WorkerBullMqSourceSyncConsumerLive
  */
 
-import { Config, Effect, Layer, Runtime, Schema } from "effect"
+import { Config, DateTime, Effect, Layer, Runtime, Schedule, Schema } from "effect"
 import { UnrecoverableError, Worker, type Job, type JobsOptions, type Processor } from "bullmq"
 import { Redis } from "ioredis"
 import { randomUUID } from "node:crypto"
@@ -21,6 +21,7 @@ import { WorkerSourceSyncStartupRepair } from "./WorkerSourceSyncStartupRepairLi
 const DEFAULT_QUEUE_PREFIX = "taxmaxi"
 const DEFAULT_SYNC_WORKER_CONCURRENCY = 1
 const DEFAULT_SYNC_WORKER_LOCK_DURATION_MS = 30_000
+const DEFAULT_PENDING_DISPATCH_INTERVAL_MS = 5_000
 const DEFAULT_RETRY_DELAY_MS = 5_000
 const PROCESS_WORKER_ID = `worker-${randomUUID()}`
 
@@ -32,6 +33,7 @@ export interface WorkerBullMqSourceSyncConsumerConfig {
   readonly queuePrefix: string
   readonly concurrency: number
   readonly lockDurationMs: number
+  readonly pendingDispatchIntervalMs: number
   readonly workerId: string
 }
 
@@ -118,6 +120,10 @@ const loadConfig = Effect.gen(function* () {
       name: "SYNC_WORKER_LOCK_DURATION_MS",
       defaultValue: DEFAULT_SYNC_WORKER_LOCK_DURATION_MS,
     }),
+    pendingDispatchIntervalMs: yield* positiveConfig({
+      name: "SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS",
+      defaultValue: DEFAULT_PENDING_DISPATCH_INTERVAL_MS,
+    }),
     workerId: yield* Config.string("WORKER_ID").pipe(
       Config.withDefault(PROCESS_WORKER_ID),
       Config.validate({
@@ -127,11 +133,6 @@ const loadConfig = Effect.gen(function* () {
     ),
   } satisfies WorkerBullMqSourceSyncConsumerConfig
 })
-
-const currentDate = Effect.map(
-  Effect.clockWith((clock) => clock.currentTimeMillis),
-  (currentTimeMillis) => new Date(currentTimeMillis)
-)
 
 const decodePayload = Schema.decodeUnknown(SourceSyncQueuePayload)
 
@@ -219,10 +220,12 @@ const processJob = Effect.fn("worker.source-sync.process", {
         })
     )
   )
-  const now = yield* currentDate
   const attemptNumber = job.attemptsMade + 1
   const maxAttempts = resolveMaxAttempts(job)
-  const nextRetryAt = new Date(now.getTime() + resolveBackoffDelayMs(job))
+  const nextRetryAt = yield* DateTime.now.pipe(
+    Effect.map(DateTime.add({ millis: resolveBackoffDelayMs(job) })),
+    Effect.map(DateTime.toDateUtc)
+  )
 
   yield* Effect.logInfo(
     {
@@ -265,7 +268,7 @@ const processJob = Effect.fn("worker.source-sync.process", {
     yield* Effect.logInfo(logPayload, "source-sync-worker:job-succeeded")
   }
 
-  return summary
+  return { payload, summary }
 })
 
 const acquireLiveWorker = (
@@ -344,7 +347,23 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
         const result = await runPromise(processJob({ job, config }).pipe(Effect.either))
 
         if (result._tag === "Right") {
-          return result.right
+          await runPromise(
+            startupRepair
+              .dispatchFollowUp({
+                jobId: result.right.payload.jobId,
+                sourceId: result.right.payload.sourceId,
+                principalId: result.right.payload.principalId,
+              })
+              .pipe(
+                Effect.catchAll((error) =>
+                  Effect.logWarning(
+                    { operation: error.operation, cause: error.cause },
+                    "source-sync-worker:follow-up-dispatch-failed"
+                  )
+                )
+              )
+          )
+          return result.right.summary
         }
 
         const error = result.left
@@ -392,6 +411,7 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
         )
         throw toJobFailure(error)
       }
+
       const worker = yield* Effect.acquireRelease(
         startupRepair.repair.pipe(Effect.zipRight(acquireWorker(config, processor))),
         (workerToClose) =>
@@ -405,12 +425,28 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
           )
       )
 
+      const dispatchPending = startupRepair.dispatchPending.pipe(
+        Effect.catchAll((error) =>
+          Effect.logWarning(
+            { operation: error.operation, cause: error.cause },
+            "source-sync-worker:pending-dispatch-failed"
+          )
+        ),
+        Effect.asVoid
+      )
+
+      yield* dispatchPending.pipe(
+        Effect.repeat(Schedule.spaced(config.pendingDispatchIntervalMs)),
+        Effect.forkScoped
+      )
+
       yield* Effect.logInfo(
         {
           queueName: SOURCE_SYNC_QUEUE_NAME,
           workerId: config.workerId,
           concurrency: config.concurrency,
           lockDurationMs: config.lockDurationMs,
+          pendingDispatchIntervalMs: config.pendingDispatchIntervalMs,
           queuePrefix: config.queuePrefix,
         },
         "source-sync-worker:started"

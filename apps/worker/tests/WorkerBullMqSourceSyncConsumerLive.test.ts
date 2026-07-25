@@ -8,7 +8,11 @@ import {
   type WorkerBullMqSourceSyncJob,
   type WorkerBullMqSourceSyncProcessor,
 } from "../src/layers/WorkerBullMqSourceSyncConsumerLive.ts"
-import { WorkerSourceSyncStartupRepair } from "../src/layers/WorkerSourceSyncStartupRepairLive.ts"
+import {
+  WorkerSourceSyncStartupRepair,
+  type WorkerSourceSyncStartupRepairError,
+  type WorkerSourceSyncStartupRepairSummary,
+} from "../src/layers/WorkerSourceSyncStartupRepairLive.ts"
 import {
   SOURCE_SYNC_JOB_NAME,
   SourceSyncJobExecutionNotFoundError,
@@ -92,6 +96,9 @@ const runWithConsumer = <A>({
   executor,
   acquireWorker,
   configOverrides,
+  repair,
+  dispatchFollowUp,
+  dispatchPending,
 }: {
   readonly effect: Effect.Effect<A>
   readonly executor: SourceSyncJobExecutorShape
@@ -100,6 +107,19 @@ const runWithConsumer = <A>({
     processor: WorkerBullMqSourceSyncProcessor
   ) => Effect.Effect<BullMqSourceSyncWorker>
   readonly configOverrides?: Record<string, string>
+  readonly repair?: Effect.Effect<
+    WorkerSourceSyncStartupRepairSummary,
+    WorkerSourceSyncStartupRepairError
+  >
+  readonly dispatchFollowUp?: (params: {
+    readonly jobId: string
+    readonly sourceId: string
+    readonly principalId: string
+  }) => Effect.Effect<void, WorkerSourceSyncStartupRepairError>
+  readonly dispatchPending?: Effect.Effect<
+    WorkerSourceSyncStartupRepairSummary,
+    WorkerSourceSyncStartupRepairError
+  >
 }) =>
   Effect.runPromise(
     Effect.scoped(
@@ -110,14 +130,27 @@ const runWithConsumer = <A>({
               Layer.mergeAll(
                 Layer.succeed(SourceSyncJobExecutor, executor),
                 Layer.succeed(WorkerSourceSyncStartupRepair, {
-                  repair: Effect.succeed({
-                    scannedJobs: 0,
-                    requeuedPending: 0,
-                    failedProcessing: 0,
-                    skippedJobs: 0,
-                    erroredJobs: 0,
-                    stoppedAfterErrors: false,
-                  }),
+                  repair:
+                    repair ??
+                    Effect.succeed({
+                      scannedJobs: 0,
+                      requeuedPending: 0,
+                      failedProcessing: 0,
+                      skippedJobs: 0,
+                      erroredJobs: 0,
+                      stoppedAfterErrors: false,
+                    }),
+                  dispatchFollowUp: dispatchFollowUp ?? (() => Effect.void),
+                  dispatchPending:
+                    dispatchPending ??
+                    Effect.succeed({
+                      scannedJobs: 0,
+                      requeuedPending: 0,
+                      failedProcessing: 0,
+                      skippedJobs: 0,
+                      erroredJobs: 0,
+                      stoppedAfterErrors: false,
+                    }),
                 })
               )
             )
@@ -129,6 +162,32 @@ const runWithConsumer = <A>({
   )
 
 describe("WorkerBullMqSourceSyncConsumerLive", () => {
+  it("keeps dispatching pending database jobs while the worker is running", async () => {
+    let dispatchCount = 0
+
+    await runWithConsumer({
+      executor: {
+        execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "completed" })),
+      },
+      dispatchPending: Effect.sync(() => {
+        dispatchCount += 1
+        return {
+          scannedJobs: 0,
+          requeuedPending: 0,
+          failedProcessing: 0,
+          skippedJobs: 0,
+          erroredJobs: 0,
+          stoppedAfterErrors: false,
+        }
+      }),
+      configOverrides: { SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS: "1" },
+      acquireWorker: () => Effect.succeed({ close: Effect.void }),
+      effect: Effect.sleep("10 millis"),
+    })
+
+    expect(dispatchCount).toBeGreaterThan(1)
+  })
+
   it("decodes valid sync and replay payloads and passes the DB job id to the executor", async () => {
     const executed: Array<ExecuteSourceSyncJobParams> = []
     let processor: WorkerBullMqSourceSyncProcessor | null = null
@@ -186,6 +245,48 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
       },
     })
     expect(syncExecution.retryPolicy?.nextRetryAt).toBeInstanceOf(Date)
+  })
+
+  it("dispatches only the completed job's materialized follow-up work", async () => {
+    let processor: WorkerBullMqSourceSyncProcessor | null = null
+    let repairCount = 0
+    const dispatched: Array<{ jobId: string; sourceId: string; principalId: string }> = []
+
+    await runWithConsumer({
+      executor: {
+        execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "completed" })),
+      },
+      repair: Effect.sync(() => {
+        repairCount += 1
+        return {
+          scannedJobs: 0,
+          requeuedPending: 0,
+          failedProcessing: 0,
+          skippedJobs: 0,
+          erroredJobs: 0,
+          stoppedAfterErrors: false,
+        }
+      }),
+      dispatchFollowUp: (params) =>
+        Effect.sync(() => {
+          dispatched.push(params)
+        }),
+      acquireWorker: (_config, acquiredProcessor) =>
+        Effect.sync(() => {
+          processor = acquiredProcessor
+          return { close: Effect.void }
+        }),
+      effect: Effect.gen(function* () {
+        if (processor === null) return yield* Effect.dieMessage("Processor was not acquired")
+        const acquiredProcessor = processor
+        yield* Effect.promise(() => acquiredProcessor(makeJob({ data: syncPayload })))
+      }),
+    })
+
+    expect(repairCount).toBe(1)
+    expect(dispatched).toEqual([
+      { jobId: "job-1", sourceId: "source-1", principalId: "principal-1" },
+    ])
   })
 
   it("fails malformed payloads terminally without calling the executor", async () => {
