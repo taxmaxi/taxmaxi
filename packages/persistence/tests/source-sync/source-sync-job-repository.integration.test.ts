@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
@@ -225,6 +225,63 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     const activeJob = await selectProcessingJob({ jobId: created.id })
     expect(activeJob.followUpMode).toBe("replay")
+  })
+
+  it("retries replay intent when the active-row update loses a completion race", async () => {
+    const created = await createJob({ mode: "sync" })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.execute(sql.raw("CREATE SEQUENCE test_follow_up_update_attempt_seq"))
+        yield* db.execute(
+          sql.raw(`
+            CREATE FUNCTION test_skip_first_follow_up_update()
+            RETURNS trigger AS $$
+            BEGIN
+              IF nextval('test_follow_up_update_attempt_seq') = 1 THEN
+                RETURN NULL;
+              END IF;
+              RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql
+          `)
+        )
+        yield* db.execute(
+          sql.raw(`
+            CREATE TRIGGER test_skip_first_follow_up_update
+            BEFORE UPDATE OF follow_up_mode ON processing_jobs
+            FOR EACH ROW
+            EXECUTE FUNCTION test_skip_first_follow_up_update()
+          `)
+        )
+      })
+    )
+
+    try {
+      const replay = await createJob({ mode: "replay" })
+
+      expect(replay).toMatchObject({
+        _tag: "ReusedSourceSyncJob",
+        id: created.id,
+      })
+
+      const activeJob = await selectProcessingJob({ jobId: created.id })
+      expect(activeJob.followUpMode).toBe("replay")
+    } finally {
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+
+          yield* db.execute(
+            sql.raw("DROP TRIGGER IF EXISTS test_skip_first_follow_up_update ON processing_jobs")
+          )
+          yield* db.execute(sql.raw("DROP FUNCTION IF EXISTS test_skip_first_follow_up_update()"))
+          yield* db.execute(sql.raw("DROP SEQUENCE IF EXISTS test_follow_up_update_attempt_seq"))
+        })
+      )
+    }
   })
 
   it("attaches queue metadata to a pending job", async () => {

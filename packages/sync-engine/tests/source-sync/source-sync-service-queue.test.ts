@@ -371,6 +371,43 @@ describe("SourceSyncService queue orchestration", () => {
     expect(enqueued).toEqual([])
   })
 
+  it("uses the replacement job that owns the replay follow-up", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const repositoryEvents: Array<string> = []
+
+    const result = await runStart({
+      mode: "replay",
+      layer: makeServiceLayer({
+        activeJobs: [makeActiveJob({ id: "job-finished", status: "processing" })],
+        createResult: {
+          _tag: "ReusedSourceSyncJob",
+          id: "job-replacement",
+          sourceId: source.id,
+          principalId: source.principalId,
+          mode: "sync",
+          status: "pending",
+          queueName: null,
+          queueJobId: null,
+        },
+        enqueued,
+        repositoryEvents,
+      }),
+    })
+
+    expect(result).toEqual({
+      sourceId: source.id,
+      jobId: "job-replacement",
+      status: "queued",
+      message: null,
+    })
+    expect(repositoryEvents).toEqual(["create:replay"])
+    expect(enqueued).toHaveLength(1)
+    expect(enqueued[0]).toMatchObject({
+      jobId: "job-replacement",
+      mode: "sync",
+    })
+  })
+
   it("reports enqueue failure after creating the pending DB job", async () => {
     const enqueued: Array<SourceSyncQueuePayload> = []
     const repositoryEvents: Array<string> = []

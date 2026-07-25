@@ -205,48 +205,54 @@ const make = Effect.gen(function* () {
         } else {
           // A replay needs follow-up handling only behind a non-replay job.
           // An active replay already satisfies the request and can be reused as-is.
-          if (mode === "replay" && activeJob.mode !== "replay") {
-            // If the active job still exists, the repository reuses it and records
-            // the replay as follow-up work instead of losing the replay request.
-            const replayRequest = yield* sourceSyncJobRepository.createOrReuseJob({
+          // If the active job still exists, the repository reuses it and records
+          // the replay as follow-up work instead of losing the replay request.
+          const replayRequest =
+            mode === "replay" && activeJob.mode !== "replay"
+              ? yield* sourceSyncJobRepository.createOrReuseJob({
+                  sourceId: source.id,
+                  principalId,
+                  mode,
+                  maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
+                })
+              : undefined
+
+          if (replayRequest?._tag === "CreatedSourceSyncJob") {
+            // The active job may finish after findActiveJob. In that race, the
+            // repository creates the replay directly, so it must be queued here.
+            yield* enqueuePendingJob({
+              jobId: replayRequest.id,
               sourceId: source.id,
               principalId,
               mode,
-              maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
             })
+            yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "queued" })
 
-            if (replayRequest._tag === "CreatedSourceSyncJob") {
-              // The active job may finish after findActiveJob. In that race, the
-              // repository creates the replay directly, so it must be queued here.
-              yield* enqueuePendingJob({
-                jobId: replayRequest.id,
-                sourceId: source.id,
-                principalId,
-                mode,
-              })
-              yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "queued" })
-
-              return {
-                sourceId: source.id,
-                jobId: replayRequest.id,
-                status: "queued",
-                message: null,
-              } satisfies SourceSyncJobSummary
-            }
+            return {
+              sourceId: source.id,
+              jobId: replayRequest.id,
+              status: "queued",
+              message: null,
+            } satisfies SourceSyncJobSummary
           }
 
-          if (activeJob.status === "pending") {
+          // A different active job may have replaced the initial snapshot while
+          // createOrReuseJob was recording the replay. Return that current owner.
+          const jobToReuse =
+            replayRequest?._tag === "ReusedSourceSyncJob" ? replayRequest : activeJob
+
+          if (jobToReuse.status === "pending") {
             if (
               shouldEnqueuePendingJob({
-                queueName: activeJob.queueName,
-                queueJobId: activeJob.queueJobId,
+                queueName: jobToReuse.queueName,
+                queueJobId: jobToReuse.queueJobId,
               })
             ) {
               yield* enqueuePendingJob({
-                jobId: activeJob.id,
-                sourceId: activeJob.sourceId,
-                principalId: activeJob.principalId,
-                mode: activeJob.mode,
+                jobId: jobToReuse.id,
+                sourceId: jobToReuse.sourceId,
+                principalId: jobToReuse.principalId,
+                mode: jobToReuse.mode,
               })
               yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "enqueued-active-job" })
             } else {
@@ -258,8 +264,8 @@ const make = Effect.gen(function* () {
 
           return {
             sourceId: source.id,
-            jobId: activeJob.id,
-            status: toPublicStatus(activeJob.status),
+            jobId: jobToReuse.id,
+            status: toPublicStatus(jobToReuse.status),
             message: null,
           } satisfies SourceSyncJobSummary
         }
