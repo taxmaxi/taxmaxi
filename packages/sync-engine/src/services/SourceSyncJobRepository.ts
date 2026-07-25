@@ -15,6 +15,7 @@ import type {
   SourceSyncExecutionJob,
   SourceSyncJobDetails,
   SourceSyncJobMode,
+  SourceSyncPendingDispatchJob,
   SourceSyncRepairableActiveJob,
   SourceSyncStaleActiveJob,
 } from "./SourceSyncModels.ts"
@@ -164,6 +165,14 @@ export interface ListRepairableActiveSourceSyncJobsParams {
 }
 
 /**
+ * ListPendingSourceSyncJobsNeedingDispatchParams - Input for continuous queue dispatch.
+ */
+export interface ListPendingSourceSyncJobsNeedingDispatchParams {
+  readonly staleBefore: Date
+  readonly limit: number
+}
+
+/**
  * SourceSyncJobRepositoryShape - Processing-job repository operations used by sync orchestration.
  */
 export interface SourceSyncJobRepositoryShape {
@@ -302,6 +311,13 @@ export interface SourceSyncJobRepositoryShape {
   readonly listRepairableActiveJobs: (
     params: ListRepairableActiveSourceSyncJobsParams
   ) => Effect.Effect<ReadonlyArray<SourceSyncRepairableActiveJob>, SyncEngineStorageError>
+
+  /**
+   * List pending jobs that are missing queue metadata or need queue reconciliation.
+   */
+  readonly listPendingJobsNeedingDispatch: (
+    params: ListPendingSourceSyncJobsNeedingDispatchParams
+  ) => Effect.Effect<ReadonlyArray<SourceSyncPendingDispatchJob>, SyncEngineStorageError>
 }
 
 /**

@@ -85,6 +85,8 @@ const makeRepositoryLayer = ({
     listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
     listRepairableActiveJobs: () =>
       Effect.dieMessage("listRepairableActiveJobs should not be called"),
+    listPendingJobsNeedingDispatch: () =>
+      Effect.dieMessage("listPendingJobsNeedingDispatch should not be called"),
   } satisfies SourceSyncJobRepositoryShape)
 
 const makeProducerLayer = ({
