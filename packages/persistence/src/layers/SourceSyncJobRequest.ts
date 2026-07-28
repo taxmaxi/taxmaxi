@@ -96,6 +96,7 @@ export const requestSourceSyncJob = ({
           )
         )
         .limit(1)
+        .for("update")
         .pipe(wrapSyncEngineSqlError("sourceSyncJobRequest.loadActiveJob"))
 
       const retryAfterCompletionRace = () =>

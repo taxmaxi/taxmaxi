@@ -905,7 +905,10 @@ export const makeProviderAssetRepositories = Effect.gen(function* () {
             and(
               eq(schema.processingJobs.id, nextJobId),
               eq(schema.processingJobs.sourceId, sourceId),
-              eq(schema.processingJobs.mode, "replay")
+              or(
+                eq(schema.processingJobs.mode, "replay"),
+                eq(schema.processingJobs.followUpMode, "replay")
+              )
             )
           )
           .limit(1)

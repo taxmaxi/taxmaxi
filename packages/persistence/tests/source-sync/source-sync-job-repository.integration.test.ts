@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
+import { requestSourceSyncJob } from "../../src/layers/SourceSyncJobRequest.ts"
 import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
@@ -225,6 +226,67 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     const activeJob = await selectProcessingJob({ jobId: created.id })
     expect(activeJob.followUpMode).toBe("replay")
+  })
+
+  it("holds a reused pending replay until its durable request transaction commits", async () => {
+    const created = await createJob({ mode: "replay" })
+    let signalRequestReady: () => void = () => undefined
+    const requestReady = new Promise<void>((resolve) => {
+      signalRequestReady = resolve
+    })
+    let releaseRequest: () => void = () => undefined
+    const requestReleased = new Promise<void>((resolve) => {
+      releaseRequest = resolve
+    })
+
+    const request = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            const replay = yield* requestSourceSyncJob({
+              executor: tx,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              maxAttempts: 3,
+              requestedAt: new Date("2025-01-02T00:00:00.000Z"),
+              activeReplayPolicy: "request_follow_up_if_processing",
+            })
+
+            yield* Effect.sync(signalRequestReady)
+            yield* Effect.promise(() => requestReleased)
+
+            return replay
+          })
+        )
+      })
+    )
+
+    await requestReady
+
+    const claim = claimJob({ jobId: created.id })
+    const claimSettledEarly = await Promise.race([
+      claim.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 50)),
+    ])
+
+    releaseRequest()
+
+    const [requestedReplay, claimedJob] = await Promise.all([request, claim])
+
+    expect(claimSettledEarly).toBe(false)
+    expect(requestedReplay).toMatchObject({
+      _tag: "ReusedSourceSyncJob",
+      id: created.id,
+      mode: "replay",
+      status: "pending",
+    })
+    expect(claimedJob).toMatchObject({
+      id: created.id,
+      mode: "replay",
+      status: "processing",
+    })
   })
 
   it("retries replay intent when the active-row update loses a completion race", async () => {

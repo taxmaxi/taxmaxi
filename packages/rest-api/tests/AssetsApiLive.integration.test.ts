@@ -522,7 +522,8 @@ describe("AssetsApiLive", () => {
             id: retriedJobId,
             sourceId,
             principalId,
-            mode: "replay",
+            mode: "sync",
+            followUpMode: "replay",
             status: "pending",
           },
         ])
