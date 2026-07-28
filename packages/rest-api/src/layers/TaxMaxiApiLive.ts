@@ -26,7 +26,7 @@ import type {
 import type {
   SourceRepository as SyncEngineSourceRepository,
   AssetRepository,
-  ProviderAssetRepository,
+  ProviderAssetReviewRepository,
   ProtocolCandidateRepository,
   SourceSyncRunService,
   SourceSyncService,
@@ -53,7 +53,7 @@ import { AssetsApiLive } from "./AssetsApiLive.ts"
 import { PortfolioApiLive } from "./PortfolioApiLive.ts"
 import { CoinGeckoPriceServiceLive } from "./CoinGeckoPriceServiceLive.ts"
 import { CoinGeckoClientLive } from "./CoinGeckoClientLive.ts"
-import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationServiceLive.ts"
+import { ProviderAssetReviewServiceLive } from "./ProviderAssetReviewServiceLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
@@ -99,7 +99,7 @@ const CoreApiGroup = Layer.mergeAll(
   LegalReferenceApiLive,
   AnonApiLive,
   PrincipalsApiLive,
-  AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
+  AssetsApiLive.pipe(Layer.provide(ProviderAssetReviewServiceLive)),
   PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive
@@ -124,7 +124,7 @@ type TaxMaxiApiLiveContext =
   | SessionRepository
   | SIWXProofVerifier
   | AssetRepository
-  | ProviderAssetRepository
+  | ProviderAssetReviewRepository
   | ProtocolCandidateRepository
   | SourceReportRepository
   | SourceSyncRunService

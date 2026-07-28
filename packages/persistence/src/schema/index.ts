@@ -20,6 +20,8 @@ import * as protocolCandidates from "./ProtocolCandidatesTable.ts"
 import * as protocolMappingEvidence from "./ProtocolMappingEvidenceTable.ts"
 import * as protocolTransactionTypeMappings from "./ProtocolTransactionTypeMappingsTable.ts"
 import * as providerAssetMappings from "./ProviderAssetMappingsTable.ts"
+import * as providerAssetObservations from "./ProviderAssetObservationsTable.ts"
+import * as providerAssetReviewReplays from "./ProviderAssetReviewReplaysTable.ts"
 import * as providerAssets from "./ProviderAssetsTable.ts"
 import * as providerTransfers from "./ProviderTransfersTable.ts"
 import * as providerTransactionTypeCatalog from "./ProviderTransactionTypeCatalogTable.ts"
@@ -65,6 +67,8 @@ export const schema = {
   ...protocolMappingEvidence,
   ...protocolTransactionTypeMappings,
   ...providerAssetMappings,
+  ...providerAssetObservations,
+  ...providerAssetReviewReplays,
   ...providerAssets,
   ...providerTransfers,
   ...providerTransactionTypeCatalog,

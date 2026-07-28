@@ -30,6 +30,8 @@ const USDC_ASSET_ID = "00000000-0000-0000-0000-000000001602"
 const USDT_ASSET_ID = "00000000-0000-0000-0000-000000001603"
 const UNKNOWN_ASSET_ID = "00000000-0000-0000-0000-000000001604"
 const UNKNOWN_MINT = "Drift111111111111111111111111111111111111111"
+const EXISTING_DYNAMIC_ASSET_ID = "00000000-0000-0000-0000-000000001605"
+const EXISTING_DYNAMIC_MINT = "Exact111111111111111111111111111111111111111"
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 
@@ -88,7 +90,12 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
     .where(
       and(
         eq(schema.assets.blockchainId, solanaBlockchain.id),
-        inArray(schema.assets.contractAddress, [SOLANA_USDC_MINT, SOLANA_USDT_MINT, UNKNOWN_MINT])
+        inArray(schema.assets.contractAddress, [
+          SOLANA_USDC_MINT,
+          SOLANA_USDT_MINT,
+          UNKNOWN_MINT,
+          EXISTING_DYNAMIC_MINT,
+        ])
       )
     )
 
@@ -392,6 +399,58 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       source: "helius_das_get_asset_batch",
       tokenProgram: TOKEN_2022_PROGRAM,
       nftHint: false,
+    })
+  })
+
+  it("automatically maps a Helius observation to an existing asset with the same Solana mint", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: EXISTING_DYNAMIC_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: EXISTING_DYNAMIC_MINT,
+          name: "Exact Mint",
+          symbol: "EXACT",
+          decimals: 7,
+          type: "token",
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: EXISTING_DYNAMIC_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: EXISTING_DYNAMIC_MINT,
+            symbol: "EXACT",
+            name: "Exact Mint",
+            decimals: 7,
+          }),
+        ])
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      mappingStatus: "approved",
+      canonicalAssetId: EXISTING_DYNAMIC_ASSET_ID,
+      canonicalAssetSymbol: "EXACT",
     })
   })
 

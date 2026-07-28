@@ -10,6 +10,7 @@ import * as Schema from "effect/Schema"
 import type { ResolvedProviderTransactionTypeMapping } from "./ProviderReferenceRepository.ts"
 import type {
   PersistNormalizedSourceArtifactsContext,
+  SourceProviderAssetObservationDraft,
   SourceProviderTransferDraft,
   SourceOnchainContextDraft,
   SourceTransactionDraft,
@@ -75,6 +76,7 @@ export interface SourceProviderPreparedNormalization {
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  readonly providerAssetObservations: ReadonlyArray<SourceProviderAssetObservationDraft>
   readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping

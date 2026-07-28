@@ -117,6 +117,7 @@ const portfolioAssetsResponseBody = JSON.stringify({
 
 const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   providerAssets: [],
+  totalCount: 0,
   page: {
     nextCursor: null,
     hasMore: false,
@@ -156,6 +157,18 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     name: "Cardano",
     exponent: 6,
     providerType: "crypto",
+    evidenceSource: {
+      providerName: "Coinbase",
+      apiName: "Coinbase App API",
+      endpoint: "GET /v2/currencies/crypto",
+      documentationUrl: "https://docs.cdp.coinbase.com/coinbase-app/track-apis/currencies",
+      payloadKind: "direct_response",
+      typeSource: "provider",
+      typeExplanation: "Coinbase reports this classification in its currency response.",
+    },
+    rawProviderPayload: { code: "ADA" },
+    discoveredAt: "2026-07-20T08:00:00.000Z",
+    retrievedAt: "2026-07-20T09:00:00.000Z",
     mappingKind: "asset",
     canonicalAssetId: "00000000-0000-4000-8000-000000000010",
     canonicalAssetSymbol: "ADA",
@@ -163,6 +176,8 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     mappingStatus: "approved",
     reviewerNotes: "Looks correct.",
     sourceNotes: "Approved with CoinGecko asset/platform metadata.",
+    reviewedBy: "00000000-0000-4000-8000-000000000012",
+    reviewedAt: "2026-07-20T10:00:00.000Z",
   },
   canonicalAsset: {
     id: "00000000-0000-4000-8000-000000000010",
@@ -183,6 +198,62 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     platformName: "Cardano",
     contractAddress: null,
   },
+  replays: [],
+})
+
+const assetCandidateResponseBody = JSON.stringify({
+  candidates: [
+    {
+      availability: "actionable",
+      coinId: "cardano",
+      coinName: "Cardano",
+      coinSymbol: "ADA",
+      platformId: "cardano",
+      platformName: "Cardano",
+      contractAddress: null,
+      exactContractMatch: false,
+      evidenceStrength: "exact_name_and_symbol",
+      representation: "native",
+      matchReasons: ["Symbol matches ADA.", "Name matches the provider exactly."],
+      warnings: [],
+      unavailableReason: null,
+      proposedAsset: {
+        blockchainName: "cardano",
+        contractAddress: null,
+        name: "Cardano",
+        symbol: "ADA",
+        decimals: 6,
+        logoUrl: null,
+        type: "native",
+      },
+    },
+  ],
+})
+
+const providerAssetDecisionResponseBody = JSON.stringify({
+  providerAsset: JSON.parse(assetCanonicalizationResponseBody).providerAsset,
+  replays: [],
+})
+
+const providerAssetReplayStartResponseBody = JSON.stringify({
+  sourceId: "00000000-0000-4000-8000-000000000020",
+  jobId: "00000000-0000-4000-8000-000000000021",
+  status: "queued",
+  message: null,
+})
+
+const providerAssetReplayJobResponseBody = JSON.stringify({
+  sourceId: "00000000-0000-4000-8000-000000000020",
+  jobId: "00000000-0000-4000-8000-000000000021",
+  status: "running",
+  phase: "classifying",
+  processedRecords: 2,
+  totalRecords: 10,
+  progressPercent: 20,
+  importedRecords: 10,
+  normalizedRecords: 2,
+  failedRecords: 0,
+  message: null,
 })
 
 const emptySourceTransactionsResponseBody = JSON.stringify({
@@ -617,7 +688,13 @@ describe("TaxMaxi Promise client", () => {
     const providerAssetId = "00000000-0000-4000-8000-000000000009"
     const responseBodies = [
       emptyProviderAssetReviewsResponseBody,
+      assetCandidateResponseBody,
       assetCanonicalizationResponseBody,
+      providerAssetDecisionResponseBody,
+      providerAssetDecisionResponseBody,
+      providerAssetDecisionResponseBody,
+      providerAssetReplayJobResponseBody,
+      providerAssetReplayStartResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
       apiKey: "tm_assets",
@@ -644,17 +721,23 @@ describe("TaxMaxi Promise client", () => {
         status: "pending_review",
         cursor: "00000000-0000-4000-8000-000000000008",
         limit: 25,
+        query: "ada",
       })
     ).resolves.toEqual({
       providerAssets: [],
+      totalCount: 0,
       page: {
         nextCursor: null,
         hasMore: false,
       },
     })
     await expect(
+      taxmaxi.assets.listProviderAssetCandidates({ id: providerAssetId })
+    ).resolves.toMatchObject({ candidates: [{ coinId: "cardano" }] })
+    await expect(
       taxmaxi.assets.canonicalizeProviderAsset({
         id: providerAssetId,
+        coinId: "cardano",
         reviewerNotes: "Looks correct.",
       })
     ).resolves.toMatchObject({
@@ -663,13 +746,61 @@ describe("TaxMaxi Promise client", () => {
         mappingStatus: "approved",
       },
     })
+    await expect(
+      taxmaxi.assets.mapProviderAsset({
+        id: providerAssetId,
+        canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+        reviewerNotes: "Existing asset verified.",
+      })
+    ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
+    await expect(
+      taxmaxi.assets.approveProviderAssetAsFiat({ id: providerAssetId })
+    ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
+    await expect(
+      taxmaxi.assets.rejectProviderAsset({
+        id: providerAssetId,
+        rejectionReason: "Spam token",
+      })
+    ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
+    await expect(
+      taxmaxi.assets.getProviderAssetReplay({
+        id: providerAssetId,
+        sourceId: "00000000-0000-4000-8000-000000000020",
+        jobId: "00000000-0000-4000-8000-000000000021",
+      })
+    ).resolves.toMatchObject({ status: "running", progressPercent: 20 })
+    await expect(
+      taxmaxi.assets.retryProviderAssetReplay({
+        id: providerAssetId,
+        sourceId: "00000000-0000-4000-8000-000000000020",
+        jobId: "00000000-0000-4000-8000-000000000021",
+      })
+    ).resolves.toMatchObject({ status: "queued" })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&q=ada&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/candidates",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/map",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve-fiat",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/reject",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020/jobs/00000000-0000-4000-8000-000000000021",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000020/jobs/00000000-0000-4000-8000-000000000021/retry",
       }),
     ])
   })

@@ -8,7 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, lte, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -28,6 +28,7 @@ import {
   type PersistedSourceTransaction,
   type SourceOnchainContextDraft,
   SourceNormalizationRepository,
+  type SourceProviderAssetObservationDraft,
   type SourceProviderTransferDraft,
   type SourceTransactionDraft,
   type SourceTransactionLegDraft,
@@ -43,6 +44,7 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
+import { requestSourceSyncJob } from "./SourceSyncJobRequest.ts"
 
 interface PersistedSourceLegRecord {
   readonly id: string
@@ -676,6 +678,115 @@ const make = Effect.gen(function* () {
         } satisfies PersistedSourceProviderTransfer
       })
     )
+
+  const upsertProviderAssetObservations = ({
+    executor,
+    observations,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly observations: ReadonlyArray<SourceProviderAssetObservationDraft>
+  }) =>
+    Effect.forEach(
+      observations,
+      (observation) => {
+        const now = nowDate()
+        return executor
+          .insert(schema.providerAssetObservations)
+          .values({ ...observation, createdAt: now, updatedAt: now })
+          .onConflictDoUpdate({
+            target: [
+              schema.providerAssetObservations.sourceRawRecordId,
+              schema.providerAssetObservations.providerAssetId,
+            ],
+            set: { sourceId: observation.sourceId, updatedAt: now },
+          })
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError("sourceNormalizationRepository.upsertProviderAssetObservations")
+          )
+      },
+      { discard: true }
+    )
+
+  const lockProviderAssetMappingsForNormalization = ({
+    executor,
+    providerTransfers,
+    providerAssetObservations,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
+    readonly providerAssetObservations: ReadonlyArray<SourceProviderAssetObservationDraft>
+  }) => {
+    const providerAssetRowIds = [
+      ...new Set([
+        ...providerTransfers.flatMap((providerTransfer) =>
+          providerTransfer.providerAssetId === null ? [] : [providerTransfer.providerAssetId]
+        ),
+        ...providerAssetObservations.map((observation) => observation.providerAssetId),
+      ]),
+    ]
+
+    if (providerAssetRowIds.length === 0) return Effect.void
+
+    return executor
+      .select({ id: schema.providerAssetMappings.id })
+      .from(schema.providerAssetMappings)
+      .where(inArray(schema.providerAssetMappings.providerAssetRowId, providerAssetRowIds))
+      .for("share")
+      .pipe(
+        Effect.asVoid,
+        wrapSyncEngineSqlError(
+          "sourceNormalizationRepository.lockProviderAssetMappingsForNormalization"
+        )
+      )
+  }
+
+  const scheduleReplayForLateApprovedObservation = ({
+    executor,
+    sourceId,
+    principalId,
+    providerAssetObservations,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly sourceId: string
+    readonly principalId: string
+    readonly providerAssetObservations: ReadonlyArray<SourceProviderAssetObservationDraft>
+  }) => {
+    if (providerAssetObservations.length === 0) return Effect.void
+
+    return Effect.gen(function* () {
+      const approvedMappings = yield* executor
+        .select({ id: schema.providerAssetMappings.id })
+        .from(schema.providerAssetMappings)
+        .where(
+          and(
+            inArray(
+              schema.providerAssetMappings.providerAssetRowId,
+              providerAssetObservations.map((observation) => observation.providerAssetId)
+            ),
+            eq(schema.providerAssetMappings.mappingStatus, "approved")
+          )
+        )
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.loadMapping"
+          )
+        )
+
+      if (approvedMappings.length === 0) return
+
+      yield* requestSourceSyncJob({
+        executor,
+        sourceId,
+        principalId,
+        mode: "replay",
+        maxAttempts: 3,
+        requestedAt: nowDate(),
+        activeReplayPolicy: "request_follow_up_if_processing",
+      })
+    })
+  }
 
   const upsertTransactionLegs = ({
     executor,
@@ -1932,6 +2043,22 @@ const make = Effect.gen(function* () {
             executor: tx,
             transactionId: persistedTransaction.id,
             providerTransfers: params.providerTransfers,
+          })
+          const providerAssetObservations = params.providerAssetObservations ?? []
+          yield* upsertProviderAssetObservations({
+            executor: tx,
+            observations: providerAssetObservations,
+          })
+          yield* lockProviderAssetMappingsForNormalization({
+            executor: tx,
+            providerTransfers: persistedProviderTransfers,
+            providerAssetObservations,
+          })
+          yield* scheduleReplayForLateApprovedObservation({
+            executor: tx,
+            sourceId: params.transaction.sourceId,
+            principalId: params.transaction.principalId,
+            providerAssetObservations,
           })
           const persistedFeeTransfers = yield* upsertFeeTransfers({
             executor: tx,

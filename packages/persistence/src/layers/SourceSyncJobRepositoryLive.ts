@@ -7,12 +7,9 @@
 import { and, asc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { isActiveProcessingJobConflict } from "../errors/ProcessingJobConflict.ts"
-import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { drizzle } from "./PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 import {
-  type CreateOrReuseSourceSyncJobResult,
   type ActiveSourceSyncJobStatus,
   type SourceSyncExecutionJob,
   type SourceSyncJobMode,
@@ -35,13 +32,12 @@ import {
   toSyncEngineStorageError,
   wrapSyncEngineSqlError,
 } from "./SyncEngineRepositorySupport.ts"
+import { requestSourceSyncJob } from "./SourceSyncJobRequest.ts"
 
 const ACTIVE_JOB_STATUSES = [
   "pending",
   "processing",
 ] as const satisfies ReadonlyArray<ActiveSourceSyncJobStatus>
-const MAX_CREATE_OR_REUSE_RACE_ATTEMPTS = 3
-
 interface PersistedExecutionJobRow {
   readonly id: string
   readonly sourceId: string
@@ -250,121 +246,21 @@ const make = Effect.gen(function* () {
         )
       )
 
-  const createProcessingJob = ({
-    sourceId,
-    principalId,
-    mode,
-    maxAttempts,
-  }: {
-    readonly sourceId: string
-    readonly principalId: string
-    readonly mode: "sync" | "replay"
-    readonly maxAttempts: number
-  }): Effect.Effect<string, PersistenceError> =>
-    Effect.gen(function* () {
-      const [job] = yield* db
-        .insert(schema.processingJobs)
-        .values({
-          sourceId,
-          principalId,
-          mode,
-          status: "pending",
-          attemptCount: 0,
-          maxAttempts,
-          progressDetails: { mode },
-        })
-        .returning({ id: schema.processingJobs.id })
-        .pipe(wrapSqlError("sourceSyncJobRepository.createProcessingJob.insert"))
-
-      if (job === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceSyncJobRepository.createProcessingJob.insert",
-            cause: "failed to create processing job",
-          })
-        )
-      }
-
-      return job.id
-    })
-
   const createOrReuseJob: SourceSyncJobRepositoryShape["createOrReuseJob"] = ({
     sourceId,
     principalId,
     mode,
     maxAttempts,
-  }) => {
-    const attemptCreateOrReuse = (
-      attemptsRemaining: number
-    ): Effect.Effect<CreateOrReuseSourceSyncJobResult, SyncEngineStorageError> =>
-      createProcessingJob({ sourceId, principalId, mode, maxAttempts }).pipe(
-        Effect.map(
-          (jobId): CreateOrReuseSourceSyncJobResult => ({
-            _tag: "CreatedSourceSyncJob",
-            id: jobId,
-          })
-        ),
-        Effect.catchAll((error) => {
-          if (!isActiveProcessingJobConflict(error)) {
-            return Effect.fail(toSyncEngineStorageError({ error }))
-          }
-
-          const retryAfterCompletionRace = () =>
-            attemptsRemaining > 1
-              ? Effect.suspend(() => attemptCreateOrReuse(attemptsRemaining - 1))
-              : Effect.fail(toSyncEngineStorageError({ error }))
-
-          return findActiveJob({ sourceId, principalId }).pipe(
-            Effect.flatMap(([concurrentJob]) =>
-              Effect.gen(function* () {
-                // The conflicting job may finish before it can be read. Retry the
-                // insert so this request can become the new active job.
-                if (concurrentJob === undefined) {
-                  return yield* retryAfterCompletionRace()
-                }
-
-                if (mode === "replay" && concurrentJob.mode !== "replay") {
-                  const [updatedJob] = yield* db
-                    .update(schema.processingJobs)
-                    .set({ followUpMode: "replay" })
-                    .where(
-                      and(
-                        eq(schema.processingJobs.id, concurrentJob.id),
-                        inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
-                      )
-                    )
-                    .returning({ id: schema.processingJobs.id })
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "sourceSyncJobRepository.createOrReuseJob.requestFollowUp"
-                      )
-                    )
-
-                  // The job may finish between the read and conditional update.
-                  // Retry against the active job that now owns the source.
-                  if (updatedJob === undefined) {
-                    return yield* retryAfterCompletionRace()
-                  }
-                }
-
-                return {
-                  _tag: "ReusedSourceSyncJob",
-                  id: concurrentJob.id,
-                  sourceId: concurrentJob.sourceId,
-                  principalId: concurrentJob.principalId,
-                  mode: concurrentJob.mode,
-                  status: concurrentJob.status,
-                  queueName: concurrentJob.queueName,
-                  queueJobId: concurrentJob.queueJobId,
-                } satisfies CreateOrReuseSourceSyncJobResult
-              })
-            )
-          )
-        })
-      )
-
-    return attemptCreateOrReuse(MAX_CREATE_OR_REUSE_RACE_ATTEMPTS)
-  }
+  }) =>
+    requestSourceSyncJob({
+      executor: db,
+      sourceId,
+      principalId,
+      mode,
+      maxAttempts,
+      requestedAt: nowDate(),
+      activeReplayPolicy: "reuse",
+    })
 
   const attachQueueMetadata: SourceSyncJobRepositoryShape["attachQueueMetadata"] = ({
     jobId,

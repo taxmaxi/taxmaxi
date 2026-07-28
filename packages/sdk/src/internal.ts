@@ -1,7 +1,9 @@
 import { FetchHttpClient, HttpApiClient } from "@effect/platform"
 import type { HttpApi } from "@effect/platform"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
+import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
+import * as Option from "effect/Option"
 import {
   makeInternalAssetsEffectResource,
   makeInternalAssetsPromiseResource,
@@ -29,12 +31,22 @@ export type {
   ProviderAssetReview,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
+  ProviderAssetCandidates,
+  ProviderAssetDecision,
+  ProviderAssetReplayJob,
+  ProviderAssetReplayStart,
 } from "./assets/index.ts"
 
 export type TaxMaxiInternalEffectClient =
   typeof TaxMaxiApi extends HttpApi.HttpApi<string, infer Groups, infer ApiError, infer _ApiContext>
     ? HttpApiClient.Client<Groups, ApiError, never>
     : never
+
+const TaxMaxiApiBaseUrlConfig = Config.option(Config.url("TAXMAXI_API_BASE_URL"))
+
+/** Load the server-side TaxMaxi API URL through Effect Config. */
+export const getTaxMaxiApiBaseUrlFromConfig = (): URL | undefined =>
+  Option.getOrUndefined(Effect.runSync(TaxMaxiApiBaseUrlConfig))
 
 export const makeTaxMaxiInternalEffectClient = (
   options: TaxMaxiEffectClientOptions = {}

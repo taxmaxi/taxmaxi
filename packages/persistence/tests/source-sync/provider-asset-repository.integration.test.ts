@@ -3,15 +3,24 @@ import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
+import { ProviderAssetReviewRepositoryLive } from "../../src/layers/ProviderAssetReviewRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_PRINCIPAL_ID,
+  TEST_RAW_RECORD_ID,
+  TEST_SOURCE_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
-import { ProviderAssetRepository, SyncEngineStorageError } from "@my/sync-engine/services"
+import {
+  ProviderAssetRepository,
+  ProviderAssetReviewRepository,
+  SyncEngineStorageError,
+} from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_provider_asset_repo",
@@ -24,7 +33,10 @@ await Effect.runPromise(context.recreateTestDatabase())
 const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
 
-describe("ProviderAssetRepositoryLive", () => {
+const runReviewRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetReviewRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetReviewRepositoryLive }))
+
+describe("Provider asset repositories", () => {
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
@@ -278,11 +290,12 @@ describe("ProviderAssetRepositoryLive", () => {
         )
       )
 
-      const firstPage = await runRepository(
-        Effect.flatMap(ProviderAssetRepository, (repository) =>
+      const firstPage = await runReviewRepository(
+        Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
+            query: null,
             cursorProviderAssetRowId: null,
             limit: 2,
           })
@@ -291,11 +304,12 @@ describe("ProviderAssetRepositoryLive", () => {
 
       expect(firstPage.map((row) => row.providerAsset.currencyCode)).toEqual(["ADA", "ETH"])
 
-      const secondPage = await runRepository(
-        Effect.flatMap(ProviderAssetRepository, (repository) =>
+      const secondPage = await runReviewRepository(
+        Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
+            query: null,
             cursorProviderAssetRowId: firstPage[1]?.providerAsset.id ?? null,
             limit: 2,
           })
@@ -436,6 +450,522 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
       expect(providerAssetRows).toHaveLength(0)
+    })
+
+    it("searches review evidence and applies one attributed decision atomically", async () => {
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "review-usdc",
+                naturalKey: "currency_code:USDC",
+                currencyCode: "USDC",
+                name: "USD Coin",
+                exponent: 6,
+                providerType: "crypto",
+                payload: { contract_address: "0xreview" },
+              },
+            ],
+          })
+          const asset = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "review-usdc",
+          })
+          if (Option.isNone(asset)) return yield* Effect.dieMessage("missing provider asset")
+          yield* repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: asset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                canonicalAssetSymbol: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: "Needs review",
+              },
+            ],
+          })
+          return asset.value
+        })
+      )
+      const reviewedAt = new Date("2026-07-20T10:00:00.000Z")
+      const [firstDecision, secondDecision, searched, count, review] = await runReviewRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetReviewRepository
+          const decision = {
+            providerAssetRowId: providerAsset.id,
+            mappingKind: "asset" as const,
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            canonicalAssetSymbol: "BTC",
+            canonicalAssetDraft: null,
+            mappingStatus: "approved" as const,
+            reviewerNotes: "Verified evidence",
+            sourceNotes: "Mapped in review",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt,
+            createReplayJobs: false,
+          }
+          const first = yield* repository.decideProviderAssetMapping(decision)
+          const second = yield* repository.decideProviderAssetMapping(decision)
+          const rows = yield* repository.listProviderAssetReviews({
+            providerKey: null,
+            mappingStatus: "approved",
+            query: "0xreview",
+            cursorProviderAssetRowId: null,
+            limit: 10,
+          })
+          const total = yield* repository.countProviderAssetReviews({
+            providerKey: null,
+            mappingStatus: "approved",
+            query: "USD Coin",
+          })
+          const loaded = yield* repository.findProviderAssetReviewById({
+            providerAssetRowId: providerAsset.id,
+          })
+          return [first, second, rows, total, loaded] as const
+        })
+      )
+
+      expect(firstDecision.updated).toBe(true)
+      expect(secondDecision.updated).toBe(false)
+      expect(searched).toHaveLength(1)
+      expect(count).toBe(1)
+      expect(Option.getOrNull(review)?.mapping).toMatchObject({
+        reviewedBy: TEST_USER_ID,
+        reviewedAt,
+        reviewerNotes: "Verified evidence",
+      })
+    })
+
+    it("publishes a canonical asset and durable replay job in the review transaction", async () => {
+      const providerAssetId = crypto.randomUUID()
+      const transactionId = crypto.randomUUID()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: providerAssetId,
+            provider: "helius-solana",
+            providerAssetId: "ReviewMint111111111111111111111111111111111",
+            currencyCode: "RVT",
+            name: "Review Token",
+            providerType: "spl-token",
+            rawProviderPayload: { symbol: "RVT" },
+            retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+          })
+          yield* db.insert(schema.transactions).values({
+            id: transactionId,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            externalId: "provider-asset-review-replay",
+            timestamp: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerTransfers).values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId,
+            providerAssetId,
+            externalId: "provider-asset-review-replay",
+            timestamp: new Date("2026-07-20T10:00:00.000Z"),
+            direction: "inbound",
+            fromAddress: "external",
+            toAddress: "owned",
+            amount: "1",
+          })
+          yield* db.insert(schema.processingJobs).values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync",
+            status: "pending",
+          })
+        })
+      )
+
+      const reviewedAt = new Date("2026-07-20T11:00:00.000Z")
+      const decision = await runReviewRepository(
+        Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+          repository.decideProviderAssetMapping({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            canonicalAssetId: null,
+            canonicalAssetSymbol: null,
+            canonicalAssetDraft: {
+              blockchain: {
+                name: "review-chain",
+                chainType: "solana",
+                chainId: null,
+                nativeAssetSymbol: "SOL",
+                explorerUrl: null,
+                logoUrl: null,
+                coingeckoPlatformId: "review-chain",
+              },
+              asset: {
+                contractAddress: "ReviewMint111111111111111111111111111111111",
+                name: "Review Token",
+                symbol: "RVT",
+                decimals: 9,
+                coingeckoCoinId: "review-token",
+                logoUrl: null,
+                type: "token",
+                isSpam: false,
+              },
+            },
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Reviewed",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt,
+            createReplayJobs: true,
+          })
+        )
+      )
+      const staleDecision = await runReviewRepository(
+        Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+          repository.decideProviderAssetMapping({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            canonicalAssetId: null,
+            canonicalAssetSymbol: null,
+            canonicalAssetDraft: {
+              blockchain: {
+                name: "wrong-review-chain",
+                chainType: "solana",
+                chainId: null,
+                nativeAssetSymbol: "SOL",
+                explorerUrl: null,
+                logoUrl: null,
+                coingeckoPlatformId: "wrong-review-chain",
+              },
+              asset: {
+                contractAddress: "WrongMint1111111111111111111111111111111111",
+                name: "Wrong Review Token",
+                symbol: "WRONG",
+                decimals: 9,
+                coingeckoCoinId: "wrong-review-token",
+                logoUrl: null,
+                type: "token",
+                isSpam: false,
+              },
+            },
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Stale review",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt,
+            createReplayJobs: true,
+          })
+        )
+      )
+
+      const persisted = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const jobs = yield* db
+            .select({
+              sourceId: schema.processingJobs.sourceId,
+              mode: schema.processingJobs.mode,
+              followUpMode: schema.processingJobs.followUpMode,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const mappings = yield* db
+            .select({ canonicalAssetId: schema.providerAssetMappings.canonicalAssetId })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetId))
+          const staleAssets = yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.coingeckoCoinId, "wrong-review-token"))
+          return { jobs, mappings, staleAssets }
+        })
+      )
+
+      expect(decision).toMatchObject({
+        updated: true,
+        canonicalAsset: { symbol: "RVT" },
+        affectedSources: [
+          {
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            jobId: expect.any(String),
+          },
+        ],
+      })
+      expect(persisted.jobs).toEqual([
+        { sourceId: TEST_SOURCE_ID, mode: "sync", followUpMode: "replay" },
+      ])
+      expect(persisted.mappings[0]?.canonicalAssetId).toBe(decision.canonicalAsset?.id)
+      expect(staleDecision.updated).toBe(false)
+      expect(persisted.staleAssets).toHaveLength(0)
+
+      const replayJobId = decision.affectedSources[0]?.jobId
+      expect(replayJobId).toBeDefined()
+
+      if (replayJobId !== undefined) {
+        const unrelatedJobId = crypto.randomUUID()
+        await runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.delete(schema.transactions).where(eq(schema.transactions.id, transactionId))
+            yield* db.insert(schema.processingJobs).values({
+              id: unrelatedJobId,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "completed",
+              completedAt: new Date("2026-07-20T12:00:00.000Z"),
+            })
+          })
+        )
+
+        const replaySource = await runReviewRepository(
+          Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+            repository.findProviderAssetReplaySource({
+              providerAssetRowId: providerAssetId,
+              sourceId: TEST_SOURCE_ID,
+              jobId: replayJobId,
+            })
+          )
+        )
+
+        expect(Option.getOrNull(replaySource)).toEqual({
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          jobId: replayJobId,
+        })
+
+        const unrelatedSource = await runReviewRepository(
+          Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+            repository.findProviderAssetReplaySource({
+              providerAssetRowId: providerAssetId,
+              sourceId: TEST_SOURCE_ID,
+              jobId: unrelatedJobId,
+            })
+          )
+        )
+        expect(Option.isNone(unrelatedSource)).toBe(true)
+
+        const rebound = await runReviewRepository(
+          Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+            repository.replaceProviderAssetReplayJob({
+              providerAssetRowId: providerAssetId,
+              sourceId: TEST_SOURCE_ID,
+              previousJobId: replayJobId,
+              nextJobId: unrelatedJobId,
+            })
+          )
+        )
+        const reboundSource = await runReviewRepository(
+          Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+            repository.findProviderAssetReplaySource({
+              providerAssetRowId: providerAssetId,
+              sourceId: TEST_SOURCE_ID,
+              jobId: unrelatedJobId,
+            })
+          )
+        )
+
+        expect(rebound).toBe(true)
+        expect(Option.getOrNull(reboundSource)?.jobId).toBe(unrelatedJobId)
+      }
+    })
+
+    it("uses one canonical asset for concurrent native approvals", async () => {
+      const providerAssetIds = [crypto.randomUUID(), crypto.randomUUID()] as const
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values(
+            providerAssetIds.map((id, index) => ({
+              id,
+              provider: "coinbase",
+              providerAssetId: `native-review-${index}`,
+              currencyCode: "RNC",
+              name: "Review Native Coin",
+              providerType: "crypto",
+              rawProviderPayload: { symbol: "RNC" },
+              retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+            }))
+          )
+          yield* db.insert(schema.providerAssetMappings).values(
+            providerAssetIds.map((providerAssetRowId) => ({
+              providerAssetRowId,
+              mappingKind: "asset" as const,
+              mappingStatus: "pending_review" as const,
+            }))
+          )
+        })
+      )
+
+      const decide = (providerAssetRowId: string) =>
+        runReviewRepository(
+          Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+            repository.decideProviderAssetMapping({
+              providerAssetRowId,
+              mappingKind: "asset",
+              canonicalAssetId: null,
+              canonicalAssetSymbol: null,
+              canonicalAssetDraft: {
+                blockchain: {
+                  name: "review-native-chain",
+                  chainType: "other",
+                  chainId: null,
+                  nativeAssetSymbol: "RNC",
+                  explorerUrl: null,
+                  logoUrl: null,
+                  coingeckoPlatformId: "review-native-chain",
+                },
+                asset: {
+                  contractAddress: null,
+                  name: "Review Native Coin",
+                  symbol: "RNC",
+                  decimals: 8,
+                  coingeckoCoinId: "review-native-coin",
+                  logoUrl: null,
+                  type: "native",
+                  isSpam: false,
+                },
+              },
+              mappingStatus: "approved",
+              reviewerNotes: null,
+              sourceNotes: "Concurrent review",
+              reviewedBy: TEST_USER_ID,
+              reviewedAt: new Date("2026-07-20T12:00:00.000Z"),
+              createReplayJobs: false,
+            })
+          )
+        )
+
+      const decisions = await Promise.all(providerAssetIds.map(decide))
+
+      expect(decisions[0]?.canonicalAsset?.id).toBe(decisions[1]?.canonicalAsset?.id)
+
+      const nativeAssets = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.coingeckoCoinId, "review-native-coin"))
+        })
+      )
+      expect(nativeAssets).toHaveLength(1)
+    })
+
+    it("creates replay work for a source that only observed the reviewed asset as a fee", async () => {
+      const providerAssetId = crypto.randomUUID()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: providerAssetId,
+            provider: "coinbase",
+            providerAssetId: "fee-only-review-asset",
+            currencyCode: "FEE",
+            name: "Fee-only review asset",
+            providerType: "crypto",
+            rawProviderPayload: { symbol: "FEE" },
+            retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+          })
+          yield* db.insert(schema.sourceRecordsRaw).values({
+            id: TEST_RAW_RECORD_ID,
+            sourceId: TEST_SOURCE_ID,
+            provider: "coinbase",
+            recordType: "coinbase_transaction",
+            externalRecordId: "fee-only-review-record",
+            occurredAt: new Date("2026-07-20T10:00:00.000Z"),
+            payload: {},
+            importedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetObservations).values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            providerAssetId,
+          })
+        })
+      )
+
+      const decision = await runReviewRepository(
+        Effect.flatMap(ProviderAssetReviewRepository, (repository) =>
+          repository.decideProviderAssetMapping({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            canonicalAssetSymbol: "BTC",
+            canonicalAssetDraft: null,
+            mappingStatus: "approved",
+            reviewerNotes: null,
+            sourceNotes: "Approved fee currency",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt: new Date("2026-07-20T12:00:00.000Z"),
+            createReplayJobs: true,
+          })
+        )
+      )
+
+      expect(decision.affectedSources).toEqual([
+        {
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          jobId: expect.any(String),
+        },
+      ])
+    })
+
+    it("preserves review history when the administrator is deleted", async () => {
+      const providerAssetId = crypto.randomUUID()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: providerAssetId,
+            provider: "coinbase",
+            providerAssetId: "reviewed-before-user-deletion",
+            currencyCode: "DEL",
+            name: "Deletion Review",
+            providerType: "crypto",
+            rawProviderPayload: {},
+            retrievedAt: new Date("2026-07-20T10:00:00.000Z"),
+          })
+          yield* db.insert(schema.providerAssetMappings).values({
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "rejected",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt: new Date("2026-07-20T12:00:00.000Z"),
+          })
+          yield* db.delete(schema.users).where(eq(schema.users.id, TEST_USER_ID))
+        })
+      )
+
+      const [mapping] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ reviewedBy: schema.providerAssetMappings.reviewedBy })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetId))
+        })
+      )
+
+      expect(mapping?.reviewedBy).toBeNull()
     })
   })
 })

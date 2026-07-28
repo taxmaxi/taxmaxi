@@ -1053,6 +1053,7 @@ const make = Effect.gen(function* () {
       const normalizedMetadata = yield* decodeCoinbaseNormalizedMetadata(
         normalized.transaction.metadata
       )
+
       const resolvedTransactionType = yield* coinbaseReferenceMappingService.resolveTransactionType(
         {
           providerTransactionType: normalized.transaction.providerTransactionType ?? "unknown",
@@ -1078,6 +1079,7 @@ const make = Effect.gen(function* () {
         currencyCode: normalized.primaryAssetCurrency,
         rawSourcePayload: sourceRecord.payload,
       })
+
       const maybePrimaryAsset = yield* Option.match(primaryAssetResolution.assetId, {
         onNone: () => Effect.succeed(Option.none()),
         onSome: (assetId) =>
@@ -1086,18 +1088,38 @@ const make = Effect.gen(function* () {
             message: `Missing asset row for resolved Coinbase asset ${assetId}`,
           }).pipe(Effect.map(Option.some)),
       })
+
       const primaryProviderAssetId = yield* loadProviderAssetIdentity({
         currencyCode: normalized.primaryAssetCurrency,
       })
+
       const baseTransactionReview = determineCoinbaseReview({
         providerTransactionType: normalized.transaction.providerTransactionType,
         resolvedTransactionType,
         principalId: source.principalId,
       })
+
       const reviewableAssetCurrencies = primaryAssetResolution.requiresReview
         ? [normalized.primaryAssetCurrency.toUpperCase(), ...normalized.unresolvedAssetCurrencies]
         : normalized.unresolvedAssetCurrencies
+
       const unresolvedAssetCurrencies = Array.from(new Set(reviewableAssetCurrencies)).sort()
+
+      const providerAssetObservations = (yield* Effect.forEach(
+        unresolvedAssetCurrencies,
+        (currencyCode) => loadProviderAssetIdentity({ currencyCode })
+      )).flatMap((providerAssetId) =>
+        providerAssetId === null
+          ? []
+          : [
+              {
+                sourceId: source.id,
+                sourceRawRecordId: sourceRecord.id,
+                providerAssetId,
+              },
+            ]
+      )
+
       const transactionReview =
         unresolvedAssetCurrencies.length === 0
           ? baseTransactionReview
@@ -1123,6 +1145,7 @@ const make = Effect.gen(function* () {
           ...providerTransfer,
           providerAssetId: providerTransfer.providerAssetId ?? primaryProviderAssetId,
         })),
+        providerAssetObservations,
         feeTransfers: normalized.feeTransfers,
         transactionReview,
         resolvedTransactionType,

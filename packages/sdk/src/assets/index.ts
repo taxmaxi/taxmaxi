@@ -3,7 +3,13 @@ import type {
   AssetCatalogListResponse,
   AssetCanonicalizationRequest,
   AssetCanonicalizationResponse,
+  CoinGeckoAssetCandidateListResponse,
+  MapProviderAssetRequest,
+  ProviderAssetDecisionResponse,
+  RejectProviderAssetRequest,
   ProviderAssetReviewListResponse,
+  SourceSyncJobResponse,
+  SourceSyncStartResponse,
 } from "@my/rest-api/contracts"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import { HttpApiClient, type HttpApi } from "@effect/platform"
@@ -43,6 +49,10 @@ export type AssetCanonicalizationInput = {
   readonly id: string
 } & AssetCanonicalizationRequest
 export type AssetCanonicalization = AssetCanonicalizationResponse
+export type ProviderAssetCandidates = CoinGeckoAssetCandidateListResponse
+export type ProviderAssetDecision = ProviderAssetDecisionResponse
+export type ProviderAssetReplayJob = SourceSyncJobResponse
+export type ProviderAssetReplayStart = SourceSyncStartResponse
 
 export type AssetCatalogListInput = {
   readonly query?: string | null
@@ -56,6 +66,7 @@ export type AssetCatalogDetailInput = {
 export type ProviderAssetReviewListInput = {
   readonly provider?: string
   readonly status?: "approved" | "pending_review" | "rejected"
+  readonly query?: string
   readonly cursor?: string | null
   readonly limit?: number
 }
@@ -77,6 +88,28 @@ export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Effect.Effect<AssetCanonicalization, unknown, never>
+  readonly listProviderAssetCandidates: (input: {
+    readonly id: string
+  }) => Effect.Effect<ProviderAssetCandidates, unknown, never>
+  readonly mapProviderAsset: (
+    input: { readonly id: string } & MapProviderAssetRequest
+  ) => Effect.Effect<ProviderAssetDecision, unknown, never>
+  readonly approveProviderAssetAsFiat: (input: {
+    readonly id: string
+  }) => Effect.Effect<ProviderAssetDecision, unknown, never>
+  readonly rejectProviderAsset: (
+    input: { readonly id: string } & RejectProviderAssetRequest
+  ) => Effect.Effect<ProviderAssetDecision, unknown, never>
+  readonly getProviderAssetReplay: (input: {
+    readonly id: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Effect.Effect<ProviderAssetReplayJob, unknown, never>
+  readonly retryProviderAssetReplay: (input: {
+    readonly id: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Effect.Effect<ProviderAssetReplayStart, unknown, never>
 }
 
 export type InternalAssetsPromiseResource = AssetsPromiseResource & {
@@ -86,6 +119,28 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Promise<AssetCanonicalization>
+  readonly listProviderAssetCandidates: (input: {
+    readonly id: string
+  }) => Promise<ProviderAssetCandidates>
+  readonly mapProviderAsset: (
+    input: { readonly id: string } & MapProviderAssetRequest
+  ) => Promise<ProviderAssetDecision>
+  readonly approveProviderAssetAsFiat: (input: {
+    readonly id: string
+  }) => Promise<ProviderAssetDecision>
+  readonly rejectProviderAsset: (
+    input: { readonly id: string } & RejectProviderAssetRequest
+  ) => Promise<ProviderAssetDecision>
+  readonly getProviderAssetReplay: (input: {
+    readonly id: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Promise<ProviderAssetReplayJob>
+  readonly retryProviderAssetReplay: (input: {
+    readonly id: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Promise<ProviderAssetReplayStart>
 }
 
 const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsset => ({
@@ -147,21 +202,53 @@ export const makeInternalAssetsEffectResource = (
         urlParams: {
           provider: input?.provider,
           status: input?.status,
+          q: input?.query,
           cursor: input?.cursor ?? undefined,
           limit: input?.limit,
         },
       })
     ),
-  canonicalizeProviderAsset: ({ id, reviewerNotes }) =>
+  listProviderAssetCandidates: ({ id }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.listProviderAssetCandidates({ path: { id } })
+    ),
+  canonicalizeProviderAsset: ({ id, coinId, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.canonicalizeProviderAsset({
         path: {
           id,
         },
         payload: {
+          coinId,
           reviewerNotes,
         },
       })
+    ),
+  mapProviderAsset: ({ id, canonicalAssetId, reviewerNotes }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.mapProviderAsset({
+        path: { id },
+        payload: { canonicalAssetId, reviewerNotes },
+      })
+    ),
+  approveProviderAssetAsFiat: ({ id }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.approveProviderAssetAsFiat({ path: { id } })
+    ),
+  rejectProviderAsset: ({ id, rejectionReason }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.rejectProviderAsset({
+        path: { id },
+        payload: { rejectionReason },
+      })
+    ),
+  getProviderAssetReplay: ({ id, sourceId, jobId }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.getProviderAssetReplay({ path: { id, sourceId, jobId } })
+    ),
+  retryProviderAssetReplay: ({ id, sourceId, jobId }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.retryProviderAssetReplay({ path: { id, sourceId, jobId } })
     ),
 })
 
@@ -180,4 +267,10 @@ export const makeInternalAssetsPromiseResource = (
   ...makeAssetsPromiseResource(effect, run),
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),
   canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
+  listProviderAssetCandidates: (input) => run(effect.listProviderAssetCandidates(input)),
+  mapProviderAsset: (input) => run(effect.mapProviderAsset(input)),
+  approveProviderAssetAsFiat: (input) => run(effect.approveProviderAssetAsFiat(input)),
+  rejectProviderAsset: (input) => run(effect.rejectProviderAsset(input)),
+  getProviderAssetReplay: (input) => run(effect.getProviderAssetReplay(input)),
+  retryProviderAssetReplay: (input) => run(effect.retryProviderAssetReplay(input)),
 })

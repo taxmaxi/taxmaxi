@@ -49,6 +49,7 @@ import { AssetCatalogRepositoryLive } from "./AssetCatalogRepositoryLive.ts"
 import { AssetRepositoryLive } from "./AssetRepositoryLive.ts"
 import { CoinbaseCredentialRepositoryLive } from "./CoinbaseCredentialRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "./ProviderAssetRepositoryLive.ts"
+import { ProviderAssetReviewRepositoryLive } from "./ProviderAssetReviewRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "./ProviderReferenceRepositoryLive.ts"
 import { ProtocolCandidateRepositoryLive } from "./ProtocolCandidateRepositoryLive.ts"
 import { ProtocolTransactionTypeMappingRepositoryLive } from "./ProtocolTransactionTypeMappingRepositoryLive.ts"
@@ -115,6 +116,7 @@ export const RepositoriesLive = Layer.mergeAll(
   AssetRepositoryLive,
   CoinbaseCredentialRepositoryLive,
   ProviderAssetRepositoryLive,
+  ProviderAssetReviewRepositoryLive,
   ProviderReferenceRepositoryLive,
   ProtocolCandidateRepositoryLive,
   ProtocolTransactionTypeMappingRepositoryLive,

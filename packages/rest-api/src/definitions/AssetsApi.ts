@@ -8,6 +8,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/p
 import * as Schema from "effect/Schema"
 import { AdminAuthMiddleware } from "./AuthMiddleware.ts"
 import { InternalServerError } from "./ApiErrors.ts"
+import { SourceSyncJobResponse, SourceSyncStartResponse } from "./SourcesApi.ts"
 
 export class AssetBadRequestError extends Schema.TaggedError<AssetBadRequestError>()(
   "AssetBadRequestError",
@@ -25,6 +26,12 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
   HttpApiSchema.annotations({ status: 404 })
 ) {}
 
+export class AssetConflictError extends Schema.TaggedError<AssetConflictError>()(
+  "AssetConflictError",
+  { message: Schema.String },
+  HttpApiSchema.annotations({ status: 409 })
+) {}
+
 export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>(
   "ProviderAssetReviewRow"
 )({
@@ -36,6 +43,18 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   name: Schema.NullOr(Schema.String),
   exponent: Schema.NullOr(Schema.Number),
   providerType: Schema.NullOr(Schema.String),
+  evidenceSource: Schema.Struct({
+    providerName: Schema.String,
+    apiName: Schema.String,
+    endpoint: Schema.NullOr(Schema.String),
+    documentationUrl: Schema.NullOr(Schema.String),
+    payloadKind: Schema.Literal("direct_response", "derived_observation", "fallback"),
+    typeSource: Schema.Literal("provider", "taxmaxi_inferred"),
+    typeExplanation: Schema.String,
+  }),
+  rawProviderPayload: Schema.Unknown,
+  discoveredAt: Schema.DateTimeUtc,
+  retrievedAt: Schema.DateTimeUtc,
   mappingKind: Schema.NullOr(Schema.Literal("asset", "fiat")),
   canonicalAssetId: Schema.NullOr(Schema.String),
   canonicalAssetSymbol: Schema.NullOr(Schema.String),
@@ -43,6 +62,8 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   mappingStatus: Schema.NullOr(Schema.Literal("approved", "pending_review", "rejected")),
   reviewerNotes: Schema.NullOr(Schema.String),
   sourceNotes: Schema.NullOr(Schema.String),
+  reviewedBy: Schema.NullOr(Schema.String),
+  reviewedAt: Schema.NullOr(Schema.DateTimeUtc),
 }) {}
 
 export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetReviewListResponse>(
@@ -53,6 +74,7 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
     nextCursor: Schema.NullOr(Schema.String),
     hasMore: Schema.Boolean,
   }),
+  totalCount: Schema.Number,
 }) {}
 
 export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetResponse>(
@@ -83,6 +105,7 @@ export class AssetCatalogListResponse extends Schema.Class<AssetCatalogListRespo
 export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicalizationRequest>(
   "AssetCanonicalizationRequest"
 )({
+  coinId: Schema.NonEmptyTrimmedString,
   reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
 }) {}
 
@@ -117,10 +140,77 @@ export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicaliz
   providerAsset: ProviderAssetReviewRow,
   canonicalAsset: CanonicalAssetResponse,
   evidence: AssetCanonicalizationEvidenceResponse,
+  replays: Schema.Array(
+    Schema.Struct({
+      sourceId: Schema.String,
+      jobId: Schema.NullOr(Schema.String),
+      status: Schema.Literal("queued", "failed_to_queue"),
+      message: Schema.NullOr(Schema.String),
+    })
+  ),
+}) {}
+
+export class CoinGeckoAssetCandidateResponse extends Schema.Class<CoinGeckoAssetCandidateResponse>(
+  "CoinGeckoAssetCandidateResponse"
+)({
+  availability: Schema.Literal("actionable", "unavailable"),
+  coinId: Schema.String,
+  coinName: Schema.String,
+  coinSymbol: Schema.String,
+  platformId: Schema.NullOr(Schema.String),
+  platformName: Schema.NullOr(Schema.String),
+  contractAddress: Schema.NullOr(Schema.String),
+  exactContractMatch: Schema.Boolean,
+  evidenceStrength: Schema.Literal("exact_contract", "exact_name_and_symbol", "symbol_only"),
+  representation: Schema.Literal("native", "token", "unknown"),
+  matchReasons: Schema.Array(Schema.String),
+  warnings: Schema.Array(Schema.String),
+  unavailableReason: Schema.NullOr(Schema.String),
+  proposedAsset: Schema.NullOr(
+    Schema.Struct({
+      blockchainName: Schema.String,
+      contractAddress: Schema.NullOr(Schema.String),
+      name: Schema.String,
+      symbol: Schema.String,
+      decimals: Schema.Number,
+      logoUrl: Schema.NullOr(Schema.String),
+      type: Schema.Literal("native", "token", "nft"),
+    })
+  ),
+}) {}
+
+export class CoinGeckoAssetCandidateListResponse extends Schema.Class<CoinGeckoAssetCandidateListResponse>(
+  "CoinGeckoAssetCandidateListResponse"
+)({ candidates: Schema.Array(CoinGeckoAssetCandidateResponse) }) {}
+
+export class MapProviderAssetRequest extends Schema.Class<MapProviderAssetRequest>(
+  "MapProviderAssetRequest"
+)({
+  canonicalAssetId: Schema.UUID,
+  reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
+}) {}
+
+export class RejectProviderAssetRequest extends Schema.Class<RejectProviderAssetRequest>(
+  "RejectProviderAssetRequest"
+)({ rejectionReason: Schema.NonEmptyTrimmedString }) {}
+
+export class ProviderAssetDecisionResponse extends Schema.Class<ProviderAssetDecisionResponse>(
+  "ProviderAssetDecisionResponse"
+)({
+  providerAsset: ProviderAssetReviewRow,
+  replays: Schema.Array(
+    Schema.Struct({
+      sourceId: Schema.String,
+      jobId: Schema.NullOr(Schema.String),
+      status: Schema.Literal("queued", "failed_to_queue"),
+      message: Schema.NullOr(Schema.String),
+    })
+  ),
 }) {}
 
 const ProviderAssetReviewQuery = Schema.Struct({
   provider: Schema.optional(Schema.String),
+  q: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Literal("pending_review", "approved", "rejected")),
   cursor: Schema.optional(Schema.UUID),
   limit: Schema.optional(
@@ -198,6 +288,7 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
   .addSuccess(AssetCanonicalizationResponse)
   .addError(AssetBadRequestError)
   .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -208,11 +299,98 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
   )
   .middleware(AdminAuthMiddleware)
 
+const listProviderAssetCandidates = HttpApiEndpoint.get(
+  "listProviderAssetCandidates",
+  "/assets/provider-assets/:id/candidates"
+)
+  .setPath(Schema.Struct({ id: Schema.UUID }))
+  .addSuccess(CoinGeckoAssetCandidateListResponse)
+  .addError(AssetBadRequestError)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
+const mapProviderAsset = HttpApiEndpoint.post("mapProviderAsset", "/assets/provider-assets/:id/map")
+  .setPath(Schema.Struct({ id: Schema.UUID }))
+  .setPayload(MapProviderAssetRequest)
+  .addSuccess(ProviderAssetDecisionResponse)
+  .addError(AssetBadRequestError)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
+const approveProviderAssetAsFiat = HttpApiEndpoint.post(
+  "approveProviderAssetAsFiat",
+  "/assets/provider-assets/:id/approve-fiat"
+)
+  .setPath(Schema.Struct({ id: Schema.UUID }))
+  .addSuccess(ProviderAssetDecisionResponse)
+  .addError(AssetBadRequestError)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Approve provider fiat currency",
+      description:
+        "Approves a fiat provider observation using its normalized currency code as the canonical fiat target.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const rejectProviderAsset = HttpApiEndpoint.post(
+  "rejectProviderAsset",
+  "/assets/provider-assets/:id/reject"
+)
+  .setPath(Schema.Struct({ id: Schema.UUID }))
+  .setPayload(RejectProviderAssetRequest)
+  .addSuccess(ProviderAssetDecisionResponse)
+  .addError(AssetBadRequestError)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
+const ProviderAssetReplayPath = Schema.Struct({
+  id: Schema.UUID,
+  sourceId: Schema.UUID,
+})
+
+const getProviderAssetReplay = HttpApiEndpoint.get(
+  "getProviderAssetReplay",
+  "/assets/provider-assets/:id/replays/:sourceId/jobs/:jobId"
+)
+  .setPath(Schema.Struct({ ...ProviderAssetReplayPath.fields, jobId: Schema.UUID }))
+  .addSuccess(SourceSyncJobResponse)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
+const retryProviderAssetReplay = HttpApiEndpoint.post(
+  "retryProviderAssetReplay",
+  "/assets/provider-assets/:id/replays/:sourceId/jobs/:jobId/retry"
+)
+  .setPath(Schema.Struct({ ...ProviderAssetReplayPath.fields, jobId: Schema.UUID }))
+  .addSuccess(SourceSyncStartResponse)
+  .addError(AssetNotFoundError)
+  .addError(AssetConflictError)
+  .addError(InternalServerError)
+  .middleware(AdminAuthMiddleware)
+
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
   .add(listProviderAssetReviews)
+  .add(listProviderAssetCandidates)
   .add(canonicalizeProviderAsset)
+  .add(mapProviderAsset)
+  .add(approveProviderAssetAsFiat)
+  .add(rejectProviderAsset)
+  .add(getProviderAssetReplay)
+  .add(retryProviderAssetReplay)
   .prefix("/v1")
   .annotateContext(
     OpenApi.annotations({

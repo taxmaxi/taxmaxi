@@ -160,6 +160,16 @@ export interface SourceProviderTransferDraft {
 }
 
 /**
+ * SourceProviderAssetObservationDraft - Provider asset identity observed in a
+ * raw source row even when no canonical transfer could be produced yet.
+ */
+export interface SourceProviderAssetObservationDraft {
+  readonly sourceId: string
+  readonly sourceRawRecordId: string
+  readonly providerAssetId: string
+}
+
+/**
  * SourceTransactionLegDraft - Canonical transaction leg upsert payload.
  */
 export interface SourceTransactionLegDraft {
@@ -309,6 +319,9 @@ export interface PersistNormalizedSourceArtifactsParamsBase {
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
+  readonly providerAssetObservations?:
+    | ReadonlyArray<SourceProviderAssetObservationDraft>
+    | undefined
   readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
