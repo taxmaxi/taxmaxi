@@ -59,7 +59,6 @@ export interface ProviderAssetDecisionResult {
 /** Shared audit and replay fields for an atomic provider asset decision. */
 export interface DecideProviderAssetMappingBase {
   readonly providerAssetRowId: string
-  readonly mappingStatus: "approved" | "rejected"
   readonly reviewerNotes: string | null
   readonly sourceNotes: string | null
   readonly reviewedBy: string
@@ -67,8 +66,9 @@ export interface DecideProviderAssetMappingBase {
   readonly createReplayJobs: boolean
 }
 
-/** Asset-target approval or rejection decision. */
+/** Asset-target approval decision. */
 export interface DecideProviderAssetMappingAsAsset extends DecideProviderAssetMappingBase {
+  readonly mappingStatus: "approved"
   readonly mappingKind: Extract<ProviderAssetMappingKind, "asset">
   readonly canonicalAssetId: string | null
   readonly canonicalAssetSymbol: string | null
@@ -80,14 +80,22 @@ export interface DecideProviderAssetMappingAsAsset extends DecideProviderAssetMa
 
 /** Fiat-target approval decision. */
 export interface DecideProviderAssetMappingAsFiat extends DecideProviderAssetMappingBase {
+  readonly mappingStatus: "approved"
   readonly mappingKind: Extract<ProviderAssetMappingKind, "fiat">
   readonly canonicalFiatCurrency: string
+}
+
+/** Rejection decision that preserves the pending mapping target kind. */
+export interface RejectProviderAssetMapping extends DecideProviderAssetMappingBase {
+  readonly mappingStatus: "rejected"
+  readonly mappingKind: ProviderAssetMappingKind
 }
 
 /** Atomic provider asset review decision input. */
 export type DecideProviderAssetMappingParams =
   | DecideProviderAssetMappingAsAsset
   | DecideProviderAssetMappingAsFiat
+  | RejectProviderAssetMapping
 
 /**
  * ProviderAssetReviewRepositoryShape - Review queue and atomic decision persistence operations.

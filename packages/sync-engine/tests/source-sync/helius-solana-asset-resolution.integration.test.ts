@@ -32,6 +32,8 @@ const UNKNOWN_ASSET_ID = "00000000-0000-0000-0000-000000001604"
 const UNKNOWN_MINT = "Drift111111111111111111111111111111111111111"
 const EXISTING_DYNAMIC_ASSET_ID = "00000000-0000-0000-0000-000000001605"
 const EXISTING_DYNAMIC_MINT = "Exact111111111111111111111111111111111111111"
+const SPAM_ASSET_ID = "00000000-0000-0000-0000-000000001606"
+const SPAM_MINT = "Spam1111111111111111111111111111111111111111"
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 
@@ -95,6 +97,7 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
           SOLANA_USDT_MINT,
           UNKNOWN_MINT,
           EXISTING_DYNAMIC_MINT,
+          SPAM_MINT,
         ])
       )
     )
@@ -451,6 +454,58 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       mappingStatus: "approved",
       canonicalAssetId: EXISTING_DYNAMIC_ASSET_ID,
       canonicalAssetSymbol: "EXACT",
+    })
+  })
+
+  it("keeps a Helius observation pending when the exact Solana mint is marked as spam", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: SPAM_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: SPAM_MINT,
+          name: "Spam Token",
+          symbol: "SPAM",
+          decimals: 6,
+          type: "token",
+          isSpam: true,
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: SPAM_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: SPAM_MINT,
+            symbol: "SPAM",
+            name: "Spam Token",
+            decimals: 6,
+          }),
+        ])
+    )
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
     })
   })
 

@@ -413,6 +413,65 @@ describe("AssetsApiLive", () => {
     })
   })
 
+  it("preserves the mapping kind when an admin rejects a fiat provider row", async () => {
+    const userId = crypto.randomUUID()
+    const providerAssetId = crypto.randomUUID()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.users).values({
+          id: userId,
+          email: `${userId}@asset-review.test`,
+          role: "admin",
+        })
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetId,
+          provider: "coinbase",
+          providerAssetId: "fiat-rejected",
+          currencyCode: "ZZZ",
+          name: "Unsupported fiat",
+          providerType: "fiat",
+          rawProviderPayload: { code: "ZZZ" },
+          retrievedAt: new Date("2026-07-20T09:00:00.000Z"),
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAssetId,
+          mappingKind: "fiat",
+          mappingStatus: "pending_review",
+        })
+      })
+    )
+
+    const response = await Effect.runPromise(
+      Effect.gen(function* () {
+        const request = HttpClientRequest.post(
+          `/v1/assets/provider-assets/${providerAssetId}/reject`
+        ).pipe(
+          HttpClientRequest.bearerToken(`user_${userId}_admin`),
+          HttpClientRequest.bodyUnsafeJson({ rejectionReason: "Unsupported currency" })
+        )
+        const result = yield* HttpClient.execute(request)
+        const body = yield* result.json
+        return {
+          status: result.status,
+          body: yield* Schema.decodeUnknown(ProviderAssetDecisionResponse)(body),
+        }
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.providerAsset).toMatchObject({
+      id: providerAssetId,
+      mappingKind: "fiat",
+      canonicalAssetId: null,
+      canonicalAssetSymbol: null,
+      canonicalFiatCurrency: null,
+      mappingStatus: "rejected",
+      reviewerNotes: "Unsupported currency",
+      reviewedBy: userId,
+    })
+  })
+
   it("binds replay status and retry to the exact review job", async () => {
     const userId = crypto.randomUUID()
     const principalId = crypto.randomUUID()

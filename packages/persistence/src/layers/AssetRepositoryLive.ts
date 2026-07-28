@@ -98,6 +98,7 @@ const make = Effect.gen(function* () {
           .where(
             and(
               eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase()),
+              eq(schema.assets.isSpam, false),
               or(
                 and(
                   eq(schema.blockchains.chainType, "evm"),

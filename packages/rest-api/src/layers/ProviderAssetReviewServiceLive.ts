@@ -10,6 +10,7 @@ import {
   type CanonicalAssetDraft,
   type CanonicalBlockchainDraft,
   type ProviderAssetAffectedSource,
+  type ProviderAssetMappingKind,
   type ProviderAssetRecord,
 } from "@my/sync-engine/services"
 import { AssetCatalogRepository } from "@my/persistence/services"
@@ -700,14 +701,15 @@ const make = Effect.gen(function* () {
           new ProviderAssetReviewNotFoundError({ message: "Provider asset not found." })
         )
       }
-      if (review.value.mapping?.mappingStatus !== "pending_review") {
+      const mapping = review.value.mapping
+      if (mapping === null || mapping.mappingStatus !== "pending_review") {
         return yield* Effect.fail(
           new ProviderAssetReviewConflictError({
             message: "Provider asset mapping is no longer pending review.",
           })
         )
       }
-      return review.value
+      return { providerAsset: review.value.providerAsset, mapping }
     })
 
   const loadReviewAfterDecision = (providerAssetRowId: string) =>
@@ -731,51 +733,65 @@ const make = Effect.gen(function* () {
       )
     )
 
-  const decide = (
-    params: Parameters<ProviderAssetReviewServiceShape["rejectProviderAsset"]>[0] & {
-      readonly canonicalAssetId: string | null
-      readonly canonicalAssetSymbol: string | null
-      readonly canonicalAssetDraft: {
-        readonly blockchain: CanonicalBlockchainDraft
-        readonly asset: CanonicalAssetDraft
-      } | null
-      readonly mappingStatus: "approved" | "rejected"
-      readonly reviewerNotes: string | null
-      readonly sourceNotes: string | null
-      readonly createReplayJobs: boolean
-    }
-  ) =>
-    providerAssetReviewRepository
-      .decideProviderAssetMapping({
-        providerAssetRowId: params.providerAssetRowId,
-        mappingKind: "asset",
-        canonicalAssetId: params.canonicalAssetId,
-        canonicalAssetSymbol: params.canonicalAssetSymbol,
-        canonicalAssetDraft: params.canonicalAssetDraft,
-        mappingStatus: params.mappingStatus,
-        reviewerNotes: params.reviewerNotes,
-        sourceNotes: params.sourceNotes,
-        reviewedBy: params.reviewedBy,
-        reviewedAt: new Date(),
-        createReplayJobs: params.createReplayJobs,
-      })
-      .pipe(
-        Effect.mapError(
-          () =>
-            new ProviderAssetReviewInternalError({
-              message: "Failed to persist provider asset review decision.",
-            })
-        ),
-        Effect.flatMap((result) =>
-          result.updated
-            ? Effect.succeed(result)
-            : Effect.fail(
-                new ProviderAssetReviewConflictError({
-                  message: "Provider asset mapping was reviewed by another administrator.",
-                })
-              )
-        )
+  const decide = (params: {
+    readonly providerAssetRowId: string
+    readonly reviewedBy: string
+    readonly mappingKind: ProviderAssetMappingKind
+    readonly canonicalAssetId: string | null
+    readonly canonicalAssetSymbol: string | null
+    readonly canonicalAssetDraft: {
+      readonly blockchain: CanonicalBlockchainDraft
+      readonly asset: CanonicalAssetDraft
+    } | null
+    readonly mappingStatus: "approved" | "rejected"
+    readonly reviewerNotes: string | null
+    readonly sourceNotes: string | null
+    readonly createReplayJobs: boolean
+  }) => {
+    const decision =
+      params.mappingStatus === "rejected"
+        ? providerAssetReviewRepository.decideProviderAssetMapping({
+            providerAssetRowId: params.providerAssetRowId,
+            mappingKind: params.mappingKind,
+            mappingStatus: "rejected",
+            reviewerNotes: params.reviewerNotes,
+            sourceNotes: params.sourceNotes,
+            reviewedBy: params.reviewedBy,
+            reviewedAt: new Date(),
+            createReplayJobs: params.createReplayJobs,
+          })
+        : providerAssetReviewRepository.decideProviderAssetMapping({
+            providerAssetRowId: params.providerAssetRowId,
+            mappingKind: "asset",
+            canonicalAssetId: params.canonicalAssetId,
+            canonicalAssetSymbol: params.canonicalAssetSymbol,
+            canonicalAssetDraft: params.canonicalAssetDraft,
+            mappingStatus: "approved",
+            reviewerNotes: params.reviewerNotes,
+            sourceNotes: params.sourceNotes,
+            reviewedBy: params.reviewedBy,
+            reviewedAt: new Date(),
+            createReplayJobs: params.createReplayJobs,
+          })
+
+    return decision.pipe(
+      Effect.mapError(
+        () =>
+          new ProviderAssetReviewInternalError({
+            message: "Failed to persist provider asset review decision.",
+          })
+      ),
+      Effect.flatMap((result) =>
+        result.updated
+          ? Effect.succeed(result)
+          : Effect.fail(
+              new ProviderAssetReviewConflictError({
+                message: "Provider asset mapping was reviewed by another administrator.",
+              })
+            )
       )
+    )
+  }
 
   const listCoinGeckoCandidates: ProviderAssetReviewServiceShape["listCoinGeckoCandidates"] = ({
     providerAssetRowId,
@@ -891,8 +907,8 @@ const make = Effect.gen(function* () {
         })
         const decision = yield* decide({
           providerAssetRowId,
-          rejectionReason: "",
           reviewedBy,
+          mappingKind: "asset",
           canonicalAssetId: null,
           canonicalAssetSymbol: null,
           canonicalAssetDraft: { blockchain: resolved.blockchain, asset: resolved.asset },
@@ -967,8 +983,8 @@ const make = Effect.gen(function* () {
         }
         const decision = yield* decide({
           providerAssetRowId,
-          rejectionReason: "",
           reviewedBy,
+          mappingKind: "asset",
           canonicalAssetId: target.value.id,
           canonicalAssetSymbol: target.value.symbol,
           canonicalAssetDraft: null,
@@ -1037,15 +1053,15 @@ const make = Effect.gen(function* () {
     reviewedBy,
   }) =>
     Effect.gen(function* () {
-      yield* loadPendingReview(providerAssetRowId)
+      const review = yield* loadPendingReview(providerAssetRowId)
       const reason = rejectionReason.trim()
       if (reason === "") {
         return yield* Effect.fail(makeBadRequest("A rejection reason is required."))
       }
       yield* decide({
         providerAssetRowId,
-        rejectionReason: reason,
         reviewedBy,
+        mappingKind: review.mapping.mappingKind,
         canonicalAssetId: null,
         canonicalAssetSymbol: null,
         canonicalAssetDraft: null,

@@ -756,7 +756,9 @@ const make = Effect.gen(function* () {
 
     return Effect.gen(function* () {
       const approvedMappings = yield* executor
-        .select({ id: schema.providerAssetMappings.id })
+        .select({
+          providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+        })
         .from(schema.providerAssetMappings)
         .where(
           and(
@@ -767,7 +769,6 @@ const make = Effect.gen(function* () {
             eq(schema.providerAssetMappings.mappingStatus, "approved")
           )
         )
-        .limit(1)
         .pipe(
           wrapSyncEngineSqlError(
             "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.loadMapping"
@@ -776,15 +777,46 @@ const make = Effect.gen(function* () {
 
       if (approvedMappings.length === 0) return
 
-      yield* requestSourceSyncJob({
+      const requestedAt = nowDate()
+      const job = yield* requestSourceSyncJob({
         executor,
         sourceId,
         principalId,
         mode: "replay",
         maxAttempts: 3,
-        requestedAt: nowDate(),
+        requestedAt,
         activeReplayPolicy: "request_follow_up_if_processing",
       })
+
+      yield* executor
+        .insert(schema.providerAssetReviewReplays)
+        .values(
+          approvedMappings.map(({ providerAssetRowId }) => ({
+            providerAssetRowId,
+            sourceId,
+            principalId,
+            jobId: job.id,
+            createdAt: requestedAt,
+            updatedAt: requestedAt,
+          }))
+        )
+        .onConflictDoUpdate({
+          target: [
+            schema.providerAssetReviewReplays.providerAssetRowId,
+            schema.providerAssetReviewReplays.sourceId,
+          ],
+          set: {
+            principalId,
+            jobId: job.id,
+            updatedAt: requestedAt,
+          },
+        })
+        .pipe(
+          Effect.asVoid,
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.scheduleReplayForLateApprovedObservation.linkReplay"
+          )
+        )
     })
   }
 

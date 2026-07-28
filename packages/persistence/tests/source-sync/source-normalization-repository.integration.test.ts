@@ -532,13 +532,41 @@ describe("SourceNormalizationRepositoryLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
+          .select({
+            id: schema.processingJobs.id,
+            mode: schema.processingJobs.mode,
+            status: schema.processingJobs.status,
+          })
           .from(schema.processingJobs)
           .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
       })
     )
 
-    expect(jobs).toEqual([{ mode: "replay", status: "pending" }])
+    expect(jobs).toEqual([{ id: expect.any(String), mode: "replay", status: "pending" }])
+
+    const replayLinks = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            providerAssetRowId: schema.providerAssetReviewReplays.providerAssetRowId,
+            sourceId: schema.providerAssetReviewReplays.sourceId,
+            principalId: schema.providerAssetReviewReplays.principalId,
+            jobId: schema.providerAssetReviewReplays.jobId,
+          })
+          .from(schema.providerAssetReviewReplays)
+          .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAssetId))
+      })
+    )
+
+    expect(replayLinks).toEqual([
+      {
+        providerAssetRowId: providerAssetId,
+        sourceId: TEST_SOURCE_ID,
+        principalId: TEST_PRINCIPAL_ID,
+        jobId: jobs[0]?.id,
+      },
+    ])
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

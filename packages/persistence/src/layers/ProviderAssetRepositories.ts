@@ -710,7 +710,9 @@ export const makeProviderAssetRepositories = Effect.gen(function* () {
             }
 
             const canonicalAsset =
-              params.mappingKind === "fiat" || params.canonicalAssetDraft === null
+              params.mappingStatus === "rejected" ||
+              params.mappingKind === "fiat" ||
+              params.canonicalAssetDraft === null
                 ? null
                 : yield* upsertCanonicalAsset({
                     executor: tx,
@@ -720,17 +722,19 @@ export const makeProviderAssetRepositories = Effect.gen(function* () {
                   })
 
             const canonicalAssetId =
-              params.mappingKind === "asset"
+              params.mappingStatus === "approved" && params.mappingKind === "asset"
                 ? (canonicalAsset?.id ?? params.canonicalAssetId)
                 : null
 
             const canonicalAssetSymbol =
-              params.mappingKind === "asset"
+              params.mappingStatus === "approved" && params.mappingKind === "asset"
                 ? (canonicalAsset?.symbol ?? params.canonicalAssetSymbol)
                 : null
 
             const canonicalFiatCurrency =
-              params.mappingKind === "fiat" ? params.canonicalFiatCurrency : null
+              params.mappingStatus === "approved" && params.mappingKind === "fiat"
+                ? params.canonicalFiatCurrency
+                : null
 
             const updated = yield* tx
               .update(schema.providerAssetMappings)
