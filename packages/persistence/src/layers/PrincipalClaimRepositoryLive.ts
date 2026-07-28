@@ -674,6 +674,16 @@ const make = Effect.gen(function* () {
               )
 
             yield* tx
+              .update(schema.providerAssetReviewReplays)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.providerAssetReviewReplays.sourceId, params.sourceId),
+                  eq(schema.providerAssetReviewReplays.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
               .update(schema.syncRuns)
               .set({ principalId: params.userPrincipalId, updatedAt: now })
               .where(eq(schema.syncRuns.principalId, params.anonymousPrincipalId))
@@ -902,6 +912,16 @@ const make = Effect.gen(function* () {
                 and(
                   eq(schema.processingJobs.sourceId, params.sourceId),
                   eq(schema.processingJobs.principalId, params.anonymousPrincipalId)
+                )
+              )
+
+            yield* tx
+              .update(schema.providerAssetReviewReplays)
+              .set({ principalId: params.userPrincipalId, updatedAt: now })
+              .where(
+                and(
+                  eq(schema.providerAssetReviewReplays.sourceId, params.sourceId),
+                  eq(schema.providerAssetReviewReplays.principalId, params.anonymousPrincipalId)
                 )
               )
 

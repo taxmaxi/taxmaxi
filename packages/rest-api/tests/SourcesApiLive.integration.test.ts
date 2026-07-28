@@ -461,6 +461,38 @@ const seedPrincipalUser = ({
     })
   })
 
+const seedProviderAssetReplayForSource = ({ sourceId }: { readonly sourceId: string }) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [job] = yield* db
+      .select({
+        id: schema.processingJobs.id,
+        principalId: schema.processingJobs.principalId,
+      })
+      .from(schema.processingJobs)
+      .where(eq(schema.processingJobs.sourceId, sourceId))
+      .limit(1)
+
+    if (job === undefined) {
+      return yield* Effect.dieMessage("Source fixture did not create a processing job")
+    }
+
+    const providerAssetRowId = crypto.randomUUID()
+    yield* db.insert(schema.providerAssets).values({
+      id: providerAssetRowId,
+      provider: "helius-solana",
+      providerAssetId: crypto.randomUUID(),
+      currencyCode: "TEST",
+      retrievedAt: new Date("2026-07-28T00:00:00.000Z"),
+    })
+    yield* db.insert(schema.providerAssetReviewReplays).values({
+      providerAssetRowId,
+      sourceId,
+      principalId: job.principalId,
+      jobId: job.id,
+    })
+  })
+
 const reportFixtureIds = {
   buyTransactionId: "00000000-0000-0000-0000-000000046101",
   sellTransactionId: "00000000-0000-0000-0000-000000046102",
@@ -1359,6 +1391,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
       }
 
+      yield* seedProviderAssetReplayForSource({ sourceId: created.source.id })
+
       const userId = crypto.randomUUID()
       const principalId = crypto.randomUUID()
       yield* seedPrincipalUser({ userId, principalId })
@@ -1397,6 +1431,12 @@ describe("SourcesApiLive", () => {
         .from(schema.processingJobs)
         .where(eq(schema.processingJobs.sourceId, created.source.id))
       expect(jobs).toEqual([{ principalId }])
+
+      const replayLinks = yield* db
+        .select({ principalId: schema.providerAssetReviewReplays.principalId })
+        .from(schema.providerAssetReviewReplays)
+        .where(eq(schema.providerAssetReviewReplays.sourceId, created.source.id))
+      expect(replayLinks).toEqual([{ principalId }])
 
       const claims = yield* db
         .select({
@@ -1786,6 +1826,8 @@ describe("SourcesApiLive", () => {
         return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
       }
 
+      yield* seedProviderAssetReplayForSource({ sourceId: created.source.id })
+
       const userId = crypto.randomUUID()
       const principalId = crypto.randomUUID()
       yield* seedPrincipalUser({ userId, principalId })
@@ -1819,6 +1861,12 @@ describe("SourcesApiLive", () => {
         sourcePrincipalId: principalId,
         addressPrincipalId: principalId,
       })
+
+      const replayLinks = yield* db
+        .select({ principalId: schema.providerAssetReviewReplays.principalId })
+        .from(schema.providerAssetReviewReplays)
+        .where(eq(schema.providerAssetReviewReplays.sourceId, created.source.id))
+      expect(replayLinks).toEqual([{ principalId }])
     }).pipe(
       Effect.provide(HttpLive),
       Effect.withConfigProvider(ClaimTokenConfigProvider),

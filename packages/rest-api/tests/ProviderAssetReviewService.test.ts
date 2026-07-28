@@ -289,6 +289,8 @@ describe("ProviderAssetReviewService", () => {
       selectExactTokenPlatform({
         assetPlatforms: coinGeckoAssetPlatformSnapshot,
         observedTokenId: solanaMint,
+        provider: "helius-solana",
+        providerType: "spl-token",
         tokenPlatforms: [
           ["ethereum", "0xA0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"],
           ["solana", solanaMint],
@@ -296,6 +298,20 @@ describe("ProviderAssetReviewService", () => {
         ],
       })
     ).toEqual(["solana", solanaMint])
+  })
+
+  it("rejects exact token identifiers observed on a different provider chain", () => {
+    const solanaMint = "CaseSensitiveMint"
+
+    expect(
+      selectExactTokenPlatform({
+        assetPlatforms: coinGeckoAssetPlatformSnapshot,
+        observedTokenId: solanaMint,
+        provider: "helius-solana",
+        providerType: "spl-token",
+        tokenPlatforms: [["aptos", solanaMint]],
+      })
+    ).toBeNull()
   })
 
   it("suppresses candidate validation failures but preserves provider outages", async () => {

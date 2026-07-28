@@ -185,16 +185,25 @@ export const providerTokenIdentifiersMatch = ({
 export const selectExactTokenPlatform = ({
   assetPlatforms,
   observedTokenId,
+  provider,
+  providerType,
   tokenPlatforms,
 }: {
   readonly assetPlatforms: ReadonlyArray<CoinGeckoAssetPlatform>
   readonly observedTokenId: string
+  readonly provider: string
+  readonly providerType: string | null
   readonly tokenPlatforms: ReadonlyArray<readonly [string, string]>
 }): readonly [string, string] | null => {
   const matches = tokenPlatforms.filter(([platformId, contractAddress]) => {
     const platform = assetPlatforms.find((candidate) => candidate.id === platformId)
     return (
       platform !== undefined &&
+      isObservedProviderChainMatch({
+        blockchainChainType: deriveChainType(platform),
+        provider,
+        providerType,
+      }) &&
       providerTokenIdentifiersMatch({
         chainType: deriveChainType(platform),
         observedTokenId,
@@ -596,6 +605,8 @@ const make = Effect.gen(function* () {
       const tokenPlatformEntry = selectExactTokenPlatform({
         assetPlatforms,
         observedTokenId,
+        provider: providerAsset.provider,
+        providerType: providerAsset.providerType,
         tokenPlatforms,
       })
       if (tokenPlatformEntry === null) {
