@@ -878,12 +878,12 @@ describe("SourcesApiLive", () => {
       yield* db.insert(schema.transactionReviews).values({
         transactionId: reportFixtureIds.sellTransactionId,
         principalId: fixture.principalId,
-        reviewStatus: "needs_review",
+        reviewStatus: "changed",
         originalTypeKey: "sell_fiat",
         currentTypeKey: "sell_fiat",
         categorizationReason:
-          "Tax review required because the transaction disposes more inventory than the synced FIFO lots currently cover.",
-        matchedLayer: "fifo_inventory",
+          "provider_asset_mapping: Keep the approved provider mapping.\nfifo_inventory: Review required because source inventory is incomplete.",
+        matchedLayer: "provider_asset_mapping,fifo_inventory",
         needsReview: true,
       })
 
@@ -929,7 +929,11 @@ describe("SourcesApiLive", () => {
           ],
         },
       })
-    }).pipe(Effect.provide(HttpLive))
+    }).pipe(
+      Effect.provide(HttpLive),
+      Effect.withConfigProvider(ClaimTokenConfigProvider),
+      Effect.scoped
+    )
   )
 
   it.effect("returns empty source report lists for a source with no canonical rows", () =>
