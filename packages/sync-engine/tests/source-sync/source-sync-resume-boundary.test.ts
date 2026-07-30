@@ -108,7 +108,8 @@ const runWithProvider = <A, E>(
         Layer.provide(
           Layer.succeed(AssetRepository, {
             findAssetById: () => Effect.dieMessage("findAssetById should not be called"),
-            findAssetBySymbol: () => Effect.dieMessage("findAssetBySymbol should not be called"),
+            findAssetByCoinGeckoId: () =>
+              Effect.dieMessage("findAssetByCoinGeckoId should not be called"),
             findNativeAssetForBlockchain: () =>
               Effect.dieMessage("findNativeAssetForBlockchain should not be called"),
             findAssetByBlockchainAndContractAddress: () =>
@@ -126,10 +127,6 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("upsertProviderAssetMappings should not be called"),
             seedProviderAssetMappingsIfMissing: () =>
               Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
-            backfillApprovedSymbolMappingsCanonicalAssetIds: () =>
-              Effect.dieMessage(
-                "backfillApprovedSymbolMappingsCanonicalAssetIds should not be called"
-              ),
             findProviderAssetByProviderAssetId: () =>
               Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
             findProviderAssetByNaturalKey: () =>

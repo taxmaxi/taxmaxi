@@ -67,6 +67,51 @@ describe("AssetRepositoryLive", () => {
     expect(blockchains.some((blockchain) => blockchain.name === "bitcoin")).toBe(true)
   })
 
+  it("allows duplicate symbols while resolving economic assets by exact identity", async () => {
+    const firstAssetId = "00000000-0000-0000-0000-00000000d001"
+    const secondAssetId = "00000000-0000-0000-0000-00000000d002"
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.assets).values([
+          {
+            id: firstAssetId,
+            name: "Example Dollar",
+            symbol: "DUP",
+            coingeckoCoinId: "example-dollar",
+          },
+          {
+            id: secondAssetId,
+            name: "Duplicate Token",
+            symbol: "DUP",
+            coingeckoCoinId: "duplicate-token",
+          },
+        ])
+      })
+    )
+
+    const firstAsset = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findAssetByCoinGeckoId({ coingeckoCoinId: "example-dollar" })
+      )
+    )
+    const secondAsset = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findAssetByCoinGeckoId({ coingeckoCoinId: "duplicate-token" })
+      )
+    )
+
+    expect(Option.getOrNull(firstAsset)).toEqual({
+      id: firstAssetId,
+      symbol: "DUP",
+    })
+    expect(Option.getOrNull(secondAsset)).toEqual({
+      id: secondAssetId,
+      symbol: "DUP",
+    })
+  })
+
   it("matches EVM token contracts case-insensitively and preserves existing asset logos", async () => {
     const existingAssetId = "00000000-0000-0000-0000-00000000a551"
     const existingLogoUrl = "https://assets.example/usdc.png"
@@ -85,12 +130,16 @@ describe("AssetRepositoryLive", () => {
         if (base !== undefined) {
           yield* db.insert(schema.assets).values({
             id: existingAssetId,
-            blockchainId: base.id,
-            contractAddress: "0xAbCdEfAbCdEf",
             name: "Existing USDC",
             symbol: "USDC",
-            decimals: 6,
+            coingeckoCoinId: "usd-coin",
             logoUrl: existingLogoUrl,
+          })
+          yield* db.insert(schema.assetRepresentations).values({
+            assetId: existingAssetId,
+            blockchainId: base.id,
+            contractAddress: "0xabcdefabcdef",
+            decimals: 6,
             type: "token",
           })
         }
@@ -110,14 +159,17 @@ describe("AssetRepositoryLive", () => {
             coingeckoPlatformId: "base",
           },
           asset: {
-            contractAddress: "0xabcdefabcdef",
             name: "USD Coin",
             symbol: "usdc",
-            decimals: 6,
             coingeckoCoinId: "usd-coin",
             logoUrl: null,
-            type: "token",
             isSpam: false,
+          },
+          representation: {
+            contractAddress: "0xabcdefabcdef",
+            decimals: 6,
+            type: "token",
+            metadata: null,
           },
         })
       )
@@ -129,7 +181,6 @@ describe("AssetRepositoryLive", () => {
         return yield* db
           .select({
             id: schema.assets.id,
-            contractAddress: schema.assets.contractAddress,
             coingeckoCoinId: schema.assets.coingeckoCoinId,
             logoUrl: schema.assets.logoUrl,
           })
@@ -142,7 +193,6 @@ describe("AssetRepositoryLive", () => {
     expect(persistedAsset.id).toBe(existingAssetId)
     expect(storedAsset).toEqual({
       id: existingAssetId,
-      contractAddress: "0xabcdefabcdef",
       coingeckoCoinId: "usd-coin",
       logoUrl: existingLogoUrl,
     })
@@ -157,8 +207,41 @@ describe("AssetRepositoryLive", () => {
     )
 
     expect(Option.getOrNull(foundAsset)).toEqual({
-      id: existingAssetId,
+      representationId: persistedAsset.representationId,
+      assetId: existingAssetId,
       symbol: "USDC",
     })
+
+    const replayedAsset = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertCanonicalAsset({
+          blockchain: {
+            name: "base",
+            chainType: "evm",
+            chainId: 8453,
+            nativeAssetSymbol: "ETH",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: "base",
+          },
+          asset: {
+            name: "USD Coin",
+            symbol: "USDC",
+            coingeckoCoinId: "usd-coin",
+            logoUrl: null,
+            isSpam: false,
+          },
+          representation: {
+            contractAddress: "0xAbCdEfAbCdEf",
+            decimals: 6,
+            type: "token",
+            metadata: null,
+          },
+        })
+      )
+    )
+
+    expect(replayedAsset.id).toBe(existingAssetId)
+    expect(replayedAsset.representationId).toBe(persistedAsset.representationId)
   })
 })

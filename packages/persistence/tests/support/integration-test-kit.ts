@@ -353,19 +353,29 @@ export const seedSyncEngineAssets = ({
     yield* db.insert(schema.assets).values([
       {
         id: TEST_BTC_ASSET_ID,
-        blockchainId: bitcoinBlockchainId,
-        contractAddress: "sync-engine-btc-fixture",
         name: "Sync Engine Bitcoin Fixture",
         symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
+      },
+      {
+        id: TEST_EUR_ASSET_ID,
+        name: "Sync Engine Euro Fixture",
+        symbol: "EUR",
+      },
+    ])
+
+    yield* db.insert(schema.assetRepresentations).values([
+      {
+        assetId: TEST_BTC_ASSET_ID,
+        blockchainId: bitcoinBlockchainId,
+        contractAddress: "sync-engine-btc-fixture",
         decimals: 8,
         type: "token",
       },
       {
-        id: TEST_EUR_ASSET_ID,
+        assetId: TEST_EUR_ASSET_ID,
         blockchainId: baseBlockchainId,
         contractAddress: "sync-engine-eur-fixture",
-        name: "Sync Engine Euro Fixture",
-        symbol: "EUR",
         decimals: 2,
         type: "token",
       },

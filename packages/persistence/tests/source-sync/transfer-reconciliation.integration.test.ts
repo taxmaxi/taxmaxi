@@ -78,7 +78,7 @@ const seedApprovedProviderAsset = ({
       providerAssetRowId: providerAsset.id,
       mappingKind: "asset",
       canonicalAssetId: TEST_BTC_ASSET_ID,
-      canonicalAssetSymbol: "BTC",
+      canonicalAssetRepresentationId: null,
       canonicalFiatCurrency: null,
       mappingStatus: "approved",
       reviewerNotes: null,

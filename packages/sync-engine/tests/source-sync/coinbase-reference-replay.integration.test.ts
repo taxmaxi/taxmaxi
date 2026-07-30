@@ -234,23 +234,9 @@ const seedCoinbaseSource = () =>
       return yield* Effect.dieMessage("Failed to create cex account fixture")
     }
 
-    const [baseBlockchain] = yield* db
-      .select({ id: schema.blockchains.id })
-      .from(schema.blockchains)
-      .where(eq(schema.blockchains.name, "base"))
-      .limit(1)
-
-    if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
-    }
-
     yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "eur-pr05",
       name: "Euro",
       symbol: "EUR",
-      decimals: 2,
-      type: "token",
     })
 
     yield* db.insert(schema.sources).values({
@@ -267,23 +253,10 @@ const insertTaoAsset = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
-    const [baseBlockchain] = yield* db
-      .select({ id: schema.blockchains.id })
-      .from(schema.blockchains)
-      .where(eq(schema.blockchains.name, "base"))
-      .limit(1)
-
-    if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
-    }
-
     yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "tao-pr05",
       name: "Bittensor",
       symbol: "TAO",
-      decimals: 8,
-      type: "token",
+      coingeckoCoinId: "bittensor",
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -328,8 +301,8 @@ const fetchReplayState = () =>
     const [taoMapping] = yield* db
       .select({
         mappingStatus: schema.providerAssetMappings.mappingStatus,
-        canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
         canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+        canonicalAssetRepresentationId: schema.providerAssetMappings.canonicalAssetRepresentationId,
       })
       .from(schema.providerAssetMappings)
       .innerJoin(
@@ -382,7 +355,7 @@ describe("coinbase reference-data replay", () => {
         ])
         expect(firstRun.legs).toHaveLength(0)
         expect(firstRun.taoMapping?.mappingStatus).toBe("pending_review")
-        expect(firstRun.taoMapping?.canonicalAssetSymbol).toBe("TAO")
+        expect(firstRun.taoMapping?.canonicalAssetRepresentationId).toBeNull()
 
         yield* insertTaoAsset()
         yield* runSync()

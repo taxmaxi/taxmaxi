@@ -124,7 +124,7 @@ const makeProviderLayer = ({
         AssetRepository,
         AssetRepository.of({
           findAssetById: () => Effect.succeed(Option.none()),
-          findAssetBySymbol: () => Effect.succeed(Option.none()),
+          findAssetByCoinGeckoId: () => Effect.succeed(Option.none()),
           findNativeAssetForBlockchain: () => Effect.succeed(Option.none()),
           findAssetByBlockchainAndContractAddress: () => Effect.succeed(Option.none()),
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
@@ -158,7 +158,8 @@ const makeProviderLayer = ({
               mappingStatus: "approved",
               mappingKind: "asset",
               canonicalAssetId: "asset-sol",
-              canonicalAssetSymbol: "SOL",
+              canonicalAssetRepresentationId: "representation-sol",
+              assetSymbol: "SOL",
               canonicalFiatCurrency: null,
             } satisfies HeliusSolanaResolvedAsset),
           resolveAssets: ({ assets }) =>
@@ -184,7 +185,8 @@ const makeProviderLayer = ({
                             mappingStatus: "approved",
                             mappingKind: "asset",
                             canonicalAssetId: "asset-sol",
-                            canonicalAssetSymbol: "SOL",
+                            canonicalAssetRepresentationId: "representation-sol",
+                            assetSymbol: "SOL",
                             canonicalFiatCurrency: null,
                           } satisfies HeliusSolanaResolvedAsset,
                         ]
@@ -204,7 +206,8 @@ const makeProviderLayer = ({
                             mappingStatus: "approved",
                             mappingKind: "asset",
                             canonicalAssetId: "asset-usdc",
-                            canonicalAssetSymbol: "USDC",
+                            canonicalAssetRepresentationId: "representation-usdc",
+                            assetSymbol: "USDC",
                             canonicalFiatCurrency: null,
                           } satisfies HeliusSolanaResolvedAsset,
                         ]
@@ -653,10 +656,17 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       blockHeight: "123",
       positionInBlock: "4",
       feeAmount: "5000",
+      feeAssetId: "asset-sol",
+      feeAssetRepresentationId: "representation-sol",
       isError: false,
     })
     expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5", "0.000005"])
     expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native", "fee"])
+    expect(
+      result.feeTransfers.every(
+        (transfer) => transfer.assetRepresentationId === "representation-sol"
+      )
+    ).toBe(true)
     expect(result.providerTransfers).toHaveLength(2)
     expect(result.transactionReview).toBeNull()
   })
@@ -912,6 +922,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
     expect(splTransfer).toMatchObject({
       amount: "12.5",
+      assetRepresentationId: "representation-usdc",
       type: "spl",
       fromAddress: "counterparty-address",
       toAddress: WALLET_ADDRESS,
@@ -944,6 +955,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const metadata = Schema.decodeUnknownSync(Schema.Struct({ activityFacts: ActivityFacts }))(
       result.transaction.metadata
     )
+    expect(
+      metadata.activityFacts.movements.some(
+        (movement) => movement.assetRepresentationId === "representation-usdc"
+      )
+    ).toBe(true)
     const classification = await Effect.runPromise(
       Effect.gen(function* () {
         const classifier = yield* ActivityClassificationService

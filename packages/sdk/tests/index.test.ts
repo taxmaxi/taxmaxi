@@ -125,19 +125,26 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
 
 const assetCatalogAssetResponse = {
   id: "00000000-0000-4000-8000-000000000010",
-  blockchainId: "00000000-0000-4000-8000-000000000011",
-  blockchainName: "solana",
-  blockchainChainType: "solana",
-  blockchainChainId: null,
-  blockchainExplorerUrl: "https://explorer.solana.com",
-  blockchainLogoUrl: null,
-  contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   name: "USD Coin",
   symbol: "USDC",
-  decimals: 6,
+  coingeckoCoinId: "usd-coin",
   logoUrl: null,
-  type: "token",
   isSpam: false,
+  representations: [
+    {
+      id: "00000000-0000-4000-8000-000000000011",
+      blockchainId: "00000000-0000-4000-8000-000000000012",
+      blockchainName: "solana",
+      blockchainChainType: "solana",
+      blockchainChainId: null,
+      blockchainExplorerUrl: "https://explorer.solana.com",
+      blockchainLogoUrl: null,
+      contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      decimals: 6,
+      type: "token",
+      metadata: null,
+    },
+  ],
 } as const
 
 const assetCatalogListResponseBody = JSON.stringify({
@@ -158,7 +165,7 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     providerType: "crypto",
     mappingKind: "asset",
     canonicalAssetId: "00000000-0000-4000-8000-000000000010",
-    canonicalAssetSymbol: "ADA",
+    canonicalAssetRepresentationId: "00000000-0000-4000-8000-000000000011",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     reviewerNotes: "Looks correct.",
@@ -166,6 +173,7 @@ const assetCanonicalizationResponseBody = JSON.stringify({
   },
   canonicalAsset: {
     id: "00000000-0000-4000-8000-000000000010",
+    representationId: "00000000-0000-4000-8000-000000000011",
     blockchainId: "00000000-0000-4000-8000-000000000011",
     blockchainName: "cardano",
     name: "Cardano",
@@ -659,7 +667,7 @@ describe("TaxMaxi Promise client", () => {
       })
     ).resolves.toMatchObject({
       providerAsset: {
-        canonicalAssetSymbol: "ADA",
+        canonicalAssetRepresentationId: "00000000-0000-4000-8000-000000000011",
         mappingStatus: "approved",
       },
     })

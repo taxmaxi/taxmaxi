@@ -2198,12 +2198,9 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         yield* db.insert(schema.assets).values({
           id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "sync-engine-sol-cross-asset-fee-fixture",
           name: "Sync Engine Solana Cross-Asset Fee Fixture",
           symbol: "SOL",
-          decimals: 9,
-          type: "token",
+          coingeckoCoinId: "solana",
         })
 
         yield* Effect.forEach(records, (record) => seedRawRecord(record))
@@ -2708,12 +2705,9 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         yield* db.insert(schema.assets).values({
           id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "sync-engine-sol-fixture",
           name: "Sync Engine Solana Fixture",
           symbol: "SOL",
-          decimals: 9,
-          type: "token",
+          coingeckoCoinId: "solana",
         })
 
         yield* Effect.forEach(records, (record) =>
