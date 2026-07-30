@@ -676,6 +676,10 @@ const make = Effect.gen(function* () {
                   costBasisCurrency: schema.fifoLots.costBasisCurrency,
                 })
                 .from(schema.fifoLots)
+                .innerJoin(
+                  schema.transactionLegs,
+                  eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+                )
                 .where(
                   and(
                     eq(schema.fifoLots.principalId, lotPrincipalId),
@@ -683,7 +687,8 @@ const make = Effect.gen(function* () {
                     eq(schema.fifoLots.assetId, assetId),
                     sql`${schema.fifoLots.sourceLegId} is not null`,
                     gt(schema.fifoLots.remainingAmount, "0"),
-                    lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
+                    lte(schema.fifoLots.acquiredAt, maxAcquiredAt),
+                    lte(schema.transactionLegs.timestamp, maxAcquiredAt)
                   )
                 )
                 .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
@@ -1092,6 +1097,13 @@ const make = Effect.gen(function* () {
                   Effect.asVoid
                 )
 
+            const hasFifoInventoryReview = sql`
+              ${schema.transactionReviews.needsReview} = true
+              and cast(${FIFO_INVENTORY_REVIEW_LAYER} as text) = any(
+                string_to_array(coalesce(${schema.transactionReviews.matchedLayer}, ''), ',')
+              )
+            `
+
             const upsertInternalTransferReview = ({
               transactionId,
             }: {
@@ -1130,16 +1142,51 @@ const make = Effect.gen(function* () {
                       then ${schema.transactionReviews.currentTypeKey}
                     else 'internal_transfer'
                   end`,
-                    categorizationReason: INTERNAL_TRANSFER_REASON,
-                    matchedLayer: "transfer_reconciliation",
+                    categorizationReason: sql`case
+                    when ${hasFifoInventoryReview}
+                      then case
+                        when strpos(
+                          coalesce(${schema.transactionReviews.categorizationReason}, ''),
+                          cast(${INTERNAL_TRANSFER_REASON} as text)
+                        ) > 0
+                          then ${schema.transactionReviews.categorizationReason}
+                        when coalesce(${schema.transactionReviews.categorizationReason}, '') = ''
+                          then cast(${INTERNAL_TRANSFER_REASON} as text)
+                        else ${schema.transactionReviews.categorizationReason}
+                          || E'\n'
+                          || cast(${INTERNAL_TRANSFER_REASON} as text)
+                      end
+                    else cast(${INTERNAL_TRANSFER_REASON} as text)
+                  end`,
+                    matchedLayer: sql`case
+                    when ${hasFifoInventoryReview}
+                      then case
+                        when 'transfer_reconciliation' = any(
+                          string_to_array(
+                            coalesce(${schema.transactionReviews.matchedLayer}, ''),
+                            ','
+                          )
+                        )
+                          then ${schema.transactionReviews.matchedLayer}
+                        else concat_ws(
+                          ',',
+                          nullif(${schema.transactionReviews.matchedLayer}, ''),
+                          'transfer_reconciliation'
+                        )
+                      end
+                    else 'transfer_reconciliation'
+                  end`,
                     needsReview: sql`case
+                    when ${hasFifoInventoryReview}
+                      then true
                     when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
                       then ${schema.transactionReviews.needsReview}
                     else false
                   end`,
                     userNotes: schema.transactionReviews.userNotes,
                     reviewedAt: sql`case
-                    when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                    when ${hasFifoInventoryReview}
+                      or ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
                       then ${schema.transactionReviews.reviewedAt}
                     else ${now}
                   end`,
@@ -1736,9 +1783,14 @@ const make = Effect.gen(function* () {
                           principalId: schema.fifoLots.principalId,
                           assetId: schema.fifoLots.assetId,
                           acquiredAt: schema.fifoLots.acquiredAt,
+                          availableAt: schema.transactionLegs.timestamp,
                           remainingAmount: schema.fifoLots.remainingAmount,
                         })
                         .from(schema.fifoLots)
+                        .innerJoin(
+                          schema.transactionLegs,
+                          eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+                        )
                         .where(
                           and(
                             eq(schema.fifoLots.sourceId, destinationSourceId),
@@ -1794,7 +1846,8 @@ const make = Effect.gen(function* () {
                     if (
                       lot.principalId !== effect.principalId ||
                       lot.assetId !== effect.assetId ||
-                      lot.acquiredAt > effect.timestamp
+                      lot.acquiredAt > effect.timestamp ||
+                      lot.availableAt > effect.timestamp
                     ) {
                       continue
                     }

@@ -854,6 +854,10 @@ const make = Effect.gen(function* () {
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
         })
         .from(schema.fifoLots)
+        .innerJoin(
+          schema.transactionLegs,
+          eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+        )
         .where(
           and(
             eq(schema.fifoLots.principalId, principalId),
@@ -861,7 +865,8 @@ const make = Effect.gen(function* () {
             eq(schema.fifoLots.assetId, assetId),
             sql`${schema.fifoLots.sourceLegId} is not null`,
             gt(schema.fifoLots.remainingAmount, "0"),
-            lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
+            lte(schema.fifoLots.acquiredAt, maxAcquiredAt),
+            lte(schema.transactionLegs.timestamp, maxAcquiredAt)
           )
         )
         .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
