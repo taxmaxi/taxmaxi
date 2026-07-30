@@ -1204,6 +1204,35 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(summary).toEqual({ canonicalizedPairs: 1 })
 
+    const underfundedState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const laterMatches = yield* db
+          .select({
+            fifoLotId: schema.disposalMatches.fifoLotId,
+            matchedAmount: schema.disposalMatches.matchedAmount,
+          })
+          .from(schema.disposalMatches)
+          .where(
+            eq(schema.disposalMatches.disposalLegId, destinationRecoveryFixture.laterDisposalLegId)
+          )
+        const [localLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, destinationRecoveryFixture.localLotId))
+
+        return { laterMatches, localLot }
+      })
+    )
+
+    expect(underfundedState.laterMatches).toEqual([
+      {
+        fifoLotId: destinationRecoveryFixture.localLotId,
+        matchedAmount: expect.stringContaining("0.05000000"),
+      },
+    ])
+    expect(underfundedState.localLot?.remainingAmount).toContain("0.00000000")
+
     const secondSummary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.applyDeterministicInternalTransferCanonicalization({
