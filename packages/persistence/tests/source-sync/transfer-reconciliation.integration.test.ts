@@ -817,6 +817,88 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
 
+    await runSourceNormalization(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: ONCHAIN_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "destination-disposal-before-reconciliation",
+            externalGroupId: null,
+            timestamp: new Date("2025-04-20T10:00:00.000Z"),
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "confirmed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: null,
+            providerUpdatedAt: null,
+            metadata: null,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "dex",
+            cexAccountId: null,
+            externalAccountId: null,
+            externalOrderId: null,
+            externalFillId: null,
+            side: "sell",
+            instrument: "BTC-EUR",
+            fillPrice: "60000.00",
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          deriveLegs: ({ transaction }) =>
+            Effect.succeed([
+              {
+                sourceId: ONCHAIN_SOURCE_ID,
+                sourceRawRecordId: null,
+                externalId: "destination-disposal-before-reconciliation:leg",
+                txHash: null,
+                timestamp: new Date("2025-04-20T10:00:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                addressId: ONCHAIN_ADDRESS_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.15000000",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "fixture_disposal",
+                metadata: null,
+                transactionId: transaction.id,
+                sourceTransferId: null,
+                fiatAmount: "9000.00",
+                fiatCurrency: "EUR",
+                feeForTransactionId: null,
+              },
+            ]),
+          transactionReview: null,
+          resolvedTransactionType: {
+            providerTransactionType: "sell",
+            transactionType: "sell_fiat",
+            inventoryEffect: "disposal",
+            taxTreatment: "taxable_by_default",
+            resolutionStrategy: "static",
+            pairedRecordRequired: false,
+            mappingStatus: "approved",
+          },
+        })
+      )
+    )
+
+    const reviewsBeforeReconciliation = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
+      })
+    )
+    expect(reviewsBeforeReconciliation).toHaveLength(1)
+
     const summary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.applyDeterministicInternalTransferCanonicalization({
@@ -863,88 +945,18 @@ describe("TransferReconciliationServiceLive", () => {
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
         originalAmount: expect.stringContaining("0.10000000"),
-        remainingAmount: expect.stringContaining("0.10000000"),
+        remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
       }),
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
         originalAmount: expect.stringContaining("0.20000000"),
-        remainingAmount: expect.stringContaining("0.20000000"),
+        remainingAmount: expect.stringContaining("0.15000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
       }),
     ])
-
-    await runSourceNormalization(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: ONCHAIN_SOURCE_ID,
-            sourceRawRecordId: null,
-            externalId: "destination-disposal-after-reconciliation",
-            externalGroupId: null,
-            timestamp: new Date("2025-04-20T10:00:00.000Z"),
-            transactionType: "sell_fiat",
-            providerTransactionType: "sell",
-            providerStatus: "confirmed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: null,
-            providerUpdatedAt: null,
-            metadata: null,
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "dex",
-            cexAccountId: null,
-            externalAccountId: null,
-            externalOrderId: null,
-            externalFillId: null,
-            side: "sell",
-            instrument: "BTC-EUR",
-            fillPrice: "60000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: null,
-          },
-          providerTransfers: [],
-          feeTransfers: [],
-          legs: [
-            {
-              sourceId: ONCHAIN_SOURCE_ID,
-              sourceRawRecordId: null,
-              externalId: "destination-disposal-after-reconciliation:leg",
-              txHash: null,
-              timestamp: new Date("2025-04-20T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: ONCHAIN_ADDRESS_ID,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "0.15000000",
-              kind: "disposal",
-              provenance: "deterministic",
-              derivationRule: "fixture_disposal",
-              metadata: null,
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "9000.00",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: {
-            providerTransactionType: "sell",
-            transactionType: "sell_fiat",
-            inventoryEffect: "disposal",
-            taxTreatment: "taxable_by_default",
-            resolutionStrategy: "static",
-            pairedRecordRequired: false,
-            mappingStatus: "approved",
-          },
-        })
-      )
-    )
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -960,6 +972,10 @@ describe("TransferReconciliationServiceLive", () => {
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.providerTransferId, firstProviderTransferId))
         const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        const reviews = yield* db
+          .select()
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
         const disposalMatches = yield* db
           .select({
             fifoLotId: schema.disposalMatches.fifoLotId,
@@ -976,7 +992,7 @@ describe("TransferReconciliationServiceLive", () => {
           .select({ remainingAmount: schema.fifoLots.remainingAmount })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.id, providerOriginLotId))
-        return { lots, movement, allocations, disposalMatches, providerOriginLot }
+        return { lots, movement, allocations, disposalMatches, providerOriginLot, reviews }
       })
     )
 
@@ -987,6 +1003,7 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
     expect(state.allocations).toHaveLength(0)
+    expect(state.reviews).toHaveLength(0)
     expect(state.disposalMatches).toEqual([
       {
         fifoLotId: movedLots[0]?.id,

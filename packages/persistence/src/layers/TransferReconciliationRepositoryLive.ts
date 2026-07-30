@@ -1306,6 +1306,351 @@ const make = Effect.gen(function* () {
                 }
               })
 
+            const hasUnmatchedFifoEffects = ({
+              transactionId,
+            }: {
+              readonly transactionId: string
+            }) =>
+              Effect.gen(function* () {
+                const legs = yield* tx
+                  .select({
+                    id: schema.transactionLegs.id,
+                    kind: schema.transactionLegs.kind,
+                    assetId: schema.transactionLegs.assetId,
+                    amount: schema.transactionLegs.amount,
+                  })
+                  .from(schema.transactionLegs)
+                  .where(eq(schema.transactionLegs.transactionId, transactionId))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.loadLegs"
+                    )
+                  )
+                const movements = yield* tx
+                  .select({
+                    id: schema.inventoryMovements.id,
+                    assetId: schema.inventoryMovements.assetId,
+                    amount: schema.inventoryMovements.amount,
+                  })
+                  .from(schema.inventoryMovements)
+                  .where(
+                    and(
+                      eq(schema.inventoryMovements.transactionId, transactionId),
+                      eq(schema.inventoryMovements.direction, "outbound")
+                    )
+                  )
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.loadMovements"
+                    )
+                  )
+                const disposalLegs = legs.filter((leg) => leg.kind === "disposal")
+                const disposalMatches =
+                  disposalLegs.length === 0
+                    ? []
+                    : yield* tx
+                        .select({ disposalLegId: schema.disposalMatches.disposalLegId })
+                        .from(schema.disposalMatches)
+                        .where(
+                          inArray(
+                            schema.disposalMatches.disposalLegId,
+                            disposalLegs.map((leg) => leg.id)
+                          )
+                        )
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.loadDisposalMatches"
+                          )
+                        )
+                const movementAllocations =
+                  movements.length === 0
+                    ? []
+                    : yield* tx
+                        .select({
+                          inventoryMovementId:
+                            schema.inventoryMovementAllocations.inventoryMovementId,
+                        })
+                        .from(schema.inventoryMovementAllocations)
+                        .where(
+                          inArray(
+                            schema.inventoryMovementAllocations.inventoryMovementId,
+                            movements.map((movement) => movement.id)
+                          )
+                        )
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.loadMovementAllocations"
+                          )
+                        )
+                const matchedDisposalLegIds = new Set(
+                  disposalMatches.map((match) => match.disposalLegId)
+                )
+                const allocatedMovementIds = new Set(
+                  movementAllocations.map((allocation) => allocation.inventoryMovementId)
+                )
+
+                if (disposalLegs.some((leg) => !matchedDisposalLegIds.has(leg.id))) {
+                  return true
+                }
+
+                for (const movement of movements) {
+                  if (allocatedMovementIds.has(movement.id)) {
+                    continue
+                  }
+
+                  const movementAmount = yield* decodeBigDecimal({
+                    value: yield* formatDecimal({
+                      value: movement.amount,
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.movementAmount",
+                    }),
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.movementAmount",
+                  })
+                  const matchingDisposalResults = yield* Effect.forEach(
+                    disposalLegs.filter(
+                      (leg) => leg.assetId === movement.assetId && matchedDisposalLegIds.has(leg.id)
+                    ),
+                    (leg) =>
+                      Effect.gen(function* () {
+                        const amount = yield* decodeBigDecimal({
+                          value: yield* formatDecimal({
+                            value: leg.amount,
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.disposalAmount",
+                          }),
+                          operation:
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.disposalAmount",
+                        })
+                        return BigDecimal.equals(amount, movementAmount)
+                      })
+                  )
+
+                  if (!matchingDisposalResults.some(Boolean)) {
+                    return true
+                  }
+                }
+
+                return false
+              })
+
+            const rematchReviewedDestinationDisposals = ({
+              destinationSourceId,
+            }: {
+              readonly destinationSourceId: string
+            }) =>
+              Effect.gen(function* () {
+                const reviewedDisposals = yield* tx
+                  .select({
+                    id: schema.transactionLegs.id,
+                    transactionId: schema.transactionLegs.transactionId,
+                    principalId: schema.transactionLegs.principalId,
+                    assetId: schema.transactionLegs.assetId,
+                    amount: schema.transactionLegs.amount,
+                    fiatAmount: schema.transactionLegs.fiatAmount,
+                    timestamp: schema.transactionLegs.timestamp,
+                  })
+                  .from(schema.transactionLegs)
+                  .innerJoin(
+                    schema.transactionReviews,
+                    eq(
+                      schema.transactionReviews.transactionId,
+                      schema.transactionLegs.transactionId
+                    )
+                  )
+                  .where(
+                    and(
+                      eq(schema.transactionLegs.sourceId, destinationSourceId),
+                      eq(schema.transactionLegs.kind, "disposal"),
+                      eq(schema.transactionReviews.matchedLayer, "fifo_inventory"),
+                      eq(schema.transactionReviews.needsReview, true),
+                      sql`${schema.transactionLegs.transactionId} is not null`,
+                      sql`not exists (
+                        select 1
+                        from ${schema.disposalMatches}
+                        where ${schema.disposalMatches.disposalLegId} = ${schema.transactionLegs.id}
+                      )`
+                    )
+                  )
+                  .orderBy(
+                    asc(schema.transactionLegs.timestamp),
+                    asc(schema.transactionLegs.createdAt)
+                  )
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.loadDisposals"
+                    )
+                  )
+                const blockedInventoryKeys = new Set<string>()
+
+                for (const disposal of reviewedDisposals) {
+                  if (disposal.transactionId === null) {
+                    continue
+                  }
+
+                  const inventoryKey = `${disposal.principalId}:${disposal.assetId}`
+                  if (blockedInventoryKeys.has(inventoryKey)) {
+                    continue
+                  }
+
+                  const disposalAmount = yield* decodeBigDecimal({
+                    value: yield* formatDecimal({
+                      value: disposal.amount,
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.disposalAmount",
+                    }),
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.disposalAmount",
+                  })
+                  const totalProceeds =
+                    disposal.fiatAmount === null
+                      ? BigDecimal.fromBigInt(0n)
+                      : yield* decodeBigDecimal({
+                          value: yield* formatDecimal({
+                            value: disposal.fiatAmount,
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.fiatAmount",
+                          }),
+                          operation:
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.fiatAmount",
+                        })
+                  const availableLots = yield* loadOpenLots({
+                    lotPrincipalId: disposal.principalId,
+                    sourceId: destinationSourceId,
+                    assetId: disposal.assetId,
+                    maxAcquiredAt: disposal.timestamp,
+                  })
+                  let remainingAmount = disposalAmount
+                  const allocations: Array<{
+                    readonly fifoLotId: string
+                    readonly matchedAmount: string
+                    readonly remainingAmount: string
+                    readonly costBasis: string
+                    readonly proceeds: string
+                    readonly gainLoss: string
+                  }> = []
+
+                  for (const lot of availableLots) {
+                    if (!BigDecimal.greaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
+                      break
+                    }
+
+                    const lotRemaining = yield* decodeBigDecimal({
+                      value: yield* formatDecimal({
+                        value: lot.remainingAmount,
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.lotRemaining",
+                      }),
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.lotRemaining",
+                    })
+                    const costBasisPerToken = yield* decodeBigDecimal({
+                      value: yield* formatDecimal({
+                        value: lot.costBasisPerToken,
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.costBasisPerToken",
+                      }),
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.costBasisPerToken",
+                    })
+                    const matchedAmount = BigDecimal.lessThanOrEqualTo(
+                      remainingAmount,
+                      lotRemaining
+                    )
+                      ? remainingAmount
+                      : lotRemaining
+                    const nextLotRemaining = BigDecimal.subtract(lotRemaining, matchedAmount)
+                    const costBasis = BigDecimal.round(
+                      BigDecimal.multiply(matchedAmount, costBasisPerToken),
+                      { scale: 8 }
+                    )
+                    const proceedsRatio = Option.getOrElse(
+                      BigDecimal.divide(matchedAmount, disposalAmount),
+                      () => BigDecimal.fromBigInt(0n)
+                    )
+                    const proceeds = BigDecimal.round(
+                      BigDecimal.multiply(totalProceeds, proceedsRatio),
+                      { scale: 8 }
+                    )
+                    const gainLoss = BigDecimal.subtract(proceeds, costBasis)
+
+                    allocations.push({
+                      fifoLotId: lot.id,
+                      matchedAmount: BigDecimal.format(matchedAmount),
+                      remainingAmount: BigDecimal.format(nextLotRemaining),
+                      costBasis: roundFiatAmount(costBasis),
+                      proceeds: roundFiatAmount(proceeds),
+                      gainLoss: roundFiatAmount(gainLoss),
+                    })
+                    remainingAmount = BigDecimal.subtract(remainingAmount, matchedAmount)
+                  }
+
+                  if (BigDecimal.greaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
+                    blockedInventoryKeys.add(inventoryKey)
+                    continue
+                  }
+
+                  yield* Effect.forEach(allocations, (allocation) =>
+                    Effect.gen(function* () {
+                      yield* tx
+                        .insert(schema.disposalMatches)
+                        .values({
+                          disposalLegId: disposal.id,
+                          fifoLotId: allocation.fifoLotId,
+                          matchedAmount: allocation.matchedAmount,
+                          costBasis: allocation.costBasis,
+                          proceeds: allocation.proceeds,
+                          gainLoss: allocation.gainLoss,
+                          createdAt: nowDate(),
+                        })
+                        .onConflictDoNothing({
+                          target: [
+                            schema.disposalMatches.fifoLotId,
+                            schema.disposalMatches.disposalLegId,
+                          ],
+                        })
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.insertMatch"
+                          )
+                        )
+                      yield* tx
+                        .update(schema.fifoLots)
+                        .set({
+                          remainingAmount: allocation.remainingAmount,
+                          updatedAt: nowDate(),
+                        })
+                        .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.updateLot"
+                          )
+                        )
+                    })
+                  )
+
+                  if (
+                    !(yield* hasUnmatchedFifoEffects({
+                      transactionId: disposal.transactionId,
+                    }))
+                  ) {
+                    yield* tx
+                      .delete(schema.transactionReviews)
+                      .where(
+                        and(
+                          eq(schema.transactionReviews.transactionId, disposal.transactionId),
+                          eq(schema.transactionReviews.matchedLayer, "fifo_inventory")
+                        )
+                      )
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rematchReviewedDestinationDisposals.clearReview"
+                        )
+                      )
+                  }
+                }
+              })
+
             const applyPair = (row: (typeof reconciliations)[number]) =>
               Effect.gen(function* () {
                 const amount = yield* formatDecimal({
@@ -1592,6 +1937,9 @@ const make = Effect.gen(function* () {
                   destinationSourceId: destinationTransaction.sourceId,
                   destinationLegId,
                   disposition,
+                })
+                yield* rematchReviewedDestinationDisposals({
+                  destinationSourceId: destinationTransaction.sourceId,
                 })
 
                 if (row.providerDirection === "inbound") {

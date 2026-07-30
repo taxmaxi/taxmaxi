@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
@@ -75,6 +76,44 @@ describe("SourceReplayRepositoryLive", () => {
 
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
+  })
+
+  it("waits for the source inventory lock before resetting replay state", async () => {
+    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseLock = await Effect.runPromise(Deferred.make<void>())
+    const lockSource = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, TEST_SOURCE_ID))
+              .for("update")
+            yield* Deferred.succeed(lockAcquired, undefined)
+            yield* Deferred.await(releaseLock)
+          })
+        )
+      })
+    )
+
+    await Effect.runPromise(Deferred.await(lockAcquired))
+
+    const replay = runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    const earlyOutcome = await Promise.race([
+      replay.then(() => "completed" as const),
+      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 50)),
+    ])
+
+    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+    await Promise.all([lockSource, replay])
+
+    expect(earlyOutcome).toBe("blocked")
   })
 
   it("clears canonical source-derived rows while keeping cached raw rows reusable", async () => {
