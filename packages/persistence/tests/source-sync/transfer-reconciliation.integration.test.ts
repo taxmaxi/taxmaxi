@@ -1,12 +1,14 @@
-import { eq } from "drizzle-orm"
+import { asc, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import {
+  SourceNormalizationRepository,
   TransferReconciliationRepository,
   TransferReconciliationService,
 } from "@my/sync-engine/services"
+import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { TransferReconciliationRepositoryLive } from "../../src/layers/TransferReconciliationRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -38,6 +40,9 @@ const runTransferReconciliationRepository = <A, E>(
   effect: Effect.Effect<A, E, TransferReconciliationRepository>
 ) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: TransferReconciliationRepositoryLive }))
+
+const runSourceNormalization = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
 
 const ONCHAIN_ADDRESS_ID = "00000000-0000-0000-0000-000000000701"
 const ONCHAIN_SOURCE_ID = "00000000-0000-0000-0000-000000000702"
@@ -611,7 +616,7 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
-  it("can canonicalize one admin-approved reconciliation without sweeping the source", async () => {
+  it("moves reconciled FIFO lots between sources before destination disposal", async () => {
     const walletAddress = "bc1qownedwalletscopedreplay000000000000000000"
     const timestamp = new Date("2025-04-14T10:00:00.000Z")
 
@@ -836,6 +841,111 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(secondSummary).toEqual({ canonicalizedPairs: 1 })
 
+    const movedLots = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            id: schema.fifoLots.id,
+            acquiredAt: schema.fifoLots.acquiredAt,
+            originalAmount: schema.fifoLots.originalAmount,
+            remainingAmount: schema.fifoLots.remainingAmount,
+            costBasisPerToken: schema.fifoLots.costBasisPerToken,
+            costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceId, ONCHAIN_SOURCE_ID))
+          .orderBy(asc(schema.fifoLots.createdAt))
+      })
+    )
+
+    expect(movedLots).toEqual([
+      expect.objectContaining({
+        acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        originalAmount: expect.stringContaining("0.10000000"),
+        remainingAmount: expect.stringContaining("0.10000000"),
+        costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
+        costBasisCurrency: "EUR",
+      }),
+      expect.objectContaining({
+        acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        originalAmount: expect.stringContaining("0.20000000"),
+        remainingAmount: expect.stringContaining("0.20000000"),
+        costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
+        costBasisCurrency: "EUR",
+      }),
+    ])
+
+    await runSourceNormalization(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: ONCHAIN_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "destination-disposal-after-reconciliation",
+            externalGroupId: null,
+            timestamp: new Date("2025-04-20T10:00:00.000Z"),
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "confirmed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: null,
+            providerUpdatedAt: null,
+            metadata: null,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "dex",
+            cexAccountId: null,
+            externalAccountId: null,
+            externalOrderId: null,
+            externalFillId: null,
+            side: "sell",
+            instrument: "BTC-EUR",
+            fillPrice: "60000.00",
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [
+            {
+              sourceId: ONCHAIN_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: "destination-disposal-after-reconciliation:leg",
+              txHash: null,
+              timestamp: new Date("2025-04-20T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              addressId: ONCHAIN_ADDRESS_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.15000000",
+              kind: "disposal",
+              provenance: "deterministic",
+              derivationRule: "fixture_disposal",
+              metadata: null,
+              transactionId: null,
+              sourceTransferId: null,
+              fiatAmount: "9000.00",
+              fiatCurrency: "EUR",
+              feeForTransactionId: null,
+            },
+          ],
+          transactionReview: null,
+          resolvedTransactionType: {
+            providerTransactionType: "sell",
+            transactionType: "sell_fiat",
+            inventoryEffect: "disposal",
+            taxTreatment: "taxable_by_default",
+            resolutionStrategy: "static",
+            pairedRecordRequired: false,
+            mappingStatus: "approved",
+          },
+        })
+      )
+    )
+
     const state = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -850,11 +960,23 @@ describe("TransferReconciliationServiceLive", () => {
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.providerTransferId, firstProviderTransferId))
         const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+        const disposalMatches = yield* db
+          .select({
+            fifoLotId: schema.disposalMatches.fifoLotId,
+            matchedAmount: schema.disposalMatches.matchedAmount,
+          })
+          .from(schema.disposalMatches)
+          .where(
+            inArray(
+              schema.disposalMatches.fifoLotId,
+              movedLots.map((lot) => lot.id)
+            )
+          )
         const [providerOriginLot] = yield* db
           .select({ remainingAmount: schema.fifoLots.remainingAmount })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.id, providerOriginLotId))
-        return { lots, movement, allocations, providerOriginLot }
+        return { lots, movement, allocations, disposalMatches, providerOriginLot }
       })
     )
 
@@ -865,6 +987,16 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
     expect(state.allocations).toHaveLength(0)
+    expect(state.disposalMatches).toEqual([
+      {
+        fifoLotId: movedLots[0]?.id,
+        matchedAmount: expect.stringContaining("0.10000000"),
+      },
+      {
+        fifoLotId: movedLots[1]?.id,
+        matchedAmount: expect.stringContaining("0.05000000"),
+      },
+    ])
     expect(state.providerOriginLot?.remainingAmount).toContain("0.20000000")
     expect(state.lots).toEqual(
       expect.arrayContaining([
@@ -874,11 +1006,11 @@ describe("TransferReconciliationServiceLive", () => {
         }),
         expect.objectContaining({
           sourceId: ONCHAIN_SOURCE_ID,
-          remainingAmount: expect.stringContaining("0.10000000"),
+          remainingAmount: expect.stringContaining("0.00000000"),
         }),
         expect.objectContaining({
           sourceId: ONCHAIN_SOURCE_ID,
-          remainingAmount: expect.stringContaining("0.20000000"),
+          remainingAmount: expect.stringContaining("0.15000000"),
         }),
       ])
     )
