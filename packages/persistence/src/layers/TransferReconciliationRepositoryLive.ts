@@ -246,17 +246,6 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const now = nowDate()
 
-            yield* tx
-              .select({ id: schema.principals.id })
-              .from(schema.principals)
-              .where(eq(schema.principals.id, principalId))
-              .for("update")
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockPrincipalInventory"
-                )
-              )
-
             const reconciliations = yield* tx
               .select({
                 providerTransferId: schema.providerTransfers.id,
@@ -325,6 +314,45 @@ const make = Effect.gen(function* () {
                   "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.selectReconciliations"
                 )
               )
+
+            const inventorySourceIds = [
+              ...new Set(
+                reconciliations.flatMap((reconciliation) => [
+                  reconciliation.providerTransactionSourceId,
+                  reconciliation.canonicalTransactionSourceId,
+                ])
+              ),
+            ].sort()
+
+            if (inventorySourceIds.length > 0) {
+              const lockedSources = yield* tx
+                .select({ id: schema.sources.id })
+                .from(schema.sources)
+                .where(
+                  and(
+                    eq(schema.sources.principalId, principalId),
+                    inArray(schema.sources.id, inventorySourceIds)
+                  )
+                )
+                .orderBy(asc(schema.sources.id))
+                .for("update")
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory"
+                  )
+                )
+
+              if (lockedSources.length !== inventorySourceIds.length) {
+                return yield* Effect.fail(
+                  new SyncEngineStorageError({
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
+                    cause:
+                      "Internal transfer sources are not owned by the reconciliation principal",
+                  })
+                )
+              }
+            }
 
             const loadDependentUsageCount = (legId: string) =>
               // A leg with no FIFO lots should not block canonicalization. The aggregate returns

@@ -803,7 +803,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(String(counts.lot?.remainingAmount)).toContain("1")
   })
 
-  it("matches FIFO inventory across sources for the same principal", async () => {
+  it("keeps FIFO inventory isolated by source for the same principal", async () => {
     const dependentSourceId = "00000000-0000-0000-0000-000000000282"
     const originTransactionId = "00000000-0000-0000-0000-000000000283"
 
@@ -954,12 +954,22 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         const [lot] = yield* db.select().from(schema.fifoLots).where(eq(schema.fifoLots.id, lotId))
         const matches = yield* db.select().from(schema.disposalMatches)
-        return { lot, matches }
+        const reviews = yield* db
+          .select()
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.matchedLayer, "fifo_inventory"))
+        return { lot, matches, reviews }
       })
     )
-    expect(state.lot?.remainingAmount).toContain("0.60000000")
-    expect(state.matches).toEqual([
-      expect.objectContaining({ matchedAmount: expect.stringContaining("0.40000000") }),
+    expect(state.lot?.remainingAmount).toContain("1.00000000")
+    expect(state.matches).toHaveLength(0)
+    expect(state.reviews).toEqual([
+      expect.objectContaining({
+        reviewStatus: "needs_review",
+        matchedLayer: "fifo_inventory",
+        needsReview: true,
+        categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
+      }),
     ])
   })
 

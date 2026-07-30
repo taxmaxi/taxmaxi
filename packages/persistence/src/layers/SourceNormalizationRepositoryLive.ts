@@ -810,11 +810,13 @@ const make = Effect.gen(function* () {
   const loadOpenFifoLots = ({
     executor,
     principalId,
+    sourceId,
     assetId,
     maxAcquiredAt,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly principalId: string
+    readonly sourceId: string
     readonly assetId: string
     readonly maxAcquiredAt: Date
   }) =>
@@ -831,6 +833,7 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.fifoLots.principalId, principalId),
+            eq(schema.fifoLots.sourceId, sourceId),
             eq(schema.fifoLots.assetId, assetId),
             sql`${schema.fifoLots.sourceLegId} is not null`,
             gt(schema.fifoLots.remainingAmount, "0"),
@@ -1028,6 +1031,7 @@ const make = Effect.gen(function* () {
       const openLots = yield* loadOpenFifoLots({
         executor,
         principalId: leg.principalId,
+        sourceId: leg.sourceId,
         assetId: leg.assetId,
         maxAcquiredAt: leg.timestamp,
       })
@@ -1639,6 +1643,7 @@ const make = Effect.gen(function* () {
         const openLots = yield* loadOpenFifoLots({
           executor,
           principalId: transaction.principalId,
+          sourceId: providerTransfer.sourceId,
           assetId: assetMapping.assetId,
           maxAcquiredAt: providerTransfer.timestamp,
         })
@@ -1821,6 +1826,7 @@ const make = Effect.gen(function* () {
           const openLots = yield* loadOpenFifoLots({
             executor,
             principalId: leg.principalId,
+            sourceId: leg.sourceId,
             assetId: leg.assetId,
             maxAcquiredAt: leg.timestamp,
           })
@@ -1875,17 +1881,6 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          yield* tx
-            .select({ id: schema.principals.id })
-            .from(schema.principals)
-            .where(eq(schema.principals.id, params.transaction.principalId))
-            .for("update")
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipalInventory"
-              )
-            )
-
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
@@ -1896,9 +1891,10 @@ const make = Effect.gen(function* () {
               )
             )
             .limit(1)
+            .for("update")
             .pipe(
               wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal"
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory"
               )
             )
 
@@ -1906,7 +1902,7 @@ const make = Effect.gen(function* () {
             return yield* Effect.fail(
               toSyncEngineStorageError({
                 operation:
-                  "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal",
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory",
                 error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
               })
             )
