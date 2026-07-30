@@ -125,6 +125,25 @@ const decodeNumericString = ({
 const isInsufficientFifoInventoryError = (error: SyncEngineStorageError): boolean =>
   error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
 
+const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
+const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
+  "fifo_inventory: Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover."
+
+const appendReviewSegment = ({
+  existing,
+  segment,
+  separator,
+}: {
+  readonly existing: string | null | undefined
+  readonly segment: string
+  readonly separator: string
+}): string =>
+  existing === null || existing === undefined || existing.trim() === ""
+    ? segment
+    : existing.includes(segment)
+      ? existing
+      : `${existing}${separator}${segment}`
+
 const buildInsufficientInventoryReview = ({
   transaction,
   existingReview,
@@ -143,27 +162,32 @@ const buildInsufficientInventoryReview = ({
   const principalId = transaction.principalId
 
   const inventoryReason =
-    "Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover. " +
+    `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
     "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
     String(error.cause)
-  const categorizationReason =
-    existingReview?.categorizationReason === null ||
-    existingReview?.categorizationReason === undefined
-      ? inventoryReason
-      : `${existingReview.categorizationReason} ${inventoryReason}`
+  const preservesReviewedState =
+    existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
 
   return {
     principalId,
-    reviewStatus: "needs_review",
+    reviewStatus: preservesReviewedState ? existingReview.reviewStatus : "needs_review",
     originalTypeKey: existingReview?.originalTypeKey ?? resolvedTransactionType.transactionType,
     originalConfidence: existingReview?.originalConfidence ?? null,
     currentTypeKey: existingReview?.currentTypeKey ?? resolvedTransactionType.transactionType,
     legalRuleSetVersion: existingReview?.legalRuleSetVersion ?? null,
-    categorizationReason,
-    matchedLayer: "fifo_inventory",
+    categorizationReason: appendReviewSegment({
+      existing: existingReview?.categorizationReason,
+      segment: inventoryReason,
+      separator: "\n",
+    }),
+    matchedLayer: appendReviewSegment({
+      existing: existingReview?.matchedLayer,
+      segment: FIFO_INVENTORY_REVIEW_LAYER,
+      separator: ",",
+    }),
     needsReview: true,
     userNotes: existingReview?.userNotes ?? null,
-    reviewedAt: null,
+    reviewedAt: preservesReviewedState ? existingReview.reviewedAt : null,
   }
 }
 

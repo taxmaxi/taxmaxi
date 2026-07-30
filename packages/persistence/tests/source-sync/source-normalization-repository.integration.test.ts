@@ -2021,7 +2021,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(state.allocations).toHaveLength(0)
     expect(state.reviews).toContainEqual(
       expect.objectContaining({
-        matchedLayer: "fifo_inventory",
+        matchedLayer: "coinbase_reference_mapping,fifo_inventory",
         needsReview: true,
         categorizationReason: expect.stringContaining("Insufficient FIFO inventory"),
       })
