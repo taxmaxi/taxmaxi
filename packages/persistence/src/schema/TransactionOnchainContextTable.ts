@@ -1,5 +1,8 @@
+import { sql } from "drizzle-orm"
 import {
   boolean,
+  check,
+  foreignKey,
   index,
   jsonb,
   numeric,
@@ -11,6 +14,7 @@ import {
 } from "drizzle-orm/pg-core"
 import { addresses } from "./AddressesTable.ts"
 import { assets } from "./AssetsTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { blockchains } from "./BlockchainsTable.ts"
 import { transactions } from "./TransactionsTable.ts"
 
@@ -59,6 +63,7 @@ export const transactionOnchainContext = pgTable(
 
     feeAmount: numeric("gas_fee_in_native", { precision: 78, scale: 0 }), // Chain fee amount in native units.
     feeAssetId: uuid("fee_asset_id").references(() => assets.id), // Native fee asset (ETH, SOL, BTC, ...).
+    feeAssetRepresentationId: uuid("fee_asset_representation_id"),
 
     feeCostBasisAmount: numeric("gas_fee_cost_basis_amount", { precision: 36, scale: 8 }), // Fiat value at execution time.
     feeCostBasisCurrency: text("gas_fee_cost_basis_currency"), // Fiat currency code for fee valuation.
@@ -71,6 +76,15 @@ export const transactionOnchainContext = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
+    check(
+      "transaction_onchain_context_fee_representation_requires_asset",
+      sql`${table.feeAssetRepresentationId} is null or ${table.feeAssetId} is not null`
+    ),
+    foreignKey({
+      columns: [table.feeAssetRepresentationId, table.feeAssetId],
+      foreignColumns: [assetRepresentations.id, assetRepresentations.assetId],
+      name: "transaction_onchain_context_fee_representation_asset_fk",
+    }),
     uniqueIndex("transaction_onchain_context_chain_tx_hash_address_unique").on(
       table.blockchainId,
       table.chainTxId,

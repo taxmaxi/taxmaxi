@@ -112,6 +112,7 @@ export class ActivityMovementFacts extends Schema.Class<ActivityMovementFacts>(
   direction: ActivityMovementDirection,
   role: ActivityMovementRole,
   assetId: Schema.NullOr(Schema.String),
+  assetRepresentationId: Schema.NullOr(Schema.String),
   assetSymbol: Schema.NullOr(Schema.String),
   amount: Schema.NullOr(Schema.String),
   fiatAmount: Schema.NullOr(Schema.String),

@@ -38,7 +38,7 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   providerType: Schema.NullOr(Schema.String),
   mappingKind: Schema.NullOr(Schema.Literal("asset", "fiat")),
   canonicalAssetId: Schema.NullOr(Schema.String),
-  canonicalAssetSymbol: Schema.NullOr(Schema.String),
+  canonicalAssetRepresentationId: Schema.NullOr(Schema.String),
   canonicalFiatCurrency: Schema.NullOr(Schema.String),
   mappingStatus: Schema.NullOr(Schema.Literal("approved", "pending_review", "rejected")),
   reviewerNotes: Schema.NullOr(Schema.String),
@@ -55,8 +55,8 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   }),
 }) {}
 
-export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetResponse>(
-  "AssetCatalogAssetResponse"
+export class AssetRepresentationResponse extends Schema.Class<AssetRepresentationResponse>(
+  "AssetRepresentationResponse"
 )({
   id: Schema.String,
   blockchainId: Schema.String,
@@ -66,12 +66,21 @@ export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetRes
   blockchainExplorerUrl: Schema.NullOr(Schema.String),
   blockchainLogoUrl: Schema.NullOr(Schema.String),
   contractAddress: Schema.NullOr(Schema.String),
+  decimals: Schema.Number,
+  type: Schema.Literal("native", "token", "nft"),
+  metadata: Schema.Unknown,
+}) {}
+
+export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetResponse>(
+  "AssetCatalogAssetResponse"
+)({
+  id: Schema.String,
   name: Schema.String,
   symbol: Schema.String,
-  decimals: Schema.Number,
+  coingeckoCoinId: Schema.NullOr(Schema.String),
   logoUrl: Schema.NullOr(Schema.String),
-  type: Schema.Literal("native", "token", "nft"),
   isSpam: Schema.Boolean,
+  representations: Schema.Array(AssetRepresentationResponse),
 }) {}
 
 export class AssetCatalogListResponse extends Schema.Class<AssetCatalogListResponse>(
@@ -90,6 +99,7 @@ export class CanonicalAssetResponse extends Schema.Class<CanonicalAssetResponse>
   "CanonicalAssetResponse"
 )({
   id: Schema.String,
+  representationId: Schema.String,
   blockchainId: Schema.String,
   blockchainName: Schema.String,
   name: Schema.String,

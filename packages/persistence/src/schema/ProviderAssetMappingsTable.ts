@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   pgEnum,
   pgTable,
@@ -10,6 +11,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import { assets } from "./AssetsTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 import { providerMappingStatusEnum } from "./ProviderTransactionTypeMappingsTable.ts"
 
@@ -29,7 +31,7 @@ export const providerAssetMappings = pgTable(
       .references(() => providerAssets.id),
     mappingKind: providerAssetMappingKindEnum("mapping_kind").notNull(),
     canonicalAssetId: uuid("canonical_asset_id").references(() => assets.id),
-    canonicalAssetSymbol: text("canonical_asset_symbol"),
+    canonicalAssetRepresentationId: uuid("canonical_asset_representation_id"),
     canonicalFiatCurrency: text("canonical_fiat_currency"),
     mappingStatus: providerMappingStatusEnum("mapping_status").notNull().default("pending_review"),
     reviewerNotes: text("reviewer_notes"),
@@ -39,16 +41,28 @@ export const providerAssetMappings = pgTable(
   },
   (table) => [
     uniqueIndex("provider_asset_mappings_provider_asset_row_unique").on(table.providerAssetRowId),
+    foreignKey({
+      columns: [table.canonicalAssetRepresentationId, table.canonicalAssetId],
+      foreignColumns: [assetRepresentations.id, assetRepresentations.assetId],
+      name: "provider_asset_mappings_representation_asset_fk",
+    }),
     index("idx_provider_asset_mappings_status").on(table.mappingStatus),
     check(
       "provider_asset_mappings_kind_requires_target",
       sql`(
         ${table.mappingKind} = 'asset'
-        and (${table.canonicalAssetId} is not null or ${table.canonicalAssetSymbol} is not null)
+        and ${table.canonicalAssetId} is not null
+        and ${table.canonicalFiatCurrency} is null
       ) or (
         ${table.mappingKind} = 'fiat'
+        and ${table.canonicalAssetId} is null
+        and ${table.canonicalAssetRepresentationId} is null
         and ${table.canonicalFiatCurrency} is not null
       ) or ${table.mappingStatus} in ('pending_review', 'rejected')`
+    ),
+    check(
+      "provider_asset_mappings_representation_requires_asset",
+      sql`${table.canonicalAssetRepresentationId} is null or ${table.canonicalAssetId} is not null`
     ),
   ]
 )

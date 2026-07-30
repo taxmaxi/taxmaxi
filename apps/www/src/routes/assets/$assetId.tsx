@@ -47,8 +47,6 @@ function AssetDetailRoute() {
   const { assetId } = Route.useParams()
   const { taxmaxi } = Route.useRouteContext()
   const { data: asset } = useSuspenseQuery(queries.assetDetail(taxmaxi(), assetId))
-  const explorerHref = getTaxMaxiAssetExplorerHref(asset)
-  const blockchainName = formatBlockchainName(asset.blockchainName)
 
   return (
     <AssetsPageShell>
@@ -71,7 +69,7 @@ function AssetDetailRoute() {
                 <AssetSymbolMark asset={asset} />
                 <div className="min-w-0">
                   <p className="m-0 text-sm font-medium uppercase tracking-[0.18em] text-marketing-muted">
-                    {blockchainName}
+                    Economic asset
                   </p>
                   <h1 className="mt-2 truncate font-display text-5xl font-semibold leading-none text-off-white sm:text-6xl">
                     {asset.symbol}
@@ -81,7 +79,8 @@ function AssetDetailRoute() {
               </div>
 
               <div className="w-fit rounded-full border border-marketing-border-muted bg-marketing-surface-active px-4 py-2 text-sm text-marketing-foreground">
-                {formatAssetType(asset.type)}
+                {asset.representations.length} representation
+                {asset.representations.length === 1 ? "" : "s"}
               </div>
             </div>
 
@@ -93,9 +92,20 @@ function AssetDetailRoute() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <AssetDetailItem label="Asset ID" value={asset.id} />
-              <AssetDetailItem label="Decimals" value={asset.decimals.toString()} />
-              <AssetDetailItem label="Network" value={blockchainName} />
-              <AssetDetailItem label="Chain type" value={asset.blockchainChainType} />
+              <AssetDetailItem
+                label="CoinGecko ID"
+                value={asset.coingeckoCoinId ?? "Not assigned"}
+              />
+              <AssetDetailItem
+                label="Networks"
+                value={new Set(
+                  asset.representations.map((item) => item.blockchainId)
+                ).size.toString()}
+              />
+              <AssetDetailItem
+                label="Representations"
+                value={asset.representations.length.toString()}
+              />
             </div>
           </div>
 
@@ -107,44 +117,55 @@ function AssetDetailRoute() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
-              <div className="flex flex-col gap-2">
-                <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-marketing-muted">
-                  Contract address
+              {asset.representations.length === 0 ? (
+                <p className="m-0 text-sm text-marketing-muted">
+                  No network representations are registered.
                 </p>
-                {asset.contractAddress ? (
-                  <code className="break-all rounded-2xl border border-marketing-border-muted bg-marketing-surface-active px-4 py-3 text-sm text-marketing-foreground">
-                    {asset.contractAddress}
-                  </code>
-                ) : (
-                  <p className="m-0 rounded-2xl border border-marketing-border-muted bg-marketing-surface-active px-4 py-3 text-sm text-marketing-foreground">
-                    Native network asset
-                  </p>
-                )}
-              </div>
-
-              {explorerHref ? (
-                <LandingButton asChild className="w-full" size="pill" variant="control">
-                  <a href={explorerHref} rel="noreferrer" target="_blank">
-                    View on explorer
-                    <ExternalLink data-icon="inline-end" />
-                  </a>
-                </LandingButton>
-              ) : null}
+              ) : (
+                asset.representations.map((representation) => {
+                  const explorerHref = getTaxMaxiAssetExplorerHref(representation)
+                  return (
+                    <div
+                      className="flex flex-col gap-3 rounded-2xl border border-marketing-border-muted bg-marketing-surface-active p-4"
+                      key={representation.id}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium">
+                          {formatBlockchainName(representation.blockchainName)}
+                        </span>
+                        <span className="text-xs text-marketing-muted">
+                          {formatAssetType(representation.type)}
+                        </span>
+                      </div>
+                      <code className="break-all text-xs text-marketing-muted">
+                        {representation.contractAddress ?? "Native asset"}
+                      </code>
+                      <span className="text-xs text-marketing-muted">
+                        {representation.decimals} decimals
+                      </span>
+                      {explorerHref ? (
+                        <LandingButton asChild size="pill" variant="control">
+                          <a href={explorerHref} rel="noreferrer" target="_blank">
+                            View on explorer
+                            <ExternalLink data-icon="inline-end" />
+                          </a>
+                        </LandingButton>
+                      ) : null}
+                    </div>
+                  )
+                })
+              )}
             </CardContent>
           </Card>
         </section>
 
         <section className="grid gap-4 md:grid-cols-2">
           <AssetInfoCard
-            description={`Resolved from the TaxMaxi asset registry on ${blockchainName}.`}
+            description="Economic identity stays stable across exchanges and blockchain networks."
             title="Registry"
           />
           <AssetInfoCard
-            description={
-              asset.contractAddress
-                ? "Matched by contract or mint address during import and normalization."
-                : "Matched as the native asset for activity on this network."
-            }
+            description="Exact contract, mint, and native identities are preserved as network representations."
             title="Normalization"
           />
         </section>

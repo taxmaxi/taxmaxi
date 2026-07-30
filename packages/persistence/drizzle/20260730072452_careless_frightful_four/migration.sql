@@ -1,15 +1,24 @@
 CREATE TYPE "address_type" AS ENUM('evm', 'solana', 'bitcoin');--> statement-breakpoint
-CREATE TYPE "asset_type" AS ENUM('native', 'token', 'nft');--> statement-breakpoint
-CREATE TYPE "chain_type" AS ENUM('evm', 'solana', 'bitcoin');--> statement-breakpoint
+CREATE TYPE "asset_representation_type" AS ENUM('native', 'token', 'nft');--> statement-breakpoint
+CREATE TYPE "fifo_lot_cost_basis_status" AS ENUM('known', 'pending_review');--> statement-breakpoint
 CREATE TYPE "auth_provider_type" AS ENUM('local', 'google', 'coinbase');--> statement-breakpoint
+CREATE TYPE "inventory_movement_direction" AS ENUM('inbound', 'outbound');--> statement-breakpoint
+CREATE TYPE "inventory_movement_purpose" AS ENUM('principal', 'fee', 'reward');--> statement-breakpoint
+CREATE TYPE "inventory_movement_reconciliation_status" AS ENUM('unmatched', 'matched', 'needs_review');--> statement-breakpoint
+CREATE TYPE "inventory_movement_tax_treatment" AS ENUM('taxable', 'non_taxable', 'pending_review');--> statement-breakpoint
 CREATE TYPE "oauth_intent" AS ENUM('login', 'link');--> statement-breakpoint
 CREATE TYPE "oauth_state_status" AS ENUM('pending', 'completed', 'failed');--> statement-breakpoint
+CREATE TYPE "principal_claim_type" AS ENUM('x402_receipt', 'siwx_wallet', 'cli_claim_token');--> statement-breakpoint
+CREATE TYPE "principal_kind" AS ENUM('user', 'anonymous_wallet');--> statement-breakpoint
 CREATE TYPE "job_mode" AS ENUM('sync', 'replay');--> statement-breakpoint
 CREATE TYPE "job_status" AS ENUM('pending', 'processing', 'completed', 'failed');--> statement-breakpoint
+CREATE TYPE "protocol_candidate_observation_onchain_data_source" AS ENUM('dune');--> statement-breakpoint
+CREATE TYPE "protocol_mapping_evidence_kind" AS ENUM('sample_signature', 'normalized_fixture', 'dune_observation', 'review_note');--> statement-breakpoint
+CREATE TYPE "protocol_movement_pattern" AS ENUM('token_out_and_token_in');--> statement-breakpoint
 CREATE TYPE "provider_asset_mapping_kind" AS ENUM('asset', 'fiat');--> statement-breakpoint
 CREATE TYPE "provider_inventory_effect" AS ENUM('acquisition', 'disposal', 'income', 'internal_transfer', 'non_inventory', 'unknown');--> statement-breakpoint
 CREATE TYPE "provider_mapping_status" AS ENUM('approved', 'pending_review', 'rejected');--> statement-breakpoint
-CREATE TYPE "provider_resolution_strategy" AS ENUM('static', 'amount_sign', 'venue_side', 'amount_sign_fee', 'no_leg');--> statement-breakpoint
+CREATE TYPE "provider_resolution_strategy" AS ENUM('static', 'amount_sign', 'venue_side', 'paired_spread_fee', 'no_leg');--> statement-breakpoint
 CREATE TYPE "provider_tax_treatment" AS ENUM('taxable_by_default', 'non_taxable_by_default', 'requires_additional_rule_logic');--> statement-breakpoint
 CREATE TYPE "provider_transfer_direction" AS ENUM('inbound', 'outbound');--> statement-breakpoint
 CREATE TYPE "sourceable_type" AS ENUM('onchain', 'cex', 'dex');--> statement-breakpoint
@@ -28,10 +37,10 @@ CREATE TABLE "addresses" (
 	"type" "address_type" NOT NULL,
 	"name" text NOT NULL,
 	"ens_name" text,
-	"user_id" uuid,
+	"principal_id" uuid NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "addresses_address_user_id_unique" UNIQUE("address","user_id")
+	CONSTRAINT "addresses_principal_address_unique" UNIQUE("address","principal_id")
 );
 --> statement-breakpoint
 CREATE TABLE "asset_prices" (
@@ -46,25 +55,42 @@ CREATE TABLE "asset_prices" (
 	CONSTRAINT "unique_asset_price_idx" UNIQUE("asset_id","timestamp","currency")
 );
 --> statement-breakpoint
-CREATE TABLE "assets" (
+CREATE TABLE "asset_representations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"asset_id" uuid NOT NULL,
 	"blockchain_id" uuid NOT NULL,
+	"type" "asset_representation_type" NOT NULL,
 	"contract_address" text,
-	"name" text NOT NULL,
-	"symbol" text NOT NULL,
 	"decimals" integer NOT NULL,
-	"logo_url" text,
-	"type" "asset_type" DEFAULT 'token'::"asset_type" NOT NULL,
+	"metadata" jsonb,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
-	"is_spam" boolean DEFAULT false NOT NULL,
-	CONSTRAINT "unique_token_idx" UNIQUE("blockchain_id","contract_address")
+	CONSTRAINT "asset_representations_id_asset_unique" UNIQUE("id","asset_id"),
+	CONSTRAINT "asset_representations_identity_matches_type" CHECK ((
+        "type" = 'native'
+        and "contract_address" is null
+      ) or (
+        "type" in ('token', 'nft')
+        and "contract_address" is not null
+      )),
+	CONSTRAINT "asset_representations_decimals_non_negative" CHECK ("decimals" >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "assets" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"name" text NOT NULL,
+	"symbol" text NOT NULL,
+	"coingecko_coin_id" text,
+	"logo_url" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	"is_spam" boolean DEFAULT false NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "blockchains" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"name" text NOT NULL UNIQUE,
-	"chain_type" "chain_type" NOT NULL,
+	"chain_type" text NOT NULL,
 	"chain_id" integer,
 	"native_asset_symbol" text NOT NULL,
 	"explorer_url" text,
@@ -77,7 +103,7 @@ CREATE TABLE "blockchains" (
 CREATE TABLE "cex_account" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"cex_id" uuid NOT NULL,
-	"user_id" uuid NOT NULL,
+	"principal_id" uuid NOT NULL,
 	"provider_user_id" text,
 	"provider_account_id" text,
 	"access_token" text,
@@ -112,6 +138,13 @@ CREATE TABLE "disposal_matches" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "dune_protocol_candidate_observations" (
+	"observation_id" uuid PRIMARY KEY,
+	"query_id" integer NOT NULL,
+	"query_name" text NOT NULL,
+	"query_version" integer NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "email_verification_requests" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"user_id" uuid,
@@ -124,7 +157,7 @@ CREATE TABLE "email_verification_requests" (
 --> statement-breakpoint
 CREATE TABLE "fifo_lots" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"user_id" uuid,
+	"principal_id" uuid NOT NULL,
 	"source_id" uuid NOT NULL,
 	"asset_id" uuid NOT NULL,
 	"acquired_at" timestamp NOT NULL,
@@ -132,10 +165,13 @@ CREATE TABLE "fifo_lots" (
 	"remaining_amount" numeric(100,30) NOT NULL,
 	"cost_basis_per_token" numeric(36,18) NOT NULL,
 	"cost_basis_currency" text NOT NULL,
-	"source_leg_id" uuid NOT NULL,
+	"cost_basis_status" "fifo_lot_cost_basis_status" DEFAULT 'known'::"fifo_lot_cost_basis_status" NOT NULL,
+	"source_leg_id" uuid,
+	"source_provider_transfer_id" uuid,
 	"source_leg_sequence" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "fifo_lots_origin_present" CHECK (num_nonnulls("source_leg_id", "source_provider_transfer_id") = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "auth_identities" (
@@ -146,6 +182,36 @@ CREATE TABLE "auth_identities" (
 	"password_hash" text,
 	"provider_data" jsonb,
 	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "inventory_movement_allocations" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"inventory_movement_id" uuid NOT NULL,
+	"fifo_lot_id" uuid NOT NULL,
+	"matched_amount" numeric(100,30) NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "inventory_movement_allocations_amount_positive" CHECK ("matched_amount" > 0)
+);
+--> statement-breakpoint
+CREATE TABLE "inventory_movements" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"principal_id" uuid NOT NULL,
+	"source_id" uuid NOT NULL,
+	"source_raw_record_id" uuid,
+	"transaction_id" uuid NOT NULL,
+	"provider_transfer_id" uuid,
+	"transaction_leg_id" uuid,
+	"asset_id" uuid NOT NULL,
+	"timestamp" timestamp NOT NULL,
+	"direction" "inventory_movement_direction" NOT NULL,
+	"purpose" "inventory_movement_purpose" NOT NULL,
+	"tax_treatment" "inventory_movement_tax_treatment" NOT NULL,
+	"reconciliation_status" "inventory_movement_reconciliation_status" NOT NULL,
+	"amount" numeric(100,30) NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "inventory_movements_amount_positive" CHECK ("amount" > 0),
+	CONSTRAINT "inventory_movements_origin_present" CHECK (num_nonnulls("provider_transfer_id", "transaction_leg_id") = 1)
 );
 --> statement-breakpoint
 CREATE TABLE "jurisdiction_rule_set_rules" (
@@ -255,11 +321,42 @@ CREATE TABLE "oauth_states" (
 	"created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "principal_claims" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"principal_id" uuid NOT NULL,
+	"source_id" uuid,
+	"request_id" uuid NOT NULL,
+	"claim_type" "principal_claim_type" NOT NULL,
+	"claim_value_hash" text NOT NULL,
+	"chain_type" text,
+	"wallet_address" text,
+	"payer_chain_type" text,
+	"payer_wallet_address" text,
+	"year" integer,
+	"jurisdiction" text,
+	"expires_at" timestamp,
+	"consumed_at" timestamp,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "principal_claims_wallet_resource_fields" CHECK ("claim_type" not in ('siwx_wallet', 'cli_claim_token') or ("source_id" is not null and "chain_type" is not null and "wallet_address" is not null and "year" is not null and "jurisdiction" is not null))
+);
+--> statement-breakpoint
+CREATE TABLE "principals" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"kind" "principal_kind" NOT NULL,
+	"user_id" uuid,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "principals_kind_user_id_consistency" CHECK (("kind" = 'user' and "user_id" is not null) or ("kind" = 'anonymous_wallet' and "user_id" is null))
+);
+--> statement-breakpoint
 CREATE TABLE "processing_jobs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"source_id" uuid NOT NULL,
-	"user_id" uuid,
+	"principal_id" uuid NOT NULL,
 	"mode" "job_mode" DEFAULT 'sync'::"job_mode" NOT NULL,
+	"follow_up_mode" "job_mode",
+	"follow_up_job_id" uuid,
 	"status" "job_status" DEFAULT 'pending'::"job_status" NOT NULL,
 	"attempt_count" integer DEFAULT 0 NOT NULL,
 	"max_attempts" integer DEFAULT 3 NOT NULL,
@@ -281,12 +378,74 @@ CREATE TABLE "processing_jobs" (
 	CONSTRAINT "processing_jobs_max_attempts_positive" CHECK ("max_attempts" > 0)
 );
 --> statement-breakpoint
+CREATE TABLE "protocol_candidate_observations" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"candidate_id" uuid NOT NULL,
+	"onchain_data_source" "protocol_candidate_observation_onchain_data_source" NOT NULL,
+	"onchain_data_source_observation_key" text NOT NULL,
+	"observed_window_start" timestamp NOT NULL,
+	"observed_window_end" timestamp NOT NULL,
+	"interaction_count" numeric(78,0) NOT NULL,
+	"transaction_count" numeric(78,0),
+	"unique_actor_count" numeric(78,0),
+	"sample_transaction_hashes" jsonb NOT NULL,
+	"related_subject_identifiers" jsonb NOT NULL,
+	"retrieved_at" timestamp NOT NULL,
+	"raw_payload" jsonb NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "protocol_candidates" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"blockchain_id" uuid NOT NULL,
+	"subject_kind" text NOT NULL,
+	"subject_identifier" text NOT NULL,
+	"protocol_name_hint" text,
+	"category_hint" text,
+	"mapping_status" "provider_mapping_status" DEFAULT 'pending_review'::"provider_mapping_status" NOT NULL,
+	"first_seen_at" timestamp NOT NULL,
+	"last_seen_at" timestamp NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "protocol_mapping_evidence" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"mapping_id" uuid NOT NULL,
+	"candidate_observation_id" uuid,
+	"evidence_kind" "protocol_mapping_evidence_kind" NOT NULL,
+	"sample_signature" text,
+	"payload" jsonb NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "protocol_transaction_type_mappings" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+	"candidate_id" uuid,
+	"blockchain_id" uuid NOT NULL,
+	"subject_identifier" text NOT NULL,
+	"protocol_name" text NOT NULL,
+	"movement_pattern" "protocol_movement_pattern" NOT NULL,
+	"transaction_type_key" text,
+	"inventory_effect" "provider_inventory_effect" NOT NULL,
+	"tax_treatment" "provider_tax_treatment" NOT NULL,
+	"confidence" numeric(5,4) NOT NULL,
+	"mapping_status" "provider_mapping_status" DEFAULT 'pending_review'::"provider_mapping_status" NOT NULL,
+	"version" integer NOT NULL,
+	"reviewer_notes" text,
+	"source_notes" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "protocol_transaction_type_mappings_approved_requires_type_key" CHECK ("mapping_status" in ('pending_review', 'rejected') or "transaction_type_key" is not null),
+	CONSTRAINT "protocol_transaction_type_mappings_confidence_range" CHECK ("confidence" >= 0 and "confidence" <= 1)
+);
+--> statement-breakpoint
 CREATE TABLE "provider_asset_mappings" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"provider_asset_row_id" uuid NOT NULL,
 	"mapping_kind" "provider_asset_mapping_kind" NOT NULL,
 	"canonical_asset_id" uuid,
-	"canonical_asset_symbol" text,
+	"canonical_asset_representation_id" uuid,
 	"canonical_fiat_currency" text,
 	"mapping_status" "provider_mapping_status" DEFAULT 'pending_review'::"provider_mapping_status" NOT NULL,
 	"reviewer_notes" text,
@@ -295,11 +454,15 @@ CREATE TABLE "provider_asset_mappings" (
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "provider_asset_mappings_kind_requires_target" CHECK ((
         "mapping_kind" = 'asset'
-        and ("canonical_asset_id" is not null or "canonical_asset_symbol" is not null)
+        and "canonical_asset_id" is not null
+        and "canonical_fiat_currency" is null
       ) or (
         "mapping_kind" = 'fiat'
+        and "canonical_asset_id" is null
+        and "canonical_asset_representation_id" is null
         and "canonical_fiat_currency" is not null
-      ) or "mapping_status" in ('pending_review', 'rejected'))
+      ) or "mapping_status" in ('pending_review', 'rejected')),
+	CONSTRAINT "provider_asset_mappings_representation_requires_asset" CHECK ("canonical_asset_representation_id" is null or "canonical_asset_id" is not null)
 );
 --> statement-breakpoint
 CREATE TABLE "provider_assets" (
@@ -408,7 +571,7 @@ CREATE TABLE "sources" (
 	"address_id" uuid,
 	"cex_account_id" uuid,
 	"sourceable_type" "sourceable_type" NOT NULL,
-	"user_id" uuid NOT NULL,
+	"principal_id" uuid NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "sourceable_id_not_null" CHECK ("address_id" is not null or "cex_account_id" is not null)
@@ -439,7 +602,7 @@ CREATE TABLE "sync_run_items" (
 --> statement-breakpoint
 CREATE TABLE "sync_runs" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"user_id" uuid NOT NULL,
+	"principal_id" uuid NOT NULL,
 	"status" "sync_run_status" DEFAULT 'queued'::"sync_run_status" NOT NULL,
 	"requested_source_count" integer DEFAULT 0 NOT NULL,
 	"queued_source_count" integer DEFAULT 0 NOT NULL,
@@ -468,9 +631,10 @@ CREATE TABLE "transaction_legs" (
 	"external_id" text,
 	"tx_hash" text,
 	"timestamp" timestamp NOT NULL,
-	"user_id" uuid,
+	"principal_id" uuid NOT NULL,
 	"address_id" uuid,
 	"asset_id" uuid NOT NULL,
+	"asset_representation_id" uuid,
 	"amount" numeric(100,30) NOT NULL,
 	"kind" "leg_kind" NOT NULL,
 	"provenance" "leg_provenance" NOT NULL,
@@ -501,19 +665,21 @@ CREATE TABLE "transaction_onchain_context" (
 	"gas_price" numeric(78,0),
 	"gas_fee_in_native" numeric(78,0),
 	"fee_asset_id" uuid,
+	"fee_asset_representation_id" uuid,
 	"gas_fee_cost_basis_amount" numeric(36,8),
 	"gas_fee_cost_basis_currency" text,
 	"is_error" boolean DEFAULT false NOT NULL,
 	"function_name" text,
 	"metadata" jsonb,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "transaction_onchain_context_fee_representation_requires_asset" CHECK ("fee_asset_representation_id" is null or "fee_asset_id" is not null)
 );
 --> statement-breakpoint
 CREATE TABLE "transaction_reviews" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"transaction_id" uuid NOT NULL UNIQUE,
-	"user_id" uuid NOT NULL,
+	"principal_id" uuid NOT NULL,
 	"review_status" "review_status" DEFAULT 'needs_review'::"review_status" NOT NULL,
 	"original_type_key" text,
 	"original_confidence" numeric(3,2),
@@ -543,7 +709,7 @@ CREATE TABLE "transactions" (
 	"provider_created_at" timestamp,
 	"provider_updated_at" timestamp,
 	"metadata" jsonb,
-	"user_id" uuid,
+	"principal_id" uuid NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "transactions_identifier_present" CHECK ("external_id" is not null or "source_raw_record_id" is not null)
@@ -586,7 +752,7 @@ CREATE TABLE "transaction_venue_context" (
 --> statement-breakpoint
 CREATE TABLE "transfer_reconciliations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-	"user_id" uuid NOT NULL,
+	"principal_id" uuid NOT NULL,
 	"provider_transfer_id" uuid NOT NULL,
 	"canonical_transfer_id" uuid,
 	"canonical_transaction_id" uuid,
@@ -606,6 +772,7 @@ CREATE TABLE "transfers" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"source_id" uuid NOT NULL,
 	"source_raw_record_id" uuid,
+	"principal_id" uuid NOT NULL,
 	"external_id" text,
 	"external_group_id" text,
 	"address_id" uuid,
@@ -622,6 +789,7 @@ CREATE TABLE "transfers" (
 	"to_party_type" text,
 	"to_party_resource_path" text,
 	"asset_id" uuid NOT NULL,
+	"asset_representation_id" uuid,
 	"amount" numeric(100,30) NOT NULL,
 	"token_id" text,
 	"notes" text,
@@ -648,15 +816,29 @@ CREATE INDEX "address_idx" ON "addresses" ("address");--> statement-breakpoint
 CREATE INDEX "asset_price_asset_id_idx" ON "asset_prices" ("asset_id");--> statement-breakpoint
 CREATE INDEX "asset_price_timestamp_idx" ON "asset_prices" ("timestamp");--> statement-breakpoint
 CREATE INDEX "asset_price_currency_idx" ON "asset_prices" ("currency");--> statement-breakpoint
+CREATE UNIQUE INDEX "asset_representations_chain_contract_unique" ON "asset_representations" ("blockchain_id","contract_address") WHERE "contract_address" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "asset_representations_chain_native_unique" ON "asset_representations" ("blockchain_id") WHERE "type" = 'native';--> statement-breakpoint
+CREATE INDEX "asset_representations_asset_idx" ON "asset_representations" ("asset_id");--> statement-breakpoint
+CREATE INDEX "asset_representations_blockchain_idx" ON "asset_representations" ("blockchain_id");--> statement-breakpoint
 CREATE INDEX "asset_symbol_idx" ON "assets" ("symbol");--> statement-breakpoint
-CREATE INDEX "idx_cex_account_user_cex" ON "cex_account" ("user_id","cex_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "cex_account_user_cex_provider_account_unique" ON "cex_account" ("user_id","cex_id","provider_account_id") WHERE "provider_account_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "assets_coingecko_coin_id_unique" ON "assets" ("coingecko_coin_id") WHERE "coingecko_coin_id" is not null;--> statement-breakpoint
+CREATE INDEX "idx_cex_account_principal_cex" ON "cex_account" ("principal_id","cex_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "cex_account_principal_cex_provider_account_unique" ON "cex_account" ("principal_id","cex_id","provider_account_id") WHERE "provider_account_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_disposal_matches_leg_unique" ON "disposal_matches" ("fifo_lot_id","disposal_leg_id");--> statement-breakpoint
 CREATE INDEX "idx_disposal_matches_leg" ON "disposal_matches" ("disposal_leg_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "idx_fifo_lots_source_leg" ON "fifo_lots" ("source_leg_id","source_leg_sequence");--> statement-breakpoint
-CREATE INDEX "idx_fifo_lots_user_asset_remaining" ON "fifo_lots" ("user_id","asset_id","remaining_amount");--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_fifo_lots_source_leg" ON "fifo_lots" ("source_leg_id","source_leg_sequence") WHERE "source_leg_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_fifo_lots_source_provider_transfer" ON "fifo_lots" ("source_provider_transfer_id") WHERE "source_provider_transfer_id" is not null;--> statement-breakpoint
+CREATE INDEX "idx_fifo_lots_principal_asset_remaining" ON "fifo_lots" ("principal_id","asset_id","remaining_amount");--> statement-breakpoint
 CREATE UNIQUE INDEX "auth_identities_provider_provider_id_uidx" ON "auth_identities" ("provider","provider_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "auth_identities_user_provider_uidx" ON "auth_identities" ("user_id","provider");--> statement-breakpoint
+CREATE UNIQUE INDEX "inventory_movement_allocations_lot_movement_unique_idx" ON "inventory_movement_allocations" ("inventory_movement_id","fifo_lot_id");--> statement-breakpoint
+CREATE INDEX "idx_inventory_movement_allocations_movement" ON "inventory_movement_allocations" ("inventory_movement_id");--> statement-breakpoint
+CREATE INDEX "idx_inventory_movement_allocations_fifo_lot" ON "inventory_movement_allocations" ("fifo_lot_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "inventory_movements_provider_transfer_unique_idx" ON "inventory_movements" ("provider_transfer_id") WHERE "provider_transfer_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "inventory_movements_transaction_leg_unique_idx" ON "inventory_movements" ("transaction_leg_id") WHERE "transaction_leg_id" is not null;--> statement-breakpoint
+CREATE INDEX "idx_inventory_movements_source_timestamp" ON "inventory_movements" ("source_id","timestamp");--> statement-breakpoint
+CREATE INDEX "idx_inventory_movements_principal_asset" ON "inventory_movements" ("principal_id","asset_id");--> statement-breakpoint
+CREATE INDEX "idx_inventory_movements_transaction" ON "inventory_movements" ("transaction_id");--> statement-breakpoint
 CREATE INDEX "idx_jurisdiction_rule_set_rules_set" ON "jurisdiction_rule_set_rules" ("rule_set_id","priority");--> statement-breakpoint
 CREATE INDEX "idx_jurisdiction_rule_set_rules_rule" ON "jurisdiction_rule_set_rules" ("rule_id");--> statement-breakpoint
 CREATE INDEX "idx_jurisdiction_rule_sets_jurisdiction" ON "jurisdiction_rule_sets" ("jurisdiction_code");--> statement-breakpoint
@@ -671,13 +853,28 @@ CREATE INDEX "idx_legal_sources_jurisdiction" ON "legal_sources" ("jurisdiction_
 CREATE INDEX "idx_legal_sources_effective_from" ON "legal_sources" ("effective_from");--> statement-breakpoint
 CREATE INDEX "idx_transaction_type_legal_rules_type" ON "transaction_type_legal_rules" ("transaction_type_key");--> statement-breakpoint
 CREATE INDEX "idx_transaction_type_legal_rules_rule" ON "transaction_type_legal_rules" ("rule_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "principal_claims_type_value_unique" ON "principal_claims" ("claim_type","claim_value_hash");--> statement-breakpoint
+CREATE UNIQUE INDEX "principal_claims_request_type_unique" ON "principal_claims" ("request_id","claim_type");--> statement-breakpoint
+CREATE INDEX "idx_principal_claims_principal_id" ON "principal_claims" ("principal_id");--> statement-breakpoint
+CREATE INDEX "idx_principal_claims_source_id" ON "principal_claims" ("source_id");--> statement-breakpoint
+CREATE INDEX "idx_principal_claims_payer_wallet" ON "principal_claims" ("payer_chain_type","payer_wallet_address");--> statement-breakpoint
+CREATE UNIQUE INDEX "principals_user_unique" ON "principals" ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_principals_kind" ON "principals" ("kind");--> statement-breakpoint
 CREATE INDEX "idx_processing_jobs_source_id" ON "processing_jobs" ("source_id");--> statement-breakpoint
-CREATE INDEX "idx_processing_jobs_user_id" ON "processing_jobs" ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_processing_jobs_principal_id" ON "processing_jobs" ("principal_id");--> statement-breakpoint
 CREATE INDEX "idx_processing_jobs_status" ON "processing_jobs" ("status");--> statement-breakpoint
 CREATE INDEX "idx_processing_jobs_queue_job" ON "processing_jobs" ("queue_name","queue_job_id");--> statement-breakpoint
 CREATE INDEX "idx_processing_jobs_heartbeat_at" ON "processing_jobs" ("heartbeat_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "processing_jobs_active_source_unique" ON "processing_jobs" ("source_id") WHERE "status" in ('pending', 'processing');--> statement-breakpoint
 CREATE UNIQUE INDEX "processing_jobs_queue_job_unique" ON "processing_jobs" ("queue_name","queue_job_id") WHERE "queue_name" is not null and "queue_job_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "protocol_candidate_observations_onchain_data_source_period_unique" ON "protocol_candidate_observations" ("candidate_id","onchain_data_source","onchain_data_source_observation_key");--> statement-breakpoint
+CREATE INDEX "idx_protocol_candidate_observations_candidate" ON "protocol_candidate_observations" ("candidate_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "protocol_candidates_blockchain_subject_unique" ON "protocol_candidates" ("blockchain_id","subject_kind","subject_identifier");--> statement-breakpoint
+CREATE INDEX "idx_protocol_candidates_mapping_status" ON "protocol_candidates" ("mapping_status");--> statement-breakpoint
+CREATE INDEX "idx_protocol_mapping_evidence_mapping" ON "protocol_mapping_evidence" ("mapping_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "protocol_transaction_type_mappings_subject_pattern_version_unique" ON "protocol_transaction_type_mappings" ("blockchain_id","subject_identifier","movement_pattern","version");--> statement-breakpoint
+CREATE INDEX "idx_protocol_transaction_type_mappings_blockchain_subject" ON "protocol_transaction_type_mappings" ("blockchain_id","subject_identifier");--> statement-breakpoint
+CREATE INDEX "idx_protocol_transaction_type_mappings_mapping_status" ON "protocol_transaction_type_mappings" ("mapping_status");--> statement-breakpoint
 CREATE UNIQUE INDEX "provider_asset_mappings_provider_asset_row_unique" ON "provider_asset_mappings" ("provider_asset_row_id");--> statement-breakpoint
 CREATE INDEX "idx_provider_asset_mappings_status" ON "provider_asset_mappings" ("mapping_status");--> statement-breakpoint
 CREATE UNIQUE INDEX "provider_assets_provider_asset_id_unique" ON "provider_assets" ("provider","provider_asset_id") WHERE "provider_asset_id" is not null;--> statement-breakpoint
@@ -696,23 +893,23 @@ CREATE UNIQUE INDEX "source_records_raw_source_external_unique" ON "source_recor
 CREATE INDEX "idx_source_records_raw_source_occurred" ON "source_records_raw" ("source_id","occurred_at");--> statement-breakpoint
 CREATE INDEX "idx_source_records_raw_source_normalized" ON "source_records_raw" ("source_id","normalized_at");--> statement-breakpoint
 CREATE INDEX "idx_sources_provider_key" ON "sources" ("provider_key");--> statement-breakpoint
-CREATE UNIQUE INDEX "sources_user_address_unique" ON "sources" ("user_id","address_id");--> statement-breakpoint
-CREATE UNIQUE INDEX "sources_user_cex_account_unique" ON "sources" ("user_id","cex_account_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "sources_principal_address_unique" ON "sources" ("principal_id","address_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "sources_principal_cex_account_unique" ON "sources" ("principal_id","cex_account_id");--> statement-breakpoint
 CREATE INDEX "idx_source_sync_state_last_synced" ON "source_sync_state" ("last_synced_at");--> statement-breakpoint
 CREATE INDEX "idx_sync_run_items_run_id" ON "sync_run_items" ("run_id");--> statement-breakpoint
 CREATE INDEX "idx_sync_run_items_source_id" ON "sync_run_items" ("source_id");--> statement-breakpoint
 CREATE INDEX "idx_sync_run_items_processing_job_id" ON "sync_run_items" ("processing_job_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "sync_run_items_run_source_unique" ON "sync_run_items" ("run_id","source_id");--> statement-breakpoint
-CREATE INDEX "idx_sync_runs_user_id" ON "sync_runs" ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_sync_runs_principal_id" ON "sync_runs" ("principal_id");--> statement-breakpoint
 CREATE INDEX "idx_sync_runs_status" ON "sync_runs" ("status");--> statement-breakpoint
 CREATE INDEX "idx_sync_runs_created_at" ON "sync_runs" ("created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_transaction_legs_source_external_unique" ON "transaction_legs" ("source_id","external_id") WHERE "external_id" is not null;--> statement-breakpoint
-CREATE UNIQUE INDEX "idx_transaction_legs_unique" ON "transaction_legs" ("tx_hash","address_id","asset_id","kind","source_transfer_id") WHERE "tx_hash" is not null and "address_id" is not null;--> statement-breakpoint
-CREATE UNIQUE INDEX "idx_transaction_legs_gas_fee_unique" ON "transaction_legs" ("tx_hash","address_id","asset_id") WHERE "tx_hash" is not null AND "address_id" is not null AND "kind" = 'fee' AND "derivation_rule" IN ('gas_fee', 'failed_tx_gas_fee');--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_transaction_legs_unique" ON "transaction_legs" ("tx_hash","address_id","asset_id","asset_representation_id","kind","source_transfer_id") WHERE "tx_hash" is not null and "address_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_transaction_legs_gas_fee_unique" ON "transaction_legs" ("tx_hash","address_id","asset_id","asset_representation_id") WHERE "tx_hash" is not null AND "address_id" is not null AND "kind" = 'fee' AND "derivation_rule" IN ('gas_fee', 'failed_tx_gas_fee');--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_source" ON "transaction_legs" ("source_id");--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_transaction" ON "transaction_legs" ("transaction_id");--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_address" ON "transaction_legs" ("address_id");--> statement-breakpoint
-CREATE INDEX "idx_transaction_legs_user" ON "transaction_legs" ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_transaction_legs_principal" ON "transaction_legs" ("principal_id");--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_asset" ON "transaction_legs" ("asset_id");--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_kind" ON "transaction_legs" ("kind");--> statement-breakpoint
 CREATE INDEX "idx_transaction_legs_timestamp" ON "transaction_legs" ("timestamp");--> statement-breakpoint
@@ -722,6 +919,7 @@ CREATE INDEX "idx_transaction_onchain_context_blockchain_tx_hash" ON "transactio
 CREATE INDEX "idx_transaction_onchain_context_address" ON "transaction_onchain_context" ("address_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "transactions_source_external_id_unique_idx" ON "transactions" ("source_id","external_id") WHERE "external_id" is not null;--> statement-breakpoint
 CREATE INDEX "idx_transactions_source_timestamp" ON "transactions" ("source_id","timestamp");--> statement-breakpoint
+CREATE INDEX "idx_transactions_principal_timestamp" ON "transactions" ("principal_id","timestamp");--> statement-breakpoint
 CREATE INDEX "idx_transactions_external_group" ON "transactions" ("source_id","external_group_id");--> statement-breakpoint
 CREATE INDEX "idx_transactions_source_provider_type" ON "transactions" ("source_id","provider_transaction_type");--> statement-breakpoint
 CREATE INDEX "idx_transactions_source_provider_status" ON "transactions" ("source_id","provider_status");--> statement-breakpoint
@@ -730,28 +928,41 @@ CREATE INDEX "idx_transaction_venue_context_external_account" ON "transaction_ve
 CREATE INDEX "idx_transaction_venue_context_order" ON "transaction_venue_context" ("external_order_id");--> statement-breakpoint
 CREATE INDEX "idx_transaction_venue_context_fill" ON "transaction_venue_context" ("external_fill_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "transfer_reconciliations_provider_transfer_unique_idx" ON "transfer_reconciliations" ("provider_transfer_id");--> statement-breakpoint
-CREATE INDEX "idx_transfer_reconciliations_user_status" ON "transfer_reconciliations" ("user_id","status");--> statement-breakpoint
+CREATE INDEX "idx_transfer_reconciliations_principal_status" ON "transfer_reconciliations" ("principal_id","status");--> statement-breakpoint
 CREATE INDEX "idx_transfer_reconciliations_canonical_transfer" ON "transfer_reconciliations" ("canonical_transfer_id");--> statement-breakpoint
 CREATE INDEX "idx_transfer_reconciliations_canonical_transaction" ON "transfer_reconciliations" ("canonical_transaction_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_transfers_source_external_unique" ON "transfers" ("source_id","external_id") WHERE "external_id" is not null;--> statement-breakpoint
-CREATE UNIQUE INDEX "idx_transfers_unique" ON "transfers" ("tx_hash","address_id","type","from_address","to_address","asset_id") WHERE "tx_hash" is not null and "address_id" is not null and "from_address" is not null and "to_address" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "idx_transfers_unique" ON "transfers" ("tx_hash","address_id","type","from_address","to_address","asset_id","asset_representation_id") WHERE "tx_hash" is not null and "address_id" is not null and "from_address" is not null and "to_address" is not null;--> statement-breakpoint
 CREATE INDEX "idx_transfers_source_timestamp" ON "transfers" ("source_id","timestamp");--> statement-breakpoint
+CREATE INDEX "idx_transfers_principal_timestamp" ON "transfers" ("principal_id","timestamp");--> statement-breakpoint
 CREATE INDEX "idx_transfers_external_group" ON "transfers" ("source_id","external_group_id");--> statement-breakpoint
 CREATE INDEX "idx_transfers_source_type" ON "transfers" ("source_id","type");--> statement-breakpoint
 CREATE INDEX "idx_transfers_blockchain_tx_hash" ON "transfers" ("blockchain_id","tx_hash");--> statement-breakpoint
-ALTER TABLE "addresses" ADD CONSTRAINT "addresses_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
+ALTER TABLE "addresses" ADD CONSTRAINT "addresses_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "asset_prices" ADD CONSTRAINT "asset_prices_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "assets" ADD CONSTRAINT "assets_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
+ALTER TABLE "asset_representations" ADD CONSTRAINT "asset_representations_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "asset_representations" ADD CONSTRAINT "asset_representations_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
 ALTER TABLE "cex_account" ADD CONSTRAINT "cex_account_cex_id_cex_id_fkey" FOREIGN KEY ("cex_id") REFERENCES "cex"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "cex_account" ADD CONSTRAINT "cex_account_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "cex_account" ADD CONSTRAINT "cex_account_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "disposal_matches" ADD CONSTRAINT "disposal_matches_disposal_leg_id_transaction_legs_id_fkey" FOREIGN KEY ("disposal_leg_id") REFERENCES "transaction_legs"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "disposal_matches" ADD CONSTRAINT "disposal_matches_fifo_lot_id_fifo_lots_id_fkey" FOREIGN KEY ("fifo_lot_id") REFERENCES "fifo_lots"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "dune_protocol_candidate_observations" ADD CONSTRAINT "dune_protocol_candidate_observations_6fVTEm5envHJ_fkey" FOREIGN KEY ("observation_id") REFERENCES "protocol_candidate_observations"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "email_verification_requests" ADD CONSTRAINT "email_verification_requests_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "fifo_lots" ADD CONSTRAINT "fifo_lots_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
+ALTER TABLE "fifo_lots" ADD CONSTRAINT "fifo_lots_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "fifo_lots" ADD CONSTRAINT "fifo_lots_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id");--> statement-breakpoint
 ALTER TABLE "fifo_lots" ADD CONSTRAINT "fifo_lots_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id");--> statement-breakpoint
 ALTER TABLE "fifo_lots" ADD CONSTRAINT "fifo_lots_source_leg_id_transaction_legs_id_fkey" FOREIGN KEY ("source_leg_id") REFERENCES "transaction_legs"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "fifo_lots" ADD CONSTRAINT "fifo_lots_zo6btAURiYIu_fkey" FOREIGN KEY ("source_provider_transfer_id") REFERENCES "provider_transfers"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "auth_identities" ADD CONSTRAINT "auth_identities_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movement_allocations" ADD CONSTRAINT "inventory_movement_allocations_iAO6csLCSW6D_fkey" FOREIGN KEY ("inventory_movement_id") REFERENCES "inventory_movements"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movement_allocations" ADD CONSTRAINT "inventory_movement_allocations_fifo_lot_id_fifo_lots_id_fkey" FOREIGN KEY ("fifo_lot_id") REFERENCES "fifo_lots"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_g3T9P1auBFr8_fkey" FOREIGN KEY ("source_raw_record_id") REFERENCES "source_records_raw"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_transaction_id_transactions_id_fkey" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_Hu4boO3PhauI_fkey" FOREIGN KEY ("provider_transfer_id") REFERENCES "provider_transfers"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_transaction_leg_id_transaction_legs_id_fkey" FOREIGN KEY ("transaction_leg_id") REFERENCES "transaction_legs"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "inventory_movements" ADD CONSTRAINT "inventory_movements_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id");--> statement-breakpoint
 ALTER TABLE "jurisdiction_rule_set_rules" ADD CONSTRAINT "jurisdiction_rule_set_rules_l8WA6MhMvBx4_fkey" FOREIGN KEY ("rule_set_id") REFERENCES "jurisdiction_rule_sets"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "jurisdiction_rule_set_rules" ADD CONSTRAINT "jurisdiction_rule_set_rules_rule_id_legal_rules_id_fkey" FOREIGN KEY ("rule_id") REFERENCES "legal_rules"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "legal_clauses" ADD CONSTRAINT "legal_clauses_source_id_legal_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "legal_sources"("id") ON DELETE CASCADE;--> statement-breakpoint
@@ -760,10 +971,22 @@ ALTER TABLE "legal_rule_citations" ADD CONSTRAINT "legal_rule_citations_clause_i
 ALTER TABLE "transaction_type_legal_rules" ADD CONSTRAINT "transaction_type_legal_rules_8XfTWuJYmG0D_fkey" FOREIGN KEY ("transaction_type_key") REFERENCES "transaction_types"("type_key") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_type_legal_rules" ADD CONSTRAINT "transaction_type_legal_rules_rule_id_legal_rules_id_fkey" FOREIGN KEY ("rule_id") REFERENCES "legal_rules"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "oauth_states" ADD CONSTRAINT "oauth_states_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "principal_claims" ADD CONSTRAINT "principal_claims_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "principal_claims" ADD CONSTRAINT "principal_claims_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "principals" ADD CONSTRAINT "principals_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "processing_jobs" ADD CONSTRAINT "processing_jobs_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "processing_jobs" ADD CONSTRAINT "processing_jobs_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
+ALTER TABLE "processing_jobs" ADD CONSTRAINT "processing_jobs_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "processing_jobs" ADD CONSTRAINT "processing_jobs_follow_up_job_id_fk" FOREIGN KEY ("follow_up_job_id") REFERENCES "processing_jobs"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "protocol_candidate_observations" ADD CONSTRAINT "protocol_candidate_observations_jXDjBJXsnfVQ_fkey" FOREIGN KEY ("candidate_id") REFERENCES "protocol_candidates"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "protocol_candidates" ADD CONSTRAINT "protocol_candidates_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
+ALTER TABLE "protocol_mapping_evidence" ADD CONSTRAINT "protocol_mapping_evidence_n1VJSCxTe9Nv_fkey" FOREIGN KEY ("mapping_id") REFERENCES "protocol_transaction_type_mappings"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "protocol_mapping_evidence" ADD CONSTRAINT "protocol_mapping_evidence_Qx3cGe0oz1f5_fkey" FOREIGN KEY ("candidate_observation_id") REFERENCES "protocol_candidate_observations"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "protocol_transaction_type_mappings" ADD CONSTRAINT "protocol_transaction_type_mappings_z2ZsJYAbplik_fkey" FOREIGN KEY ("candidate_id") REFERENCES "protocol_candidates"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "protocol_transaction_type_mappings" ADD CONSTRAINT "protocol_transaction_type_mappings_eRAvAZmyZKBj_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
+ALTER TABLE "protocol_transaction_type_mappings" ADD CONSTRAINT "protocol_transaction_type_mappings_shs1CvnFjFtO_fkey" FOREIGN KEY ("transaction_type_key") REFERENCES "transaction_types"("type_key");--> statement-breakpoint
 ALTER TABLE "provider_asset_mappings" ADD CONSTRAINT "provider_asset_mappings_VWjtxlloj6Ae_fkey" FOREIGN KEY ("provider_asset_row_id") REFERENCES "provider_assets"("id");--> statement-breakpoint
 ALTER TABLE "provider_asset_mappings" ADD CONSTRAINT "provider_asset_mappings_canonical_asset_id_assets_id_fkey" FOREIGN KEY ("canonical_asset_id") REFERENCES "assets"("id");--> statement-breakpoint
+ALTER TABLE "provider_asset_mappings" ADD CONSTRAINT "provider_asset_mappings_representation_asset_fk" FOREIGN KEY ("canonical_asset_representation_id","canonical_asset_id") REFERENCES "asset_representations"("id","asset_id");--> statement-breakpoint
 ALTER TABLE "provider_transaction_type_mappings" ADD CONSTRAINT "provider_transaction_type_mappings_shs1ErzDsl7H_fkey" FOREIGN KEY ("transaction_type_key") REFERENCES "transaction_types"("type_key");--> statement-breakpoint
 ALTER TABLE "provider_transfers" ADD CONSTRAINT "provider_transfers_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "provider_transfers" ADD CONSTRAINT "provider_transfers_XA1TFONMDvBX_fkey" FOREIGN KEY ("source_raw_record_id") REFERENCES "source_records_raw"("id") ON DELETE SET NULL;--> statement-breakpoint
@@ -773,41 +996,45 @@ ALTER TABLE "sessions" ADD CONSTRAINT "sessions_user_id_users_id_fkey" FOREIGN K
 ALTER TABLE "source_records_raw" ADD CONSTRAINT "source_records_raw_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "sources" ADD CONSTRAINT "sources_address_id_addresses_id_fkey" FOREIGN KEY ("address_id") REFERENCES "addresses"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "sources" ADD CONSTRAINT "sources_cex_account_id_cex_account_id_fkey" FOREIGN KEY ("cex_account_id") REFERENCES "cex_account"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "sources" ADD CONSTRAINT "sources_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "sources" ADD CONSTRAINT "sources_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "source_sync_state" ADD CONSTRAINT "source_sync_state_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "source_sync_state" ADD CONSTRAINT "source_sync_state_2VTS0oV0EXbd_fkey" FOREIGN KEY ("checkpoint_raw_record_id") REFERENCES "source_records_raw"("id") ON DELETE SET NULL;--> statement-breakpoint
 ALTER TABLE "sync_run_items" ADD CONSTRAINT "sync_run_items_run_id_sync_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "sync_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "sync_run_items" ADD CONSTRAINT "sync_run_items_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "sync_run_items" ADD CONSTRAINT "sync_run_items_processing_job_id_processing_jobs_id_fkey" FOREIGN KEY ("processing_job_id") REFERENCES "processing_jobs"("id") ON DELETE SET NULL;--> statement-breakpoint
-ALTER TABLE "sync_runs" ADD CONSTRAINT "sync_runs_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "sync_runs" ADD CONSTRAINT "sync_runs_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_08IySLTIAriv_fkey" FOREIGN KEY ("source_raw_record_id") REFERENCES "source_records_raw"("id") ON DELETE SET NULL;--> statement-breakpoint
-ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
+ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_address_id_addresses_id_fkey" FOREIGN KEY ("address_id") REFERENCES "addresses"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id");--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_transaction_id_transactions_id_fkey" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_source_transfer_id_transfers_id_fkey" FOREIGN KEY ("source_transfer_id") REFERENCES "transfers"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_fee_for_transaction_id_transactions_id_fkey" FOREIGN KEY ("fee_for_transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "transaction_legs" ADD CONSTRAINT "transaction_legs_representation_asset_fk" FOREIGN KEY ("asset_representation_id","asset_id") REFERENCES "asset_representations"("id","asset_id");--> statement-breakpoint
 ALTER TABLE "transaction_onchain_context" ADD CONSTRAINT "transaction_onchain_context_transaction_id_transactions_id_fkey" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_onchain_context" ADD CONSTRAINT "transaction_onchain_context_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
 ALTER TABLE "transaction_onchain_context" ADD CONSTRAINT "transaction_onchain_context_address_id_addresses_id_fkey" FOREIGN KEY ("address_id") REFERENCES "addresses"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_onchain_context" ADD CONSTRAINT "transaction_onchain_context_fee_asset_id_assets_id_fkey" FOREIGN KEY ("fee_asset_id") REFERENCES "assets"("id");--> statement-breakpoint
+ALTER TABLE "transaction_onchain_context" ADD CONSTRAINT "transaction_onchain_context_fee_representation_asset_fk" FOREIGN KEY ("fee_asset_representation_id","fee_asset_id") REFERENCES "asset_representations"("id","asset_id");--> statement-breakpoint
 ALTER TABLE "transaction_reviews" ADD CONSTRAINT "transaction_reviews_transaction_id_transactions_id_fkey" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
-ALTER TABLE "transaction_reviews" ADD CONSTRAINT "transaction_reviews_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "transaction_reviews" ADD CONSTRAINT "transaction_reviews_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_source_raw_record_id_source_records_raw_id_fkey" FOREIGN KEY ("source_raw_record_id") REFERENCES "source_records_raw"("id") ON DELETE SET NULL;--> statement-breakpoint
-ALTER TABLE "transactions" ADD CONSTRAINT "transactions_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id");--> statement-breakpoint
+ALTER TABLE "transactions" ADD CONSTRAINT "transactions_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_transaction_type_fk" FOREIGN KEY ("transaction_type") REFERENCES "transaction_types"("type_key");--> statement-breakpoint
 ALTER TABLE "transaction_types" ADD CONSTRAINT "transaction_types_category_key_fk" FOREIGN KEY ("category_key") REFERENCES "transaction_categories"("category_key");--> statement-breakpoint
 ALTER TABLE "transaction_types" ADD CONSTRAINT "transaction_types_subcategory_key_fk" FOREIGN KEY ("subcategory_key") REFERENCES "transaction_subcategories"("subcategory_key");--> statement-breakpoint
 ALTER TABLE "transaction_venue_context" ADD CONSTRAINT "transaction_venue_context_transaction_id_transactions_id_fkey" FOREIGN KEY ("transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transaction_venue_context" ADD CONSTRAINT "transaction_venue_context_cex_account_id_cex_account_id_fkey" FOREIGN KEY ("cex_account_id") REFERENCES "cex_account"("id") ON DELETE SET NULL;--> statement-breakpoint
-ALTER TABLE "transfer_reconciliations" ADD CONSTRAINT "transfer_reconciliations_user_id_users_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "transfer_reconciliations" ADD CONSTRAINT "transfer_reconciliations_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfer_reconciliations" ADD CONSTRAINT "transfer_reconciliations_0LTGRXfYOC6D_fkey" FOREIGN KEY ("provider_transfer_id") REFERENCES "provider_transfers"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfer_reconciliations" ADD CONSTRAINT "transfer_reconciliations_aLMaGGKWBcB8_fkey" FOREIGN KEY ("canonical_transfer_id") REFERENCES "transfers"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfer_reconciliations" ADD CONSTRAINT "transfer_reconciliations_np3pcnm4mPC4_fkey" FOREIGN KEY ("canonical_transaction_id") REFERENCES "transactions"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfers" ADD CONSTRAINT "transfers_source_id_sources_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfers" ADD CONSTRAINT "transfers_source_raw_record_id_source_records_raw_id_fkey" FOREIGN KEY ("source_raw_record_id") REFERENCES "source_records_raw"("id") ON DELETE SET NULL;--> statement-breakpoint
+ALTER TABLE "transfers" ADD CONSTRAINT "transfers_principal_id_principals_id_fkey" FOREIGN KEY ("principal_id") REFERENCES "principals"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfers" ADD CONSTRAINT "transfers_address_id_addresses_id_fkey" FOREIGN KEY ("address_id") REFERENCES "addresses"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "transfers" ADD CONSTRAINT "transfers_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
-ALTER TABLE "transfers" ADD CONSTRAINT "transfers_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id");
+ALTER TABLE "transfers" ADD CONSTRAINT "transfers_asset_id_assets_id_fkey" FOREIGN KEY ("asset_id") REFERENCES "assets"("id");--> statement-breakpoint
+ALTER TABLE "transfers" ADD CONSTRAINT "transfers_representation_asset_fk" FOREIGN KEY ("asset_representation_id","asset_id") REFERENCES "asset_representations"("id","asset_id");

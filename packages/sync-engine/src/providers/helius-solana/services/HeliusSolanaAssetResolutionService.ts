@@ -68,7 +68,8 @@ export interface HeliusSolanaResolvedAsset {
   readonly mappingStatus: ProviderAssetMappingStatus
   readonly mappingKind: "asset" | "fiat"
   readonly canonicalAssetId: string | null
-  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetRepresentationId: string | null
+  readonly assetSymbol: string | null
   readonly canonicalFiatCurrency: string | null
 }
 

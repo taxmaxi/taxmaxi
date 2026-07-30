@@ -13,6 +13,7 @@ import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
+  AssetRepresentationResponse,
   AssetBadRequestError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
@@ -42,7 +43,7 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     providerType: row.providerAsset.providerType,
     mappingKind: row.mapping?.mappingKind ?? null,
     canonicalAssetId: row.mapping?.canonicalAssetId ?? null,
-    canonicalAssetSymbol: row.mapping?.canonicalAssetSymbol ?? null,
+    canonicalAssetRepresentationId: row.mapping?.canonicalAssetRepresentationId ?? null,
     canonicalFiatCurrency: row.mapping?.canonicalFiatCurrency ?? null,
     mappingStatus: row.mapping?.mappingStatus ?? null,
     reviewerNotes: row.mapping?.reviewerNotes ?? null,
@@ -52,19 +53,14 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
 const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
   AssetCatalogAssetResponse.make({
     id: row.id,
-    blockchainId: row.blockchainId,
-    blockchainName: row.blockchainName,
-    blockchainChainType: row.blockchainChainType,
-    blockchainChainId: row.blockchainChainId,
-    blockchainExplorerUrl: row.blockchainExplorerUrl,
-    blockchainLogoUrl: row.blockchainLogoUrl,
-    contractAddress: row.contractAddress,
     name: row.name,
     symbol: row.symbol,
-    decimals: row.decimals,
+    coingeckoCoinId: row.coingeckoCoinId,
     logoUrl: row.logoUrl,
-    type: row.type,
     isSpam: row.isSpam,
+    representations: row.representations.map((representation) =>
+      AssetRepresentationResponse.make(representation)
+    ),
   })
 
 export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>

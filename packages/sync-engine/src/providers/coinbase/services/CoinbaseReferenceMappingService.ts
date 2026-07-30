@@ -97,7 +97,7 @@ export interface CoinbaseResolvedCurrencyMapping {
   readonly mappingStatus: ProviderMappingStatus
   readonly mappingKind: "asset" | "fiat"
   readonly canonicalAssetId: string | null
-  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetRepresentationId: string | null
   readonly canonicalFiatCurrency: string | null
 }
 

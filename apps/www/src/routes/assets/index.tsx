@@ -41,11 +41,23 @@ function AssetsIndexRoute() {
   const [query, setQuery] = useState("")
   const filteredAssets = useMemo(() => filterTaxMaxiAssets({ assets, query }), [assets, query])
   const networkCount = useMemo(
-    () => new Set(assets.map((asset) => asset.blockchainId)).size,
+    () =>
+      new Set(
+        assets.flatMap((asset) =>
+          asset.representations.map((representation) => representation.blockchainId)
+        )
+      ).size,
     [assets]
   )
   const contractCount = useMemo(
-    () => assets.filter((asset) => asset.contractAddress !== null).length,
+    () =>
+      assets.reduce(
+        (count, asset) =>
+          count +
+          asset.representations.filter((representation) => representation.contractAddress !== null)
+            .length,
+        0
+      ),
     [assets]
   )
 
@@ -153,6 +165,8 @@ function AssetStatCard({ label, value }: { readonly label: string; readonly valu
 }
 
 function AssetListCard({ asset }: { readonly asset: TaxMaxiAsset }) {
+  const firstRepresentation = asset.representations[0]
+
   return (
     <Link
       className="group block h-full rounded-[1.75rem] no-underline outline-none focus-visible:ring-3 focus-visible:ring-marketing-border/40"
@@ -185,10 +199,23 @@ function AssetListCard({ asset }: { readonly asset: TaxMaxiAsset }) {
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-3 text-sm">
-            <AssetMeta label="Network" value={formatBlockchainName(asset.blockchainName)} />
-            <AssetMeta label="Type" value={formatAssetType(asset.type)} />
-            <AssetMeta label="Decimals" value={asset.decimals.toString()} />
-            <AssetMeta label="Chain" value={asset.blockchainChainType} />
+            <AssetMeta
+              label="Networks"
+              value={new Set(
+                asset.representations.map((item) => item.blockchainId)
+              ).size.toString()}
+            />
+            <AssetMeta label="Representations" value={asset.representations.length.toString()} />
+            <AssetMeta
+              label="First type"
+              value={firstRepresentation ? formatAssetType(firstRepresentation.type) : "—"}
+            />
+            <AssetMeta
+              label="First network"
+              value={
+                firstRepresentation ? formatBlockchainName(firstRepresentation.blockchainName) : "—"
+              }
+            />
           </dl>
         </CardContent>
       </Card>

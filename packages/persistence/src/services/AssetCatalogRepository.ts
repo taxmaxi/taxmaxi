@@ -1,5 +1,5 @@
 /**
- * AssetCatalogRepository - Public canonical asset catalog read model.
+ * AssetCatalogRepository - Public economic asset catalog read model.
  *
  * @module AssetCatalogRepository
  */
@@ -10,14 +10,9 @@ import type * as Option from "effect/Option"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
 /**
- * AssetCatalogAssetType - Canonical asset category persisted in the asset table.
+ * AssetCatalogRepresentationRecord - One chain-specific form of an economic asset.
  */
-export type AssetCatalogAssetType = "native" | "token" | "nft"
-
-/**
- * AssetCatalogAssetRecord - Public asset catalog projection joined with blockchain metadata.
- */
-export interface AssetCatalogAssetRecord {
+export interface AssetCatalogRepresentationRecord {
   readonly id: string
   readonly blockchainId: string
   readonly blockchainName: string
@@ -26,43 +21,44 @@ export interface AssetCatalogAssetRecord {
   readonly blockchainExplorerUrl: string | null
   readonly blockchainLogoUrl: string | null
   readonly contractAddress: string | null
-  readonly name: string
-  readonly symbol: string
   readonly decimals: number
-  readonly logoUrl: string | null
-  readonly type: AssetCatalogAssetType
-  readonly isSpam: boolean
+  readonly type: "native" | "token" | "nft"
+  readonly metadata: unknown
 }
 
 /**
- * AssetCatalogListParams - Search and limit options for public asset catalog reads.
+ * AssetCatalogAssetRecord - Economic asset with all known network representations.
  */
+export interface AssetCatalogAssetRecord {
+  readonly id: string
+  readonly name: string
+  readonly symbol: string
+  readonly coingeckoCoinId: string | null
+  readonly logoUrl: string | null
+  readonly isSpam: boolean
+  readonly representations: ReadonlyArray<AssetCatalogRepresentationRecord>
+}
+
 export interface AssetCatalogListParams {
   readonly query: string | null
   readonly limit: number
 }
 
 /**
- * AssetCatalogRepositoryShape - Read operations for canonical assets.
+ * AssetCatalogRepositoryShape - Read operations for economic assets.
  */
 export interface AssetCatalogRepositoryShape {
-  /**
-   * List non-spam canonical assets, optionally filtered by a search query.
-   */
   readonly listAssets: (
     params: AssetCatalogListParams
   ) => Effect.Effect<ReadonlyArray<AssetCatalogAssetRecord>, PersistenceError>
 
-  /**
-   * Find one non-spam canonical asset by database id.
-   */
   readonly findAssetById: (params: {
     readonly assetId: string
   }) => Effect.Effect<Option.Option<AssetCatalogAssetRecord>, PersistenceError>
 }
 
 /**
- * AssetCatalogRepository - Context tag for public asset catalog persistence.
+ * AssetCatalogRepository - Context tag for public economic asset catalog persistence.
  */
 export class AssetCatalogRepository extends Context.Tag("AssetCatalogRepository")<
   AssetCatalogRepository,

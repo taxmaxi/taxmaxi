@@ -1,6 +1,6 @@
-# Asset identity uses canonical assets and provider mappings
+# Asset identity separates economic assets from network representations
 
-TaxMaxi separates canonical assets from provider-reported assets so sync can ingest unknown crypto assets without guessing their tax identity.
+TaxMaxi separates economic identity, network representation, provider observation, and custody source. This decision supersedes the original form of ADR 0002.
 
 ## Status
 
@@ -8,56 +8,39 @@ Accepted
 
 ## Context
 
-TaxMaxi calculates taxes from normalized transactions. Normalization needs stable asset identity: the system must know whether a raw provider reference is canonical `SOL`, canonical `USDC`, an NFT, a spam token, an unsupported token, or an asset that still needs review.
+One economic asset can exist in several places. USDC held at Coinbase has no required blockchain. USDC on Solana has a mint, while USDC on Ethereum and Base has a different contract on each chain. Treating each contract as a separate canonical asset splits valuation, inventory, FIFO, and portfolio reporting. Treating a symbol as identity can merge unrelated assets that share a symbol.
 
-Crypto providers and chains expose assets through provider-native identifiers such as Solana mint addresses, token programs, symbols, names, decimals, and metadata payloads. That metadata is useful evidence, but it is not authoritative TaxMaxi identity. Symbols can collide, names can lie, token metadata can change, and unknown assets are common.
-
-That is especially important for crypto taxes because asset identity mistakes can poison cost basis and valuation.
-
-## Constraints
-
-- Canonical tax calculations must use TaxMaxi-owned asset identity, not raw provider metadata.
-- Provider metadata must be preserved for provenance and later review.
-- Unknown assets must not fail sync merely because TaxMaxi has not approved them yet.
-- Unknown assets must not be silently treated as canonical assets.
-- Native assets such as Solana `SOL` may use built-in reference data instead of external metadata calls.
-- Provider-specific asset resolution belongs in the sync provider layer, not in core tax calculation logic.
-- Replay after approval must resolve the same provider asset deterministically.
+Provider metadata is evidence, not canonical identity. Providers can report aliases, duplicate symbols, incomplete decimals, or unknown assets. A custody source such as a Coinbase account or wallet describes where activity was observed; it is not an asset identity.
 
 ## Decision
 
-Use two separate concepts:
+TaxMaxi uses four explicit concepts:
 
-- `assets` are canonical TaxMaxi assets used by normalized transactions, valuation, and tax calculation.
-- `provider_assets` are assets as observed from an external provider, including provider identifiers and raw metadata.
+- **Economic asset**: the fungible or non-fungible thing used by valuation, inventory, FIFO, portfolio, and tax reporting. `assets.id` is its authoritative identity. An economic asset has a display name, symbol, and optional external market-data identity, but no blockchain, contract, mint, decimals, or native/token kind.
+- **Network representation**: one concrete form of an economic asset on a blockchain. `asset_representations` records `assetId`, `blockchainId`, native/token/NFT kind, contract address or mint, decimals, and representation metadata.
+- **Provider observation**: the asset facts reported by an external provider. `provider_assets` preserves provider IDs, natural keys, symbols, exponents, types, and raw payloads without making them canonical.
+- **Custody source**: the account, wallet, or address from which TaxMaxi imports activity. Sources preserve custody and ingestion lineage separately from asset identity.
 
-Connect them through `provider_asset_mappings`.
+An approved crypto provider mapping must target `canonicalAssetId`. It may also target `canonicalAssetRepresentationId` when the observation identifies a concrete network representation. It never targets a symbol.
 
-An approved mapping means TaxMaxi has decided that a provider asset is safe to resolve to a canonical TaxMaxi asset or supported fiat/stablecoin convention. A pending mapping means the provider asset is known to TaxMaxi but not yet approved for canonical tax treatment.
+A chainless observation such as Coinbase USDC maps only to economic USDC. An on-chain observation such as the Solana USDC mint maps to economic USDC and the exact Solana representation.
 
-For Solana, Helius asset resolution follows this lifecycle:
+Normalized transfers and transaction legs use economic `assetId` for accounting and carry nullable representation provenance. FIFO lots, prices, valuation, and portfolio aggregation remain keyed by economic `assetId`; their source transfer or leg retains representation provenance when it exists.
 
-1. Native `SOL` resolves from built-in Solana reference data without a Helius DAS metadata call.
-2. Known mints such as Solana USDC and USDT seed provider assets and approved mappings to canonical TaxMaxi assets.
-3. Unknown SPL, Token-2022, and NFT-like mints are fetched through Helius DAS batch metadata where possible.
-4. The resolver stores the provider asset with mint, symbol/name, decimals, token program, NFT hints, and raw provider payload.
-5. The resolver creates a `pending_review` provider asset mapping instead of failing sync or fabricating a canonical asset.
-6. A human or later review workflow approves the mapping after deciding whether to map to an existing canonical asset, create a new canonical asset, map to another supported convention, or leave it unresolved.
-7. Replay after approval uses the approved mapping and does not need to rediscover the asset through provider metadata.
+## Constraints
 
-## Considered Options
-
-1. Trust provider symbols and automatically map by symbol.
-2. Automatically create canonical TaxMaxi assets for every unknown mint.
-3. Fail sync whenever a provider reports an unknown asset.
-4. Store provider assets separately and require explicit mappings to canonical assets.
+- Symbols are display and search data. They are not unique and are never foreign keys or approved mapping targets.
+- A contract address or mint is unique within one blockchain.
+- A blockchain has at most one native representation.
+- Native representations have no contract address or mint. Token and NFT representations require one.
+- Representation decimals are non-negative.
+- Known reference assets and representations are resolved by exact external IDs, blockchain IDs, and contract or mint values.
+- Unknown or rejected provider observations remain provider observations and do not create canonical assets automatically.
 
 ## Consequences
 
-- Sync can continue when new or obscure assets appear.
-- Tax calculation remains protected from unreviewed provider metadata.
-- Review workflows have the raw provider payload and provenance needed to make asset decisions.
-- Most legitimate unknown tokens will become new TaxMaxi `assets` rows during review, then receive approved mappings.
-- Duplicate symbols, spam tokens, bad metadata, and NFT-like assets can be handled explicitly instead of being normalized incorrectly.
-- Replay can convert previously review-required records into canonical records once mappings are approved.
-- The system needs product and operational surfaces for reviewing pending provider asset mappings before full production use.
+- One USDC economic asset can aggregate Coinbase custody and several chain representations.
+- Duplicate symbols do not force two economic assets to merge.
+- Cross-chain transfers can preserve origin and destination representations while sharing one accounting asset.
+- Provider review must choose an economic asset ID and, for on-chain observations, the exact representation ID.
+- The pre-launch database uses a hard migration with a clean baseline rather than a symbol compatibility bridge.

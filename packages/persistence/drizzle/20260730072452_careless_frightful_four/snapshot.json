@@ -1,8 +1,8 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "26fa1050-b065-4755-9e12-5ff03a70159d",
-  "prevIds": ["5050050b-f59d-4f07-9148-0fb9e2417638"],
+  "id": "fc518570-6e7e-4357-8e19-88e3205b8148",
+  "prevIds": ["00000000-0000-0000-0000-000000000000"],
   "ddl": [
     {
       "values": ["evm", "solana", "bitcoin"],
@@ -12,19 +12,43 @@
     },
     {
       "values": ["native", "token", "nft"],
-      "name": "asset_type",
+      "name": "asset_representation_type",
       "entityType": "enums",
       "schema": "public"
     },
     {
-      "values": ["evm", "solana", "bitcoin"],
-      "name": "chain_type",
+      "values": ["known", "pending_review"],
+      "name": "fifo_lot_cost_basis_status",
       "entityType": "enums",
       "schema": "public"
     },
     {
       "values": ["local", "google", "coinbase"],
       "name": "auth_provider_type",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["inbound", "outbound"],
+      "name": "inventory_movement_direction",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["principal", "fee", "reward"],
+      "name": "inventory_movement_purpose",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["unmatched", "matched", "needs_review"],
+      "name": "inventory_movement_reconciliation_status",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["taxable", "non_taxable", "pending_review"],
+      "name": "inventory_movement_tax_treatment",
       "entityType": "enums",
       "schema": "public"
     },
@@ -65,6 +89,24 @@
       "schema": "public"
     },
     {
+      "values": ["dune"],
+      "name": "protocol_candidate_observation_onchain_data_source",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["sample_signature", "normalized_fixture", "dune_observation", "review_note"],
+      "name": "protocol_mapping_evidence_kind",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["token_out_and_token_in"],
+      "name": "protocol_movement_pattern",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
       "values": ["asset", "fiat"],
       "name": "provider_asset_mapping_kind",
       "entityType": "enums",
@@ -90,7 +132,7 @@
       "schema": "public"
     },
     {
-      "values": ["static", "amount_sign", "venue_side", "amount_sign_fee", "no_leg"],
+      "values": ["static", "amount_sign", "venue_side", "paired_spread_fee", "no_leg"],
       "name": "provider_resolution_strategy",
       "entityType": "enums",
       "schema": "public"
@@ -195,6 +237,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "asset_representations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "assets",
       "entityType": "tables",
       "schema": "public"
@@ -225,6 +273,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "dune_protocol_candidate_observations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "email_verification_requests",
       "entityType": "tables",
       "schema": "public"
@@ -238,6 +292,18 @@
     {
       "isRlsEnabled": false,
       "name": "auth_identities",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "inventory_movement_allocations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "inventory_movements",
       "entityType": "tables",
       "schema": "public"
     },
@@ -304,6 +370,30 @@
     {
       "isRlsEnabled": false,
       "name": "processing_jobs",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "protocol_candidate_observations",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "protocol_candidates",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "protocol_mapping_evidence",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "protocol_transaction_type_mappings",
       "entityType": "tables",
       "schema": "public"
     },
@@ -658,7 +748,20 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "assets"
+      "table": "asset_representations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "asset_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
     },
     {
       "type": "uuid",
@@ -671,7 +774,20 @@
       "name": "blockchain_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "assets"
+      "table": "asset_representations"
+    },
+    {
+      "type": "asset_representation_type",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "type",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
     },
     {
       "type": "text",
@@ -682,6 +798,71 @@
       "generated": null,
       "identity": null,
       "name": "contract_address",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "decimals",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "metadata",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -713,14 +894,14 @@
       "table": "assets"
     },
     {
-      "type": "integer",
+      "type": "text",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "decimals",
+      "name": "coingecko_coin_id",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -734,19 +915,6 @@
       "generated": null,
       "identity": null,
       "name": "logo_url",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "assets"
-    },
-    {
-      "type": "asset_type",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": "'token'",
-      "generated": null,
-      "identity": null,
-      "name": "type",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -817,8 +985,8 @@
       "table": "blockchains"
     },
     {
-      "type": "chain_type",
-      "typeSchema": "public",
+      "type": "text",
+      "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
       "default": null,
@@ -1302,6 +1470,58 @@
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "observation_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "dune_protocol_candidate_observations"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "query_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "dune_protocol_candidate_observations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "query_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "dune_protocol_candidate_observations"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "query_version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "dune_protocol_candidate_observations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
       "default": "gen_random_uuid()",
       "generated": null,
       "identity": null,
@@ -1506,14 +1726,40 @@
       "table": "fifo_lots"
     },
     {
+      "type": "fifo_lot_cost_basis_status",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'known'",
+      "generated": null,
+      "identity": null,
+      "name": "cost_basis_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "fifo_lots"
+    },
+    {
       "type": "uuid",
       "typeSchema": null,
-      "notNull": true,
+      "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
       "name": "source_leg_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "fifo_lots"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_provider_transfer_id",
       "entityType": "columns",
       "schema": "public",
       "table": "fifo_lots"
@@ -1647,6 +1893,279 @@
       "entityType": "columns",
       "schema": "public",
       "table": "auth_identities"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "inventory_movement_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "fifo_lot_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "type": "numeric(100,30)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "matched_amount",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "principal_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_raw_record_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "transaction_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "provider_transfer_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "transaction_leg_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "asset_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "timestamp",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "inventory_movement_direction",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "direction",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "inventory_movement_purpose",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "purpose",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "inventory_movement_tax_treatment",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tax_treatment",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "inventory_movement_reconciliation_status",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "reconciliation_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "numeric(100,30)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "amount",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "inventory_movements"
     },
     {
       "type": "uuid",
@@ -2988,6 +3507,32 @@
       "table": "processing_jobs"
     },
     {
+      "type": "job_mode",
+      "typeSchema": "public",
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "follow_up_mode",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "processing_jobs"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "follow_up_job_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "processing_jobs"
+    },
+    {
       "type": "job_status",
       "typeSchema": "public",
       "notNull": true,
@@ -3219,6 +3764,630 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "candidate_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "protocol_candidate_observation_onchain_data_source",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "onchain_data_source",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "onchain_data_source_observation_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "observed_window_start",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "observed_window_end",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "numeric(78,0)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "interaction_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "numeric(78,0)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "transaction_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "numeric(78,0)",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "unique_actor_count",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sample_transaction_hashes",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "related_subject_identifiers",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "retrieved_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "raw_payload",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "blockchain_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "subject_kind",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "subject_identifier",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "protocol_name_hint",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "category_hint",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "provider_mapping_status",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'pending_review'",
+      "generated": null,
+      "identity": null,
+      "name": "mapping_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "first_seen_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "last_seen_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "mapping_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "candidate_observation_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "protocol_mapping_evidence_kind",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "evidence_kind",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sample_signature",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "jsonb",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "payload",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "candidate_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "blockchain_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "subject_identifier",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "protocol_name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "protocol_movement_pattern",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "movement_pattern",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "transaction_type_key",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "provider_inventory_effect",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "inventory_effect",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "provider_tax_treatment",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "tax_treatment",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "numeric(5,4)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "confidence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "provider_mapping_status",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'pending_review'",
+      "generated": null,
+      "identity": null,
+      "name": "mapping_status",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "version",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "reviewer_notes",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "text",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "source_notes",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "timestamp",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "now()",
+      "generated": null,
+      "identity": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "gen_random_uuid()",
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
       "table": "provider_asset_mappings"
     },
     {
@@ -3261,14 +4430,14 @@
       "table": "provider_asset_mappings"
     },
     {
-      "type": "text",
+      "type": "uuid",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "canonical_asset_symbol",
+      "name": "canonical_asset_representation_id",
       "entityType": "columns",
       "schema": "public",
       "table": "provider_asset_mappings"
@@ -5016,6 +6185,19 @@
       "table": "transaction_legs"
     },
     {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "asset_representation_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "transaction_legs"
+    },
+    {
       "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
@@ -5336,6 +6518,19 @@
       "generated": null,
       "identity": null,
       "name": "fee_asset_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "transaction_onchain_context"
+    },
+    {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "fee_asset_representation_id",
       "entityType": "columns",
       "schema": "public",
       "table": "transaction_onchain_context"
@@ -6602,6 +7797,19 @@
       "table": "transfers"
     },
     {
+      "type": "uuid",
+      "typeSchema": null,
+      "notNull": false,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "asset_representation_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "transfers"
+    },
+    {
       "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
@@ -6858,6 +8066,97 @@
       "nameExplicit": true,
       "columns": [
         {
+          "value": "blockchain_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "contract_address",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"contract_address\" is not null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "asset_representations_chain_contract_unique",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "blockchain_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"type\" = 'native'",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "asset_representations_chain_native_unique",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "asset_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "asset_representations_asset_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "blockchain_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "asset_representations_blockchain_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
           "value": "symbol",
           "isExpression": false,
           "asc": true,
@@ -6871,6 +8170,27 @@
       "method": "btree",
       "concurrently": false,
       "name": "asset_symbol_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "assets"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "coingecko_coin_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"coingecko_coin_id\" is not null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "assets_coingecko_coin_id_unique",
       "entityType": "indexes",
       "schema": "public",
       "table": "assets"
@@ -7006,11 +8326,32 @@
         }
       ],
       "isUnique": true,
-      "where": null,
+      "where": "\"source_leg_id\" is not null",
       "with": "",
       "method": "btree",
       "concurrently": false,
       "name": "idx_fifo_lots_source_leg",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "fifo_lots"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "source_provider_transfer_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"source_provider_transfer_id\" is not null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_fifo_lots_source_provider_transfer",
       "entityType": "indexes",
       "schema": "public",
       "table": "fifo_lots"
@@ -7105,6 +8446,195 @@
       "entityType": "indexes",
       "schema": "public",
       "table": "auth_identities"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "inventory_movement_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "fifo_lot_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "inventory_movement_allocations_lot_movement_unique_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "inventory_movement_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movement_allocations_movement",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "fifo_lot_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movement_allocations_fifo_lot",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "provider_transfer_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"provider_transfer_id\" is not null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "inventory_movements_provider_transfer_unique_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "transaction_leg_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": "\"transaction_leg_id\" is not null",
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "inventory_movements_transaction_leg_unique_idx",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "source_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "timestamp",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movements_source_timestamp",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "principal_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "asset_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movements_principal_asset",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "transaction_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_inventory_movements_transaction",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "inventory_movements"
     },
     {
       "nameExplicit": true,
@@ -7742,6 +9272,230 @@
       "entityType": "indexes",
       "schema": "public",
       "table": "processing_jobs"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "candidate_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "onchain_data_source",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "onchain_data_source_observation_key",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "protocol_candidate_observations_onchain_data_source_period_unique",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "candidate_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_protocol_candidate_observations_candidate",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "blockchain_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "subject_kind",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "subject_identifier",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "protocol_candidates_blockchain_subject_unique",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "mapping_status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_protocol_candidates_mapping_status",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "mapping_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_protocol_mapping_evidence_mapping",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "blockchain_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "subject_identifier",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "movement_pattern",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "version",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "protocol_transaction_type_mappings_subject_pattern_version_unique",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "blockchain_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "subject_identifier",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_protocol_transaction_type_mappings_blockchain_subject",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "nameExplicit": true,
+      "columns": [
+        {
+          "value": "mapping_status",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "with": "",
+      "method": "btree",
+      "concurrently": false,
+      "name": "idx_protocol_transaction_type_mappings_mapping_status",
+      "entityType": "indexes",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
     },
     {
       "nameExplicit": true,
@@ -8482,6 +10236,13 @@
           "opclass": null
         },
         {
+          "value": "asset_representation_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
           "value": "kind",
           "isExpression": false,
           "asc": true,
@@ -8525,6 +10286,13 @@
         },
         {
           "value": "asset_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
+        },
+        {
+          "value": "asset_representation_id",
           "isExpression": false,
           "asc": true,
           "nullsFirst": false,
@@ -9208,6 +10976,13 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
+        },
+        {
+          "value": "asset_representation_id",
+          "isExpression": false,
+          "asc": true,
+          "nullsFirst": false,
+          "opclass": null
         }
       ],
       "isUnique": true,
@@ -9388,16 +11163,29 @@
     },
     {
       "nameExplicit": false,
+      "columns": ["asset_id"],
+      "schemaTo": "public",
+      "tableTo": "assets",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "asset_representations_asset_id_assets_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "nameExplicit": false,
       "columns": ["blockchain_id"],
       "schemaTo": "public",
       "tableTo": "blockchains",
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "assets_blockchain_id_blockchains_id_fkey",
+      "name": "asset_representations_blockchain_id_blockchains_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "assets"
+      "table": "asset_representations"
     },
     {
       "nameExplicit": false,
@@ -9450,6 +11238,19 @@
       "entityType": "fks",
       "schema": "public",
       "table": "disposal_matches"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["observation_id"],
+      "schemaTo": "public",
+      "tableTo": "protocol_candidate_observations",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "dune_protocol_candidate_observations_6fVTEm5envHJ_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "dune_protocol_candidate_observations"
     },
     {
       "nameExplicit": false,
@@ -9518,6 +11319,19 @@
     },
     {
       "nameExplicit": false,
+      "columns": ["source_provider_transfer_id"],
+      "schemaTo": "public",
+      "tableTo": "provider_transfers",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "fifo_lots_zo6btAURiYIu_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "fifo_lots"
+    },
+    {
+      "nameExplicit": false,
       "columns": ["user_id"],
       "schemaTo": "public",
       "tableTo": "users",
@@ -9528,6 +11342,123 @@
       "entityType": "fks",
       "schema": "public",
       "table": "auth_identities"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["inventory_movement_id"],
+      "schemaTo": "public",
+      "tableTo": "inventory_movements",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movement_allocations_iAO6csLCSW6D_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["fifo_lot_id"],
+      "schemaTo": "public",
+      "tableTo": "fifo_lots",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movement_allocations_fifo_lot_id_fifo_lots_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["principal_id"],
+      "schemaTo": "public",
+      "tableTo": "principals",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movements_principal_id_principals_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["source_id"],
+      "schemaTo": "public",
+      "tableTo": "sources",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movements_source_id_sources_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["source_raw_record_id"],
+      "schemaTo": "public",
+      "tableTo": "source_records_raw",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "name": "inventory_movements_g3T9P1auBFr8_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["transaction_id"],
+      "schemaTo": "public",
+      "tableTo": "transactions",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movements_transaction_id_transactions_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["provider_transfer_id"],
+      "schemaTo": "public",
+      "tableTo": "provider_transfers",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movements_Hu4boO3PhauI_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["transaction_leg_id"],
+      "schemaTo": "public",
+      "tableTo": "transaction_legs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "inventory_movements_transaction_leg_id_transaction_legs_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["asset_id"],
+      "schemaTo": "public",
+      "tableTo": "assets",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "inventory_movements_asset_id_assets_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "inventory_movements"
     },
     {
       "nameExplicit": false,
@@ -9699,6 +11630,110 @@
       "table": "processing_jobs"
     },
     {
+      "nameExplicit": true,
+      "columns": ["follow_up_job_id"],
+      "schemaTo": "public",
+      "tableTo": "processing_jobs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "name": "processing_jobs_follow_up_job_id_fk",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "processing_jobs"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["candidate_id"],
+      "schemaTo": "public",
+      "tableTo": "protocol_candidates",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "protocol_candidate_observations_jXDjBJXsnfVQ_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_candidate_observations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["blockchain_id"],
+      "schemaTo": "public",
+      "tableTo": "blockchains",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "protocol_candidates_blockchain_id_blockchains_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_candidates"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["mapping_id"],
+      "schemaTo": "public",
+      "tableTo": "protocol_transaction_type_mappings",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "protocol_mapping_evidence_n1VJSCxTe9Nv_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["candidate_observation_id"],
+      "schemaTo": "public",
+      "tableTo": "protocol_candidate_observations",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "name": "protocol_mapping_evidence_Qx3cGe0oz1f5_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_mapping_evidence"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["candidate_id"],
+      "schemaTo": "public",
+      "tableTo": "protocol_candidates",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "name": "protocol_transaction_type_mappings_z2ZsJYAbplik_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["blockchain_id"],
+      "schemaTo": "public",
+      "tableTo": "blockchains",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "protocol_transaction_type_mappings_eRAvAZmyZKBj_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "nameExplicit": false,
+      "columns": ["transaction_type_key"],
+      "schemaTo": "public",
+      "tableTo": "transaction_types",
+      "columnsTo": ["type_key"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "protocol_transaction_type_mappings_shs1CvnFjFtO_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
       "nameExplicit": false,
       "columns": ["provider_asset_row_id"],
       "schemaTo": "public",
@@ -9720,6 +11755,19 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_asset_mappings_canonical_asset_id_assets_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "provider_asset_mappings"
+    },
+    {
+      "nameExplicit": true,
+      "columns": ["canonical_asset_representation_id", "canonical_asset_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_representations",
+      "columnsTo": ["id", "asset_id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "provider_asset_mappings_representation_asset_fk",
       "entityType": "fks",
       "schema": "public",
       "table": "provider_asset_mappings"
@@ -10037,6 +12085,19 @@
       "table": "transaction_legs"
     },
     {
+      "nameExplicit": true,
+      "columns": ["asset_representation_id", "asset_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_representations",
+      "columnsTo": ["id", "asset_id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "transaction_legs_representation_asset_fk",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "transaction_legs"
+    },
+    {
       "nameExplicit": false,
       "columns": ["transaction_id"],
       "schemaTo": "public",
@@ -10084,6 +12145,19 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "transaction_onchain_context_fee_asset_id_assets_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "transaction_onchain_context"
+    },
+    {
+      "nameExplicit": true,
+      "columns": ["fee_asset_representation_id", "fee_asset_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_representations",
+      "columnsTo": ["id", "asset_id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "transaction_onchain_context_fee_representation_asset_fk",
       "entityType": "fks",
       "schema": "public",
       "table": "transaction_onchain_context"
@@ -10349,6 +12423,19 @@
       "table": "transfers"
     },
     {
+      "nameExplicit": true,
+      "columns": ["asset_representation_id", "asset_id"],
+      "schemaTo": "public",
+      "tableTo": "asset_representations",
+      "columnsTo": ["id", "asset_id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "name": "transfers_representation_asset_fk",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "transfers"
+    },
+    {
       "columns": ["id"],
       "nameExplicit": false,
       "name": "addresses_pkey",
@@ -10362,6 +12449,14 @@
       "name": "asset_prices_pkey",
       "schema": "public",
       "table": "asset_prices",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "asset_representations_pkey",
+      "schema": "public",
+      "table": "asset_representations",
       "entityType": "pks"
     },
     {
@@ -10405,6 +12500,14 @@
       "entityType": "pks"
     },
     {
+      "columns": ["observation_id"],
+      "nameExplicit": false,
+      "name": "dune_protocol_candidate_observations_pkey",
+      "schema": "public",
+      "table": "dune_protocol_candidate_observations",
+      "entityType": "pks"
+    },
+    {
       "columns": ["id"],
       "nameExplicit": false,
       "name": "email_verification_requests_pkey",
@@ -10426,6 +12529,22 @@
       "name": "auth_identities_pkey",
       "schema": "public",
       "table": "auth_identities",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "inventory_movement_allocations_pkey",
+      "schema": "public",
+      "table": "inventory_movement_allocations",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "inventory_movements_pkey",
+      "schema": "public",
+      "table": "inventory_movements",
       "entityType": "pks"
     },
     {
@@ -10514,6 +12633,38 @@
       "name": "processing_jobs_pkey",
       "schema": "public",
       "table": "processing_jobs",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "protocol_candidate_observations_pkey",
+      "schema": "public",
+      "table": "protocol_candidate_observations",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "protocol_candidates_pkey",
+      "schema": "public",
+      "table": "protocol_candidates",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "protocol_mapping_evidence_pkey",
+      "schema": "public",
+      "table": "protocol_mapping_evidence",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "protocol_transaction_type_mappings_pkey",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings",
       "entityType": "pks"
     },
     {
@@ -10712,12 +12863,12 @@
     },
     {
       "nameExplicit": true,
-      "columns": ["blockchain_id", "contract_address"],
+      "columns": ["id", "asset_id"],
       "nullsNotDistinct": false,
-      "name": "unique_token_idx",
+      "name": "asset_representations_id_asset_unique",
       "entityType": "uniques",
       "schema": "public",
-      "table": "assets"
+      "table": "asset_representations"
     },
     {
       "nameExplicit": true,
@@ -10828,6 +12979,48 @@
       "entityType": "uniques"
     },
     {
+      "value": "(\n        \"type\" = 'native'\n        and \"contract_address\" is null\n      ) or (\n        \"type\" in ('token', 'nft')\n        and \"contract_address\" is not null\n      )",
+      "name": "asset_representations_identity_matches_type",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "value": "\"decimals\" >= 0",
+      "name": "asset_representations_decimals_non_negative",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "asset_representations"
+    },
+    {
+      "value": "num_nonnulls(\"source_leg_id\", \"source_provider_transfer_id\") = 1",
+      "name": "fifo_lots_origin_present",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "fifo_lots"
+    },
+    {
+      "value": "\"matched_amount\" > 0",
+      "name": "inventory_movement_allocations_amount_positive",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "inventory_movement_allocations"
+    },
+    {
+      "value": "\"amount\" > 0",
+      "name": "inventory_movements_amount_positive",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
+      "value": "num_nonnulls(\"provider_transfer_id\", \"transaction_leg_id\") = 1",
+      "name": "inventory_movements_origin_present",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "inventory_movements"
+    },
+    {
       "value": "\"claim_type\" not in ('siwx_wallet', 'cli_claim_token') or (\"source_id\" is not null and \"chain_type\" is not null and \"wallet_address\" is not null and \"year\" is not null and \"jurisdiction\" is not null)",
       "name": "principal_claims_wallet_resource_fields",
       "entityType": "checks",
@@ -10856,8 +13049,29 @@
       "table": "processing_jobs"
     },
     {
-      "value": "(\n        \"mapping_kind\" = 'asset'\n        and (\"canonical_asset_id\" is not null or \"canonical_asset_symbol\" is not null)\n      ) or (\n        \"mapping_kind\" = 'fiat'\n        and \"canonical_fiat_currency\" is not null\n      ) or \"mapping_status\" in ('pending_review', 'rejected')",
+      "value": "\"mapping_status\" in ('pending_review', 'rejected') or \"transaction_type_key\" is not null",
+      "name": "protocol_transaction_type_mappings_approved_requires_type_key",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "value": "\"confidence\" >= 0 and \"confidence\" <= 1",
+      "name": "protocol_transaction_type_mappings_confidence_range",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "protocol_transaction_type_mappings"
+    },
+    {
+      "value": "(\n        \"mapping_kind\" = 'asset'\n        and \"canonical_asset_id\" is not null\n        and \"canonical_fiat_currency\" is null\n      ) or (\n        \"mapping_kind\" = 'fiat'\n        and \"canonical_asset_id\" is null\n        and \"canonical_asset_representation_id\" is null\n        and \"canonical_fiat_currency\" is not null\n      ) or \"mapping_status\" in ('pending_review', 'rejected')",
       "name": "provider_asset_mappings_kind_requires_target",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "provider_asset_mappings"
+    },
+    {
+      "value": "\"canonical_asset_representation_id\" is null or \"canonical_asset_id\" is not null",
+      "name": "provider_asset_mappings_representation_requires_asset",
       "entityType": "checks",
       "schema": "public",
       "table": "provider_asset_mappings"
@@ -10924,6 +13138,13 @@
       "entityType": "checks",
       "schema": "public",
       "table": "transaction_legs"
+    },
+    {
+      "value": "\"fee_asset_representation_id\" is null or \"fee_asset_id\" is not null",
+      "name": "transaction_onchain_context_fee_representation_requires_asset",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "transaction_onchain_context"
     },
     {
       "value": "\"external_id\" is not null or \"source_raw_record_id\" is not null",

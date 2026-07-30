@@ -8,6 +8,7 @@ import {
   AssetRepository,
   ProviderAssetRepository,
   type CanonicalAssetDraft,
+  type CanonicalAssetRepresentationDraft,
   type CanonicalBlockchainDraft,
   type ProviderAssetRecord,
 } from "@my/sync-engine/services"
@@ -297,6 +298,7 @@ const buildNativeCanonicalDrafts = ({
 }): {
   readonly blockchain: CanonicalBlockchainDraft
   readonly asset: CanonicalAssetDraft
+  readonly representation: CanonicalAssetRepresentationDraft
 } => ({
   blockchain: {
     name: platform.id,
@@ -308,14 +310,17 @@ const buildNativeCanonicalDrafts = ({
     coingeckoPlatformId: platform.id,
   },
   asset: {
-    contractAddress: null,
     name: coin.name,
     symbol: upperSymbol(coin.symbol),
-    decimals,
     coingeckoCoinId: coin.id,
     logoUrl: coin.image?.small ?? null,
-    type: "native",
     isSpam: false,
+  },
+  representation: {
+    contractAddress: null,
+    decimals,
+    type: "native",
+    metadata: null,
   },
 })
 
@@ -332,6 +337,7 @@ const buildTokenCanonicalDrafts = ({
 }): {
   readonly blockchain: CanonicalBlockchainDraft
   readonly asset: CanonicalAssetDraft
+  readonly representation: CanonicalAssetRepresentationDraft
 } => {
   const detail = coin.detail_platforms[platform.id]
   return {
@@ -345,14 +351,17 @@ const buildTokenCanonicalDrafts = ({
       coingeckoPlatformId: platform.id,
     },
     asset: {
-      contractAddress,
       name: coin.name,
       symbol: upperSymbol(coin.symbol),
-      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
       coingeckoCoinId: coin.id,
       logoUrl: coin.image?.small ?? null,
-      type: "token",
       isSpam: false,
+    },
+    representation: {
+      contractAddress,
+      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
+      type: "token",
+      metadata: null,
     },
   }
 }
@@ -514,6 +523,7 @@ const make = Effect.gen(function* () {
           .upsertCanonicalAsset({
             blockchain: resolved.blockchain,
             asset: resolved.asset,
+            representation: resolved.representation,
           })
           .pipe(
             Effect.mapError(
@@ -531,7 +541,7 @@ const make = Effect.gen(function* () {
                 providerAssetRowId,
                 mappingKind: "asset",
                 canonicalAssetId: canonicalAsset.id,
-                canonicalAssetSymbol: canonicalAsset.symbol,
+                canonicalAssetRepresentationId: canonicalAsset.representationId,
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,

@@ -101,6 +101,7 @@ export interface SourceOnchainContextDraft {
   readonly gasPrice: string | null
   readonly feeAmount: string | null
   readonly feeAssetId: string | null
+  readonly feeAssetRepresentationId?: string | null
   readonly feeCostBasisAmount: string | null
   readonly feeCostBasisCurrency: string | null
   readonly isError: boolean
@@ -131,6 +132,7 @@ export interface SourceTransferDraft {
   readonly toPartyType: string | null
   readonly toPartyResourcePath: string | null
   readonly assetId: string
+  readonly assetRepresentationId?: string | null
   readonly amount: string
   readonly tokenId: string | null
   readonly notes: string | null
@@ -171,6 +173,7 @@ export interface SourceTransactionLegDraft {
   readonly principalId: string
   readonly addressId: string | null
   readonly assetId: string
+  readonly assetRepresentationId?: string | null
   readonly amount: string
   readonly kind: SourceLegKind
   readonly provenance: SourceLegProvenance
@@ -236,6 +239,7 @@ export interface PersistedSourceTransfer {
   readonly timestamp: Date
   readonly addressId: string | null
   readonly assetId: string
+  readonly assetRepresentationId: string | null
   readonly amount: string
   readonly type: SourceTransferType
 }
@@ -273,6 +277,7 @@ export interface PersistedSourceLeg {
   readonly timestamp: Date
   readonly principalId: string
   readonly assetId: string
+  readonly assetRepresentationId: string | null
   readonly amount: string
   readonly kind: SourceLegKind
   readonly fiatAmount: string | null

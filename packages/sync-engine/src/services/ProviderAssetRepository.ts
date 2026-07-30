@@ -56,7 +56,7 @@ export interface ProviderAssetMappingDraft {
   readonly providerAssetRowId: string
   readonly mappingKind: ProviderAssetMappingKind
   readonly canonicalAssetId: string | null
-  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetRepresentationId: string | null
   readonly canonicalFiatCurrency: string | null
   readonly mappingStatus: ProviderAssetMappingStatus
   readonly reviewerNotes: string | null
@@ -70,7 +70,7 @@ export interface ProviderAssetMappingState {
   readonly providerAssetRowId: string
   readonly mappingKind: ProviderAssetMappingKind
   readonly canonicalAssetId: string | null
-  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetRepresentationId: string | null
   readonly canonicalFiatCurrency: string | null
   readonly mappingStatus: ProviderAssetMappingStatus
 }
@@ -122,18 +122,6 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly seedProviderAssetMappingsIfMissing: (params: {
     readonly mappings: ReadonlyArray<ProviderAssetMappingDraft>
-  }) => Effect.Effect<number, SyncEngineStorageError>
-
-  /**
-   * Backfill canonical ids for approved asset mappings that still only carry a
-   * matching canonical symbol from older default seeds.
-   */
-  readonly backfillApprovedSymbolMappingsCanonicalAssetIds: (params: {
-    readonly mappings: ReadonlyArray<{
-      readonly providerAssetRowId: string
-      readonly canonicalAssetId: string
-      readonly canonicalAssetSymbol: string
-    }>
   }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**

@@ -1,5 +1,5 @@
 /**
- * AssetRepositoryLive - Canonical asset and blockchain lookup persistence for sync-engine.
+ * AssetRepositoryLive - Economic asset and network representation persistence for sync-engine.
  *
  * @module AssetRepositoryLive
  */
@@ -8,14 +8,14 @@ import { and, eq, isNull, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { drizzle } from "./PgClientLive.ts"
-import { schema } from "../schema/index.ts"
 import {
   AssetRepository,
   type AssetRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
+import { drizzle } from "./PgClientLive.ts"
 import { wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
+import { schema } from "../schema/index.ts"
 
 const normalizeContractAddress = ({
   chainType,
@@ -30,94 +30,100 @@ const make = Effect.gen(function* () {
   const db = yield* drizzle
 
   const findAssetById: AssetRepositoryShape["findAssetById"] = ({ assetId }) =>
-    Effect.gen(function* () {
-      const [asset] = yield* db
-        .select({
-          id: schema.assets.id,
-          symbol: schema.assets.symbol,
-        })
-        .from(schema.assets)
-        .where(eq(schema.assets.id, assetId))
-        .limit(1)
-        .pipe(wrapSyncEngineSqlError("assetRepository.findAssetById"))
+    db
+      .select({
+        id: schema.assets.id,
+        symbol: schema.assets.symbol,
+      })
+      .from(schema.assets)
+      .where(eq(schema.assets.id, assetId))
+      .limit(1)
+      .pipe(
+        wrapSyncEngineSqlError("assetRepository.findAssetById"),
+        Effect.map((rows) => Option.fromNullable(rows[0]))
+      )
 
-      return Option.fromNullable(asset)
-    })
+  const findAssetByCoinGeckoId: AssetRepositoryShape["findAssetByCoinGeckoId"] = ({
+    coingeckoCoinId,
+  }) =>
+    db
+      .select({
+        id: schema.assets.id,
+        symbol: schema.assets.symbol,
+      })
+      .from(schema.assets)
+      .where(eq(schema.assets.coingeckoCoinId, coingeckoCoinId))
+      .limit(1)
+      .pipe(
+        wrapSyncEngineSqlError("assetRepository.findAssetByCoinGeckoId"),
+        Effect.map((rows) => Option.fromNullable(rows[0]))
+      )
 
-  const findAssetBySymbol: AssetRepositoryShape["findAssetBySymbol"] = ({ symbol }) =>
-    Effect.gen(function* () {
-      const [asset] = yield* db
-        .select({
-          id: schema.assets.id,
-          symbol: schema.assets.symbol,
-        })
-        .from(schema.assets)
-        .where(eq(sql<string>`upper(${schema.assets.symbol})`, symbol.toUpperCase()))
-        .limit(1)
-        .pipe(wrapSyncEngineSqlError("assetRepository.findAssetBySymbol"))
-
-      return Option.fromNullable(asset)
-    })
+  const representationColumns = {
+    representationId: schema.assetRepresentations.id,
+    assetId: schema.assets.id,
+    symbol: schema.assets.symbol,
+  }
 
   const findNativeAssetForBlockchain: AssetRepositoryShape["findNativeAssetForBlockchain"] = ({
     blockchainName,
     symbol,
   }) =>
-    Effect.gen(function* () {
-      const [asset] = yield* db
-        .select({
-          id: schema.assets.id,
-          symbol: schema.assets.symbol,
-        })
-        .from(schema.assets)
-        .innerJoin(schema.blockchains, eq(schema.assets.blockchainId, schema.blockchains.id))
-        .where(
-          and(
-            eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase()),
-            eq(sql<string>`upper(${schema.assets.symbol})`, symbol.toUpperCase()),
-            eq(schema.assets.type, "native"),
-            isNull(schema.assets.contractAddress)
-          )
+    db
+      .select(representationColumns)
+      .from(schema.assetRepresentations)
+      .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
+      .innerJoin(
+        schema.blockchains,
+        eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
+      )
+      .where(
+        and(
+          eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase()),
+          eq(sql<string>`upper(${schema.assets.symbol})`, symbol.toUpperCase()),
+          eq(schema.assetRepresentations.type, "native"),
+          isNull(schema.assetRepresentations.contractAddress)
         )
-        .limit(1)
-        .pipe(wrapSyncEngineSqlError("assetRepository.findNativeAssetForBlockchain"))
-
-      return Option.fromNullable(asset)
-    })
+      )
+      .limit(1)
+      .pipe(
+        wrapSyncEngineSqlError("assetRepository.findNativeAssetForBlockchain"),
+        Effect.map((rows) => Option.fromNullable(rows[0]))
+      )
 
   const findAssetByBlockchainAndContractAddress: AssetRepositoryShape["findAssetByBlockchainAndContractAddress"] =
     ({ blockchainName, contractAddress }) =>
-      Effect.gen(function* () {
-        const [asset] = yield* db
-          .select({
-            id: schema.assets.id,
-            symbol: schema.assets.symbol,
-          })
-          .from(schema.assets)
-          .innerJoin(schema.blockchains, eq(schema.assets.blockchainId, schema.blockchains.id))
-          .where(
-            and(
-              eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase()),
-              or(
-                and(
-                  eq(schema.blockchains.chainType, "evm"),
-                  eq(
-                    sql<string>`lower(${schema.assets.contractAddress})`,
-                    contractAddress.toLowerCase()
-                  )
-                ),
-                and(
-                  ne(schema.blockchains.chainType, "evm"),
-                  eq(schema.assets.contractAddress, contractAddress)
+      db
+        .select(representationColumns)
+        .from(schema.assetRepresentations)
+        .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
+        )
+        .where(
+          and(
+            eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase()),
+            or(
+              and(
+                eq(schema.blockchains.chainType, "evm"),
+                eq(
+                  sql<string>`lower(${schema.assetRepresentations.contractAddress})`,
+                  contractAddress.toLowerCase()
                 )
+              ),
+              and(
+                ne(schema.blockchains.chainType, "evm"),
+                eq(schema.assetRepresentations.contractAddress, contractAddress)
               )
             )
           )
-          .limit(1)
-          .pipe(wrapSyncEngineSqlError("assetRepository.findAssetByBlockchainAndContractAddress"))
-
-        return Option.fromNullable(asset)
-      })
+        )
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError("assetRepository.findAssetByBlockchainAndContractAddress"),
+          Effect.map((rows) => Option.fromNullable(rows[0]))
+        )
 
   const listBlockchains: AssetRepositoryShape["listBlockchains"] = () =>
     db
@@ -131,6 +137,7 @@ const make = Effect.gen(function* () {
   const upsertCanonicalAsset: AssetRepositoryShape["upsertCanonicalAsset"] = ({
     blockchain,
     asset,
+    representation,
   }) =>
     db
       .transaction((tx) =>
@@ -140,13 +147,7 @@ const make = Effect.gen(function* () {
           yield* tx
             .insert(schema.blockchains)
             .values({
-              name: blockchain.name,
-              chainType: blockchain.chainType,
-              chainId: blockchain.chainId,
-              nativeAssetSymbol: blockchain.nativeAssetSymbol,
-              explorerUrl: blockchain.explorerUrl,
-              logoUrl: blockchain.logoUrl,
-              coingeckoPlatformId: blockchain.coingeckoPlatformId,
+              ...blockchain,
               createdAt: now,
               updatedAt: now,
             })
@@ -155,6 +156,9 @@ const make = Effect.gen(function* () {
               set: {
                 chainType: sql.raw("excluded.chain_type"),
                 chainId: sql.raw("excluded.chain_id"),
+                nativeAssetSymbol: sql.raw("excluded.native_asset_symbol"),
+                explorerUrl: sql.raw("excluded.explorer_url"),
+                logoUrl: sql.raw("excluded.logo_url"),
                 coingeckoPlatformId: sql.raw("excluded.coingecko_platform_id"),
                 updatedAt: now,
               },
@@ -185,86 +189,108 @@ const make = Effect.gen(function* () {
 
           const contractAddress = normalizeContractAddress({
             chainType: blockchain.chainType,
-            contractAddress: asset.contractAddress,
+            contractAddress: representation.contractAddress,
           })
-          const assetFilter =
+          const representationFilter =
             contractAddress === null
               ? and(
-                  eq(schema.assets.blockchainId, persistedBlockchain.id),
-                  eq(sql<string>`upper(${schema.assets.symbol})`, asset.symbol.toUpperCase()),
-                  eq(schema.assets.type, asset.type),
-                  isNull(schema.assets.contractAddress)
+                  eq(schema.assetRepresentations.blockchainId, persistedBlockchain.id),
+                  eq(schema.assetRepresentations.type, "native"),
+                  isNull(schema.assetRepresentations.contractAddress)
                 )
               : blockchain.chainType === "evm"
                 ? and(
-                    eq(schema.assets.blockchainId, persistedBlockchain.id),
-                    eq(sql<string>`lower(${schema.assets.contractAddress})`, contractAddress)
+                    eq(schema.assetRepresentations.blockchainId, persistedBlockchain.id),
+                    eq(
+                      sql<string>`lower(${schema.assetRepresentations.contractAddress})`,
+                      contractAddress
+                    )
                   )
                 : and(
-                    eq(schema.assets.blockchainId, persistedBlockchain.id),
-                    eq(schema.assets.contractAddress, contractAddress)
+                    eq(schema.assetRepresentations.blockchainId, persistedBlockchain.id),
+                    eq(schema.assetRepresentations.contractAddress, contractAddress)
                   )
 
-          const [existingAsset] = yield* tx
-            .select({ id: schema.assets.id })
-            .from(schema.assets)
-            .where(assetFilter)
+          const [existingRepresentation] = yield* tx
+            .select({
+              id: schema.assetRepresentations.id,
+              assetId: schema.assetRepresentations.assetId,
+              coingeckoCoinId: schema.assets.coingeckoCoinId,
+            })
+            .from(schema.assetRepresentations)
+            .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
+            .where(representationFilter)
             .limit(1)
-            .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.findAsset"))
+            .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.findRepresentation"))
 
+          const [assetByExternalIdentity] =
+            asset.coingeckoCoinId !== null
+              ? yield* tx
+                  .select({ id: schema.assets.id })
+                  .from(schema.assets)
+                  .where(eq(schema.assets.coingeckoCoinId, asset.coingeckoCoinId))
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.findEconomicAsset")
+                  )
+              : []
+          const representationIdentityConflicts =
+            existingRepresentation !== undefined &&
+            asset.coingeckoCoinId !== null &&
+            ((existingRepresentation.coingeckoCoinId !== null &&
+              existingRepresentation.coingeckoCoinId !== asset.coingeckoCoinId) ||
+              (assetByExternalIdentity !== undefined &&
+                assetByExternalIdentity.id !== existingRepresentation.assetId))
+
+          if (representationIdentityConflicts) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "assetRepository.upsertCanonicalAsset.validateEconomicIdentity",
+                cause: {
+                  blockchainName: blockchain.name,
+                  contractAddress,
+                  coingeckoCoinId: asset.coingeckoCoinId,
+                  message:
+                    "The network representation is already assigned to a different economic asset.",
+                },
+              })
+            )
+          }
+
+          const existingAssetId = existingRepresentation?.assetId ?? assetByExternalIdentity?.id
           const assetValues = {
-            blockchainId: persistedBlockchain.id,
-            contractAddress,
             name: asset.name,
             symbol: asset.symbol.toUpperCase(),
-            decimals: asset.decimals,
             coingeckoCoinId: asset.coingeckoCoinId,
-            type: asset.type,
             isSpam: asset.isSpam,
             updatedAt: now,
           } as const
-          const assetInsertValues = {
-            ...assetValues,
-            logoUrl: asset.logoUrl,
-          } as const
           const assetUpdateValues =
-            asset.logoUrl === null
-              ? assetValues
-              : {
-                  ...assetValues,
-                  logoUrl: asset.logoUrl,
-                }
+            asset.logoUrl === null ? assetValues : { ...assetValues, logoUrl: asset.logoUrl }
 
           const [persistedAsset] =
-            existingAsset === undefined
+            existingAssetId === undefined
               ? yield* tx
                   .insert(schema.assets)
                   .values({
-                    ...assetInsertValues,
+                    ...assetValues,
+                    logoUrl: asset.logoUrl,
                     createdAt: now,
                   })
                   .returning({
                     id: schema.assets.id,
-                    blockchainId: schema.assets.blockchainId,
                     name: schema.assets.name,
                     symbol: schema.assets.symbol,
-                    decimals: schema.assets.decimals,
-                    contractAddress: schema.assets.contractAddress,
-                    type: schema.assets.type,
                   })
                   .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.insertAsset"))
               : yield* tx
                   .update(schema.assets)
                   .set(assetUpdateValues)
-                  .where(eq(schema.assets.id, existingAsset.id))
+                  .where(eq(schema.assets.id, existingAssetId))
                   .returning({
                     id: schema.assets.id,
-                    blockchainId: schema.assets.blockchainId,
                     name: schema.assets.name,
                     symbol: schema.assets.symbol,
-                    decimals: schema.assets.decimals,
-                    contractAddress: schema.assets.contractAddress,
-                    type: schema.assets.type,
                   })
                   .pipe(wrapSyncEngineSqlError("assetRepository.upsertCanonicalAsset.updateAsset"))
 
@@ -281,9 +307,75 @@ const make = Effect.gen(function* () {
             )
           }
 
+          const representationValues = {
+            assetId: persistedAsset.id,
+            blockchainId: persistedBlockchain.id,
+            contractAddress,
+            decimals: representation.decimals,
+            type: representation.type,
+            metadata: representation.metadata,
+            updatedAt: now,
+          } as const
+          const [persistedRepresentation] =
+            existingRepresentation === undefined
+              ? yield* tx
+                  .insert(schema.assetRepresentations)
+                  .values({
+                    ...representationValues,
+                    createdAt: now,
+                  })
+                  .returning({
+                    id: schema.assetRepresentations.id,
+                    blockchainId: schema.assetRepresentations.blockchainId,
+                    decimals: schema.assetRepresentations.decimals,
+                    contractAddress: schema.assetRepresentations.contractAddress,
+                    type: schema.assetRepresentations.type,
+                  })
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "assetRepository.upsertCanonicalAsset.insertRepresentation"
+                    )
+                  )
+              : yield* tx
+                  .update(schema.assetRepresentations)
+                  .set(representationValues)
+                  .where(eq(schema.assetRepresentations.id, existingRepresentation.id))
+                  .returning({
+                    id: schema.assetRepresentations.id,
+                    blockchainId: schema.assetRepresentations.blockchainId,
+                    decimals: schema.assetRepresentations.decimals,
+                    contractAddress: schema.assetRepresentations.contractAddress,
+                    type: schema.assetRepresentations.type,
+                  })
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "assetRepository.upsertCanonicalAsset.updateRepresentation"
+                    )
+                  )
+
+          if (persistedRepresentation === undefined) {
+            return yield* Effect.fail(
+              new SyncEngineStorageError({
+                operation: "assetRepository.upsertCanonicalAsset.persistRepresentation",
+                cause: {
+                  assetId: persistedAsset.id,
+                  blockchainName: blockchain.name,
+                  message: "Asset representation was not available after upsert.",
+                },
+              })
+            )
+          }
+
           return {
-            ...persistedAsset,
+            id: persistedAsset.id,
+            representationId: persistedRepresentation.id,
+            blockchainId: persistedRepresentation.blockchainId,
             blockchainName: persistedBlockchain.name,
+            name: persistedAsset.name,
+            symbol: persistedAsset.symbol,
+            decimals: persistedRepresentation.decimals,
+            contractAddress: persistedRepresentation.contractAddress,
+            type: persistedRepresentation.type,
           }
         })
       )
@@ -291,7 +383,7 @@ const make = Effect.gen(function* () {
 
   return AssetRepository.of({
     findAssetById,
-    findAssetBySymbol,
+    findAssetByCoinGeckoId,
     findNativeAssetForBlockchain,
     findAssetByBlockchainAndContractAddress,
     listBlockchains,
@@ -299,4 +391,7 @@ const make = Effect.gen(function* () {
   } satisfies AssetRepositoryShape)
 })
 
+/**
+ * AssetRepositoryLive - Live economic asset and network representation persistence.
+ */
 export const AssetRepositoryLive = Layer.effect(AssetRepository, make)

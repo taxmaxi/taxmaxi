@@ -1,5 +1,6 @@
 import {
   check,
+  foreignKey,
   index,
   jsonb,
   numeric,
@@ -13,6 +14,7 @@ import {
 import { sql } from "drizzle-orm"
 import { addresses } from "./AddressesTable.ts"
 import { assets } from "./AssetsTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
 import { sources } from "./SourcesTable.ts"
@@ -84,6 +86,7 @@ export const transactionLegs = pgTable(
     assetId: uuid("asset_id")
       .notNull()
       .references(() => assets.id),
+    assetRepresentationId: uuid("asset_representation_id"),
     amount: numeric("amount", { precision: 100, scale: 30 }).notNull(), // Exact asset quantity in canonical asset units.
 
     // Accounting classification
@@ -127,6 +130,11 @@ export const transactionLegs = pgTable(
       "transaction_legs_tx_hash_requires_address",
       sql`${table.txHash} is null or ${table.addressId} is not null`
     ),
+    foreignKey({
+      columns: [table.assetRepresentationId, table.assetId],
+      foreignColumns: [assetRepresentations.id, assetRepresentations.assetId],
+      name: "transaction_legs_representation_asset_fk",
+    }),
     uniqueIndex("idx_transaction_legs_source_external_unique")
       .on(table.sourceId, table.externalId)
       .where(sql`${table.externalId} is not null`),
@@ -134,12 +142,19 @@ export const transactionLegs = pgTable(
     // Prevent duplicate legs from same transfer with same kind
     // A transfer can produce multiple legs of different kinds (e.g., swap: acquisition + disposal)
     uniqueIndex("idx_transaction_legs_unique")
-      .on(table.txHash, table.addressId, table.assetId, table.kind, table.sourceTransferId)
+      .on(
+        table.txHash,
+        table.addressId,
+        table.assetId,
+        table.assetRepresentationId,
+        table.kind,
+        table.sourceTransferId
+      )
       .where(sql`${table.txHash} is not null and ${table.addressId} is not null`),
 
     // Ensure a transaction has at most one canonical gas fee leg per asset+address.
     uniqueIndex("idx_transaction_legs_gas_fee_unique")
-      .on(table.txHash, table.addressId, table.assetId)
+      .on(table.txHash, table.addressId, table.assetId, table.assetRepresentationId)
       .where(
         sql`${table.txHash} is not null AND ${table.addressId} is not null AND ${table.kind} = 'fee' AND ${table.derivationRule} IN ('gas_fee', 'failed_tx_gas_fee')`
       ),

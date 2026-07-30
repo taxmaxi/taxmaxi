@@ -22,6 +22,7 @@ export type {
   AssetCatalogDetailInput,
   AssetCatalogList,
   AssetCatalogListInput,
+  AssetRepresentation,
   AssetsEffectResource,
   AssetsPromiseResource,
   InternalAssetsEffectResource,

@@ -18,6 +18,15 @@ export interface SyncEngineAsset {
 }
 
 /**
+ * SyncEngineAssetRepresentation - Concrete network representation with its economic asset.
+ */
+export interface SyncEngineAssetRepresentation {
+  readonly representationId: string
+  readonly assetId: string
+  readonly symbol: string
+}
+
+/**
  * SyncEngineBlockchain - Minimal blockchain projection used for network lookups.
  */
 export interface SyncEngineBlockchain {
@@ -42,21 +51,29 @@ export interface CanonicalBlockchainDraft {
  * CanonicalAssetDraft - Canonical asset data to create or refresh.
  */
 export interface CanonicalAssetDraft {
-  readonly contractAddress: string | null
   readonly name: string
   readonly symbol: string
-  readonly decimals: number
   readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
-  readonly type: "native" | "token" | "nft"
   readonly isSpam: boolean
 }
 
 /**
- * CanonicalAssetRecord - Canonical asset with its owning blockchain.
+ * CanonicalAssetRepresentationDraft - Chain-specific identity to create or refresh.
+ */
+export interface CanonicalAssetRepresentationDraft {
+  readonly contractAddress: string | null
+  readonly decimals: number
+  readonly type: "native" | "token" | "nft"
+  readonly metadata: unknown
+}
+
+/**
+ * CanonicalAssetRecord - Economic asset with the representation that was created or resolved.
  */
 export interface CanonicalAssetRecord {
   readonly id: string
+  readonly representationId: string
   readonly blockchainId: string
   readonly blockchainName: string
   readonly name: string
@@ -78,10 +95,10 @@ export interface AssetRepositoryShape {
   }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
 
   /**
-   * Load a canonical asset by symbol.
+   * Load a canonical economic asset by an exact CoinGecko identity.
    */
-  readonly findAssetBySymbol: (params: {
-    readonly symbol: string
+  readonly findAssetByCoinGeckoId: (params: {
+    readonly coingeckoCoinId: string
   }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
 
   /**
@@ -90,7 +107,7 @@ export interface AssetRepositoryShape {
   readonly findNativeAssetForBlockchain: (params: {
     readonly blockchainName: string
     readonly symbol: string
-  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+  }) => Effect.Effect<Option.Option<SyncEngineAssetRepresentation>, SyncEngineStorageError>
 
   /**
    * Load a token/NFT asset by blockchain name and mint/contract address.
@@ -98,7 +115,7 @@ export interface AssetRepositoryShape {
   readonly findAssetByBlockchainAndContractAddress: (params: {
     readonly blockchainName: string
     readonly contractAddress: string
-  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+  }) => Effect.Effect<Option.Option<SyncEngineAssetRepresentation>, SyncEngineStorageError>
 
   /**
    * Load all blockchains used for provider network-name resolution.
@@ -114,6 +131,7 @@ export interface AssetRepositoryShape {
   readonly upsertCanonicalAsset: (params: {
     readonly blockchain: CanonicalBlockchainDraft
     readonly asset: CanonicalAssetDraft
+    readonly representation: CanonicalAssetRepresentationDraft
   }) => Effect.Effect<CanonicalAssetRecord, SyncEngineStorageError>
 }
 
