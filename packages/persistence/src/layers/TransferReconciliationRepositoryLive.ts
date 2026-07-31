@@ -1687,7 +1687,8 @@ const make = Effect.gen(function* () {
                   .where(
                     and(
                       eq(schema.inventoryMovements.sourceId, destinationSourceId),
-                      eq(schema.inventoryMovements.direction, "outbound")
+                      eq(schema.inventoryMovements.direction, "outbound"),
+                      ne(schema.inventoryMovements.reconciliationStatus, "matched")
                     )
                   )
                   .pipe(

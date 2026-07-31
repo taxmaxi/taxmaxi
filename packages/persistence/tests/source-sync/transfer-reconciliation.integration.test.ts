@@ -1172,7 +1172,112 @@ describe("TransferReconciliationServiceLive", () => {
           needsReview: true,
         })
 
+        const [canonicalTransferTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "destination-canonical-transfer",
+            timestamp: new Date("2025-04-19T10:00:00.000Z"),
+            transactionType: "internal_transfer",
+            providerTransactionType: "send",
+            providerStatus: "confirmed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [canonicalAcquisitionLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "destination-canonical-transfer:opening-leg",
+            timestamp: new Date("2025-04-05T09:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.03000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "1200.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (canonicalTransferTransaction === undefined || canonicalAcquisitionLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical transfer fixtures")
+        }
+
+        const [canonicalTransferLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "destination-canonical-transfer:leg",
+            timestamp: new Date("2025-04-19T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.03000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "internal_transfer_out",
+            transactionId: canonicalTransferTransaction.id,
+            fiatAmount: "1200.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        const [canonicalLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-05T09:00:00.000Z"),
+            originalAmount: "0.03000000",
+            remainingAmount: "0.00000000",
+            costBasisPerToken: "40000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: canonicalAcquisitionLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+
+        if (canonicalTransferLeg === undefined || canonicalLot === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical transfer FIFO fixtures")
+        }
+
+        const [canonicalMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: canonicalTransferTransaction.id,
+            providerTransferId: null,
+            transactionLegId: canonicalTransferLeg.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-19T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.03000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (canonicalMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical custody movement fixture")
+        }
+
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: canonicalTransferLeg.id,
+          fifoLotId: canonicalLot.id,
+          matchedAmount: "0.03000000",
+          costBasis: "1200.00000000",
+          proceeds: "1200.00000000",
+          gainLoss: "0.00000000",
+        })
+
         return {
+          canonicalLotId: canonicalLot.id,
+          canonicalMovementId: canonicalMovement.id,
+          canonicalTransferLegId: canonicalTransferLeg.id,
           localLotId: localLot.id,
           laterDisposalLegId: laterDisposalLeg.id,
           feeMovementId: feeMovement.id,
@@ -1271,7 +1376,8 @@ describe("TransferReconciliationServiceLive", () => {
           .where(
             and(
               eq(schema.fifoLots.sourceId, ONCHAIN_SOURCE_ID),
-              ne(schema.fifoLots.id, destinationRecoveryFixture.localLotId)
+              ne(schema.fifoLots.id, destinationRecoveryFixture.localLotId),
+              ne(schema.fifoLots.id, destinationRecoveryFixture.canonicalLotId)
             )
           )
           .orderBy(asc(schema.fifoLots.createdAt))
@@ -1340,7 +1446,32 @@ describe("TransferReconciliationServiceLive", () => {
           .select({ remainingAmount: schema.fifoLots.remainingAmount })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.id, destinationRecoveryFixture.localLotId))
+        const [canonicalLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, destinationRecoveryFixture.canonicalLotId))
+        const canonicalMovementAllocations = yield* db
+          .select({ id: schema.inventoryMovementAllocations.id })
+          .from(schema.inventoryMovementAllocations)
+          .where(
+            eq(
+              schema.inventoryMovementAllocations.inventoryMovementId,
+              destinationRecoveryFixture.canonicalMovementId
+            )
+          )
+        const canonicalDisposalMatches = yield* db
+          .select({ id: schema.disposalMatches.id })
+          .from(schema.disposalMatches)
+          .where(
+            eq(
+              schema.disposalMatches.disposalLegId,
+              destinationRecoveryFixture.canonicalTransferLegId
+            )
+          )
         return {
+          canonicalDisposalMatches,
+          canonicalLot,
+          canonicalMovementAllocations,
           lots,
           movement,
           allocations,
@@ -1366,6 +1497,9 @@ describe("TransferReconciliationServiceLive", () => {
         matchedAmount: expect.stringContaining("0.02000000"),
       }),
     ])
+    expect(state.canonicalMovementAllocations).toHaveLength(0)
+    expect(state.canonicalDisposalMatches).toHaveLength(1)
+    expect(state.canonicalLot?.remainingAmount).toContain("0.00000000")
     expect(state.reviews).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
