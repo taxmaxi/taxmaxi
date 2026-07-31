@@ -961,7 +961,9 @@ const make = Effect.gen(function* () {
                 })
                 let totalCostBasis = BigDecimal.fromBigInt(0n)
                 let fiatCurrency: string | null = null
-                const allocations: Array<(typeof existingMatches)[number]> = []
+                const allocations: Array<
+                  (typeof existingMatches)[number] & { readonly remainingAmount: string }
+                > = []
 
                 for (const lot of availableLots) {
                   if (!BigDecimal.greaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
@@ -1007,43 +1009,6 @@ const make = Effect.gen(function* () {
                     )
                   }
 
-                  yield* tx
-                    .update(schema.fifoLots)
-                    .set({
-                      remainingAmount: BigDecimal.format(updatedRemainingAmount),
-                      updatedAt: nowDate(),
-                    })
-                    .where(eq(schema.fifoLots.id, lot.id))
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.updateSourceLot"
-                      )
-                    )
-
-                  yield* tx
-                    .insert(schema.disposalMatches)
-                    .values({
-                      disposalLegId: originLegId,
-                      fifoLotId: lot.id,
-                      matchedAmount: BigDecimal.format(amountToMove),
-                      // Internal transfers carry basis forward without realizing gain/loss.
-                      costBasis: roundFiatAmount(costBasis),
-                      proceeds: roundFiatAmount(costBasis),
-                      gainLoss: "0",
-                      createdAt: nowDate(),
-                    })
-                    .onConflictDoNothing({
-                      target: [
-                        schema.disposalMatches.fifoLotId,
-                        schema.disposalMatches.disposalLegId,
-                      ],
-                    })
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.insertMatch"
-                      )
-                    )
-
                   allocations.push({
                     fifoLotId: lot.id,
                     matchedAmount: BigDecimal.format(amountToMove),
@@ -1051,6 +1016,7 @@ const make = Effect.gen(function* () {
                     acquiredAt: lot.acquiredAt,
                     costBasisPerToken: lot.costBasisPerToken,
                     costBasisCurrency: lot.costBasisCurrency,
+                    remainingAmount: BigDecimal.format(updatedRemainingAmount),
                   })
                   totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
                   remainingToMove = BigDecimal.subtract(remainingToMove, amountToMove)
@@ -1065,6 +1031,47 @@ const make = Effect.gen(function* () {
                     })
                   )
                 }
+
+                yield* Effect.forEach(allocations, (allocation) =>
+                  Effect.gen(function* () {
+                    yield* tx
+                      .update(schema.fifoLots)
+                      .set({
+                        remainingAmount: allocation.remainingAmount,
+                        updatedAt: nowDate(),
+                      })
+                      .where(eq(schema.fifoLots.id, allocation.fifoLotId))
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.updateSourceLot"
+                        )
+                      )
+
+                    yield* tx
+                      .insert(schema.disposalMatches)
+                      .values({
+                        disposalLegId: originLegId,
+                        fifoLotId: allocation.fifoLotId,
+                        matchedAmount: allocation.matchedAmount,
+                        // Internal transfers carry basis forward without realizing gain/loss.
+                        costBasis: allocation.costBasis,
+                        proceeds: allocation.costBasis,
+                        gainLoss: "0",
+                        createdAt: nowDate(),
+                      })
+                      .onConflictDoNothing({
+                        target: [
+                          schema.disposalMatches.fifoLotId,
+                          schema.disposalMatches.disposalLegId,
+                        ],
+                      })
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.insertMatch"
+                        )
+                      )
+                  })
+                )
 
                 return {
                   matches: allocations,
@@ -1103,6 +1110,19 @@ const make = Effect.gen(function* () {
                 string_to_array(coalesce(${schema.transactionReviews.matchedLayer}, ''), ',')
               )
             `
+            const hasUnresolvedNonFifoReviewLayer = sql`
+              exists (
+                select 1
+                from unnest(
+                  string_to_array(coalesce(${schema.transactionReviews.matchedLayer}, ''), ',')
+                ) as review_layers(layer)
+                where btrim(review_layers.layer) not in (
+                  '',
+                  cast(${FIFO_INVENTORY_REVIEW_LAYER} as text),
+                  'transfer_reconciliation'
+                )
+              )
+            `
 
             const upsertInternalTransferReview = ({
               transactionId,
@@ -1132,6 +1152,8 @@ const make = Effect.gen(function* () {
                   set: {
                     reviewStatus: sql`case
                     when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
+                      then ${schema.transactionReviews.reviewStatus}
+                    when ${hasFifoInventoryReview} and ${hasUnresolvedNonFifoReviewLayer}
                       then ${schema.transactionReviews.reviewStatus}
                     else 'auto_applied'
                   end`,
@@ -1506,6 +1528,88 @@ const make = Effect.gen(function* () {
                 return false
               })
 
+            const clearResolvedFifoReview = ({
+              transactionId,
+            }: {
+              readonly transactionId: string
+            }) =>
+              Effect.gen(function* () {
+                if (
+                  yield* hasUnmatchedFifoEffects({
+                    transactionId,
+                  })
+                ) {
+                  return
+                }
+
+                const [review] = yield* tx
+                  .select({
+                    reviewStatus: schema.transactionReviews.reviewStatus,
+                    categorizationReason: schema.transactionReviews.categorizationReason,
+                    matchedLayer: schema.transactionReviews.matchedLayer,
+                    userNotes: schema.transactionReviews.userNotes,
+                  })
+                  .from(schema.transactionReviews)
+                  .where(eq(schema.transactionReviews.transactionId, transactionId))
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.clearResolvedFifoReview.loadReview"
+                    )
+                  )
+
+                if (review === undefined) {
+                  return
+                }
+
+                const remainingLayers = (review.matchedLayer ?? "")
+                  .split(",")
+                  .map((layer) => layer.trim())
+                  .filter((layer) => layer !== "" && layer !== FIFO_INVENTORY_REVIEW_LAYER)
+                const remainingReasons = (review.categorizationReason ?? "")
+                  .split("\n")
+                  .filter(
+                    (reason) =>
+                      reason.trim() !== "" &&
+                      !reason.trimStart().startsWith(FIFO_INVENTORY_REVIEW_REASON_PREFIX)
+                  )
+                const preservesUserReview =
+                  review.reviewStatus === "approved" || review.reviewStatus === "changed"
+                const shouldKeepReview =
+                  remainingLayers.length > 0 ||
+                  remainingReasons.length > 0 ||
+                  review.userNotes !== null ||
+                  preservesUserReview
+
+                if (!shouldKeepReview) {
+                  yield* tx
+                    .delete(schema.transactionReviews)
+                    .where(eq(schema.transactionReviews.transactionId, transactionId))
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.clearResolvedFifoReview.deleteFifoOnlyReview"
+                      )
+                    )
+                  return
+                }
+
+                yield* tx
+                  .update(schema.transactionReviews)
+                  .set({
+                    categorizationReason:
+                      remainingReasons.length === 0 ? null : remainingReasons.join("\n"),
+                    matchedLayer: remainingLayers.length === 0 ? null : remainingLayers.join(","),
+                    needsReview: review.reviewStatus === "needs_review",
+                    updatedAt: nowDate(),
+                  })
+                  .where(eq(schema.transactionReviews.transactionId, transactionId))
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.clearResolvedFifoReview.clearFifoSegment"
+                    )
+                  )
+              })
+
             const rebuildReviewedDestinationFifoEffects = ({
               destinationSourceId,
             }: {
@@ -1559,6 +1663,7 @@ const make = Effect.gen(function* () {
                     and(
                       eq(schema.transactionLegs.sourceId, destinationSourceId),
                       eq(schema.transactionLegs.kind, "disposal"),
+                      sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`,
                       sql`${schema.transactionLegs.transactionId} is not null`
                     )
                   )
@@ -2098,79 +2203,7 @@ const make = Effect.gen(function* () {
                     continue
                   }
 
-                  if (
-                    !(yield* hasUnmatchedFifoEffects({
-                      transactionId,
-                    }))
-                  ) {
-                    const [review] = yield* tx
-                      .select({
-                        reviewStatus: schema.transactionReviews.reviewStatus,
-                        categorizationReason: schema.transactionReviews.categorizationReason,
-                        matchedLayer: schema.transactionReviews.matchedLayer,
-                        userNotes: schema.transactionReviews.userNotes,
-                      })
-                      .from(schema.transactionReviews)
-                      .where(eq(schema.transactionReviews.transactionId, transactionId))
-                      .limit(1)
-                      .pipe(
-                        wrapSyncEngineSqlError(
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.loadReview"
-                        )
-                      )
-
-                    if (review === undefined) {
-                      continue
-                    }
-
-                    const remainingLayers = (review.matchedLayer ?? "")
-                      .split(",")
-                      .map((layer) => layer.trim())
-                      .filter((layer) => layer !== "" && layer !== FIFO_INVENTORY_REVIEW_LAYER)
-                    const remainingReasons = (review.categorizationReason ?? "")
-                      .split("\n")
-                      .filter(
-                        (reason) =>
-                          reason.trim() !== "" &&
-                          !reason.trimStart().startsWith(FIFO_INVENTORY_REVIEW_REASON_PREFIX)
-                      )
-                    const preservesUserReview =
-                      review.reviewStatus === "approved" || review.reviewStatus === "changed"
-                    const shouldKeepReview =
-                      remainingLayers.length > 0 ||
-                      remainingReasons.length > 0 ||
-                      review.userNotes !== null ||
-                      preservesUserReview
-
-                    if (!shouldKeepReview) {
-                      yield* tx
-                        .delete(schema.transactionReviews)
-                        .where(eq(schema.transactionReviews.transactionId, transactionId))
-                        .pipe(
-                          wrapSyncEngineSqlError(
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.deleteFifoOnlyReview"
-                          )
-                        )
-                      continue
-                    }
-
-                    yield* tx
-                      .update(schema.transactionReviews)
-                      .set({
-                        categorizationReason:
-                          remainingReasons.length === 0 ? null : remainingReasons.join("\n"),
-                        matchedLayer:
-                          remainingLayers.length === 0 ? null : remainingLayers.join(","),
-                        needsReview: review.reviewStatus === "needs_review",
-                        updatedAt: nowDate(),
-                      })
-                      .where(eq(schema.transactionReviews.transactionId, transactionId))
-                      .pipe(
-                        wrapSyncEngineSqlError(
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.clearFifoReviewSegment"
-                        )
-                      )
-                  }
+                  yield* clearResolvedFifoReview({ transactionId })
                 }
               })
 
@@ -2495,6 +2528,10 @@ const make = Effect.gen(function* () {
                       "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.markCustodyMovementsMatched"
                     )
                   )
+
+                yield* clearResolvedFifoReview({
+                  transactionId: originTransaction.id,
+                })
 
                 return true
               })
