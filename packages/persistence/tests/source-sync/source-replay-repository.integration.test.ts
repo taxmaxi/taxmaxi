@@ -79,9 +79,9 @@ describe("SourceReplayRepositoryLive", () => {
   })
 
   it("waits for the source inventory lock before resetting replay state", async () => {
-    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
-    const releaseLock = await Effect.runPromise(Deferred.make<void>())
-    const lockSource = runPg(
+    const sourceLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseSourceLock = await Effect.runPromise(Deferred.make<void>())
+    const heldSourceLock = runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db.transaction((tx) =>
@@ -91,29 +91,33 @@ describe("SourceReplayRepositoryLive", () => {
               .from(schema.sources)
               .where(eq(schema.sources.id, TEST_SOURCE_ID))
               .for("update")
-            yield* Deferred.succeed(lockAcquired, undefined)
-            yield* Deferred.await(releaseLock)
+            yield* Deferred.succeed(sourceLockAcquired, undefined)
+            yield* Deferred.await(releaseSourceLock)
           })
         )
       })
     )
 
-    await Effect.runPromise(Deferred.await(lockAcquired))
+    await Effect.runPromise(Deferred.await(sourceLockAcquired))
 
-    const replay = runReplayRepository(
+    const replayWaitingForSource = runReplayRepository(
       Effect.flatMap(SourceReplayRepository, (repository) =>
         repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
       )
-    )
-    const earlyOutcome = await Promise.race([
-      replay.then(() => "completed" as const),
-      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 50)),
-    ])
+    ).then(() => "completed" as const)
 
-    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
-    await Promise.all([lockSource, replay])
+    // Phase 1: replay must remain blocked while another transaction owns the source lock.
+    const replayBeforeSourceRelease = await context
+      .waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+      .then(() => "blocked" as const)
 
-    expect(earlyOutcome).toBe("blocked")
+    expect(replayBeforeSourceRelease).toBe("blocked")
+
+    // Phase 2: replay must finish after the source lock is released.
+    await Effect.runPromise(Deferred.succeed(releaseSourceLock, undefined))
+    const [, laterOutcome] = await Promise.all([heldSourceLock, replayWaitingForSource])
+
+    expect(laterOutcome).toBe("completed")
   })
 
   it("clears canonical source-derived rows while keeping cached raw rows reusable", async () => {

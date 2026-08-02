@@ -103,9 +103,10 @@ describe("PrincipalClaimRepositoryLive", () => {
   })
 
   it("locks the source before either ownership principal", async () => {
-    const sourceLocked = await Effect.runPromise(Deferred.make<void>())
-    const releaseSource = await Effect.runPromise(Deferred.make<void>())
-    const sourceLock = runPg(
+    // Given another transaction owns the source row lock.
+    const sourceLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseSourceLock = await Effect.runPromise(Deferred.make<void>())
+    const heldSourceLock = runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db.transaction((tx) =>
@@ -115,16 +116,17 @@ describe("PrincipalClaimRepositoryLive", () => {
               .from(schema.sources)
               .where(eq(schema.sources.id, SOURCE_ID))
               .for("update")
-            yield* Deferred.succeed(sourceLocked, undefined)
-            yield* Deferred.await(releaseSource)
+            yield* Deferred.succeed(sourceLockAcquired, undefined)
+            yield* Deferred.await(releaseSourceLock)
           })
         )
       })
     )
 
-    await Effect.runPromise(Deferred.await(sourceLocked))
+    await Effect.runPromise(Deferred.await(sourceLockAcquired))
 
-    const claim = runPrincipalClaim(
+    // When a claim starts, it must wait for the source before locking either principal.
+    const claimWaitingForSource = runPrincipalClaim(
       Effect.flatMap(PrincipalClaimRepository, (repository) =>
         repository.claimAnonymousSourceForUser({
           anonymousPrincipalId: ANONYMOUS_PRINCIPAL_ID,
@@ -136,9 +138,11 @@ describe("PrincipalClaimRepositoryLive", () => {
       )
     )
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "sources" })
 
-    const principalLock = runPg(
+    // The claim should be waiting on the source row without holding either
+    // principal row, so this independent principal lock must complete.
+    const principalLockProbe = runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db.transaction((tx) =>
@@ -147,19 +151,19 @@ describe("PrincipalClaimRepositoryLive", () => {
             .from(schema.principals)
             .where(inArray(schema.principals.id, [ANONYMOUS_PRINCIPAL_ID, USER_PRINCIPAL_ID]))
             .orderBy(asc(schema.principals.id))
-            .for("update")
+            .for("update", { noWait: true })
         )
       })
-    )
-    const principalLockOutcome = await Promise.race([
-      principalLock.then(() => "completed" as const),
-      new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 50)),
-    ])
+    ).then(() => "completed" as const)
+    const principalLockProbeOutcome = await principalLockProbe
 
-    await Effect.runPromise(Deferred.succeed(releaseSource, undefined))
-    const [, claimedSourceId] = await Promise.all([sourceLock, claim, principalLock])
+    // Then the principal rows remain lockable while the claim waits.
+    expect(principalLockProbeOutcome).toBe("completed")
 
-    expect(principalLockOutcome).toBe("completed")
+    // And the claim finishes successfully after the source lock is released.
+    await Effect.runPromise(Deferred.succeed(releaseSourceLock, undefined))
+    const [, claimedSourceId] = await Promise.all([heldSourceLock, claimWaitingForSource])
+
     expect(claimedSourceId).toBe(SOURCE_ID)
   })
 })

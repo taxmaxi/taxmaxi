@@ -226,6 +226,37 @@ export const makeIntegrationTestDatabaseContext = ({
   const runPg = <A, E>(effect: Effect.Effect<A, E, SyncEngineRepositoryTestRuntime>) =>
     Effect.runPromise(effect.pipe(Effect.provide(TestPgClientLive), Effect.scoped))
 
+  const waitForQueryBlockedOnLock = ({ queryIncludes }: { readonly queryIncludes: string }) =>
+    runPg(
+      Effect.gen(function* () {
+        const sql = yield* PgClient.PgClient
+
+        for (let attempt = 0; attempt < 500; attempt += 1) {
+          const [activity] = yield* sql<{ readonly isWaiting: boolean }>`
+            select exists (
+              select 1
+              from pg_stat_activity
+              where datname = current_database()
+                and pid <> pg_backend_pid()
+                and state = 'active'
+                and wait_event_type = 'Lock'
+                and position(${queryIncludes} in query) > 0
+            ) as "isWaiting"
+          `
+
+          if (activity?.isWaiting === true) {
+            return
+          }
+
+          yield* Effect.sleep("10 millis")
+        }
+
+        return yield* Effect.dieMessage(
+          `Timed out waiting for a database lock wait containing ${queryIncludes}`
+        )
+      })
+    )
+
   const runWithLayer = <A, E, R, LE>({
     effect,
     layer,
@@ -242,6 +273,7 @@ export const makeIntegrationTestDatabaseContext = ({
     destroyTestDatabase,
     runPg,
     runWithLayer,
+    waitForQueryBlockedOnLock,
   }
 }
 
