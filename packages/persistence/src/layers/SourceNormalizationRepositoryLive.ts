@@ -125,6 +125,25 @@ const decodeNumericString = ({
 const isInsufficientFifoInventoryError = (error: SyncEngineStorageError): boolean =>
   error.operation === INSUFFICIENT_FIFO_INVENTORY_OPERATION
 
+const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
+const FIFO_INVENTORY_REVIEW_REASON_PREFIX =
+  "fifo_inventory: Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover."
+
+const appendReviewSegment = ({
+  existing,
+  segment,
+  separator,
+}: {
+  readonly existing: string | null | undefined
+  readonly segment: string
+  readonly separator: string
+}): string =>
+  existing === null || existing === undefined || existing.trim() === ""
+    ? segment
+    : existing.includes(segment)
+      ? existing
+      : `${existing}${separator}${segment}`
+
 const buildInsufficientInventoryReview = ({
   transaction,
   existingReview,
@@ -143,27 +162,32 @@ const buildInsufficientInventoryReview = ({
   const principalId = transaction.principalId
 
   const inventoryReason =
-    "Review required because the transaction moves more inventory out than the synced source FIFO lots currently cover. " +
+    `${FIFO_INVENTORY_REVIEW_REASON_PREFIX} ` +
     "This usually means an opening balance, transfer in, or historical acquisition is missing. " +
     String(error.cause)
-  const categorizationReason =
-    existingReview?.categorizationReason === null ||
-    existingReview?.categorizationReason === undefined
-      ? inventoryReason
-      : `${existingReview.categorizationReason} ${inventoryReason}`
+  const preservesReviewedState =
+    existingReview?.reviewStatus === "approved" || existingReview?.reviewStatus === "changed"
 
   return {
     principalId,
-    reviewStatus: "needs_review",
+    reviewStatus: preservesReviewedState ? existingReview.reviewStatus : "needs_review",
     originalTypeKey: existingReview?.originalTypeKey ?? resolvedTransactionType.transactionType,
     originalConfidence: existingReview?.originalConfidence ?? null,
     currentTypeKey: existingReview?.currentTypeKey ?? resolvedTransactionType.transactionType,
     legalRuleSetVersion: existingReview?.legalRuleSetVersion ?? null,
-    categorizationReason,
-    matchedLayer: "fifo_inventory",
+    categorizationReason: appendReviewSegment({
+      existing: existingReview?.categorizationReason,
+      segment: inventoryReason,
+      separator: "\n",
+    }),
+    matchedLayer: appendReviewSegment({
+      existing: existingReview?.matchedLayer,
+      segment: FIFO_INVENTORY_REVIEW_LAYER,
+      separator: ",",
+    }),
     needsReview: true,
     userNotes: existingReview?.userNotes ?? null,
-    reviewedAt: null,
+    reviewedAt: preservesReviewedState ? existingReview.reviewedAt : null,
   }
 }
 
@@ -810,11 +834,13 @@ const make = Effect.gen(function* () {
   const loadOpenFifoLots = ({
     executor,
     principalId,
+    sourceId,
     assetId,
     maxAcquiredAt,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly principalId: string
+    readonly sourceId: string
     readonly assetId: string
     readonly maxAcquiredAt: Date
   }) =>
@@ -828,13 +854,19 @@ const make = Effect.gen(function* () {
           costBasisPerToken: schema.fifoLots.costBasisPerToken,
         })
         .from(schema.fifoLots)
+        .innerJoin(
+          schema.transactionLegs,
+          eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+        )
         .where(
           and(
             eq(schema.fifoLots.principalId, principalId),
+            eq(schema.fifoLots.sourceId, sourceId),
             eq(schema.fifoLots.assetId, assetId),
             sql`${schema.fifoLots.sourceLegId} is not null`,
             gt(schema.fifoLots.remainingAmount, "0"),
-            lte(schema.fifoLots.acquiredAt, maxAcquiredAt)
+            lte(schema.fifoLots.acquiredAt, maxAcquiredAt),
+            lte(schema.transactionLegs.timestamp, maxAcquiredAt)
           )
         )
         .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
@@ -1028,6 +1060,7 @@ const make = Effect.gen(function* () {
       const openLots = yield* loadOpenFifoLots({
         executor,
         principalId: leg.principalId,
+        sourceId: leg.sourceId,
         assetId: leg.assetId,
         maxAcquiredAt: leg.timestamp,
       })
@@ -1639,6 +1672,7 @@ const make = Effect.gen(function* () {
         const openLots = yield* loadOpenFifoLots({
           executor,
           principalId: transaction.principalId,
+          sourceId: providerTransfer.sourceId,
           assetId: assetMapping.assetId,
           maxAcquiredAt: providerTransfer.timestamp,
         })
@@ -1821,6 +1855,7 @@ const make = Effect.gen(function* () {
           const openLots = yield* loadOpenFifoLots({
             executor,
             principalId: leg.principalId,
+            sourceId: leg.sourceId,
             assetId: leg.assetId,
             maxAcquiredAt: leg.timestamp,
           })
@@ -1875,17 +1910,6 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          yield* tx
-            .select({ id: schema.principals.id })
-            .from(schema.principals)
-            .where(eq(schema.principals.id, params.transaction.principalId))
-            .for("update")
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.persistNormalizedArtifacts.lockPrincipalInventory"
-              )
-            )
-
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
@@ -1896,9 +1920,10 @@ const make = Effect.gen(function* () {
               )
             )
             .limit(1)
+            .for("update")
             .pipe(
               wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal"
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory"
               )
             )
 
@@ -1906,7 +1931,7 @@ const make = Effect.gen(function* () {
             return yield* Effect.fail(
               toSyncEngineStorageError({
                 operation:
-                  "sourceNormalizationRepository.persistNormalizedArtifacts.verifySourcePrincipal",
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory",
                 error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
               })
             )

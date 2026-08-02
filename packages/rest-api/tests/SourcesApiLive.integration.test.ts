@@ -205,7 +205,8 @@ const makeHttpLive = (
     Layer.provide(x402PaymentValidatorLayer),
     Layer.provide(SimpleTokenValidatorLive),
     Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer)),
-    Layer.provideMerge(NodeHttpServer.layerTest)
+    Layer.provideMerge(NodeHttpServer.layerTest),
+    Layer.provide(Layer.setConfigProvider(ClaimTokenConfigProvider))
   )
 
 const HttpLive = makeHttpLive(SourceSyncQueueTestLive)
@@ -878,12 +879,12 @@ describe("SourcesApiLive", () => {
       yield* db.insert(schema.transactionReviews).values({
         transactionId: reportFixtureIds.sellTransactionId,
         principalId: fixture.principalId,
-        reviewStatus: "needs_review",
+        reviewStatus: "changed",
         originalTypeKey: "sell_fiat",
         currentTypeKey: "sell_fiat",
         categorizationReason:
-          "Tax review required because the transaction disposes more inventory than the synced FIFO lots currently cover.",
-        matchedLayer: "fifo_inventory",
+          "provider_asset_mapping: Keep the approved provider mapping.\nfifo_inventory: Review required because source inventory is incomplete.",
+        matchedLayer: "provider_asset_mapping,fifo_inventory",
         needsReview: true,
       })
 
@@ -1269,11 +1270,7 @@ describe("SourcesApiLive", () => {
         principalId: response.source.principalId,
         mode: "sync",
       })
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect(
@@ -1334,11 +1331,7 @@ describe("SourcesApiLive", () => {
           ])
         )
         expect(queueEvents).toHaveLength(1)
-      }).pipe(
-        Effect.provide(NoPayerIdentityHttpLive),
-        Effect.withConfigProvider(ClaimTokenConfigProvider),
-        Effect.scoped
-      )
+      }).pipe(Effect.provide(NoPayerIdentityHttpLive), Effect.scoped)
   )
 
   it.effect("finds an anonymous source claim by authenticated CLI claim token", () =>
@@ -1407,11 +1400,7 @@ describe("SourcesApiLive", () => {
         .where(eq(schema.principalClaims.requestId, created.claim.requestId))
       expect(claims).toHaveLength(2)
       expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("lists anonymous paid source handles by payer-wallet SIWX", () =>
@@ -1466,11 +1455,7 @@ describe("SourcesApiLive", () => {
           }),
         ])
       )
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("lists and reads anonymous paid source sync jobs by payer-wallet SIWX", () =>
@@ -1524,11 +1509,7 @@ describe("SourcesApiLive", () => {
           status: "queued",
         })
       )
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("returns one anonymous paid source only for the matching payer wallet", () =>
@@ -1592,11 +1573,7 @@ describe("SourcesApiLive", () => {
           expect(result.left._tag).toBe("AnonNotFoundError")
         }
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect(
@@ -1663,11 +1640,7 @@ describe("SourcesApiLive", () => {
         if (authenticatedApiResult._tag === "Left") {
           expect(authenticatedApiResult.left._tag).toBe("UnauthorizedError")
         }
-      }).pipe(
-        Effect.provide(HttpLive),
-        Effect.withConfigProvider(ClaimTokenConfigProvider),
-        Effect.scoped
-      )
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("removes claimed sources from anonymous payer-session access", () =>
@@ -1721,11 +1694,7 @@ describe("SourcesApiLive", () => {
       if (sourceResult._tag === "Left") {
         expect(sourceResult.left._tag).toBe("AnonNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("reuses an existing anonymous paid source when the payer session is active", () =>
@@ -1761,11 +1730,7 @@ describe("SourcesApiLive", () => {
       expect(reused.claim).toBeNull()
       expect(reused.syncJob).toBeNull()
       expect(queueEvents).toHaveLength(1)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("claims an anonymous paid source by payer-wallet SIWX without a claim token", () =>
@@ -1819,11 +1784,7 @@ describe("SourcesApiLive", () => {
         sourcePrincipalId: principalId,
         addressPrincipalId: principalId,
       })
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects SIWX for the synced source wallet when it is not the payer wallet", () =>
@@ -1867,11 +1828,7 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects payer-wallet SIWX with invalid domain, nonce, expiry, or chain", () =>
@@ -1928,11 +1885,7 @@ describe("SourcesApiLive", () => {
           expect(result.left._tag).toBe("AnonBadRequestError")
         }
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects replaying a CLI claim token after a successful ownership move", () =>
@@ -1992,11 +1945,7 @@ describe("SourcesApiLive", () => {
         .where(eq(schema.principalClaims.requestId, created.claim.requestId))
       expect(claims).toHaveLength(2)
       expect(claims.every((claim) => claim.consumedAt instanceof Date)).toBe(true)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect(
@@ -2061,11 +2010,7 @@ describe("SourcesApiLive", () => {
           .where(eq(schema.sources.id, created.source.id))
           .limit(1)
         expect(storedSource).toEqual({ principalId: claimingPrincipalId })
-      }).pipe(
-        Effect.provide(HttpLive),
-        Effect.withConfigProvider(ClaimTokenConfigProvider),
-        Effect.scoped
-      )
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects an expired authenticated CLI claim token", () =>
@@ -2109,11 +2054,7 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects an already consumed authenticated CLI claim token", () =>
@@ -2163,11 +2104,7 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects a CLI claim token that is no longer owned by an anonymous principal", () =>
@@ -2215,11 +2152,7 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects a CLI claim token whose wallet context no longer matches its source", () =>
@@ -2263,11 +2196,7 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("returns conflict when claiming a wallet the user already owns", () =>
@@ -2355,11 +2284,7 @@ describe("SourcesApiLive", () => {
         .where(eq(schema.principalClaims.requestId, created.claim.requestId))
       expect(claims).toHaveLength(2)
       expect(claims.every((claim) => claim.consumedAt === null)).toBe(true)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("returns not found for an unknown authenticated CLI claim token", () =>
@@ -2383,11 +2308,7 @@ describe("SourcesApiLive", () => {
       if (result._tag === "Left") {
         expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
       }
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("requires authentication for CLI claim token lookup", () =>
@@ -2447,11 +2368,7 @@ describe("SourcesApiLive", () => {
       expect(claims).toEqual([])
       expect(jobs).toEqual([])
       expect(queueEvents).toHaveLength(0)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("returns x402 settlement response header for paid anonymous source creation", () =>
@@ -2489,11 +2406,7 @@ describe("SourcesApiLive", () => {
         principalId: decodedBody.source.principalId,
         mode: "sync",
       })
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("rejects anonymous source creation with invalid x402 payment before side effects", () =>
@@ -2529,11 +2442,7 @@ describe("SourcesApiLive", () => {
       expect(claims).toEqual([])
       expect(jobs).toEqual([])
       expect(queueEvents).toHaveLength(0)
-    }).pipe(
-      Effect.provide(HttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("does not persist anonymous source claims when x402 settlement fails", () =>
@@ -2568,11 +2477,7 @@ describe("SourcesApiLive", () => {
       expect(claims).toEqual([])
       expect(jobs).toHaveLength(1)
       expect(queueEvents).toHaveLength(1)
-    }).pipe(
-      Effect.provide(SettlementFailureHttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(SettlementFailureHttpLive), Effect.scoped)
   )
 
   it.effect("does not settle x402 payment when paid anonymous sync enqueue fails", () =>
@@ -2604,11 +2509,7 @@ describe("SourcesApiLive", () => {
       expect(claims).toEqual([])
       expect(queueEvents).toHaveLength(0)
       expect(settlementEvents).toEqual([])
-    }).pipe(
-      Effect.provide(PaidQueueFailureHttpLive),
-      Effect.withConfigProvider(ClaimTokenConfigProvider),
-      Effect.scoped
-    )
+    }).pipe(Effect.provide(PaidQueueFailureHttpLive), Effect.scoped)
   )
 
   it.effect("rejects source creation when invalid auth credentials are present", () =>

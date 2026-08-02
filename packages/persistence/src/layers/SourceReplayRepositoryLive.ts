@@ -34,43 +34,15 @@ const make = Effect.gen(function* () {
             .from(schema.sources)
             .where(eq(schema.sources.id, sourceId))
             .limit(1)
+            .for("update")
             .pipe(
               wrapSyncEngineSqlError(
-                "sourceReplayRepository.resetSourceDerivedState.selectSourcePrincipal"
+                "sourceReplayRepository.resetSourceDerivedState.lockSourceInventory"
               )
             )
 
-          if (source !== undefined) {
-            yield* tx
-              .select({ id: schema.principals.id })
-              .from(schema.principals)
-              .where(eq(schema.principals.id, source.principalId))
-              .for("update")
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "sourceReplayRepository.resetSourceDerivedState.lockPrincipalInventory"
-                )
-              )
-
-            const [sourceAfterLock] = yield* tx
-              .select({ principalId: schema.sources.principalId })
-              .from(schema.sources)
-              .where(eq(schema.sources.id, sourceId))
-              .limit(1)
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "sourceReplayRepository.resetSourceDerivedState.verifySourcePrincipal"
-                )
-              )
-
-            if (sourceAfterLock?.principalId !== source.principalId) {
-              return yield* Effect.fail(
-                toSyncEngineStorageError({
-                  operation: "sourceReplayRepository.resetSourceDerivedState.verifySourcePrincipal",
-                  error: `Source ${sourceId} changed principal while replay was starting`,
-                })
-              )
-            }
+          if (source === undefined) {
+            return
           }
 
           const crossSourceAllocations = yield* tx

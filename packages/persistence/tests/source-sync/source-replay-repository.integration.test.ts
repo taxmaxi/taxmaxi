@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
@@ -75,6 +76,48 @@ describe("SourceReplayRepositoryLive", () => {
 
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
+  })
+
+  it("waits for the source inventory lock before resetting replay state", async () => {
+    const sourceLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseSourceLock = await Effect.runPromise(Deferred.make<void>())
+    const heldSourceLock = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, TEST_SOURCE_ID))
+              .for("update")
+            yield* Deferred.succeed(sourceLockAcquired, undefined)
+            yield* Deferred.await(releaseSourceLock)
+          })
+        )
+      })
+    )
+
+    await Effect.runPromise(Deferred.await(sourceLockAcquired))
+
+    const replayWaitingForSource = runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      )
+    ).then(() => "completed" as const)
+
+    // Phase 1: replay must remain blocked while another transaction owns the source lock.
+    const replayBeforeSourceRelease = await context
+      .waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+      .then(() => "blocked" as const)
+
+    expect(replayBeforeSourceRelease).toBe("blocked")
+
+    // Phase 2: replay must finish after the source lock is released.
+    await Effect.runPromise(Deferred.succeed(releaseSourceLock, undefined))
+    const [, laterOutcome] = await Promise.all([heldSourceLock, replayWaitingForSource])
+
+    expect(laterOutcome).toBe("completed")
   })
 
   it("clears canonical source-derived rows while keeping cached raw rows reusable", async () => {

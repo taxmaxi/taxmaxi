@@ -163,7 +163,11 @@ const summarizeReviewRows = (
       const definition = sourceReportReviewIssueDefinitions[code]
       const issueReviewIds = new Set(
         rows
-          .filter((row) => row.matchedLayer === definition.matchedLayer)
+          .filter((row) =>
+            (row.matchedLayer ?? "")
+              .split(",")
+              .some((layer) => layer.trim() === definition.matchedLayer)
+          )
           .map((row) => row.reviewId)
       )
       const count = issueReviewIds.size
@@ -429,7 +433,6 @@ const make = Effect.gen(function* () {
       .where(
         and(
           eq(schema.transactions.sourceId, sourceId),
-          eq(schema.transactionReviews.reviewStatus, "needs_review"),
           eq(schema.transactionReviews.needsReview, true)
         )
       )
