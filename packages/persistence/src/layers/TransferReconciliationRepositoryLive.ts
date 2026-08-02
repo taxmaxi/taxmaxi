@@ -1398,8 +1398,6 @@ const make = Effect.gen(function* () {
                   .select({
                     id: schema.transactionLegs.id,
                     kind: schema.transactionLegs.kind,
-                    assetId: schema.transactionLegs.assetId,
-                    amount: schema.transactionLegs.amount,
                   })
                   .from(schema.transactionLegs)
                   .where(eq(schema.transactionLegs.transactionId, transactionId))
@@ -1411,8 +1409,7 @@ const make = Effect.gen(function* () {
                 const movements = yield* tx
                   .select({
                     id: schema.inventoryMovements.id,
-                    assetId: schema.inventoryMovements.assetId,
-                    amount: schema.inventoryMovements.amount,
+                    reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
                   })
                   .from(schema.inventoryMovements)
                   .where(
@@ -1476,41 +1473,14 @@ const make = Effect.gen(function* () {
                 }
 
                 for (const movement of movements) {
-                  if (allocatedMovementIds.has(movement.id)) {
+                  if (
+                    movement.reconciliationStatus === "matched" ||
+                    allocatedMovementIds.has(movement.id)
+                  ) {
                     continue
                   }
 
-                  const movementAmount = yield* decodeBigDecimal({
-                    value: yield* formatDecimal({
-                      value: movement.amount,
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.movementAmount",
-                    }),
-                    operation:
-                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.movementAmount",
-                  })
-                  const matchingDisposalResults = yield* Effect.forEach(
-                    disposalLegs.filter(
-                      (leg) => leg.assetId === movement.assetId && matchedDisposalLegIds.has(leg.id)
-                    ),
-                    (leg) =>
-                      Effect.gen(function* () {
-                        const amount = yield* decodeBigDecimal({
-                          value: yield* formatDecimal({
-                            value: leg.amount,
-                            operation:
-                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.disposalAmount",
-                          }),
-                          operation:
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.disposalAmount",
-                        })
-                        return BigDecimal.equals(amount, movementAmount)
-                      })
-                  )
-
-                  if (!matchingDisposalResults.some(Boolean)) {
-                    return true
-                  }
+                  return true
                 }
 
                 return false

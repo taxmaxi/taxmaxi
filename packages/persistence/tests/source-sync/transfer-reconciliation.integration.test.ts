@@ -893,6 +893,53 @@ describe("TransferReconciliationServiceLive", () => {
           fifoLotId: lot.id,
           matchedAmount: "0.10000000",
         })
+
+        const [feeLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "scoped-replay-origin-fee:leg",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "fee",
+            provenance: "deterministic",
+            derivationRule: "fixture_fee",
+            transactionId: providerTransfer.transactionId,
+            fiatAmount: null,
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (feeLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create origin fee leg fixture")
+        }
+
+        // Match the transfer amount so the test proves that amount equality does not make this
+        // unrelated fee movement part of the canonical transfer.
+        const [feeMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId: null,
+            transactionLegId: feeLeg.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "fee",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (feeMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create origin fee movement fixture")
+        }
+
         yield* db.insert(schema.transactionReviews).values({
           transactionId: providerTransfer.transactionId,
           principalId: TEST_PRINCIPAL_ID,
@@ -927,6 +974,7 @@ describe("TransferReconciliationServiceLive", () => {
         }
 
         return {
+          feeMovementId: feeMovement.id,
           originTransactionId: providerTransfer.transactionId,
           providerOriginLotId: providerOriginLot.id,
         }
@@ -1414,6 +1462,13 @@ describe("TransferReconciliationServiceLive", () => {
           .select()
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.providerTransferId, firstProviderTransferId))
+        const [feeMovement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, providerOriginFixture.feeMovementId))
         const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
         const reviews = yield* db
           .select()
@@ -1476,6 +1531,7 @@ describe("TransferReconciliationServiceLive", () => {
           movement,
           allocations,
           disposalMatches,
+          feeMovement,
           providerOriginLot,
           originReview,
           localLot,
@@ -1490,6 +1546,10 @@ describe("TransferReconciliationServiceLive", () => {
         taxTreatment: "non_taxable",
       })
     )
+    expect(state.feeMovement).toEqual({
+      reconciliationStatus: "unmatched",
+      taxTreatment: "pending_review",
+    })
     expect(state.allocations).toEqual([
       expect.objectContaining({
         inventoryMovementId: destinationRecoveryFixture.feeMovementId,
@@ -1502,6 +1562,14 @@ describe("TransferReconciliationServiceLive", () => {
     expect(state.canonicalLot?.remainingAmount).toContain("0.00000000")
     expect(state.reviews).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          transactionId: providerOriginFixture.originTransactionId,
+          reviewStatus: "auto_applied",
+          categorizationReason:
+            "fifo_inventory: Review required because origin inventory was incomplete.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+          matchedLayer: "fifo_inventory,transfer_reconciliation",
+          needsReview: true,
+        }),
         expect.objectContaining({
           transactionId: destinationRecoveryFixture.reviewedTransactionId,
           reviewStatus: "changed",
@@ -1521,15 +1589,15 @@ describe("TransferReconciliationServiceLive", () => {
         }),
       ])
     )
-    expect(state.reviews).toHaveLength(2)
+    expect(state.reviews).toHaveLength(3)
     expect(state.originReview).toEqual(
       expect.objectContaining({
         transactionId: providerOriginFixture.originTransactionId,
         reviewStatus: "auto_applied",
         categorizationReason:
-          "Deterministic provider transfer reconciled to a principal-owned onchain transfer.",
-        matchedLayer: "transfer_reconciliation",
-        needsReview: false,
+          "fifo_inventory: Review required because origin inventory was incomplete.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+        matchedLayer: "fifo_inventory,transfer_reconciliation",
+        needsReview: true,
       })
     )
     expect(state.disposalMatches).toHaveLength(3)
