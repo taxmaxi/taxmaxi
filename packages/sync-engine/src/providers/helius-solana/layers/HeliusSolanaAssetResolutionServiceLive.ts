@@ -9,7 +9,6 @@ import * as Either from "effect/Either"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
-import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
 import {
   ProviderAssetRepository,
@@ -47,7 +46,6 @@ interface DefaultAssetMapping {
   readonly name: string
   readonly decimals: number
   readonly providerType: "native" | "spl-token"
-  readonly canonicalAssetId: string
   readonly sourceNotes: string
 }
 
@@ -77,7 +75,6 @@ const nativeDefaultAssetMapping = {
   name: "Solana",
   decimals: 9,
   providerType: "native",
-  canonicalAssetId: KNOWN_ASSET_IDS.SOL,
   sourceNotes: "TaxMaxi built-in Solana native SOL mapping.",
 } as const satisfies DefaultAssetMapping
 
@@ -90,7 +87,6 @@ const defaultAssetMappings = [
     name: "USD Coin",
     decimals: 6,
     providerType: "spl-token",
-    canonicalAssetId: KNOWN_ASSET_IDS.USDC,
     sourceNotes: "TaxMaxi built-in Solana USDC mint mapping.",
   },
   {
@@ -100,7 +96,6 @@ const defaultAssetMappings = [
     name: "Tether USD",
     decimals: 6,
     providerType: "spl-token",
-    canonicalAssetId: KNOWN_ASSET_IDS.USDT,
     sourceNotes: "TaxMaxi built-in Solana USDT mint mapping.",
   },
 ] as const satisfies ReadonlyArray<DefaultAssetMapping>

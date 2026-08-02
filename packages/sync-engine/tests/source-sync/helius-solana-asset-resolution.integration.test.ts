@@ -2,7 +2,6 @@ import { and, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { KNOWN_ASSET_IDS, KNOWN_ASSET_REPRESENTATION_IDS } from "@my/core/asset"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
@@ -26,13 +25,13 @@ const context = makeIntegrationTestDatabaseContext({
 
 await Effect.runPromise(context.recreateTestDatabase())
 
-const SOL_ASSET_ID = KNOWN_ASSET_IDS.SOL
-const USDC_ASSET_ID = KNOWN_ASSET_IDS.USDC
-const USDT_ASSET_ID = KNOWN_ASSET_IDS.USDT
+const SOL_ASSET_ID = "00000000-0000-0000-0000-000000001601"
+const USDC_ASSET_ID = "00000000-0000-0000-0000-000000001602"
+const USDT_ASSET_ID = "00000000-0000-0000-0000-000000001603"
 const UNKNOWN_ASSET_ID = "00000000-0000-0000-0000-000000001604"
-const SOL_REPRESENTATION_ID = KNOWN_ASSET_REPRESENTATION_IDS.SOL_SOLANA
-const USDC_REPRESENTATION_ID = KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA
-const USDT_REPRESENTATION_ID = KNOWN_ASSET_REPRESENTATION_IDS.USDT_SOLANA
+const SOL_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001601"
+const USDC_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001602"
+const USDT_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001603"
 const UNKNOWN_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001604"
 const UNKNOWN_MINT = "Drift111111111111111111111111111111111111111"
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"

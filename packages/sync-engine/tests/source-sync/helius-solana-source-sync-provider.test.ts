@@ -124,6 +124,7 @@ const makeProviderLayer = ({
         AssetRepository,
         AssetRepository.of({
           findAssetById: () => Effect.succeed(Option.none()),
+          findAssetByCoinGeckoId: () => Effect.succeed(Option.none()),
           findRepresentationById: () => Effect.succeed(Option.none()),
           findNativeRepresentationForBlockchain: () => Effect.succeed(Option.none()),
           findRepresentationByBlockchainAndAddress: () => Effect.succeed(Option.none()),

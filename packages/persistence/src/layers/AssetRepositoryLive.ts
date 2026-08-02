@@ -40,6 +40,20 @@ const make = Effect.gen(function* () {
       return Option.fromNullable(asset)
     })
 
+  const findAssetByCoinGeckoId: AssetRepositoryShape["findAssetByCoinGeckoId"] = ({
+    coingeckoCoinId,
+  }) =>
+    Effect.gen(function* () {
+      const [asset] = yield* db
+        .select({ id: schema.assets.id, symbol: schema.assets.symbol })
+        .from(schema.assets)
+        .where(eq(schema.assets.coingeckoCoinId, coingeckoCoinId))
+        .limit(1)
+        .pipe(wrapSyncEngineSqlError("assetRepository.findAssetByCoinGeckoId"))
+
+      return Option.fromNullable(asset)
+    })
+
   const findRepresentationById: AssetRepositoryShape["findRepresentationById"] = ({
     assetRepresentationId,
   }) =>
@@ -397,6 +411,7 @@ const make = Effect.gen(function* () {
 
   return AssetRepository.of({
     findAssetById,
+    findAssetByCoinGeckoId,
     findRepresentationById,
     findNativeRepresentationForBlockchain,
     findRepresentationByBlockchainAndAddress,

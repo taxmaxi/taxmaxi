@@ -10,11 +10,6 @@
 
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import {
-  KNOWN_ASSET_IDS,
-  KNOWN_ASSET_REPRESENTATION_IDS,
-  KNOWN_ECONOMIC_ASSETS,
-} from "@my/core/asset"
 import { drizzle } from "../layers/PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 
@@ -59,10 +54,22 @@ const blockchains = [
   },
 ] as const
 
+const economicAssets = [
+  { name: "Bitcoin", symbol: "BTC", coingeckoCoinId: "bitcoin", type: "fungible" },
+  { name: "Ether", symbol: "ETH", coingeckoCoinId: "ethereum", type: "fungible" },
+  { name: "Solana", symbol: "SOL", coingeckoCoinId: "solana", type: "fungible" },
+  { name: "USD Coin", symbol: "USDC", coingeckoCoinId: "usd-coin", type: "fungible" },
+  { name: "Tether", symbol: "USDT", coingeckoCoinId: "tether", type: "fungible" },
+  { name: "Cardano", symbol: "ADA", coingeckoCoinId: "cardano", type: "fungible" },
+  { name: "Polkadot", symbol: "DOT", coingeckoCoinId: "polkadot", type: "fungible" },
+  { name: "Zcash", symbol: "ZEC", coingeckoCoinId: "zcash", type: "fungible" },
+  { name: "EURC", symbol: "EURC", coingeckoCoinId: "euro-coin", type: "fungible" },
+  { name: "Bittensor", symbol: "TAO", coingeckoCoinId: "bittensor", type: "fungible" },
+] as const
+
 const assetRepresentations = [
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.BTC_BITCOIN,
-    assetId: KNOWN_ASSET_IDS.BTC,
+    assetCoinGeckoId: "bitcoin",
     blockchainName: "bitcoin",
     type: "native",
     contractAddress: null,
@@ -70,8 +77,7 @@ const assetRepresentations = [
     decimals: 8,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.ETH_ETHEREUM,
-    assetId: KNOWN_ASSET_IDS.ETH,
+    assetCoinGeckoId: "ethereum",
     blockchainName: "ethereum",
     type: "native",
     contractAddress: null,
@@ -79,8 +85,7 @@ const assetRepresentations = [
     decimals: 18,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.ETH_BASE,
-    assetId: KNOWN_ASSET_IDS.ETH,
+    assetCoinGeckoId: "ethereum",
     blockchainName: "base",
     type: "native",
     contractAddress: null,
@@ -88,8 +93,7 @@ const assetRepresentations = [
     decimals: 18,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.SOL_SOLANA,
-    assetId: KNOWN_ASSET_IDS.SOL,
+    assetCoinGeckoId: "solana",
     blockchainName: "solana",
     type: "native",
     contractAddress: null,
@@ -97,8 +101,7 @@ const assetRepresentations = [
     decimals: 9,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA,
-    assetId: KNOWN_ASSET_IDS.USDC,
+    assetCoinGeckoId: "usd-coin",
     blockchainName: "solana",
     type: "token",
     contractAddress: null,
@@ -106,8 +109,7 @@ const assetRepresentations = [
     decimals: 6,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.USDT_SOLANA,
-    assetId: KNOWN_ASSET_IDS.USDT,
+    assetCoinGeckoId: "tether",
     blockchainName: "solana",
     type: "token",
     contractAddress: null,
@@ -115,8 +117,7 @@ const assetRepresentations = [
     decimals: 6,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.USDC_ETHEREUM,
-    assetId: KNOWN_ASSET_IDS.USDC,
+    assetCoinGeckoId: "usd-coin",
     blockchainName: "ethereum",
     type: "token",
     contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -124,8 +125,7 @@ const assetRepresentations = [
     decimals: 6,
   },
   {
-    id: KNOWN_ASSET_REPRESENTATION_IDS.USDC_BASE,
-    assetId: KNOWN_ASSET_IDS.USDC,
+    assetCoinGeckoId: "usd-coin",
     blockchainName: "base",
     type: "token",
     contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
@@ -1075,7 +1075,7 @@ export const seedData = Effect.gen(function* () {
   yield* db
     .insert(schema.assets)
     .values(
-      KNOWN_ECONOMIC_ASSETS.map((asset) => ({
+      economicAssets.map((asset) => ({
         ...asset,
         logoUrl: null,
         createdAt: seedTimestamp,
@@ -1083,7 +1083,7 @@ export const seedData = Effect.gen(function* () {
       }))
     )
     .onConflictDoUpdate({
-      target: schema.assets.id,
+      target: schema.assets.coingeckoCoinId,
       set: {
         name: sql.raw("excluded.name"),
         symbol: sql.raw("excluded.symbol"),
@@ -1100,13 +1100,34 @@ export const seedData = Effect.gen(function* () {
   const blockchainIdsByName = new Map(
     persistedBlockchains.map((blockchain) => [blockchain.name, blockchain.id] as const)
   )
+  const persistedAssets = yield* db
+    .select({ id: schema.assets.id, coingeckoCoinId: schema.assets.coingeckoCoinId })
+    .from(schema.assets)
+    .where(
+      inArray(
+        schema.assets.coingeckoCoinId,
+        economicAssets.map((asset) => asset.coingeckoCoinId)
+      )
+    )
+  const assetIdsByCoinGeckoId = new Map(
+    persistedAssets.flatMap((asset) =>
+      asset.coingeckoCoinId === null ? [] : [[asset.coingeckoCoinId, asset.id] as const]
+    )
+  )
 
   for (const representation of assetRepresentations) {
     const blockchainId = blockchainIdsByName.get(representation.blockchainName)
+    const assetId = assetIdsByCoinGeckoId.get(representation.assetCoinGeckoId)
 
     if (blockchainId === undefined) {
       return yield* Effect.dieMessage(
         `Missing ${representation.blockchainName} blockchain after seeding blockchains`
+      )
+    }
+
+    if (assetId === undefined) {
+      return yield* Effect.dieMessage(
+        `Missing ${representation.assetCoinGeckoId} economic asset after seeding assets`
       )
     }
 
@@ -1131,8 +1152,7 @@ export const seedData = Effect.gen(function* () {
       .where(representationFilter)
       .limit(1)
     const values = {
-      id: representation.id,
-      assetId: representation.assetId,
+      assetId,
       blockchainId,
       type: representation.type,
       contractAddress: representation.contractAddress,

@@ -2,7 +2,6 @@ import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -33,6 +32,9 @@ const TestPgClientLive = context.TestPgClientLive
 const userId = "00000000-0000-0000-0000-000000000161"
 const principalId = "00000000-0000-0000-0000-000000000162"
 const sourceId = "00000000-0000-0000-0000-000000000261"
+const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000561"
+const ETH_ASSET_ID = "00000000-0000-0000-0000-000000000562"
+const SOL_ASSET_ID = "00000000-0000-0000-0000-000000000563"
 
 const makeCoinbaseRecord = ({
   externalRecordId,
@@ -349,9 +351,10 @@ const seedCoinbaseSource = () =>
     }
 
     yield* db.insert(schema.assets).values({
-      id: KNOWN_ASSET_IDS.ETH,
+      id: ETH_ASSET_ID,
       name: "Ethereum",
       symbol: "ETH",
+      coingeckoCoinId: "ethereum",
       type: "fungible",
     })
 
@@ -388,10 +391,12 @@ const seedCanonicalAsset = ({
   id,
   symbol,
   contractAddress,
+  coingeckoCoinId,
 }: {
   readonly id: string
   readonly symbol: string
   readonly contractAddress: string
+  readonly coingeckoCoinId?: string
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -409,6 +414,7 @@ const seedCanonicalAsset = ({
       id,
       name: `${symbol} Fixture`,
       symbol,
+      coingeckoCoinId,
       type: "fungible",
     })
     yield* db.insert(schema.assetRepresentations).values({
@@ -559,18 +565,21 @@ describe("coinbase reference mappings", () => {
     await Effect.runPromise(
       Effect.all([
         seedCanonicalAsset({
-          id: KNOWN_ASSET_IDS.BTC,
+          id: BTC_ASSET_ID,
           symbol: "BTC",
+          coingeckoCoinId: "bitcoin",
           contractAddress: "coinbase-default-existing-btc",
         }),
         seedCanonicalAsset({
-          id: KNOWN_ASSET_IDS.ETH,
+          id: ETH_ASSET_ID,
           symbol: "ETH",
+          coingeckoCoinId: "ethereum",
           contractAddress: "coinbase-default-existing-eth",
         }),
         seedCanonicalAsset({
-          id: KNOWN_ASSET_IDS.SOL,
+          id: SOL_ASSET_ID,
           symbol: "SOL",
+          coingeckoCoinId: "solana",
           contractAddress: "coinbase-default-existing-sol",
         }),
       ])
@@ -583,17 +592,17 @@ describe("coinbase reference mappings", () => {
     const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
 
     expect(mappings.find((mapping) => mapping.currencyCode === "BTC")).toMatchObject({
-      canonicalAssetId: KNOWN_ASSET_IDS.BTC,
+      canonicalAssetId: BTC_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
     })
     expect(mappings.find((mapping) => mapping.currencyCode === "ETH")).toMatchObject({
-      canonicalAssetId: KNOWN_ASSET_IDS.ETH,
+      canonicalAssetId: ETH_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
     })
     expect(mappings.find((mapping) => mapping.currencyCode === "SOL")).toMatchObject({
-      canonicalAssetId: KNOWN_ASSET_IDS.SOL,
+      canonicalAssetId: SOL_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
     })
@@ -612,8 +621,9 @@ describe("coinbase reference mappings", () => {
   it("does not overwrite reviewed provider asset mappings on later default refreshes", async () => {
     await Effect.runPromise(
       seedCanonicalAsset({
-        id: KNOWN_ASSET_IDS.BTC,
+        id: BTC_ASSET_ID,
         symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
         contractAddress: "coinbase-default-reviewed-btc",
       })
     )
@@ -639,7 +649,7 @@ describe("coinbase reference mappings", () => {
           .values({
             providerAssetRowId: adaMapping.providerAssetRowId,
             mappingKind: "asset",
-            canonicalAssetId: KNOWN_ASSET_IDS.BTC,
+            canonicalAssetId: BTC_ASSET_ID,
             assetRepresentationId: null,
             canonicalFiatCurrency: null,
             mappingStatus: "approved",
@@ -649,7 +659,7 @@ describe("coinbase reference mappings", () => {
           .onConflictDoUpdate({
             target: schema.providerAssetMappings.providerAssetRowId,
             set: {
-              canonicalAssetId: KNOWN_ASSET_IDS.BTC,
+              canonicalAssetId: BTC_ASSET_ID,
               assetRepresentationId: null,
               mappingStatus: "approved",
               reviewerNotes: "Admin reviewed ADA as BTC test fixture",
@@ -668,7 +678,7 @@ describe("coinbase reference mappings", () => {
     )
 
     expect(refreshedAdaMapping).toMatchObject({
-      canonicalAssetId: KNOWN_ASSET_IDS.BTC,
+      canonicalAssetId: BTC_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
       reviewerNotes: "Admin reviewed ADA as BTC test fixture",
@@ -679,8 +689,9 @@ describe("coinbase reference mappings", () => {
   it("maps a chainless custody observation to an economic asset only", async () => {
     await Effect.runPromise(
       seedCanonicalAsset({
-        id: KNOWN_ASSET_IDS.BTC,
+        id: BTC_ASSET_ID,
         symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
         contractAddress: "coinbase-default-legacy-btc",
       })
     )
@@ -696,7 +707,7 @@ describe("coinbase reference mappings", () => {
     )
 
     expect(btcMapping).toMatchObject({
-      canonicalAssetId: KNOWN_ASSET_IDS.BTC,
+      canonicalAssetId: BTC_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
     })
@@ -1545,7 +1556,7 @@ describe("coinbase reference mappings", () => {
           })
         )
         expect(state.eth2Mapping?.assetRepresentationId).toBeNull()
-        expect(state.eth2Mapping?.canonicalAssetId).toBe(KNOWN_ASSET_IDS.ETH)
+        expect(state.eth2Mapping?.canonicalAssetId).toBe(ETH_ASSET_ID)
       })
     )
   })

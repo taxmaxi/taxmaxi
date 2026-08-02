@@ -2,7 +2,6 @@ import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
@@ -14,6 +13,7 @@ import { schema } from "../../src/schema/index.ts"
 import { PortfolioRepository } from "../../src/services/PortfolioRepository.ts"
 import {
   TEST_EUR_ASSET_ID,
+  TEST_BTC_ASSET_ID,
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
@@ -40,8 +40,7 @@ const context = makeIntegrationTestDatabaseContext({
 })
 
 const runPg = context.runPg
-const TEST_BTC_ASSET_ID = KNOWN_ASSET_IDS.BTC
-const TEST_SOL_ASSET_ID = KNOWN_ASSET_IDS.SOL
+const TEST_SOL_ASSET_ID = "00000000-0000-0000-0000-000000000483"
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -2225,6 +2224,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           id: TEST_SOL_ASSET_ID,
           name: "Sync Engine Solana Cross-Asset Fee Fixture",
           symbol: "SOL",
+          coingeckoCoinId: "solana",
           type: "fungible",
         })
 
@@ -2732,6 +2732,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           id: TEST_SOL_ASSET_ID,
           name: "Sync Engine Solana Fixture",
           symbol: "SOL",
+          coingeckoCoinId: "solana",
           type: "fungible",
         })
 

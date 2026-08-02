@@ -95,6 +95,11 @@ export interface AssetRepositoryShape {
     readonly assetId: string
   }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
 
+  /** Load a canonical asset by its stable CoinGecko coin id. */
+  readonly findAssetByCoinGeckoId: (params: {
+    readonly coingeckoCoinId: string
+  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+
   /** Load a network representation by id. */
   readonly findRepresentationById: (params: {
     readonly assetRepresentationId: string

@@ -108,6 +108,8 @@ const runWithProvider = <A, E>(
         Layer.provide(
           Layer.succeed(AssetRepository, {
             findAssetById: () => Effect.dieMessage("findAssetById should not be called"),
+            findAssetByCoinGeckoId: () =>
+              Effect.dieMessage("findAssetByCoinGeckoId should not be called"),
             findRepresentationById: () =>
               Effect.dieMessage("findRepresentationById should not be called"),
             findNativeRepresentationForBlockchain: () =>

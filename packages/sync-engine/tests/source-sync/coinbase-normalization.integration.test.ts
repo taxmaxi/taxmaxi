@@ -2,7 +2,6 @@ import { and, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -34,6 +33,8 @@ const context = makeIntegrationTestDatabaseContext({
 })
 const TestPgClientLive = context.TestPgClientLive
 const recreateTestDatabase = context.recreateTestDatabase
+const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000541"
+const DOT_ASSET_ID = "00000000-0000-0000-0000-000000000542"
 
 const makeCoinbaseRecord = ({
   externalRecordId,
@@ -406,16 +407,18 @@ const seedCoinbaseSource = () =>
     }
 
     yield* db.insert(schema.assets).values({
-      id: KNOWN_ASSET_IDS.BTC,
+      id: BTC_ASSET_ID,
       name: "Bitcoin",
       symbol: "BTC",
+      coingeckoCoinId: "bitcoin",
       type: "fungible",
     })
 
     yield* db.insert(schema.assets).values({
-      id: KNOWN_ASSET_IDS.DOT,
+      id: DOT_ASSET_ID,
       name: "Polkadot",
       symbol: "DOT",
+      coingeckoCoinId: "polkadot",
       type: "fungible",
     })
 

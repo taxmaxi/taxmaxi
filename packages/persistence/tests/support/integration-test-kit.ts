@@ -270,6 +270,7 @@ export const makeIntegrationTestDatabaseContext = ({
   return {
     databaseName,
     TestPgClientLive,
+    migrateTestDatabaseFromFolder,
     recreateTestDatabase,
     recreateEmptyTestDatabase,
     destroyTestDatabase,
@@ -389,6 +390,7 @@ export const seedSyncEngineAssets = ({
         id: TEST_BTC_ASSET_ID,
         name: "Sync Engine Bitcoin Fixture",
         symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
         type: "fungible",
       },
       {

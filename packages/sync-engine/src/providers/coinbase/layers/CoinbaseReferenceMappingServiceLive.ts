@@ -354,7 +354,7 @@ const make = Effect.gen(function* () {
         } satisfies ProviderAssetMappingDraft
       }
 
-      if (mapping.canonicalAssetId === null) {
+      if (mapping.canonicalAssetCoinGeckoId === null) {
         return {
           providerAssetRowId,
           mappingKind: mapping.mappingKind,
@@ -368,8 +368,8 @@ const make = Effect.gen(function* () {
         } satisfies ProviderAssetMappingDraft
       }
 
-      const canonicalAsset = yield* assetRepository.findAssetById({
-        assetId: mapping.canonicalAssetId,
+      const canonicalAsset = yield* assetRepository.findAssetByCoinGeckoId({
+        coingeckoCoinId: mapping.canonicalAssetCoinGeckoId,
       })
 
       if (Option.isSome(canonicalAsset)) {
@@ -393,7 +393,7 @@ const make = Effect.gen(function* () {
         canonicalFiatCurrency: null,
         mappingStatus: "pending_review",
         reviewerNotes: null,
-        sourceNotes: `Coinbase default mapping targets economic asset ${mapping.canonicalAssetId}, but no assets row exists. Review required after adding or selecting an economic asset.`,
+        sourceNotes: `Coinbase default mapping targets CoinGecko asset ${mapping.canonicalAssetCoinGeckoId}, but no assets row exists. Review required after adding or selecting an economic asset.`,
       } satisfies ProviderAssetMappingDraft
     })
 

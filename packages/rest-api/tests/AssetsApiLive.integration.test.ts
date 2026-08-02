@@ -1,6 +1,5 @@
 import { HttpApiBuilder, HttpClient, HttpClientRequest } from "@effect/platform"
 import { NodeHttpServer } from "@effect/platform-node"
-import { KNOWN_ASSET_REPRESENTATION_IDS } from "@my/core/asset"
 import {
   AuthService,
   HashedPassword,
@@ -163,21 +162,18 @@ describe("AssetsApiLive", () => {
       type: "fungible",
       representations: expect.arrayContaining([
         expect.objectContaining({
-          id: KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA,
           blockchainName: "solana",
           mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
           decimals: 6,
           type: "token",
         }),
         expect.objectContaining({
-          id: KNOWN_ASSET_REPRESENTATION_IDS.USDC_ETHEREUM,
           blockchainName: "ethereum",
           contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
           decimals: 6,
           type: "token",
         }),
         expect.objectContaining({
-          id: KNOWN_ASSET_REPRESENTATION_IDS.USDC_BASE,
           blockchainName: "base",
           contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
           decimals: 6,

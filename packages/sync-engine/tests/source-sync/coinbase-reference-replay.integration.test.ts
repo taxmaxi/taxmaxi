@@ -2,7 +2,6 @@ import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -32,6 +31,7 @@ const TestPgClientLive = context.TestPgClientLive
 const userId = "00000000-0000-0000-0000-000000000151"
 const principalId = "00000000-0000-0000-0000-000000000152"
 const sourceId = "00000000-0000-0000-0000-000000000251"
+const TAO_ASSET_ID = "00000000-0000-0000-0000-000000000551"
 
 const makeCoinbaseRecord = ({
   externalRecordId,
@@ -250,9 +250,10 @@ const insertTaoAsset = () =>
     const db = yield* drizzle
 
     yield* db.insert(schema.assets).values({
-      id: KNOWN_ASSET_IDS.TAO,
+      id: TAO_ASSET_ID,
       name: "Bittensor",
       symbol: "TAO",
+      coingeckoCoinId: "bittensor",
       type: "fungible",
     })
   }).pipe(Effect.provide(TestPgClientLive))
@@ -352,7 +353,7 @@ describe("coinbase reference-data replay", () => {
         ])
         expect(firstRun.legs).toHaveLength(0)
         expect(firstRun.taoMapping?.mappingStatus).toBe("pending_review")
-        expect(firstRun.taoMapping?.assetRepresentationId).toBe("TAO")
+        expect(firstRun.taoMapping?.assetRepresentationId).toBeNull()
 
         yield* insertTaoAsset()
         yield* runSync()

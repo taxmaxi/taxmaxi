@@ -1,8 +1,7 @@
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { eq, inArray } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
-import { KNOWN_ASSET_IDS, KNOWN_ASSET_REPRESENTATION_IDS } from "@my/core/asset"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -183,38 +182,48 @@ describe("AssetRepositoryLive", () => {
 
   it("keeps known economic assets and network representations exact on repeated seeds", async () => {
     await runPg(seedData)
+
+    const readUsdcState = () =>
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [usdc] = yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.coingeckoCoinId, "usd-coin"))
+            .limit(1)
+
+          if (usdc === undefined) {
+            return yield* Effect.dieMessage("Missing seeded USD Coin economic asset")
+          }
+
+          const representations = yield* db
+            .select({
+              id: schema.assetRepresentations.id,
+              blockchainName: schema.blockchains.name,
+              contractAddress: schema.assetRepresentations.contractAddress,
+              mintAddress: schema.assetRepresentations.mintAddress,
+            })
+            .from(schema.assetRepresentations)
+            .innerJoin(
+              schema.blockchains,
+              eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
+            )
+            .where(eq(schema.assetRepresentations.assetId, usdc.id))
+
+          return { usdc, representations }
+        })
+      )
+
+    const firstState = await readUsdcState()
     await runPg(seedData)
+    const secondState = await readUsdcState()
 
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [usdc] = yield* db
-          .select({ id: schema.assets.id })
-          .from(schema.assets)
-          .where(eq(schema.assets.id, KNOWN_ASSET_IDS.USDC))
-          .limit(1)
-        const representations = yield* db
-          .select({ id: schema.assetRepresentations.id })
-          .from(schema.assetRepresentations)
-          .where(
-            inArray(schema.assetRepresentations.id, [
-              KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA,
-              KNOWN_ASSET_REPRESENTATION_IDS.USDC_ETHEREUM,
-              KNOWN_ASSET_REPRESENTATION_IDS.USDC_BASE,
-            ])
-          )
-
-        return { usdc, representations }
-      })
-    )
-
-    expect(state.usdc?.id).toBe(KNOWN_ASSET_IDS.USDC)
-    expect(state.representations.map((representation) => representation.id).sort()).toEqual(
-      [
-        KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA,
-        KNOWN_ASSET_REPRESENTATION_IDS.USDC_ETHEREUM,
-        KNOWN_ASSET_REPRESENTATION_IDS.USDC_BASE,
-      ].sort()
-    )
+    expect(firstState.usdc).toBeDefined()
+    expect(firstState.representations).toHaveLength(3)
+    expect(
+      firstState.representations.map((representation) => representation.blockchainName).sort()
+    ).toEqual(["base", "ethereum", "solana"])
+    expect(secondState).toEqual(firstState)
   })
 })
