@@ -1465,6 +1465,8 @@ const make = Effect.gen(function* () {
                   .select({
                     id: schema.transactionLegs.id,
                     kind: schema.transactionLegs.kind,
+                    assetId: schema.transactionLegs.assetId,
+                    amount: schema.transactionLegs.amount,
                   })
                   .from(schema.transactionLegs)
                   .where(eq(schema.transactionLegs.transactionId, transactionId))
@@ -1476,7 +1478,11 @@ const make = Effect.gen(function* () {
                 const movements = yield* tx
                   .select({
                     id: schema.inventoryMovements.id,
+                    providerTransferId: schema.inventoryMovements.providerTransferId,
+                    purpose: schema.inventoryMovements.purpose,
                     reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+                    assetId: schema.inventoryMovements.assetId,
+                    amount: schema.inventoryMovements.amount,
                   })
                   .from(schema.inventoryMovements)
                   .where(
@@ -1545,6 +1551,41 @@ const make = Effect.gen(function* () {
                     allocatedMovementIds.has(movement.id)
                   ) {
                     continue
+                  }
+
+                  if (movement.purpose === "principal" && movement.providerTransferId !== null) {
+                    const movementAmount = yield* decodeBigDecimal({
+                      value: yield* formatDecimal({
+                        value: movement.amount,
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.movementAmount",
+                      }),
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.movementAmount",
+                    })
+                    const matchingDisposalResults = yield* Effect.forEach(
+                      disposalLegs.filter(
+                        (leg) =>
+                          leg.assetId === movement.assetId && matchedDisposalLegIds.has(leg.id)
+                      ),
+                      (leg) =>
+                        Effect.gen(function* () {
+                          const disposalAmount = yield* decodeBigDecimal({
+                            value: yield* formatDecimal({
+                              value: leg.amount,
+                              operation:
+                                "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.disposalAmount",
+                            }),
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnmatchedFifoEffects.disposalAmount",
+                          })
+                          return BigDecimal.equals(disposalAmount, movementAmount)
+                        })
+                    )
+
+                    if (matchingDisposalResults.some(Boolean)) {
+                      continue
+                    }
                   }
 
                   return true
@@ -1886,32 +1927,119 @@ const make = Effect.gen(function* () {
                 }
 
                 // A later canonical transfer may reserve inventory needed by an earlier reviewed
-                // effect. Remove only transfers whose destination lots have no dependent usage;
-                // their reconciliations are queued again after this FIFO suffix is rebuilt.
-                const invalidatedReconciliations: Array<{
+                // effect. Build each dependent transfer chain, verify that every destination lot
+                // is used only by another planned transfer, then invalidate from the far end.
+                type InvalidationPlan = {
                   readonly custodyProviderTransferId: string | null
-                  readonly destinationLegs: Awaited<
-                    Effect.Effect.Success<ReturnType<typeof loadPrincipalLegs>>
+                  readonly depth: number
+                  readonly destinationLegs: Effect.Effect.Success<
+                    ReturnType<typeof loadPrincipalLegs>
                   >
+                  readonly destinationSourceId: string
+                  readonly destinationTimestamp: Date
                   readonly inventoryKey: string
-                  readonly originLegs: Awaited<
-                    Effect.Effect.Success<ReturnType<typeof loadPrincipalLegs>>
-                  >
+                  readonly originLegs: Effect.Effect.Success<ReturnType<typeof loadPrincipalLegs>>
+                  readonly originTimestamp: Date
                   readonly originTransactionId: string
                   readonly row: ReconciliationRow
-                }> = []
-                const unrebuildableInventoryKeys = new Set<string>()
+                }
+                const loadInvalidationPlan = ({
+                  depth,
+                  inventoryKey,
+                  row,
+                }: {
+                  readonly depth: number
+                  readonly inventoryKey: string
+                  readonly row: ReconciliationRow
+                }) =>
+                  Effect.gen(function* () {
+                    if (row.canonicalTransactionId === null || row.canonicalTransferId === null) {
+                      return null
+                    }
 
+                    const { destinationTransaction, originTransaction } =
+                      resolveReconciliationTransactions({
+                        canonicalTransactionId: row.canonicalTransactionId,
+                        row,
+                      })
+                    const amount = yield* formatDecimal({
+                      value: row.amount,
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.downstreamAmount",
+                    })
+                    const originLegs = yield* loadPrincipalLegs({
+                      transactionId: originTransaction.id,
+                    })
+                    const destinationLegs = yield* loadPrincipalLegs({
+                      transactionId: destinationTransaction.id,
+                    })
+                    const [originLeg] = originLegs
+                    const [destinationLeg] = destinationLegs
+                    const originExternalId = `${originTransaction.externalId ?? originTransaction.id}:internal_transfer_out`
+                    const destinationExternalId = `${destinationTransaction.externalId ?? destinationTransaction.id}:internal_transfer_in`
+                    const originSourceTransferId =
+                      originTransaction.id === row.canonicalTransactionId
+                        ? row.canonicalTransferId
+                        : null
+                    const destinationSourceTransferId =
+                      destinationTransaction.id === row.canonicalTransactionId
+                        ? row.canonicalTransferId
+                        : null
+                    const originIsCanonical =
+                      originLeg !== undefined &&
+                      originLegs.length === 1 &&
+                      (yield* isExpectedPrincipalLeg({
+                        leg: originLeg,
+                        externalId: originExternalId,
+                        kind: "disposal",
+                        derivationRule: "internal_transfer_out",
+                        assetId: row.assetId,
+                        amount,
+                        sourceTransferId: originSourceTransferId,
+                      }))
+                    const destinationIsCanonical =
+                      destinationLeg !== undefined &&
+                      destinationLegs.length === 1 &&
+                      (yield* isExpectedPrincipalLeg({
+                        leg: destinationLeg,
+                        externalId: destinationExternalId,
+                        kind: "acquisition",
+                        derivationRule: "internal_transfer_in",
+                        assetId: row.assetId,
+                        amount,
+                        sourceTransferId: destinationSourceTransferId,
+                      }))
+
+                    if (!originIsCanonical || !destinationIsCanonical) {
+                      return null
+                    }
+
+                    return {
+                      custodyProviderTransferId: yield* loadCustodyProviderTransferId({
+                        originTransactionId: originTransaction.id,
+                        row,
+                      }),
+                      depth,
+                      destinationLegs,
+                      destinationSourceId: destinationTransaction.sourceId,
+                      destinationTimestamp: destinationTransaction.timestamp,
+                      inventoryKey,
+                      originLegs,
+                      originTimestamp: originTransaction.timestamp,
+                      originTransactionId: originTransaction.id,
+                      row,
+                    } satisfies InvalidationPlan
+                  })
+
+                const rootRowsByInventoryKey = new Map<string, ReconciliationRow[]>()
                 for (const row of connectedReconciliations) {
-                  if (row.canonicalTransactionId === null || row.canonicalTransferId === null) {
+                  if (row.canonicalTransactionId === null) {
                     continue
                   }
-
-                  const { destinationTransaction, originTransaction } =
-                    resolveReconciliationTransactions({
-                      canonicalTransactionId: row.canonicalTransactionId,
-                      row,
-                    })
+                  const { originTransaction } = resolveReconciliationTransactions({
+                    canonicalTransactionId: row.canonicalTransactionId,
+                    row,
+                  })
                   if (originTransaction.sourceId !== destinationSourceId) {
                     continue
                   }
@@ -1922,81 +2050,121 @@ const make = Effect.gen(function* () {
                     continue
                   }
 
-                  const amount = yield* formatDecimal({
-                    value: row.amount,
-                    operation:
-                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.downstreamAmount",
-                  })
-                  const originLegs = yield* loadPrincipalLegs({
-                    transactionId: originTransaction.id,
-                  })
-                  const destinationLegs = yield* loadPrincipalLegs({
-                    transactionId: destinationTransaction.id,
-                  })
-                  const [originLeg] = originLegs
-                  const [destinationLeg] = destinationLegs
-                  const originExternalId = `${originTransaction.externalId ?? originTransaction.id}:internal_transfer_out`
-                  const destinationExternalId = `${destinationTransaction.externalId ?? destinationTransaction.id}:internal_transfer_in`
-                  const originSourceTransferId =
-                    originTransaction.id === row.canonicalTransactionId
-                      ? row.canonicalTransferId
-                      : null
-                  const destinationSourceTransferId =
-                    destinationTransaction.id === row.canonicalTransactionId
-                      ? row.canonicalTransferId
-                      : null
-                  const originIsCanonical =
-                    originLeg !== undefined &&
-                    originLegs.length === 1 &&
-                    (yield* isExpectedPrincipalLeg({
-                      leg: originLeg,
-                      externalId: originExternalId,
-                      kind: "disposal",
-                      derivationRule: "internal_transfer_out",
-                      assetId: row.assetId,
-                      amount,
-                      sourceTransferId: originSourceTransferId,
-                    }))
-                  const destinationIsCanonical =
-                    destinationLeg !== undefined &&
-                    destinationLegs.length === 1 &&
-                    (yield* isExpectedPrincipalLeg({
-                      leg: destinationLeg,
-                      externalId: destinationExternalId,
-                      kind: "acquisition",
-                      derivationRule: "internal_transfer_in",
-                      assetId: row.assetId,
-                      amount,
-                      sourceTransferId: destinationSourceTransferId,
-                    }))
+                  const roots = rootRowsByInventoryKey.get(inventoryKey) ?? []
+                  roots.push(row)
+                  rootRowsByInventoryKey.set(inventoryKey, roots)
+                }
 
-                  if (!originIsCanonical || !destinationIsCanonical) {
-                    continue
+                const rebuildableReconciliations: InvalidationPlan[] = []
+                const unrebuildableInventoryKeys = new Set<string>()
+
+                for (const [inventoryKey, rootRows] of rootRowsByInventoryKey) {
+                  const plans: InvalidationPlan[] = []
+                  const plannedReconciliationIds = new Set<string>()
+                  const pendingRows = rootRows.map((row) => ({ depth: 0, row }))
+
+                  for (let index = 0; index < pendingRows.length; index += 1) {
+                    const pending = pendingRows[index]
+                    if (
+                      pending === undefined ||
+                      plannedReconciliationIds.has(pending.row.reconciliationId)
+                    ) {
+                      continue
+                    }
+
+                    const plan = yield* loadInvalidationPlan({
+                      depth: pending.depth,
+                      inventoryKey,
+                      row: pending.row,
+                    })
+                    if (plan === null) {
+                      continue
+                    }
+
+                    plannedReconciliationIds.add(plan.row.reconciliationId)
+                    plans.push(plan)
+                    for (const candidate of connectedReconciliations) {
+                      if (
+                        plannedReconciliationIds.has(candidate.reconciliationId) ||
+                        candidate.assetId !== plan.row.assetId ||
+                        originSourceIdForReconciliation(candidate) !== plan.destinationSourceId
+                      ) {
+                        continue
+                      }
+
+                      const candidateOriginTimestamp =
+                        candidate.providerDirection === "outbound"
+                          ? candidate.providerTransactionTimestamp
+                          : candidate.canonicalTransactionTimestamp
+                      if (candidateOriginTimestamp < plan.destinationTimestamp) {
+                        continue
+                      }
+
+                      pendingRows.push({ depth: plan.depth + 1, row: candidate })
+                    }
                   }
 
-                  if (!(yield* canClearPrincipalLegs({ legs: destinationLegs }))) {
+                  const plannedOriginLegIds = new Set(
+                    plans.flatMap(({ originLegs }) => originLegs.map(({ id }) => id))
+                  )
+                  const destinationLegIds = plans.flatMap(({ destinationLegs }) =>
+                    destinationLegs.map(({ id }) => id)
+                  )
+                  const dependentDisposals =
+                    destinationLegIds.length === 0
+                      ? []
+                      : yield* tx
+                          .select({ disposalLegId: schema.disposalMatches.disposalLegId })
+                          .from(schema.disposalMatches)
+                          .innerJoin(
+                            schema.fifoLots,
+                            eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId)
+                          )
+                          .where(inArray(schema.fifoLots.sourceLegId, destinationLegIds))
+                          .pipe(
+                            wrapSyncEngineSqlError(
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.loadDependentTransferDisposals"
+                            )
+                          )
+                  const dependentAllocations =
+                    destinationLegIds.length === 0
+                      ? []
+                      : yield* tx
+                          .select({ id: schema.inventoryMovementAllocations.id })
+                          .from(schema.inventoryMovementAllocations)
+                          .innerJoin(
+                            schema.fifoLots,
+                            eq(schema.fifoLots.id, schema.inventoryMovementAllocations.fifoLotId)
+                          )
+                          .where(inArray(schema.fifoLots.sourceLegId, destinationLegIds))
+                          .limit(1)
+                          .pipe(
+                            wrapSyncEngineSqlError(
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.loadDependentTransferAllocations"
+                            )
+                          )
+                  const hasUnplannedUsage =
+                    dependentAllocations.length > 0 ||
+                    dependentDisposals.some(
+                      ({ disposalLegId }) => !plannedOriginLegIds.has(disposalLegId)
+                    )
+
+                  if (hasUnplannedUsage) {
                     unrebuildableInventoryKeys.add(inventoryKey)
                     continue
                   }
 
-                  invalidatedReconciliations.push({
-                    custodyProviderTransferId: yield* loadCustodyProviderTransferId({
-                      originTransactionId: originTransaction.id,
-                      row,
-                    }),
-                    destinationLegs,
-                    inventoryKey,
-                    originLegs,
-                    originTransactionId: originTransaction.id,
-                    row,
-                  })
+                  rebuildableReconciliations.push(...plans)
                 }
 
-                const rebuildableReconciliations = invalidatedReconciliations.filter(
-                  ({ inventoryKey }) => !unrebuildableInventoryKeys.has(inventoryKey)
+                const invalidationsInReverseDependencyOrder = [...rebuildableReconciliations].sort(
+                  (left, right) =>
+                    right.depth - left.depth ||
+                    right.originTimestamp.getTime() - left.originTimestamp.getTime() ||
+                    right.row.reconciliationId.localeCompare(left.row.reconciliationId)
                 )
 
-                for (const invalidated of rebuildableReconciliations) {
+                for (const invalidated of invalidationsInReverseDependencyOrder) {
                   yield* clearPrincipalLegs({ legs: invalidated.originLegs })
                   yield* clearPrincipalLegs({ legs: invalidated.destinationLegs })
                   yield* markInternalTransferForFifoRebuild({
@@ -2117,7 +2285,8 @@ const make = Effect.gen(function* () {
                   (left, right) =>
                     left.timestamp.getTime() - right.timestamp.getTime() ||
                     left.createdAt.getTime() - right.createdAt.getTime() ||
-                    left.kind.localeCompare(right.kind)
+                    left.kind.localeCompare(right.kind) ||
+                    left.id.localeCompare(right.id)
                 )
 
                 const inventoryKeyForEffect = (effect: (typeof effects)[number]) =>
@@ -2515,7 +2684,14 @@ const make = Effect.gen(function* () {
                     )
                 }
 
-                return rebuildableReconciliations.map(({ row }) => row)
+                return [...rebuildableReconciliations]
+                  .sort(
+                    (left, right) =>
+                      left.depth - right.depth ||
+                      left.originTimestamp.getTime() - right.originTimestamp.getTime() ||
+                      left.row.reconciliationId.localeCompare(right.row.reconciliationId)
+                  )
+                  .map(({ row }) => row)
               })
 
             const applyPair = (row: (typeof reconciliations)[number]) =>

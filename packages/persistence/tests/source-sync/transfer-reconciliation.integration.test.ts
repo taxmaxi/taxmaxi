@@ -1078,6 +1078,52 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .where(eq(schema.transactionReviews.transactionId, reviewedTransaction.id))
 
+        const [redundantProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: reviewedTransaction.id,
+            externalId: "destination-reviewed-principal-movement",
+            externalGroupId: "destination-reviewed-principal-movement:group",
+            providerAssetId: providerAssetRowId,
+            timestamp: new Date("2025-04-20T10:00:00.000Z"),
+            direction: "outbound",
+            fromAccountRef: "owned-wallet",
+            toAccountRef: null,
+            fromAddress: walletAddress,
+            toAddress: "bc1qexternaldisposal000000000000000000000000",
+            networkName: "bitcoin",
+            networkHash: "destination-reviewed-principal-movement-hash",
+            amount: "0.15000000",
+            metadata: { provider: "bitcoin" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+
+        if (redundantProviderTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create redundant principal transfer fixture")
+        }
+
+        const [redundantPrincipalMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: reviewedTransaction.id,
+            providerTransferId: redundantProviderTransfer.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-20T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.15000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (redundantPrincipalMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create redundant principal movement fixture")
+        }
+
         const [localAcquisitionLeg] = yield* db
           .insert(schema.transactionLegs)
           .values({
@@ -1329,6 +1375,7 @@ describe("TransferReconciliationServiceLive", () => {
           localLotId: localLot.id,
           laterDisposalLegId: laterDisposalLeg.id,
           feeMovementId: feeMovement.id,
+          redundantPrincipalMovementId: redundantPrincipalMovement.id,
           reviewedTransactionId: reviewedTransaction.id,
         }
       })
@@ -1514,6 +1561,26 @@ describe("TransferReconciliationServiceLive", () => {
               destinationRecoveryFixture.canonicalMovementId
             )
           )
+        const redundantPrincipalMovementAllocations = yield* db
+          .select({ id: schema.inventoryMovementAllocations.id })
+          .from(schema.inventoryMovementAllocations)
+          .where(
+            eq(
+              schema.inventoryMovementAllocations.inventoryMovementId,
+              destinationRecoveryFixture.redundantPrincipalMovementId
+            )
+          )
+        const [redundantPrincipalMovement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+          })
+          .from(schema.inventoryMovements)
+          .where(
+            eq(
+              schema.inventoryMovements.id,
+              destinationRecoveryFixture.redundantPrincipalMovementId
+            )
+          )
         const canonicalDisposalMatches = yield* db
           .select({ id: schema.disposalMatches.id })
           .from(schema.disposalMatches)
@@ -1533,6 +1600,8 @@ describe("TransferReconciliationServiceLive", () => {
           disposalMatches,
           feeMovement,
           providerOriginLot,
+          redundantPrincipalMovement,
+          redundantPrincipalMovementAllocations,
           originReview,
           localLot,
           reviews,
@@ -1558,6 +1627,8 @@ describe("TransferReconciliationServiceLive", () => {
       }),
     ])
     expect(state.canonicalMovementAllocations).toHaveLength(0)
+    expect(state.redundantPrincipalMovement).toEqual({ reconciliationStatus: "unmatched" })
+    expect(state.redundantPrincipalMovementAllocations).toHaveLength(0)
     expect(state.canonicalDisposalMatches).toHaveLength(1)
     expect(state.canonicalLot?.remainingAmount).toContain("0.00000000")
     expect(state.reviews).toEqual(
@@ -2187,6 +2258,9 @@ describe("TransferReconciliationServiceLive", () => {
     const downstreamAddressId = "00000000-0000-0000-0000-000000000705"
     const downstreamSourceId = "00000000-0000-0000-0000-000000000706"
     const downstreamWalletAddress = "bc1qdownstreamtransferreplay000000000000000000"
+    const finalAddressId = "00000000-0000-0000-0000-000000000707"
+    const finalSourceId = "00000000-0000-0000-0000-000000000708"
+    const finalWalletAddress = "bc1qfinaltransferreplay0000000000000000000000"
     const providerAssetRowId = await runPg(
       seedApprovedProviderAsset({
         providerAssetId: "btc-provider-asset-transfer-replay",
@@ -2232,6 +2306,22 @@ describe("TransferReconciliationServiceLive", () => {
           providerKey: "bitcoin",
           sourceableType: "onchain",
           addressId: downstreamAddressId,
+          cexAccountId: null,
+        })
+        yield* db.insert(schema.addresses).values({
+          id: finalAddressId,
+          address: finalWalletAddress,
+          type: "bitcoin",
+          name: "Final replay destination",
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        yield* db.insert(schema.sources).values({
+          id: finalSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Final replay source",
+          providerKey: "bitcoin",
+          sourceableType: "onchain",
+          addressId: finalAddressId,
           cexAccountId: null,
         })
 
@@ -2543,6 +2633,156 @@ describe("TransferReconciliationServiceLive", () => {
     )
     expect(downstreamSummary).toEqual({ canonicalizedPairs: 1 })
 
+    const finalFixture = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [downstreamLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceId, downstreamSourceId))
+        const [finalProviderTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: downstreamSourceId,
+            externalId: "provider-transfer-final-replay:tx",
+            timestamp: new Date("2025-04-17T10:00:00.000Z"),
+            transactionType: null,
+            providerTransactionType: "send",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [finalCanonicalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: finalSourceId,
+            externalId: "onchain-receipt-final-replay:tx",
+            timestamp: new Date("2025-04-17T10:05:00.000Z"),
+            transactionType: null,
+            providerTransactionType: null,
+            providerStatus: "confirmed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (
+          downstreamLot === undefined ||
+          finalProviderTransaction === undefined ||
+          finalCanonicalTransaction === undefined
+        ) {
+          return yield* Effect.dieMessage("Failed to create final replay transactions")
+        }
+
+        const [finalProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: downstreamSourceId,
+            transactionId: finalProviderTransaction.id,
+            externalId: "provider-transfer-final-replay",
+            externalGroupId: "provider-transfer-final-replay:group",
+            providerAssetId: providerAssetRowId,
+            timestamp: new Date("2025-04-17T10:00:00.000Z"),
+            direction: "outbound",
+            fromAccountRef: "downstream-wallet",
+            toAccountRef: null,
+            fromAddress: downstreamWalletAddress,
+            toAddress: finalWalletAddress,
+            networkName: "bitcoin",
+            networkHash: "btc-final-replay-hash",
+            amount: "0.05000000",
+            metadata: { provider: "bitcoin" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+        const [finalCanonicalTransfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: finalSourceId,
+            externalId: "onchain-receipt-final-replay",
+            externalGroupId: "onchain-receipt-final-replay",
+            addressId: finalAddressId,
+            blockchainId: fixture.bitcoinBlockchainId,
+            txHash: "btc-final-replay-hash",
+            timestamp: new Date("2025-04-17T10:05:00.000Z"),
+            type: "utxo",
+            fromAddress: downstreamWalletAddress,
+            toAddress: finalWalletAddress,
+            fromPartyType: "address",
+            toPartyType: "address",
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            metadata: { provider: "bitcoin" },
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transfers.id })
+
+        if (finalProviderTransfer === undefined || finalCanonicalTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create final replay transfers")
+        }
+
+        const [finalMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: downstreamSourceId,
+            transactionId: finalProviderTransaction.id,
+            providerTransferId: finalProviderTransfer.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-17T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.05000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        const [finalReconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: finalProviderTransfer.id,
+            canonicalTransferId: finalCanonicalTransfer.id,
+            canonicalTransactionId: finalCanonicalTransaction.id,
+            status: "approved",
+            matchReason: "admin_approved_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+
+        if (finalMovement === undefined || finalReconciliation === undefined) {
+          return yield* Effect.dieMessage("Failed to create final replay reconciliation")
+        }
+
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.00000000" })
+          .where(eq(schema.fifoLots.id, downstreamLot.id))
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: finalMovement.id,
+          fifoLotId: downstreamLot.id,
+          matchedAmount: "0.05000000",
+        })
+
+        return {
+          movementId: finalMovement.id,
+          providerTransactionId: finalProviderTransaction.id,
+          reconciliationId: finalReconciliation.id,
+        }
+      })
+    )
+
+    const finalSummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: downstreamSourceId,
+          reconciliationId: finalFixture.reconciliationId,
+        })
+      )
+    )
+    expect(finalSummary).toEqual({ canonicalizedPairs: 1 })
+
     const upstreamSummary = await runTransferReconciliation(
       Effect.flatMap(TransferReconciliationService, (service) =>
         service.applyDeterministicInternalTransferCanonicalization({
@@ -2596,10 +2836,37 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.id, replayFixture.downstreamMovementId))
+        const [finalOriginLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            and(
+              eq(schema.transactionLegs.transactionId, finalFixture.providerTransactionId),
+              eq(schema.transactionLegs.derivationRule, "internal_transfer_out")
+            )
+          )
+        const [finalReview] = yield* db
+          .select({
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+          })
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, finalFixture.providerTransactionId))
+        const [finalMovement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, finalFixture.movementId))
         const downstreamLots = yield* db
           .select({ id: schema.fifoLots.id })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.sourceId, downstreamSourceId))
+        const finalLots = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceId, finalSourceId))
         const downstreamMatches =
           downstreamOriginLeg === undefined
             ? []
@@ -2607,6 +2874,13 @@ describe("TransferReconciliationServiceLive", () => {
                 .select({ id: schema.disposalMatches.id })
                 .from(schema.disposalMatches)
                 .where(eq(schema.disposalMatches.disposalLegId, downstreamOriginLeg.id))
+        const finalMatches =
+          finalOriginLeg === undefined
+            ? []
+            : yield* db
+                .select({ id: schema.disposalMatches.id })
+                .from(schema.disposalMatches)
+                .where(eq(schema.disposalMatches.disposalLegId, finalOriginLeg.id))
 
         return {
           downstreamLots,
@@ -2614,6 +2888,11 @@ describe("TransferReconciliationServiceLive", () => {
           downstreamMovement,
           downstreamOriginLeg,
           downstreamReview,
+          finalLots,
+          finalMatches,
+          finalMovement,
+          finalOriginLeg,
+          finalReview,
           reviewedMatches,
           reviewedReview,
         }
@@ -2636,6 +2915,17 @@ describe("TransferReconciliationServiceLive", () => {
       taxTreatment: "pending_review",
     })
     expect(state.downstreamReview).toEqual({
+      matchedLayer: "transfer_reconciliation,fifo_inventory",
+      needsReview: true,
+    })
+    expect(state.finalOriginLeg).toBeDefined()
+    expect(state.finalMatches).toHaveLength(0)
+    expect(state.finalLots).toHaveLength(0)
+    expect(state.finalMovement).toEqual({
+      reconciliationStatus: "unmatched",
+      taxTreatment: "pending_review",
+    })
+    expect(state.finalReview).toEqual({
       matchedLayer: "transfer_reconciliation,fifo_inventory",
       needsReview: true,
     })
