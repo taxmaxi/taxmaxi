@@ -108,12 +108,6 @@ const make = Effect.gen(function* () {
         .pipe(
           wrapSyncEngineSqlError(
             "transferReconciliationRepository.listProviderTransfersForReconciliation"
-          ),
-          Effect.map((rows) =>
-            rows.map((row) => ({
-              ...row,
-              amount: String(row.amount),
-            }))
           )
         )
 
@@ -180,15 +174,7 @@ const make = Effect.gen(function* () {
         )
         .orderBy(asc(schema.transfers.timestamp), asc(schema.transfers.id))
         .pipe(
-          wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates"),
-          Effect.map((rows) =>
-            rows.map((row) => ({
-              ...row,
-              blockchainId: row.blockchainId,
-              blockchainName: row.blockchainName,
-              amount: String(row.amount),
-            }))
-          )
+          wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
         )
     }
 
@@ -530,20 +516,22 @@ const make = Effect.gen(function* () {
                     )
                   )
 
-                yield* Effect.forEach(matches, (match) =>
-                  tx
-                    .update(schema.fifoLots)
-                    .set({
-                      remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${match.matchedAmount}`,
-                      updatedAt: nowDate(),
-                    })
-                    .where(eq(schema.fifoLots.id, match.fifoLotId))
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.restoreDisposalMatches.updateLot"
+                yield* Effect.forEach(
+                  matches,
+                  (match) =>
+                    tx
+                      .update(schema.fifoLots)
+                      .set({
+                        remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${match.matchedAmount}`,
+                        updatedAt: nowDate(),
+                      })
+                      .where(eq(schema.fifoLots.id, match.fifoLotId))
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.restoreDisposalMatches.updateLot"
+                        )
                       ),
-                      Effect.asVoid
-                    )
+                  { discard: true }
                 )
               })
 
@@ -560,8 +548,8 @@ const make = Effect.gen(function* () {
                   if (leg.kind === "acquisition" || leg.kind === "income") {
                     const [dependent] = yield* loadDependentUsageCount(leg.id)
                     if (
-                      Number(dependent?.disposalMatchCount ?? 0) > 0 ||
-                      Number(dependent?.custodyAllocationCount ?? 0) > 0
+                      (dependent?.disposalMatchCount ?? 0) > 0 ||
+                      (dependent?.custodyAllocationCount ?? 0) > 0
                     ) {
                       return false
                     }
