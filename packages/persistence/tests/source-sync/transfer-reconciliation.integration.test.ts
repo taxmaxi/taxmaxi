@@ -2182,6 +2182,465 @@ describe("TransferReconciliationServiceLive", () => {
     })
   })
 
+  it("replays later canonical transfers after recovering earlier FIFO effects", async () => {
+    const walletAddress = "bc1qownedwallettransferreplay00000000000000000"
+    const downstreamAddressId = "00000000-0000-0000-0000-000000000705"
+    const downstreamSourceId = "00000000-0000-0000-0000-000000000706"
+    const downstreamWalletAddress = "bc1qdownstreamtransferreplay000000000000000000"
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({
+        providerAssetId: "btc-provider-asset-transfer-replay",
+      })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+
+    const upstreamProviderTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-upstream-replay",
+        timestamp: new Date("2025-04-14T10:00:00.000Z"),
+        amount: "0.05000000",
+        toAddress: walletAddress,
+        networkHash: "btc-upstream-replay-hash",
+      })
+    )
+    const upstreamReceipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-upstream-replay",
+        txHash: "btc-upstream-replay-hash",
+        timestamp: new Date("2025-04-14T10:05:00.000Z"),
+        amount: "0.05000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    const replayFixture = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.addresses).values({
+          id: downstreamAddressId,
+          address: downstreamWalletAddress,
+          type: "bitcoin",
+          name: "Downstream replay destination",
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        yield* db.insert(schema.sources).values({
+          id: downstreamSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Downstream replay source",
+          providerKey: "bitcoin",
+          sourceableType: "onchain",
+          addressId: downstreamAddressId,
+          cexAccountId: null,
+        })
+
+        const [upstreamProviderTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, upstreamProviderTransferId))
+        const [upstreamReconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: upstreamProviderTransferId,
+            canonicalTransferId: upstreamReceipt.transferId,
+            canonicalTransactionId: upstreamReceipt.transactionId,
+            status: "approved",
+            matchReason: "admin_approved_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+        const [upstreamAcquisitionLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "upstream-replay-acquisition",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "2500.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (
+          upstreamProviderTransfer === undefined ||
+          upstreamReconciliation === undefined ||
+          upstreamAcquisitionLeg === undefined
+        ) {
+          return yield* Effect.dieMessage("Failed to create upstream replay fixtures")
+        }
+
+        const [upstreamLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "0.05000000",
+            remainingAmount: "0.00000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: upstreamAcquisitionLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [upstreamMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: upstreamProviderTransfer.transactionId,
+            providerTransferId: upstreamProviderTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-14T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.05000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (upstreamLot === undefined || upstreamMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create upstream replay inventory")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: upstreamMovement.id,
+          fifoLotId: upstreamLot.id,
+          matchedAmount: "0.05000000",
+        })
+
+        const [localAcquisitionLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "transfer-replay-local-acquisition",
+            timestamp: new Date("2025-04-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "2600.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        const [reviewedTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "transfer-replay-earlier-disposal",
+            timestamp: new Date("2025-04-15T10:00:00.000Z"),
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "confirmed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (localAcquisitionLeg === undefined || reviewedTransaction === undefined) {
+          return yield* Effect.dieMessage("Failed to create reviewed replay fixtures")
+        }
+
+        const [localLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-02T10:00:00.000Z"),
+            originalAmount: "0.05000000",
+            remainingAmount: "0.00000000",
+            costBasisPerToken: "52000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: localAcquisitionLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [reviewedDisposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "transfer-replay-earlier-disposal:leg",
+            timestamp: new Date("2025-04-15T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "fixture_disposal",
+            transactionId: reviewedTransaction.id,
+            fiatAmount: "6000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (localLot === undefined || reviewedDisposalLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create reviewed replay FIFO effects")
+        }
+
+        yield* db.insert(schema.transactionReviews).values({
+          transactionId: reviewedTransaction.id,
+          principalId: TEST_PRINCIPAL_ID,
+          reviewStatus: "needs_review",
+          originalTypeKey: "sell_fiat",
+          currentTypeKey: "sell_fiat",
+          categorizationReason:
+            "fifo_inventory: Review required because destination inventory is incomplete.",
+          matchedLayer: "fifo_inventory",
+          needsReview: true,
+        })
+
+        const [downstreamProviderTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "provider-transfer-downstream-replay:tx",
+            timestamp: new Date("2025-04-16T10:00:00.000Z"),
+            transactionType: null,
+            providerTransactionType: "send",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [downstreamCanonicalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: downstreamSourceId,
+            externalId: "onchain-receipt-downstream-replay:tx",
+            timestamp: new Date("2025-04-16T10:05:00.000Z"),
+            transactionType: null,
+            providerTransactionType: null,
+            providerStatus: "confirmed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (
+          downstreamProviderTransaction === undefined ||
+          downstreamCanonicalTransaction === undefined
+        ) {
+          return yield* Effect.dieMessage("Failed to create downstream replay transactions")
+        }
+
+        const [downstreamProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: downstreamProviderTransaction.id,
+            externalId: "provider-transfer-downstream-replay",
+            externalGroupId: "provider-transfer-downstream-replay:group",
+            providerAssetId: providerAssetRowId,
+            timestamp: new Date("2025-04-16T10:00:00.000Z"),
+            direction: "outbound",
+            fromAccountRef: "owned-wallet",
+            toAccountRef: null,
+            fromAddress: walletAddress,
+            toAddress: downstreamWalletAddress,
+            networkName: "bitcoin",
+            networkHash: "btc-downstream-replay-hash",
+            amount: "0.05000000",
+            metadata: { provider: "bitcoin" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+        const [downstreamCanonicalTransfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: downstreamSourceId,
+            externalId: "onchain-receipt-downstream-replay",
+            externalGroupId: "onchain-receipt-downstream-replay",
+            addressId: downstreamAddressId,
+            blockchainId: fixture.bitcoinBlockchainId,
+            txHash: "btc-downstream-replay-hash",
+            timestamp: new Date("2025-04-16T10:05:00.000Z"),
+            type: "utxo",
+            fromAddress: walletAddress,
+            toAddress: downstreamWalletAddress,
+            fromPartyType: "address",
+            toPartyType: "address",
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            metadata: { provider: "bitcoin" },
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transfers.id })
+
+        if (downstreamProviderTransfer === undefined || downstreamCanonicalTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create downstream replay transfers")
+        }
+
+        const [downstreamMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: downstreamProviderTransaction.id,
+            providerTransferId: downstreamProviderTransfer.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-16T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.05000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        const [downstreamReconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: downstreamProviderTransfer.id,
+            canonicalTransferId: downstreamCanonicalTransfer.id,
+            canonicalTransactionId: downstreamCanonicalTransaction.id,
+            status: "approved",
+            matchReason: "admin_approved_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+
+        if (downstreamMovement === undefined || downstreamReconciliation === undefined) {
+          return yield* Effect.dieMessage("Failed to create downstream replay reconciliation")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: downstreamMovement.id,
+          fifoLotId: localLot.id,
+          matchedAmount: "0.05000000",
+        })
+
+        return {
+          downstreamMovementId: downstreamMovement.id,
+          downstreamProviderTransactionId: downstreamProviderTransaction.id,
+          downstreamReconciliationId: downstreamReconciliation.id,
+          reviewedDisposalLegId: reviewedDisposalLeg.id,
+          reviewedTransactionId: reviewedTransaction.id,
+          upstreamReconciliationId: upstreamReconciliation.id,
+        }
+      })
+    )
+
+    const downstreamSummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: ONCHAIN_SOURCE_ID,
+          reconciliationId: replayFixture.downstreamReconciliationId,
+        })
+      )
+    )
+    expect(downstreamSummary).toEqual({ canonicalizedPairs: 1 })
+
+    const upstreamSummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId: replayFixture.upstreamReconciliationId,
+        })
+      )
+    )
+    expect(upstreamSummary).toEqual({ canonicalizedPairs: 1 })
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const reviewedMatches = yield* db
+          .select({ matchedAmount: schema.disposalMatches.matchedAmount })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.disposalLegId, replayFixture.reviewedDisposalLegId))
+        const [downstreamOriginLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            and(
+              eq(
+                schema.transactionLegs.transactionId,
+                replayFixture.downstreamProviderTransactionId
+              ),
+              eq(schema.transactionLegs.derivationRule, "internal_transfer_out")
+            )
+          )
+        const [reviewedReview] = yield* db
+          .select({ id: schema.transactionReviews.id })
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, replayFixture.reviewedTransactionId))
+        const [downstreamReview] = yield* db
+          .select({
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+          })
+          .from(schema.transactionReviews)
+          .where(
+            eq(
+              schema.transactionReviews.transactionId,
+              replayFixture.downstreamProviderTransactionId
+            )
+          )
+        const [downstreamMovement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, replayFixture.downstreamMovementId))
+        const downstreamLots = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceId, downstreamSourceId))
+        const downstreamMatches =
+          downstreamOriginLeg === undefined
+            ? []
+            : yield* db
+                .select({ id: schema.disposalMatches.id })
+                .from(schema.disposalMatches)
+                .where(eq(schema.disposalMatches.disposalLegId, downstreamOriginLeg.id))
+
+        return {
+          downstreamLots,
+          downstreamMatches,
+          downstreamMovement,
+          downstreamOriginLeg,
+          downstreamReview,
+          reviewedMatches,
+          reviewedReview,
+        }
+      })
+    )
+
+    expect(state.reviewedMatches).toHaveLength(2)
+    expect(state.reviewedMatches).toEqual(
+      expect.arrayContaining([
+        { matchedAmount: expect.stringContaining("0.05000000") },
+        { matchedAmount: expect.stringContaining("0.05000000") },
+      ])
+    )
+    expect(state.reviewedReview).toBeUndefined()
+    expect(state.downstreamOriginLeg).toBeDefined()
+    expect(state.downstreamMatches).toHaveLength(0)
+    expect(state.downstreamLots).toHaveLength(0)
+    expect(state.downstreamMovement).toEqual({
+      reconciliationStatus: "unmatched",
+      taxTreatment: "pending_review",
+    })
+    expect(state.downstreamReview).toEqual({
+      matchedLayer: "transfer_reconciliation,fifo_inventory",
+      needsReview: true,
+    })
+  })
+
   it("does not mutate same-source lots when transfer inventory is insufficient", async () => {
     const walletAddress = "bc1qownedwalletpartialinventory0000000000000000"
     const providerAssetRowId = await runPg(
