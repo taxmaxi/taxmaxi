@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { useRouteContext } from "@tanstack/react-router"
+import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import {
   isTaxMaxiUnauthorizedError,
   type SourceSyncJob,
@@ -80,8 +81,12 @@ export function Dashboard({
   )
 
   const selectedSourceId = accountScope === ALL_ACCOUNTS ? undefined : accountScope
-  const portfolioQuery = useQuery(queries.portfolioAssets(taxmaxi, selectedSourceId))
+  const portfolioQuery = useQuery({
+    ...queries.portfolioAssets(taxmaxi, selectedSourceId),
+    placeholderData: keepPreviousData,
+  })
   const activeHoldings = portfolioQuery.data?.assets ?? []
+  const isSwitchingPortfolio = portfolioQuery.isFetching && portfolioQuery.isPlaceholderData
 
   useEffect(() => {
     if (isTaxMaxiUnauthorizedError(portfolioQuery.error)) {
@@ -160,7 +165,7 @@ export function Dashboard({
         syncingSourceIds={syncingSourceIds}
         sources={accounts}
       >
-        <div className="flex min-w-0 flex-col gap-8 py-6 sm:py-8">
+        <div aria-busy={isSwitchingPortfolio} className="flex min-w-0 flex-col gap-8 py-6 sm:py-8">
           <PortfolioOverview summary={summary} />
 
           <Tabs defaultValue="assets" className="gap-y-8">
@@ -174,7 +179,7 @@ export function Dashboard({
                 currency={portfolioQuery.data?.currency ?? "EUR"}
                 error={portfolioQuery.isError}
                 holdings={activeHoldings}
-                loading={portfolioQuery.isPending}
+                loading={portfolioQuery.isPending && portfolioQuery.data === undefined}
               />
             </TabsContent>
             <TabsContent value="transactions">
@@ -189,37 +194,77 @@ export function Dashboard({
 }
 
 function PortfolioOverview({ summary }: { summary: DashboardSummary }) {
+  const balance = summary.currentBalance === null ? "—" : formatCurrency(summary.currentBalance)
+  const profitLoss =
+    summary.unrealizedProfitLoss === null ? "—" : formatSignedCurrency(summary.unrealizedProfitLoss)
+  const profitLossPercentage =
+    summary.unrealizedProfitLossPercentage === null
+      ? "—"
+      : formatPercent(summary.unrealizedProfitLossPercentage)
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
         <p className="text-3xl sm:text-5xl font-semibold tabular-nums tracking-normal">
-          {summary.currentBalance === null ? "—" : formatCurrency(summary.currentBalance)}
+          <SlidingValue value={balance} />
         </p>
 
         <div className="flex flex-col">
-          {summary.unrealizedProfitLoss === null ? (
-            <ValueTone tone="neutral">—</ValueTone>
-          ) : (
-            <ValueTone
-              tone={summary.unrealizedProfitLoss.startsWith("-") ? "negative" : "positive"}
-            >
-              {formatSignedCurrency(summary.unrealizedProfitLoss)}
-            </ValueTone>
-          )}
+          <ValueTone
+            tone={
+              summary.unrealizedProfitLoss === null
+                ? "neutral"
+                : summary.unrealizedProfitLoss.startsWith("-")
+                  ? "negative"
+                  : "positive"
+            }
+          >
+            <SlidingValue value={profitLoss} />
+          </ValueTone>
 
-          {summary.unrealizedProfitLossPercentage === null ? (
-            <ValueTone tone="neutral">—</ValueTone>
-          ) : (
-            <ValueTone
-              tone={
-                summary.unrealizedProfitLossPercentage.startsWith("-") ? "negative" : "positive"
-              }
-            >
-              {formatPercent(summary.unrealizedProfitLossPercentage)}
-            </ValueTone>
-          )}
+          <ValueTone
+            tone={
+              summary.unrealizedProfitLossPercentage === null
+                ? "neutral"
+                : summary.unrealizedProfitLossPercentage.startsWith("-")
+                  ? "negative"
+                  : "positive"
+            }
+          >
+            <SlidingValue value={profitLossPercentage} />
+          </ValueTone>
         </div>
       </div>
     </div>
+  )
+}
+
+function SlidingValue({ value }: { value: string }) {
+  const reduceMotion = useReducedMotion()
+
+  if (reduceMotion) {
+    return <>{value}</>
+  }
+
+  return (
+    <span className="relative inline-grid overflow-hidden align-bottom">
+      <span className="invisible col-start-1 row-start-1" aria-hidden="true">
+        {value}
+      </span>
+      <span className="sr-only">{value}</span>
+      <AnimatePresence initial={false} mode="popLayout">
+        <motion.span
+          aria-hidden="true"
+          className="col-start-1 row-start-1"
+          key={value}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: "-45%" }}
+          initial={{ opacity: 0, y: "45%" }}
+          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+        >
+          {value}
+        </motion.span>
+      </AnimatePresence>
+    </span>
   )
 }
