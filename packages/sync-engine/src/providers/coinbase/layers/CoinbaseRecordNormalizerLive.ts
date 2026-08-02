@@ -382,6 +382,7 @@ const buildFeeTransfer = (params: {
         toPartyType: "fee",
         toPartyResourcePath: null,
         assetId: assetId.value,
+        assetRepresentationId: null,
         amount: params.money.amount,
         tokenId: null,
         notes: params.notes,

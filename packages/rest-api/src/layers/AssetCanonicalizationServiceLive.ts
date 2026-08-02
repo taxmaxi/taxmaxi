@@ -7,8 +7,9 @@
 import {
   AssetRepository,
   ProviderAssetRepository,
-  type CanonicalAssetDraft,
+  type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
+  type EconomicAssetDraft,
   type ProviderAssetRecord,
 } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
@@ -296,7 +297,8 @@ const buildNativeCanonicalDrafts = ({
   readonly platform: CoinGeckoAssetPlatform
 }): {
   readonly blockchain: CanonicalBlockchainDraft
-  readonly asset: CanonicalAssetDraft
+  readonly asset: EconomicAssetDraft
+  readonly representation: AssetRepresentationDraft
 } => ({
   blockchain: {
     name: platform.id,
@@ -308,14 +310,20 @@ const buildNativeCanonicalDrafts = ({
     coingeckoPlatformId: platform.id,
   },
   asset: {
-    contractAddress: null,
     name: coin.name,
     symbol: upperSymbol(coin.symbol),
-    decimals,
     coingeckoCoinId: coin.id,
+    logoUrl: coin.image?.small ?? null,
+    type: "fungible",
+  },
+  representation: {
+    contractAddress: null,
+    mintAddress: null,
+    decimals,
     logoUrl: coin.image?.small ?? null,
     type: "native",
     isSpam: false,
+    metadata: { source: "coingecko", coinId: coin.id, platformId: platform.id },
   },
 })
 
@@ -331,7 +339,8 @@ const buildTokenCanonicalDrafts = ({
   readonly providerAsset: ProviderAssetRecord
 }): {
   readonly blockchain: CanonicalBlockchainDraft
-  readonly asset: CanonicalAssetDraft
+  readonly asset: EconomicAssetDraft
+  readonly representation: AssetRepresentationDraft
 } => {
   const detail = coin.detail_platforms[platform.id]
   return {
@@ -345,14 +354,20 @@ const buildTokenCanonicalDrafts = ({
       coingeckoPlatformId: platform.id,
     },
     asset: {
-      contractAddress,
       name: coin.name,
       symbol: upperSymbol(coin.symbol),
-      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
       coingeckoCoinId: coin.id,
       logoUrl: coin.image?.small ?? null,
-      type: "token",
+      type: providerAsset.providerType === "nft" ? "nft" : "fungible",
+    },
+    representation: {
+      contractAddress: deriveChainType(platform) === "solana" ? null : contractAddress,
+      mintAddress: deriveChainType(platform) === "solana" ? contractAddress : null,
+      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
+      logoUrl: coin.image?.small ?? null,
+      type: providerAsset.providerType === "nft" ? "nft" : "token",
       isSpam: false,
+      metadata: { source: "coingecko", coinId: coin.id, platformId: platform.id },
     },
   }
 }
@@ -511,9 +526,10 @@ const make = Effect.gen(function* () {
           providerAsset: providerAssetReview.value.providerAsset,
         })
         const canonicalAsset = yield* assetRepository
-          .upsertCanonicalAsset({
+          .upsertEconomicAssetRepresentation({
             blockchain: resolved.blockchain,
             asset: resolved.asset,
+            representation: resolved.representation,
           })
           .pipe(
             Effect.mapError(
@@ -531,7 +547,7 @@ const make = Effect.gen(function* () {
                 providerAssetRowId,
                 mappingKind: "asset",
                 canonicalAssetId: canonicalAsset.id,
-                canonicalAssetSymbol: canonicalAsset.symbol,
+                assetRepresentationId: canonicalAsset.representationId,
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,

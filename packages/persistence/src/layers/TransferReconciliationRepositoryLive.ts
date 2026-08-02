@@ -80,6 +80,7 @@ const make = Effect.gen(function* () {
           providerTransactionId: schema.providerTransfers.transactionId,
           providerAssetId: schema.providerTransfers.providerAssetId,
           canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+          assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
           timestamp: schema.providerTransfers.timestamp,
           direction: schema.providerTransfers.direction,
           fromAddress: schema.providerTransfers.fromAddress,
@@ -115,6 +116,7 @@ const make = Effect.gen(function* () {
     ({
       principalId,
       canonicalAssetId,
+      assetRepresentationId,
       direction,
       walletAddress,
       timestampStart,
@@ -145,6 +147,7 @@ const make = Effect.gen(function* () {
           fromAddress: schema.transfers.fromAddress,
           toAddress: schema.transfers.toAddress,
           assetId: schema.transfers.assetId,
+          assetRepresentationId: schema.transfers.assetRepresentationId,
           amount: schema.transfers.amount,
         })
         .from(schema.transfers)
@@ -163,6 +166,9 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.sources.principalId, principalId),
             eq(schema.transfers.assetId, canonicalAssetId),
+            ...(assetRepresentationId === null
+              ? []
+              : [eq(schema.transfers.assetRepresentationId, assetRepresentationId)]),
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
             eq(schema.addresses.address, walletAddress),
             sql`lower(${ownershipColumn}) = lower(${walletAddress})`,

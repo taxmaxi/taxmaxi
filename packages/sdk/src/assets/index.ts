@@ -19,7 +19,7 @@ type TaxMaxiAssetsClient =
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
-export type AssetCatalogAsset = {
+export type AssetRepresentation = {
   readonly id: string
   readonly blockchainId: string
   readonly blockchainName: string
@@ -27,13 +27,20 @@ export type AssetCatalogAsset = {
   readonly blockchainChainId: number | null
   readonly blockchainExplorerUrl: string | null
   readonly blockchainLogoUrl: string | null
+  readonly type: "native" | "token" | "nft"
   readonly contractAddress: string | null
-  readonly name: string
-  readonly symbol: string
+  readonly mintAddress: string | null
   readonly decimals: number
   readonly logoUrl: string | null
-  readonly type: "native" | "token" | "nft"
-  readonly isSpam: boolean
+  readonly metadata: unknown
+}
+export type AssetCatalogAsset = {
+  readonly id: string
+  readonly name: string
+  readonly symbol: string
+  readonly logoUrl: string | null
+  readonly type: "fungible" | "nft"
+  readonly representations: ReadonlyArray<AssetRepresentation>
 }
 export type TaxMaxiAssetType = AssetCatalogAsset["type"]
 export type AssetCatalogList = {
@@ -90,19 +97,25 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
 
 const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsset => ({
   id: asset.id,
-  blockchainId: asset.blockchainId,
-  blockchainName: asset.blockchainName,
-  blockchainChainType: asset.blockchainChainType,
-  blockchainChainId: asset.blockchainChainId,
-  blockchainExplorerUrl: asset.blockchainExplorerUrl,
-  blockchainLogoUrl: asset.blockchainLogoUrl,
-  contractAddress: asset.contractAddress,
   name: asset.name,
   symbol: asset.symbol,
-  decimals: asset.decimals,
   logoUrl: asset.logoUrl,
   type: asset.type,
-  isSpam: asset.isSpam,
+  representations: asset.representations.map((representation) => ({
+    id: representation.id,
+    blockchainId: representation.blockchainId,
+    blockchainName: representation.blockchainName,
+    blockchainChainType: representation.blockchainChainType,
+    blockchainChainId: representation.blockchainChainId,
+    blockchainExplorerUrl: representation.blockchainExplorerUrl,
+    blockchainLogoUrl: representation.blockchainLogoUrl,
+    type: representation.type,
+    contractAddress: representation.contractAddress,
+    mintAddress: representation.mintAddress,
+    decimals: representation.decimals,
+    logoUrl: representation.logoUrl,
+    metadata: representation.metadata,
+  })),
 })
 
 const toAssetCatalogList = (response: AssetCatalogListResponse): AssetCatalogList => ({

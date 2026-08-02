@@ -1,7 +1,8 @@
-import { and, eq, inArray, isNull } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { KNOWN_ASSET_IDS, KNOWN_ASSET_REPRESENTATION_IDS } from "@my/core/asset"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
@@ -25,10 +26,14 @@ const context = makeIntegrationTestDatabaseContext({
 
 await Effect.runPromise(context.recreateTestDatabase())
 
-const SOL_ASSET_ID = "00000000-0000-0000-0000-000000001601"
-const USDC_ASSET_ID = "00000000-0000-0000-0000-000000001602"
-const USDT_ASSET_ID = "00000000-0000-0000-0000-000000001603"
+const SOL_ASSET_ID = KNOWN_ASSET_IDS.SOL
+const USDC_ASSET_ID = KNOWN_ASSET_IDS.USDC
+const USDT_ASSET_ID = KNOWN_ASSET_IDS.USDT
 const UNKNOWN_ASSET_ID = "00000000-0000-0000-0000-000000001604"
+const SOL_REPRESENTATION_ID = KNOWN_ASSET_REPRESENTATION_IDS.SOL_SOLANA
+const USDC_REPRESENTATION_ID = KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA
+const USDT_REPRESENTATION_ID = KNOWN_ASSET_REPRESENTATION_IDS.USDT_SOLANA
+const UNKNOWN_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001604"
 const UNKNOWN_MINT = "Drift111111111111111111111111111111111111111"
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -84,52 +89,62 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
   yield* db.delete(schema.providerAssets)
 
   yield* db
-    .delete(schema.assets)
-    .where(
-      and(
-        eq(schema.assets.blockchainId, solanaBlockchain.id),
-        inArray(schema.assets.contractAddress, [SOLANA_USDC_MINT, SOLANA_USDT_MINT, UNKNOWN_MINT])
-      )
-    )
-
+    .delete(schema.assetRepresentations)
+    .where(eq(schema.assetRepresentations.blockchainId, solanaBlockchain.id))
   yield* db
     .delete(schema.assets)
     .where(
-      and(
-        eq(schema.assets.blockchainId, solanaBlockchain.id),
-        isNull(schema.assets.contractAddress),
-        eq(schema.assets.symbol, "SOL"),
-        eq(schema.assets.type, "native")
-      )
+      inArray(schema.assets.id, [SOL_ASSET_ID, USDC_ASSET_ID, USDT_ASSET_ID, UNKNOWN_ASSET_ID])
     )
 
   yield* db.insert(schema.assets).values([
     {
       id: SOL_ASSET_ID,
-      blockchainId: solanaBlockchain.id,
-      contractAddress: null,
       name: "Solana",
       symbol: "SOL",
-      decimals: 9,
-      type: "native",
+      type: "fungible",
     },
     {
       id: USDC_ASSET_ID,
-      blockchainId: solanaBlockchain.id,
-      contractAddress: SOLANA_USDC_MINT,
       name: "USD Coin",
       symbol: "USDC",
-      decimals: 6,
-      type: "token",
+      type: "fungible",
     },
     {
       id: USDT_ASSET_ID,
-      blockchainId: solanaBlockchain.id,
-      contractAddress: SOLANA_USDT_MINT,
       name: "Tether USD",
       symbol: "USDT",
-      decimals: 6,
+      type: "fungible",
+    },
+  ])
+
+  yield* db.insert(schema.assetRepresentations).values([
+    {
+      id: SOL_REPRESENTATION_ID,
+      assetId: SOL_ASSET_ID,
+      blockchainId: solanaBlockchain.id,
+      type: "native",
+      contractAddress: null,
+      mintAddress: null,
+      decimals: 9,
+    },
+    {
+      id: USDC_REPRESENTATION_ID,
+      assetId: USDC_ASSET_ID,
+      blockchainId: solanaBlockchain.id,
       type: "token",
+      contractAddress: null,
+      mintAddress: SOLANA_USDC_MINT,
+      decimals: 6,
+    },
+    {
+      id: USDT_REPRESENTATION_ID,
+      assetId: USDT_ASSET_ID,
+      blockchainId: solanaBlockchain.id,
+      type: "token",
+      contractAddress: null,
+      mintAddress: SOLANA_USDT_MINT,
+      decimals: 6,
     },
   ])
 
@@ -182,7 +197,7 @@ const fetchProviderAssetState = ({ mintAddress }: { readonly mintAddress: string
         mappingKind: schema.providerAssetMappings.mappingKind,
         mappingStatus: schema.providerAssetMappings.mappingStatus,
         canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-        canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+        assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
         sourceNotes: schema.providerAssetMappings.sourceNotes,
       })
       .from(schema.providerAssets)
@@ -237,7 +252,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       decimals: 9,
       mappingStatus: "approved",
       canonicalAssetId: SOL_ASSET_ID,
-      canonicalAssetSymbol: "SOL",
+      assetRepresentationId: SOL_REPRESENTATION_ID,
     })
   })
 
@@ -299,7 +314,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       mappingKind: "asset",
       mappingStatus: "approved",
       canonicalAssetId: USDC_ASSET_ID,
-      canonicalAssetSymbol: "USDC",
+      assetRepresentationId: USDC_REPRESENTATION_ID,
     })
     expect(usdcState?.rawProviderPayload).toMatchObject({
       source: "helius_das_get_asset_batch",
@@ -332,7 +347,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       tokenProgram: null,
       mappingStatus: "approved",
       canonicalAssetId: USDC_ASSET_ID,
-      canonicalAssetSymbol: "USDC",
+      assetRepresentationId: USDC_REPRESENTATION_ID,
     })
 
     const usdcState = await context.runPg(
@@ -471,10 +486,16 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
 
         yield* db.insert(schema.assets).values({
           id: UNKNOWN_ASSET_ID,
-          blockchainId: solanaBlockchain.id,
-          contractAddress: UNKNOWN_MINT,
           name: "Drift Example",
           symbol: "DRIFT",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
           decimals: 6,
           type: "token",
         })
@@ -484,7 +505,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .set({
             mappingKind: "asset",
             canonicalAssetId: UNKNOWN_ASSET_ID,
-            canonicalAssetSymbol: "DRIFT",
+            assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
             canonicalFiatCurrency: null,
             mappingStatus: "approved",
             reviewerNotes: "Approved in test",
@@ -514,7 +535,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       kind: "canonical",
       mintAddress: UNKNOWN_MINT,
       canonicalAssetId: UNKNOWN_ASSET_ID,
-      canonicalAssetSymbol: "DRIFT",
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
       mappingStatus: "approved",
     })
   })

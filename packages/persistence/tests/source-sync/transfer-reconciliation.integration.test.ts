@@ -15,6 +15,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
   makeIntegrationTestDatabaseContext,
@@ -84,7 +85,7 @@ const seedApprovedProviderAsset = ({
       providerAssetRowId: providerAsset.id,
       mappingKind: "asset",
       canonicalAssetId: TEST_BTC_ASSET_ID,
-      canonicalAssetSymbol: "BTC",
+      assetRepresentationId: null,
       canonicalFiatCurrency: null,
       mappingStatus: "approved",
       reviewerNotes: null,
@@ -279,6 +280,7 @@ const seedOnchainReceipt = ({
         toPartyType: "address",
         toPartyResourcePath: null,
         assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         amount,
         tokenId: null,
         notes: null,

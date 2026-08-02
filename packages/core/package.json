@@ -24,6 +24,10 @@
       "types": "./dist/authorization/index.d.ts",
       "default": "./dist/authorization/index.js"
     },
+    "./asset": {
+      "types": "./dist/asset/index.d.ts",
+      "default": "./dist/asset/index.js"
+    },
     "./currency": {
       "types": "./dist/currency/index.d.ts",
       "default": "./dist/currency/index.js"

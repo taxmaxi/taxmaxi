@@ -46,6 +46,8 @@ export const TEST_SOURCE_ID = "00000000-0000-0000-0000-000000000281"
 export const TEST_RAW_RECORD_ID = "00000000-0000-0000-0000-000000000381"
 export const TEST_BTC_ASSET_ID = "00000000-0000-0000-0000-000000000481"
 export const TEST_EUR_ASSET_ID = "00000000-0000-0000-0000-000000000482"
+export const TEST_BTC_REPRESENTATION_ID = "00000000-0000-0000-0000-000000000581"
+export const TEST_EUR_REPRESENTATION_ID = "00000000-0000-0000-0000-000000000582"
 
 export interface SyncEngineRepositoryFixture {
   readonly userId: string
@@ -385,19 +387,34 @@ export const seedSyncEngineAssets = ({
     yield* db.insert(schema.assets).values([
       {
         id: TEST_BTC_ASSET_ID,
-        blockchainId: bitcoinBlockchainId,
-        contractAddress: "sync-engine-btc-fixture",
         name: "Sync Engine Bitcoin Fixture",
         symbol: "BTC",
+        type: "fungible",
+      },
+      {
+        id: TEST_EUR_ASSET_ID,
+        name: "Sync Engine Euro Fixture",
+        symbol: "EUR",
+        type: "fungible",
+      },
+    ])
+
+    yield* db.insert(schema.assetRepresentations).values([
+      {
+        id: TEST_BTC_REPRESENTATION_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        blockchainId: bitcoinBlockchainId,
+        contractAddress: "sync-engine-btc-fixture",
+        mintAddress: null,
         decimals: 8,
         type: "token",
       },
       {
-        id: TEST_EUR_ASSET_ID,
+        id: TEST_EUR_REPRESENTATION_ID,
+        assetId: TEST_EUR_ASSET_ID,
         blockchainId: baseBlockchainId,
         contractAddress: "sync-engine-eur-fixture",
-        name: "Sync Engine Euro Fixture",
-        symbol: "EUR",
+        mintAddress: null,
         decimals: 2,
         type: "token",
       },

@@ -2,6 +2,7 @@ import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
@@ -12,7 +13,6 @@ import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordR
 import { schema } from "../../src/schema/index.ts"
 import { PortfolioRepository } from "../../src/services/PortfolioRepository.ts"
 import {
-  TEST_BTC_ASSET_ID,
   TEST_EUR_ASSET_ID,
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
@@ -40,7 +40,8 @@ const context = makeIntegrationTestDatabaseContext({
 })
 
 const runPg = context.runPg
-const TEST_SOL_ASSET_ID = "00000000-0000-0000-0000-000000000483"
+const TEST_BTC_ASSET_ID = KNOWN_ASSET_IDS.BTC
+const TEST_SOL_ASSET_ID = KNOWN_ASSET_IDS.SOL
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -293,6 +294,20 @@ describe("SourceNormalizationRepositoryLive", () => {
       seedSyncEngineAssets({
         baseBlockchainId: fixture.baseBlockchainId,
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .insert(schema.assets)
+          .values({
+            id: TEST_BTC_ASSET_ID,
+            name: "Bitcoin",
+            symbol: "BTC",
+            type: "fungible",
+          })
+          .onConflictDoNothing({ target: schema.assets.id })
       })
     )
     await runPg(
@@ -2208,12 +2223,9 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         yield* db.insert(schema.assets).values({
           id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "sync-engine-sol-cross-asset-fee-fixture",
           name: "Sync Engine Solana Cross-Asset Fee Fixture",
           symbol: "SOL",
-          decimals: 9,
-          type: "token",
+          type: "fungible",
         })
 
         yield* Effect.forEach(records, (record) => seedRawRecord(record))
@@ -2718,12 +2730,9 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         yield* db.insert(schema.assets).values({
           id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "sync-engine-sol-fixture",
           name: "Sync Engine Solana Fixture",
           symbol: "SOL",
-          decimals: 9,
-          type: "token",
+          type: "fungible",
         })
 
         yield* Effect.forEach(records, (record) =>

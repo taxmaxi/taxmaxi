@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   numeric,
   pgEnum,
@@ -10,6 +11,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import { assets } from "./AssetsTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { fifoLots } from "./FifoLotsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 import { providerTransfers } from "./ProviderTransfersTable.ts"
@@ -69,6 +71,7 @@ export const inventoryMovements = pgTable(
     assetId: uuid("asset_id")
       .notNull()
       .references(() => assets.id),
+    assetRepresentationId: uuid("asset_representation_id"),
     timestamp: timestamp("timestamp").notNull(),
     direction: inventoryMovementDirectionEnum("direction").notNull(),
     purpose: inventoryMovementPurposeEnum("purpose").notNull(),
@@ -80,6 +83,11 @@ export const inventoryMovements = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.assetId, table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
+      name: "inventory_movements_representation_matches_asset_fk",
+    }),
     check("inventory_movements_amount_positive", sql`${table.amount} > 0`),
     check(
       "inventory_movements_origin_present",

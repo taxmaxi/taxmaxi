@@ -210,6 +210,7 @@ const make = Effect.gen(function* () {
         {
           principalId: providerTransfer.principalId,
           canonicalAssetId: providerTransfer.canonicalAssetId,
+          assetRepresentationId: providerTransfer.assetRepresentationId,
           direction: providerTransfer.direction,
           walletAddress,
           timestampStart,

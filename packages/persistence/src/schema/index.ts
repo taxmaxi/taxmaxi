@@ -1,5 +1,6 @@
 import * as addresses from "./AddressesTable.ts"
 import * as assetPrices from "./AssetPricesTable.ts"
+import * as assetRepresentations from "./AssetRepresentationsTable.ts"
 import * as assets from "./AssetsTable.ts"
 import * as blockchains from "./BlockchainsTable.ts"
 import * as cex from "./CexTable.ts"
@@ -45,6 +46,7 @@ import * as users from "./UsersTable.ts"
 export const schema = {
   ...addresses,
   ...assetPrices,
+  ...assetRepresentations,
   ...assets,
   ...blockchains,
   ...cex,
@@ -90,6 +92,11 @@ export const schema = {
 
 export type { Address } from "./AddressesTable.ts"
 export type { AssetPrice, AssetPriceInsert } from "./AssetPricesTable.ts"
+export type {
+  AssetRepresentation,
+  AssetRepresentationInsert,
+  AssetRepresentationType,
+} from "./AssetRepresentationsTable.ts"
 export type { Asset, AssetInsert, AssetType } from "./AssetsTable.ts"
 export type { Blockchain, BlockchainInsert } from "./BlockchainsTable.ts"
 export type { Cex, CexInsert } from "./CexTable.ts"

@@ -7,6 +7,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_EUR_REPRESENTATION_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -105,7 +106,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 providerAssetRowId: providerAssetRecord.id,
                 mappingKind: "asset",
                 canonicalAssetId: TEST_BTC_ASSET_ID,
-                canonicalAssetSymbol: "BTC",
+                assetRepresentationId: null,
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes: "Reviewed",
@@ -152,7 +153,7 @@ describe("ProviderAssetRepositoryLive", () => {
         providerAssetRowId: providerAssetRecord.id,
         mappingKind: "asset",
         canonicalAssetId: TEST_BTC_ASSET_ID,
-        canonicalAssetSymbol: "BTC",
+        assetRepresentationId: null,
         mappingStatus: "approved",
       })
       expect(providerAssetRows).toHaveLength(1)
@@ -197,6 +198,61 @@ describe("ProviderAssetRepositoryLive", () => {
         exponent: 2,
         providerType: "fiat",
       })
+    })
+
+    it("rejects a network representation that belongs to another economic asset", async () => {
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "helius-solana",
+            entries: [
+              {
+                providerAssetId: "mismatched-representation-fixture",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "spl-token",
+                payload: { mint: "mismatched-representation-fixture" },
+              },
+            ],
+          })
+        )
+      )
+
+      const providerAsset = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetByProviderAssetId({
+            providerKey: "helius-solana",
+            providerAssetId: "mismatched-representation-fixture",
+          })
+        )
+      )
+
+      if (Option.isNone(providerAsset)) {
+        expect.fail("Expected provider asset fixture to exist")
+      }
+
+      const error = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: "Invalid cross-asset representation fixture",
+              },
+            ],
+          })
+        ).pipe(Effect.flip)
+      )
+
+      expect(error).toBeInstanceOf(SyncEngineStorageError)
     })
 
     it("pages provider asset reviews with a stable provider asset cursor", async () => {
@@ -268,7 +324,7 @@ describe("ProviderAssetRepositoryLive", () => {
               providerAssetRowId: providerAsset.id,
               mappingKind: "asset",
               canonicalAssetId: null,
-              canonicalAssetSymbol: null,
+              assetRepresentationId: null,
               canonicalFiatCurrency: null,
               mappingStatus: "pending_review",
               reviewerNotes: null,
@@ -346,7 +402,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 providerAssetRowId: naturalKeyProviderAsset.value.id,
                 mappingKind: "asset",
                 canonicalAssetId: TEST_BTC_ASSET_ID,
-                canonicalAssetSymbol: "BTC",
+                assetRepresentationId: null,
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes: "Admin reviewed placeholder asset",

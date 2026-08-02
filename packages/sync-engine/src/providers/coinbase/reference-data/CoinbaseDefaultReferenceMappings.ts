@@ -4,6 +4,7 @@
  * @module CoinbaseDefaultReferenceMappings
  */
 
+import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import type {
   ProviderAssetMappingKind,
   ProviderAssetMappingStatus,
@@ -29,7 +30,7 @@ export interface CoinbaseDefaultTransactionTypeMapping {
 export interface CoinbaseDefaultCurrencyMapping {
   readonly currencyCode: string
   readonly mappingKind: ProviderAssetMappingKind
-  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetId: string | null
   readonly canonicalFiatCurrency: string | null
   readonly mappingStatus: ProviderAssetMappingStatus
   readonly sourceNotes: string
@@ -386,7 +387,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "BTC",
     mappingKind: "asset",
-    canonicalAssetSymbol: "BTC",
+    canonicalAssetId: KNOWN_ASSET_IDS.BTC,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -394,7 +395,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ETH",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ETH",
+    canonicalAssetId: KNOWN_ASSET_IDS.ETH,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -402,7 +403,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ETH2",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ETH",
+    canonicalAssetId: KNOWN_ASSET_IDS.ETH,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Coinbase-specific alias for staked / deprecated ETH balances.",
@@ -410,7 +411,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ADA",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ADA",
+    canonicalAssetId: KNOWN_ASSET_IDS.ADA,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -418,7 +419,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "DOT",
     mappingKind: "asset",
-    canonicalAssetSymbol: "DOT",
+    canonicalAssetId: KNOWN_ASSET_IDS.DOT,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -426,7 +427,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "SOL",
     mappingKind: "asset",
-    canonicalAssetSymbol: "SOL",
+    canonicalAssetId: KNOWN_ASSET_IDS.SOL,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -434,7 +435,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ZEC",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ZEC",
+    canonicalAssetId: KNOWN_ASSET_IDS.ZEC,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -442,7 +443,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "EURC",
     mappingKind: "asset",
-    canonicalAssetSymbol: "EURC",
+    canonicalAssetId: KNOWN_ASSET_IDS.EURC,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -450,7 +451,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "TAO",
     mappingKind: "asset",
-    canonicalAssetSymbol: "TAO",
+    canonicalAssetId: KNOWN_ASSET_IDS.TAO,
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -458,7 +459,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "EUR",
     mappingKind: "fiat",
-    canonicalAssetSymbol: null,
+    canonicalAssetId: null,
     canonicalFiatCurrency: "EUR",
     mappingStatus: "approved",
     sourceNotes: "Fiat currency mapping used for native amounts and fiat-denominated fees.",

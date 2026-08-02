@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -234,25 +235,6 @@ const seedCoinbaseSource = () =>
       return yield* Effect.dieMessage("Failed to create cex account fixture")
     }
 
-    const [baseBlockchain] = yield* db
-      .select({ id: schema.blockchains.id })
-      .from(schema.blockchains)
-      .where(eq(schema.blockchains.name, "base"))
-      .limit(1)
-
-    if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
-    }
-
-    yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "eur-pr05",
-      name: "Euro",
-      symbol: "EUR",
-      decimals: 2,
-      type: "token",
-    })
-
     yield* db.insert(schema.sources).values({
       id: sourceId,
       name: "Coinbase",
@@ -267,23 +249,11 @@ const insertTaoAsset = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
-    const [baseBlockchain] = yield* db
-      .select({ id: schema.blockchains.id })
-      .from(schema.blockchains)
-      .where(eq(schema.blockchains.name, "base"))
-      .limit(1)
-
-    if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
-    }
-
     yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "tao-pr05",
+      id: KNOWN_ASSET_IDS.TAO,
       name: "Bittensor",
       symbol: "TAO",
-      decimals: 8,
-      type: "token",
+      type: "fungible",
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -328,7 +298,7 @@ const fetchReplayState = () =>
     const [taoMapping] = yield* db
       .select({
         mappingStatus: schema.providerAssetMappings.mappingStatus,
-        canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+        assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
         canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
       })
       .from(schema.providerAssetMappings)
@@ -382,7 +352,7 @@ describe("coinbase reference-data replay", () => {
         ])
         expect(firstRun.legs).toHaveLength(0)
         expect(firstRun.taoMapping?.mappingStatus).toBe("pending_review")
-        expect(firstRun.taoMapping?.canonicalAssetSymbol).toBe("TAO")
+        expect(firstRun.taoMapping?.assetRepresentationId).toBe("TAO")
 
         yield* insertTaoAsset()
         yield* runSync()

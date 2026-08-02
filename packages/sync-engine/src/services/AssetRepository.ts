@@ -17,6 +17,13 @@ export interface SyncEngineAsset {
   readonly symbol: string
 }
 
+/** Network representation resolved from exact chain reference data. */
+export interface SyncEngineAssetRepresentation {
+  readonly id: string
+  readonly assetId: string
+  readonly symbol: string
+}
+
 /**
  * SyncEngineBlockchain - Minimal blockchain projection used for network lookups.
  */
@@ -39,31 +46,42 @@ export interface CanonicalBlockchainDraft {
 }
 
 /**
- * CanonicalAssetDraft - Canonical asset data to create or refresh.
+ * EconomicAssetDraft - Chain-independent economic asset data to create or refresh.
  */
-export interface CanonicalAssetDraft {
-  readonly contractAddress: string | null
+export interface EconomicAssetDraft {
   readonly name: string
   readonly symbol: string
-  readonly decimals: number
   readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
-  readonly type: "native" | "token" | "nft"
-  readonly isSpam: boolean
+  readonly type: "fungible" | "nft"
 }
 
 /**
- * CanonicalAssetRecord - Canonical asset with its owning blockchain.
+ * AssetRepresentationDraft - Concrete native asset, contract, or mint on one blockchain.
  */
-export interface CanonicalAssetRecord {
+export interface AssetRepresentationDraft {
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number
+  readonly logoUrl: string | null
+  readonly type: "native" | "token" | "nft"
+  readonly isSpam: boolean
+  readonly metadata: unknown
+}
+
+/** Economic asset and the exact network representation created for it. */
+export interface EconomicAssetRepresentationRecord {
   readonly id: string
-  readonly blockchainId: string
-  readonly blockchainName: string
   readonly name: string
   readonly symbol: string
+  readonly type: "fungible" | "nft"
+  readonly representationId: string
+  readonly blockchainId: string
+  readonly blockchainName: string
   readonly decimals: number
   readonly contractAddress: string | null
-  readonly type: "native" | "token" | "nft"
+  readonly mintAddress: string | null
+  readonly representationType: "native" | "token" | "nft"
 }
 
 /**
@@ -77,28 +95,25 @@ export interface AssetRepositoryShape {
     readonly assetId: string
   }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
 
-  /**
-   * Load a canonical asset by symbol.
-   */
-  readonly findAssetBySymbol: (params: {
-    readonly symbol: string
-  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+  /** Load a network representation by id. */
+  readonly findRepresentationById: (params: {
+    readonly assetRepresentationId: string
+  }) => Effect.Effect<Option.Option<SyncEngineAssetRepresentation>, SyncEngineStorageError>
 
   /**
-   * Load the native asset for one blockchain by blockchain name and symbol.
+   * Load the native representation for one blockchain by blockchain name.
    */
-  readonly findNativeAssetForBlockchain: (params: {
+  readonly findNativeRepresentationForBlockchain: (params: {
     readonly blockchainName: string
-    readonly symbol: string
-  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+  }) => Effect.Effect<Option.Option<SyncEngineAssetRepresentation>, SyncEngineStorageError>
 
   /**
    * Load a token/NFT asset by blockchain name and mint/contract address.
    */
-  readonly findAssetByBlockchainAndContractAddress: (params: {
+  readonly findRepresentationByBlockchainAndAddress: (params: {
     readonly blockchainName: string
-    readonly contractAddress: string
-  }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
+    readonly address: string
+  }) => Effect.Effect<Option.Option<SyncEngineAssetRepresentation>, SyncEngineStorageError>
 
   /**
    * Load all blockchains used for provider network-name resolution.
@@ -109,12 +124,13 @@ export interface AssetRepositoryShape {
   >
 
   /**
-   * Create or refresh a canonical blockchain and asset as one durable operation.
+   * Create or refresh an economic asset and one network representation as one durable operation.
    */
-  readonly upsertCanonicalAsset: (params: {
+  readonly upsertEconomicAssetRepresentation: (params: {
     readonly blockchain: CanonicalBlockchainDraft
-    readonly asset: CanonicalAssetDraft
-  }) => Effect.Effect<CanonicalAssetRecord, SyncEngineStorageError>
+    readonly asset: EconomicAssetDraft
+    readonly representation: AssetRepresentationDraft
+  }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
 }
 
 /**

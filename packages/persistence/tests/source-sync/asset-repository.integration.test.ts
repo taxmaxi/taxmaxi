@@ -1,10 +1,12 @@
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { eq } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { KNOWN_ASSET_IDS, KNOWN_ASSET_REPRESENTATION_IDS } from "@my/core/asset"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
+import { seedData } from "../../src/seed/data.ts"
 import {
   TEST_BTC_ASSET_ID,
   makeIntegrationTestDatabaseContext,
@@ -85,12 +87,17 @@ describe("AssetRepositoryLive", () => {
         if (base !== undefined) {
           yield* db.insert(schema.assets).values({
             id: existingAssetId,
-            blockchainId: base.id,
-            contractAddress: "0xAbCdEfAbCdEf",
             name: "Existing USDC",
             symbol: "USDC",
-            decimals: 6,
             logoUrl: existingLogoUrl,
+            type: "fungible",
+          })
+          yield* db.insert(schema.assetRepresentations).values({
+            assetId: existingAssetId,
+            blockchainId: base.id,
+            contractAddress: "0xabcdefabcdef",
+            mintAddress: null,
+            decimals: 6,
             type: "token",
           })
         }
@@ -99,7 +106,7 @@ describe("AssetRepositoryLive", () => {
 
     const persistedAsset = await runRepository(
       Effect.flatMap(AssetRepository, (repository) =>
-        repository.upsertCanonicalAsset({
+        repository.upsertEconomicAssetRepresentation({
           blockchain: {
             name: "base",
             chainType: "evm",
@@ -110,14 +117,20 @@ describe("AssetRepositoryLive", () => {
             coingeckoPlatformId: "base",
           },
           asset: {
-            contractAddress: "0xabcdefabcdef",
             name: "USD Coin",
             symbol: "usdc",
-            decimals: 6,
             coingeckoCoinId: "usd-coin",
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress: "0xabcdefabcdef",
+            mintAddress: null,
+            decimals: 6,
             logoUrl: null,
             type: "token",
             isSpam: false,
+            metadata: null,
           },
         })
       )
@@ -129,11 +142,15 @@ describe("AssetRepositoryLive", () => {
         return yield* db
           .select({
             id: schema.assets.id,
-            contractAddress: schema.assets.contractAddress,
             coingeckoCoinId: schema.assets.coingeckoCoinId,
             logoUrl: schema.assets.logoUrl,
+            contractAddress: schema.assetRepresentations.contractAddress,
           })
           .from(schema.assets)
+          .innerJoin(
+            schema.assetRepresentations,
+            eq(schema.assetRepresentations.assetId, schema.assets.id)
+          )
           .where(eq(schema.assets.id, existingAssetId))
           .limit(1)
       })
@@ -149,16 +166,55 @@ describe("AssetRepositoryLive", () => {
 
     const foundAsset = await runRepository(
       Effect.flatMap(AssetRepository, (repository) =>
-        repository.findAssetByBlockchainAndContractAddress({
+        repository.findRepresentationByBlockchainAndAddress({
           blockchainName: "base",
-          contractAddress: "0xAbCdEfAbCdEf",
+          address: "0xAbCdEfAbCdEf",
         })
       )
     )
 
-    expect(Option.getOrNull(foundAsset)).toEqual({
-      id: existingAssetId,
-      symbol: "USDC",
-    })
+    expect(Option.getOrNull(foundAsset)).toEqual(
+      expect.objectContaining({
+        assetId: existingAssetId,
+        symbol: "USDC",
+      })
+    )
+  })
+
+  it("keeps known economic assets and network representations exact on repeated seeds", async () => {
+    await runPg(seedData)
+    await runPg(seedData)
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [usdc] = yield* db
+          .select({ id: schema.assets.id })
+          .from(schema.assets)
+          .where(eq(schema.assets.id, KNOWN_ASSET_IDS.USDC))
+          .limit(1)
+        const representations = yield* db
+          .select({ id: schema.assetRepresentations.id })
+          .from(schema.assetRepresentations)
+          .where(
+            inArray(schema.assetRepresentations.id, [
+              KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA,
+              KNOWN_ASSET_REPRESENTATION_IDS.USDC_ETHEREUM,
+              KNOWN_ASSET_REPRESENTATION_IDS.USDC_BASE,
+            ])
+          )
+
+        return { usdc, representations }
+      })
+    )
+
+    expect(state.usdc?.id).toBe(KNOWN_ASSET_IDS.USDC)
+    expect(state.representations.map((representation) => representation.id).sort()).toEqual(
+      [
+        KNOWN_ASSET_REPRESENTATION_IDS.USDC_SOLANA,
+        KNOWN_ASSET_REPRESENTATION_IDS.USDC_ETHEREUM,
+        KNOWN_ASSET_REPRESENTATION_IDS.USDC_BASE,
+      ].sort()
+    )
   })
 })

@@ -10,14 +10,12 @@ import type * as Option from "effect/Option"
 import type { PersistenceError } from "../errors/RepositoryError.ts"
 
 /**
- * AssetCatalogAssetType - Canonical asset category persisted in the asset table.
+ * AssetCatalogAssetType - Economic asset category persisted in the asset table.
  */
-export type AssetCatalogAssetType = "native" | "token" | "nft"
+export type AssetCatalogAssetType = "fungible" | "nft"
 
-/**
- * AssetCatalogAssetRecord - Public asset catalog projection joined with blockchain metadata.
- */
-export interface AssetCatalogAssetRecord {
+/** Public network representation projection with blockchain metadata. */
+export interface AssetCatalogRepresentationRecord {
   readonly id: string
   readonly blockchainId: string
   readonly blockchainName: string
@@ -25,13 +23,24 @@ export interface AssetCatalogAssetRecord {
   readonly blockchainChainId: number | null
   readonly blockchainExplorerUrl: string | null
   readonly blockchainLogoUrl: string | null
+  readonly type: "native" | "token" | "nft"
   readonly contractAddress: string | null
-  readonly name: string
-  readonly symbol: string
+  readonly mintAddress: string | null
   readonly decimals: number
   readonly logoUrl: string | null
+  readonly metadata: unknown
+}
+
+/**
+ * AssetCatalogAssetRecord - Economic asset with its known network representations.
+ */
+export interface AssetCatalogAssetRecord {
+  readonly id: string
+  readonly name: string
+  readonly symbol: string
+  readonly logoUrl: string | null
   readonly type: AssetCatalogAssetType
-  readonly isSpam: boolean
+  readonly representations: ReadonlyArray<AssetCatalogRepresentationRecord>
 }
 
 /**

@@ -11,7 +11,7 @@ import {
   describeTaxMaxiAsset,
   formatBlockchainName,
   formatAssetType,
-  getTaxMaxiAssetExplorerHref,
+  getAssetRepresentationExplorerHref,
   type TaxMaxiAsset,
 } from "#/lib/assets"
 import { isTaxMaxiAssetNotFoundError, queries } from "#/integrations/taxmaxi/queries"
@@ -47,8 +47,6 @@ function AssetDetailRoute() {
   const { assetId } = Route.useParams()
   const { taxmaxi } = Route.useRouteContext()
   const { data: asset } = useSuspenseQuery(queries.assetDetail(taxmaxi(), assetId))
-  const explorerHref = getTaxMaxiAssetExplorerHref(asset)
-  const blockchainName = formatBlockchainName(asset.blockchainName)
 
   return (
     <AssetsPageShell>
@@ -71,7 +69,7 @@ function AssetDetailRoute() {
                 <AssetSymbolMark asset={asset} />
                 <div className="min-w-0">
                   <p className="m-0 text-sm font-medium uppercase tracking-[0.18em] text-marketing-muted">
-                    {blockchainName}
+                    Economic asset
                   </p>
                   <h1 className="mt-2 truncate font-display text-5xl font-semibold leading-none text-off-white sm:text-6xl">
                     {asset.symbol}
@@ -93,63 +91,95 @@ function AssetDetailRoute() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <AssetDetailItem label="Asset ID" value={asset.id} />
-              <AssetDetailItem label="Decimals" value={asset.decimals.toString()} />
-              <AssetDetailItem label="Network" value={blockchainName} />
-              <AssetDetailItem label="Chain type" value={asset.blockchainChainType} />
+              <AssetDetailItem label="Type" value={formatAssetType(asset.type)} />
+              <AssetDetailItem
+                label="Network representations"
+                value={asset.representations.length.toString()}
+              />
             </div>
           </div>
 
           <Card className="border border-marketing-border-muted bg-marketing-surface text-marketing-foreground shadow-none ring-0">
             <CardHeader>
-              <CardTitle>Registry details</CardTitle>
+              <CardTitle>Network representations</CardTitle>
               <CardDescription className="text-marketing-muted">
-                The identifier TaxMaxi uses to resolve activity into this canonical asset.
+                Exact native, contract, and mint identities that resolve to this economic asset.
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-col gap-5">
-              <div className="flex flex-col gap-2">
-                <p className="m-0 text-xs font-medium uppercase tracking-[0.16em] text-marketing-muted">
-                  Contract address
+            <CardContent className="flex flex-col gap-4">
+              {asset.representations.length === 0 ? (
+                <p className="m-0 text-sm leading-6 text-marketing-muted">
+                  This custody asset has no network-specific representation.
                 </p>
-                {asset.contractAddress ? (
-                  <code className="break-all rounded-2xl border border-marketing-border-muted bg-marketing-surface-active px-4 py-3 text-sm text-marketing-foreground">
-                    {asset.contractAddress}
-                  </code>
-                ) : (
-                  <p className="m-0 rounded-2xl border border-marketing-border-muted bg-marketing-surface-active px-4 py-3 text-sm text-marketing-foreground">
-                    Native network asset
-                  </p>
-                )}
-              </div>
-
-              {explorerHref ? (
-                <LandingButton asChild className="w-full" size="pill" variant="control">
-                  <a href={explorerHref} rel="noreferrer" target="_blank">
-                    View on explorer
-                    <ExternalLink data-icon="inline-end" />
-                  </a>
-                </LandingButton>
-              ) : null}
+              ) : (
+                asset.representations.map((representation) => (
+                  <AssetRepresentationCard
+                    key={representation.id}
+                    representation={representation}
+                  />
+                ))
+              )}
             </CardContent>
           </Card>
         </section>
 
         <section className="grid gap-4 md:grid-cols-2">
           <AssetInfoCard
-            description={`Resolved from the TaxMaxi asset registry on ${blockchainName}.`}
-            title="Registry"
+            description="Balances, valuation, FIFO lots, and tax reports use this economic asset ID across every custody source."
+            title="Economic identity"
           />
           <AssetInfoCard
             description={
-              asset.contractAddress
-                ? "Matched by contract or mint address during import and normalization."
-                : "Matched as the native asset for activity on this network."
+              "On-chain observations also keep the exact network representation used during import and normalization."
             }
             title="Normalization"
           />
         </section>
       </div>
     </AssetsPageShell>
+  )
+}
+
+function AssetRepresentationCard({
+  representation,
+}: {
+  readonly representation: TaxMaxiAsset["representations"][number]
+}) {
+  const explorerHref = getAssetRepresentationExplorerHref(representation)
+  const address = representation.contractAddress ?? representation.mintAddress
+  const typeLabel =
+    representation.type === "native" ? "Native" : representation.type === "nft" ? "NFT" : "Token"
+
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-marketing-border-muted bg-marketing-surface-active p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="m-0 font-medium text-marketing-foreground">
+            {formatBlockchainName(representation.blockchainName)}
+          </p>
+          <p className="mt-1 text-sm text-marketing-muted">
+            {typeLabel} · {representation.decimals} decimals
+          </p>
+        </div>
+        {explorerHref ? (
+          <Button asChild size="icon-sm" variant="ghost">
+            <a
+              aria-label={`View ${representation.blockchainName} representation on explorer`}
+              href={explorerHref}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <ExternalLink />
+            </a>
+          </Button>
+        ) : null}
+      </div>
+      {address === null ? (
+        <p className="m-0 text-sm text-marketing-muted">Native network asset</p>
+      ) : (
+        <code className="break-all text-xs text-marketing-foreground">{address}</code>
+      )}
+    </div>
   )
 }
 

@@ -93,18 +93,24 @@ const seedTaxFixtures = () =>
     const [btcAsset] = yield* db
       .insert(schema.assets)
       .values({
-        blockchainId: baseBlockchain.id,
-        contractAddress: btcContractAddress,
         name: "Bitcoin",
         symbol: "BTC",
-        decimals: 8,
-        type: "token",
+        type: "fungible",
       })
       .returning({ id: schema.assets.id })
 
     if (btcAsset === undefined) {
       return yield* Effect.dieMessage("Failed to create BTC asset fixture")
     }
+
+    yield* db.insert(schema.assetRepresentations).values({
+      assetId: btcAsset.id,
+      blockchainId: baseBlockchain.id,
+      contractAddress: btcContractAddress,
+      mintAddress: null,
+      decimals: 8,
+      type: "token",
+    })
 
     yield* db.insert(schema.sources).values({
       id: sourceId,
@@ -245,8 +251,9 @@ const insertIncompleteIncomeLeg = () =>
     const db = yield* drizzle
     const [asset] = yield* db
       .select({ id: schema.assets.id })
-      .from(schema.assets)
-      .where(eq(schema.assets.contractAddress, btcContractAddress))
+      .from(schema.assetRepresentations)
+      .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
+      .where(eq(schema.assetRepresentations.contractAddress, btcContractAddress))
       .limit(1)
 
     if (asset === undefined) {

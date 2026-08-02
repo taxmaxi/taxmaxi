@@ -9,6 +9,7 @@ import * as Either from "effect/Either"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import { KNOWN_ASSET_IDS } from "@my/core/asset"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
 import {
   ProviderAssetRepository,
@@ -46,14 +47,14 @@ interface DefaultAssetMapping {
   readonly name: string
   readonly decimals: number
   readonly providerType: "native" | "spl-token"
-  readonly canonicalAssetSymbol: string
+  readonly canonicalAssetId: string
   readonly sourceNotes: string
 }
 
 interface NormalizedAssetReference {
   readonly kind: "native" | "spl"
   readonly mintAddress: string | null
-  readonly rawProviderPayload: unknown | undefined
+  readonly rawProviderPayload: unknown
 }
 
 interface DecodedDasAsset {
@@ -76,7 +77,7 @@ const nativeDefaultAssetMapping = {
   name: "Solana",
   decimals: 9,
   providerType: "native",
-  canonicalAssetSymbol: SOLANA_NATIVE_SYMBOL,
+  canonicalAssetId: KNOWN_ASSET_IDS.SOL,
   sourceNotes: "TaxMaxi built-in Solana native SOL mapping.",
 } as const satisfies DefaultAssetMapping
 
@@ -89,7 +90,7 @@ const defaultAssetMappings = [
     name: "USD Coin",
     decimals: 6,
     providerType: "spl-token",
-    canonicalAssetSymbol: "USDC",
+    canonicalAssetId: KNOWN_ASSET_IDS.USDC,
     sourceNotes: "TaxMaxi built-in Solana USDC mint mapping.",
   },
   {
@@ -99,7 +100,7 @@ const defaultAssetMappings = [
     name: "Tether USD",
     decimals: 6,
     providerType: "spl-token",
-    canonicalAssetSymbol: "USDT",
+    canonicalAssetId: KNOWN_ASSET_IDS.USDT,
     sourceNotes: "TaxMaxi built-in Solana USDT mint mapping.",
   },
 ] as const satisfies ReadonlyArray<DefaultAssetMapping>
@@ -477,15 +478,14 @@ const make = Effect.gen(function* () {
 
   const canonicalAssetForDefault = (mapping: DefaultAssetMapping) =>
     mapping.providerType === "native"
-      ? assetRepository.findNativeAssetForBlockchain({
+      ? assetRepository.findNativeRepresentationForBlockchain({
           blockchainName: SOLANA_BLOCKCHAIN_NAME,
-          symbol: mapping.canonicalAssetSymbol,
         })
       : mapping.mintAddress === null
         ? Effect.succeed(Option.none())
-        : assetRepository.findAssetByBlockchainAndContractAddress({
+        : assetRepository.findRepresentationByBlockchainAndAddress({
             blockchainName: SOLANA_BLOCKCHAIN_NAME,
-            contractAddress: mapping.mintAddress,
+            address: mapping.mintAddress,
           })
 
   const defaultProviderAssetMappingDraft = ({
@@ -502,8 +502,8 @@ const make = Effect.gen(function* () {
         return {
           providerAssetRowId,
           mappingKind: "asset",
-          canonicalAssetId: canonicalAsset.value.id,
-          canonicalAssetSymbol: canonicalAsset.value.symbol,
+          canonicalAssetId: canonicalAsset.value.assetId,
+          assetRepresentationId: canonicalAsset.value.id,
           canonicalFiatCurrency: null,
           mappingStatus: "approved",
           reviewerNotes: null,
@@ -515,7 +515,7 @@ const make = Effect.gen(function* () {
         providerAssetRowId,
         mappingKind: "asset",
         canonicalAssetId: null,
-        canonicalAssetSymbol: mapping.canonicalAssetSymbol,
+        assetRepresentationId: null,
         canonicalFiatCurrency: null,
         mappingStatus: "pending_review",
         reviewerNotes: null,
@@ -539,23 +539,6 @@ const make = Effect.gen(function* () {
       yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
         mappings: [draft],
       })
-
-      if (
-        draft.mappingKind === "asset" &&
-        draft.mappingStatus === "approved" &&
-        draft.canonicalAssetId !== null &&
-        draft.canonicalAssetSymbol !== null
-      ) {
-        yield* providerAssetRepository.backfillApprovedSymbolMappingsCanonicalAssetIds({
-          mappings: [
-            {
-              providerAssetRowId: providerAsset.id,
-              canonicalAssetId: draft.canonicalAssetId,
-              canonicalAssetSymbol: draft.canonicalAssetSymbol,
-            },
-          ],
-        })
-      }
     })
 
   const ensureDefaultMappings = (): Effect.Effect<
@@ -594,22 +577,6 @@ const make = Effect.gen(function* () {
       yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
         mappings: mappingDrafts,
       })
-      yield* providerAssetRepository.backfillApprovedSymbolMappingsCanonicalAssetIds({
-        mappings: mappingDrafts.flatMap((mapping) =>
-          mapping.mappingKind === "asset" &&
-          mapping.mappingStatus === "approved" &&
-          mapping.canonicalAssetId !== null &&
-          mapping.canonicalAssetSymbol !== null
-            ? [
-                {
-                  providerAssetRowId: mapping.providerAssetRowId,
-                  canonicalAssetId: mapping.canonicalAssetId,
-                  canonicalAssetSymbol: mapping.canonicalAssetSymbol,
-                },
-              ]
-            : []
-        ),
-      })
 
       return {
         providerAssetCatalogCount: defaultAssetMappings.length,
@@ -632,7 +599,7 @@ const make = Effect.gen(function* () {
     rawProviderPayload,
   }: {
     readonly mintAddress: string
-    readonly rawProviderPayload: unknown | undefined
+    readonly rawProviderPayload: unknown
   }): ProviderAssetCatalogEntry => ({
     providerAssetId: mintAddress,
     naturalKey: mintNaturalKey(mintAddress),
@@ -655,7 +622,7 @@ const make = Effect.gen(function* () {
           providerAssetRowId: providerAsset.id,
           mappingKind: providerAsset.providerType === "fiat" ? "fiat" : "asset",
           canonicalAssetId: null,
-          canonicalAssetSymbol: null,
+          assetRepresentationId: null,
           canonicalFiatCurrency: null,
           mappingStatus: "pending_review",
           reviewerNotes: null,
@@ -740,6 +707,16 @@ const make = Effect.gen(function* () {
         )
       }
 
+      if (mapping.assetRepresentationId === null) {
+        return yield* Effect.fail(
+          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+            mintAddress: reference.mintAddress,
+            providerAssetRowId: providerAsset.id,
+            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} is approved but has no network representation target.`,
+          })
+        )
+      }
+
       const canonicalAsset = yield* assetRepository.findAssetById({
         assetId: mapping.canonicalAssetId,
       })
@@ -750,6 +727,23 @@ const make = Effect.gen(function* () {
             mintAddress: reference.mintAddress,
             providerAssetRowId: providerAsset.id,
             message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at missing canonical asset ${mapping.canonicalAssetId}.`,
+          })
+        )
+      }
+
+      const representation = yield* assetRepository.findRepresentationById({
+        assetRepresentationId: mapping.assetRepresentationId,
+      })
+
+      if (
+        Option.isNone(representation) ||
+        representation.value.assetId !== mapping.canonicalAssetId
+      ) {
+        return yield* Effect.fail(
+          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+            mintAddress: reference.mintAddress,
+            providerAssetRowId: providerAsset.id,
+            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at an invalid network representation ${mapping.assetRepresentationId}.`,
           })
         )
       }
@@ -786,7 +780,7 @@ const make = Effect.gen(function* () {
         mappingStatus: mapping.mappingStatus,
         mappingKind: mapping.mappingKind,
         canonicalAssetId: mapping.canonicalAssetId,
-        canonicalAssetSymbol: mapping.canonicalAssetSymbol,
+        assetRepresentationId: mapping.assetRepresentationId,
         canonicalFiatCurrency: mapping.canonicalFiatCurrency,
       } satisfies HeliusSolanaResolvedAsset
     })

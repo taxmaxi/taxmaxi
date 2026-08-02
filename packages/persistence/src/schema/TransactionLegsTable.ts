@@ -1,5 +1,6 @@
 import {
   check,
+  foreignKey,
   index,
   jsonb,
   numeric,
@@ -12,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 import { addresses } from "./AddressesTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
@@ -84,6 +86,7 @@ export const transactionLegs = pgTable(
     assetId: uuid("asset_id")
       .notNull()
       .references(() => assets.id),
+    assetRepresentationId: uuid("asset_representation_id"),
     amount: numeric("amount", { precision: 100, scale: 30 }).notNull(), // Exact asset quantity in canonical asset units.
 
     // Accounting classification
@@ -119,6 +122,11 @@ export const transactionLegs = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.assetId, table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
+      name: "transaction_legs_representation_matches_asset_fk",
+    }),
     check(
       "transaction_legs_identifier_present",
       sql`${table.txHash} is not null or ${table.externalId} is not null`

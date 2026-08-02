@@ -52,6 +52,7 @@ interface PersistedSourceLegRecord {
   readonly timestamp: Date
   readonly principalId: string
   readonly assetId: string
+  readonly assetRepresentationId: string | null
   readonly amount: string
   readonly kind: "acquisition" | "disposal" | "income" | "fee"
   readonly fiatAmount: string | null
@@ -356,6 +357,7 @@ const make = Effect.gen(function* () {
     timestamp: schema.transfers.timestamp,
     addressId: schema.transfers.addressId,
     assetId: schema.transfers.assetId,
+    assetRepresentationId: schema.transfers.assetRepresentationId,
     amount: schema.transfers.amount,
     type: schema.transfers.type,
   } as const
@@ -388,6 +390,7 @@ const make = Effect.gen(function* () {
     timestamp: schema.transactionLegs.timestamp,
     principalId: schema.transactionLegs.principalId,
     assetId: schema.transactionLegs.assetId,
+    assetRepresentationId: schema.transactionLegs.assetRepresentationId,
     amount: schema.transactionLegs.amount,
     kind: schema.transactionLegs.kind,
     fiatAmount: schema.transactionLegs.fiatAmount,
@@ -604,6 +607,7 @@ const make = Effect.gen(function* () {
               toPartyType: sql.raw("excluded.to_party_type"),
               toPartyResourcePath: sql.raw("excluded.to_party_resource_path"),
               assetId: sql.raw("excluded.asset_id"),
+              assetRepresentationId: sql.raw("excluded.asset_representation_id"),
               amount: sql.raw("excluded.amount"),
               tokenId: sql.raw("excluded.token_id"),
               notes: sql.raw("excluded.notes"),
@@ -728,6 +732,7 @@ const make = Effect.gen(function* () {
               principalId: sql.raw("excluded.principal_id"),
               addressId: sql.raw("excluded.address_id"),
               assetId: sql.raw("excluded.asset_id"),
+              assetRepresentationId: sql.raw("excluded.asset_representation_id"),
               amount: sql.raw("excluded.amount"),
               kind: sql.raw("excluded.kind"),
               provenance: sql.raw("excluded.provenance"),
@@ -1017,6 +1022,7 @@ const make = Effect.gen(function* () {
           principalId: leg.principalId,
           sourceId: leg.sourceId,
           assetId: leg.assetId,
+          assetRepresentationId: leg.assetRepresentationId,
           acquiredAt: leg.timestamp,
           originalAmount: leg.amount,
           remainingAmount: leg.amount,
@@ -1479,7 +1485,10 @@ const make = Effect.gen(function* () {
         }
 
         const [assetMapping] = yield* executor
-          .select({ assetId: schema.providerAssetMappings.canonicalAssetId })
+          .select({
+            assetId: schema.providerAssetMappings.canonicalAssetId,
+            assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+          })
           .from(schema.providerAssetMappings)
           .where(
             and(
@@ -1512,6 +1521,7 @@ const make = Effect.gen(function* () {
             transactionId: transaction.id,
             providerTransferId: providerTransfer.id,
             assetId: assetMapping.assetId,
+            assetRepresentationId: assetMapping.assetRepresentationId,
             timestamp: providerTransfer.timestamp,
             direction: providerTransfer.direction,
             purpose,
@@ -1529,6 +1539,7 @@ const make = Effect.gen(function* () {
               sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
               transactionId: sql.raw("excluded.transaction_id"),
               assetId: sql.raw("excluded.asset_id"),
+              assetRepresentationId: sql.raw("excluded.asset_representation_id"),
               timestamp: sql.raw("excluded.timestamp"),
               direction: sql.raw("excluded.direction"),
               purpose: sql.raw("excluded.purpose"),
@@ -1617,6 +1628,7 @@ const make = Effect.gen(function* () {
               principalId: transaction.principalId,
               sourceId: providerTransfer.sourceId,
               assetId: assetMapping.assetId,
+              assetRepresentationId: assetMapping.assetRepresentationId,
               acquiredAt: providerTransfer.timestamp,
               originalAmount: providerTransfer.amount,
               remainingAmount: providerTransfer.amount,
@@ -1635,6 +1647,7 @@ const make = Effect.gen(function* () {
               set: {
                 sourceId: sql.raw("excluded.source_id"),
                 assetId: sql.raw("excluded.asset_id"),
+                assetRepresentationId: sql.raw("excluded.asset_representation_id"),
                 acquiredAt: sql.raw("excluded.acquired_at"),
                 originalAmount: sql.raw("excluded.original_amount"),
                 remainingAmount: sql`${schema.fifoLots.remainingAmount} + excluded.original_amount - ${schema.fifoLots.originalAmount}`,
@@ -1790,6 +1803,7 @@ const make = Effect.gen(function* () {
               providerTransferId: null,
               transactionLegId: leg.id,
               assetId: leg.assetId,
+              assetRepresentationId: leg.assetRepresentationId,
               timestamp: leg.timestamp,
               direction: "outbound",
               purpose: "fee",
@@ -1807,6 +1821,7 @@ const make = Effect.gen(function* () {
                 sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
                 transactionId: sql.raw("excluded.transaction_id"),
                 assetId: sql.raw("excluded.asset_id"),
+                assetRepresentationId: sql.raw("excluded.asset_representation_id"),
                 timestamp: sql.raw("excluded.timestamp"),
                 taxTreatment: sql`case
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id

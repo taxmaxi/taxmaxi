@@ -125,19 +125,27 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
 
 const assetCatalogAssetResponse = {
   id: "00000000-0000-4000-8000-000000000010",
-  blockchainId: "00000000-0000-4000-8000-000000000011",
-  blockchainName: "solana",
-  blockchainChainType: "solana",
-  blockchainChainId: null,
-  blockchainExplorerUrl: "https://explorer.solana.com",
-  blockchainLogoUrl: null,
-  contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
   name: "USD Coin",
   symbol: "USDC",
-  decimals: 6,
   logoUrl: null,
-  type: "token",
-  isSpam: false,
+  type: "fungible",
+  representations: [
+    {
+      id: "00000000-0000-4000-8000-000000000012",
+      blockchainId: "00000000-0000-4000-8000-000000000011",
+      blockchainName: "solana",
+      blockchainChainType: "solana",
+      blockchainChainId: null,
+      blockchainExplorerUrl: "https://explorer.solana.com",
+      blockchainLogoUrl: null,
+      contractAddress: null,
+      mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      decimals: 6,
+      logoUrl: null,
+      type: "token",
+      metadata: null,
+    },
+  ],
 } as const
 
 const assetCatalogListResponseBody = JSON.stringify({
@@ -158,7 +166,7 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     providerType: "crypto",
     mappingKind: "asset",
     canonicalAssetId: "00000000-0000-4000-8000-000000000010",
-    canonicalAssetSymbol: "ADA",
+    assetRepresentationId: "00000000-0000-4000-8000-000000000012",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     reviewerNotes: "Looks correct.",
@@ -166,13 +174,16 @@ const assetCanonicalizationResponseBody = JSON.stringify({
   },
   canonicalAsset: {
     id: "00000000-0000-4000-8000-000000000010",
+    representationId: "00000000-0000-4000-8000-000000000012",
     blockchainId: "00000000-0000-4000-8000-000000000011",
     blockchainName: "cardano",
     name: "Cardano",
     symbol: "ADA",
+    type: "fungible",
     decimals: 6,
     contractAddress: null,
-    type: "native",
+    mintAddress: null,
+    representationType: "native",
   },
   evidence: {
     source: "coingecko",
@@ -659,7 +670,7 @@ describe("TaxMaxi Promise client", () => {
       })
     ).resolves.toMatchObject({
       providerAsset: {
-        canonicalAssetSymbol: "ADA",
+        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
         mappingStatus: "approved",
       },
     })

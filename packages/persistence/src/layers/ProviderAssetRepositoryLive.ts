@@ -136,7 +136,7 @@ const make = Effect.gen(function* () {
               providerAssetRowId: mapping.providerAssetRowId,
               mappingKind: mapping.mappingKind,
               canonicalAssetId: mapping.canonicalAssetId,
-              canonicalAssetSymbol: mapping.canonicalAssetSymbol,
+              assetRepresentationId: mapping.assetRepresentationId,
               canonicalFiatCurrency: mapping.canonicalFiatCurrency,
               mappingStatus: mapping.mappingStatus,
               reviewerNotes: mapping.reviewerNotes,
@@ -150,7 +150,7 @@ const make = Effect.gen(function* () {
             set: {
               mappingKind: sql.raw("excluded.mapping_kind"),
               canonicalAssetId: sql.raw("excluded.canonical_asset_id"),
-              canonicalAssetSymbol: sql.raw("excluded.canonical_asset_symbol"),
+              assetRepresentationId: sql.raw("excluded.asset_representation_id"),
               canonicalFiatCurrency: sql.raw("excluded.canonical_fiat_currency"),
               mappingStatus: sql.raw("excluded.mapping_status"),
               reviewerNotes: sql.raw("excluded.reviewer_notes"),
@@ -179,7 +179,7 @@ const make = Effect.gen(function* () {
               providerAssetRowId: mapping.providerAssetRowId,
               mappingKind: mapping.mappingKind,
               canonicalAssetId: mapping.canonicalAssetId,
-              canonicalAssetSymbol: mapping.canonicalAssetSymbol,
+              assetRepresentationId: mapping.assetRepresentationId,
               canonicalFiatCurrency: mapping.canonicalFiatCurrency,
               mappingStatus: mapping.mappingStatus,
               reviewerNotes: mapping.reviewerNotes,
@@ -197,43 +197,6 @@ const make = Effect.gen(function* () {
           )
 
         return insertedRows.length
-      })
-
-  const backfillApprovedSymbolMappingsCanonicalAssetIds: ProviderAssetRepositoryShape["backfillApprovedSymbolMappingsCanonicalAssetIds"] =
-    ({ mappings }) =>
-      Effect.gen(function* () {
-        if (mappings.length === 0) {
-          return 0
-        }
-
-        const now = nowDate()
-
-        const updatedCounts = yield* Effect.forEach(mappings, (mapping) =>
-          db
-            .update(schema.providerAssetMappings)
-            .set({
-              canonicalAssetId: mapping.canonicalAssetId,
-              updatedAt: now,
-            })
-            .where(
-              and(
-                eq(schema.providerAssetMappings.providerAssetRowId, mapping.providerAssetRowId),
-                eq(schema.providerAssetMappings.mappingKind, "asset"),
-                eq(schema.providerAssetMappings.mappingStatus, "approved"),
-                eq(schema.providerAssetMappings.canonicalAssetSymbol, mapping.canonicalAssetSymbol),
-                sql`${schema.providerAssetMappings.canonicalAssetId} is null`
-              )
-            )
-            .returning({ id: schema.providerAssetMappings.id })
-            .pipe(
-              Effect.map((rows) => rows.length),
-              wrapSyncEngineSqlError(
-                "providerAssetRepository.backfillApprovedSymbolMappingsCanonicalAssetIds"
-              )
-            )
-        )
-
-        return updatedCounts.reduce((total, count) => total + count, 0)
       })
 
   const findProviderAssetByProviderAssetId: ProviderAssetRepositoryShape["findProviderAssetByProviderAssetId"] =
@@ -360,7 +323,7 @@ const make = Effect.gen(function* () {
       providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
       mappingKind: schema.providerAssetMappings.mappingKind,
       canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-      canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+      assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
       canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
       mappingStatus: schema.providerAssetMappings.mappingStatus,
       reviewerNotes: schema.providerAssetMappings.reviewerNotes,
@@ -465,7 +428,7 @@ const make = Effect.gen(function* () {
           providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
           mappingKind: schema.providerAssetMappings.mappingKind,
           canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-          canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+          assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
           canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
           mappingStatus: schema.providerAssetMappings.mappingStatus,
         })
@@ -481,7 +444,6 @@ const make = Effect.gen(function* () {
     upsertProviderAssets,
     upsertProviderAssetMappings,
     seedProviderAssetMappingsIfMissing,
-    backfillApprovedSymbolMappingsCanonicalAssetIds,
     findProviderAssetByProviderAssetId,
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,
