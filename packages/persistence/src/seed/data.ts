@@ -1159,25 +1159,28 @@ export const seedData = Effect.gen(function* () {
       .from(schema.assetRepresentations)
       .where(representationFilter)
       .limit(1)
-    const values = {
+    const referenceValues = {
       assetId,
       blockchainId,
       type: representation.type,
       contractAddress: representation.contractAddress,
       mintAddress: representation.mintAddress,
       decimals: representation.decimals,
-      logoUrl: null,
-      isSpam: false,
-      metadata: { source: "taxmaxi_reference_data" },
       updatedAt: seedTimestamp,
     } as const
 
     if (existingRepresentation === undefined) {
-      yield* db.insert(schema.assetRepresentations).values({ ...values, createdAt: seedTimestamp })
+      yield* db.insert(schema.assetRepresentations).values({
+        ...referenceValues,
+        logoUrl: null,
+        isSpam: false,
+        metadata: { source: "taxmaxi_reference_data" },
+        createdAt: seedTimestamp,
+      })
     } else {
       yield* db
         .update(schema.assetRepresentations)
-        .set(values)
+        .set(referenceValues)
         .where(eq(schema.assetRepresentations.id, existingRepresentation.id))
     }
   }

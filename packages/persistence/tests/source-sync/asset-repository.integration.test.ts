@@ -217,6 +217,9 @@ describe("AssetRepositoryLive", () => {
               blockchainName: schema.blockchains.name,
               contractAddress: schema.assetRepresentations.contractAddress,
               mintAddress: schema.assetRepresentations.mintAddress,
+              logoUrl: schema.assetRepresentations.logoUrl,
+              isSpam: schema.assetRepresentations.isSpam,
+              metadata: schema.assetRepresentations.metadata,
             })
             .from(schema.assetRepresentations)
             .innerJoin(
@@ -230,6 +233,29 @@ describe("AssetRepositoryLive", () => {
       )
 
     const firstState = await readUsdcState()
+    const reviewedRepresentation = firstState.representations.find(
+      (representation) => representation.blockchainName === "base"
+    )
+
+    if (reviewedRepresentation === undefined) {
+      expect.fail("Missing seeded Base USDC representation")
+    }
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.assetRepresentations)
+          .set({
+            logoUrl: "https://assets.example/reviewed-usdc.png",
+            isSpam: true,
+            metadata: { source: "manual_review", reviewer: "test" },
+          })
+          .where(eq(schema.assetRepresentations.id, reviewedRepresentation.id))
+      })
+    )
+
+    const reviewedState = await readUsdcState()
     await runPg(seedData)
     const secondState = await readUsdcState()
 
@@ -238,6 +264,6 @@ describe("AssetRepositoryLive", () => {
     expect(
       firstState.representations.map((representation) => representation.blockchainName).sort()
     ).toEqual(["base", "ethereum", "solana"])
-    expect(secondState).toEqual(firstState)
+    expect(secondState).toEqual(reviewedState)
   })
 })
