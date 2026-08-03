@@ -202,7 +202,7 @@ describe("AssetRepositoryLive", () => {
         Effect.gen(function* () {
           const db = yield* drizzle
           const [usdc] = yield* db
-            .select({ id: schema.assets.id })
+            .select({ id: schema.assets.id, logoUrl: schema.assets.logoUrl })
             .from(schema.assets)
             .where(eq(schema.assets.coingeckoCoinId, "usd-coin"))
             .limit(1)
@@ -244,6 +244,10 @@ describe("AssetRepositoryLive", () => {
     await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        yield* db
+          .update(schema.assets)
+          .set({ logoUrl: "https://assets.example/reviewed-usdc-asset.png" })
+          .where(eq(schema.assets.id, firstState.usdc.id))
         yield* db
           .update(schema.assetRepresentations)
           .set({

@@ -1096,7 +1096,7 @@ export const seedData = Effect.gen(function* () {
         name: sql.raw("excluded.name"),
         symbol: sql.raw("excluded.symbol"),
         coingeckoCoinId: sql.raw("excluded.coingecko_coin_id"),
-        logoUrl: sql.raw("excluded.logo_url"),
+        logoUrl: sql`coalesce(excluded.logo_url, ${schema.assets.logoUrl})`,
         type: sql.raw("excluded.type"),
         updatedAt: seedTimestamp,
       },
