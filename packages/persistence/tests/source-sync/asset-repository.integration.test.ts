@@ -285,9 +285,10 @@ describe("AssetRepositoryLive", () => {
     })
   })
 
-  it("matches non-EVM contract addresses exactly", async () => {
-    const contractAddress = "cardanoAsset1AbCdEf"
-    const persistedAsset = await runRepository(
+  it("keeps case-distinct non-EVM contract addresses separate", async () => {
+    const firstContractAddress = "cardanoAsset1AbCdEf"
+    const secondContractAddress = firstContractAddress.toLowerCase()
+    const firstAsset = await runRepository(
       Effect.flatMap(AssetRepository, (repository) =>
         repository.upsertEconomicAssetRepresentation({
           blockchain: {
@@ -307,7 +308,38 @@ describe("AssetRepositoryLive", () => {
             type: "fungible",
           },
           representation: {
-            contractAddress,
+            contractAddress: firstContractAddress,
+            mintAddress: null,
+            decimals: 6,
+            logoUrl: null,
+            type: "token",
+            isSpam: false,
+            metadata: null,
+          },
+        })
+      )
+    )
+    const secondAsset = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertEconomicAssetRepresentation({
+          blockchain: {
+            name: "cardano",
+            chainType: "cardano",
+            chainId: null,
+            nativeAssetSymbol: "ADA",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: "cardano",
+          },
+          asset: {
+            name: "Second Cardano Test Token",
+            symbol: "CT2",
+            coingeckoCoinId: "second-cardano-test-token",
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress: secondContractAddress,
             mintAddress: null,
             decimals: 6,
             logoUrl: null,
@@ -319,31 +351,38 @@ describe("AssetRepositoryLive", () => {
       )
     )
 
-    const exactMatch = await runRepository(
+    const firstMatch = await runRepository(
       Effect.flatMap(AssetRepository, (repository) =>
         repository.findRepresentationByBlockchainAndAddress({
           blockchainName: "cardano",
-          address: contractAddress,
+          address: firstContractAddress,
         })
       )
     )
-    const wrongCase = await runRepository(
+    const secondMatch = await runRepository(
       Effect.flatMap(AssetRepository, (repository) =>
         repository.findRepresentationByBlockchainAndAddress({
           blockchainName: "cardano",
-          address: contractAddress.toLowerCase(),
+          address: secondContractAddress,
         })
       )
     )
 
-    expect(Option.getOrNull(exactMatch)).toEqual(
+    expect(Option.getOrNull(firstMatch)).toEqual(
       expect.objectContaining({
-        id: persistedAsset.representationId,
-        assetId: persistedAsset.id,
+        id: firstAsset.representationId,
+        assetId: firstAsset.id,
         symbol: "CTT",
       })
     )
-    expect(Option.isNone(wrongCase)).toBe(true)
+    expect(Option.getOrNull(secondMatch)).toEqual(
+      expect.objectContaining({
+        id: secondAsset.representationId,
+        assetId: secondAsset.id,
+        symbol: "CT2",
+      })
+    )
+    expect(firstAsset.representationId).not.toBe(secondAsset.representationId)
   })
 
   it("keeps known economic assets and network representations exact on repeated seeds", async () => {

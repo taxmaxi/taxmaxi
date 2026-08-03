@@ -61,7 +61,7 @@ export const assetRepresentations = pgTable(
       .on(table.blockchainId)
       .where(sql`${table.type} = 'native'`),
     uniqueIndex("asset_representations_contract_unique_idx")
-      .on(table.blockchainId, sql`lower(${table.contractAddress})`)
+      .on(table.blockchainId, table.contractAddress)
       .where(sql`${table.contractAddress} is not null`),
     uniqueIndex("asset_representations_mint_unique_idx")
       .on(table.blockchainId, table.mintAddress)

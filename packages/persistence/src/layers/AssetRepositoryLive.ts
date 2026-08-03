@@ -236,10 +236,7 @@ const make = Effect.gen(function* () {
                 : contractAddress !== null
                   ? and(
                       eq(schema.assetRepresentations.blockchainId, persistedBlockchain.id),
-                      eq(
-                        sql<string>`lower(${schema.assetRepresentations.contractAddress})`,
-                        contractAddress.toLowerCase()
-                      )
+                      eq(schema.assetRepresentations.contractAddress, contractAddress)
                     )
                   : mintAddress !== null
                     ? and(
