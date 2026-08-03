@@ -101,6 +101,14 @@ const assetRepresentations = [
     decimals: 9,
   },
   {
+    assetCoinGeckoId: "solana",
+    blockchainName: "solana",
+    type: "token",
+    contractAddress: null,
+    mintAddress: "So11111111111111111111111111111111111111112",
+    decimals: 9,
+  },
+  {
     assetCoinGeckoId: "usd-coin",
     blockchainName: "solana",
     type: "token",

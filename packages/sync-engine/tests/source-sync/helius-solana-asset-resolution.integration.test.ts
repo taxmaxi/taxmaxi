@@ -30,6 +30,7 @@ const USDC_ASSET_ID = "00000000-0000-0000-0000-000000001602"
 const USDT_ASSET_ID = "00000000-0000-0000-0000-000000001603"
 const UNKNOWN_ASSET_ID = "00000000-0000-0000-0000-000000001604"
 const SOL_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001601"
+const WRAPPED_SOL_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001605"
 const USDC_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001602"
 const USDT_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001603"
 const UNKNOWN_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001604"
@@ -125,6 +126,15 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
       type: "native",
       contractAddress: null,
       mintAddress: null,
+      decimals: 9,
+    },
+    {
+      id: WRAPPED_SOL_REPRESENTATION_ID,
+      assetId: SOL_ASSET_ID,
+      blockchainId: solanaBlockchain.id,
+      type: "token",
+      contractAddress: null,
+      mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
       decimals: 9,
     },
     {
@@ -246,12 +256,36 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     expect(result).toMatchObject({
       kind: "canonical",
       assetKind: "native",
-      providerAssetId: SOLANA_WRAPPED_NATIVE_MINT,
+      providerAssetId: null,
       currencyCode: "SOL",
       decimals: 9,
       mappingStatus: "approved",
       canonicalAssetId: SOL_ASSET_ID,
       assetRepresentationId: SOL_REPRESENTATION_ID,
+    })
+  })
+
+  it("resolves wrapped SOL to its mint representation", async () => {
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        Effect.gen(function* () {
+          yield* service.ensureDefaultMappings()
+
+          return yield* service.resolveAsset({
+            kind: "spl",
+            mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+          })
+        })
+      ),
+      () => Effect.dieMessage("DAS should not be called for wrapped SOL default mapping")
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      assetKind: "token",
+      mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+      canonicalAssetId: SOL_ASSET_ID,
+      assetRepresentationId: WRAPPED_SOL_REPRESENTATION_ID,
     })
   })
 

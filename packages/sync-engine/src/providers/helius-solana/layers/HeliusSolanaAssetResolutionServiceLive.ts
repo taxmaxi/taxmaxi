@@ -69,7 +69,7 @@ interface DecodedDasAsset {
 const NATIVE_SOL_NATURAL_KEY = "solana:native:SOL"
 
 const nativeDefaultAssetMapping = {
-  mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+  mintAddress: null,
   naturalKey: NATIVE_SOL_NATURAL_KEY,
   currencyCode: SOLANA_NATIVE_SYMBOL,
   name: "Solana",
@@ -78,8 +78,19 @@ const nativeDefaultAssetMapping = {
   sourceNotes: "TaxMaxi built-in Solana native SOL mapping.",
 } as const satisfies DefaultAssetMapping
 
+const wrappedSolDefaultAssetMapping = {
+  mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+  naturalKey: `solana:mint:${SOLANA_WRAPPED_NATIVE_MINT}`,
+  currencyCode: SOLANA_NATIVE_SYMBOL,
+  name: "Wrapped SOL",
+  decimals: 9,
+  providerType: "spl-token",
+  sourceNotes: "TaxMaxi built-in wrapped SOL mint mapping.",
+} as const satisfies DefaultAssetMapping
+
 const defaultAssetMappings = [
   nativeDefaultAssetMapping,
+  wrappedSolDefaultAssetMapping,
   {
     mintAddress: SOLANA_USDC_MINT,
     naturalKey: `solana:mint:${SOLANA_USDC_MINT}`,
@@ -177,10 +188,6 @@ const normalizeMintAddress = (mintAddress: string | null): string | null => {
   const trimmed = mintAddress.trim()
   return trimmed === "" ? null : trimmed
 }
-
-const isNativeSolReference = (reference: HeliusSolanaAssetReference): boolean =>
-  reference.kind === "native" ||
-  normalizeMintAddress(reference.mintAddress) === SOLANA_WRAPPED_NATIVE_MINT
 
 const mintNaturalKey = (mintAddress: string): string => `solana:mint:${mintAddress}`
 
@@ -314,7 +321,7 @@ const decodeDasAssetBatch = (
 const normalizeReference = (
   reference: HeliusSolanaAssetReference
 ): Effect.Effect<NormalizedAssetReference, HeliusSolanaAssetMetadataDecodeError> => {
-  if (isNativeSolReference(reference)) {
+  if (reference.kind === "native") {
     return Effect.succeed({
       kind: "native",
       mintAddress: null,
