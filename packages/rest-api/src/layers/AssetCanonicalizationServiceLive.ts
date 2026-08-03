@@ -222,6 +222,14 @@ const observedProviderTokenId = (providerAsset: ProviderAssetRecord): string | n
   )
 }
 
+export const representationIdForProviderObservation = ({
+  providerAsset,
+  representationId,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly representationId: string
+}): string | null => (observedProviderTokenId(providerAsset) === null ? null : representationId)
+
 const validateProviderTokenIdentity = ({
   contractAddress,
   platform,
@@ -547,7 +555,10 @@ const make = Effect.gen(function* () {
                 providerAssetRowId,
                 mappingKind: "asset",
                 canonicalAssetId: canonicalAsset.id,
-                assetRepresentationId: canonicalAsset.representationId,
+                assetRepresentationId: representationIdForProviderObservation({
+                  providerAsset: providerAssetReview.value.providerAsset,
+                  representationId: canonicalAsset.representationId,
+                }),
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,
