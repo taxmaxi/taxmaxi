@@ -71,6 +71,8 @@ describe("AssetRepositoryLive", () => {
   it("matches EVM token contracts case-insensitively and preserves existing asset logos", async () => {
     const existingAssetId = "00000000-0000-0000-0000-00000000a551"
     const existingLogoUrl = "https://assets.example/usdc.png"
+    const existingExplorerUrl = "https://base.example"
+    const existingBlockchainLogoUrl = "https://assets.example/base.png"
 
     await runPg(
       Effect.gen(function* () {
@@ -84,6 +86,10 @@ describe("AssetRepositoryLive", () => {
         expect(base).toBeDefined()
 
         if (base !== undefined) {
+          yield* db
+            .update(schema.blockchains)
+            .set({ explorerUrl: existingExplorerUrl, logoUrl: existingBlockchainLogoUrl })
+            .where(eq(schema.blockchains.id, base.id))
           yield* db.insert(schema.assets).values({
             id: existingAssetId,
             name: "Existing USDC",
@@ -144,11 +150,17 @@ describe("AssetRepositoryLive", () => {
             coingeckoCoinId: schema.assets.coingeckoCoinId,
             logoUrl: schema.assets.logoUrl,
             contractAddress: schema.assetRepresentations.contractAddress,
+            explorerUrl: schema.blockchains.explorerUrl,
+            blockchainLogoUrl: schema.blockchains.logoUrl,
           })
           .from(schema.assets)
           .innerJoin(
             schema.assetRepresentations,
             eq(schema.assetRepresentations.assetId, schema.assets.id)
+          )
+          .innerJoin(
+            schema.blockchains,
+            eq(schema.blockchains.id, schema.assetRepresentations.blockchainId)
           )
           .where(eq(schema.assets.id, existingAssetId))
           .limit(1)
@@ -161,6 +173,8 @@ describe("AssetRepositoryLive", () => {
       contractAddress: "0xabcdefabcdef",
       coingeckoCoinId: "usd-coin",
       logoUrl: existingLogoUrl,
+      explorerUrl: existingExplorerUrl,
+      blockchainLogoUrl: existingBlockchainLogoUrl,
     })
 
     const foundAsset = await runRepository(
