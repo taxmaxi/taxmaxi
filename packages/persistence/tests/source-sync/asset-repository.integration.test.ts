@@ -285,6 +285,67 @@ describe("AssetRepositoryLive", () => {
     })
   })
 
+  it("matches non-EVM contract addresses exactly", async () => {
+    const contractAddress = "cardanoAsset1AbCdEf"
+    const persistedAsset = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertEconomicAssetRepresentation({
+          blockchain: {
+            name: "cardano",
+            chainType: "cardano",
+            chainId: null,
+            nativeAssetSymbol: "ADA",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: "cardano",
+          },
+          asset: {
+            name: "Cardano Test Token",
+            symbol: "CTT",
+            coingeckoCoinId: "cardano-test-token",
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress,
+            mintAddress: null,
+            decimals: 6,
+            logoUrl: null,
+            type: "token",
+            isSpam: false,
+            metadata: null,
+          },
+        })
+      )
+    )
+
+    const exactMatch = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findRepresentationByBlockchainAndAddress({
+          blockchainName: "cardano",
+          address: contractAddress,
+        })
+      )
+    )
+    const wrongCase = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findRepresentationByBlockchainAndAddress({
+          blockchainName: "cardano",
+          address: contractAddress.toLowerCase(),
+        })
+      )
+    )
+
+    expect(Option.getOrNull(exactMatch)).toEqual(
+      expect.objectContaining({
+        id: persistedAsset.representationId,
+        assetId: persistedAsset.id,
+        symbol: "CTT",
+      })
+    )
+    expect(Option.isNone(wrongCase)).toBe(true)
+  })
+
   it("keeps known economic assets and network representations exact on repeated seeds", async () => {
     await runPg(seedData)
 
