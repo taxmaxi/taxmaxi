@@ -1547,6 +1547,7 @@ const make = Effect.gen(function* () {
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
                     or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
                     or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.assetRepresentationId} is distinct from excluded.asset_representation_id
                     or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
                     or ${schema.inventoryMovements.direction} is distinct from excluded.direction
                     or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
@@ -1558,6 +1559,7 @@ const make = Effect.gen(function* () {
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
                     or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
                     or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.assetRepresentationId} is distinct from excluded.asset_representation_id
                     or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
                     or ${schema.inventoryMovements.direction} is distinct from excluded.direction
                     or ${schema.inventoryMovements.purpose} is distinct from excluded.purpose
@@ -1827,6 +1829,7 @@ const make = Effect.gen(function* () {
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
                     or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
                     or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.assetRepresentationId} is distinct from excluded.asset_representation_id
                     or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
                     or ${schema.inventoryMovements.amount} is distinct from excluded.amount
                   then 'pending_review'::inventory_movement_tax_treatment
@@ -1836,6 +1839,7 @@ const make = Effect.gen(function* () {
                   when ${schema.inventoryMovements.sourceRawRecordId} is distinct from excluded.source_raw_record_id
                     or ${schema.inventoryMovements.transactionId} is distinct from excluded.transaction_id
                     or ${schema.inventoryMovements.assetId} is distinct from excluded.asset_id
+                    or ${schema.inventoryMovements.assetRepresentationId} is distinct from excluded.asset_representation_id
                     or ${schema.inventoryMovements.timestamp} is distinct from excluded.timestamp
                     or ${schema.inventoryMovements.amount} is distinct from excluded.amount
                   then 'unmatched'::inventory_movement_reconciliation_status
