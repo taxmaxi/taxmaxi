@@ -248,8 +248,10 @@ const make = Effect.gen(function* () {
               .select({
                 id: schema.assetRepresentations.id,
                 assetId: schema.assetRepresentations.assetId,
+                assetCoingeckoCoinId: schema.assets.coingeckoCoinId,
               })
               .from(schema.assetRepresentations)
+              .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
               .where(representationFilter)
               .limit(1)
               .pipe(
@@ -267,19 +269,46 @@ const make = Effect.gen(function* () {
                   )
                 : eq(schema.assets.coingeckoCoinId, asset.coingeckoCoinId)
 
+            const [existingAssetByIdentity] = yield* tx
+              .select({ id: schema.assets.id })
+              .from(schema.assets)
+              .where(economicAssetFilter)
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.upsertEconomicAssetRepresentation.findEconomicAsset"
+                )
+              )
+
+            const representationOwnerConflicts =
+              existingRepresentation !== undefined &&
+              ((existingAssetByIdentity !== undefined &&
+                existingAssetByIdentity.id !== existingRepresentation.assetId) ||
+                (asset.coingeckoCoinId !== null &&
+                  existingRepresentation.assetCoingeckoCoinId !== null &&
+                  existingRepresentation.assetCoingeckoCoinId !== asset.coingeckoCoinId))
+
+            if (representationOwnerConflicts) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.validateRepresentationOwner",
+                  cause: {
+                    assetCoingeckoCoinId: asset.coingeckoCoinId,
+                    existingAssetId: existingRepresentation.assetId,
+                    existingAssetCoingeckoCoinId: existingRepresentation.assetCoingeckoCoinId,
+                    representationId: existingRepresentation.id,
+                    message: "Representation belongs to a different economic asset.",
+                  },
+                })
+              )
+            }
+
             const existingAsset =
-              existingRepresentation === undefined
-                ? (yield* tx
-                    .select({ id: schema.assets.id })
-                    .from(schema.assets)
-                    .where(economicAssetFilter)
-                    .limit(1)
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "assetRepository.upsertEconomicAssetRepresentation.findEconomicAsset"
-                      )
-                    ))[0]
-                : { id: existingRepresentation.assetId }
+              existingAssetByIdentity ??
+              (existingRepresentation === undefined
+                ? undefined
+                : { id: existingRepresentation.assetId })
 
             const assetValues = {
               name: asset.name,

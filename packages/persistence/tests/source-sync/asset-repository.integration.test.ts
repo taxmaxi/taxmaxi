@@ -12,7 +12,7 @@ import {
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
-import { AssetRepository } from "@my/sync-engine/services"
+import { AssetRepository, SyncEngineStorageError } from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_asset_repo",
@@ -192,6 +192,97 @@ describe("AssetRepositoryLive", () => {
         symbol: "USDC",
       })
     )
+  })
+
+  it("rejects a reviewed representation owned by a different economic asset", async () => {
+    const existingAssetId = "00000000-0000-0000-0000-00000000a552"
+    const contractAddress = "0xfeedfeedfeed"
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [base] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "base"))
+          .limit(1)
+
+        if (base === undefined) {
+          return yield* Effect.dieMessage("Missing Base blockchain fixture")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: existingAssetId,
+          name: "Existing Asset",
+          symbol: "OLD",
+          coingeckoCoinId: "existing-asset",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          assetId: existingAssetId,
+          blockchainId: base.id,
+          contractAddress,
+          mintAddress: null,
+          decimals: 18,
+          type: "token",
+        })
+      })
+    )
+
+    const error = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertEconomicAssetRepresentation({
+          blockchain: {
+            name: "base",
+            chainType: "evm",
+            chainId: 8453,
+            nativeAssetSymbol: "ETH",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: "base",
+          },
+          asset: {
+            name: "Reviewed Asset",
+            symbol: "NEW",
+            coingeckoCoinId: "reviewed-asset",
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress,
+            mintAddress: null,
+            decimals: 18,
+            logoUrl: null,
+            type: "token",
+            isSpam: false,
+            metadata: null,
+          },
+        })
+      ).pipe(Effect.flip)
+    )
+
+    expect(error).toBeInstanceOf(SyncEngineStorageError)
+
+    const [storedAsset] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            name: schema.assets.name,
+            symbol: schema.assets.symbol,
+            coingeckoCoinId: schema.assets.coingeckoCoinId,
+          })
+          .from(schema.assets)
+          .where(eq(schema.assets.id, existingAssetId))
+          .limit(1)
+      })
+    )
+
+    expect(storedAsset).toEqual({
+      name: "Existing Asset",
+      symbol: "OLD",
+      coingeckoCoinId: "existing-asset",
+    })
   })
 
   it("keeps known economic assets and network representations exact on repeated seeds", async () => {
