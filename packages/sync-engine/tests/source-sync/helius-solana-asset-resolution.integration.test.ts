@@ -289,6 +289,59 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
+  it("rejects a wrapped SOL mapping that points to native SOL", async () => {
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.ensureDefaultMappings()
+      ),
+      () => Effect.dieMessage("DAS should not be called while seeding default mappings")
+    )
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [wrappedSolProviderAsset] = yield* db
+          .select({ id: schema.providerAssets.id })
+          .from(schema.providerAssets)
+          .where(eq(schema.providerAssets.providerAssetId, SOLANA_WRAPPED_NATIVE_MINT))
+          .limit(1)
+
+        if (wrappedSolProviderAsset === undefined) {
+          return yield* Effect.dieMessage("Missing wrapped SOL provider asset")
+        }
+
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            canonicalAssetId: SOL_ASSET_ID,
+            assetRepresentationId: SOL_REPRESENTATION_ID,
+            mappingStatus: "approved",
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, wrappedSolProviderAsset.id))
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.either(
+        Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+          service.resolveAsset({
+            kind: "spl",
+            mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+          })
+        )
+      ),
+      () => Effect.dieMessage("DAS should not be called for an approved mapping")
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "HeliusSolanaBrokenApprovedProviderAssetMappingError",
+        mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+      })
+    }
+  })
+
   it("resolves known SPL stablecoin mints through one DAS batch and approved canonical mappings", async () => {
     const dasCalls: Array<ReadonlyArray<string>> = []
 

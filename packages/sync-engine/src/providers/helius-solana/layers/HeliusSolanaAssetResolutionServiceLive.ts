@@ -733,13 +733,22 @@ const make = Effect.gen(function* () {
         )
       }
 
-      const representation = yield* assetRepository.findRepresentationById({
-        assetRepresentationId: mapping.assetRepresentationId,
-      })
+      const representation =
+        reference.kind === "native"
+          ? yield* assetRepository.findNativeRepresentationForBlockchain({
+              blockchainName: SOLANA_BLOCKCHAIN_NAME,
+            })
+          : reference.mintAddress === null
+            ? Option.none()
+            : yield* assetRepository.findRepresentationByBlockchainAndAddress({
+                blockchainName: SOLANA_BLOCKCHAIN_NAME,
+                address: reference.mintAddress,
+              })
 
       if (
         Option.isNone(representation) ||
-        representation.value.assetId !== mapping.canonicalAssetId
+        representation.value.assetId !== mapping.canonicalAssetId ||
+        representation.value.id !== mapping.assetRepresentationId
       ) {
         return yield* Effect.fail(
           new HeliusSolanaBrokenApprovedProviderAssetMappingError({
