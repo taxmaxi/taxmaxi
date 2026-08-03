@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "53f3e743-357b-49d4-a9b0-9f4093cf49d9",
+  "id": "8c518d6e-8374-464d-be20-510eec5db210",
   "prevIds": ["90b26cb8-f459-4aac-88ab-4ced05b3e966"],
   "ddl": [
     {
@@ -12,12 +12,6 @@
     },
     {
       "values": ["native", "token", "nft"],
-      "name": "asset_representation_type",
-      "entityType": "enums",
-      "schema": "public"
-    },
-    {
-      "values": ["fungible", "nft"],
       "name": "asset_type",
       "entityType": "enums",
       "schema": "public"
@@ -238,12 +232,6 @@
     {
       "isRlsEnabled": false,
       "name": "asset_prices",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
-      "name": "asset_representations",
       "entityType": "tables",
       "schema": "public"
     },
@@ -754,20 +742,7 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
+      "table": "assets"
     },
     {
       "type": "uuid",
@@ -780,20 +755,7 @@
       "name": "blockchain_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "asset_representation_type",
-      "typeSchema": "public",
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "type",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
+      "table": "assets"
     },
     {
       "type": "text",
@@ -804,110 +766,6 @@
       "generated": null,
       "identity": null,
       "name": "contract_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "mint_address",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "decimals",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "text",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "logo_url",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "boolean",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "false",
-      "generated": null,
-      "identity": null,
-      "name": "is_spam",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "jsonb",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "metadata",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "created_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "timestamp",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "now()",
-      "generated": null,
-      "identity": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": "gen_random_uuid()",
-      "generated": null,
-      "identity": null,
-      "name": "id",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -934,6 +792,19 @@
       "generated": null,
       "identity": null,
       "name": "symbol",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "assets"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "decimals",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -969,7 +840,7 @@
       "typeSchema": "public",
       "notNull": true,
       "dimensions": 0,
-      "default": "'fungible'",
+      "default": "'token'",
       "generated": null,
       "identity": null,
       "name": "type",
@@ -999,6 +870,19 @@
       "generated": null,
       "identity": null,
       "name": "updated_at",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "assets"
+    },
+    {
+      "type": "boolean",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "false",
+      "generated": null,
+      "identity": null,
+      "name": "is_spam",
       "entityType": "columns",
       "schema": "public",
       "table": "assets"
@@ -1706,19 +1590,6 @@
       "table": "fifo_lots"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "fifo_lots"
-    },
-    {
       "type": "timestamp",
       "typeSchema": null,
       "notNull": true,
@@ -2117,19 +1988,6 @@
       "generated": null,
       "identity": null,
       "name": "asset_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "inventory_movements"
-    },
-    {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
       "entityType": "columns",
       "schema": "public",
       "table": "inventory_movements"
@@ -4501,14 +4359,14 @@
       "table": "provider_asset_mappings"
     },
     {
-      "type": "uuid",
+      "type": "text",
       "typeSchema": null,
       "notNull": false,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "asset_representation_id",
+      "name": "canonical_asset_symbol",
       "entityType": "columns",
       "schema": "public",
       "table": "provider_asset_mappings"
@@ -6256,19 +6114,6 @@
       "table": "transaction_legs"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "transaction_legs"
-    },
-    {
       "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
@@ -7855,19 +7700,6 @@
       "table": "transfers"
     },
     {
-      "type": "uuid",
-      "typeSchema": null,
-      "notNull": false,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "asset_representation_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "transfers"
-    },
-    {
       "type": "numeric(100,30)",
       "typeSchema": null,
       "notNull": true,
@@ -8124,153 +7956,6 @@
       "nameExplicit": true,
       "columns": [
         {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"type\" = 'native'",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_native_blockchain_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "lower(\"contract_address\")",
-          "isExpression": true,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"contract_address\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_contract_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "mint_address",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": "\"mint_address\" is not null",
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_mint_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        },
-        {
-          "value": "id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": true,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "asset_representations_asset_id_id_unique_idx",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "asset_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_representations_asset",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
-          "value": "blockchain_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "with": "",
-      "method": "btree",
-      "concurrently": false,
-      "name": "idx_asset_representations_blockchain",
-      "entityType": "indexes",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": true,
-      "columns": [
-        {
           "value": "symbol",
           "isExpression": false,
           "asc": true,
@@ -8299,12 +7984,12 @@
           "opclass": null
         }
       ],
-      "isUnique": true,
+      "isUnique": false,
       "where": null,
       "with": "",
       "method": "btree",
       "concurrently": false,
-      "name": "asset_coingecko_coin_id_unique_idx",
+      "name": "asset_coingecko_coin_id_idx",
       "entityType": "indexes",
       "schema": "public",
       "table": "assets"
@@ -11076,13 +10761,6 @@
           "asc": true,
           "nullsFirst": false,
           "opclass": null
-        },
-        {
-          "value": "asset_representation_id",
-          "isExpression": false,
-          "asc": true,
-          "nullsFirst": false,
-          "opclass": null
         }
       ],
       "isUnique": true,
@@ -11263,29 +10941,16 @@
     },
     {
       "nameExplicit": false,
-      "columns": ["asset_id"],
-      "schemaTo": "public",
-      "tableTo": "assets",
-      "columnsTo": ["id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "asset_representations_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "nameExplicit": false,
       "columns": ["blockchain_id"],
       "schemaTo": "public",
       "tableTo": "blockchains",
       "columnsTo": ["id"],
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
-      "name": "asset_representations_blockchain_id_blockchains_id_fkey",
+      "name": "assets_blockchain_id_blockchains_id_fkey",
       "entityType": "fks",
       "schema": "public",
-      "table": "asset_representations"
+      "table": "assets"
     },
     {
       "nameExplicit": false,
@@ -11431,19 +11096,6 @@
       "table": "fifo_lots"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "fifo_lots_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "fifo_lots"
-    },
-    {
       "nameExplicit": false,
       "columns": ["user_id"],
       "schemaTo": "public",
@@ -11569,19 +11221,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "inventory_movements_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "inventory_movements"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "inventory_movements_representation_matches_asset_fk",
       "entityType": "fks",
       "schema": "public",
       "table": "inventory_movements"
@@ -11881,19 +11520,6 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "name": "provider_asset_mappings_canonical_asset_id_assets_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "provider_asset_mappings"
-    },
-    {
-      "nameExplicit": true,
-      "columns": ["canonical_asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "provider_asset_mappings_representation_matches_asset_fk",
       "entityType": "fks",
       "schema": "public",
       "table": "provider_asset_mappings"
@@ -12211,19 +11837,6 @@
       "table": "transaction_legs"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "transaction_legs_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "transaction_legs"
-    },
-    {
       "nameExplicit": false,
       "columns": ["transaction_id"],
       "schemaTo": "public",
@@ -12536,19 +12149,6 @@
       "table": "transfers"
     },
     {
-      "nameExplicit": true,
-      "columns": ["asset_id", "asset_representation_id"],
-      "schemaTo": "public",
-      "tableTo": "asset_representations",
-      "columnsTo": ["asset_id", "id"],
-      "onUpdate": "NO ACTION",
-      "onDelete": "NO ACTION",
-      "name": "transfers_representation_matches_asset_fk",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "transfers"
-    },
-    {
       "columns": ["id"],
       "nameExplicit": false,
       "name": "addresses_pkey",
@@ -12562,14 +12162,6 @@
       "name": "asset_prices_pkey",
       "schema": "public",
       "table": "asset_prices",
-      "entityType": "pks"
-    },
-    {
-      "columns": ["id"],
-      "nameExplicit": false,
-      "name": "asset_representations_pkey",
-      "schema": "public",
-      "table": "asset_representations",
       "entityType": "pks"
     },
     {
@@ -12976,6 +12568,15 @@
     },
     {
       "nameExplicit": true,
+      "columns": ["blockchain_id", "contract_address"],
+      "nullsNotDistinct": false,
+      "name": "unique_token_idx",
+      "entityType": "uniques",
+      "schema": "public",
+      "table": "assets"
+    },
+    {
+      "nameExplicit": true,
       "columns": ["rule_set_id", "rule_id"],
       "nullsNotDistinct": false,
       "name": "jurisdiction_rule_set_rules_unique",
@@ -13083,20 +12684,6 @@
       "entityType": "uniques"
     },
     {
-      "value": "\"decimals\" >= 0",
-      "name": "asset_representations_decimals_non_negative",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
-      "value": "(\n        \"type\" = 'native'\n        and \"contract_address\" is null\n        and \"mint_address\" is null\n      ) or (\n        \"type\" in ('token', 'nft')\n        and num_nonnulls(\"contract_address\", \"mint_address\") = 1\n      )",
-      "name": "asset_representations_identity_matches_type",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "asset_representations"
-    },
-    {
       "value": "num_nonnulls(\"source_leg_id\", \"source_provider_transfer_id\") = 1",
       "name": "fifo_lots_origin_present",
       "entityType": "checks",
@@ -13165,20 +12752,6 @@
       "entityType": "checks",
       "schema": "public",
       "table": "protocol_transaction_type_mappings"
-    },
-    {
-      "value": "(\n        \"mapping_kind\" = 'asset'\n        and \"canonical_asset_id\" is not null\n      ) or (\n        \"mapping_kind\" = 'fiat'\n        and \"canonical_fiat_currency\" is not null\n      ) or \"mapping_status\" in ('pending_review', 'rejected')",
-      "name": "provider_asset_mappings_kind_requires_target",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_asset_mappings"
-    },
-    {
-      "value": "\"asset_representation_id\" is null or \"canonical_asset_id\" is not null",
-      "name": "provider_asset_mappings_representation_requires_asset",
-      "entityType": "checks",
-      "schema": "public",
-      "table": "provider_asset_mappings"
     },
     {
       "value": "\"provider_asset_id\" is not null or \"natural_key\" is not null",

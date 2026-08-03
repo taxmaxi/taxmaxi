@@ -270,7 +270,6 @@ export const makeIntegrationTestDatabaseContext = ({
   return {
     databaseName,
     TestPgClientLive,
-    migrateTestDatabaseFromFolder,
     recreateTestDatabase,
     recreateEmptyTestDatabase,
     destroyTestDatabase,

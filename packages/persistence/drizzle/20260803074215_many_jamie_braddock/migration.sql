@@ -1,0 +1,1 @@
+ALTER TABLE "provider_asset_mappings" DROP CONSTRAINT "provider_asset_mappings_kind_requires_target";
