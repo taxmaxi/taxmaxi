@@ -4,7 +4,7 @@
  * @module PortfolioRepositoryLive
  */
 
-import { and, asc, eq, gt } from "drizzle-orm"
+import { and, asc, eq, gt, isNull, or } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -78,10 +78,18 @@ const make = Effect.gen(function* () {
         })
         .from(schema.fifoLots)
         .innerJoin(schema.assets, eq(schema.fifoLots.assetId, schema.assets.id))
+        .leftJoin(
+          schema.assetRepresentations,
+          eq(schema.fifoLots.assetRepresentationId, schema.assetRepresentations.id)
+        )
         .where(
           and(
             eq(schema.fifoLots.principalId, scope.principalId),
             gt(schema.fifoLots.remainingAmount, "0"),
+            or(
+              isNull(schema.fifoLots.assetRepresentationId),
+              eq(schema.assetRepresentations.isSpam, false)
+            ),
             scope.sourceId === null ? undefined : eq(schema.fifoLots.sourceId, scope.sourceId)
           )
         )
