@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest"
+import * as Effect from "effect/Effect"
 import {
   deriveChainType,
   deriveNativeAssetDecimals,
   representationIdForProviderObservation,
   selectNativePlatform,
+  validateNativeProviderIdentity,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import type { ProviderAssetRecord } from "@my/sync-engine/services"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
@@ -65,6 +67,23 @@ describe("AssetCanonicalizationService", () => {
         representationId,
       })
     ).toBe(representationId)
+  })
+
+  it("rejects a native asset resolution for an observed Solana token", () => {
+    const result = Effect.runSync(
+      validateNativeProviderIdentity(
+        makeProviderAsset({
+          provider: "helius-solana",
+          providerAssetId: "Mint111111111111111111111111111111111111111",
+          naturalKey: "solana:mint:Mint111111111111111111111111111111111111111",
+          currencyCode: "SOL",
+          name: "Solana",
+          providerType: "spl-token",
+        })
+      ).pipe(Effect.either)
+    )
+
+    expect(result._tag).toBe("Left")
   })
 
   it("includes Cardano native platform metadata from CoinGecko", () => {

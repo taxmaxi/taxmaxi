@@ -273,6 +273,17 @@ const validateProviderTokenIdentity = ({
       )
 }
 
+export const validateNativeProviderIdentity = (
+  providerAsset: ProviderAssetRecord
+): Effect.Effect<void, AssetCanonicalizationBadRequestError> =>
+  observedProviderTokenId(providerAsset) === null
+    ? Effect.void
+    : Effect.fail(
+        makeBadRequest(
+          `CoinGecko native asset does not match observed provider token id for ${providerAsset.currencyCode}.`
+        )
+      )
+
 const selectCoin = ({
   providerAsset,
   searchCoins,
@@ -426,6 +437,8 @@ const make = Effect.gen(function* () {
       const nativePlatform = selectNativePlatform({ coinId: coin.id, assetPlatforms })
 
       if (nativePlatform !== null) {
+        yield* validateNativeProviderIdentity(providerAsset)
+
         const nativeDecimals = deriveNativeAssetDecimals({
           coinId: coin.id,
           platform: nativePlatform,
