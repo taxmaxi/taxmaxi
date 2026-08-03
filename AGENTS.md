@@ -183,3 +183,17 @@ Select only needed columns. Do not use `SELECT *`.
 7. Only commit when explicitly requested by the user.
 8. Environment variables must be loaded using Effect Config instead of `process.env` directly.
 9. Keep `.env` files local. They are intentionally present for this working copy but must not be committed.
+
+## Agent skills
+
+### Issue tracker
+
+Durable product work is tracked in GitHub Issues and is public by default. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default Matt Pocock triage labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a multi-context layout for TaxMaxi's apps and packages. See `docs/agents/domain.md`.
