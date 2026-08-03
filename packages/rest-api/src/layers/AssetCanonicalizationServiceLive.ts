@@ -222,13 +222,28 @@ const observedProviderTokenId = (providerAsset: ProviderAssetRecord): string | n
   )
 }
 
+const isNativeOnchainObservation = (providerAsset: ProviderAssetRecord): boolean => {
+  const provider = normalize(providerAsset.provider)
+  const providerType =
+    providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
+  const naturalKey = trimOrNull(providerAsset.naturalKey)
+
+  return (
+    provider.includes("solana") &&
+    (providerType === "native" || naturalKey?.startsWith("solana:native:") === true)
+  )
+}
+
 export const representationIdForProviderObservation = ({
   providerAsset,
   representationId,
 }: {
   readonly providerAsset: ProviderAssetRecord
   readonly representationId: string
-}): string | null => (observedProviderTokenId(providerAsset) === null ? null : representationId)
+}): string | null =>
+  isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null
+    ? representationId
+    : null
 
 const validateProviderTokenIdentity = ({
   contractAddress,

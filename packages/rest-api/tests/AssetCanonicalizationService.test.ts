@@ -51,6 +51,22 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(representationId)
   })
 
+  it("keeps the native representation for an observed Solana native asset", () => {
+    const representationId = "00000000-0000-4000-8000-000000000002"
+
+    expect(
+      representationIdForProviderObservation({
+        providerAsset: makeProviderAsset({
+          provider: "helius-solana",
+          providerAssetId: null,
+          naturalKey: "solana:native:SOL",
+          providerType: "native",
+        }),
+        representationId,
+      })
+    ).toBe(representationId)
+  })
+
   it("includes Cardano native platform metadata from CoinGecko", () => {
     const cardanoPlatform = coinGeckoAssetPlatformSnapshot.find(
       (platform) => platform.id === "cardano"
