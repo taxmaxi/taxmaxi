@@ -252,6 +252,7 @@ const make = Effect.gen(function* () {
                   canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
                   canonicalTransferExternalId: schema.transfers.externalId,
                   assetId: schema.transfers.assetId,
+                  assetRepresentationId: schema.transfers.assetRepresentationId,
                   amount: schema.transfers.amount,
                   providerTransactionSourceId: providerTransactionTable.sourceId,
                   providerTransactionSourceRawRecordId: providerTransactionTable.sourceRawRecordId,
@@ -1291,6 +1292,7 @@ const make = Effect.gen(function* () {
               timestamp,
               principalId,
               assetId,
+              assetRepresentationId,
               amount,
               kind,
               sourceTransferId,
@@ -1304,6 +1306,7 @@ const make = Effect.gen(function* () {
               readonly timestamp: Date
               readonly principalId: string
               readonly assetId: string
+              readonly assetRepresentationId: string | null
               readonly amount: string
               readonly kind: "acquisition" | "disposal"
               readonly sourceTransferId: string | null
@@ -1322,6 +1325,7 @@ const make = Effect.gen(function* () {
                     principalId,
                     addressId: null,
                     assetId,
+                    assetRepresentationId,
                     amount,
                     kind,
                     provenance: "deterministic",
@@ -1349,6 +1353,7 @@ const make = Effect.gen(function* () {
                       timestamp: sql.raw("excluded.timestamp"),
                       principalId: sql.raw("excluded.principal_id"),
                       assetId: sql.raw("excluded.asset_id"),
+                      assetRepresentationId: sql.raw("excluded.asset_representation_id"),
                       amount: sql.raw("excluded.amount"),
                       kind: sql.raw("excluded.kind"),
                       provenance: sql.raw("excluded.provenance"),
@@ -1376,12 +1381,14 @@ const make = Effect.gen(function* () {
             const moveLotsForInternalTransfer = ({
               originLegId,
               assetId,
+              assetRepresentationId,
               destinationSourceId,
               destinationLegId,
               disposition,
             }: {
               readonly originLegId: string
               readonly assetId: string
+              readonly assetRepresentationId: string | null
               readonly destinationSourceId: string
               readonly destinationLegId: string
               readonly disposition: {
@@ -1437,6 +1444,7 @@ const make = Effect.gen(function* () {
                       principalId,
                       sourceId: destinationSourceId,
                       assetId,
+                      assetRepresentationId,
                       acquiredAt: match.acquiredAt,
                       originalAmount: matchedAmount,
                       remainingAmount: matchedAmount,
@@ -2731,6 +2739,12 @@ const make = Effect.gen(function* () {
                   originTransaction.id === canonicalTransactionId ? canonicalTransferId : null
                 const destinationSourceTransferId =
                   destinationTransaction.id === canonicalTransactionId ? canonicalTransferId : null
+                const originAssetRepresentationId =
+                  originTransaction.id === canonicalTransactionId ? row.assetRepresentationId : null
+                const destinationAssetRepresentationId =
+                  destinationTransaction.id === canonicalTransactionId
+                    ? row.assetRepresentationId
+                    : null
 
                 const custodyProviderTransferId = yield* loadCustodyProviderTransferId({
                   originTransactionId: originTransaction.id,
@@ -2854,6 +2868,7 @@ const make = Effect.gen(function* () {
                   timestamp: originTransaction.timestamp,
                   principalId: originTransaction.principalId,
                   assetId: row.assetId,
+                  assetRepresentationId: originAssetRepresentationId,
                   amount,
                   kind: "disposal",
                   sourceTransferId: originSourceTransferId,
@@ -2868,6 +2883,7 @@ const make = Effect.gen(function* () {
                   timestamp: destinationTransaction.timestamp,
                   principalId: destinationTransaction.principalId,
                   assetId: row.assetId,
+                  assetRepresentationId: destinationAssetRepresentationId,
                   amount,
                   kind: "acquisition",
                   sourceTransferId: destinationSourceTransferId,
@@ -2924,6 +2940,7 @@ const make = Effect.gen(function* () {
                 yield* moveLotsForInternalTransfer({
                   originLegId,
                   assetId: row.assetId,
+                  assetRepresentationId: destinationAssetRepresentationId,
                   destinationSourceId: destinationTransaction.sourceId,
                   destinationLegId,
                   disposition,

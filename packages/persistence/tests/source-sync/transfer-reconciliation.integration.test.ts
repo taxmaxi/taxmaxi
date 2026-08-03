@@ -1463,6 +1463,7 @@ describe("TransferReconciliationServiceLive", () => {
         return yield* db
           .select({
             id: schema.fifoLots.id,
+            assetRepresentationId: schema.fifoLots.assetRepresentationId,
             acquiredAt: schema.fifoLots.acquiredAt,
             originalAmount: schema.fifoLots.originalAmount,
             remainingAmount: schema.fifoLots.remainingAmount,
@@ -1484,6 +1485,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(movedLots).toEqual([
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         originalAmount: expect.stringContaining("0.10000000"),
         remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
@@ -1491,6 +1493,7 @@ describe("TransferReconciliationServiceLive", () => {
       }),
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         originalAmount: expect.stringContaining("0.20000000"),
         remainingAmount: expect.stringContaining("0.08000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
