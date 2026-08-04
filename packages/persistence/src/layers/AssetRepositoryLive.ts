@@ -324,6 +324,10 @@ const make = Effect.gen(function* () {
                 ? yield* tx
                     .insert(schema.assets)
                     .values({ ...assetValues, createdAt: now })
+                    .onConflictDoUpdate({
+                      target: schema.assets.coingeckoCoinId,
+                      set: assetValues,
+                    })
                     .returning({
                       id: schema.assets.id,
                       name: schema.assets.name,

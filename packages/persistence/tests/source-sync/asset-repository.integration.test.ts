@@ -285,6 +285,83 @@ describe("AssetRepositoryLive", () => {
     })
   })
 
+  it("shares one economic asset across concurrent network representation inserts", async () => {
+    const upsertRepresentation = ({
+      blockchainName,
+      contractAddress,
+    }: {
+      readonly blockchainName: string
+      readonly contractAddress: string
+    }) =>
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertEconomicAssetRepresentation({
+          blockchain: {
+            name: blockchainName,
+            chainType: "other",
+            chainId: null,
+            nativeAssetSymbol: "NATIVE",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: blockchainName,
+          },
+          asset: {
+            name: "Concurrent Asset",
+            symbol: "CON",
+            coingeckoCoinId: "concurrent-asset",
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress,
+            mintAddress: null,
+            decimals: 8,
+            logoUrl: null,
+            type: "token",
+            isSpam: false,
+            metadata: null,
+          },
+        })
+      )
+
+    const [first, second] = await runRepository(
+      Effect.all(
+        [
+          upsertRepresentation({
+            blockchainName: "concurrent-chain-a",
+            contractAddress: "contract-a",
+          }),
+          upsertRepresentation({
+            blockchainName: "concurrent-chain-b",
+            contractAddress: "contract-b",
+          }),
+        ],
+        { concurrency: "unbounded" }
+      )
+    )
+
+    expect(first.id).toBe(second.id)
+    expect(first.representationId).not.toBe(second.representationId)
+
+    const stored = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const economicAssets = yield* db
+          .select({ id: schema.assets.id })
+          .from(schema.assets)
+          .where(eq(schema.assets.coingeckoCoinId, "concurrent-asset"))
+        const representations = yield* db
+          .select({ assetId: schema.assetRepresentations.assetId })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.assetId, first.id))
+
+        return { economicAssets, representations }
+      })
+    )
+
+    expect(stored.economicAssets).toEqual([{ id: first.id }])
+    expect(stored.representations).toHaveLength(2)
+  })
+
   it("keeps case-distinct non-EVM contract addresses separate", async () => {
     const firstContractAddress = "cardanoAsset1AbCdEf"
     const secondContractAddress = firstContractAddress.toLowerCase()
