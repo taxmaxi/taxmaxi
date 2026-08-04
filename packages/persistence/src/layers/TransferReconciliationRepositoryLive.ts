@@ -1422,6 +1422,19 @@ const make = Effect.gen(function* () {
                   )
 
                 if (existingLots.length > 0) {
+                  yield* tx
+                    .update(schema.fifoLots)
+                    .set({
+                      assetId,
+                      assetRepresentationId,
+                      updatedAt: nowDate(),
+                    })
+                    .where(eq(schema.fifoLots.sourceLegId, destinationLegId))
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.updateExistingLots"
+                      )
+                    )
                   return
                 }
 

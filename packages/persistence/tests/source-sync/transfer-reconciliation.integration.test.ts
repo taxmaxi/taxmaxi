@@ -1716,6 +1716,82 @@ describe("TransferReconciliationServiceLive", () => {
         }),
       ])
     )
+
+    const replayRepresentationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [representation] = yield* db
+          .insert(schema.assetRepresentations)
+          .values({
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            type: "token",
+            contractAddress: "0x0000000000000000000000000000000000000b7c",
+            decimals: 8,
+          })
+          .returning({ id: schema.assetRepresentations.id })
+
+        if (representation === undefined) {
+          return yield* Effect.dieMessage("Failed to create replay representation fixture")
+        }
+
+        yield* db
+          .update(schema.transfers)
+          .set({ assetRepresentationId: representation.id })
+          .where(eq(schema.transfers.id, firstReceipt.transferId))
+
+        return representation.id
+      })
+    )
+
+    const replaySummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId: firstReconciliationId,
+        })
+      )
+    )
+    expect(replaySummary).toEqual({ canonicalizedPairs: 1 })
+
+    const replayState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [destinationLeg] = yield* db
+          .select({
+            id: schema.transactionLegs.id,
+            assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+          })
+          .from(schema.transactionLegs)
+          .where(
+            and(
+              eq(schema.transactionLegs.transactionId, firstReceipt.transactionId),
+              eq(schema.transactionLegs.derivationRule, "internal_transfer_in")
+            )
+          )
+          .limit(1)
+
+        if (destinationLeg === undefined) {
+          return yield* Effect.dieMessage("Missing replay destination leg")
+        }
+
+        const destinationLots = yield* db
+          .select({ assetRepresentationId: schema.fifoLots.assetRepresentationId })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, destinationLeg.id))
+
+        return { destinationLeg, destinationLots }
+      })
+    )
+
+    expect(replayState.destinationLeg.assetRepresentationId).toBe(replayRepresentationId)
+    expect(replayState.destinationLots.length).toBeGreaterThan(0)
+    expect(
+      replayState.destinationLots.every(
+        (lot) => lot.assetRepresentationId === replayRepresentationId
+      )
+    ).toBe(true)
   })
 
   it("keeps transferred lots unavailable before the destination receipt", async () => {
