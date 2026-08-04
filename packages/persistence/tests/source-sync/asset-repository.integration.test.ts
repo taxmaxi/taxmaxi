@@ -362,6 +362,87 @@ describe("AssetRepositoryLive", () => {
     expect(stored.representations).toHaveLength(2)
   })
 
+  it("reuses native, contract, and mint representations across concurrent inserts", async () => {
+    const cases = [
+      {
+        name: "native",
+        representation: { contractAddress: null, mintAddress: null, type: "native" as const },
+      },
+      {
+        name: "contract",
+        representation: {
+          contractAddress: "concurrent-contract",
+          mintAddress: null,
+          type: "token" as const,
+        },
+      },
+      {
+        name: "mint",
+        representation: {
+          contractAddress: null,
+          mintAddress: "concurrent-mint",
+          type: "token" as const,
+        },
+      },
+    ] as const
+
+    const upsertRepresentation = ({
+      name,
+      representation,
+    }: {
+      readonly name: string
+      readonly representation: {
+        readonly contractAddress: string | null
+        readonly mintAddress: string | null
+        readonly type: "native" | "token"
+      }
+    }) =>
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertEconomicAssetRepresentation({
+          blockchain: {
+            name: `concurrent-representation-${name}`,
+            chainType: "other",
+            chainId: null,
+            nativeAssetSymbol: "NATIVE",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: `concurrent-representation-${name}`,
+          },
+          asset: {
+            name: `Concurrent Representation ${name}`,
+            symbol: "CRP",
+            coingeckoCoinId: `concurrent-representation-${name}`,
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            ...representation,
+            decimals: 8,
+            logoUrl: null,
+            isSpam: false,
+            metadata: null,
+          },
+        })
+      )
+
+    const results = await runRepository(
+      Effect.forEach(cases, ({ name, representation }) =>
+        Effect.all(
+          [
+            upsertRepresentation({ name, representation }),
+            upsertRepresentation({ name, representation }),
+          ],
+          { concurrency: "unbounded" }
+        )
+      )
+    )
+
+    for (const [first, second] of results) {
+      expect(first.id).toBe(second.id)
+      expect(first.representationId).toBe(second.representationId)
+    }
+  })
+
   it("keeps case-distinct non-EVM contract addresses separate", async () => {
     const firstContractAddress = "cardanoAsset1AbCdEf"
     const secondContractAddress = firstContractAddress.toLowerCase()

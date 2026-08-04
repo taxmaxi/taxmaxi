@@ -380,41 +380,103 @@ const make = Effect.gen(function* () {
               metadata: representation.metadata,
               updatedAt: now,
             } as const
-            const [persistedRepresentation] =
+
+            if (existingRepresentation === undefined) {
+              const insert = tx
+                .insert(schema.assetRepresentations)
+                .values({ ...representationValues, createdAt: now })
+              const conflictSafeInsert =
+                representation.type === "native"
+                  ? insert.onConflictDoNothing({
+                      target: schema.assetRepresentations.blockchainId,
+                      where: sql`${schema.assetRepresentations.type} = 'native'`,
+                    })
+                  : contractAddress !== null
+                    ? insert.onConflictDoNothing({
+                        target: [
+                          schema.assetRepresentations.blockchainId,
+                          schema.assetRepresentations.contractAddress,
+                        ],
+                        where: sql`${schema.assetRepresentations.contractAddress} is not null`,
+                      })
+                    : insert.onConflictDoNothing({
+                        target: [
+                          schema.assetRepresentations.blockchainId,
+                          schema.assetRepresentations.mintAddress,
+                        ],
+                        where: sql`${schema.assetRepresentations.mintAddress} is not null`,
+                      })
+
+              yield* conflictSafeInsert.pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.upsertEconomicAssetRepresentation.insertRepresentation"
+                )
+              )
+            }
+
+            const representationAfterInsert =
               existingRepresentation === undefined
-                ? yield* tx
-                    .insert(schema.assetRepresentations)
-                    .values({ ...representationValues, createdAt: now })
-                    .returning({
+                ? (yield* tx
+                    .select({
                       id: schema.assetRepresentations.id,
-                      blockchainId: schema.assetRepresentations.blockchainId,
-                      decimals: schema.assetRepresentations.decimals,
-                      contractAddress: schema.assetRepresentations.contractAddress,
-                      mintAddress: schema.assetRepresentations.mintAddress,
-                      representationType: schema.assetRepresentations.type,
+                      assetId: schema.assetRepresentations.assetId,
                     })
+                    .from(schema.assetRepresentations)
+                    .where(representationFilter)
+                    .limit(1)
                     .pipe(
                       wrapSyncEngineSqlError(
-                        "assetRepository.upsertEconomicAssetRepresentation.insertRepresentation"
+                        "assetRepository.upsertEconomicAssetRepresentation.reloadRepresentation"
                       )
-                    )
-                : yield* tx
-                    .update(schema.assetRepresentations)
-                    .set(representationValues)
-                    .where(eq(schema.assetRepresentations.id, existingRepresentation.id))
-                    .returning({
-                      id: schema.assetRepresentations.id,
-                      blockchainId: schema.assetRepresentations.blockchainId,
-                      decimals: schema.assetRepresentations.decimals,
-                      contractAddress: schema.assetRepresentations.contractAddress,
-                      mintAddress: schema.assetRepresentations.mintAddress,
-                      representationType: schema.assetRepresentations.type,
-                    })
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "assetRepository.upsertEconomicAssetRepresentation.updateRepresentation"
-                      )
-                    )
+                    ))[0]
+                : undefined
+            const representationToPersist = existingRepresentation ?? representationAfterInsert
+
+            if (representationToPersist === undefined) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.reloadRepresentation",
+                  cause: {
+                    assetId: persistedAsset.id,
+                    message: "Representation missing after conflict-safe insert.",
+                  },
+                })
+              )
+            }
+
+            if (representationToPersist.assetId !== persistedAsset.id) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.validateRepresentationOwner",
+                  cause: {
+                    assetId: persistedAsset.id,
+                    existingAssetId: representationToPersist.assetId,
+                    representationId: representationToPersist.id,
+                    message: "Representation belongs to a different economic asset.",
+                  },
+                })
+              )
+            }
+
+            const [persistedRepresentation] = yield* tx
+              .update(schema.assetRepresentations)
+              .set(representationValues)
+              .where(eq(schema.assetRepresentations.id, representationToPersist.id))
+              .returning({
+                id: schema.assetRepresentations.id,
+                blockchainId: schema.assetRepresentations.blockchainId,
+                decimals: schema.assetRepresentations.decimals,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                mintAddress: schema.assetRepresentations.mintAddress,
+                representationType: schema.assetRepresentations.type,
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.upsertEconomicAssetRepresentation.updateRepresentation"
+                )
+              )
 
             if (persistedRepresentation === undefined) {
               return yield* Effect.fail(
