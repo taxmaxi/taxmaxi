@@ -1033,9 +1033,14 @@ const make = Effect.gen(function* () {
           createdAt: now,
           updatedAt: now,
         })
-        .onConflictDoNothing({
+        .onConflictDoUpdate({
           target: [schema.fifoLots.sourceLegId, schema.fifoLots.sourceLegSequence],
-          where: sql`${schema.fifoLots.sourceLegId} is not null`,
+          targetWhere: sql`${schema.fifoLots.sourceLegId} is not null`,
+          set: {
+            assetRepresentationId: sql.raw("excluded.asset_representation_id"),
+            updatedAt: now,
+          },
+          setWhere: eq(schema.fifoLots.assetId, leg.assetId),
         })
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.ensureFifoLotForLeg"))
     })

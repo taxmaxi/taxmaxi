@@ -498,6 +498,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               principalId: TEST_PRINCIPAL_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
               amount: "1.00000000",
               kind: "acquisition",
               provenance: "deterministic",
@@ -632,6 +633,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.matches).toHaveLength(1)
     expect(counts.reviews).toHaveLength(1)
     expect(String(counts.lot?.remainingAmount)).toContain("0.6")
+    expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
   })
 
   it("marks disposals with missing FIFO inventory for review instead of failing", async () => {
