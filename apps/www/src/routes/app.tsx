@@ -10,6 +10,7 @@ import {
 import { Dashboard } from "#/components/dashboard"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
+import ThemeToggle from "#/components/theme-toggle"
 import type { Account } from "#/lib/dashboard-types"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
@@ -111,19 +112,19 @@ function RouteComponent() {
       as="main"
       tone="marketing"
       data-page="app"
-      className="relative isolate w-full overflow-x-clip"
+      className="relative isolate w-full overflow-x-clip bg-[var(--app-page-fallback)] text-marketing-text"
     >
       <div
         aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0 bg-linear-to-b from-[#26352f] via-[#1c2b25] to-[#22312b]"
+        className="pointer-events-none fixed inset-0 z-0 [background:var(--app-page-background)]"
       />
 
       <div
         aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0 opacity-[0.02]"
+        className="pointer-events-none fixed inset-0 z-0"
         style={{
-          backgroundImage: `linear-gradient(rgba(163, 196, 181, 0.5) 1px, transparent 1px),
-                           linear-gradient(90deg, rgba(163, 196, 181, 0.5) 1px, transparent 1px)`,
+          backgroundImage: `linear-gradient(var(--app-grid-line) 1px, transparent 1px),
+                           linear-gradient(90deg, var(--app-grid-line) 1px, transparent 1px)`,
           backgroundSize: "64px 64px",
         }}
       />
@@ -240,8 +241,8 @@ function AppHeader() {
           className={cn(
             "relative flex flex-col overflow-hidden rounded-[1.75rem] border py-0 text-marketing-foreground transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
             isCompact
-              ? "border-marketing-border bg-[linear-gradient(180deg,rgba(38,53,47,0.58),rgba(28,43,37,0.46))] shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_24px_70px_rgba(0,0,0,0.22)] supports-[backdrop-filter]:backdrop-blur-[48px]"
-              : "border-transparent bg-transparent shadow-none max-md:border-marketing-border max-md:bg-[linear-gradient(180deg,rgba(38,53,47,0.58),rgba(28,43,37,0.46))] max-md:shadow-[inset_0_1px_0_rgba(255,255,255,0.14),0_24px_70px_rgba(0,0,0,0.22)] max-md:supports-[backdrop-filter]:backdrop-blur-[48px]"
+              ? "border-marketing-border [background:var(--app-header-background)] [box-shadow:var(--app-header-shadow)] supports-[backdrop-filter]:backdrop-blur-[48px]"
+              : "border-transparent bg-transparent shadow-none max-md:border-marketing-border max-md:[background:var(--app-header-background)] max-md:[box-shadow:var(--app-header-shadow)] max-md:supports-[backdrop-filter]:backdrop-blur-[48px]"
           )}
         >
           <div
@@ -250,7 +251,10 @@ function AppHeader() {
               isCompact ? "px-4" : "px-4 md:px-0"
             )}
           >
-            <Logo theme="dark" size="small" />
+            <Logo size="small" />
+            <div className="ml-auto">
+              <ThemeToggle />
+            </div>
           </div>
         </div>
       </div>

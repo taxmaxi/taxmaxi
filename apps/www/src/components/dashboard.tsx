@@ -158,7 +158,7 @@ export function Dashboard({
     <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">
       <SourceSyncIsland items={activeSyncs} onDismiss={onDismissSync} onRetry={onRetrySync} />
       <SourceCards
-        contentClassName="border border-marketing-border bg-[linear-gradient(180deg,rgba(17,28,23,0.78),rgba(9,15,12,0.62))] text-marketing-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.12),0_24px_70px_rgba(0,0,0,0.26)] ring-0 supports-[backdrop-filter]:backdrop-blur-[48px] [--accent:rgb(255_255_255_/_0.1)] [--accent-foreground:var(--marketing-foreground)] [--border:var(--marketing-border-muted)] [--card:rgb(255_255_255_/_0.06)] [--card-foreground:var(--marketing-foreground)] [--foreground:var(--marketing-foreground)] [--input:rgb(255_255_255_/_0.12)] [--muted:rgb(255_255_255_/_0.08)] [--muted-foreground:var(--marketing-muted)] [--popover:rgb(17_28_23_/_0.95)] [--popover-foreground:var(--marketing-foreground)]"
+        contentClassName="border border-marketing-border text-marketing-foreground ring-0 [background:var(--app-content-background)] [box-shadow:var(--app-content-shadow)] supports-[backdrop-filter]:backdrop-blur-[48px]"
         onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
         onSourceSync={onSourceSync}
         selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}

@@ -1,3 +1,4 @@
+import { Monitor, Moon, Sun } from "lucide-react"
 import { useEffect, useState } from "react"
 
 type ThemeMode = "light" | "dark" | "auto"
@@ -33,6 +34,7 @@ function applyThemeMode(mode: ThemeMode) {
 
 export default function ThemeToggle() {
   const [mode, setMode] = useState<ThemeMode>("auto")
+  const nextMode: ThemeMode = mode === "light" ? "dark" : mode === "dark" ? "auto" : "light"
 
   useEffect(() => {
     const initialMode = getInitialMode()
@@ -55,16 +57,12 @@ export default function ThemeToggle() {
   }, [mode])
 
   function toggleMode() {
-    const nextMode: ThemeMode = mode === "light" ? "dark" : mode === "dark" ? "auto" : "light"
     setMode(nextMode)
     applyThemeMode(nextMode)
     window.localStorage.setItem("theme", nextMode)
   }
 
-  const label =
-    mode === "auto"
-      ? "Theme mode: auto (system). Click to switch to light mode."
-      : `Theme mode: ${mode}. Click to switch mode.`
+  const label = `Theme: ${mode}. Switch to ${nextMode}.`
 
   return (
     <button
@@ -72,9 +70,25 @@ export default function ThemeToggle() {
       onClick={toggleMode}
       aria-label={label}
       title={label}
-      className="rounded-full border border-[var(--chip-line)] bg-[var(--chip-bg)] px-3 py-1.5 text-sm font-semibold text-[var(--sea-ink)] shadow-[0_8px_22px_rgba(30,90,72,0.08)] transition hover:-translate-y-0.5"
+      className="group relative grid size-9 touch-manipulation place-items-center rounded-full outline-none before:absolute before:-inset-1 before:content-[''] focus-visible:ring-2 focus-visible:ring-ring/50"
     >
-      {mode === "auto" ? "Auto" : mode === "dark" ? "Dark" : "Light"}
+      <span
+        aria-hidden="true"
+        className="relative grid size-9 place-items-center rounded-full border border-border bg-background/75 text-foreground shadow-sm [transition:transform_150ms_cubic-bezier(0.25,0.46,0.45,0.94),color_120ms_ease,background-color_120ms_ease,border-color_120ms_ease] group-active:scale-[0.97] motion-reduce:transform-none motion-reduce:group-active:transform-none [@media(hover:hover)_and_(pointer:fine)]:group-hover:bg-accent"
+      >
+        <Sun
+          className="absolute size-4 scale-[0.82] -rotate-12 opacity-0 [transition:opacity_140ms_ease,transform_160ms_cubic-bezier(0.645,0.045,0.355,1)] data-[active=true]:scale-100 data-[active=true]:rotate-0 data-[active=true]:opacity-100 motion-reduce:transform-none"
+          data-active={mode === "light"}
+        />
+        <Moon
+          className="absolute size-4 scale-[0.82] -rotate-12 opacity-0 [transition:opacity_140ms_ease,transform_160ms_cubic-bezier(0.645,0.045,0.355,1)] data-[active=true]:scale-100 data-[active=true]:rotate-0 data-[active=true]:opacity-100 motion-reduce:transform-none"
+          data-active={mode === "dark"}
+        />
+        <Monitor
+          className="absolute size-4 scale-[0.82] -rotate-12 opacity-0 [transition:opacity_140ms_ease,transform_160ms_cubic-bezier(0.645,0.045,0.355,1)] data-[active=true]:scale-100 data-[active=true]:rotate-0 data-[active=true]:opacity-100 motion-reduce:transform-none"
+          data-active={mode === "auto"}
+        />
+      </span>
     </button>
   )
 }
