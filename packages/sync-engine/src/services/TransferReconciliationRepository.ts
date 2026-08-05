@@ -44,8 +44,9 @@ export interface ProviderTransferReconciliationCandidate {
  * OnchainTransferReconciliationCandidate - Canonical onchain transfer candidate owned by the principal.
  */
 export interface OnchainTransferReconciliationCandidate {
-  readonly transferId: string
-  readonly transactionId: string | null
+  readonly transferId: string | null
+  readonly observedProviderTransferId: string | null
+  readonly transactionId: string
   readonly sourceId: string
   readonly addressId: string
   readonly blockchainId: string | null
@@ -54,8 +55,14 @@ export interface OnchainTransferReconciliationCandidate {
   readonly timestamp: Date
   readonly fromAddress: string | null
   readonly toAddress: string | null
-  readonly assetId: string
+  readonly providerAssetRowId: string | null
+  readonly providerAssetMappingStatus: "approved" | "pending_review" | "rejected" | null
+  readonly assetId: string | null
   readonly assetRepresentationId: string | null
+  readonly representationType: "native" | "token" | "nft" | null
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
   readonly amount: string
 }
 
@@ -95,14 +102,23 @@ export interface ListProviderTransfersForReconciliationParams {
  */
 export interface FindOnchainTransferReconciliationCandidatesParams {
   readonly principalId: string
-  readonly canonicalAssetId: string
-  readonly assetRepresentationId: string | null
   readonly direction: "inbound" | "outbound"
   readonly walletAddress: string
   readonly timestampStart: Date
   readonly timestampEnd: Date
   readonly networkName: string | null
   readonly networkHash: string | null
+}
+
+/**
+ * RecordOnchainRepresentationEvidenceParams - Strong physical-transfer evidence
+ * attached to a pending destination provider-asset mapping.
+ */
+export interface RecordOnchainRepresentationEvidenceParams {
+  readonly providerAssetRowId: string
+  readonly sourceProviderTransferId: string
+  readonly destinationProviderTransferId: string
+  readonly proposedCanonicalAssetId: string
 }
 
 /**
@@ -123,6 +139,14 @@ export interface TransferReconciliationRepositoryShape {
   readonly findOnchainTransferCandidates: (
     params: FindOnchainTransferReconciliationCandidatesParams
   ) => Effect.Effect<ReadonlyArray<OnchainTransferReconciliationCandidate>, SyncEngineStorageError>
+
+  /**
+   * Keep first-seen exact representation evidence pending for review. This never
+   * approves a provider-asset mapping or assigns its canonical target.
+   */
+  readonly recordOnchainRepresentationEvidence: (
+    params: RecordOnchainRepresentationEvidenceParams
+  ) => Effect.Effect<void, SyncEngineStorageError>
 
   /**
    * Persist or update the durable reconciliation state for one provider transfer.
