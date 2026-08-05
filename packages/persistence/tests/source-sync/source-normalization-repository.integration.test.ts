@@ -12,8 +12,9 @@ import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordR
 import { schema } from "../../src/schema/index.ts"
 import { PortfolioRepository } from "../../src/services/PortfolioRepository.ts"
 import {
-  TEST_BTC_ASSET_ID,
   TEST_EUR_ASSET_ID,
+  TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
@@ -296,6 +297,20 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
     await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .insert(schema.assets)
+          .values({
+            id: TEST_BTC_ASSET_ID,
+            name: "Bitcoin",
+            symbol: "BTC",
+            type: "fungible",
+          })
+          .onConflictDoNothing({ target: schema.assets.id })
+      })
+    )
+    await runPg(
       seedRawRecord({
         rawRecordId: TEST_RAW_RECORD_ID,
         externalRecordId: "raw-acquire-1",
@@ -483,6 +498,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               principalId: TEST_PRINCIPAL_ID,
               addressId: null,
               assetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
               amount: "1.00000000",
               kind: "acquisition",
               provenance: "deterministic",
@@ -617,6 +633,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.matches).toHaveLength(1)
     expect(counts.reviews).toHaveLength(1)
     expect(String(counts.lot?.remainingAmount)).toContain("0.6")
+    expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
   })
 
   it("marks disposals with missing FIFO inventory for review instead of failing", async () => {
@@ -1751,6 +1768,97 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(pendingState.allocations).toHaveLength(0)
   })
 
+  it("resets reconciliation when replay changes only the asset representation", async () => {
+    const rawRecordId = "00000000-0000-0000-0000-000000000710"
+    const occurredAt = new Date("2025-04-10T10:00:00.000Z")
+    const payload = {
+      id: "tx-representation-replay-send",
+      type: "send",
+      status: "completed",
+      amount: { amount: "-0.10000000", currency: "BTC" },
+      native_amount: { amount: "-1500.00", currency: "EUR" },
+      created_at: occurredAt.toISOString(),
+      resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-representation-replay-send",
+      network: {
+        status: "confirmed",
+        hash: "tx-representation-replay-hash",
+        network_name: "bitcoin",
+      },
+      to: {
+        address: "bc1qrepresentationreplaydestination",
+        resource: "address",
+      },
+    }
+
+    await runPg(
+      seedRawRecord({
+        rawRecordId,
+        externalRecordId: "raw-representation-replay-send",
+        occurredAt,
+        payload,
+      })
+    )
+
+    const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
+    const normalize = () =>
+      runCoinbaseNormalization(
+        persistCoinbaseNormalization({
+          source,
+          sourceRecord: buildSeededRawRecord({
+            rawRecordId,
+            externalRecordId: "raw-representation-replay-send",
+            occurredAt,
+            payload,
+          }),
+        })
+      )
+
+    await normalize()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .select({ id: schema.providerAssets.id })
+          .from(schema.providerAssets)
+          .where(eq(schema.providerAssets.currencyCode, "BTC"))
+          .limit(1)
+
+        if (providerAsset === undefined) {
+          return yield* Effect.dieMessage("Missing Coinbase BTC provider asset")
+        }
+
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({ assetRepresentationId: TEST_BTC_REPRESENTATION_ID })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+        yield* db
+          .update(schema.inventoryMovements)
+          .set({ taxTreatment: "non_taxable", reconciliationStatus: "matched" })
+          .where(eq(schema.inventoryMovements.purpose, "principal"))
+      })
+    )
+
+    await normalize()
+
+    const [movement] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.purpose, "principal"))
+      })
+    )
+
+    expect(movement).toEqual(
+      expect.objectContaining({
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+      })
+    )
+  })
+
   it("persists a Coinbase receive provider transfer with source and destination context", async () => {
     const rawRecordId = "00000000-0000-0000-0000-000000000692"
     const occurredAt = new Date("2025-04-02T10:00:00.000Z")
@@ -2208,12 +2316,10 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         yield* db.insert(schema.assets).values({
           id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "sync-engine-sol-cross-asset-fee-fixture",
           name: "Sync Engine Solana Cross-Asset Fee Fixture",
           symbol: "SOL",
-          decimals: 9,
-          type: "token",
+          coingeckoCoinId: "solana",
+          type: "fungible",
         })
 
         yield* Effect.forEach(records, (record) => seedRawRecord(record))
@@ -2718,12 +2824,10 @@ describe("SourceNormalizationRepositoryLive", () => {
         const db = yield* drizzle
         yield* db.insert(schema.assets).values({
           id: TEST_SOL_ASSET_ID,
-          blockchainId: fixture.baseBlockchainId,
-          contractAddress: "sync-engine-sol-fixture",
           name: "Sync Engine Solana Fixture",
           symbol: "SOL",
-          decimals: 9,
-          type: "token",
+          coingeckoCoinId: "solana",
+          type: "fungible",
         })
 
         yield* Effect.forEach(records, (record) =>

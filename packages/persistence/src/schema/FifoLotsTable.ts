@@ -1,5 +1,6 @@
 import {
   check,
+  foreignKey,
   index,
   integer,
   numeric,
@@ -12,6 +13,7 @@ import {
 } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 import { assets } from "./AssetsTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 import { providerTransfers } from "./ProviderTransfersTable.ts"
 import { sources } from "./SourcesTable.ts"
@@ -35,6 +37,7 @@ export const fifoLots = pgTable(
     assetId: uuid("asset_id")
       .notNull()
       .references(() => assets.id),
+    assetRepresentationId: uuid("asset_representation_id"),
 
     // Acquisition details
     acquiredAt: timestamp("acquired_at").notNull(),
@@ -62,6 +65,11 @@ export const fifoLots = pgTable(
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.assetId, table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
+      name: "fifo_lots_representation_matches_asset_fk",
+    }),
     check(
       "fifo_lots_origin_present",
       sql`num_nonnulls(${table.sourceLegId}, ${table.sourceProviderTransferId}) = 1`

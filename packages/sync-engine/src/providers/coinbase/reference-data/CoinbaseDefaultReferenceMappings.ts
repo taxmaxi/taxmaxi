@@ -29,7 +29,7 @@ export interface CoinbaseDefaultTransactionTypeMapping {
 export interface CoinbaseDefaultCurrencyMapping {
   readonly currencyCode: string
   readonly mappingKind: ProviderAssetMappingKind
-  readonly canonicalAssetSymbol: string | null
+  readonly canonicalAssetCoinGeckoId: string | null
   readonly canonicalFiatCurrency: string | null
   readonly mappingStatus: ProviderAssetMappingStatus
   readonly sourceNotes: string
@@ -386,7 +386,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "BTC",
     mappingKind: "asset",
-    canonicalAssetSymbol: "BTC",
+    canonicalAssetCoinGeckoId: "bitcoin",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -394,7 +394,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ETH",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ETH",
+    canonicalAssetCoinGeckoId: "ethereum",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -402,7 +402,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ETH2",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ETH",
+    canonicalAssetCoinGeckoId: "ethereum",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Coinbase-specific alias for staked / deprecated ETH balances.",
@@ -410,7 +410,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ADA",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ADA",
+    canonicalAssetCoinGeckoId: "cardano",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -418,7 +418,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "DOT",
     mappingKind: "asset",
-    canonicalAssetSymbol: "DOT",
+    canonicalAssetCoinGeckoId: "polkadot",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -426,7 +426,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "SOL",
     mappingKind: "asset",
-    canonicalAssetSymbol: "SOL",
+    canonicalAssetCoinGeckoId: "solana",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -434,7 +434,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "ZEC",
     mappingKind: "asset",
-    canonicalAssetSymbol: "ZEC",
+    canonicalAssetCoinGeckoId: "zcash",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -442,7 +442,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "EURC",
     mappingKind: "asset",
-    canonicalAssetSymbol: "EURC",
+    canonicalAssetCoinGeckoId: "euro-coin",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -450,7 +450,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "TAO",
     mappingKind: "asset",
-    canonicalAssetSymbol: "TAO",
+    canonicalAssetCoinGeckoId: "bittensor",
     canonicalFiatCurrency: null,
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
@@ -458,7 +458,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   {
     currencyCode: "EUR",
     mappingKind: "fiat",
-    canonicalAssetSymbol: null,
+    canonicalAssetCoinGeckoId: null,
     canonicalFiatCurrency: "EUR",
     mappingStatus: "approved",
     sourceNotes: "Fiat currency mapping used for native amounts and fiat-denominated fees.",

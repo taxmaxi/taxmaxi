@@ -33,6 +33,8 @@ const context = makeIntegrationTestDatabaseContext({
 })
 const TestPgClientLive = context.TestPgClientLive
 const recreateTestDatabase = context.recreateTestDatabase
+const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000541"
+const DOT_ASSET_ID = "00000000-0000-0000-0000-000000000542"
 
 const makeCoinbaseRecord = ({
   externalRecordId,
@@ -405,30 +407,19 @@ const seedCoinbaseSource = () =>
     }
 
     yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "btc-base-test",
+      id: BTC_ASSET_ID,
       name: "Bitcoin",
       symbol: "BTC",
-      decimals: 8,
-      type: "token",
+      coingeckoCoinId: "bitcoin",
+      type: "fungible",
     })
 
     yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "eur-base-test",
-      name: "Euro",
-      symbol: "EUR",
-      decimals: 2,
-      type: "token",
-    })
-
-    yield* db.insert(schema.assets).values({
-      blockchainId: baseBlockchain.id,
-      contractAddress: "dot-base-test",
+      id: DOT_ASSET_ID,
       name: "Polkadot",
       symbol: "DOT",
-      decimals: 10,
-      type: "token",
+      coingeckoCoinId: "polkadot",
+      type: "fungible",
     })
 
     yield* db.insert(schema.sources).values({
@@ -1162,7 +1153,7 @@ const fetchProviderAssetState = ({ currencyCode }: { readonly currencyCode: stri
               mappingStatus: schema.providerAssetMappings.mappingStatus,
               mappingKind: schema.providerAssetMappings.mappingKind,
               canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-              canonicalAssetSymbol: schema.providerAssetMappings.canonicalAssetSymbol,
+              assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
             })
             .from(schema.providerAssetMappings)
             .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
@@ -1219,7 +1210,7 @@ const seedPendingProviderAssetMapping = ({
       providerAssetRowId: providerAsset.id,
       mappingKind: "asset",
       canonicalAssetId: null,
-      canonicalAssetSymbol: null,
+      assetRepresentationId: null,
       canonicalFiatCurrency: null,
       mappingStatus: "pending_review",
       reviewerNotes: "Fixture pending provider asset review",
@@ -1229,36 +1220,15 @@ const seedPendingProviderAssetMapping = ({
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
-const seedCanonicalAsset = ({
-  symbol,
-  contractAddress,
-  decimals,
-}: {
-  readonly symbol: string
-  readonly contractAddress: string
-  readonly decimals: number
-}) =>
+const seedCanonicalAsset = ({ symbol }: { readonly symbol: string }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
-    const [baseBlockchain] = yield* db
-      .select({ id: schema.blockchains.id })
-      .from(schema.blockchains)
-      .where(eq(schema.blockchains.name, "base"))
-      .limit(1)
-
-    if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
-    }
-
     const [asset] = yield* db
       .insert(schema.assets)
       .values({
-        blockchainId: baseBlockchain.id,
-        contractAddress,
         name: `${symbol} Test Asset`,
         symbol,
-        decimals,
-        type: "token",
+        type: "fungible",
       })
       .returning({ id: schema.assets.id })
 
@@ -1272,11 +1242,11 @@ const seedCanonicalAsset = ({
 const approveProviderAssetMappingToCanonicalAsset = ({
   currencyCode,
   canonicalAssetId,
-  canonicalAssetSymbol,
+  assetRepresentationId,
 }: {
   readonly currencyCode: string
   readonly canonicalAssetId: string | null
-  readonly canonicalAssetSymbol: string
+  readonly assetRepresentationId: string | null
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -1303,7 +1273,7 @@ const approveProviderAssetMappingToCanonicalAsset = ({
       .set({
         mappingKind: "asset",
         canonicalAssetId,
-        canonicalAssetSymbol,
+        assetRepresentationId,
         canonicalFiatCurrency: null,
         mappingStatus: "approved",
         reviewerNotes: "Approved after provider asset repair",
@@ -1871,7 +1841,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("replays previously failed raw rows after repairing an approved provider asset mapping", async () => {
+  it("replays reviewable raw rows after approving an economic asset mapping", async () => {
     activeSyncRecords = makeHypeReviewableSyncRecords()
     activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
 
@@ -1883,50 +1853,42 @@ describe("coinbase normalization persistence", () => {
           providerType: "crypto",
         })
 
-        yield* approveProviderAssetMappingToCanonicalAsset({
-          currencyCode: "HYPE",
-          canonicalAssetId: null,
-          canonicalAssetSymbol: "HYPE",
-        })
+        const reviewableSummary = yield* runSync()
+        const reviewableJob = yield* fetchJobDetails({ jobId: reviewableSummary.jobId })
+        const reviewableCounts = yield* fetchCounts()
 
-        const failedSummary = yield* runSync()
-        const failedJob = yield* fetchJobDetails({ jobId: failedSummary.jobId })
-        const failedCounts = yield* fetchCounts()
-
-        expect(failedJob.status).toBe("completed")
-        expect(failedJob.normalizedRecords).toBe(1)
-        expect(failedJob.failedRecords).toBe(1)
+        expect(reviewableJob.status).toBe("completed")
+        expect(reviewableJob.normalizedRecords).toBe(2)
+        expect(reviewableJob.failedRecords).toBe(0)
         expect(
-          failedCounts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-1")?.normalizedAt
-        ).toBeNull()
+          reviewableCounts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-1")
+            ?.normalizedAt
+        ).not.toBeNull()
         expect(
-          failedCounts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-1")
+          reviewableCounts.rawRows.find((row) => row.externalRecordId === "tx-hype-buy-1")
             ?.normalizationError
-        ).toContain("approved but has no canonical target configured")
-        expect(failedCounts.transactions).toHaveLength(0)
-        expect(failedCounts.legs).toHaveLength(0)
+        ).toBeNull()
+        expect(reviewableCounts.transactions).toHaveLength(1)
+        expect(reviewableCounts.legs).toHaveLength(0)
 
         const hypeAssetId = yield* seedCanonicalAsset({
           symbol: "HYPE",
-          contractAddress: "hype-base-test",
-          decimals: 8,
         })
         yield* approveProviderAssetMappingToCanonicalAsset({
           currencyCode: "HYPE",
           canonicalAssetId: hypeAssetId,
-          canonicalAssetSymbol: "HYPE",
+          assetRepresentationId: null,
         })
 
         activeSyncRecords = []
-        const repairedSummary = yield* runSync()
-        const repairedJob = yield* fetchJobDetails({ jobId: repairedSummary.jobId })
+        const repairedJob = yield* replaySource()
         const repairedCounts = yield* fetchCounts()
         const repairedRawRow = repairedCounts.rawRows.find(
           (row) => row.externalRecordId === "tx-hype-buy-1"
         )
 
         expect(repairedJob.status).toBe("completed")
-        expect(repairedJob.normalizedRecords).toBe(1)
+        expect(repairedJob.normalizedRecords).toBe(2)
         expect(repairedJob.failedRecords).toBe(0)
         expect(repairedRawRow?.normalizedAt).not.toBeNull()
         expect(repairedRawRow?.normalizationError).toBeNull()

@@ -7,8 +7,9 @@
 import {
   AssetRepository,
   ProviderAssetRepository,
-  type CanonicalAssetDraft,
+  type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
+  type EconomicAssetDraft,
   type ProviderAssetRecord,
 } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
@@ -221,6 +222,29 @@ const observedProviderTokenId = (providerAsset: ProviderAssetRecord): string | n
   )
 }
 
+const isNativeOnchainObservation = (providerAsset: ProviderAssetRecord): boolean => {
+  const provider = normalize(providerAsset.provider)
+  const providerType =
+    providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
+  const naturalKey = trimOrNull(providerAsset.naturalKey)
+
+  return (
+    provider.includes("solana") &&
+    (providerType === "native" || naturalKey?.startsWith("solana:native:") === true)
+  )
+}
+
+export const representationIdForProviderObservation = ({
+  providerAsset,
+  representationId,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly representationId: string
+}): string | null =>
+  isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null
+    ? representationId
+    : null
+
 const validateProviderTokenIdentity = ({
   contractAddress,
   platform,
@@ -248,6 +272,17 @@ const validateProviderTokenIdentity = ({
         )
       )
 }
+
+export const validateNativeProviderIdentity = (
+  providerAsset: ProviderAssetRecord
+): Effect.Effect<void, AssetCanonicalizationBadRequestError> =>
+  observedProviderTokenId(providerAsset) === null
+    ? Effect.void
+    : Effect.fail(
+        makeBadRequest(
+          `CoinGecko native asset does not match observed provider token id for ${providerAsset.currencyCode}.`
+        )
+      )
 
 const selectCoin = ({
   providerAsset,
@@ -296,7 +331,8 @@ const buildNativeCanonicalDrafts = ({
   readonly platform: CoinGeckoAssetPlatform
 }): {
   readonly blockchain: CanonicalBlockchainDraft
-  readonly asset: CanonicalAssetDraft
+  readonly asset: EconomicAssetDraft
+  readonly representation: AssetRepresentationDraft
 } => ({
   blockchain: {
     name: platform.id,
@@ -308,14 +344,20 @@ const buildNativeCanonicalDrafts = ({
     coingeckoPlatformId: platform.id,
   },
   asset: {
-    contractAddress: null,
     name: coin.name,
     symbol: upperSymbol(coin.symbol),
-    decimals,
     coingeckoCoinId: coin.id,
+    logoUrl: coin.image?.small ?? null,
+    type: "fungible",
+  },
+  representation: {
+    contractAddress: null,
+    mintAddress: null,
+    decimals,
     logoUrl: coin.image?.small ?? null,
     type: "native",
     isSpam: false,
+    metadata: { source: "coingecko", coinId: coin.id, platformId: platform.id },
   },
 })
 
@@ -331,7 +373,8 @@ const buildTokenCanonicalDrafts = ({
   readonly providerAsset: ProviderAssetRecord
 }): {
   readonly blockchain: CanonicalBlockchainDraft
-  readonly asset: CanonicalAssetDraft
+  readonly asset: EconomicAssetDraft
+  readonly representation: AssetRepresentationDraft
 } => {
   const detail = coin.detail_platforms[platform.id]
   return {
@@ -345,14 +388,20 @@ const buildTokenCanonicalDrafts = ({
       coingeckoPlatformId: platform.id,
     },
     asset: {
-      contractAddress,
       name: coin.name,
       symbol: upperSymbol(coin.symbol),
-      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
       coingeckoCoinId: coin.id,
       logoUrl: coin.image?.small ?? null,
-      type: "token",
+      type: providerAsset.providerType === "nft" ? "nft" : "fungible",
+    },
+    representation: {
+      contractAddress: deriveChainType(platform) === "solana" ? null : contractAddress,
+      mintAddress: deriveChainType(platform) === "solana" ? contractAddress : null,
+      decimals: detail?.decimal_place ?? providerAsset.exponent ?? 0,
+      logoUrl: coin.image?.small ?? null,
+      type: providerAsset.providerType === "nft" ? "nft" : "token",
       isSpam: false,
+      metadata: { source: "coingecko", coinId: coin.id, platformId: platform.id },
     },
   }
 }
@@ -388,6 +437,8 @@ const make = Effect.gen(function* () {
       const nativePlatform = selectNativePlatform({ coinId: coin.id, assetPlatforms })
 
       if (nativePlatform !== null) {
+        yield* validateNativeProviderIdentity(providerAsset)
+
         const nativeDecimals = deriveNativeAssetDecimals({
           coinId: coin.id,
           platform: nativePlatform,
@@ -511,9 +562,10 @@ const make = Effect.gen(function* () {
           providerAsset: providerAssetReview.value.providerAsset,
         })
         const canonicalAsset = yield* assetRepository
-          .upsertCanonicalAsset({
+          .upsertEconomicAssetRepresentation({
             blockchain: resolved.blockchain,
             asset: resolved.asset,
+            representation: resolved.representation,
           })
           .pipe(
             Effect.mapError(
@@ -531,7 +583,10 @@ const make = Effect.gen(function* () {
                 providerAssetRowId,
                 mappingKind: "asset",
                 canonicalAssetId: canonicalAsset.id,
-                canonicalAssetSymbol: canonicalAsset.symbol,
+                assetRepresentationId: representationIdForProviderObservation({
+                  providerAsset: providerAssetReview.value.providerAsset,
+                  representationId: canonicalAsset.representationId,
+                }),
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,

@@ -4,7 +4,10 @@
  * @module AssetCanonicalizationService
  */
 
-import type { CanonicalAssetRecord, ProviderAssetReviewRecord } from "@my/sync-engine/services"
+import type {
+  EconomicAssetRepresentationRecord,
+  ProviderAssetReviewRecord,
+} from "@my/sync-engine/services"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -55,7 +58,7 @@ export interface AssetCanonicalizationEvidence {
 
 export interface CanonicalizeProviderAssetResult {
   readonly providerAsset: ProviderAssetReviewRecord
-  readonly canonicalAsset: CanonicalAssetRecord
+  readonly canonicalAsset: EconomicAssetRepresentationRecord
   readonly evidence: AssetCanonicalizationEvidence
 }
 

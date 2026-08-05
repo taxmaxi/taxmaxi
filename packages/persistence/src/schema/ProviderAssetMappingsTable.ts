@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   pgEnum,
   pgTable,
@@ -9,6 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 import { providerMappingStatusEnum } from "./ProviderTransactionTypeMappingsTable.ts"
@@ -29,7 +31,7 @@ export const providerAssetMappings = pgTable(
       .references(() => providerAssets.id),
     mappingKind: providerAssetMappingKindEnum("mapping_kind").notNull(),
     canonicalAssetId: uuid("canonical_asset_id").references(() => assets.id),
-    canonicalAssetSymbol: text("canonical_asset_symbol"),
+    assetRepresentationId: uuid("asset_representation_id"),
     canonicalFiatCurrency: text("canonical_fiat_currency"),
     mappingStatus: providerMappingStatusEnum("mapping_status").notNull().default("pending_review"),
     reviewerNotes: text("reviewer_notes"),
@@ -44,12 +46,21 @@ export const providerAssetMappings = pgTable(
       "provider_asset_mappings_kind_requires_target",
       sql`(
         ${table.mappingKind} = 'asset'
-        and (${table.canonicalAssetId} is not null or ${table.canonicalAssetSymbol} is not null)
+        and ${table.canonicalAssetId} is not null
       ) or (
         ${table.mappingKind} = 'fiat'
         and ${table.canonicalFiatCurrency} is not null
       ) or ${table.mappingStatus} in ('pending_review', 'rejected')`
     ),
+    check(
+      "provider_asset_mappings_representation_requires_asset",
+      sql`${table.assetRepresentationId} is null or ${table.canonicalAssetId} is not null`
+    ),
+    foreignKey({
+      columns: [table.canonicalAssetId, table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
+      name: "provider_asset_mappings_representation_matches_asset_fk",
+    }),
   ]
 )
 

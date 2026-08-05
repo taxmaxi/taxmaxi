@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   jsonb,
   numeric,
@@ -12,6 +13,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core"
 import { addresses } from "./AddressesTable.ts"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { blockchains } from "./BlockchainsTable.ts"
 import { principals } from "./PrincipalsTable.ts"
@@ -82,6 +84,7 @@ export const transfers = pgTable(
     assetId: uuid("asset_id")
       .notNull()
       .references(() => assets.id),
+    assetRepresentationId: uuid("asset_representation_id"),
     amount: numeric("amount", { precision: 100, scale: 30 }).notNull(), // Provider-native decimal amount.
     tokenId: text("token_id"), // Optional NFT/inscription-like identifier.
 
@@ -108,6 +111,11 @@ export const transfers = pgTable(
       "transfers_tx_hash_requires_onchain_context",
       sql`${table.txHash} is null or (${table.blockchainId} is not null and ${table.addressId} is not null and ${table.fromAddress} is not null and ${table.toAddress} is not null)`
     ),
+    foreignKey({
+      columns: [table.assetId, table.assetRepresentationId],
+      foreignColumns: [assetRepresentations.assetId, assetRepresentations.id],
+      name: "transfers_representation_matches_asset_fk",
+    }),
 
     uniqueIndex("idx_transfers_source_external_unique")
       .on(table.sourceId, table.externalId)
@@ -121,7 +129,8 @@ export const transfers = pgTable(
         table.type,
         table.fromAddress,
         table.toAddress,
-        table.assetId
+        table.assetId,
+        table.assetRepresentationId
       )
       .where(
         sql`${table.txHash} is not null and ${table.addressId} is not null and ${table.fromAddress} is not null and ${table.toAddress} is not null`

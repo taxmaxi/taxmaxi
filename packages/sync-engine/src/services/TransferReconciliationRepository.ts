@@ -30,6 +30,7 @@ export interface ProviderTransferReconciliationCandidate {
   readonly providerTransactionId: string
   readonly providerAssetId: string | null
   readonly canonicalAssetId: string | null
+  readonly assetRepresentationId: string | null
   readonly timestamp: Date
   readonly direction: "inbound" | "outbound"
   readonly fromAddress: string | null
@@ -54,6 +55,7 @@ export interface OnchainTransferReconciliationCandidate {
   readonly fromAddress: string | null
   readonly toAddress: string | null
   readonly assetId: string
+  readonly assetRepresentationId: string | null
   readonly amount: string
 }
 
@@ -94,6 +96,7 @@ export interface ListProviderTransfersForReconciliationParams {
 export interface FindOnchainTransferReconciliationCandidatesParams {
   readonly principalId: string
   readonly canonicalAssetId: string
+  readonly assetRepresentationId: string | null
   readonly direction: "inbound" | "outbound"
   readonly walletAddress: string
   readonly timestampStart: Date

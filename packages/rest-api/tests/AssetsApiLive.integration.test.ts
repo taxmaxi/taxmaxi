@@ -15,6 +15,7 @@ import {
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -38,6 +39,9 @@ const TestPgClientLive = context.TestPgClientLive
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
+const TestConfigProvider = ConfigProvider.fromMap(
+  new Map([["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"]])
+)
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
@@ -107,7 +111,8 @@ const HttpLive = HttpApiBuilder.serve().pipe(
   Layer.provide(X402PaymentValidatorTestLive),
   Layer.provide(SimpleTokenValidatorLive),
   Layer.provideMerge(PersistenceLayer),
-  Layer.provideMerge(NodeHttpServer.layerTest)
+  Layer.provideMerge(NodeHttpServer.layerTest),
+  Layer.provide(Layer.setConfigProvider(TestConfigProvider))
 )
 
 const getJson = <Response, Encoded, Requirements>({
@@ -153,12 +158,28 @@ describe("AssetsApiLive", () => {
     expect(response.status).toBe(200)
     expect(symbols).toEqual(expect.arrayContaining(["SOL", "USDC", "USDT"]))
     expect(usdc).toMatchObject({
-      blockchainName: "solana",
-      contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-      decimals: 6,
-      isSpam: false,
       name: "USD Coin",
-      type: "token",
+      type: "fungible",
+      representations: expect.arrayContaining([
+        expect.objectContaining({
+          blockchainName: "solana",
+          mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          decimals: 6,
+          type: "token",
+        }),
+        expect.objectContaining({
+          blockchainName: "ethereum",
+          contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+          decimals: 6,
+          type: "token",
+        }),
+        expect.objectContaining({
+          blockchainName: "base",
+          contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          decimals: 6,
+          type: "token",
+        }),
+      ]),
     })
   })
 
@@ -198,10 +219,13 @@ describe("AssetsApiLive", () => {
     expect(detailResponse.status).toBe(200)
     expect(detailResponse.body).toMatchObject({
       id: usdc.id,
-      blockchainId: usdc.blockchainId,
-      blockchainExplorerUrl: "https://explorer.solana.com",
-      contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       symbol: "USDC",
+      representations: expect.arrayContaining([
+        expect.objectContaining({
+          blockchainExplorerUrl: "https://explorer.solana.com",
+          mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        }),
+      ]),
     })
   })
 

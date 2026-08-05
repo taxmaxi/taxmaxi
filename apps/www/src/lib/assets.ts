@@ -1,4 +1,4 @@
-import type { AssetCatalogAsset } from "taxmaxi"
+import type { AssetCatalogAsset, AssetRepresentation } from "taxmaxi"
 
 export type TaxMaxiAsset = AssetCatalogAsset
 export type TaxMaxiAssetType = TaxMaxiAsset["type"]
@@ -21,9 +21,12 @@ export function filterTaxMaxiAssets({
       asset.id,
       asset.name,
       asset.symbol,
-      asset.blockchainName,
-      asset.blockchainChainType,
-      asset.contractAddress ?? "",
+      ...asset.representations.flatMap((representation) => [
+        representation.blockchainName,
+        representation.blockchainChainType,
+        representation.contractAddress ?? "",
+        representation.mintAddress ?? "",
+      ]),
     ]
       .join(" ")
       .toLowerCase()
@@ -33,10 +36,8 @@ export function filterTaxMaxiAssets({
 
 export function formatAssetType(assetType: TaxMaxiAssetType): string {
   switch (assetType) {
-    case "native":
-      return "Native asset"
-    case "token":
-      return "Token"
+    case "fungible":
+      return "Fungible asset"
     case "nft":
       return "NFT"
   }
@@ -50,26 +51,24 @@ export function formatBlockchainName(name: string): string {
 }
 
 export function describeTaxMaxiAsset(asset: TaxMaxiAsset): string {
-  const blockchainName = formatBlockchainName(asset.blockchainName)
-
-  if (asset.type === "native") {
-    return `Native ${blockchainName} asset used for network fees, balances, and transfer normalization.`
-  }
-
   if (asset.type === "nft") {
-    return `Canonical ${blockchainName} NFT asset resolved by TaxMaxi during activity normalization.`
+    return "Economic NFT identity used consistently across custody sources and network activity."
   }
 
-  return `Canonical ${blockchainName} token used to normalize transfers, swaps, balances, and tax reports.`
+  const representationCount = asset.representations.length
+  const representationLabel = representationCount === 1 ? "representation" : "representations"
+
+  return `Economic asset used for transfers, balances, valuation, and tax reports, with ${representationCount} known network ${representationLabel}.`
 }
 
-export function getTaxMaxiAssetExplorerHref(asset: TaxMaxiAsset): string | null {
-  if (asset.blockchainExplorerUrl === null) {
+export function getAssetRepresentationExplorerHref(
+  representation: AssetRepresentation
+): string | null {
+  if (representation.blockchainExplorerUrl === null) {
     return null
   }
 
-  const explorerBaseUrl = asset.blockchainExplorerUrl.replace(/\/+$/, "")
-  return asset.contractAddress === null
-    ? explorerBaseUrl
-    : `${explorerBaseUrl}/address/${asset.contractAddress}`
+  const explorerBaseUrl = representation.blockchainExplorerUrl.replace(/\/+$/, "")
+  const address = representation.contractAddress ?? representation.mintAddress
+  return address === null ? explorerBaseUrl : `${explorerBaseUrl}/address/${address}`
 }

@@ -10,7 +10,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "#/com
 import {
   describeTaxMaxiAsset,
   filterTaxMaxiAssets,
-  formatBlockchainName,
   formatAssetType,
   type TaxMaxiAsset,
 } from "#/lib/assets"
@@ -41,11 +40,25 @@ function AssetsIndexRoute() {
   const [query, setQuery] = useState("")
   const filteredAssets = useMemo(() => filterTaxMaxiAssets({ assets, query }), [assets, query])
   const networkCount = useMemo(
-    () => new Set(assets.map((asset) => asset.blockchainId)).size,
+    () =>
+      new Set(
+        assets.flatMap((asset) =>
+          asset.representations.map((representation) => representation.blockchainId)
+        )
+      ).size,
     [assets]
   )
   const contractCount = useMemo(
-    () => assets.filter((asset) => asset.contractAddress !== null).length,
+    () =>
+      assets.reduce(
+        (count, asset) =>
+          count +
+          asset.representations.filter(
+            (representation) =>
+              representation.contractAddress !== null || representation.mintAddress !== null
+          ).length,
+        0
+      ),
     [assets]
   )
 
@@ -66,7 +79,7 @@ function AssetsIndexRoute() {
         <div className="grid gap-4 md:grid-cols-3">
           <AssetStatCard label="Canonical assets" value={assets.length.toString()} />
           <AssetStatCard label="Networks" value={networkCount.toString()} />
-          <AssetStatCard label="Token contracts" value={contractCount.toString()} />
+          <AssetStatCard label="Contracts and mints" value={contractCount.toString()} />
         </div>
 
         <form
@@ -153,6 +166,13 @@ function AssetStatCard({ label, value }: { readonly label: string; readonly valu
 }
 
 function AssetListCard({ asset }: { readonly asset: TaxMaxiAsset }) {
+  const networkNames = asset.representations.map((representation) => representation.blockchainName)
+  const networkLabel =
+    networkNames.length === 0
+      ? "No network representation"
+      : networkNames.slice(0, 2).join(", ") +
+        (networkNames.length > 2 ? ` +${networkNames.length - 2}` : "")
+
   return (
     <Link
       className="group block h-full rounded-[1.75rem] no-underline outline-none focus-visible:ring-3 focus-visible:ring-marketing-border/40"
@@ -185,10 +205,10 @@ function AssetListCard({ asset }: { readonly asset: TaxMaxiAsset }) {
         </CardHeader>
         <CardContent>
           <dl className="grid grid-cols-2 gap-3 text-sm">
-            <AssetMeta label="Network" value={formatBlockchainName(asset.blockchainName)} />
+            <AssetMeta label="Networks" value={networkLabel} />
             <AssetMeta label="Type" value={formatAssetType(asset.type)} />
-            <AssetMeta label="Decimals" value={asset.decimals.toString()} />
-            <AssetMeta label="Chain" value={asset.blockchainChainType} />
+            <AssetMeta label="Representations" value={asset.representations.length.toString()} />
+            <AssetMeta label="Economic ID" value={asset.id} />
           </dl>
         </CardContent>
       </Card>

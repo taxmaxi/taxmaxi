@@ -208,7 +208,7 @@ const make = Effect.gen(function* () {
           providerAssetRowId,
           mappingKind,
           canonicalAssetId: null,
-          canonicalAssetSymbol: null,
+          assetRepresentationId: null,
           canonicalFiatCurrency: null,
           mappingStatus: "pending_review",
           reviewerNotes: null,
@@ -346,7 +346,7 @@ const make = Effect.gen(function* () {
           providerAssetRowId,
           mappingKind: mapping.mappingKind,
           canonicalAssetId: null,
-          canonicalAssetSymbol: null,
+          assetRepresentationId: null,
           canonicalFiatCurrency: mapping.canonicalFiatCurrency,
           mappingStatus: mapping.mappingStatus,
           reviewerNotes: null,
@@ -354,22 +354,22 @@ const make = Effect.gen(function* () {
         } satisfies ProviderAssetMappingDraft
       }
 
-      if (mapping.canonicalAssetSymbol === null) {
+      if (mapping.canonicalAssetCoinGeckoId === null) {
         return {
           providerAssetRowId,
           mappingKind: mapping.mappingKind,
           canonicalAssetId: null,
-          canonicalAssetSymbol: null,
+          assetRepresentationId: null,
           canonicalFiatCurrency: null,
           mappingStatus: "pending_review",
           reviewerNotes: null,
           sourceNotes:
-            "Coinbase default asset mapping has no canonical asset symbol configured. Review required.",
+            "Coinbase default asset mapping has no canonical economic asset id configured. Review required.",
         } satisfies ProviderAssetMappingDraft
       }
 
-      const canonicalAsset = yield* assetRepository.findAssetBySymbol({
-        symbol: mapping.canonicalAssetSymbol,
+      const canonicalAsset = yield* assetRepository.findAssetByCoinGeckoId({
+        coingeckoCoinId: mapping.canonicalAssetCoinGeckoId,
       })
 
       if (Option.isSome(canonicalAsset)) {
@@ -377,7 +377,7 @@ const make = Effect.gen(function* () {
           providerAssetRowId,
           mappingKind: mapping.mappingKind,
           canonicalAssetId: canonicalAsset.value.id,
-          canonicalAssetSymbol: mapping.canonicalAssetSymbol,
+          assetRepresentationId: null,
           canonicalFiatCurrency: null,
           mappingStatus: "approved",
           reviewerNotes: null,
@@ -389,11 +389,11 @@ const make = Effect.gen(function* () {
         providerAssetRowId,
         mappingKind: mapping.mappingKind,
         canonicalAssetId: null,
-        canonicalAssetSymbol: mapping.canonicalAssetSymbol,
+        assetRepresentationId: null,
         canonicalFiatCurrency: null,
         mappingStatus: "pending_review",
         reviewerNotes: null,
-        sourceNotes: `Coinbase default mapping targets canonical asset symbol ${mapping.canonicalAssetSymbol}, but no canonical assets row exists. Review required after adding or selecting a canonical asset.`,
+        sourceNotes: `Coinbase default mapping targets CoinGecko asset ${mapping.canonicalAssetCoinGeckoId}, but no assets row exists. Review required after adding or selecting an economic asset.`,
       } satisfies ProviderAssetMappingDraft
     })
 
@@ -441,22 +441,6 @@ const make = Effect.gen(function* () {
 
       yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
         mappings: resolvedDefaultMappings.map(({ providerAssetMapping }) => providerAssetMapping),
-      })
-
-      yield* providerAssetRepository.backfillApprovedSymbolMappingsCanonicalAssetIds({
-        mappings: resolvedDefaultMappings.flatMap(({ providerAssetMapping }) =>
-          providerAssetMapping.mappingKind === "asset" &&
-          providerAssetMapping.canonicalAssetId !== null &&
-          providerAssetMapping.canonicalAssetSymbol !== null
-            ? [
-                {
-                  providerAssetRowId: providerAssetMapping.providerAssetRowId,
-                  canonicalAssetId: providerAssetMapping.canonicalAssetId,
-                  canonicalAssetSymbol: providerAssetMapping.canonicalAssetSymbol,
-                },
-              ]
-            : []
-        ),
       })
 
       return {
@@ -537,7 +521,7 @@ const make = Effect.gen(function* () {
           mappingStatus: persistedMapping.mappingStatus,
           mappingKind: persistedMapping.mappingKind,
           canonicalAssetId: persistedMapping.canonicalAssetId,
-          canonicalAssetSymbol: persistedMapping.canonicalAssetSymbol,
+          assetRepresentationId: persistedMapping.assetRepresentationId,
           canonicalFiatCurrency: persistedMapping.canonicalFiatCurrency,
         },
         currencyCode: upperCurrencyCode,
@@ -549,7 +533,7 @@ const make = Effect.gen(function* () {
         mappingStatus: persistedMapping.mappingStatus,
         mappingKind: persistedMapping.mappingKind,
         canonicalAssetId,
-        canonicalAssetSymbol: persistedMapping.canonicalAssetSymbol,
+        assetRepresentationId: persistedMapping.assetRepresentationId,
         canonicalFiatCurrency: persistedMapping.canonicalFiatCurrency,
       } satisfies CoinbaseResolvedCurrencyMapping
     })

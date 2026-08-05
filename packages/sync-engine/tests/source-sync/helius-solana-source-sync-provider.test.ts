@@ -124,12 +124,13 @@ const makeProviderLayer = ({
         AssetRepository,
         AssetRepository.of({
           findAssetById: () => Effect.succeed(Option.none()),
-          findAssetBySymbol: () => Effect.succeed(Option.none()),
-          findNativeAssetForBlockchain: () => Effect.succeed(Option.none()),
-          findAssetByBlockchainAndContractAddress: () => Effect.succeed(Option.none()),
+          findAssetByCoinGeckoId: () => Effect.succeed(Option.none()),
+          findRepresentationById: () => Effect.succeed(Option.none()),
+          findNativeRepresentationForBlockchain: () => Effect.succeed(Option.none()),
+          findRepresentationByBlockchainAndAddress: () => Effect.succeed(Option.none()),
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
-          upsertCanonicalAsset: () =>
-            Effect.dieMessage("upsertCanonicalAsset should not be called"),
+          upsertEconomicAssetRepresentation: () =>
+            Effect.dieMessage("upsertEconomicAssetRepresentation should not be called"),
         })
       )
     ),
@@ -158,7 +159,7 @@ const makeProviderLayer = ({
               mappingStatus: "approved",
               mappingKind: "asset",
               canonicalAssetId: "asset-sol",
-              canonicalAssetSymbol: "SOL",
+              assetRepresentationId: "representation-sol",
               canonicalFiatCurrency: null,
             } satisfies HeliusSolanaResolvedAsset),
           resolveAssets: ({ assets }) =>
@@ -184,7 +185,7 @@ const makeProviderLayer = ({
                             mappingStatus: "approved",
                             mappingKind: "asset",
                             canonicalAssetId: "asset-sol",
-                            canonicalAssetSymbol: "SOL",
+                            assetRepresentationId: "representation-sol",
                             canonicalFiatCurrency: null,
                           } satisfies HeliusSolanaResolvedAsset,
                         ]
@@ -204,7 +205,7 @@ const makeProviderLayer = ({
                             mappingStatus: "approved",
                             mappingKind: "asset",
                             canonicalAssetId: "asset-usdc",
-                            canonicalAssetSymbol: "USDC",
+                            assetRepresentationId: "representation-usdc-solana",
                             canonicalFiatCurrency: null,
                           } satisfies HeliusSolanaResolvedAsset,
                         ]

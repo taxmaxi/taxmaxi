@@ -15,6 +15,7 @@ import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
   makeIntegrationTestDatabaseContext,
@@ -84,7 +85,7 @@ const seedApprovedProviderAsset = ({
       providerAssetRowId: providerAsset.id,
       mappingKind: "asset",
       canonicalAssetId: TEST_BTC_ASSET_ID,
-      canonicalAssetSymbol: "BTC",
+      assetRepresentationId: null,
       canonicalFiatCurrency: null,
       mappingStatus: "approved",
       reviewerNotes: null,
@@ -279,6 +280,7 @@ const seedOnchainReceipt = ({
         toPartyType: "address",
         toPartyResourcePath: null,
         assetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         amount,
         tokenId: null,
         notes: null,
@@ -1461,6 +1463,7 @@ describe("TransferReconciliationServiceLive", () => {
         return yield* db
           .select({
             id: schema.fifoLots.id,
+            assetRepresentationId: schema.fifoLots.assetRepresentationId,
             acquiredAt: schema.fifoLots.acquiredAt,
             originalAmount: schema.fifoLots.originalAmount,
             remainingAmount: schema.fifoLots.remainingAmount,
@@ -1482,6 +1485,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(movedLots).toEqual([
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         originalAmount: expect.stringContaining("0.10000000"),
         remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
@@ -1489,6 +1493,7 @@ describe("TransferReconciliationServiceLive", () => {
       }),
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         originalAmount: expect.stringContaining("0.20000000"),
         remainingAmount: expect.stringContaining("0.08000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
@@ -1711,6 +1716,82 @@ describe("TransferReconciliationServiceLive", () => {
         }),
       ])
     )
+
+    const replayRepresentationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [representation] = yield* db
+          .insert(schema.assetRepresentations)
+          .values({
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            type: "token",
+            contractAddress: "0x0000000000000000000000000000000000000b7c",
+            decimals: 8,
+          })
+          .returning({ id: schema.assetRepresentations.id })
+
+        if (representation === undefined) {
+          return yield* Effect.dieMessage("Failed to create replay representation fixture")
+        }
+
+        yield* db
+          .update(schema.transfers)
+          .set({ assetRepresentationId: representation.id })
+          .where(eq(schema.transfers.id, firstReceipt.transferId))
+
+        return representation.id
+      })
+    )
+
+    const replaySummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId: firstReconciliationId,
+        })
+      )
+    )
+    expect(replaySummary).toEqual({ canonicalizedPairs: 1 })
+
+    const replayState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [destinationLeg] = yield* db
+          .select({
+            id: schema.transactionLegs.id,
+            assetRepresentationId: schema.transactionLegs.assetRepresentationId,
+          })
+          .from(schema.transactionLegs)
+          .where(
+            and(
+              eq(schema.transactionLegs.transactionId, firstReceipt.transactionId),
+              eq(schema.transactionLegs.derivationRule, "internal_transfer_in")
+            )
+          )
+          .limit(1)
+
+        if (destinationLeg === undefined) {
+          return yield* Effect.dieMessage("Missing replay destination leg")
+        }
+
+        const destinationLots = yield* db
+          .select({ assetRepresentationId: schema.fifoLots.assetRepresentationId })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, destinationLeg.id))
+
+        return { destinationLeg, destinationLots }
+      })
+    )
+
+    expect(replayState.destinationLeg.assetRepresentationId).toBe(replayRepresentationId)
+    expect(replayState.destinationLots.length).toBeGreaterThan(0)
+    expect(
+      replayState.destinationLots.every(
+        (lot) => lot.assetRepresentationId === replayRepresentationId
+      )
+    ).toBe(true)
   })
 
   it("keeps transferred lots unavailable before the destination receipt", async () => {

@@ -1,12 +1,91 @@
 import { describe, expect, it } from "vitest"
+import * as Effect from "effect/Effect"
 import {
   deriveChainType,
   deriveNativeAssetDecimals,
+  representationIdForProviderObservation,
   selectNativePlatform,
+  validateNativeProviderIdentity,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
+import type { ProviderAssetRecord } from "@my/sync-engine/services"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 describe("AssetCanonicalizationService", () => {
+  const makeProviderAsset = (
+    overrides: Partial<ProviderAssetRecord> = {}
+  ): ProviderAssetRecord => ({
+    id: "00000000-0000-4000-8000-000000000001",
+    provider: "coinbase",
+    providerAssetId: "coinbase-usdc",
+    naturalKey: null,
+    currencyCode: "USDC",
+    name: "USD Coin",
+    exponent: 6,
+    providerType: "crypto",
+    rawProviderPayload: {},
+    discoveredAt: new Date("2025-01-01T00:00:00.000Z"),
+    retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+    ...overrides,
+  })
+
+  it("keeps chainless provider mappings at the economic asset level", () => {
+    expect(
+      representationIdForProviderObservation({
+        providerAsset: makeProviderAsset(),
+        representationId: "00000000-0000-4000-8000-000000000002",
+      })
+    ).toBeNull()
+  })
+
+  it("keeps an exact representation for an observed Solana mint", () => {
+    const representationId = "00000000-0000-4000-8000-000000000002"
+
+    expect(
+      representationIdForProviderObservation({
+        providerAsset: makeProviderAsset({
+          provider: "helius-solana",
+          providerAssetId: "Mint111111111111111111111111111111111111111",
+          naturalKey: "solana:mint:Mint111111111111111111111111111111111111111",
+          providerType: "spl-token",
+        }),
+        representationId,
+      })
+    ).toBe(representationId)
+  })
+
+  it("keeps the native representation for an observed Solana native asset", () => {
+    const representationId = "00000000-0000-4000-8000-000000000002"
+
+    expect(
+      representationIdForProviderObservation({
+        providerAsset: makeProviderAsset({
+          provider: "helius-solana",
+          providerAssetId: null,
+          naturalKey: "solana:native:SOL",
+          providerType: "native",
+        }),
+        representationId,
+      })
+    ).toBe(representationId)
+  })
+
+  it("rejects a native asset resolution for an observed Solana token", () => {
+    const result = Effect.runSync(
+      validateNativeProviderIdentity(
+        makeProviderAsset({
+          provider: "helius-solana",
+          providerAssetId: "Mint111111111111111111111111111111111111111",
+          naturalKey: "solana:mint:Mint111111111111111111111111111111111111111",
+          currencyCode: "SOL",
+          name: "Solana",
+          providerType: "spl-token",
+        })
+      ).pipe(Effect.either)
+    )
+
+    expect(result._tag).toBe("Left")
+  })
+
   it("includes Cardano native platform metadata from CoinGecko", () => {
     const cardanoPlatform = coinGeckoAssetPlatformSnapshot.find(
       (platform) => platform.id === "cardano"

@@ -79,6 +79,7 @@ export type {
   AssetCatalogDetailInput,
   AssetCatalogList,
   AssetCatalogListInput,
+  AssetRepresentation,
   AssetsEffectResource,
   AssetsPromiseResource,
   TaxMaxiAssetType,

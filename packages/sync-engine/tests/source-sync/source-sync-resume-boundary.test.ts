@@ -108,14 +108,17 @@ const runWithProvider = <A, E>(
         Layer.provide(
           Layer.succeed(AssetRepository, {
             findAssetById: () => Effect.dieMessage("findAssetById should not be called"),
-            findAssetBySymbol: () => Effect.dieMessage("findAssetBySymbol should not be called"),
-            findNativeAssetForBlockchain: () =>
-              Effect.dieMessage("findNativeAssetForBlockchain should not be called"),
-            findAssetByBlockchainAndContractAddress: () =>
-              Effect.dieMessage("findAssetByBlockchainAndContractAddress should not be called"),
+            findAssetByCoinGeckoId: () =>
+              Effect.dieMessage("findAssetByCoinGeckoId should not be called"),
+            findRepresentationById: () =>
+              Effect.dieMessage("findRepresentationById should not be called"),
+            findNativeRepresentationForBlockchain: () =>
+              Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
+            findRepresentationByBlockchainAndAddress: () =>
+              Effect.dieMessage("findRepresentationByBlockchainAndAddress should not be called"),
             listBlockchains: () => Effect.dieMessage("listBlockchains should not be called"),
-            upsertCanonicalAsset: () =>
-              Effect.dieMessage("upsertCanonicalAsset should not be called"),
+            upsertEconomicAssetRepresentation: () =>
+              Effect.dieMessage("upsertEconomicAssetRepresentation should not be called"),
           })
         ),
         Layer.provide(
@@ -126,10 +129,6 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("upsertProviderAssetMappings should not be called"),
             seedProviderAssetMappingsIfMissing: () =>
               Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
-            backfillApprovedSymbolMappingsCanonicalAssetIds: () =>
-              Effect.dieMessage(
-                "backfillApprovedSymbolMappingsCanonicalAssetIds should not be called"
-              ),
             findProviderAssetByProviderAssetId: () =>
               Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
             findProviderAssetByNaturalKey: () =>

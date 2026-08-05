@@ -8,7 +8,7 @@
  * @module seed/data
  */
 
-import { and, eq, inArray, isNull, ne, sql } from "drizzle-orm"
+import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { drizzle } from "../layers/PgClientLive.ts"
 import { schema } from "../schema/index.ts"
@@ -54,37 +54,91 @@ const blockchains = [
   },
 ] as const
 
-const solanaNativeAsset = {
-  contractAddress: null,
-  name: "Solana",
-  symbol: "SOL",
-  decimals: 9,
-  coingeckoCoinId: "solana",
-  type: "native",
-  logoUrl: null,
-  isSpam: false,
-} as const
+const economicAssets = [
+  { name: "Bitcoin", symbol: "BTC", coingeckoCoinId: "bitcoin", type: "fungible" },
+  { name: "Ether", symbol: "ETH", coingeckoCoinId: "ethereum", type: "fungible" },
+  { name: "Solana", symbol: "SOL", coingeckoCoinId: "solana", type: "fungible" },
+  { name: "USD Coin", symbol: "USDC", coingeckoCoinId: "usd-coin", type: "fungible" },
+  { name: "Tether", symbol: "USDT", coingeckoCoinId: "tether", type: "fungible" },
+  { name: "Cardano", symbol: "ADA", coingeckoCoinId: "cardano", type: "fungible" },
+  { name: "Polkadot", symbol: "DOT", coingeckoCoinId: "polkadot", type: "fungible" },
+  { name: "Zcash", symbol: "ZEC", coingeckoCoinId: "zcash", type: "fungible" },
+  { name: "EURC", symbol: "EURC", coingeckoCoinId: "euro-coin", type: "fungible" },
+  { name: "Bittensor", symbol: "TAO", coingeckoCoinId: "bittensor", type: "fungible" },
+] as const
 
-const solanaTokenAssets = [
+const assetRepresentations = [
   {
-    contractAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    name: "USD Coin",
-    symbol: "USDC",
-    decimals: 6,
-    coingeckoCoinId: "usd-coin",
-    type: "token",
-    logoUrl: null,
-    isSpam: false,
+    assetCoinGeckoId: "bitcoin",
+    blockchainName: "bitcoin",
+    type: "native",
+    contractAddress: null,
+    mintAddress: null,
+    decimals: 8,
   },
   {
-    contractAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-    name: "Tether",
-    symbol: "USDT",
-    decimals: 6,
-    coingeckoCoinId: "tether",
+    assetCoinGeckoId: "ethereum",
+    blockchainName: "ethereum",
+    type: "native",
+    contractAddress: null,
+    mintAddress: null,
+    decimals: 18,
+  },
+  {
+    assetCoinGeckoId: "ethereum",
+    blockchainName: "base",
+    type: "native",
+    contractAddress: null,
+    mintAddress: null,
+    decimals: 18,
+  },
+  {
+    assetCoinGeckoId: "solana",
+    blockchainName: "solana",
+    type: "native",
+    contractAddress: null,
+    mintAddress: null,
+    decimals: 9,
+  },
+  {
+    assetCoinGeckoId: "solana",
+    blockchainName: "solana",
     type: "token",
-    logoUrl: null,
-    isSpam: false,
+    contractAddress: null,
+    mintAddress: "So11111111111111111111111111111111111111112",
+    decimals: 9,
+  },
+  {
+    assetCoinGeckoId: "usd-coin",
+    blockchainName: "solana",
+    type: "token",
+    contractAddress: null,
+    mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    decimals: 6,
+  },
+  {
+    assetCoinGeckoId: "tether",
+    blockchainName: "solana",
+    type: "token",
+    contractAddress: null,
+    mintAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    decimals: 6,
+  },
+  {
+    assetCoinGeckoId: "usd-coin",
+    blockchainName: "ethereum",
+    type: "token",
+    contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    mintAddress: null,
+    decimals: 6,
+  },
+  {
+    assetCoinGeckoId: "usd-coin",
+    blockchainName: "base",
+    type: "token",
+    contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    mintAddress: null,
+    decimals: 6,
   },
 ] as const
 
@@ -1026,73 +1080,110 @@ export const seedData = Effect.gen(function* () {
     )
     .onConflictDoNothing({ target: schema.blockchains.name })
 
-  const [solanaBlockchain] = yield* db
-    .select({ id: schema.blockchains.id })
-    .from(schema.blockchains)
-    .where(eq(schema.blockchains.name, "solana"))
-    .limit(1)
-
-  if (solanaBlockchain === undefined) {
-    return yield* Effect.dieMessage("Missing solana blockchain after seeding blockchains")
-  }
-
-  const [existingNativeSolAsset] = yield* db
-    .select({ id: schema.assets.id })
-    .from(schema.assets)
-    .where(
-      and(
-        eq(schema.assets.blockchainId, solanaBlockchain.id),
-        eq(schema.assets.symbol, solanaNativeAsset.symbol),
-        eq(schema.assets.type, solanaNativeAsset.type),
-        isNull(schema.assets.contractAddress)
-      )
-    )
-    .limit(1)
-
-  if (existingNativeSolAsset === undefined) {
-    yield* db.insert(schema.assets).values({
-      ...solanaNativeAsset,
-      blockchainId: solanaBlockchain.id,
-      createdAt: seedTimestamp,
-      updatedAt: seedTimestamp,
-    })
-  } else {
-    yield* db
-      .update(schema.assets)
-      .set({
-        name: solanaNativeAsset.name,
-        decimals: solanaNativeAsset.decimals,
-        coingeckoCoinId: solanaNativeAsset.coingeckoCoinId,
-        logoUrl: solanaNativeAsset.logoUrl,
-        isSpam: solanaNativeAsset.isSpam,
-        updatedAt: seedTimestamp,
-      })
-      .where(eq(schema.assets.id, existingNativeSolAsset.id))
-  }
-
   yield* db
     .insert(schema.assets)
     .values(
-      solanaTokenAssets.map((asset) => ({
+      economicAssets.map((asset) => ({
         ...asset,
-        blockchainId: solanaBlockchain.id,
+        logoUrl: null,
         createdAt: seedTimestamp,
         updatedAt: seedTimestamp,
       }))
     )
     .onConflictDoUpdate({
-      target: [schema.assets.blockchainId, schema.assets.contractAddress],
+      target: schema.assets.coingeckoCoinId,
       set: {
         name: sql.raw("excluded.name"),
         symbol: sql.raw("excluded.symbol"),
-        decimals: sql.raw("excluded.decimals"),
         coingeckoCoinId: sql.raw("excluded.coingecko_coin_id"),
-        logoUrl: sql.raw("excluded.logo_url"),
+        logoUrl: sql`coalesce(excluded.logo_url, ${schema.assets.logoUrl})`,
         type: sql.raw("excluded.type"),
-        isSpam: sql.raw("excluded.is_spam"),
         updatedAt: seedTimestamp,
       },
     })
+
+  const persistedBlockchains = yield* db
+    .select({ id: schema.blockchains.id, name: schema.blockchains.name })
+    .from(schema.blockchains)
+  const blockchainIdsByName = new Map(
+    persistedBlockchains.map((blockchain) => [blockchain.name, blockchain.id] as const)
+  )
+  const persistedAssets = yield* db
+    .select({ id: schema.assets.id, coingeckoCoinId: schema.assets.coingeckoCoinId })
+    .from(schema.assets)
+    .where(
+      inArray(
+        schema.assets.coingeckoCoinId,
+        economicAssets.map((asset) => asset.coingeckoCoinId)
+      )
+    )
+  const assetIdsByCoinGeckoId = new Map(
+    persistedAssets.flatMap((asset) =>
+      asset.coingeckoCoinId === null ? [] : [[asset.coingeckoCoinId, asset.id] as const]
+    )
+  )
+
+  for (const representation of assetRepresentations) {
+    const blockchainId = blockchainIdsByName.get(representation.blockchainName)
+    const assetId = assetIdsByCoinGeckoId.get(representation.assetCoinGeckoId)
+
+    if (blockchainId === undefined) {
+      return yield* Effect.dieMessage(
+        `Missing ${representation.blockchainName} blockchain after seeding blockchains`
+      )
+    }
+
+    if (assetId === undefined) {
+      return yield* Effect.dieMessage(
+        `Missing ${representation.assetCoinGeckoId} economic asset after seeding assets`
+      )
+    }
+
+    const representationFilter =
+      representation.type === "native"
+        ? and(
+            eq(schema.assetRepresentations.blockchainId, blockchainId),
+            eq(schema.assetRepresentations.type, "native")
+          )
+        : representation.contractAddress !== null
+          ? and(
+              eq(schema.assetRepresentations.blockchainId, blockchainId),
+              eq(schema.assetRepresentations.contractAddress, representation.contractAddress)
+            )
+          : and(
+              eq(schema.assetRepresentations.blockchainId, blockchainId),
+              eq(schema.assetRepresentations.mintAddress, representation.mintAddress)
+            )
+    const [existingRepresentation] = yield* db
+      .select({ id: schema.assetRepresentations.id })
+      .from(schema.assetRepresentations)
+      .where(representationFilter)
+      .limit(1)
+    const referenceValues = {
+      assetId,
+      blockchainId,
+      type: representation.type,
+      contractAddress: representation.contractAddress,
+      mintAddress: representation.mintAddress,
+      decimals: representation.decimals,
+      updatedAt: seedTimestamp,
+    } as const
+
+    if (existingRepresentation === undefined) {
+      yield* db.insert(schema.assetRepresentations).values({
+        ...referenceValues,
+        logoUrl: null,
+        isSpam: false,
+        metadata: { source: "taxmaxi_reference_data" },
+        createdAt: seedTimestamp,
+      })
+    } else {
+      yield* db
+        .update(schema.assetRepresentations)
+        .set(referenceValues)
+        .where(eq(schema.assetRepresentations.id, existingRepresentation.id))
+    }
+  }
 
   yield* db
     .insert(schema.cex)
