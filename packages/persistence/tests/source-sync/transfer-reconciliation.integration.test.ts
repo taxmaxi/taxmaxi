@@ -97,7 +97,15 @@ const seedApprovedProviderAsset = ({
     return providerAsset.id
   })
 
-const seedOwnedOnchainSource = ({ walletAddress }: { readonly walletAddress: string }) =>
+const seedOwnedOnchainSource = ({
+  walletAddress,
+  addressType = "bitcoin",
+  providerKey = "bitcoin",
+}: {
+  readonly walletAddress: string
+  readonly addressType?: "bitcoin" | "evm" | "solana"
+  readonly providerKey?: string
+}) =>
   Effect.gen(function* () {
     const db = yield* drizzle
     const now = new Date("2025-04-10T00:00:00.000Z")
@@ -105,8 +113,8 @@ const seedOwnedOnchainSource = ({ walletAddress }: { readonly walletAddress: str
     yield* db.insert(schema.addresses).values({
       id: ONCHAIN_ADDRESS_ID,
       address: walletAddress,
-      type: "bitcoin",
-      name: "Owned bitcoin wallet",
+      type: addressType,
+      name: `Owned ${addressType} wallet`,
       principalId: TEST_PRINCIPAL_ID,
       createdAt: now,
       updatedAt: now,
@@ -115,8 +123,8 @@ const seedOwnedOnchainSource = ({ walletAddress }: { readonly walletAddress: str
     yield* db.insert(schema.sources).values({
       id: ONCHAIN_SOURCE_ID,
       principalId: TEST_PRINCIPAL_ID,
-      name: "Owned bitcoin source",
-      providerKey: "bitcoin",
+      name: `Owned ${addressType} source`,
+      providerKey,
       sourceableType: "onchain",
       addressId: ONCHAIN_ADDRESS_ID,
       cexAccountId: null,
@@ -131,6 +139,7 @@ const seedProviderTransfer = ({
   timestamp,
   amount,
   toAddress,
+  networkName = "bitcoin",
   networkHash,
 }: {
   readonly providerAssetRowId: string
@@ -138,6 +147,7 @@ const seedProviderTransfer = ({
   readonly timestamp: Date
   readonly amount: string
   readonly toAddress: string
+  readonly networkName?: string
   readonly networkHash: string | null
 }) =>
   Effect.gen(function* () {
@@ -182,7 +192,7 @@ const seedProviderTransfer = ({
         toAccountRef: null,
         fromAddress: null,
         toAddress,
-        networkName: "bitcoin",
+        networkName,
         networkHash,
         amount,
         metadata: { provider: "coinbase" },
@@ -203,6 +213,9 @@ const seedOnchainReceipt = ({
   amount,
   walletAddress,
   blockchainId,
+  assetId = TEST_BTC_ASSET_ID,
+  assetRepresentationId = TEST_BTC_REPRESENTATION_ID,
+  transferType = "utxo",
 }: {
   readonly externalId: string
   readonly txHash: string
@@ -210,6 +223,9 @@ const seedOnchainReceipt = ({
   readonly amount: string
   readonly walletAddress: string
   readonly blockchainId: string
+  readonly assetId?: string
+  readonly assetRepresentationId?: string
+  readonly transferType?: "erc20" | "native" | "spl" | "utxo"
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -270,7 +286,7 @@ const seedOnchainReceipt = ({
         blockchainId,
         txHash,
         timestamp,
-        type: "utxo",
+        type: transferType,
         fromAddress: "bc1qexternalorigin0000000000000000000000000",
         toAddress: walletAddress,
         fromAccountRef: null,
@@ -279,8 +295,8 @@ const seedOnchainReceipt = ({
         fromPartyResourcePath: null,
         toPartyType: "address",
         toPartyResourcePath: null,
-        assetId: TEST_BTC_ASSET_ID,
-        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        assetId,
+        assetRepresentationId,
         amount,
         tokenId: null,
         notes: null,
@@ -295,6 +311,128 @@ const seedOnchainReceipt = ({
 
     return {
       transferId: transfer.id,
+      transactionId: transaction.id,
+    }
+  })
+
+const seedObservedOnchainReceipt = ({
+  providerAssetId,
+  externalId,
+  txHash,
+  timestamp,
+  amount,
+  walletAddress,
+  blockchainId,
+  blockchainName,
+  representationType,
+  contractAddress,
+  mintAddress,
+  decimals,
+}: {
+  readonly providerAssetId: string
+  readonly externalId: string
+  readonly txHash: string
+  readonly timestamp: Date
+  readonly amount: string
+  readonly walletAddress: string
+  readonly blockchainId: string
+  readonly blockchainName: string
+  readonly representationType: "native" | "token" | "nft"
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const now = new Date("2025-04-10T00:00:00.000Z")
+
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "test-onchain-adapter",
+        providerAssetId,
+        naturalKey: `${blockchainName}:${representationType}:${providerAssetId}`,
+        currencyCode: "UNKNOWN",
+        name: "Unknown observed asset",
+        exponent: decimals,
+        providerType: representationType,
+        rawProviderPayload: { providerAssetId, blockchainName },
+        retrievedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({ id: schema.providerAssets.id })
+
+    if (providerAsset === undefined) {
+      return yield* Effect.dieMessage("Failed to create observed provider asset fixture")
+    }
+
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: providerAsset.id,
+      mappingKind: "asset",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+      canonicalFiatCurrency: null,
+      mappingStatus: "pending_review",
+      reviewerNotes: null,
+      sourceNotes: "First observed by test onchain adapter.",
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    const [transaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: ONCHAIN_SOURCE_ID,
+        sourceRawRecordId: null,
+        externalId: `${externalId}:transaction`,
+        externalGroupId: externalId,
+        timestamp,
+        providerStatus: "confirmed",
+        providerDescription: "Observed onchain receipt fixture",
+        metadata: { provider: "test-onchain-adapter" },
+        principalId: TEST_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+
+    if (transaction === undefined) {
+      return yield* Effect.dieMessage("Failed to create observed onchain transaction fixture")
+    }
+
+    const [providerTransfer] = yield* db
+      .insert(schema.providerTransfers)
+      .values({
+        sourceId: ONCHAIN_SOURCE_ID,
+        sourceRawRecordId: null,
+        transactionId: transaction.id,
+        externalId,
+        externalGroupId: externalId,
+        providerAssetId: providerAsset.id,
+        timestamp,
+        direction: "inbound",
+        fromAccountRef: null,
+        toAccountRef: null,
+        fromAddress: "external-observed-origin",
+        toAddress: walletAddress,
+        networkName: blockchainName,
+        networkHash: txHash,
+        observedBlockchainId: blockchainId,
+        observedRepresentationType: representationType,
+        observedContractAddress: contractAddress,
+        observedMintAddress: mintAddress,
+        observedDecimals: decimals,
+        amount,
+        metadata: { provider: "test-onchain-adapter" },
+      })
+      .returning({ id: schema.providerTransfers.id })
+
+    if (providerTransfer === undefined) {
+      return yield* Effect.dieMessage("Failed to create observed onchain transfer fixture")
+    }
+
+    return {
+      providerAssetRowId: providerAsset.id,
+      providerTransferId: providerTransfer.id,
       transactionId: transaction.id,
     }
   })
@@ -381,6 +519,507 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it("reconciles a chainless Coinbase asset mapping to an exact EVM representation", async () => {
+    const walletAddress = "0x0000000000000000000000000000000000000960"
+    const timestamp = new Date("2025-04-10T11:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-coinbase-chainless-evm" })
+    )
+    await runPg(
+      seedOwnedOnchainSource({
+        walletAddress,
+        addressType: "evm",
+        providerKey: "test-evm-adapter",
+      })
+    )
+
+    const representationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [representation] = yield* db
+          .insert(schema.assetRepresentations)
+          .values({
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            type: "token",
+            contractAddress: "0x0000000000000000000000000000000000000b96",
+            decimals: 8,
+          })
+          .returning({ id: schema.assetRepresentations.id })
+
+        if (representation === undefined) {
+          return yield* Effect.dieMessage("Failed to create EVM representation fixture")
+        }
+
+        return representation.id
+      })
+    )
+
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-chainless-evm",
+        timestamp,
+        amount: "0.40000000",
+        toAddress: walletAddress,
+        networkName: "base",
+        networkHash: "0xchainless-evm-hash",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-chainless-evm",
+        txHash: "0xchainless-evm-hash",
+        timestamp: new Date("2025-04-10T11:02:00.000Z"),
+        amount: "0.40000000",
+        walletAddress,
+        blockchainId: fixture.baseBlockchainId,
+        assetRepresentationId: representationId,
+        transferType: "erc20",
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary.autoApplied).toBe(1)
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: receipt.transferId,
+        canonicalTransactionId: receipt.transactionId,
+        status: "auto_applied",
+      })
+    )
+  })
+
+  it("uses a unique owned-address amount and time-window match when no hash is available", async () => {
+    const walletAddress = "bc1qownedwalletwindowmatch00000000000000000000"
+    const timestamp = new Date("2025-04-10T12:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-window-match" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-window-match",
+        timestamp,
+        amount: "0.33000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-window-match",
+        txHash: "btc-window-match-hash",
+        timestamp: new Date("2025-04-10T18:00:00.000Z"),
+        amount: "0.33000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: receipt.transferId,
+        status: "auto_applied",
+      })
+    )
+  })
+
+  it("replays reconciliation after a destination source is synced later", async () => {
+    const walletAddress = "bc1qownedwalletlatersync000000000000000000000"
+    const timestamp = new Date("2025-04-10T13:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-later-sync" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-later-sync",
+        timestamp,
+        amount: "0.21000000",
+        toAddress: walletAddress,
+        networkHash: "btc-later-sync-hash",
+      })
+    )
+
+    const reconcile = () =>
+      runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+
+    await reconcile()
+    const [pending] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+    expect(pending).toEqual(
+      expect.objectContaining({ status: "pending", matchReason: "no_candidate_onchain_receipt" })
+    )
+
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-later-sync",
+        txHash: "btc-later-sync-hash",
+        timestamp: new Date("2025-04-10T13:05:00.000Z"),
+        amount: "0.21000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await reconcile()
+
+    const [replayed] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+    expect(replayed).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: receipt.transferId,
+        status: "auto_applied",
+      })
+    )
+  })
+
+  it("keeps a first-seen representation pending with evidence and replays after approval", async () => {
+    const walletAddress = "0x0000000000000000000000000000000000000961"
+    const contractAddress = "0x0000000000000000000000000000000000000c96"
+    const txHash = "0xunknown-representation-hash"
+    const timestamp = new Date("2025-04-10T14:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-unknown-representation" })
+    )
+    await runPg(
+      seedOwnedOnchainSource({
+        walletAddress,
+        addressType: "evm",
+        providerKey: "test-evm-adapter",
+      })
+    )
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-unknown-representation",
+        timestamp,
+        amount: "0.61000000",
+        toAddress: walletAddress,
+        networkName: "base",
+        networkHash: txHash,
+      })
+    )
+    const observed = await runPg(
+      seedObservedOnchainReceipt({
+        providerAssetId: contractAddress,
+        externalId: "observed-onchain-unknown-representation",
+        txHash,
+        timestamp: new Date("2025-04-10T14:01:00.000Z"),
+        amount: "0.61000000",
+        walletAddress,
+        blockchainId: fixture.baseBlockchainId,
+        blockchainName: "base",
+        representationType: "token",
+        contractAddress,
+        mintAddress: null,
+        decimals: 8,
+      })
+    )
+
+    const reconcile = () =>
+      runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+
+    await reconcile()
+    const pendingState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const [mapping] = yield* db
+          .select()
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, observed.providerAssetRowId))
+        return { mapping, reconciliation }
+      })
+    )
+
+    expect(pendingState.reconciliation).toEqual(
+      expect.objectContaining({
+        status: "pending",
+        matchReason: "asset_representation_review_pending",
+        canonicalTransferId: null,
+        canonicalTransactionId: observed.transactionId,
+      })
+    )
+    expect(pendingState.reconciliation?.reviewMetadata).toEqual(
+      expect.objectContaining({
+        proposedCanonicalAssetId: TEST_BTC_ASSET_ID,
+        evidenceKind: "network_hash_owned_address_amount",
+      })
+    )
+    expect(pendingState.mapping).toEqual(
+      expect.objectContaining({
+        mappingStatus: "pending_review",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        sourceNotes: expect.stringContaining("transfer_reconciliation_evidence"),
+      })
+    )
+
+    const canonicalTransfer = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [representation] = yield* db
+          .insert(schema.assetRepresentations)
+          .values({
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            type: "token",
+            contractAddress,
+            decimals: 8,
+          })
+          .returning({ id: schema.assetRepresentations.id })
+
+        if (representation === undefined) {
+          return yield* Effect.dieMessage("Failed to approve representation fixture")
+        }
+
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: representation.id,
+            mappingStatus: "approved",
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, observed.providerAssetRowId))
+
+        yield* db.insert(schema.transactionOnchainContext).values({
+          transactionId: observed.transactionId,
+          blockchainId: fixture.baseBlockchainId,
+          addressId: ONCHAIN_ADDRESS_ID,
+          chainTxId: txHash,
+          blockHeight: "1",
+          blockHash: "block-unknown-representation",
+          positionInBlock: "0",
+          fromAddress: "external-observed-origin",
+          toAddress: walletAddress,
+          gasUsed: null,
+          gasPrice: null,
+          feeAmount: null,
+          feeAssetId: null,
+          feeCostBasisAmount: null,
+          feeCostBasisCurrency: null,
+          isError: false,
+          functionName: null,
+          metadata: { provider: "test-evm-adapter" },
+        })
+
+        const [transfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "canonical-unknown-representation",
+            externalGroupId: txHash,
+            addressId: ONCHAIN_ADDRESS_ID,
+            blockchainId: fixture.baseBlockchainId,
+            txHash,
+            timestamp: new Date("2025-04-10T14:01:00.000Z"),
+            type: "erc20",
+            fromAddress: "external-observed-origin",
+            toAddress: walletAddress,
+            fromAccountRef: null,
+            toAccountRef: null,
+            fromPartyType: "address",
+            fromPartyResourcePath: null,
+            toPartyType: "address",
+            toPartyResourcePath: null,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: representation.id,
+            amount: "0.61000000",
+            tokenId: null,
+            notes: null,
+            metadata: { provider: "test-evm-adapter" },
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transfers.id })
+
+        if (transfer === undefined) {
+          return yield* Effect.dieMessage("Failed to replay canonical transfer fixture")
+        }
+
+        return transfer.id
+      })
+    )
+
+    await reconcile()
+    const [replayed] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+    expect(replayed).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: canonicalTransfer,
+        status: "auto_applied",
+      })
+    )
+  })
+
+  it("does not create or approve a representation mapping from symbol and name equality", async () => {
+    const walletAddress = "0x0000000000000000000000000000000000000962"
+    const timestamp = new Date("2025-04-10T15:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-symbol-only" })
+    )
+    await runPg(
+      seedOwnedOnchainSource({
+        walletAddress,
+        addressType: "evm",
+        providerKey: "test-evm-adapter",
+      })
+    )
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-symbol-only",
+        timestamp,
+        amount: "0.71000000",
+        toAddress: walletAddress,
+        networkName: "base",
+        networkHash: "0xsource-physical-hash",
+      })
+    )
+    const observed = await runPg(
+      seedObservedOnchainReceipt({
+        providerAssetId: "0x0000000000000000000000000000000000000d96",
+        externalId: "observed-symbol-only",
+        txHash: "0xdifferent-physical-hash",
+        timestamp: new Date("2025-04-10T15:01:00.000Z"),
+        amount: "0.71000000",
+        walletAddress,
+        blockchainId: fixture.baseBlockchainId,
+        blockchainName: "base",
+        representationType: "token",
+        contractAddress: "0x0000000000000000000000000000000000000d96",
+        mintAddress: null,
+        decimals: 8,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ currencyCode: "BTC", name: "Sync Engine Bitcoin Fixture" })
+          .where(eq(schema.providerAssets.id, observed.providerAssetRowId))
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [mapping] = yield* db
+          .select()
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, observed.providerAssetRowId))
+        const [reconciliation] = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        return { mapping, reconciliation }
+      })
+    )
+
+    expect(state.mapping).toEqual(
+      expect.objectContaining({
+        mappingStatus: "pending_review",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        sourceNotes: "First observed by test onchain adapter.",
+      })
+    )
+    expect(state.reconciliation).toEqual(
+      expect.objectContaining({
+        status: "pending",
+        matchReason: "no_candidate_onchain_receipt",
+      })
+    )
+  })
+
   it("marks competing owned receipts as needs_review instead of forcing a match", async () => {
     const walletAddress = "bc1qownedwalletambiguous000000000000000000"
     const timestamp = new Date("2025-04-11T10:00:00.000Z")
@@ -456,6 +1095,17 @@ describe("TransferReconciliationServiceLive", () => {
         status: "needs_review",
         matchReason: "multiple_candidate_onchain_receipts",
         deterministic: false,
+      })
+    )
+    expect(reconciliation?.reviewMetadata).toEqual(
+      expect.objectContaining({
+        candidateCount: 2,
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            amount: expect.stringContaining("0.25000000"),
+          }),
+        ]),
       })
     )
   })
