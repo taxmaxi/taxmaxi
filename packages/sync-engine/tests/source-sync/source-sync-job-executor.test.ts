@@ -91,6 +91,7 @@ const makeExecutorLayer = ({
   replayRawRecords = [],
   replayCandidates = [],
   failNormalizeOnce = false,
+  additionalPrincipalSources = [],
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -102,6 +103,7 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
+  readonly additionalPrincipalSources?: ReadonlyArray<SourceSyncSource>
   readonly events: Array<string>
 }) => {
   const syncSource = {
@@ -114,7 +116,8 @@ const makeExecutorLayer = ({
   }
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
-    listPrincipalSourceSyncContexts: () => Effect.succeed([syncSource]),
+    listPrincipalSourceSyncContexts: () =>
+      Effect.succeed([syncSource, ...additionalPrincipalSources]),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -377,15 +380,21 @@ const makeExecutorLayer = ({
   })
 
   const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
-    reconcileTransferCandidates: () =>
-      Effect.succeed({
-        evaluatedProviderTransfers: 0,
-        pending: 0,
-        needsReview: 0,
-        autoApplied: 0,
+    reconcileTransferCandidates: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`reconcile:${sourceId}`)
+        return {
+          evaluatedProviderTransfers: 0,
+          pending: 0,
+          needsReview: 0,
+          autoApplied: 0,
+        }
       }),
-    applyDeterministicInternalTransferCanonicalization: () =>
-      Effect.succeed({ canonicalizedPairs: 0 }),
+    applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`canonicalize:${sourceId}`)
+        return { canonicalizedPairs: 0 }
+      }),
   })
 
   return SourceSyncJobExecutorLive.pipe(
@@ -565,13 +574,22 @@ describe("SourceSyncJobExecutor", () => {
 
   it("runs replay mode with cached raw rows and marks the job completed", async () => {
     const events: Array<string> = []
+    const originSource: SourceSyncSource = {
+      ...source,
+      id: "origin-source",
+    }
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
         Effect.provide(
-          makeExecutorLayer({ mode: "replay", replayRawRecords: [replayRawRecord], events })
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [replayRawRecord],
+            additionalPrincipalSources: [originSource],
+            events,
+          })
         )
       )
     )
@@ -581,6 +599,8 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("heartbeat:source-sync-inline-executor")
     expect(events).toContain("mark-raw-normalized")
     expect(events).toContain("clear-replay-failure-metadata")
+    expect(events).toContain("reconcile:origin-source")
+    expect(events).toContain("canonicalize:origin-source")
     expect(events).toContain("complete:1:1")
   })
 
