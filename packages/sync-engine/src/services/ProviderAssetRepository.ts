@@ -96,6 +96,12 @@ export interface ProviderAssetReviewRecord {
   readonly mapping: ProviderAssetReviewMapping | null
 }
 
+/** Principal-owned source that has transfer rows using one provider asset. */
+export interface ProviderAssetSourceRecord {
+  readonly principalId: string
+  readonly sourceId: string
+}
+
 /**
  * ProviderAssetRepositoryShape - Provider asset persistence and lookup operations.
  */
@@ -169,6 +175,11 @@ export interface ProviderAssetRepositoryShape {
     readonly cursorProviderAssetRowId: string | null
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<ProviderAssetReviewRecord>, SyncEngineStorageError>
+
+  /** List sources whose cached transfers use one provider asset. */
+  readonly listProviderAssetSources: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<ReadonlyArray<ProviderAssetSourceRecord>, SyncEngineStorageError>
 
   /**
    * Load the current mapping for one provider asset.

@@ -7,6 +7,7 @@
 import {
   AssetRepository,
   ProviderAssetRepository,
+  SourceSyncService,
   type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
   type EconomicAssetDraft,
@@ -410,6 +411,7 @@ const make = Effect.gen(function* () {
   const coinGeckoClient = yield* CoinGeckoClient
   const providerAssetRepository = yield* ProviderAssetRepository
   const assetRepository = yield* AssetRepository
+  const sourceSyncService = yield* SourceSyncService
 
   const mapCoinGeckoError = (error: { readonly message: string }) =>
     new AssetCanonicalizationProviderError({ message: error.message })
@@ -558,6 +560,17 @@ const make = Effect.gen(function* () {
           return yield* Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
         }
 
+        const affectedSources = yield* providerAssetRepository
+          .listProviderAssetSources({ providerAssetRowId })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to load sources affected by provider asset approval.",
+                })
+            )
+          )
+
         const resolved = yield* resolveCoinGeckoDrafts({
           providerAsset: providerAssetReview.value.providerAsset,
         })
@@ -621,6 +634,23 @@ const make = Effect.gen(function* () {
             })
           )
         }
+
+        yield* Effect.forEach(affectedSources, ({ principalId, sourceId }) =>
+          sourceSyncService.replaySourceSyncJob({ principalId, sourceId }).pipe(
+            Effect.tap(({ jobId, status }) =>
+              Effect.logInfo(
+                { principalId, sourceId, providerAssetRowId, jobId, status },
+                "Queued source replay after provider asset approval"
+              )
+            ),
+            Effect.catchAll((error) =>
+              Effect.logError(
+                { principalId, sourceId, providerAssetRowId, error },
+                "Failed to queue source replay after provider asset approval"
+              )
+            )
+          )
+        )
 
         return {
           providerAsset: approvedProviderAsset.value,

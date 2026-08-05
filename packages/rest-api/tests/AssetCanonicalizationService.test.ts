@@ -1,13 +1,24 @@
 import { describe, expect, it } from "vitest"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import {
+  AssetCanonicalizationServiceLive,
   deriveChainType,
   deriveNativeAssetDecimals,
   representationIdForProviderObservation,
   selectNativePlatform,
   validateNativeProviderIdentity,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
-import type { ProviderAssetRecord } from "@my/sync-engine/services"
+import {
+  AssetRepository,
+  ProviderAssetRepository,
+  SourceSyncService,
+  type ProviderAssetRecord,
+  type ProviderAssetRepositoryShape,
+} from "@my/sync-engine/services"
+import { AssetCanonicalizationService } from "../src/services/AssetCanonicalizationService.ts"
+import { CoinGeckoClient } from "../src/services/coingecko/CoinGeckoClient.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 describe("AssetCanonicalizationService", () => {
@@ -67,6 +78,142 @@ describe("AssetCanonicalizationService", () => {
         representationId,
       })
     ).toBe(representationId)
+  })
+
+  it("queues affected source replays after approving a provider asset", async () => {
+    const providerAssetRowId = "00000000-0000-4000-8000-000000000003"
+    const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
+    const representationId = "00000000-0000-4000-8000-000000000005"
+    const blockchainId = "00000000-0000-4000-8000-000000000006"
+    const principalId = "00000000-0000-4000-8000-000000000007"
+    const sourceId = "00000000-0000-4000-8000-000000000008"
+    const mintAddress = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    const events: Array<string> = []
+    let mappingApproved = false
+    const providerAsset = makeProviderAsset({
+      id: providerAssetRowId,
+      provider: "helius-solana",
+      providerAssetId: mintAddress,
+      naturalKey: `solana:mint:${mintAddress}`,
+      currencyCode: "USDC",
+      name: "USD Coin",
+      exponent: null,
+      providerType: "spl-token",
+    })
+    const providerAssetRepository: ProviderAssetRepositoryShape = {
+      upsertProviderAssets: () => Effect.dieMessage("upsertProviderAssets should not be called"),
+      upsertProviderAssetMappings: () =>
+        Effect.sync(() => {
+          mappingApproved = true
+          events.push("approve")
+          return 1
+        }),
+      seedProviderAssetMappingsIfMissing: () =>
+        Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
+      findProviderAssetByProviderAssetId: () =>
+        Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
+      findProviderAssetByNaturalKey: () =>
+        Effect.dieMessage("findProviderAssetByNaturalKey should not be called"),
+      findProviderAssetByCurrencyCode: () =>
+        Effect.dieMessage("findProviderAssetByCurrencyCode should not be called"),
+      findProviderAssetReviewById: () =>
+        Effect.succeed(
+          Option.some({
+            providerAsset,
+            mapping: {
+              providerAssetRowId,
+              mappingKind: "asset",
+              canonicalAssetId: mappingApproved ? canonicalAssetId : null,
+              assetRepresentationId: mappingApproved ? representationId : null,
+              canonicalFiatCurrency: null,
+              mappingStatus: mappingApproved ? "approved" : "pending_review",
+              reviewerNotes: null,
+              sourceNotes: null,
+            },
+          })
+        ),
+      listProviderAssetReviews: () =>
+        Effect.dieMessage("listProviderAssetReviews should not be called"),
+      listProviderAssetSources: () => Effect.succeed([{ principalId, sourceId }]),
+      findProviderAssetMapping: () =>
+        Effect.dieMessage("findProviderAssetMapping should not be called"),
+    }
+    const layer = AssetCanonicalizationServiceLive.pipe(
+      Layer.provide(Layer.succeed(ProviderAssetRepository, providerAssetRepository)),
+      Layer.provide(
+        Layer.succeed(AssetRepository, {
+          findAssetById: () => Effect.dieMessage("findAssetById should not be called"),
+          findAssetByCoinGeckoId: () =>
+            Effect.dieMessage("findAssetByCoinGeckoId should not be called"),
+          findRepresentationById: () =>
+            Effect.dieMessage("findRepresentationById should not be called"),
+          findNativeRepresentationForBlockchain: () =>
+            Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
+          findRepresentationByBlockchainAndAddress: () =>
+            Effect.dieMessage("findRepresentationByBlockchainAndAddress should not be called"),
+          listBlockchains: () => Effect.dieMessage("listBlockchains should not be called"),
+          upsertEconomicAssetRepresentation: () =>
+            Effect.succeed({
+              id: canonicalAssetId,
+              name: "USD Coin",
+              symbol: "USDC",
+              type: "fungible",
+              representationId,
+              blockchainId,
+              blockchainName: "solana",
+              decimals: 6,
+              contractAddress: null,
+              mintAddress,
+              representationType: "token",
+            }),
+        })
+      ),
+      Layer.provide(
+        Layer.succeed(CoinGeckoClient, {
+          searchCoins: () => Effect.succeed([{ id: "usd-coin", name: "USD Coin", symbol: "USDC" }]),
+          getCoin: () =>
+            Effect.succeed({
+              id: "usd-coin",
+              name: "USD Coin",
+              symbol: "usdc",
+              asset_platform_id: "solana",
+              platforms: { solana: mintAddress },
+              detail_platforms: {
+                solana: { contract_address: mintAddress, decimal_place: 6 },
+              },
+            }),
+          listMarkets: () => Effect.dieMessage("listMarkets should not be called"),
+        })
+      ),
+      Layer.provide(
+        Layer.succeed(SourceSyncService, {
+          startSourceSyncJob: () => Effect.dieMessage("startSourceSyncJob should not be called"),
+          replaySourceSyncJob: ({ principalId: replayPrincipalId, sourceId: replaySourceId }) =>
+            Effect.sync(() => {
+              events.push(`replay:${replayPrincipalId}:${replaySourceId}`)
+              return {
+                sourceId: replaySourceId,
+                jobId: "00000000-0000-4000-8000-000000000009",
+                status: "queued" as const,
+                message: null,
+              }
+            }),
+          getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+        })
+      )
+    )
+
+    const result = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.canonicalizeProviderAssetFromCoinGecko({
+          providerAssetRowId,
+          reviewerNotes: "Reviewed",
+        })
+      ).pipe(Effect.provide(layer))
+    )
+
+    expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
+    expect(events).toEqual(["approve", `replay:${principalId}:${sourceId}`])
   })
 
   it("rejects a native asset resolution for an observed Solana token", () => {

@@ -440,6 +440,20 @@ const make = Effect.gen(function* () {
       return Option.fromNullable(row)
     })
 
+  const listProviderAssetSources: ProviderAssetRepositoryShape["listProviderAssetSources"] = ({
+    providerAssetRowId,
+  }) =>
+    db
+      .selectDistinct({
+        principalId: schema.sources.principalId,
+        sourceId: schema.sources.id,
+      })
+      .from(schema.providerTransfers)
+      .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+      .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+      .orderBy(asc(schema.sources.id))
+      .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetSources"))
+
   return ProviderAssetRepository.of({
     upsertProviderAssets,
     upsertProviderAssetMappings,
@@ -449,6 +463,7 @@ const make = Effect.gen(function* () {
     findProviderAssetByCurrencyCode,
     findProviderAssetReviewById,
     listProviderAssetReviews,
+    listProviderAssetSources,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })
