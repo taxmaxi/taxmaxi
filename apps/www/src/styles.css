@@ -391,6 +391,14 @@ html:has([data-page="app"]) {
   transition: transform 0.22s cubic-bezier(0.165, 0.84, 0.44, 1) !important;
 }
 
+[data-transaction-mobile-sheet][vaul-drawer] {
+  background-color: var(--popover) !important;
+  background-image: none !important;
+  border-color: var(--border) !important;
+  color: var(--popover-foreground) !important;
+  transition: transform 0.22s cubic-bezier(0.165, 0.84, 0.44, 1) !important;
+}
+
 [data-family-mobile-nav-overlay][vaul-overlay] {
   transition: opacity 0.2s cubic-bezier(0.165, 0.84, 0.44, 1) !important;
 }
