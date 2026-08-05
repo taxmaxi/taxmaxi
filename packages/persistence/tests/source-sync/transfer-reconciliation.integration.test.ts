@@ -1211,6 +1211,166 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it("keeps distinct observed representations visible beside canonical transfers", async () => {
+    const walletAddress = "0x0000000000000000000000000000000000000965"
+    const canonicalContractAddress = "0x0000000000000000000000000000000000000a96"
+    const observedContractAddress = "0x0000000000000000000000000000000000000b96"
+    const txHash = "0xdistinct-observed-representations"
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-distinct-observed" })
+    )
+    await runPg(
+      seedOwnedOnchainSource({
+        walletAddress,
+        addressType: "evm",
+        providerKey: "test-evm-adapter",
+      })
+    )
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-distinct-observed",
+        timestamp: new Date("2025-04-11T11:00:00.000Z"),
+        amount: "0.18000000",
+        toAddress: walletAddress,
+        networkName: "base",
+        networkHash: txHash,
+      })
+    )
+    const observed = await runPg(
+      seedObservedOnchainReceipt({
+        providerAssetId: observedContractAddress,
+        externalId: "observed-distinct-representation",
+        txHash,
+        timestamp: new Date("2025-04-11T11:02:00.000Z"),
+        amount: "0.18000000",
+        walletAddress,
+        blockchainId: fixture.baseBlockchainId,
+        blockchainName: "base",
+        representationType: "token",
+        contractAddress: observedContractAddress,
+        mintAddress: null,
+        decimals: 8,
+      })
+    )
+
+    const canonicalTransferId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [representation] = yield* db
+          .insert(schema.assetRepresentations)
+          .values({
+            assetId: TEST_BTC_ASSET_ID,
+            blockchainId: fixture.baseBlockchainId,
+            type: "token",
+            contractAddress: canonicalContractAddress,
+            decimals: 8,
+          })
+          .returning({ id: schema.assetRepresentations.id })
+
+        if (representation === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical representation fixture")
+        }
+
+        yield* db.insert(schema.transactionOnchainContext).values({
+          transactionId: observed.transactionId,
+          blockchainId: fixture.baseBlockchainId,
+          addressId: ONCHAIN_ADDRESS_ID,
+          chainTxId: txHash,
+          blockHeight: "1",
+          blockHash: "block-distinct-observed-representations",
+          positionInBlock: "0",
+          fromAddress: "external-observed-origin",
+          toAddress: walletAddress,
+          gasUsed: null,
+          gasPrice: null,
+          feeAmount: null,
+          feeAssetId: null,
+          feeCostBasisAmount: null,
+          feeCostBasisCurrency: null,
+          isError: false,
+          functionName: null,
+          metadata: { provider: "test-evm-adapter" },
+        })
+
+        const [transfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "canonical-distinct-representation",
+            externalGroupId: txHash,
+            addressId: ONCHAIN_ADDRESS_ID,
+            blockchainId: fixture.baseBlockchainId,
+            txHash,
+            timestamp: new Date("2025-04-11T11:02:00.000Z"),
+            type: "erc20",
+            fromAddress: "external-observed-origin",
+            toAddress: walletAddress,
+            fromAccountRef: null,
+            toAccountRef: null,
+            fromPartyType: "address",
+            fromPartyResourcePath: null,
+            toPartyType: "address",
+            toPartyResourcePath: null,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: representation.id,
+            amount: "0.18000000",
+            tokenId: null,
+            notes: null,
+            metadata: { provider: "test-evm-adapter" },
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transfers.id })
+
+        if (transfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical transfer fixture")
+        }
+
+        return transfer.id
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary.needsReview).toBe(1)
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        status: "needs_review",
+        matchReason: "multiple_candidate_onchain_receipts",
+      })
+    )
+    expect(reconciliation?.reviewMetadata).toEqual(
+      expect.objectContaining({
+        candidateCount: 2,
+        candidateTransferIds: expect.arrayContaining([canonicalTransferId, null]),
+        candidates: expect.arrayContaining([
+          expect.objectContaining({
+            observedProviderTransferId: observed.providerTransferId,
+            contractAddress: observedContractAddress,
+          }),
+        ]),
+      })
+    )
+  })
+
   it("keeps reconciliation reruns idempotent for the same provider transfer", async () => {
     const walletAddress = "bc1qownedwalletrerun00000000000000000000000"
     const timestamp = new Date("2025-04-12T10:00:00.000Z")

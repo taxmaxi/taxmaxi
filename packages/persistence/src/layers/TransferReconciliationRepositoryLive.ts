@@ -256,13 +256,19 @@ const make = Effect.gen(function* () {
             sql`not exists (
               select 1
               from ${schema.transfers}
+              inner join ${schema.assetRepresentations}
+                on ${schema.assetRepresentations.id} = ${schema.transfers.assetRepresentationId}
               where ${schema.transfers.sourceId} = ${onchainProviderTransferTable.sourceId}
                 and ${schema.transfers.sourceRawRecordId} is not distinct from ${onchainProviderTransferTable.sourceRawRecordId}
                 and ${schema.transfers.txHash} is not distinct from ${onchainProviderTransferTable.networkHash}
                 and ${schema.transfers.fromAddress} is not distinct from ${onchainProviderTransferTable.fromAddress}
                 and ${schema.transfers.toAddress} is not distinct from ${onchainProviderTransferTable.toAddress}
                 and ${schema.transfers.amount} = ${onchainProviderTransferTable.amount}
-                and ${schema.transfers.assetRepresentationId} is not null
+                and ${schema.assetRepresentations.blockchainId} = ${onchainProviderTransferTable.observedBlockchainId}
+                and ${schema.assetRepresentations.type} = ${onchainProviderTransferTable.observedRepresentationType}
+                and lower(${schema.assetRepresentations.contractAddress}) is not distinct from lower(${onchainProviderTransferTable.observedContractAddress})
+                and lower(${schema.assetRepresentations.mintAddress}) is not distinct from lower(${onchainProviderTransferTable.observedMintAddress})
+                and ${schema.assetRepresentations.decimals} is not distinct from ${onchainProviderTransferTable.observedDecimals}
             )`
           )
         )
