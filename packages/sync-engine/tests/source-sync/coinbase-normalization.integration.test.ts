@@ -540,6 +540,21 @@ const seedMatchedOnchainReceipt = ({
       return yield* Effect.dieMessage("Failed to load BTC asset fixture for onchain match")
     }
 
+    const [btcRepresentation] = yield* db
+      .insert(schema.assetRepresentations)
+      .values({
+        assetId: btcAsset.id,
+        blockchainId: baseBlockchain.id,
+        type: "token",
+        contractAddress: "0x0000000000000000000000000000000000000b7c",
+        decimals: 8,
+      })
+      .returning({ id: schema.assetRepresentations.id })
+
+    if (btcRepresentation === undefined) {
+      return yield* Effect.dieMessage("Failed to create BTC representation fixture")
+    }
+
     yield* db.insert(schema.addresses).values({
       id: ownedOnchainAddressId,
       address: walletAddress,
@@ -615,7 +630,7 @@ const seedMatchedOnchainReceipt = ({
       blockchainId: baseBlockchain.id,
       txHash,
       timestamp: new Date("2025-04-01T10:05:00.000Z"),
-      type: "native",
+      type: "erc20",
       fromAddress: "0xexternal",
       toAddress: walletAddress,
       fromAccountRef: null,
@@ -625,6 +640,7 @@ const seedMatchedOnchainReceipt = ({
       toPartyType: "address",
       toPartyResourcePath: null,
       assetId: btcAsset.id,
+      assetRepresentationId: btcRepresentation.id,
       amount,
       tokenId: null,
       notes: null,
@@ -664,6 +680,21 @@ const seedMatchedOnchainSend = ({
 
     if (btcAsset === undefined) {
       return yield* Effect.dieMessage("Failed to load BTC asset fixture for onchain send")
+    }
+
+    const [btcRepresentation] = yield* db
+      .insert(schema.assetRepresentations)
+      .values({
+        assetId: btcAsset.id,
+        blockchainId: baseBlockchain.id,
+        type: "token",
+        contractAddress: "0x0000000000000000000000000000000000000b7c",
+        decimals: 8,
+      })
+      .returning({ id: schema.assetRepresentations.id })
+
+    if (btcRepresentation === undefined) {
+      return yield* Effect.dieMessage("Failed to create BTC representation fixture")
     }
 
     yield* db.insert(schema.addresses).values({
@@ -741,7 +772,7 @@ const seedMatchedOnchainSend = ({
       blockchainId: baseBlockchain.id,
       txHash,
       timestamp: new Date("2025-04-01T10:05:00.000Z"),
-      type: "native",
+      type: "erc20",
       fromAddress: walletAddress,
       toAddress: "coinbase:destination",
       fromAccountRef: null,
@@ -751,6 +782,7 @@ const seedMatchedOnchainSend = ({
       toPartyType: "exchange",
       toPartyResourcePath: null,
       assetId: btcAsset.id,
+      assetRepresentationId: btcRepresentation.id,
       amount,
       tokenId: null,
       notes: null,
