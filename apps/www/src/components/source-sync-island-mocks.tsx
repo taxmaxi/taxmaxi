@@ -3,7 +3,10 @@ import { cn } from "#/lib/utils"
 
 export type SourceSyncMockScenario = "live" | SourceSyncStatus | "multiple"
 
-export const SOURCE_SYNC_MOCKS_ENABLED = import.meta.env.DEV && import.meta.env.MODE !== "test"
+export const SOURCE_SYNC_MOCKS_ENABLED =
+  import.meta.env.VITE_ENABLED_MOCKS?.includes("source-sync-island") &&
+  import.meta.env.DEV &&
+  import.meta.env.MODE !== "test"
 
 export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
   Exclude<SourceSyncMockScenario, "live">,
