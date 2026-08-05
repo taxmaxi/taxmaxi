@@ -938,6 +938,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         amountRaw: "12500000",
       },
     })
+    expect(splProviderTransfer).toMatchObject({
+      observedBlockchainId: "solana-blockchain-id",
+      observedRepresentationType: "token",
+      observedContractAddress: null,
+      observedMintAddress: USDC_MINT,
+      observedDecimals: 6,
+    })
     expect(new Set(result.providerTransfers.map((transfer) => transfer.externalId)).size).toBe(
       result.providerTransfers.length
     )

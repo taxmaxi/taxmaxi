@@ -156,6 +156,11 @@ export interface SourceProviderTransferDraft {
   readonly toAddress: string | null
   readonly networkName: string | null
   readonly networkHash: string | null
+  readonly observedBlockchainId?: string | null
+  readonly observedRepresentationType?: "native" | "token" | "nft" | null
+  readonly observedContractAddress?: string | null
+  readonly observedMintAddress?: string | null
+  readonly observedDecimals?: number | null
   readonly amount: string
   readonly metadata: unknown
 }
@@ -263,6 +268,11 @@ export interface PersistedSourceProviderTransfer {
   readonly toAddress: string | null
   readonly networkName: string | null
   readonly networkHash: string | null
+  readonly observedBlockchainId: string | null
+  readonly observedRepresentationType: "native" | "token" | "nft" | null
+  readonly observedContractAddress: string | null
+  readonly observedMintAddress: string | null
+  readonly observedDecimals: number | null
   readonly amount: string
   readonly metadata: unknown
 }

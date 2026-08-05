@@ -780,12 +780,14 @@ const buildTransferDraft = ({
 const buildProviderTransferDraft = ({
   sourceId,
   sourceRawRecordId,
+  blockchainId,
   signature,
   timestamp,
   movement,
 }: {
   readonly sourceId: string
   readonly sourceRawRecordId: string
+  readonly blockchainId: string
   readonly signature: string
   readonly timestamp: Date
   readonly movement: SolanaBalanceMovement
@@ -803,6 +805,11 @@ const buildProviderTransferDraft = ({
   toAddress: movement.toAddress,
   networkName: SOLANA_BLOCKCHAIN_NAME,
   networkHash: signature,
+  observedBlockchainId: blockchainId,
+  observedRepresentationType: movement.asset.assetKind,
+  observedContractAddress: null,
+  observedMintAddress: movement.asset.mintAddress,
+  observedDecimals: movement.asset.decimals,
   amount: movement.amount,
   metadata: {
     provider: HELIUS_SOLANA_PROVIDER_KEY,
@@ -1914,6 +1921,7 @@ const make = ({
             buildProviderTransferDraft({
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,
+              blockchainId,
               signature,
               timestamp,
               movement,
