@@ -341,6 +341,28 @@ const make = Effect.gen(function* () {
           return "needs_review"
         }
 
+        if (
+          providerTransfer.assetRepresentationId !== null &&
+          matchedCandidate.assetRepresentationId !== providerTransfer.assetRepresentationId
+        ) {
+          yield* transferReconciliationRepository.upsertTransferReconciliation({
+            principalId: providerTransfer.principalId,
+            providerTransferId: providerTransfer.providerTransferId,
+            canonicalTransferId: null,
+            canonicalTransactionId: matchedCandidate.transactionId,
+            status: "needs_review",
+            matchReason: "provider_asset_representation_conflict",
+            confidence: "1.0000",
+            deterministic: false,
+            reviewMetadata: {
+              providerAssetRepresentationId: providerTransfer.assetRepresentationId,
+              ...candidateMetadata,
+            },
+          })
+
+          return "needs_review"
+        }
+
         if (matchedCandidate.transferId === null) {
           yield* transferReconciliationRepository.upsertTransferReconciliation({
             principalId: providerTransfer.principalId,
