@@ -874,7 +874,7 @@ describe("TransferReconciliationServiceLive", () => {
         representationType: "token",
         contractAddress,
         mintAddress: null,
-        decimals: 8,
+        decimals: null,
       })
     )
 
