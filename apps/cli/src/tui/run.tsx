@@ -10,6 +10,7 @@ import { Deferred, Effect } from "effect"
 import { mapUnknownToCliCommandError, type CliCommandError } from "../errors.ts"
 import { App } from "./App.tsx"
 import { disposeController } from "./controller.ts"
+import { RouteProvider } from "./route.tsx"
 import { ThemeProvider } from "./theme.ts"
 import { DialogProvider } from "./ui/Dialog.tsx"
 
@@ -65,7 +66,9 @@ export const runTui: Effect.Effect<void, CliCommandError> = Effect.scoped(
           () => (
             <ThemeProvider>
               <DialogProvider>
-                <App requestExit={requestExit} />
+                <RouteProvider>
+                  <App requestExit={requestExit} />
+                </RouteProvider>
               </DialogProvider>
             </ThemeProvider>
           ),
