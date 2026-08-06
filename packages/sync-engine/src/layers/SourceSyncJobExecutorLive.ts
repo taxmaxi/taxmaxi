@@ -451,12 +451,14 @@ const make = Effect.gen(function* () {
     principalId,
     triggerSourceId,
     jobId,
+    workerId,
     provider,
     spanPrefix,
   }: {
     readonly principalId: string
     readonly triggerSourceId: string
     readonly jobId: string
+    readonly workerId: string
     readonly provider: string
     readonly spanPrefix: "source-sync" | "source-replay"
   }): Effect.Effect<PrincipalReconciliationSummary, SyncEngineStorageError> =>
@@ -510,6 +512,8 @@ const make = Effect.gen(function* () {
                   kind: "client",
                 })
               )
+
+            yield* heartbeatSourceSyncJob({ jobId, workerId })
 
             return {
               evaluatedProviderTransfers:
@@ -746,6 +750,7 @@ const make = Effect.gen(function* () {
         principalId: source.principalId,
         triggerSourceId: source.id,
         jobId,
+        workerId,
         provider,
         spanPrefix: "source-sync",
       })
@@ -889,6 +894,7 @@ const make = Effect.gen(function* () {
         principalId: source.principalId,
         triggerSourceId: source.id,
         jobId,
+        workerId,
         provider,
         spanPrefix: "source-replay",
       })

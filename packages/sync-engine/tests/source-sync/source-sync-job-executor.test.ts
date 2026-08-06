@@ -601,6 +601,8 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("clear-replay-failure-metadata")
     expect(events).toContain("reconcile:origin-source")
     expect(events).toContain("canonicalize:origin-source")
+    const originCanonicalizationIndex = events.indexOf("canonicalize:origin-source")
+    expect(events[originCanonicalizationIndex + 1]).toBe("heartbeat:source-sync-inline-executor")
     expect(events).toContain("complete:1:1")
   })
 
