@@ -563,17 +563,6 @@ const make = Effect.gen(function* () {
           return yield* Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
         }
 
-        const affectedSources = yield* providerAssetRepository
-          .listProviderAssetSources({ providerAssetRowId })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to load sources affected by provider asset approval.",
-                })
-            )
-          )
-
         const resolved = yield* resolveCoinGeckoDrafts({
           providerAsset: providerAssetReview.value.providerAsset,
         })
@@ -615,6 +604,17 @@ const make = Effect.gen(function* () {
               () =>
                 new AssetCanonicalizationInternalError({
                   message: "Failed to approve provider asset mapping.",
+                })
+            )
+          )
+
+        const affectedSources = yield* providerAssetRepository
+          .listProviderAssetSources({ providerAssetRowId })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to load sources affected by provider asset approval.",
                 })
             )
           )

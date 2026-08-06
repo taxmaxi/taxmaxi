@@ -136,7 +136,11 @@ describe("AssetCanonicalizationService", () => {
         ),
       listProviderAssetReviews: () =>
         Effect.dieMessage("listProviderAssetReviews should not be called"),
-      listProviderAssetSources: () => Effect.succeed([{ principalId, sourceId }]),
+      listProviderAssetSources: () =>
+        Effect.sync(() => {
+          events.push("list-sources")
+          return [{ principalId, sourceId }]
+        }),
       findProviderAssetMapping: () =>
         Effect.dieMessage("findProviderAssetMapping should not be called"),
     }
@@ -233,15 +237,17 @@ describe("AssetCanonicalizationService", () => {
       expect(firstResult.left._tag).toBe("AssetCanonicalizationInternalError")
     }
     expect(mappingApproved).toBe(true)
-    expect(events).toEqual(["approve", `replay:${principalId}:${sourceId}`])
+    expect(events).toEqual(["approve", "list-sources", `replay:${principalId}:${sourceId}`])
 
     const result = await Effect.runPromise(canonicalize().pipe(Effect.provide(layer)))
 
     expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
     expect(events).toEqual([
       "approve",
+      "list-sources",
       `replay:${principalId}:${sourceId}`,
       "approve",
+      "list-sources",
       `replay:${principalId}:${sourceId}`,
     ])
   })
