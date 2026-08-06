@@ -1463,6 +1463,22 @@ describe("TransferReconciliationServiceLive", () => {
     ).toEqual({ canonicalizedPairs: 1 })
 
     await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.transactionReviews)
+          .set({
+            reviewStatus: "needs_review",
+            categorizationReason:
+              "provider_asset_mapping: Keep this unresolved provider review.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+            matchedLayer: "provider_asset_mapping,transfer_reconciliation",
+            needsReview: true,
+          })
+          .where(eq(schema.transactionReviews.transactionId, firstReceipt.transactionId))
+      })
+    )
+
+    await runPg(
       seedOnchainReceipt({
         externalId: "onchain-receipt-late-ambiguity-2",
         txHash: "btc-late-ambiguity-hash-2",
@@ -1504,7 +1520,14 @@ describe("TransferReconciliationServiceLive", () => {
             ])
           )
         const reviews = yield* db
-          .select({ id: schema.transactionReviews.id })
+          .select({
+            transactionId: schema.transactionReviews.transactionId,
+            reviewStatus: schema.transactionReviews.reviewStatus,
+            currentTypeKey: schema.transactionReviews.currentTypeKey,
+            categorizationReason: schema.transactionReviews.categorizationReason,
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+          })
           .from(schema.transactionReviews)
           .where(
             inArray(schema.transactionReviews.transactionId, [
@@ -1531,7 +1554,16 @@ describe("TransferReconciliationServiceLive", () => {
     )
     expect(state.transactions.every(({ transactionType }) => transactionType === null)).toBe(true)
     expect(state.internalLegs).toHaveLength(0)
-    expect(state.reviews).toHaveLength(0)
+    expect(state.reviews).toEqual([
+      {
+        transactionId: firstReceipt.transactionId,
+        reviewStatus: "needs_review",
+        currentTypeKey: null,
+        categorizationReason: "provider_asset_mapping: Keep this unresolved provider review.",
+        matchedLayer: "provider_asset_mapping",
+        needsReview: true,
+      },
+    ])
     expect(state.openingLot?.remainingAmount).toContain("1.00000000")
   })
 

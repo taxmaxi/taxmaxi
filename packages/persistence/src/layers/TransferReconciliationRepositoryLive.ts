@@ -578,11 +578,12 @@ const make = Effect.gen(function* () {
                     .split(",")
                     .map((layer) => layer.trim())
                     .filter((layer) => layer !== "" && layer !== "transfer_reconciliation")
-                  const wasAutoAppliedInternalTransfer =
-                    review.reviewStatus === "auto_applied" &&
+                  const wasReconciliationInternalTransfer =
+                    review.reviewStatus !== "approved" &&
+                    review.reviewStatus !== "changed" &&
                     review.currentTypeKey === "internal_transfer"
 
-                  if (!wasAutoAppliedInternalTransfer) {
+                  if (!wasReconciliationInternalTransfer) {
                     continue
                   }
 
