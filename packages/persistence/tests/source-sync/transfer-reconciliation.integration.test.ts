@@ -662,7 +662,7 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
-  it("reconciles a chainless Coinbase asset mapping to an exact EVM representation", async () => {
+  it("reconciles a chainless EVM mapping despite transaction hash casing", async () => {
     const walletAddress = "0x0000000000000000000000000000000000000960"
     const timestamp = new Date("2025-04-10T11:00:00.000Z")
     const providerAssetRowId = await runPg(
@@ -706,13 +706,13 @@ describe("TransferReconciliationServiceLive", () => {
         amount: "0.40000000",
         toAddress: walletAddress,
         networkName: "base",
-        networkHash: "0xchainless-evm-hash",
+        networkHash: "0xABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890",
       })
     )
     const receipt = await runPg(
       seedOnchainReceipt({
         externalId: "onchain-receipt-chainless-evm",
-        txHash: "0xchainless-evm-hash",
+        txHash: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
         timestamp: new Date("2025-04-10T11:02:00.000Z"),
         amount: "0.40000000",
         walletAddress,

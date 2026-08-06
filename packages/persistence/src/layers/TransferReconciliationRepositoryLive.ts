@@ -164,13 +164,29 @@ const make = Effect.gen(function* () {
           ? sql`true`
           : sql`lower(${schema.blockchains.name}) = lower(${networkName})`
       const canonicalNetworkHashCondition =
-        networkHash === null ? sql`true` : eq(schema.transfers.txHash, networkHash)
+        networkHash === null
+          ? sql`true`
+          : sql`
+              case
+                when ${schema.addresses.type} = 'evm'
+                  then lower(${schema.transfers.txHash}) = lower(${networkHash})
+                else ${schema.transfers.txHash} = ${networkHash}
+              end
+            `
       const observedNetworkNameCondition =
         networkName === null
           ? sql`true`
           : sql`lower(${onchainProviderTransferTable.networkName}) = lower(${networkName})`
       const observedNetworkHashCondition =
-        networkHash === null ? sql`true` : eq(onchainProviderTransferTable.networkHash, networkHash)
+        networkHash === null
+          ? sql`true`
+          : sql`
+              case
+                when ${schema.addresses.type} = 'evm'
+                  then lower(${onchainProviderTransferTable.networkHash}) = lower(${networkHash})
+                else ${onchainProviderTransferTable.networkHash} = ${networkHash}
+              end
+            `
 
       const canonicalCandidates = db
         .select({
