@@ -439,8 +439,7 @@ const make = Effect.gen(function* () {
                 ? []
                 : yield* tx
                     .select({
-                      assetId: schema.transfers.assetId,
-                      amount: schema.transfers.amount,
+                      externalId: schema.transfers.externalId,
                     })
                     .from(schema.transfers)
                     .where(eq(schema.transfers.id, existing.canonicalTransferId))
@@ -621,6 +620,36 @@ const make = Effect.gen(function* () {
                     .where(eq(schema.transactionReviews.transactionId, review.transactionId))
                 }
 
+                const matchedProviderTransferIds = [providerTransferId]
+
+                if (existing.providerDirection === "inbound") {
+                  const [custodyMovement] = yield* tx
+                    .select({
+                      providerTransferId: schema.inventoryMovements.providerTransferId,
+                    })
+                    .from(schema.inventoryMovements)
+                    .innerJoin(
+                      schema.providerTransfers,
+                      eq(schema.providerTransfers.id, schema.inventoryMovements.providerTransferId)
+                    )
+                    .where(
+                      and(
+                        eq(schema.inventoryMovements.transactionId, originTransactionId),
+                        sql`${schema.providerTransfers.metadata}->>'canonicalTransferExternalId' = ${existingCanonicalTransfer.externalId}`,
+                        sql`${schema.inventoryMovements.providerTransferId} is not null`
+                      )
+                    )
+                    .limit(1)
+
+                  if (
+                    custodyMovement?.providerTransferId !== null &&
+                    custodyMovement?.providerTransferId !== undefined &&
+                    custodyMovement.providerTransferId !== providerTransferId
+                  ) {
+                    matchedProviderTransferIds.push(custodyMovement.providerTransferId)
+                  }
+                }
+
                 yield* tx
                   .update(schema.inventoryMovements)
                   .set({
@@ -629,14 +658,9 @@ const make = Effect.gen(function* () {
                     updatedAt: nowDate(),
                   })
                   .where(
-                    or(
-                      eq(schema.inventoryMovements.providerTransferId, providerTransferId),
-                      and(
-                        eq(schema.inventoryMovements.transactionId, originTransactionId),
-                        eq(schema.inventoryMovements.purpose, "principal"),
-                        eq(schema.inventoryMovements.assetId, existingCanonicalTransfer.assetId),
-                        eq(schema.inventoryMovements.amount, existingCanonicalTransfer.amount)
-                      )
+                    inArray(
+                      schema.inventoryMovements.providerTransferId,
+                      matchedProviderTransferIds
                     )
                   )
               }

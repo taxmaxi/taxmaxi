@@ -1433,9 +1433,75 @@ describe("TransferReconciliationServiceLive", () => {
           return yield* Effect.dieMessage("Failed to create late ambiguity lot")
         }
 
+        const [unrelatedProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            externalId: "late-ambiguity-unrelated-provider-transfer",
+            externalGroupId: "late-ambiguity-unrelated-provider-transfer:group",
+            providerAssetId: providerAssetRowId,
+            timestamp,
+            direction: "outbound",
+            fromAccountRef: "coinbase-account-1",
+            toAccountRef: "unrelated-destination",
+            fromAddress: null,
+            toAddress: null,
+            networkName: "bitcoin",
+            networkHash: null,
+            amount: "0.01000000",
+            metadata: { provider: "coinbase" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+
+        if (unrelatedProviderTransfer === undefined) {
+          return yield* Effect.dieMessage(
+            "Failed to create unrelated late ambiguity provider transfer"
+          )
+        }
+
+        const [matchedMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.25000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        const [unrelatedMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId: unrelatedProviderTransfer.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.25000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (matchedMovement === undefined || unrelatedMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create late ambiguity movements")
+        }
+
         return {
           openingLotId: openingLot.id,
           providerTransactionId: providerTransfer.transactionId,
+          matchedMovementId: matchedMovement.id,
+          unrelatedMovementId: unrelatedMovement.id,
         }
       })
     )
@@ -1539,8 +1605,22 @@ describe("TransferReconciliationServiceLive", () => {
           .select({ remainingAmount: schema.fifoLots.remainingAmount })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.id, openingInventory.openingLotId))
+        const movements = yield* db
+          .select({
+            id: schema.inventoryMovements.id,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+          })
+          .from(schema.inventoryMovements)
+          .where(
+            inArray(schema.inventoryMovements.id, [
+              openingInventory.matchedMovementId,
+              openingInventory.unrelatedMovementId,
+            ])
+          )
+          .orderBy(asc(schema.inventoryMovements.id))
 
-        return { reconciliation, transactions, internalLegs, reviews, openingLot }
+        return { reconciliation, transactions, internalLegs, reviews, openingLot, movements }
       })
     )
 
@@ -1565,6 +1645,20 @@ describe("TransferReconciliationServiceLive", () => {
       },
     ])
     expect(state.openingLot?.remainingAmount).toContain("1.00000000")
+    expect(state.movements).toEqual(
+      expect.arrayContaining([
+        {
+          id: openingInventory.matchedMovementId,
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        },
+        {
+          id: openingInventory.unrelatedMovementId,
+          taxTreatment: "non_taxable",
+          reconciliationStatus: "matched",
+        },
+      ])
+    )
   })
 
   it("records review state when downstream FIFO usage blocks match rollback", async () => {
