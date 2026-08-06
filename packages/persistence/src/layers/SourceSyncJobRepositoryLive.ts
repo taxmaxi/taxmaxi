@@ -323,7 +323,7 @@ const make = Effect.gen(function* () {
                   return yield* retryAfterCompletionRace()
                 }
 
-                if (mode === "replay" && concurrentJob.mode !== "replay") {
+                if (mode === "replay") {
                   const [updatedJob] = yield* db
                     .update(schema.processingJobs)
                     .set({ followUpMode: "replay" })

@@ -227,6 +227,21 @@ describe("SourceSyncJobRepositoryLive", () => {
     expect(activeJob.followUpMode).toBe("replay")
   })
 
+  it("records a replay follow-up when replay is requested while replay is active", async () => {
+    const created = await createJob({ mode: "replay" })
+    const replay = await createJob({ mode: "replay" })
+
+    expect(replay).toMatchObject({
+      _tag: "ReusedSourceSyncJob",
+      id: created.id,
+      mode: "replay",
+      status: "pending",
+    })
+
+    const activeJob = await selectProcessingJob({ jobId: created.id })
+    expect(activeJob.followUpMode).toBe("replay")
+  })
+
   it("retries replay intent when the active-row update loses a completion race", async () => {
     const created = await createJob({ mode: "sync" })
 

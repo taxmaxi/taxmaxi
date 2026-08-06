@@ -371,6 +371,35 @@ describe("SourceSyncService queue orchestration", () => {
     expect(enqueued).toEqual([])
   })
 
+  it("preserves a replay request while another replay is processing", async () => {
+    const enqueued: Array<SourceSyncQueuePayload> = []
+    const repositoryEvents: Array<string> = []
+    const id = "job-processing-replay"
+
+    const result = await runStart({
+      mode: "replay",
+      layer: makeServiceLayer({
+        activeJobs: [makeActiveJob({ id, mode: "replay", status: "processing" })],
+        createResult: {
+          _tag: "ReusedSourceSyncJob",
+          id,
+          sourceId: source.id,
+          principalId: source.principalId,
+          mode: "replay",
+          status: "processing",
+          queueName: "source-sync",
+          queueJobId: id,
+        },
+        enqueued,
+        repositoryEvents,
+      }),
+    })
+
+    expect(result).toMatchObject({ jobId: id, status: "running" })
+    expect(repositoryEvents).toEqual(["create:replay"])
+    expect(enqueued).toEqual([])
+  })
+
   it("uses the replacement job that owns the replay follow-up", async () => {
     const enqueued: Array<SourceSyncQueuePayload> = []
     const repositoryEvents: Array<string> = []

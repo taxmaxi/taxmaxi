@@ -203,12 +203,11 @@ const make = Effect.gen(function* () {
 
           yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "recovered-stale-job" })
         } else {
-          // A replay needs follow-up handling only behind a non-replay job.
-          // An active replay already satisfies the request and can be reused as-is.
-          // If the active job still exists, the repository reuses it and records
-          // the replay as follow-up work instead of losing the replay request.
+          // Every replay request must survive the active job. A replay can carry
+          // newly approved mappings that the current execution did not observe,
+          // even when that execution is also a replay.
           const replayRequest =
-            mode === "replay" && activeJob.mode !== "replay"
+            mode === "replay"
               ? yield* sourceSyncJobRepository.createOrReuseJob({
                   sourceId: source.id,
                   principalId,
