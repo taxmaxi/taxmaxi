@@ -267,7 +267,7 @@ const make = Effect.gen(function* () {
                 and ${schema.assetRepresentations.blockchainId} = ${onchainProviderTransferTable.observedBlockchainId}
                 and ${schema.assetRepresentations.type} = ${onchainProviderTransferTable.observedRepresentationType}
                 and lower(${schema.assetRepresentations.contractAddress}) is not distinct from lower(${onchainProviderTransferTable.observedContractAddress})
-                and lower(${schema.assetRepresentations.mintAddress}) is not distinct from lower(${onchainProviderTransferTable.observedMintAddress})
+                and ${schema.assetRepresentations.mintAddress} is not distinct from ${onchainProviderTransferTable.observedMintAddress}
                 and (
                   ${onchainProviderTransferTable.observedDecimals} is null
                   or ${schema.assetRepresentations.decimals} = ${onchainProviderTransferTable.observedDecimals}

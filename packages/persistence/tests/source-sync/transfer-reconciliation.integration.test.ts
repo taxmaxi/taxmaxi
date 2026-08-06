@@ -1212,18 +1212,34 @@ describe("TransferReconciliationServiceLive", () => {
   })
 
   it("keeps distinct observed representations visible beside canonical transfers", async () => {
-    const walletAddress = "0x0000000000000000000000000000000000000965"
-    const canonicalContractAddress = "0x0000000000000000000000000000000000000a96"
-    const observedContractAddress = "0x0000000000000000000000000000000000000b96"
-    const txHash = "0xdistinct-observed-representations"
+    const walletAddress = "CaseSensitiveWallet1111111111111111111111111"
+    const canonicalMintAddress = "MintCaseABC111111111111111111111111111111111"
+    const observedMintAddress = "mintcaseabc111111111111111111111111111111111"
+    const txHash = "solana-distinct-observed-representations"
+    const solanaBlockchainId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (blockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain fixture")
+        }
+
+        return blockchain.id
+      })
+    )
     const providerAssetRowId = await runPg(
       seedApprovedProviderAsset({ providerAssetId: "btc-provider-distinct-observed" })
     )
     await runPg(
       seedOwnedOnchainSource({
         walletAddress,
-        addressType: "evm",
-        providerKey: "test-evm-adapter",
+        addressType: "solana",
+        providerKey: "helius-solana",
       })
     )
     const providerTransferId = await runPg(
@@ -1233,23 +1249,23 @@ describe("TransferReconciliationServiceLive", () => {
         timestamp: new Date("2025-04-11T11:00:00.000Z"),
         amount: "0.18000000",
         toAddress: walletAddress,
-        networkName: "base",
+        networkName: "solana",
         networkHash: txHash,
       })
     )
     const observed = await runPg(
       seedObservedOnchainReceipt({
-        providerAssetId: observedContractAddress,
+        providerAssetId: observedMintAddress,
         externalId: "observed-distinct-representation",
         txHash,
         timestamp: new Date("2025-04-11T11:02:00.000Z"),
         amount: "0.18000000",
         walletAddress,
-        blockchainId: fixture.baseBlockchainId,
-        blockchainName: "base",
+        blockchainId: solanaBlockchainId,
+        blockchainName: "solana",
         representationType: "token",
-        contractAddress: observedContractAddress,
-        mintAddress: null,
+        contractAddress: null,
+        mintAddress: observedMintAddress,
         decimals: 8,
       })
     )
@@ -1261,9 +1277,9 @@ describe("TransferReconciliationServiceLive", () => {
           .insert(schema.assetRepresentations)
           .values({
             assetId: TEST_BTC_ASSET_ID,
-            blockchainId: fixture.baseBlockchainId,
+            blockchainId: solanaBlockchainId,
             type: "token",
-            contractAddress: canonicalContractAddress,
+            mintAddress: canonicalMintAddress,
             decimals: 8,
           })
           .returning({ id: schema.assetRepresentations.id })
@@ -1274,7 +1290,7 @@ describe("TransferReconciliationServiceLive", () => {
 
         yield* db.insert(schema.transactionOnchainContext).values({
           transactionId: observed.transactionId,
-          blockchainId: fixture.baseBlockchainId,
+          blockchainId: solanaBlockchainId,
           addressId: ONCHAIN_ADDRESS_ID,
           chainTxId: txHash,
           blockHeight: "1",
@@ -1290,7 +1306,7 @@ describe("TransferReconciliationServiceLive", () => {
           feeCostBasisCurrency: null,
           isError: false,
           functionName: null,
-          metadata: { provider: "test-evm-adapter" },
+          metadata: { provider: "helius-solana" },
         })
 
         const [transfer] = yield* db
@@ -1301,10 +1317,10 @@ describe("TransferReconciliationServiceLive", () => {
             externalId: "canonical-distinct-representation",
             externalGroupId: txHash,
             addressId: ONCHAIN_ADDRESS_ID,
-            blockchainId: fixture.baseBlockchainId,
+            blockchainId: solanaBlockchainId,
             txHash,
             timestamp: new Date("2025-04-11T11:02:00.000Z"),
-            type: "erc20",
+            type: "spl",
             fromAddress: "external-observed-origin",
             toAddress: walletAddress,
             fromAccountRef: null,
@@ -1318,7 +1334,7 @@ describe("TransferReconciliationServiceLive", () => {
             amount: "0.18000000",
             tokenId: null,
             notes: null,
-            metadata: { provider: "test-evm-adapter" },
+            metadata: { provider: "helius-solana" },
             principalId: TEST_PRINCIPAL_ID,
           })
           .returning({ id: schema.transfers.id })
@@ -1364,7 +1380,7 @@ describe("TransferReconciliationServiceLive", () => {
         candidates: expect.arrayContaining([
           expect.objectContaining({
             observedProviderTransferId: observed.providerTransferId,
-            contractAddress: observedContractAddress,
+            mintAddress: observedMintAddress,
           }),
         ]),
       })
