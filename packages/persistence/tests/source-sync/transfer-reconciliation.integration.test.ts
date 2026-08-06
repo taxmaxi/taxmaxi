@@ -836,7 +836,8 @@ describe("TransferReconciliationServiceLive", () => {
   })
 
   it("keeps a first-seen representation pending with evidence and replays after approval", async () => {
-    const walletAddress = "0x0000000000000000000000000000000000000961"
+    const walletAddress = "0x0000000000000000000000000000000000abcdef"
+    const observedWalletAddress = "0x0000000000000000000000000000000000aBcDeF"
     const contractAddress = "0x0000000000000000000000000000000000000c96"
     const txHash = "0xunknown-representation-hash"
     const timestamp = new Date("2025-04-10T14:00:00.000Z")
@@ -856,7 +857,7 @@ describe("TransferReconciliationServiceLive", () => {
         externalId: "provider-transfer-unknown-representation",
         timestamp,
         amount: "0.61000000",
-        toAddress: walletAddress,
+        toAddress: observedWalletAddress,
         networkName: "base",
         networkHash: txHash,
       })
@@ -868,7 +869,7 @@ describe("TransferReconciliationServiceLive", () => {
         txHash,
         timestamp: new Date("2025-04-10T14:01:00.000Z"),
         amount: "0.61000000",
-        walletAddress,
+        walletAddress: observedWalletAddress,
         blockchainId: fixture.baseBlockchainId,
         blockchainName: "base",
         representationType: "token",
@@ -963,7 +964,7 @@ describe("TransferReconciliationServiceLive", () => {
           blockHash: "block-unknown-representation",
           positionInBlock: "0",
           fromAddress: "external-observed-origin",
-          toAddress: walletAddress,
+          toAddress: observedWalletAddress,
           gasUsed: null,
           gasPrice: null,
           feeAmount: null,
@@ -988,7 +989,7 @@ describe("TransferReconciliationServiceLive", () => {
             timestamp: new Date("2025-04-10T14:01:00.000Z"),
             type: "erc20",
             fromAddress: "external-observed-origin",
-            toAddress: walletAddress,
+            toAddress: observedWalletAddress,
             fromAccountRef: null,
             toAccountRef: null,
             fromPartyType: "address",

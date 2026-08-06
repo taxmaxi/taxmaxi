@@ -134,6 +134,27 @@ const make = Effect.gen(function* () {
           ? onchainProviderTransferTable.toAddress
           : onchainProviderTransferTable.fromAddress
       const observedDirection = direction === "outbound" ? "inbound" : "outbound"
+      const ownedSourceAddressCondition = sql`
+        case
+          when ${schema.addresses.type} = 'evm'
+            then lower(${schema.addresses.address}) = lower(${walletAddress})
+          else ${schema.addresses.address} = ${walletAddress}
+        end
+      `
+      const canonicalOwnershipCondition = sql`
+        case
+          when ${schema.addresses.type} = 'evm'
+            then lower(${canonicalOwnershipColumn}) = lower(${walletAddress})
+          else ${canonicalOwnershipColumn} = ${walletAddress}
+        end
+      `
+      const observedOwnershipCondition = sql`
+        case
+          when ${schema.addresses.type} = 'evm'
+            then lower(${observedOwnershipColumn}) = lower(${walletAddress})
+          else ${observedOwnershipColumn} = ${walletAddress}
+        end
+      `
 
       const canonicalNetworkNameCondition =
         networkName === null
@@ -194,8 +215,8 @@ const make = Effect.gen(function* () {
             eq(schema.sources.principalId, principalId),
             eq(schema.sources.sourceableType, "onchain"),
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
-            eq(schema.addresses.address, walletAddress),
-            sql`lower(${canonicalOwnershipColumn}) = lower(${walletAddress})`,
+            ownedSourceAddressCondition,
+            canonicalOwnershipCondition,
             gte(schema.transfers.timestamp, timestampStart),
             lte(schema.transfers.timestamp, timestampEnd),
             canonicalNetworkNameCondition,
@@ -246,8 +267,8 @@ const make = Effect.gen(function* () {
             eq(schema.sources.principalId, principalId),
             eq(schema.sources.sourceableType, "onchain"),
             eq(onchainProviderTransferTable.direction, observedDirection),
-            eq(schema.addresses.address, walletAddress),
-            sql`lower(${observedOwnershipColumn}) = lower(${walletAddress})`,
+            ownedSourceAddressCondition,
+            observedOwnershipCondition,
             sql`${onchainProviderTransferTable.observedRepresentationType} is not null`,
             gte(onchainProviderTransferTable.timestamp, timestampStart),
             lte(onchainProviderTransferTable.timestamp, timestampEnd),
