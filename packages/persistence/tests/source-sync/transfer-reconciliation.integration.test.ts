@@ -1535,6 +1535,229 @@ describe("TransferReconciliationServiceLive", () => {
     expect(state.openingLot?.remainingAmount).toContain("1.00000000")
   })
 
+  it("records review state when downstream FIFO usage blocks match rollback", async () => {
+    const walletAddress = "bc1qownedwalletblockedrollback000000000000000"
+    const timestamp = new Date("2025-04-11T11:30:00.000Z")
+
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({
+        providerAssetId: "btc-provider-asset-blocked-rollback",
+      })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-blocked-rollback",
+        timestamp,
+        amount: "0.25000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const firstReceipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-blocked-rollback-1",
+        txHash: "btc-blocked-rollback-hash-1",
+        timestamp: new Date("2025-04-11T11:35:00.000Z"),
+        amount: "0.25000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "blocked-rollback-opening-leg",
+            timestamp: new Date("2025-04-01T11:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "50000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (openingLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create blocked rollback opening leg")
+        }
+
+        yield* db.insert(schema.fifoLots).values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: new Date("2025-04-01T11:00:00.000Z"),
+          originalAmount: "1.00000000",
+          remainingAmount: "1.00000000",
+          costBasisPerToken: "50000.000000000000000000",
+          costBasisCurrency: "EUR",
+          sourceLegId: openingLeg.id,
+          sourceLegSequence: 0,
+        })
+      })
+    )
+
+    const reconcile = () =>
+      runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+
+    expect((await reconcile()).autoApplied).toBe(1)
+    expect(
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+    ).toEqual({ canonicalizedPairs: 1 })
+
+    const dependentUsage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [destinationLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            and(
+              eq(schema.transactionLegs.transactionId, firstReceipt.transactionId),
+              eq(schema.transactionLegs.derivationRule, "internal_transfer_in")
+            )
+          )
+          .limit(1)
+
+        if (destinationLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to load blocked rollback destination leg")
+        }
+
+        const [destinationLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, destinationLeg.id))
+          .limit(1)
+        const [dependentDisposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "blocked-rollback-dependent-disposal",
+            timestamp: new Date("2025-04-12T11:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            fiatAmount: "3000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (destinationLot === undefined || dependentDisposalLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create blocked rollback dependent usage")
+        }
+
+        const [dependentMatch] = yield* db
+          .insert(schema.disposalMatches)
+          .values({
+            disposalLegId: dependentDisposalLeg.id,
+            fifoLotId: destinationLot.id,
+            matchedAmount: "0.05000000",
+            costBasis: "2500.00",
+            proceeds: "3000.00",
+            gainLoss: "500.00",
+          })
+          .returning({ id: schema.disposalMatches.id })
+
+        if (dependentMatch === undefined) {
+          return yield* Effect.dieMessage("Failed to create blocked rollback disposal match")
+        }
+
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.20000000" })
+          .where(eq(schema.fifoLots.id, destinationLot.id))
+
+        return {
+          destinationLegId: destinationLeg.id,
+          destinationLotId: destinationLot.id,
+          dependentMatchId: dependentMatch.id,
+        }
+      })
+    )
+
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-blocked-rollback-2",
+        txHash: "btc-blocked-rollback-hash-2",
+        timestamp: new Date("2025-04-11T11:38:00.000Z"),
+        amount: "0.25000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    expect((await reconcile()).needsReview).toBe(1)
+    expect((await reconcile()).needsReview).toBe(1)
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const [destinationLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.id, dependentUsage.destinationLegId))
+        const [destinationLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, dependentUsage.destinationLotId))
+        const [dependentMatch] = yield* db
+          .select({ id: schema.disposalMatches.id })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.id, dependentUsage.dependentMatchId))
+
+        return { reconciliation, destinationLeg, destinationLot, dependentMatch }
+      })
+    )
+
+    expect(state.reconciliation).toEqual(
+      expect.objectContaining({
+        status: "needs_review",
+        canonicalTransferId: null,
+        canonicalTransactionId: null,
+        matchReason: "multiple_candidate_onchain_receipts",
+        reviewMetadata: expect.objectContaining({
+          candidateCount: 2,
+          rollback: {
+            status: "blocked",
+            reason: "dependent_destination_lot_usage",
+            appliedEffectsRetained: true,
+          },
+        }),
+      })
+    )
+    expect(state.destinationLeg).toEqual({ id: dependentUsage.destinationLegId })
+    expect(state.destinationLot?.remainingAmount).toContain("0.20000000")
+    expect(state.dependentMatch).toEqual({ id: dependentUsage.dependentMatchId })
+  })
+
   it("keeps distinct observed representations visible beside canonical transfers", async () => {
     const walletAddress = "CaseSensitiveWallet1111111111111111111111111"
     const canonicalMintAddress = "MintCaseABC111111111111111111111111111111111"
