@@ -14,6 +14,7 @@ import {
   AssetRepository,
   ProviderAssetRepository,
   SourceSyncService,
+  SourceSyncQueueError,
   type ProviderAssetRecord,
   type ProviderAssetRepositoryShape,
 } from "@my/sync-engine/services"
@@ -80,7 +81,7 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(representationId)
   })
 
-  it("queues affected source replays after approving a provider asset", async () => {
+  it("surfaces replay failures and allows retrying an approved provider asset", async () => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000003"
     const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
     const representationId = "00000000-0000-4000-8000-000000000005"
@@ -90,6 +91,7 @@ describe("AssetCanonicalizationService", () => {
     const mintAddress = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     const events: Array<string> = []
     let mappingApproved = false
+    let replayAttempts = 0
     const providerAsset = makeProviderAsset({
       id: providerAssetRowId,
       provider: "helius-solana",
@@ -189,8 +191,19 @@ describe("AssetCanonicalizationService", () => {
         Layer.succeed(SourceSyncService, {
           startSourceSyncJob: () => Effect.dieMessage("startSourceSyncJob should not be called"),
           replaySourceSyncJob: ({ principalId: replayPrincipalId, sourceId: replaySourceId }) =>
-            Effect.sync(() => {
+            Effect.gen(function* () {
+              replayAttempts += 1
               events.push(`replay:${replayPrincipalId}:${replaySourceId}`)
+
+              if (replayAttempts === 1) {
+                return yield* Effect.fail(
+                  new SourceSyncQueueError({
+                    operation: "enqueueSourceSyncJob",
+                    cause: "queue unavailable",
+                  })
+                )
+              }
+
               return {
                 sourceId: replaySourceId,
                 jobId: "00000000-0000-4000-8000-000000000009",
@@ -203,17 +216,34 @@ describe("AssetCanonicalizationService", () => {
       )
     )
 
-    const result = await Effect.runPromise(
+    const canonicalize = () =>
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.canonicalizeProviderAssetFromCoinGecko({
           providerAssetRowId,
           reviewerNotes: "Reviewed",
         })
-      ).pipe(Effect.provide(layer))
+      )
+
+    const firstResult = await Effect.runPromise(
+      canonicalize().pipe(Effect.either, Effect.provide(layer))
     )
 
-    expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
+    expect(firstResult._tag).toBe("Left")
+    if (firstResult._tag === "Left") {
+      expect(firstResult.left._tag).toBe("AssetCanonicalizationInternalError")
+    }
+    expect(mappingApproved).toBe(true)
     expect(events).toEqual(["approve", `replay:${principalId}:${sourceId}`])
+
+    const result = await Effect.runPromise(canonicalize().pipe(Effect.provide(layer)))
+
+    expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
+    expect(events).toEqual([
+      "approve",
+      `replay:${principalId}:${sourceId}`,
+      "approve",
+      `replay:${principalId}:${sourceId}`,
+    ])
   })
 
   it("rejects a native asset resolution for an observed Solana token", () => {

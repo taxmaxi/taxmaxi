@@ -552,8 +552,11 @@ const make = Effect.gen(function* () {
           )
         }
 
-        if (providerAssetReview.value.mapping?.mappingStatus !== "pending_review") {
-          return yield* Effect.fail(makeBadRequest("Provider asset mapping is not pending review."))
+        const mappingStatus = providerAssetReview.value.mapping?.mappingStatus
+        if (mappingStatus !== "pending_review" && mappingStatus !== "approved") {
+          return yield* Effect.fail(
+            makeBadRequest("Provider asset mapping cannot be approved from its current state.")
+          )
         }
 
         if (providerAssetReview.value.providerAsset.providerType?.trim().toLowerCase() === "fiat") {
@@ -643,11 +646,17 @@ const make = Effect.gen(function* () {
                 "Queued source replay after provider asset approval"
               )
             ),
-            Effect.catchAll((error) =>
+            Effect.tapError((error) =>
               Effect.logError(
                 { principalId, sourceId, providerAssetRowId, error },
                 "Failed to queue source replay after provider asset approval"
               )
+            ),
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: `Failed to queue source replay for source ${sourceId}.`,
+                })
             )
           )
         )
