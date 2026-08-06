@@ -146,7 +146,7 @@ const seedProviderTransfer = ({
   readonly externalId: string
   readonly timestamp: Date
   readonly amount: string
-  readonly toAddress: string
+  readonly toAddress: string | null
   readonly networkName?: string
   readonly networkHash: string | null
 }) =>
@@ -189,7 +189,7 @@ const seedProviderTransfer = ({
         timestamp,
         direction: "outbound",
         fromAccountRef: "coinbase-account-1",
-        toAccountRef: null,
+        toAccountRef: toAddress === null ? "unknown-destination" : null,
         fromAddress: null,
         toAddress,
         networkName,
@@ -515,6 +515,63 @@ describe("TransferReconciliationServiceLive", () => {
         status: "auto_applied",
         matchReason: "deterministic_wallet_receipt_match",
         deterministic: true,
+      })
+    )
+  })
+
+  it("uses an exact network hash when a provider transfer omits its wallet address", async () => {
+    const walletAddress = "bc1qownedwallethashonly0000000000000000000"
+    const timestamp = new Date("2025-04-10T10:30:00.000Z")
+    const networkHash = "btc-hash-only-match-1"
+
+    const providerAssetRowId = await runPg(seedApprovedProviderAsset({}))
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-hash-only",
+        timestamp,
+        amount: "0.20000000",
+        toAddress: null,
+        networkHash,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-hash-only",
+        txHash: networkHash,
+        timestamp: new Date("2025-04-10T10:35:00.000Z"),
+        amount: "0.20000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary.autoApplied).toBe(1)
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: receipt.transferId,
+        canonicalTransactionId: receipt.transactionId,
+        status: "auto_applied",
       })
     )
   })

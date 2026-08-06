@@ -103,7 +103,7 @@ export interface ListProviderTransfersForReconciliationParams {
 export interface FindOnchainTransferReconciliationCandidatesParams {
   readonly principalId: string
   readonly direction: "inbound" | "outbound"
-  readonly walletAddress: string
+  readonly walletAddress: string | null
   readonly timestampStart: Date
   readonly timestampEnd: Date
   readonly networkName: string | null

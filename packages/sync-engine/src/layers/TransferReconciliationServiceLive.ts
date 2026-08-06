@@ -188,7 +188,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const walletAddress = candidateWalletAddress(providerTransfer)
 
-      if (walletAddress === null) {
+      if (walletAddress === null && providerTransfer.networkHash === null) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
@@ -426,7 +426,9 @@ const make = Effect.gen(function* () {
             evidenceKind:
               providerTransfer.networkHash === null
                 ? "owned_address_amount_time_window"
-                : "network_hash_owned_address_amount",
+                : walletAddress === null
+                  ? "network_hash_amount"
+                  : "network_hash_owned_address_amount",
             ...candidateMetadata,
           },
         })

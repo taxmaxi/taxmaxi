@@ -134,27 +134,36 @@ const make = Effect.gen(function* () {
           ? onchainProviderTransferTable.toAddress
           : onchainProviderTransferTable.fromAddress
       const observedDirection = direction === "outbound" ? "inbound" : "outbound"
-      const ownedSourceAddressCondition = sql`
-        case
-          when ${schema.addresses.type} = 'evm'
-            then lower(${schema.addresses.address}) = lower(${walletAddress})
-          else ${schema.addresses.address} = ${walletAddress}
-        end
-      `
-      const canonicalOwnershipCondition = sql`
-        case
-          when ${schema.addresses.type} = 'evm'
-            then lower(${canonicalOwnershipColumn}) = lower(${walletAddress})
-          else ${canonicalOwnershipColumn} = ${walletAddress}
-        end
-      `
-      const observedOwnershipCondition = sql`
-        case
-          when ${schema.addresses.type} = 'evm'
-            then lower(${observedOwnershipColumn}) = lower(${walletAddress})
-          else ${observedOwnershipColumn} = ${walletAddress}
-        end
-      `
+      const ownedSourceAddressCondition =
+        networkHash !== null
+          ? sql`true`
+          : sql`
+              case
+                when ${schema.addresses.type} = 'evm'
+                  then lower(${schema.addresses.address}) = lower(${walletAddress})
+                else ${schema.addresses.address} = ${walletAddress}
+              end
+            `
+      const canonicalOwnershipCondition =
+        networkHash !== null
+          ? sql`true`
+          : sql`
+              case
+                when ${schema.addresses.type} = 'evm'
+                  then lower(${canonicalOwnershipColumn}) = lower(${walletAddress})
+                else ${canonicalOwnershipColumn} = ${walletAddress}
+              end
+            `
+      const observedOwnershipCondition =
+        networkHash !== null
+          ? sql`true`
+          : sql`
+              case
+                when ${schema.addresses.type} = 'evm'
+                  then lower(${observedOwnershipColumn}) = lower(${walletAddress})
+                else ${observedOwnershipColumn} = ${walletAddress}
+              end
+            `
 
       const canonicalNetworkNameCondition =
         networkName === null
