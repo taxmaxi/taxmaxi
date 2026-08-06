@@ -135,7 +135,7 @@ const make = Effect.gen(function* () {
           : onchainProviderTransferTable.fromAddress
       const observedDirection = direction === "outbound" ? "inbound" : "outbound"
       const ownedSourceAddressCondition =
-        networkHash !== null
+        walletAddress === null
           ? sql`true`
           : sql`
               case
@@ -144,26 +144,20 @@ const make = Effect.gen(function* () {
                 else ${schema.addresses.address} = ${walletAddress}
               end
             `
-      const canonicalOwnershipCondition =
-        networkHash !== null
-          ? sql`true`
-          : sql`
-              case
-                when ${schema.addresses.type} = 'evm'
-                  then lower(${canonicalOwnershipColumn}) = lower(${walletAddress})
-                else ${canonicalOwnershipColumn} = ${walletAddress}
-              end
-            `
-      const observedOwnershipCondition =
-        networkHash !== null
-          ? sql`true`
-          : sql`
-              case
-                when ${schema.addresses.type} = 'evm'
-                  then lower(${observedOwnershipColumn}) = lower(${walletAddress})
-                else ${observedOwnershipColumn} = ${walletAddress}
-              end
-            `
+      const canonicalOwnershipCondition = sql`
+        case
+          when ${schema.addresses.type} = 'evm'
+            then lower(${canonicalOwnershipColumn}) = lower(${schema.addresses.address})
+          else ${canonicalOwnershipColumn} = ${schema.addresses.address}
+        end
+      `
+      const observedOwnershipCondition = sql`
+        case
+          when ${schema.addresses.type} = 'evm'
+            then lower(${observedOwnershipColumn}) = lower(${schema.addresses.address})
+          else ${observedOwnershipColumn} = ${schema.addresses.address}
+        end
+      `
 
       const canonicalNetworkNameCondition =
         networkName === null

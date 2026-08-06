@@ -576,6 +576,92 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it("does not match an onchain provider movement to its own canonical transfer", async () => {
+    const walletAddress = "bc1qownedwallethashdirection0000000000000000"
+    const timestamp = new Date("2025-04-10T10:45:00.000Z")
+    const networkHash = "btc-hash-direction-match-1"
+
+    const providerAssetRowId = await runPg(seedApprovedProviderAsset({}))
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-hash-direction",
+        txHash: networkHash,
+        timestamp,
+        amount: "0.30000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const providerTransferId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            sourceRawRecordId: null,
+            transactionId: receipt.transactionId,
+            externalId: "onchain-provider-transfer-hash-direction",
+            externalGroupId: networkHash,
+            providerAssetId: providerAssetRowId,
+            timestamp,
+            direction: "inbound",
+            fromAccountRef: null,
+            toAccountRef: walletAddress,
+            fromAddress: "bc1qexternalorigin0000000000000000000000000",
+            toAddress: walletAddress,
+            networkName: "bitcoin",
+            networkHash,
+            amount: "0.30000000",
+            metadata: { provider: "bitcoin" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+
+        if (providerTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create onchain provider transfer fixture")
+        }
+
+        return providerTransfer.id
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: ONCHAIN_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        evaluatedProviderTransfers: 1,
+        pending: 1,
+        autoApplied: 0,
+      })
+    )
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        status: "pending",
+        canonicalTransferId: null,
+        canonicalTransactionId: null,
+        matchReason: "no_candidate_onchain_receipt",
+      })
+    )
+  })
+
   it("reconciles a chainless Coinbase asset mapping to an exact EVM representation", async () => {
     const walletAddress = "0x0000000000000000000000000000000000000960"
     const timestamp = new Date("2025-04-10T11:00:00.000Z")
