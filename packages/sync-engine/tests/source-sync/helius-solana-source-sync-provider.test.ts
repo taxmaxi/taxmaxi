@@ -31,6 +31,7 @@ import { FetchProviderRawBatchParams } from "../../src/shared/SourceProviderRawB
 const WALLET_ADDRESS = "So11111111111111111111111111111111111111112"
 const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+const UNKNOWN_MINT = "UnknownMint11111111111111111111111111111111"
 
 const makeFetchParams = ({
   providerKey = HELIUS_SOLANA_PROVIDER_KEY,
@@ -189,26 +190,47 @@ const makeProviderLayer = ({
                             canonicalFiatCurrency: null,
                           } satisfies HeliusSolanaResolvedAsset,
                         ]
-                      : [
-                          {
-                            kind: "canonical",
-                            assetKind: "token",
-                            mintAddress: asset.mintAddress,
-                            providerAssetRowId: `provider-asset-${asset.mintAddress}`,
-                            providerAssetId: asset.mintAddress,
-                            naturalKey: `spl:${asset.mintAddress}`,
-                            currencyCode: "USDC",
-                            name: "USD Coin",
-                            decimals: 6,
-                            tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                            nftHint: false,
-                            mappingStatus: "approved",
-                            mappingKind: "asset",
-                            canonicalAssetId: "asset-usdc",
-                            assetRepresentationId: "representation-usdc-solana",
-                            canonicalFiatCurrency: null,
-                          } satisfies HeliusSolanaResolvedAsset,
-                        ]
+                      : asset.mintAddress === UNKNOWN_MINT
+                        ? [
+                            {
+                              kind: "review_required",
+                              assetKind: "token",
+                              mintAddress: asset.mintAddress,
+                              providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                              providerAssetId: asset.mintAddress,
+                              naturalKey: `spl:${asset.mintAddress}`,
+                              currencyCode: asset.mintAddress,
+                              name: null,
+                              decimals: null,
+                              tokenProgram: null,
+                              nftHint: false,
+                              mappingStatus: "pending_review",
+                              mappingKind: "asset",
+                              canonicalAssetId: null,
+                              assetRepresentationId: null,
+                              canonicalFiatCurrency: null,
+                            } satisfies HeliusSolanaResolvedAsset,
+                          ]
+                        : [
+                            {
+                              kind: "canonical",
+                              assetKind: "token",
+                              mintAddress: asset.mintAddress,
+                              providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                              providerAssetId: asset.mintAddress,
+                              naturalKey: `spl:${asset.mintAddress}`,
+                              currencyCode: "USDC",
+                              name: "USD Coin",
+                              decimals: 6,
+                              tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                              nftHint: false,
+                              mappingStatus: "approved",
+                              mappingKind: "asset",
+                              canonicalAssetId: "asset-usdc",
+                              assetRepresentationId: "representation-usdc-solana",
+                              canonicalFiatCurrency: null,
+                            } satisfies HeliusSolanaResolvedAsset,
+                          ]
               )
             ),
         })
@@ -1280,6 +1302,70 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
     expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
     expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
+  })
+
+  it("persists token-balance decimals for an unresolved SPL asset", async () => {
+    const payload = {
+      slot: 128,
+      transactionIndex: 4,
+      transaction: {
+        signatures: ["signature-unknown-token-balance"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-unknown-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: UNKNOWN_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 5 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: UNKNOWN_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "123456", decimals: 5 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const providerTransfer = result.providerTransfers.find(
+      (transfer) => transfer.providerAssetId === `provider-asset-${UNKNOWN_MINT}`
+    )
+
+    expect(providerTransfer).toMatchObject({
+      amount: "1.23456",
+      observedMintAddress: UNKNOWN_MINT,
+      observedDecimals: 5,
+    })
   })
 
   it("prefers exact token balance deltas over parsed SPL token summaries", async () => {
