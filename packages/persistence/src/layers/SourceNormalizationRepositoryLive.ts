@@ -1978,6 +1978,48 @@ const make = Effect.gen(function* () {
             )
           }
 
+          const preparedCanonicalTransferIds = new Set(
+            params.feeTransfers.flatMap((transfer) =>
+              transfer.externalId === null ? [] : [transfer.externalId]
+            )
+          )
+          const providerAssetIdsMissingCanonicalTransfers = yield* Effect.forEach(
+            params.providerTransfers,
+            (providerTransfer) =>
+              decodeCanonicalTransferExternalId(providerTransfer.metadata).pipe(
+                Effect.map((canonicalTransferExternalId) =>
+                  providerTransfer.providerAssetId !== null &&
+                  providerTransfer.observedRepresentationType !== null &&
+                  canonicalTransferExternalId !== null &&
+                  !preparedCanonicalTransferIds.has(canonicalTransferExternalId)
+                    ? providerTransfer.providerAssetId
+                    : null
+                )
+              )
+          ).pipe(Effect.map((ids) => [...new Set(ids.filter((id) => id !== null))]))
+          const lockedMappings =
+            providerAssetIdsMissingCanonicalTransfers.length === 0
+              ? []
+              : yield* tx
+                  .select({ mappingStatus: schema.providerAssetMappings.mappingStatus })
+                  .from(schema.providerAssetMappings)
+                  .where(
+                    inArray(
+                      schema.providerAssetMappings.providerAssetRowId,
+                      providerAssetIdsMissingCanonicalTransfers
+                    )
+                  )
+                  .orderBy(asc(schema.providerAssetMappings.providerAssetRowId))
+                  .for("share")
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceNormalizationRepository.persistNormalizedArtifacts.lockApprovalState"
+                    )
+                  )
+          const requiresReplay = lockedMappings.some(
+            ({ mappingStatus }) => mappingStatus === "approved"
+          )
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,
@@ -2104,54 +2146,13 @@ const make = Effect.gen(function* () {
               )
           }
 
-          const preparedCanonicalTransferIds = new Set(
-            params.feeTransfers.flatMap((transfer) =>
-              transfer.externalId === null ? [] : [transfer.externalId]
-            )
-          )
-          const providerAssetIdsMissingCanonicalTransfers = yield* Effect.forEach(
-            params.providerTransfers,
-            (providerTransfer) =>
-              decodeCanonicalTransferExternalId(providerTransfer.metadata).pipe(
-                Effect.map((canonicalTransferExternalId) =>
-                  providerTransfer.providerAssetId !== null &&
-                  providerTransfer.observedRepresentationType !== null &&
-                  canonicalTransferExternalId !== null &&
-                  !preparedCanonicalTransferIds.has(canonicalTransferExternalId)
-                    ? providerTransfer.providerAssetId
-                    : null
-                )
-              )
-          ).pipe(Effect.map((ids) => [...new Set(ids.filter((id) => id !== null))]))
-          const approvedMappings =
-            providerAssetIdsMissingCanonicalTransfers.length === 0
-              ? []
-              : yield* tx
-                  .select({ providerAssetRowId: schema.providerAssetMappings.providerAssetRowId })
-                  .from(schema.providerAssetMappings)
-                  .where(
-                    and(
-                      inArray(
-                        schema.providerAssetMappings.providerAssetRowId,
-                        providerAssetIdsMissingCanonicalTransfers
-                      ),
-                      eq(schema.providerAssetMappings.mappingStatus, "approved")
-                    )
-                  )
-                  .limit(1)
-                  .pipe(
-                    wrapSyncEngineSqlError(
-                      "sourceNormalizationRepository.persistNormalizedArtifacts.detectStaleApproval"
-                    )
-                  )
-
           return {
             transaction: persistedTransaction,
             venueContext: persistedVenueContext,
             providerTransfers: persistedProviderTransfers,
             feeTransfers: persistedFeeTransfers,
             legs: persistedLegs,
-            requiresReplay: approvedMappings.length > 0,
+            requiresReplay,
           }
         })
       )

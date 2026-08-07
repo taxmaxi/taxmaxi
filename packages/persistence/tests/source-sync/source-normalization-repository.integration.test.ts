@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
@@ -431,6 +432,189 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     expect(result.requiresReplay).toBe(true)
+  })
+
+  it("serializes pending mapping approval until normalized artifacts commit", async () => {
+    const providerAssetRowId = "00000000-0000-4000-8000-000000000702"
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+    const externalId = "tx-pending-approval-race-1"
+    const signature = "signature-pending-approval-race-1"
+
+    const transactionId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetRowId,
+          provider: "helius-solana",
+          providerAssetId: "PrivateMint2222222222222222222222222222222222",
+          naturalKey: "solana:mint:PrivateMint2222222222222222222222222222222222",
+          currencyCode: "PRIVATE2",
+          name: null,
+          exponent: null,
+          providerType: "spl-token",
+          rawProviderPayload: {},
+          discoveredAt: timestamp,
+          retrievedAt: timestamp,
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId,
+          mappingKind: "asset",
+          canonicalAssetId: null,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+          mappingStatus: "pending_review",
+          reviewerNotes: null,
+          sourceNotes: null,
+        })
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId,
+            externalGroupId: signature,
+            timestamp,
+            providerTransactionType: "solana_transaction_full",
+            providerStatus: "completed",
+            metadata: {},
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to seed pending approval transaction")
+        }
+        return transaction.id
+      })
+    )
+
+    const transactionLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseTransactionLock = await Effect.runPromise(Deferred.make<void>())
+    const heldTransactionLock = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.transactions.id })
+              .from(schema.transactions)
+              .where(eq(schema.transactions.id, transactionId))
+              .for("update")
+            yield* Deferred.succeed(transactionLockAcquired, undefined)
+            yield* Deferred.await(releaseTransactionLock)
+          })
+        )
+      })
+    )
+
+    await Effect.runPromise(Deferred.await(transactionLockAcquired))
+
+    const normalizationPromise = runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId,
+            externalGroupId: signature,
+            timestamp,
+            transactionType: null,
+            providerTransactionType: "solana_transaction_full",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: {},
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "dex",
+            cexAccountId: null,
+            externalAccountId: null,
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: {},
+          },
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: `${signature}:provider:principal:0`,
+              externalGroupId: signature,
+              providerAssetId: providerAssetRowId,
+              timestamp,
+              direction: "inbound",
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: "sender",
+              toAddress: "recipient",
+              networkName: "solana",
+              networkHash: signature,
+              observedBlockchainId: fixture.baseBlockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: null,
+              observedMintAddress: "PrivateMint2222222222222222222222222222222222",
+              observedDecimals: null,
+              amount: "1.00000000",
+              metadata: {
+                canonicalTransferExternalId: `${signature}:principal:0`,
+              },
+            },
+          ],
+          feeTransfers: [],
+          transactionReview: null,
+          resolvedTransactionType: {
+            providerTransactionType: "solana_transaction_full",
+            transactionType: null,
+            inventoryEffect: "unknown",
+            taxTreatment: "requires_additional_rule_logic",
+            resolutionStrategy: "no_leg",
+            pairedRecordRequired: false,
+            mappingStatus: "pending_review",
+          },
+          legs: [],
+        })
+      )
+    )
+
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "transactions" })
+
+    const approvalPromise = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .update(schema.providerAssetMappings)
+              .set({
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                mappingStatus: "approved",
+              })
+              .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+            return yield* tx
+              .select({ sourceId: schema.providerTransfers.sourceId })
+              .from(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+          })
+        )
+      })
+    )
+
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "provider_asset_mappings" })
+    await Effect.runPromise(Deferred.succeed(releaseTransactionLock, undefined))
+    const [, normalization, approvalSources] = await Promise.all([
+      heldTransactionLock,
+      normalizationPromise,
+      approvalPromise,
+    ])
+
+    expect(normalization.requiresReplay).toBe(false)
+    expect(approvalSources).toContainEqual({ sourceId: TEST_SOURCE_ID })
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
