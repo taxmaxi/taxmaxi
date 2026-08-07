@@ -323,6 +323,108 @@ describe("SourceNormalizationRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
+  it("requests replay when an asset mapping was approved after artifacts were prepared", async () => {
+    const providerAssetRowId = "00000000-0000-4000-8000-000000000701"
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetRowId,
+          provider: "helius-solana",
+          providerAssetId: "PrivateMint1111111111111111111111111111111111",
+          naturalKey: "solana:mint:PrivateMint1111111111111111111111111111111111",
+          currencyCode: "PRIVATE",
+          name: null,
+          exponent: null,
+          providerType: "spl-token",
+          rawProviderPayload: {},
+          discoveredAt: timestamp,
+          retrievedAt: timestamp,
+        })
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId,
+          mappingKind: "asset",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+          mappingStatus: "approved",
+          reviewerNotes: "Approved while normalization was in flight",
+          sourceNotes: null,
+        })
+      })
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "tx-stale-approval-1",
+            externalGroupId: "signature-stale-approval-1",
+            timestamp,
+            transactionType: "transfer",
+            providerTransactionType: "solana_transaction_full",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: {},
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "dex",
+            cexAccountId: null,
+            externalAccountId: null,
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: {},
+          },
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "signature-stale-approval-1:provider:principal:0",
+              externalGroupId: "signature-stale-approval-1",
+              providerAssetId: providerAssetRowId,
+              timestamp,
+              direction: "inbound",
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: "sender",
+              toAddress: "recipient",
+              networkName: "solana",
+              networkHash: "signature-stale-approval-1",
+              observedBlockchainId: fixture.baseBlockchainId,
+              observedRepresentationType: "token",
+              observedContractAddress: null,
+              observedMintAddress: "PrivateMint1111111111111111111111111111111111",
+              observedDecimals: null,
+              amount: "1.00000000",
+              metadata: {
+                canonicalTransferExternalId: "signature-stale-approval-1:principal:0",
+              },
+            },
+          ],
+          feeTransfers: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+          legs: [],
+        })
+      )
+    )
+
+    expect(result.requiresReplay).toBe(true)
+  })
+
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
     const acquisitionResult = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>

@@ -302,6 +302,8 @@ export interface PersistNormalizedSourceArtifactsResult {
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
   readonly feeTransfers: ReadonlyArray<PersistedSourceTransfer>
   readonly legs: ReadonlyArray<PersistedSourceLeg>
+  /** A mapping was approved after normalization prepared incomplete canonical artifacts. */
+  readonly requiresReplay: boolean
 }
 
 /**

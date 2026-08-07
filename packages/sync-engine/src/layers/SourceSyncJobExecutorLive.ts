@@ -94,6 +94,7 @@ type SourceSyncExecutionError =
   | SyncEngineStorageError
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
+const DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS = 3
 const DEFAULT_SOURCE_SYNC_WORKER_ID = "source-sync-inline-executor"
 
 const UnknownSyncErrorSchema = Schema.Struct({
@@ -255,7 +256,7 @@ const make = Effect.gen(function* () {
         } satisfies NormalizationSummary
       }
 
-      yield* sourceNormalizationRepository.persistNormalizedArtifacts({
+      const persistenceResult = yield* sourceNormalizationRepository.persistNormalizedArtifacts({
         transaction: normalization.transaction,
         venueContext: normalization.venueContext,
         onchainContext: normalization.onchainContext,
@@ -265,6 +266,20 @@ const make = Effect.gen(function* () {
         resolvedTransactionType: normalization.resolvedTransactionType,
         deriveLegs: normalization.deriveLegs,
       })
+
+      if (persistenceResult.requiresReplay) {
+        const replayJob = yield* sourceSyncJobRepository.createOrReuseJob({
+          sourceId: source.id,
+          principalId: source.principalId,
+          mode: "replay",
+          maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
+        })
+
+        yield* Effect.logInfo(
+          { sourceId: source.id, replayJobId: replayJob.id },
+          "Requested replay after an in-flight asset approval"
+        )
+      }
 
       return {
         normalizedRecords: 1,
