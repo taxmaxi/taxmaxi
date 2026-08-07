@@ -239,7 +239,7 @@ describe("SourceReplayRepositoryLive", () => {
     })
   })
 
-  it("removes approved cross-source reconciliation effects before replay deletes the matched source", async () => {
+  it("removes approved reconciliation effects when the replayed source consumes the destination lot", async () => {
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const fixtureState = await runPg(
       Effect.gen(function* () {
@@ -427,16 +427,45 @@ describe("SourceReplayRepositoryLive", () => {
           proceeds: "12500.00000000",
           gainLoss: "0.00000000",
         })
-        yield* db.insert(schema.fifoLots).values({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: REPLAY_DESTINATION_SOURCE_ID,
-          assetId: TEST_BTC_ASSET_ID,
-          acquiredAt: timestamp,
-          originalAmount: "0.25000000",
-          remainingAmount: "0.25000000",
-          costBasisPerToken: "50000.000000000000000000",
-          costBasisCurrency: "EUR",
-          sourceLegId: destinationLeg.id,
+        const [destinationLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: REPLAY_DESTINATION_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: timestamp,
+            originalAmount: "0.25000000",
+            remainingAmount: "0.20000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: destinationLeg.id,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [sameSourceConsumer] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: REPLAY_DESTINATION_SOURCE_ID,
+            externalId: "replay-destination-lot-consumer",
+            timestamp: new Date("2025-04-11T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: REPLAY_DESTINATION_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "fixture_same_source_consumer",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (destinationLot === undefined || sameSourceConsumer === undefined) {
+          return yield* Effect.dieMessage("Failed to seed same-source destination lot usage")
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: sameSourceConsumer.id,
+          fifoLotId: destinationLot.id,
+          matchedAmount: "0.05000000",
+          costBasis: "2500.00000000",
+          proceeds: "3000.00000000",
+          gainLoss: "500.00000000",
         })
         yield* db.insert(schema.transactionReviews).values([
           {
@@ -478,6 +507,7 @@ describe("SourceReplayRepositoryLive", () => {
           openingLotId: openingLot.id,
           originTransactionId: originTransaction.id,
           providerTransferId: providerTransfer.id,
+          sameSourceConsumerId: sameSourceConsumer.id,
         }
       })
     )
@@ -514,8 +544,19 @@ describe("SourceReplayRepositoryLive", () => {
           })
           .from(schema.inventoryMovements)
           .where(eq(schema.inventoryMovements.providerTransferId, fixtureState.providerTransferId))
+        const [sameSourceConsumer] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.id, fixtureState.sameSourceConsumerId))
 
-        return { openingLot, originTransaction, internalLegs, reconciliations, movement }
+        return {
+          openingLot,
+          originTransaction,
+          internalLegs,
+          reconciliations,
+          movement,
+          sameSourceConsumer,
+        }
       })
     )
 
@@ -523,6 +564,7 @@ describe("SourceReplayRepositoryLive", () => {
     expect(state.originTransaction?.transactionType).toBeNull()
     expect(state.internalLegs).toEqual([])
     expect(state.reconciliations).toEqual([])
+    expect(state.sameSourceConsumer).toBeUndefined()
     expect(state.movement).toEqual({
       taxTreatment: "pending_review",
       reconciliationStatus: "unmatched",

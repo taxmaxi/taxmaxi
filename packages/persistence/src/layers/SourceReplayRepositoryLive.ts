@@ -279,7 +279,12 @@ const make = Effect.gen(function* () {
                   schema.transactionLegs,
                   eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
                 )
-                .where(inArray(schema.disposalMatches.fifoLotId, destinationLotIds))
+                .where(
+                  and(
+                    inArray(schema.disposalMatches.fifoLotId, destinationLotIds),
+                    ne(schema.transactionLegs.sourceId, sourceId)
+                  )
+                )
               const dependentAllocations = yield* tx
                 .select({ dependentSourceId: schema.inventoryMovements.sourceId })
                 .from(schema.inventoryMovementAllocations)
@@ -290,7 +295,12 @@ const make = Effect.gen(function* () {
                     schema.inventoryMovementAllocations.inventoryMovementId
                   )
                 )
-                .where(inArray(schema.inventoryMovementAllocations.fifoLotId, destinationLotIds))
+                .where(
+                  and(
+                    inArray(schema.inventoryMovementAllocations.fifoLotId, destinationLotIds),
+                    ne(schema.inventoryMovements.sourceId, sourceId)
+                  )
+                )
               const dependentSourceIds = [...dependentDisposals, ...dependentAllocations].map(
                 ({ dependentSourceId }) => dependentSourceId
               )
