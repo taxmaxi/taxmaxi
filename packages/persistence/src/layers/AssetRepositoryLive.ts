@@ -67,6 +67,7 @@ const make = Effect.gen(function* () {
           representationType: schema.assetRepresentations.type,
           contractAddress: schema.assetRepresentations.contractAddress,
           mintAddress: schema.assetRepresentations.mintAddress,
+          decimals: schema.assetRepresentations.decimals,
         })
         .from(schema.assetRepresentations)
         .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
@@ -93,6 +94,7 @@ const make = Effect.gen(function* () {
             representationType: schema.assetRepresentations.type,
             contractAddress: schema.assetRepresentations.contractAddress,
             mintAddress: schema.assetRepresentations.mintAddress,
+            decimals: schema.assetRepresentations.decimals,
           })
           .from(schema.assetRepresentations)
           .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
@@ -124,6 +126,7 @@ const make = Effect.gen(function* () {
             representationType: schema.assetRepresentations.type,
             contractAddress: schema.assetRepresentations.contractAddress,
             mintAddress: schema.assetRepresentations.mintAddress,
+            decimals: schema.assetRepresentations.decimals,
           })
           .from(schema.assetRepresentations)
           .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))

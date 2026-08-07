@@ -86,6 +86,7 @@ describe("AssetCanonicalizationService", () => {
     const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
     const representationId = "00000000-0000-4000-8000-000000000005"
     const mismatchedRepresentationId = "00000000-0000-4000-8000-00000000000a"
+    const mismatchedDecimalsRepresentationId = "00000000-0000-4000-8000-00000000000b"
     const blockchainId = "00000000-0000-4000-8000-000000000006"
     const principalId = "00000000-0000-4000-8000-000000000007"
     const sourceId = "00000000-0000-4000-8000-000000000008"
@@ -101,7 +102,7 @@ describe("AssetCanonicalizationService", () => {
       naturalKey: `solana:mint:${mintAddress}`,
       currencyCode: "USDC",
       name: "USD Coin",
-      exponent: null,
+      exponent: 6,
       providerType: "spl-token",
     })
     const providerAssetRepository: ProviderAssetRepositoryShape = {
@@ -170,6 +171,7 @@ describe("AssetCanonicalizationService", () => {
                     representationType: "token" as const,
                     contractAddress: null,
                     mintAddress,
+                    decimals: 6,
                   })
                 : assetRepresentationId === mismatchedRepresentationId
                   ? Option.some({
@@ -180,8 +182,20 @@ describe("AssetCanonicalizationService", () => {
                       representationType: "token" as const,
                       contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                       mintAddress: null,
+                      decimals: 6,
                     })
-                  : Option.none()
+                  : assetRepresentationId === mismatchedDecimalsRepresentationId
+                    ? Option.some({
+                        id: mismatchedDecimalsRepresentationId,
+                        assetId: canonicalAssetId,
+                        symbol: "USDC",
+                        blockchainName: "solana",
+                        representationType: "token" as const,
+                        contractAddress: null,
+                        mintAddress,
+                        decimals: 9,
+                      })
+                    : Option.none()
             ),
           findNativeRepresentationForBlockchain: () =>
             Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
@@ -303,6 +317,26 @@ describe("AssetCanonicalizationService", () => {
     expect(mismatchedApproval._tag).toBe("Left")
     if (mismatchedApproval._tag === "Left") {
       expect(mismatchedApproval.left).toMatchObject({
+        _tag: "AssetCanonicalizationBadRequestError",
+        message: "Selected representation does not match the observed Solana mint.",
+      })
+    }
+    expect(events).toEqual(eventsBeforeMismatch)
+
+    const mismatchedDecimalsApproval = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId,
+          assetRepresentationId: mismatchedDecimalsRepresentationId,
+          reviewerNotes: "Wrong decimals",
+        })
+      ).pipe(Effect.either, Effect.provide(layer))
+    )
+
+    expect(mismatchedDecimalsApproval._tag).toBe("Left")
+    if (mismatchedDecimalsApproval._tag === "Left") {
+      expect(mismatchedDecimalsApproval.left).toMatchObject({
         _tag: "AssetCanonicalizationBadRequestError",
         message: "Selected representation does not match the observed Solana mint.",
       })

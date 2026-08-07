@@ -26,6 +26,7 @@ export interface SyncEngineAssetRepresentation {
   readonly representationType: "native" | "token" | "nft"
   readonly contractAddress: string | null
   readonly mintAddress: string | null
+  readonly decimals: number
 }
 
 /**

@@ -289,7 +289,8 @@ export const validateManualRepresentationIdentity = ({
   const expectedType = providerType === "nft" ? "nft" : "token"
   return normalize(representation.blockchainName) === "solana" &&
     representation.representationType === expectedType &&
-    representation.mintAddress === observedTokenId
+    representation.mintAddress === observedTokenId &&
+    (providerAsset.exponent === null || representation.decimals === providerAsset.exponent)
     ? Effect.void
     : Effect.fail(
         makeBadRequest("Selected representation does not match the observed Solana mint.")
