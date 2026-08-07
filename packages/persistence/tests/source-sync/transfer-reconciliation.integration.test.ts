@@ -576,6 +576,63 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it("uses an exact network hash despite provider address and timestamp drift", async () => {
+    const walletAddress = "bc1qownedwallethashdrift0000000000000000000"
+    const providerTimestamp = new Date("2025-04-10T10:30:00.000Z")
+    const networkHash = "btc-hash-drift-match-1"
+
+    const providerAssetRowId = await runPg(seedApprovedProviderAsset({}))
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-hash-drift",
+        timestamp: providerTimestamp,
+        amount: "0.22000000",
+        toAddress: "bc1qincorrectproviderwallet000000000000000000",
+        networkHash,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-hash-drift",
+        txHash: networkHash,
+        timestamp: new Date("2025-04-12T10:35:00.000Z"),
+        amount: "0.22000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary.autoApplied).toBe(1)
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: receipt.transferId,
+        canonicalTransactionId: receipt.transactionId,
+        status: "auto_applied",
+      })
+    )
+  })
+
   it("does not match an onchain provider movement to its own canonical transfer", async () => {
     const walletAddress = "bc1qownedwallethashdirection0000000000000000"
     const timestamp = new Date("2025-04-10T10:45:00.000Z")

@@ -135,7 +135,7 @@ const make = Effect.gen(function* () {
           : onchainProviderTransferTable.fromAddress
       const observedDirection = direction === "outbound" ? "inbound" : "outbound"
       const ownedSourceAddressCondition =
-        walletAddress === null
+        networkHash !== null || walletAddress === null
           ? sql`true`
           : sql`
               case
@@ -187,6 +187,20 @@ const make = Effect.gen(function* () {
                 else ${onchainProviderTransferTable.networkHash} = ${networkHash}
               end
             `
+      const canonicalTimestampCondition =
+        networkHash === null
+          ? and(
+              gte(schema.transfers.timestamp, timestampStart),
+              lte(schema.transfers.timestamp, timestampEnd)
+            )
+          : sql`true`
+      const observedTimestampCondition =
+        networkHash === null
+          ? and(
+              gte(onchainProviderTransferTable.timestamp, timestampStart),
+              lte(onchainProviderTransferTable.timestamp, timestampEnd)
+            )
+          : sql`true`
 
       const canonicalCandidates = db
         .select({
@@ -236,8 +250,7 @@ const make = Effect.gen(function* () {
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
             ownedSourceAddressCondition,
             canonicalOwnershipCondition,
-            gte(schema.transfers.timestamp, timestampStart),
-            lte(schema.transfers.timestamp, timestampEnd),
+            canonicalTimestampCondition,
             canonicalNetworkNameCondition,
             canonicalNetworkHashCondition
           )
@@ -289,8 +302,7 @@ const make = Effect.gen(function* () {
             ownedSourceAddressCondition,
             observedOwnershipCondition,
             sql`${onchainProviderTransferTable.observedRepresentationType} is not null`,
-            gte(onchainProviderTransferTable.timestamp, timestampStart),
-            lte(onchainProviderTransferTable.timestamp, timestampEnd),
+            observedTimestampCondition,
             observedNetworkNameCondition,
             observedNetworkHashCondition,
             sql`not exists (
