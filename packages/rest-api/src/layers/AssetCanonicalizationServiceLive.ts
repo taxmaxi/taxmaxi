@@ -13,6 +13,7 @@ import {
   type EconomicAssetDraft,
   type ProviderAssetRecord,
   type ProviderAssetReviewRecord,
+  type SyncEngineAssetRepresentation,
 } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -261,6 +262,39 @@ export const representationIdForProviderObservation = ({
   isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null
     ? representationId
     : null
+
+export const validateManualRepresentationIdentity = ({
+  providerAsset,
+  representation,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly representation: SyncEngineAssetRepresentation
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+  if (isNativeOnchainObservation(providerAsset)) {
+    return normalize(representation.blockchainName) === "solana" &&
+      representation.representationType === "native"
+      ? Effect.void
+      : Effect.fail(
+          makeBadRequest("Selected representation does not match the observed Solana native asset.")
+        )
+  }
+
+  const observedTokenId = observedProviderTokenId(providerAsset)
+  if (observedTokenId === null) {
+    return Effect.void
+  }
+
+  const providerType =
+    providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
+  const expectedType = providerType === "nft" ? "nft" : "token"
+  return normalize(representation.blockchainName) === "solana" &&
+    representation.representationType === expectedType &&
+    representation.mintAddress === observedTokenId
+    ? Effect.void
+    : Effect.fail(
+        makeBadRequest("Selected representation does not match the observed Solana mint.")
+      )
+}
 
 const validateProviderTokenIdentity = ({
   contractAddress,
@@ -575,6 +609,11 @@ const make = Effect.gen(function* () {
               makeBadRequest("Asset representation does not belong to the selected asset.")
             )
           }
+
+          yield* validateManualRepresentationIdentity({
+            providerAsset: providerAssetReview.providerAsset,
+            representation: representation.value,
+          })
         }
 
         const observedRepresentationId = representationIdForProviderObservation({

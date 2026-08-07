@@ -85,6 +85,7 @@ describe("AssetCanonicalizationService", () => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000003"
     const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
     const representationId = "00000000-0000-4000-8000-000000000005"
+    const mismatchedRepresentationId = "00000000-0000-4000-8000-00000000000a"
     const blockchainId = "00000000-0000-4000-8000-000000000006"
     const principalId = "00000000-0000-4000-8000-000000000007"
     const sourceId = "00000000-0000-4000-8000-000000000008"
@@ -161,8 +162,26 @@ describe("AssetCanonicalizationService", () => {
           findRepresentationById: ({ assetRepresentationId }) =>
             Effect.succeed(
               assetRepresentationId === representationId
-                ? Option.some({ id: representationId, assetId: canonicalAssetId, symbol: "USDC" })
-                : Option.none()
+                ? Option.some({
+                    id: representationId,
+                    assetId: canonicalAssetId,
+                    symbol: "USDC",
+                    blockchainName: "solana",
+                    representationType: "token" as const,
+                    contractAddress: null,
+                    mintAddress,
+                  })
+                : assetRepresentationId === mismatchedRepresentationId
+                  ? Option.some({
+                      id: mismatchedRepresentationId,
+                      assetId: canonicalAssetId,
+                      symbol: "USDC",
+                      blockchainName: "ethereum",
+                      representationType: "token" as const,
+                      contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                      mintAddress: null,
+                    })
+                  : Option.none()
             ),
           findNativeRepresentationForBlockchain: () =>
             Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
@@ -268,6 +287,27 @@ describe("AssetCanonicalizationService", () => {
       "list-sources",
       `replay:${principalId}:${sourceId}`,
     ])
+
+    const eventsBeforeMismatch = [...events]
+    const mismatchedApproval = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId,
+          assetRepresentationId: mismatchedRepresentationId,
+          reviewerNotes: "Wrong chain",
+        })
+      ).pipe(Effect.either, Effect.provide(layer))
+    )
+
+    expect(mismatchedApproval._tag).toBe("Left")
+    if (mismatchedApproval._tag === "Left") {
+      expect(mismatchedApproval.left).toMatchObject({
+        _tag: "AssetCanonicalizationBadRequestError",
+        message: "Selected representation does not match the observed Solana mint.",
+      })
+    }
+    expect(events).toEqual(eventsBeforeMismatch)
 
     const manuallyApproved = await Effect.runPromise(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
