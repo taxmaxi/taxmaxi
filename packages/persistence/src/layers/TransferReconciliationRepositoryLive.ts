@@ -422,6 +422,8 @@ const make = Effect.gen(function* () {
         .transaction((tx) =>
           Effect.gen(function* () {
             let persistedReviewMetadata = reviewMetadata
+            let persistedCanonicalTransferId = canonicalTransferId
+            let persistedCanonicalTransactionId = canonicalTransactionId
             const [existing] = yield* tx
               .select({
                 status: schema.transferReconciliations.status,
@@ -440,25 +442,26 @@ const make = Effect.gen(function* () {
               .for("update")
               .limit(1)
 
-            if (existing?.status === "needs_review" && status === "needs_review") {
-              const blockedRollback = yield* Schema.decodeUnknown(
-                Schema.Struct({
-                  rollback: Schema.Struct({
-                    status: Schema.Literal("blocked"),
-                    reason: Schema.Literal("dependent_destination_lot_usage"),
-                    appliedEffectsRetained: Schema.Literal(true),
-                  }),
-                })
-              )(existing.reviewMetadata).pipe(Effect.option)
+            const blockedRollback =
+              existing?.status === "needs_review"
+                ? yield* Schema.decodeUnknown(
+                    Schema.Struct({
+                      rollback: Schema.Struct({
+                        status: Schema.Literal("blocked"),
+                        reason: Schema.Literal("dependent_destination_lot_usage"),
+                        appliedEffectsRetained: Schema.Literal(true),
+                      }),
+                    })
+                  )(existing.reviewMetadata).pipe(Effect.option)
+                : Option.none()
 
-              if (Option.isSome(blockedRollback)) {
-                const metadata = yield* Schema.decodeUnknown(
-                  Schema.Record({ key: Schema.String, value: Schema.Unknown })
-                )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
-                persistedReviewMetadata = {
-                  ...metadata,
-                  rollback: blockedRollback.value.rollback,
-                }
+            if (Option.isSome(blockedRollback) && status === "needs_review") {
+              const metadata = yield* Schema.decodeUnknown(
+                Schema.Record({ key: Schema.String, value: Schema.Unknown })
+              )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
+              persistedReviewMetadata = {
+                ...metadata,
+                rollback: blockedRollback.value.rollback,
               }
             }
 
@@ -474,7 +477,8 @@ const make = Effect.gen(function* () {
                     .limit(1)
 
             const invalidatesAppliedMatch =
-              existing?.status === "auto_applied" &&
+              existing !== undefined &&
+              (existing.status === "auto_applied" || Option.isSome(blockedRollback)) &&
               (status !== "auto_applied" ||
                 canonicalTransferId !== existing.canonicalTransferId ||
                 canonicalTransactionId !== existing.canonicalTransactionId)
@@ -555,7 +559,10 @@ const make = Effect.gen(function* () {
                     appliedEffectsRetained: true,
                   },
                 }
+                persistedCanonicalTransferId = existing.canonicalTransferId
+                persistedCanonicalTransactionId = existing.canonicalTransactionId
               } else {
+                persistedReviewMetadata = reviewMetadata
                 const disposalMatches =
                   disposalLegIds.length === 0
                     ? []
@@ -700,8 +707,8 @@ const make = Effect.gen(function* () {
               .values({
                 principalId,
                 providerTransferId,
-                canonicalTransferId,
-                canonicalTransactionId,
+                canonicalTransferId: persistedCanonicalTransferId,
+                canonicalTransactionId: persistedCanonicalTransactionId,
                 status,
                 matchReason,
                 confidence,

@@ -1749,7 +1749,7 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
 
-    await runPg(
+    const openingLotId = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         const [openingLeg] = yield* db
@@ -1772,18 +1772,25 @@ describe("TransferReconciliationServiceLive", () => {
           return yield* Effect.dieMessage("Failed to create blocked rollback opening leg")
         }
 
-        yield* db.insert(schema.fifoLots).values({
-          principalId: TEST_PRINCIPAL_ID,
-          sourceId: TEST_SOURCE_ID,
-          assetId: TEST_BTC_ASSET_ID,
-          acquiredAt: new Date("2025-04-01T11:00:00.000Z"),
-          originalAmount: "1.00000000",
-          remainingAmount: "1.00000000",
-          costBasisPerToken: "50000.000000000000000000",
-          costBasisCurrency: "EUR",
-          sourceLegId: openingLeg.id,
-          sourceLegSequence: 0,
-        })
+        const [openingLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T11:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "1.00000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: openingLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        if (openingLot === undefined) {
+          return yield* Effect.dieMessage("Failed to create blocked rollback opening lot")
+        }
+        return openingLot.id
       })
     )
 
@@ -1923,8 +1930,8 @@ describe("TransferReconciliationServiceLive", () => {
     expect(state.reconciliation).toEqual(
       expect.objectContaining({
         status: "needs_review",
-        canonicalTransferId: null,
-        canonicalTransactionId: null,
+        canonicalTransferId: firstReceipt.transferId,
+        canonicalTransactionId: firstReceipt.transactionId,
         matchReason: "multiple_candidate_onchain_receipts",
         reviewMetadata: expect.objectContaining({
           candidateCount: 2,
@@ -1939,6 +1946,53 @@ describe("TransferReconciliationServiceLive", () => {
     expect(state.destinationLeg).toEqual({ id: dependentUsage.destinationLegId })
     expect(state.destinationLot?.remainingAmount).toContain("0.20000000")
     expect(state.dependentMatch).toEqual({ id: dependentUsage.dependentMatchId })
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.id, dependentUsage.dependentMatchId))
+      })
+    )
+
+    expect((await reconcile()).needsReview).toBe(1)
+
+    const retriedState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const [destinationLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.id, dependentUsage.destinationLegId))
+        const [destinationLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, dependentUsage.destinationLotId))
+        const [openingLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, openingLotId))
+        return { reconciliation, destinationLeg, destinationLot, openingLot }
+      })
+    )
+
+    expect(retriedState.reconciliation).toEqual(
+      expect.objectContaining({
+        status: "needs_review",
+        canonicalTransferId: null,
+        canonicalTransactionId: null,
+        matchReason: "multiple_candidate_onchain_receipts",
+        reviewMetadata: expect.not.objectContaining({ rollback: expect.anything() }),
+      })
+    )
+    expect(retriedState.destinationLeg).toBeUndefined()
+    expect(retriedState.destinationLot).toBeUndefined()
+    expect(retriedState.openingLot?.remainingAmount).toContain("1.00000000")
   })
 
   it("keeps distinct observed representations visible beside canonical transfers", async () => {
