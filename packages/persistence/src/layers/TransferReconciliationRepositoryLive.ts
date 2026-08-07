@@ -424,6 +424,10 @@ const make = Effect.gen(function* () {
             let persistedReviewMetadata = reviewMetadata
             let persistedCanonicalTransferId = canonicalTransferId
             let persistedCanonicalTransactionId = canonicalTransactionId
+            let persistedStatus = status
+            let persistedMatchReason = matchReason
+            let persistedConfidence = confidence
+            let persistedDeterministic = deterministic
             const [existing] = yield* tx
               .select({
                 status: schema.transferReconciliations.status,
@@ -561,6 +565,12 @@ const make = Effect.gen(function* () {
                 }
                 persistedCanonicalTransferId = existing.canonicalTransferId
                 persistedCanonicalTransactionId = existing.canonicalTransactionId
+                if (status === "auto_applied") {
+                  persistedStatus = "needs_review"
+                  persistedMatchReason = "applied_match_replacement_rollback_blocked"
+                  persistedConfidence = "0.0000"
+                  persistedDeterministic = false
+                }
               } else {
                 persistedReviewMetadata = reviewMetadata
                 const disposalMatches =
@@ -709,10 +719,10 @@ const make = Effect.gen(function* () {
                 providerTransferId,
                 canonicalTransferId: persistedCanonicalTransferId,
                 canonicalTransactionId: persistedCanonicalTransactionId,
-                status,
-                matchReason,
-                confidence,
-                deterministic,
+                status: persistedStatus,
+                matchReason: persistedMatchReason,
+                confidence: persistedConfidence,
+                deterministic: persistedDeterministic,
                 reviewMetadata: persistedReviewMetadata,
                 createdAt: now,
                 updatedAt: now,

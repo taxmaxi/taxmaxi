@@ -1889,7 +1889,7 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
 
-    await runPg(
+    const secondReceipt = await runPg(
       seedOnchainReceipt({
         externalId: "onchain-receipt-blocked-rollback-2",
         txHash: "btc-blocked-rollback-hash-2",
@@ -1951,12 +1951,53 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db
+          .update(schema.transfers)
+          .set({ amount: "0.30000000" })
+          .where(eq(schema.transfers.id, firstReceipt.transferId))
+      })
+    )
+
+    expect((await reconcile()).autoApplied).toBe(1)
+
+    const blockedReplacement = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        return reconciliation
+      })
+    )
+
+    expect(blockedReplacement).toEqual(
+      expect.objectContaining({
+        status: "needs_review",
+        canonicalTransferId: firstReceipt.transferId,
+        canonicalTransactionId: firstReceipt.transactionId,
+        matchReason: "applied_match_replacement_rollback_blocked",
+        confidence: "0.0000",
+        deterministic: false,
+        reviewMetadata: expect.objectContaining({
+          rollback: {
+            status: "blocked",
+            reason: "dependent_destination_lot_usage",
+            appliedEffectsRetained: true,
+          },
+        }),
+      })
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
           .delete(schema.disposalMatches)
           .where(eq(schema.disposalMatches.id, dependentUsage.dependentMatchId))
       })
     )
 
-    expect((await reconcile()).needsReview).toBe(1)
+    expect((await reconcile()).autoApplied).toBe(1)
 
     const retriedState = await runPg(
       Effect.gen(function* () {
@@ -1983,10 +2024,10 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(retriedState.reconciliation).toEqual(
       expect.objectContaining({
-        status: "needs_review",
-        canonicalTransferId: null,
-        canonicalTransactionId: null,
-        matchReason: "multiple_candidate_onchain_receipts",
+        status: "auto_applied",
+        canonicalTransferId: secondReceipt.transferId,
+        canonicalTransactionId: secondReceipt.transactionId,
+        matchReason: "deterministic_wallet_receipt_match",
         reviewMetadata: expect.not.objectContaining({ rollback: expect.anything() }),
       })
     )
