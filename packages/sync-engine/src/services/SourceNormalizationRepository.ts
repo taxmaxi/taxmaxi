@@ -321,6 +321,8 @@ export interface PersistNormalizedSourceArtifactsContext {
  * PersistNormalizedSourceArtifactsParamsBase - Shared normalized artifact inputs.
  */
 export interface PersistNormalizedSourceArtifactsParamsBase {
+  /** Active sync job that should receive an atomic replay follow-up when stale approval is found. */
+  readonly replayRequestJobId?: string | undefined
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined

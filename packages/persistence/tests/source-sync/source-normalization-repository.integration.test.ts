@@ -326,6 +326,7 @@ describe("SourceNormalizationRepositoryLive", () => {
 
   it("requests replay when an asset mapping was approved after artifacts were prepared", async () => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000701"
+    const replayRequestJobId = "00000000-0000-4000-8000-000000000703"
     const timestamp = new Date("2025-01-01T10:00:00.000Z")
 
     await runPg(
@@ -354,12 +355,20 @@ describe("SourceNormalizationRepositoryLive", () => {
           reviewerNotes: "Approved while normalization was in flight",
           sourceNotes: null,
         })
+        yield* db.insert(schema.processingJobs).values({
+          id: replayRequestJobId,
+          sourceId: TEST_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          mode: "sync",
+          status: "processing",
+        })
       })
     )
 
     const result = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
         repository.persistNormalizedArtifacts({
+          replayRequestJobId,
           transaction: {
             sourceId: TEST_SOURCE_ID,
             sourceRawRecordId: TEST_RAW_RECORD_ID,
@@ -432,6 +441,22 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     expect(result.requiresReplay).toBe(true)
+    const replayState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .select({ followUpMode: schema.processingJobs.followUpMode })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.id, replayRequestJobId))
+        const [rawRecord] = yield* db
+          .select({ normalizedAt: schema.sourceRecordsRaw.normalizedAt })
+          .from(schema.sourceRecordsRaw)
+          .where(eq(schema.sourceRecordsRaw.id, TEST_RAW_RECORD_ID))
+        return { job, rawRecord }
+      })
+    )
+    expect(replayState.job?.followUpMode).toBe("replay")
+    expect(replayState.rawRecord?.normalizedAt).not.toBeNull()
   })
 
   it("serializes pending mapping approval until normalized artifacts commit", async () => {

@@ -2020,6 +2020,40 @@ const make = Effect.gen(function* () {
             ({ mappingStatus }) => mappingStatus === "approved"
           )
 
+          if (requiresReplay && params.replayRequestJobId !== undefined) {
+            const [replayRequestJob] = yield* tx
+              .update(schema.processingJobs)
+              .set({ followUpMode: "replay", updatedAt: nowDate() })
+              .where(
+                and(
+                  eq(schema.processingJobs.id, params.replayRequestJobId),
+                  eq(schema.processingJobs.sourceId, params.transaction.sourceId),
+                  eq(schema.processingJobs.principalId, params.transaction.principalId),
+                  inArray(schema.processingJobs.status, ["pending", "processing"])
+                )
+              )
+              .returning({ id: schema.processingJobs.id })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.requestReplayFollowUp"
+                )
+              )
+
+            if (replayRequestJob === undefined) {
+              return yield* Effect.fail(
+                toSyncEngineStorageError({
+                  operation:
+                    "sourceNormalizationRepository.persistNormalizedArtifacts.requestReplayFollowUp",
+                  error: {
+                    replayRequestJobId: params.replayRequestJobId,
+                    sourceId: params.transaction.sourceId,
+                    principalId: params.transaction.principalId,
+                  },
+                })
+              )
+            }
+          }
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,

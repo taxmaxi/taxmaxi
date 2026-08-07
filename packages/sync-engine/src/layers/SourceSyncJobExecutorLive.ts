@@ -94,7 +94,6 @@ type SourceSyncExecutionError =
   | SyncEngineStorageError
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
-const DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS = 3
 const DEFAULT_SOURCE_SYNC_WORKER_ID = "source-sync-inline-executor"
 
 const UnknownSyncErrorSchema = Schema.Struct({
@@ -226,10 +225,12 @@ const make = Effect.gen(function* () {
 
   const normalizeRawRecord = ({
     source,
+    jobId,
     rawRecord,
     normalizeRecord,
   }: {
     readonly source: SourceSyncSource
+    readonly jobId: string
     readonly rawRecord: SourceRawRecord
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
@@ -257,6 +258,7 @@ const make = Effect.gen(function* () {
       }
 
       const persistenceResult = yield* sourceNormalizationRepository.persistNormalizedArtifacts({
+        replayRequestJobId: jobId,
         transaction: normalization.transaction,
         venueContext: normalization.venueContext,
         onchainContext: normalization.onchainContext,
@@ -268,16 +270,9 @@ const make = Effect.gen(function* () {
       })
 
       if (persistenceResult.requiresReplay) {
-        const replayJob = yield* sourceSyncJobRepository.createOrReuseJob({
-          sourceId: source.id,
-          principalId: source.principalId,
-          mode: "replay",
-          maxAttempts: DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS,
-        })
-
         yield* Effect.logInfo(
-          { sourceId: source.id, replayJobId: replayJob.id },
-          "Requested replay after an in-flight asset approval"
+          { sourceId: source.id, jobId },
+          "Recorded replay follow-up after an in-flight asset approval"
         )
       }
 
@@ -303,10 +298,12 @@ const make = Effect.gen(function* () {
 
   const normalizeRawBatch = ({
     source,
+    jobId,
     rawRecords,
     normalizeRecord,
   }: {
     readonly source: SourceSyncSource
+    readonly jobId: string
     readonly rawRecords: ReadonlyArray<SourceRawRecord>
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
@@ -314,7 +311,7 @@ const make = Effect.gen(function* () {
       rawRecords,
       { normalizedRecords: 0, failedRecords: 0, failedRawRecordIds: [] } as NormalizationSummary,
       (state, rawRecord) =>
-        normalizeRawRecord({ source, rawRecord, normalizeRecord }).pipe(
+        normalizeRawRecord({ source, jobId, rawRecord, normalizeRecord }).pipe(
           Effect.map((summary) => ({
             normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
             failedRecords: state.failedRecords + summary.failedRecords,
@@ -380,6 +377,7 @@ const make = Effect.gen(function* () {
               )
             const normalization = yield* normalizeRawBatch({
               source,
+              jobId,
               rawRecords,
               normalizeRecord,
             }).pipe(
@@ -426,10 +424,12 @@ const make = Effect.gen(function* () {
 
   const replayFailedRawRecords = ({
     source,
+    jobId,
     normalizeRecord,
     countedFailedRawRecordIds,
   }: {
     readonly source: SourceSyncSource
+    readonly jobId: string
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
     readonly countedFailedRawRecordIds: ReadonlySet<string>
   }): Effect.Effect<ReplaySummary, SyncEngineStorageError> =>
@@ -444,6 +444,7 @@ const make = Effect.gen(function* () {
 
       const replaySummary = yield* normalizeRawBatch({
         source,
+        jobId,
         rawRecords: replayCandidates,
         normalizeRecord,
       })
@@ -737,6 +738,7 @@ const make = Effect.gen(function* () {
       // run because a sibling row was on a later page can normalize now.
       const replaySummary = yield* replayFailedRawRecords({
         source,
+        jobId,
         normalizeRecord,
         countedFailedRawRecordIds: classification.failedRawRecordIds,
       }).pipe(
