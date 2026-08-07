@@ -196,6 +196,24 @@ const assetCanonicalizationResponseBody = JSON.stringify({
   },
 })
 
+const providerAssetApprovalResponseBody = JSON.stringify({
+  id: "00000000-0000-4000-8000-000000000009",
+  provider: "helius-solana",
+  providerAssetId: "PrivateMint1111111111111111111111111111111111",
+  naturalKey: "solana:mint:PrivateMint1111111111111111111111111111111111",
+  currencyCode: "PRIVATE",
+  name: "Private Token",
+  exponent: 6,
+  providerType: "spl-token",
+  mappingKind: "asset",
+  canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+  assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+  canonicalFiatCurrency: null,
+  mappingStatus: "approved",
+  reviewerNotes: "Approved private mint.",
+  sourceNotes: "Approved by an admin with an existing canonical asset.",
+})
+
 const emptySourceTransactionsResponseBody = JSON.stringify({
   transactions: [],
   page: { nextCursor: null, hasMore: false },
@@ -629,6 +647,7 @@ describe("TaxMaxi Promise client", () => {
     const responseBodies = [
       emptyProviderAssetReviewsResponseBody,
       assetCanonicalizationResponseBody,
+      providerAssetApprovalResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
       apiKey: "tm_assets",
@@ -674,6 +693,17 @@ describe("TaxMaxi Promise client", () => {
         mappingStatus: "approved",
       },
     })
+    await expect(
+      taxmaxi.assets.approveProviderAsset({
+        id: providerAssetId,
+        canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+        reviewerNotes: "Approved private mint.",
+      })
+    ).resolves.toMatchObject({
+      assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+      mappingStatus: "approved",
+    })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
@@ -681,6 +711,9 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve",
       }),
     ])
   })

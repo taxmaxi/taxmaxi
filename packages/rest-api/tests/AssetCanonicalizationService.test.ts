@@ -81,7 +81,7 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(representationId)
   })
 
-  it("surfaces replay failures and allows retrying an approved provider asset", async () => {
+  it("supports replay retries and manual approval for an observed Solana token", async () => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000003"
     const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
     const representationId = "00000000-0000-4000-8000-000000000005"
@@ -150,11 +150,20 @@ describe("AssetCanonicalizationService", () => {
       Layer.provide(Layer.succeed(ProviderAssetRepository, providerAssetRepository)),
       Layer.provide(
         Layer.succeed(AssetRepository, {
-          findAssetById: () => Effect.dieMessage("findAssetById should not be called"),
+          findAssetById: ({ assetId }) =>
+            Effect.succeed(
+              assetId === canonicalAssetId
+                ? Option.some({ id: canonicalAssetId, symbol: "USDC" })
+                : Option.none()
+            ),
           findAssetByCoinGeckoId: () =>
             Effect.dieMessage("findAssetByCoinGeckoId should not be called"),
-          findRepresentationById: () =>
-            Effect.dieMessage("findRepresentationById should not be called"),
+          findRepresentationById: ({ assetRepresentationId }) =>
+            Effect.succeed(
+              assetRepresentationId === representationId
+                ? Option.some({ id: representationId, assetId: canonicalAssetId, symbol: "USDC" })
+                : Option.none()
+            ),
           findNativeRepresentationForBlockchain: () =>
             Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
           findRepresentationByBlockchainAndAddress: () =>
@@ -259,6 +268,26 @@ describe("AssetCanonicalizationService", () => {
       "list-sources",
       `replay:${principalId}:${sourceId}`,
     ])
+
+    const manuallyApproved = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId,
+          assetRepresentationId: representationId,
+          reviewerNotes: "Approved private mint",
+        })
+      ).pipe(Effect.provide(layer))
+    )
+
+    expect(manuallyApproved.mapping).toMatchObject({
+      canonicalAssetId,
+      assetRepresentationId: representationId,
+      mappingStatus: "approved",
+    })
+    expect(sourceNotes.at(-1)).toBe(
+      "transfer_reconciliation_evidence: observed Solana mint\nApproved by an admin with an existing canonical asset."
+    )
   })
 
   it("rejects a native asset resolution for an observed Solana token", () => {

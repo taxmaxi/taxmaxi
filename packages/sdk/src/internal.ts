@@ -27,6 +27,7 @@ export type {
   InternalAssetsEffectResource,
   InternalAssetsPromiseResource,
   ProviderAssetReview,
+  ProviderAssetApprovalInput,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
 } from "./assets/index.ts"

@@ -12,6 +12,7 @@ import {
   type CanonicalBlockchainDraft,
   type EconomicAssetDraft,
   type ProviderAssetRecord,
+  type ProviderAssetReviewRecord,
 } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -33,6 +34,7 @@ import {
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
+const MANUAL_SOURCE_NOTES = "Approved by an admin with an existing canonical asset."
 
 const appendSourceNote = ({
   existing,
@@ -430,6 +432,191 @@ const make = Effect.gen(function* () {
   const mapCoinGeckoError = (error: { readonly message: string }) =>
     new AssetCanonicalizationProviderError({ message: error.message })
 
+  const loadProviderAssetReview = ({
+    providerAssetRowId,
+  }: {
+    readonly providerAssetRowId: string
+  }) =>
+    providerAssetRepository.findProviderAssetReviewById({ providerAssetRowId }).pipe(
+      Effect.mapError(
+        () =>
+          new AssetCanonicalizationInternalError({
+            message: "Failed to load provider asset review row.",
+          })
+      ),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new AssetCanonicalizationNotFoundError({ message: "Provider asset not found." })
+            ),
+          onSome: Effect.succeed,
+        })
+      )
+    )
+
+  const validateApprovableProviderAsset = (
+    providerAssetReview: ProviderAssetReviewRecord
+  ): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+    const mappingStatus = providerAssetReview.mapping?.mappingStatus
+    if (mappingStatus !== "pending_review" && mappingStatus !== "approved") {
+      return Effect.fail(
+        makeBadRequest("Provider asset mapping cannot be approved from its current state.")
+      )
+    }
+
+    return providerAssetReview.providerAsset.providerType?.trim().toLowerCase() === "fiat"
+      ? Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
+      : Effect.void
+  }
+
+  const loadApprovedProviderAssetAndReplay = ({
+    providerAssetRowId,
+  }: {
+    readonly providerAssetRowId: string
+  }) =>
+    Effect.gen(function* () {
+      const affectedSources = yield* providerAssetRepository
+        .listProviderAssetSources({ providerAssetRowId })
+        .pipe(
+          Effect.mapError(
+            () =>
+              new AssetCanonicalizationInternalError({
+                message: "Failed to load sources affected by provider asset approval.",
+              })
+          )
+        )
+
+      const approvedProviderAsset = yield* providerAssetRepository
+        .findProviderAssetReviewById({ providerAssetRowId })
+        .pipe(
+          Effect.mapError(
+            () =>
+              new AssetCanonicalizationInternalError({
+                message: "Failed to load approved provider asset mapping.",
+              })
+          )
+        )
+
+      if (Option.isNone(approvedProviderAsset)) {
+        return yield* Effect.fail(
+          new AssetCanonicalizationInternalError({
+            message: "Approved provider asset mapping was not available after update.",
+          })
+        )
+      }
+
+      yield* Effect.forEach(affectedSources, ({ principalId, sourceId }) =>
+        sourceSyncService.replaySourceSyncJob({ principalId, sourceId }).pipe(
+          Effect.tap(({ jobId, status }) =>
+            Effect.logInfo(
+              { principalId, sourceId, providerAssetRowId, jobId, status },
+              "Queued source replay after provider asset approval"
+            )
+          ),
+          Effect.tapError((error) =>
+            Effect.logError(
+              { principalId, sourceId, providerAssetRowId, error },
+              "Failed to queue source replay after provider asset approval"
+            )
+          ),
+          Effect.mapError(
+            () =>
+              new AssetCanonicalizationInternalError({
+                message: `Failed to queue source replay for source ${sourceId}.`,
+              })
+          )
+        )
+      )
+
+      return approvedProviderAsset.value
+    })
+
+  const approveProviderAssetMapping: AssetCanonicalizationServiceShape["approveProviderAssetMapping"] =
+    ({ providerAssetRowId, canonicalAssetId, assetRepresentationId, reviewerNotes }) =>
+      Effect.gen(function* () {
+        const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
+        yield* validateApprovableProviderAsset(providerAssetReview)
+
+        const canonicalAsset = yield* assetRepository
+          .findAssetById({ assetId: canonicalAssetId })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to load the selected canonical asset.",
+                })
+            )
+          )
+        if (Option.isNone(canonicalAsset)) {
+          return yield* Effect.fail(
+            new AssetCanonicalizationNotFoundError({ message: "Canonical asset not found." })
+          )
+        }
+
+        if (assetRepresentationId !== null) {
+          const representation = yield* assetRepository
+            .findRepresentationById({ assetRepresentationId })
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new AssetCanonicalizationInternalError({
+                    message: "Failed to load the selected asset representation.",
+                  })
+              )
+            )
+          if (Option.isNone(representation)) {
+            return yield* Effect.fail(
+              new AssetCanonicalizationNotFoundError({ message: "Asset representation not found." })
+            )
+          }
+          if (representation.value.assetId !== canonicalAssetId) {
+            return yield* Effect.fail(
+              makeBadRequest("Asset representation does not belong to the selected asset.")
+            )
+          }
+        }
+
+        const observedRepresentationId = representationIdForProviderObservation({
+          providerAsset: providerAssetReview.providerAsset,
+          representationId: assetRepresentationId ?? "",
+        })
+        if (observedRepresentationId !== null && assetRepresentationId === null) {
+          return yield* Effect.fail(
+            makeBadRequest("Observed on-chain provider assets require an asset representation.")
+          )
+        }
+
+        yield* providerAssetRepository
+          .upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId,
+                mappingKind: "asset",
+                canonicalAssetId,
+                assetRepresentationId,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes,
+                sourceNotes: appendSourceNote({
+                  existing: providerAssetReview.mapping?.sourceNotes,
+                  note: MANUAL_SOURCE_NOTES,
+                }),
+              },
+            ],
+          })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to approve provider asset mapping.",
+                })
+            )
+          )
+
+        return yield* loadApprovedProviderAssetAndReplay({ providerAssetRowId })
+      })
+
   const resolveCoinGeckoDrafts = ({
     providerAsset,
   }: {
@@ -549,36 +736,11 @@ const make = Effect.gen(function* () {
   const canonicalizeProviderAssetFromCoinGecko: AssetCanonicalizationServiceShape["canonicalizeProviderAssetFromCoinGecko"] =
     ({ providerAssetRowId, reviewerNotes }) =>
       Effect.gen(function* () {
-        const providerAssetReview = yield* providerAssetRepository
-          .findProviderAssetReviewById({ providerAssetRowId })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to load provider asset review row.",
-                })
-            )
-          )
-
-        if (Option.isNone(providerAssetReview)) {
-          return yield* Effect.fail(
-            new AssetCanonicalizationNotFoundError({ message: "Provider asset not found." })
-          )
-        }
-
-        const mappingStatus = providerAssetReview.value.mapping?.mappingStatus
-        if (mappingStatus !== "pending_review" && mappingStatus !== "approved") {
-          return yield* Effect.fail(
-            makeBadRequest("Provider asset mapping cannot be approved from its current state.")
-          )
-        }
-
-        if (providerAssetReview.value.providerAsset.providerType?.trim().toLowerCase() === "fiat") {
-          return yield* Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
-        }
+        const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
+        yield* validateApprovableProviderAsset(providerAssetReview)
 
         const resolved = yield* resolveCoinGeckoDrafts({
-          providerAsset: providerAssetReview.value.providerAsset,
+          providerAsset: providerAssetReview.providerAsset,
         })
         const canonicalAsset = yield* assetRepository
           .upsertEconomicAssetRepresentation({
@@ -603,14 +765,14 @@ const make = Effect.gen(function* () {
                 mappingKind: "asset",
                 canonicalAssetId: canonicalAsset.id,
                 assetRepresentationId: representationIdForProviderObservation({
-                  providerAsset: providerAssetReview.value.providerAsset,
+                  providerAsset: providerAssetReview.providerAsset,
                   representationId: canonicalAsset.representationId,
                 }),
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,
                 sourceNotes: appendSourceNote({
-                  existing: providerAssetReview.value.mapping?.sourceNotes,
+                  existing: providerAssetReview.mapping?.sourceNotes,
                   note: COINGECKO_SOURCE_NOTES,
                 }),
               },
@@ -625,67 +787,19 @@ const make = Effect.gen(function* () {
             )
           )
 
-        const affectedSources = yield* providerAssetRepository
-          .listProviderAssetSources({ providerAssetRowId })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to load sources affected by provider asset approval.",
-                })
-            )
-          )
-
-        const approvedProviderAsset = yield* providerAssetRepository
-          .findProviderAssetReviewById({ providerAssetRowId })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to load approved provider asset mapping.",
-                })
-            )
-          )
-
-        if (Option.isNone(approvedProviderAsset)) {
-          return yield* Effect.fail(
-            new AssetCanonicalizationInternalError({
-              message: "Approved provider asset mapping was not available after update.",
-            })
-          )
-        }
-
-        yield* Effect.forEach(affectedSources, ({ principalId, sourceId }) =>
-          sourceSyncService.replaySourceSyncJob({ principalId, sourceId }).pipe(
-            Effect.tap(({ jobId, status }) =>
-              Effect.logInfo(
-                { principalId, sourceId, providerAssetRowId, jobId, status },
-                "Queued source replay after provider asset approval"
-              )
-            ),
-            Effect.tapError((error) =>
-              Effect.logError(
-                { principalId, sourceId, providerAssetRowId, error },
-                "Failed to queue source replay after provider asset approval"
-              )
-            ),
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: `Failed to queue source replay for source ${sourceId}.`,
-                })
-            )
-          )
-        )
+        const approvedProviderAsset = yield* loadApprovedProviderAssetAndReplay({
+          providerAssetRowId,
+        })
 
         return {
-          providerAsset: approvedProviderAsset.value,
+          providerAsset: approvedProviderAsset,
           canonicalAsset,
           evidence: resolved.evidence,
         }
       })
 
   return AssetCanonicalizationService.of({
+    approveProviderAssetMapping,
     canonicalizeProviderAssetFromCoinGecko,
   } satisfies AssetCanonicalizationServiceShape)
 })
