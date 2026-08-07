@@ -107,7 +107,8 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.sources.principalId, principalId),
-            eq(schema.providerTransfers.sourceId, sourceId)
+            eq(schema.providerTransfers.sourceId, sourceId),
+            sql`coalesce(${schema.providerTransfers.metadata}->>'role', 'principal') = 'principal'`
           )
         )
         .orderBy(asc(schema.providerTransfers.timestamp))
