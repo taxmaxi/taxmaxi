@@ -365,7 +365,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             externalId: "tx-stale-approval-1",
             externalGroupId: "signature-stale-approval-1",
             timestamp,
-            transactionType: "transfer",
+            transactionType: null,
             providerTransactionType: "solana_transaction_full",
             providerStatus: "completed",
             providerResourcePath: null,
@@ -416,7 +416,15 @@ describe("SourceNormalizationRepositoryLive", () => {
           ],
           feeTransfers: [],
           transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
+          resolvedTransactionType: {
+            providerTransactionType: "solana_transaction_full",
+            transactionType: null,
+            inventoryEffect: "unknown",
+            taxTreatment: "requires_additional_rule_logic",
+            resolutionStrategy: "no_leg",
+            pairedRecordRequired: false,
+            mappingStatus: "pending_review",
+          },
           legs: [],
         })
       )
