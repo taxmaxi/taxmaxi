@@ -859,13 +859,18 @@ const make = Effect.gen(function* () {
 
       yield* Effect.logInfo({ sourceId: source.id, jobId, provider }, "source-replay:start")
 
-      yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
-        sourceSyncSpan({
-          name: "source-replay.reset-derived-state",
-          attributes: { sourceId: source.id, jobId, provider },
-          kind: "client",
+      yield* sourceReplayRepository
+        .resetSourceDerivedState({
+          sourceId: source.id,
+          expectedPrincipalId: source.principalId,
         })
-      )
+        .pipe(
+          sourceSyncSpan({
+            name: "source-replay.reset-derived-state",
+            attributes: { sourceId: source.id, jobId, provider },
+            kind: "client",
+          })
+        )
       yield* heartbeatSourceSyncJob({ jobId, workerId })
       const rawRecords = yield* sourceRawRecordRepository
         .listAllRawRowsForReplay({ sourceId: source.id })

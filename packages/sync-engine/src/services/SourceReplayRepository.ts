@@ -35,6 +35,7 @@ export interface SourceReplayRepositoryShape {
    */
   readonly resetSourceDerivedState: (params: {
     readonly sourceId: string
+    readonly expectedPrincipalId: string
   }) => Effect.Effect<void, SourceReplayDependencyError | SyncEngineStorageError>
 }
 

@@ -28,6 +28,9 @@ const context = makeIntegrationTestDatabaseContext({
 })
 
 const runPg = context.runPg
+const CLAIMED_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000803"
+const REPLAY_LOCK_ADDRESS_ID = "00000000-0000-0000-0000-000000000101"
+const REPLAY_LOCK_SOURCE_ID = "00000000-0000-0000-0000-000000000102"
 const REPLAY_DESTINATION_ADDRESS_ID = "00000000-0000-4000-8000-000000000801"
 const REPLAY_DESTINATION_SOURCE_ID = "00000000-0000-4000-8000-000000000802"
 
@@ -104,7 +107,10 @@ describe("SourceReplayRepositoryLive", () => {
 
     const replayWaitingForSource = runReplayRepository(
       Effect.flatMap(SourceReplayRepository, (repository) =>
-        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+        repository.resetSourceDerivedState({
+          sourceId: TEST_SOURCE_ID,
+          expectedPrincipalId: TEST_PRINCIPAL_ID,
+        })
       )
     ).then(() => "completed" as const)
 
@@ -120,6 +126,117 @@ describe("SourceReplayRepositoryLive", () => {
     const [, laterOutcome] = await Promise.all([heldSourceLock, replayWaitingForSource])
 
     expect(laterOutcome).toBe("completed")
+  })
+
+  it("rejects replay when the source owner changes before its lock is acquired", async () => {
+    const timestamp = new Date("2025-04-09T10:00:00.000Z")
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.principals).values({
+          id: CLAIMED_PRINCIPAL_ID,
+          kind: "anonymous_wallet",
+          userId: null,
+        })
+        yield* db.insert(schema.addresses).values({
+          id: REPLAY_LOCK_ADDRESS_ID,
+          address: "bc1qreplaylock00000000000000000000000000000",
+          type: "bitcoin",
+          name: "Replay lock",
+          principalId: TEST_PRINCIPAL_ID,
+        })
+        yield* db.insert(schema.sources).values({
+          id: REPLAY_LOCK_SOURCE_ID,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Replay lock source",
+          providerKey: "bitcoin",
+          sourceableType: "onchain",
+          addressId: REPLAY_LOCK_ADDRESS_ID,
+          cexAccountId: null,
+        })
+        yield* db.insert(schema.transactions).values({
+          sourceId: TEST_SOURCE_ID,
+          externalId: "replay-owner-change-transaction",
+          timestamp,
+          transactionType: "internal_transfer",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          principalId: TEST_PRINCIPAL_ID,
+        })
+      })
+    )
+
+    const blockerLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseBlockerLock = await Effect.runPromise(Deferred.make<void>())
+    const heldBlockerLock = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, REPLAY_LOCK_SOURCE_ID))
+              .for("update")
+            yield* Deferred.succeed(blockerLockAcquired, undefined)
+            yield* Deferred.await(releaseBlockerLock)
+          })
+        )
+      })
+    )
+
+    await Effect.runPromise(Deferred.await(blockerLockAcquired))
+
+    const replayResultPromise = runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({
+          sourceId: TEST_SOURCE_ID,
+          expectedPrincipalId: TEST_PRINCIPAL_ID,
+        })
+      ).pipe(Effect.either)
+    )
+
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.sources)
+          .set({ principalId: CLAIMED_PRINCIPAL_ID })
+          .where(eq(schema.sources.id, TEST_SOURCE_ID))
+      })
+    )
+
+    await Effect.runPromise(Deferred.succeed(releaseBlockerLock, undefined))
+    const [, replayResult] = await Promise.all([heldBlockerLock, replayResultPromise])
+
+    expect(replayResult).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "SyncEngineStorageError",
+        operation: "sourceReplayRepository.resetSourceDerivedState.verifyLockedOwnership",
+      },
+    })
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [source] = yield* db
+          .select({ principalId: schema.sources.principalId })
+          .from(schema.sources)
+          .where(eq(schema.sources.id, TEST_SOURCE_ID))
+        const transactions = yield* db
+          .select({ externalId: schema.transactions.externalId })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+        return { source, transactions }
+      })
+    )
+
+    expect(state.source?.principalId).toBe(CLAIMED_PRINCIPAL_ID)
+    expect(state.transactions).toContainEqual({
+      externalId: "replay-owner-change-transaction",
+    })
   })
 
   it("removes approved cross-source reconciliation effects before replay deletes the matched source", async () => {
@@ -367,7 +484,10 @@ describe("SourceReplayRepositoryLive", () => {
 
     await runReplayRepository(
       Effect.flatMap(SourceReplayRepository, (repository) =>
-        repository.resetSourceDerivedState({ sourceId: REPLAY_DESTINATION_SOURCE_ID })
+        repository.resetSourceDerivedState({
+          sourceId: REPLAY_DESTINATION_SOURCE_ID,
+          expectedPrincipalId: TEST_PRINCIPAL_ID,
+        })
       )
     )
 
@@ -504,6 +624,7 @@ describe("SourceReplayRepositoryLive", () => {
       Effect.flatMap(SourceReplayRepository, (repository) =>
         repository.resetSourceDerivedState({
           sourceId: TEST_SOURCE_ID,
+          expectedPrincipalId: TEST_PRINCIPAL_ID,
         })
       )
     )
@@ -707,7 +828,10 @@ describe("SourceReplayRepositoryLive", () => {
 
       const replayResult = await runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
-          repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+          repository.resetSourceDerivedState({
+            sourceId: TEST_SOURCE_ID,
+            expectedPrincipalId: TEST_PRINCIPAL_ID,
+          })
         ).pipe(Effect.either)
       )
 

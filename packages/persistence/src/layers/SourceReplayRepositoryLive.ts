@@ -33,6 +33,7 @@ const make = Effect.gen(function* () {
 
   const resetSourceDerivedState: SourceReplayRepositoryShape["resetSourceDerivedState"] = ({
     sourceId,
+    expectedPrincipalId,
   }) =>
     db
       .transaction((tx) =>
@@ -48,14 +49,23 @@ const make = Effect.gen(function* () {
               )
             )
 
-          if (source === undefined) {
-            return
+          if (source === undefined || source.principalId !== expectedPrincipalId) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation: "sourceReplayRepository.resetSourceDerivedState.verifyOwnership",
+                error: {
+                  sourceId,
+                  expectedPrincipalId,
+                  actualPrincipalId: source?.principalId ?? null,
+                },
+              })
+            )
           }
 
           yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
-            .where(eq(schema.sources.principalId, source.principalId))
+            .where(eq(schema.sources.principalId, expectedPrincipalId))
             .orderBy(asc(schema.sources.id))
             .for("update")
             .pipe(
@@ -63,6 +73,31 @@ const make = Effect.gen(function* () {
                 "sourceReplayRepository.resetSourceDerivedState.lockPrincipalSources"
               )
             )
+
+          const [lockedSource] = yield* tx
+            .select({ principalId: schema.sources.principalId })
+            .from(schema.sources)
+            .where(eq(schema.sources.id, sourceId))
+            .limit(1)
+            .for("update")
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.recheckOwnership"
+              )
+            )
+
+          if (lockedSource?.principalId !== expectedPrincipalId) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation: "sourceReplayRepository.resetSourceDerivedState.verifyLockedOwnership",
+                error: {
+                  sourceId,
+                  expectedPrincipalId,
+                  actualPrincipalId: lockedSource?.principalId ?? null,
+                },
+              })
+            )
+          }
 
           const crossSourceAllocations = yield* tx
             .select({
@@ -265,7 +300,7 @@ const make = Effect.gen(function* () {
                   new SourceReplayDependencyError({
                     sourceId,
                     dependentSourceIds: [...new Set(dependentSourceIds)].sort(),
-                    affectedPrincipalIds: [source.principalId],
+                    affectedPrincipalIds: [expectedPrincipalId],
                   })
                 )
               }
