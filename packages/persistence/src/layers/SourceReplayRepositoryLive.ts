@@ -201,7 +201,13 @@ const make = Effect.gen(function* () {
             )
             .where(
               and(
-                inArray(schema.transferReconciliations.status, ["auto_applied", "approved"]),
+                or(
+                  inArray(schema.transferReconciliations.status, ["auto_applied", "approved"]),
+                  and(
+                    eq(schema.transferReconciliations.status, "needs_review"),
+                    sql`${schema.transferReconciliations.reviewMetadata}->'rollback'->>'appliedEffectsRetained' = 'true'`
+                  )
+                ),
                 or(
                   eq(providerTransactionTable.sourceId, sourceId),
                   eq(canonicalTransactionTable.sourceId, sourceId)
