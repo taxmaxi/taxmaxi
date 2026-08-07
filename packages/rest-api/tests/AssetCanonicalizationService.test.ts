@@ -95,7 +95,7 @@ describe("AssetCanonicalizationService", () => {
     const sourceNotes: Array<string | null> = []
     let mappingApproved = false
     let replayAttempts = 0
-    const providerAsset = makeProviderAsset({
+    let providerAsset: ProviderAssetRecord = makeProviderAsset({
       id: providerAssetRowId,
       provider: "helius-solana",
       providerAssetId: mintAddress,
@@ -362,6 +362,28 @@ describe("AssetCanonicalizationService", () => {
     expect(sourceNotes.at(-1)).toBe(
       "transfer_reconciliation_evidence: observed Solana mint\nApproved by an admin with an existing canonical asset."
     )
+
+    const eventsBeforeChainlessApproval = [...events]
+    providerAsset = makeProviderAsset({ id: providerAssetRowId })
+    const chainlessApproval = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId,
+          assetRepresentationId: representationId,
+          reviewerNotes: "No observed chain",
+        })
+      ).pipe(Effect.either, Effect.provide(layer))
+    )
+
+    expect(chainlessApproval).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "AssetCanonicalizationBadRequestError",
+        message: "Provider assets without an observed chain cannot select a representation.",
+      },
+    })
+    expect(events).toEqual(eventsBeforeChainlessApproval)
   })
 
   it("rejects a native asset resolution for an observed Solana token", () => {

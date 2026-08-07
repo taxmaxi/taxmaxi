@@ -263,6 +263,33 @@ export const representationIdForProviderObservation = ({
     ? representationId
     : null
 
+const validateManualRepresentationSelection = ({
+  providerAsset,
+  assetRepresentationId,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly assetRepresentationId: string | null
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+  const observedRepresentationId = representationIdForProviderObservation({
+    providerAsset,
+    representationId: assetRepresentationId ?? "",
+  })
+
+  if (observedRepresentationId === null && assetRepresentationId !== null) {
+    return Effect.fail(
+      makeBadRequest("Provider assets without an observed chain cannot select a representation.")
+    )
+  }
+
+  if (observedRepresentationId !== null && assetRepresentationId === null) {
+    return Effect.fail(
+      makeBadRequest("Observed on-chain provider assets require an asset representation.")
+    )
+  }
+
+  return Effect.void
+}
+
 export const validateManualRepresentationIdentity = ({
   providerAsset,
   representation,
@@ -572,6 +599,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
         yield* validateApprovableProviderAsset(providerAssetReview)
+        yield* validateManualRepresentationSelection({
+          providerAsset: providerAssetReview.providerAsset,
+          assetRepresentationId,
+        })
 
         const canonicalAsset = yield* assetRepository
           .findAssetById({ assetId: canonicalAssetId })
@@ -615,16 +646,6 @@ const make = Effect.gen(function* () {
             providerAsset: providerAssetReview.providerAsset,
             representation: representation.value,
           })
-        }
-
-        const observedRepresentationId = representationIdForProviderObservation({
-          providerAsset: providerAssetReview.providerAsset,
-          representationId: assetRepresentationId ?? "",
-        })
-        if (observedRepresentationId !== null && assetRepresentationId === null) {
-          return yield* Effect.fail(
-            makeBadRequest("Observed on-chain provider assets require an asset representation.")
-          )
         }
 
         yield* providerAssetRepository
