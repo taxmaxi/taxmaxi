@@ -90,6 +90,7 @@ describe("AssetCanonicalizationService", () => {
     const sourceId = "00000000-0000-4000-8000-000000000008"
     const mintAddress = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     const events: Array<string> = []
+    const sourceNotes: Array<string | null> = []
     let mappingApproved = false
     let replayAttempts = 0
     const providerAsset = makeProviderAsset({
@@ -104,10 +105,11 @@ describe("AssetCanonicalizationService", () => {
     })
     const providerAssetRepository: ProviderAssetRepositoryShape = {
       upsertProviderAssets: () => Effect.dieMessage("upsertProviderAssets should not be called"),
-      upsertProviderAssetMappings: () =>
+      upsertProviderAssetMappings: ({ mappings }) =>
         Effect.sync(() => {
           mappingApproved = true
           events.push("approve")
+          sourceNotes.push(mappings[0]?.sourceNotes ?? null)
           return 1
         }),
       seedProviderAssetMappingsIfMissing: () =>
@@ -130,7 +132,7 @@ describe("AssetCanonicalizationService", () => {
               canonicalFiatCurrency: null,
               mappingStatus: mappingApproved ? "approved" : "pending_review",
               reviewerNotes: null,
-              sourceNotes: null,
+              sourceNotes: "transfer_reconciliation_evidence: observed Solana mint",
             },
           })
         ),
@@ -237,11 +239,18 @@ describe("AssetCanonicalizationService", () => {
       expect(firstResult.left._tag).toBe("AssetCanonicalizationInternalError")
     }
     expect(mappingApproved).toBe(true)
+    expect(sourceNotes).toEqual([
+      "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
+    ])
     expect(events).toEqual(["approve", "list-sources", `replay:${principalId}:${sourceId}`])
 
     const result = await Effect.runPromise(canonicalize().pipe(Effect.provide(layer)))
 
     expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
+    expect(sourceNotes).toEqual([
+      "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
+      "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
+    ])
     expect(events).toEqual([
       "approve",
       "list-sources",

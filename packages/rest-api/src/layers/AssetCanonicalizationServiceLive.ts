@@ -34,6 +34,20 @@ import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoA
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
 
+const appendSourceNote = ({
+  existing,
+  note,
+}: {
+  readonly existing: string | null | undefined
+  readonly note: string
+}) => {
+  if (existing === null || existing === undefined || existing.trim() === "") {
+    return note
+  }
+
+  return existing.includes(note) ? existing : `${existing}\n${note}`
+}
+
 const CoinGeckoAssetPlatform = Schema.Struct({
   id: Schema.String,
   chain_identifier: Schema.NullOr(Schema.Number),
@@ -595,7 +609,10 @@ const make = Effect.gen(function* () {
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,
-                sourceNotes: COINGECKO_SOURCE_NOTES,
+                sourceNotes: appendSourceNote({
+                  existing: providerAssetReview.value.mapping?.sourceNotes,
+                  note: COINGECKO_SOURCE_NOTES,
+                }),
               },
             ],
           })
