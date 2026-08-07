@@ -122,7 +122,7 @@ describe("SourceReplayRepositoryLive", () => {
     expect(laterOutcome).toBe("completed")
   })
 
-  it("removes cross-source reconciliation effects before replay deletes the matched source", async () => {
+  it("removes approved cross-source reconciliation effects before replay deletes the matched source", async () => {
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const fixtureState = await runPg(
       Effect.gen(function* () {
@@ -217,7 +217,7 @@ describe("SourceReplayRepositoryLive", () => {
           providerTransferId: providerTransfer.id,
           canonicalTransferId: canonicalTransfer.id,
           canonicalTransactionId: destinationTransaction.id,
-          status: "auto_applied",
+          status: "approved",
           matchReason: "deterministic_wallet_receipt_match",
           confidence: "1.0000",
           deterministic: true,

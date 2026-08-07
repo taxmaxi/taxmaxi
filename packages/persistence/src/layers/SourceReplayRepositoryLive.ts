@@ -166,7 +166,7 @@ const make = Effect.gen(function* () {
             )
             .where(
               and(
-                eq(schema.transferReconciliations.status, "auto_applied"),
+                inArray(schema.transferReconciliations.status, ["auto_applied", "approved"]),
                 or(
                   eq(providerTransactionTable.sourceId, sourceId),
                   eq(canonicalTransactionTable.sourceId, sourceId)
