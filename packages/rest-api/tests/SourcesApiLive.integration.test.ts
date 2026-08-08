@@ -478,6 +478,9 @@ const reportFixtureIds = {
   internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
   custodyProviderTransferId: "00000000-0000-0000-0000-000000046401",
   custodyMovementId: "00000000-0000-0000-0000-000000046402",
+  secondAddressId: "00000000-0000-0000-0000-000000046501",
+  secondSourceId: "00000000-0000-0000-0000-000000046502",
+  secondSourceTransactionId: "00000000-0000-0000-0000-000000046503",
 } as const
 
 const seedSourceReportRows = ({
@@ -772,6 +775,29 @@ describe("SourcesApiLive", () => {
         .update(schema.fifoLots)
         .set({ remainingAmount: "0.5" })
         .where(eq(schema.fifoLots.id, reportFixtureIds.taxableFifoLotId))
+      yield* db.insert(schema.addresses).values({
+        id: reportFixtureIds.secondAddressId,
+        principalId: fixture.principalId,
+        address: "0x0000000000000000000000000000000000046501",
+        type: "evm",
+        name: "Second wallet",
+      })
+      yield* db.insert(schema.sources).values({
+        id: reportFixtureIds.secondSourceId,
+        principalId: fixture.principalId,
+        addressId: reportFixtureIds.secondAddressId,
+        name: "Second wallet",
+        providerKey: "etherscan",
+        sourceableType: "onchain",
+      })
+      yield* db.insert(schema.transactions).values({
+        id: reportFixtureIds.secondSourceTransactionId,
+        principalId: fixture.principalId,
+        sourceId: reportFixtureIds.secondSourceId,
+        externalId: "second-source-transaction",
+        providerDescription: "Second source transaction",
+        timestamp: new Date("2025-04-10T12:00:00.000Z"),
+      })
 
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
@@ -798,15 +824,113 @@ describe("SourcesApiLive", () => {
         currency: "EUR",
       })
 
-      const transactions = yield* client.sources.listSourceTransactions({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 1 },
+      const transactions = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId, limit: 1 },
       })
       expect(transactions.transactions).toHaveLength(1)
       expect(transactions.transactions[0]?.transactionId).toBe(reportFixtureIds.sellTransactionId)
       expect(transactions.transactions[0]?.movements[0]?.kind).toBe("disposal")
+      expect(transactions.transactions[0]?.source).toMatchObject({
+        sourceId: fixture.sourceId,
+        name: `Coinbase Source ${fixture.sourceId}`,
+        kind: "cex",
+        provider: "coinbase",
+      })
+      expect(transactions.transactions[0]?.classification.key).toBe("sell_fiat")
+      expect(transactions.transactions[0]?.totals).toMatchObject({
+        value: "6000",
+        proceeds: "6000",
+        costBasis: "4000",
+        gainLoss: "2000",
+        currency: "EUR",
+        taxTreatment: "unknown",
+        calculationStatus: "complete",
+      })
       expect(transactions.page.hasMore).toBe(true)
       expect(transactions.page.nextCursor).not.toBeNull()
+
+      const transaction = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(transaction.disposals[0]).toMatchObject({
+        legId: reportFixtureIds.disposalLegId,
+        proceeds: "6000",
+        costBasis: "4000",
+        gainLoss: "2000",
+        taxTreatment: "mixed",
+        calculationStatus: "complete",
+      })
+      expect(transaction.disposals[0]?.matchedLots).toHaveLength(2)
+      expect(transaction.providerTransfers[0]).toMatchObject({
+        providerTransferId: reportFixtureIds.custodyProviderTransferId,
+        direction: "outbound",
+        amount: "0.100000000000000000000000000000",
+      })
+
+      const allTransactions = yield* client.transactions.listTransactions({
+        urlParams: { limit: 10 },
+      })
+      expect(allTransactions.transactions).toHaveLength(3)
+      expect(allTransactions.transactions[0]).toMatchObject({
+        transactionId: reportFixtureIds.secondSourceTransactionId,
+        source: {
+          sourceId: reportFixtureIds.secondSourceId,
+          displayReference: "0x0000000000000000000000000000000000046501",
+        },
+        totals: { calculationStatus: "pending" },
+      })
+
+      const searchedTransactions = yield* client.transactions.listTransactions({
+        urlParams: {
+          search: "BTC",
+          classificationKey: "sell_fiat",
+          reviewState: "unreviewed",
+          limit: 10,
+        },
+      })
+      expect(searchedTransactions.transactions.map((row) => row.transactionId)).toEqual([
+        reportFixtureIds.sellTransactionId,
+      ])
+      const literalWildcardSearch = yield* client.transactions.listTransactions({
+        urlParams: { search: "_", limit: 10 },
+      })
+      expect(literalWildcardSearch.transactions.map((row) => row.transactionId)).toEqual([
+        reportFixtureIds.sellTransactionId,
+        reportFixtureIds.buyTransactionId,
+      ])
+
+      const invalidCursorResult = yield* client.transactions
+        .listTransactions({ urlParams: { cursor: "not-a-cursor" } })
+        .pipe(Effect.either)
+      expect(invalidCursorResult._tag).toBe("Left")
+      if (invalidCursorResult._tag === "Left") {
+        expect(invalidCursorResult.left._tag).toBe("TransactionBadRequestError")
+      }
+
+      const otherUserId = "00000000-0000-0000-0000-000000046901"
+      yield* seedPrincipalUser({
+        userId: otherUserId,
+        principalId: "00000000-0000-0000-0000-000000046902",
+      })
+      const otherClient = yield* makeAuthenticatedClient({ userId: otherUserId })
+      const hiddenTransactions = yield* otherClient.transactions.listTransactions({
+        urlParams: { limit: 10 },
+      })
+      expect(hiddenTransactions.transactions).toEqual([])
+      const hiddenSourceTransactions = yield* otherClient.transactions
+        .listTransactions({ urlParams: { sourceId: fixture.sourceId, limit: 10 } })
+        .pipe(Effect.either)
+      expect(hiddenSourceTransactions._tag).toBe("Left")
+      if (hiddenSourceTransactions._tag === "Left") {
+        expect(hiddenSourceTransactions.left._tag).toBe("TransactionNotFoundError")
+      }
+      const hiddenTransaction = yield* otherClient.transactions
+        .getTransaction({ path: { transactionId: reportFixtureIds.sellTransactionId } })
+        .pipe(Effect.either)
+      expect(hiddenTransaction._tag).toBe("Left")
+      if (hiddenTransaction._tag === "Left") {
+        expect(hiddenTransaction.left._tag).toBe("TransactionNotFoundError")
+      }
 
       const taxEvents = yield* client.sources.listSourceTaxEvents({
         path: { sourceId: fixture.sourceId },
@@ -852,6 +976,537 @@ describe("SourcesApiLive", () => {
       expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual([
         "tax_free",
         "taxable",
+      ])
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("paginates equal timestamps without duplicates or omissions", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      const tiedTransactionId = "00000000-0000-0000-0000-000000046103"
+      const db = yield* drizzle
+      yield* db.insert(schema.transactions).values({
+        id: tiedTransactionId,
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        externalId: "report-sell-tied",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const first = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId, limit: 1 },
+      })
+      if (first.page.nextCursor === null) {
+        return yield* Effect.dieMessage("Expected a cursor after the first transaction page")
+      }
+      const second = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId, cursor: first.page.nextCursor, limit: 1 },
+      })
+      if (second.page.nextCursor === null) {
+        return yield* Effect.dieMessage("Expected a cursor after the second transaction page")
+      }
+      const third = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId, cursor: second.page.nextCursor, limit: 1 },
+      })
+
+      expect([
+        first.transactions[0]?.transactionId,
+        second.transactions[0]?.transactionId,
+        third.transactions[0]?.transactionId,
+      ]).toEqual([
+        tiedTransactionId,
+        reportFixtureIds.sellTransactionId,
+        reportFixtureIds.buyTransactionId,
+      ])
+      expect(first.page).toMatchObject({ hasMore: true })
+      expect(second.page).toMatchObject({ hasMore: true })
+      expect(third.page).toEqual({ hasMore: false, nextCursor: null })
+
+      yield* db.insert(schema.transactionReviews).values({
+        transactionId: tiedTransactionId,
+        principalId: fixture.principalId,
+        reviewStatus: "changed",
+        updatedAt: new Date("2030-01-01T00:00:00.000Z"),
+      })
+      const staleCursor = yield* client.transactions
+        .listTransactions({
+          urlParams: {
+            sourceId: fixture.sourceId,
+            cursor: first.page.nextCursor,
+            limit: 1,
+          },
+        })
+        .pipe(Effect.either)
+      expect(staleCursor._tag).toBe("Left")
+      if (staleCursor._tag === "Left") {
+        expect(staleCursor.left._tag).toBe("TransactionBadRequestError")
+      }
+
+      const refreshed = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId, limit: 1 },
+      })
+      if (refreshed.page.nextCursor === null) {
+        return yield* Effect.dieMessage("Expected a cursor after refreshing the transaction page")
+      }
+      yield* db.insert(schema.transactions).values({
+        id: "00000000-0000-0000-0000-000000046104",
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        externalId: "report-newly-normalized",
+        timestamp: new Date("2025-05-10T12:00:00.000Z"),
+        updatedAt: new Date("2031-01-01T00:00:00.000Z"),
+      })
+      const staleAfterNormalization = yield* client.transactions
+        .listTransactions({
+          urlParams: {
+            sourceId: fixture.sourceId,
+            cursor: refreshed.page.nextCursor,
+            limit: 1,
+          },
+        })
+        .pipe(Effect.either)
+      expect(staleAfterNormalization._tag).toBe("Left")
+      if (staleAfterNormalization._tag === "Left") {
+        expect(staleAfterNormalization.left._tag).toBe("TransactionBadRequestError")
+      }
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("applies transaction classification, category, and review filters independently", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      const db = yield* drizzle
+      yield* db.insert(schema.transactionReviews).values({
+        transactionId: reportFixtureIds.sellTransactionId,
+        principalId: fixture.principalId,
+        reviewStatus: "approved",
+        originalTypeKey: "sell_fiat",
+        currentTypeKey: "sell_fiat",
+        needsReview: false,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const classification = yield* client.transactions.listTransactions({
+        urlParams: { classificationKey: "buy_fiat" },
+      })
+      expect(classification.transactions.map((row) => row.transactionId)).toEqual([
+        reportFixtureIds.buyTransactionId,
+      ])
+      const category = yield* client.transactions.listTransactions({
+        urlParams: { categoryKey: "trade" },
+      })
+      expect(category.transactions.map((row) => row.transactionId)).toEqual([
+        reportFixtureIds.sellTransactionId,
+        reportFixtureIds.buyTransactionId,
+      ])
+      const approved = yield* client.transactions.listTransactions({
+        urlParams: { reviewState: "approved" },
+      })
+      expect(approved.transactions.map((row) => row.transactionId)).toEqual([
+        reportFixtureIds.sellTransactionId,
+      ])
+      const unreviewed = yield* client.transactions.listTransactions({
+        urlParams: { reviewState: "unreviewed" },
+      })
+      expect(unreviewed.transactions.map((row) => row.transactionId)).toEqual([
+        reportFixtureIds.buyTransactionId,
+      ])
+      const noMatch = yield* client.transactions.listTransactions({
+        urlParams: { classificationKey: "airdrop", categoryKey: "income" },
+      })
+      expect(noMatch.transactions).toEqual([])
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("returns selected inspector evidence without raw metadata", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      const rawRecordId = "00000000-0000-0000-0000-000000046507"
+      const addressId = "00000000-0000-0000-0000-000000046508"
+      const db = yield* drizzle
+      yield* db.insert(schema.sourceRecordsRaw).values({
+        id: rawRecordId,
+        sourceId: fixture.sourceId,
+        provider: "coinbase",
+        recordType: "fill",
+        externalRecordId: "provider-fill-1",
+        externalParentId: "provider-order-1",
+        externalAccountId: "coinbase-account-1",
+        occurredAt: new Date("2025-03-10T12:00:00.000Z"),
+        payload: { privateProviderField: "must-not-leak" },
+      })
+      yield* db
+        .update(schema.transactions)
+        .set({
+          sourceRawRecordId: rawRecordId,
+          metadata: { privateTransactionField: "must-not-leak" },
+        })
+        .where(eq(schema.transactions.id, reportFixtureIds.sellTransactionId))
+      yield* db.insert(schema.transactionVenueContext).values({
+        transactionId: reportFixtureIds.sellTransactionId,
+        venueType: "cex",
+        cexAccountId: fixture.cexAccountId,
+        externalAccountId: "coinbase-account-1",
+        externalOrderId: "provider-order-1",
+        externalFillId: "provider-fill-1",
+        side: "sell",
+        instrument: "BTC-EUR",
+        fillPrice: "15000",
+        commissionAmount: "5",
+        commissionCurrency: "EUR",
+        metadata: { privateVenueField: "must-not-leak" },
+      })
+      yield* db.insert(schema.addresses).values({
+        id: addressId,
+        principalId: fixture.principalId,
+        address: "0x0000000000000000000000000000000000046508",
+        type: "evm",
+        name: "Evidence wallet",
+      })
+      yield* db.insert(schema.transactionOnchainContext).values({
+        transactionId: reportFixtureIds.sellTransactionId,
+        blockchainId: fixture.baseBlockchainId,
+        addressId,
+        chainTxId: "0xevidence",
+        blockHeight: "12345",
+        blockHash: "0xblock",
+        fromAddress: "0xfrom",
+        toAddress: "0xto",
+        functionName: "transfer",
+        feeAmount: "21",
+        feeAssetId: TEST_BTC_ASSET_ID,
+        feeCostBasisAmount: "2",
+        feeCostBasisCurrency: "EUR",
+        metadata: { privateChainField: "must-not-leak" },
+      })
+      yield* db.insert(schema.transactionReviews).values({
+        transactionId: reportFixtureIds.sellTransactionId,
+        principalId: fixture.principalId,
+        reviewStatus: "approved",
+        originalTypeKey: "sell_fiat",
+        currentTypeKey: "sell_fiat",
+        categorizationReason: "matched provider fill",
+        matchedLayer: "provider_rule",
+        userNotes: "Reviewed",
+        reviewedAt: new Date("2025-03-12T12:00:00.000Z"),
+        needsReview: false,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const detail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(detail.venue).toMatchObject({
+        type: "cex",
+        accountReference: "coinbase-account-1",
+        orderId: "provider-order-1",
+        fillId: "provider-fill-1",
+        side: "sell",
+        instrument: "BTC-EUR",
+      })
+      expect(detail.onchain).toMatchObject({
+        blockchain: "base",
+        transactionHash: "0xevidence",
+        blockHeight: "12345",
+        functionName: "transfer",
+        feeFiatValue: { amount: "2.00000000", currency: "EUR" },
+      })
+      expect(detail.providerEvidence).toMatchObject({
+        provider: "coinbase",
+        recordType: "fill",
+        externalRecordId: "provider-fill-1",
+      })
+      expect(detail.classificationExplanation).toMatchObject({
+        originalKey: "sell_fiat",
+        currentKey: "sell_fiat",
+        reason: "matched provider fill",
+        matchedLayer: "provider_rule",
+        userNotes: "Reviewed",
+      })
+      expect(JSON.stringify(detail)).not.toContain("must-not-leak")
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("preserves unknown treatment when another transaction leg has known treatment", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+      const db = yield* drizzle
+      yield* db.insert(schema.transactionLegs).values({
+        id: "00000000-0000-0000-0000-000000046209",
+        sourceId: fixture.sourceId,
+        principalId: fixture.principalId,
+        externalId: "report-sell-1:received-asset",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.3",
+        kind: "acquisition",
+        provenance: "deterministic",
+        derivationRule: "swap_received_asset",
+        transactionId: reportFixtureIds.sellTransactionId,
+        fiatAmount: "6000",
+        fiatCurrency: "EUR",
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const page = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId },
+      })
+      const transaction = page.transactions.find(
+        (row) => row.transactionId === reportFixtureIds.sellTransactionId
+      )
+      expect(transaction?.totals.taxTreatment).toBe("unknown")
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("keeps unknown disposal valuations out of transaction tax totals", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ fiatAmount: null, fiatCurrency: null })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.disposalLegId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const page = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId },
+      })
+      const row = page.transactions.find(
+        (transaction) => transaction.transactionId === reportFixtureIds.sellTransactionId
+      )
+      expect(row?.totals).toMatchObject({
+        value: null,
+        proceeds: null,
+        costBasis: "4000",
+        gainLoss: null,
+        currency: "EUR",
+        calculationStatus: "partial",
+      })
+
+      const detail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(detail.disposals[0]).toMatchObject({
+        proceeds: null,
+        costBasis: "4000",
+        gainLoss: null,
+        calculationStatus: "partial",
+      })
+      expect(detail.disposals[0]?.matchedLots).toEqual([
+        expect.objectContaining({ costBasis: "1000.00000000", proceeds: null, gainLoss: null }),
+        expect.objectContaining({ costBasis: "3000.00000000", proceeds: null, gainLoss: null }),
+      ])
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("keeps pending FIFO cost basis out of transaction tax totals", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.fifoLots)
+        .set({ costBasisStatus: "pending_review" })
+        .where(eq(schema.fifoLots.id, reportFixtureIds.taxableFifoLotId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const page = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId },
+      })
+      const row = page.transactions.find(
+        (transaction) => transaction.transactionId === reportFixtureIds.sellTransactionId
+      )
+      expect(row?.totals).toMatchObject({
+        proceeds: "6000",
+        costBasis: null,
+        gainLoss: null,
+        calculationStatus: "partial",
+      })
+
+      const detail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(detail.disposals[0]).toMatchObject({
+        proceeds: "6000",
+        costBasis: null,
+        gainLoss: null,
+        calculationStatus: "partial",
+      })
+      expect(detail.disposals[0]?.matchedLots[1]).toMatchObject({
+        costBasis: null,
+        proceeds: "3000.00000000",
+        gainLoss: null,
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("returns explicit partial totals instead of summing mixed currencies", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const db = yield* drizzle
+      yield* db
+        .update(schema.fifoLots)
+        .set({ costBasisCurrency: "USD" })
+        .where(eq(schema.fifoLots.id, reportFixtureIds.taxableFifoLotId))
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const page = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId },
+      })
+      const row = page.transactions.find(
+        (transaction) => transaction.transactionId === reportFixtureIds.sellTransactionId
+      )
+      expect(row?.totals).toMatchObject({
+        value: null,
+        proceeds: null,
+        costBasis: null,
+        gainLoss: null,
+        currency: "mixed",
+        calculationStatus: "partial",
+      })
+
+      const detail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(detail.disposals[0]).toMatchObject({
+        proceeds: null,
+        costBasis: null,
+        gainLoss: null,
+        calculationStatus: "partial",
+      })
+    }).pipe(Effect.provide(HttpLive))
+  )
+
+  it.effect("loads both sides of transfer reconciliation evidence", () =>
+    Effect.gen(function* () {
+      const fixture = yield* seedSyncEngineRepositoryFixture()
+      yield* seedSyncEngineAssets({
+        baseBlockchainId: fixture.baseBlockchainId,
+        bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+      })
+      yield* seedSourceReportRows({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+      })
+
+      const canonicalTransferId = "00000000-0000-0000-0000-000000046505"
+      const providerTransferId = "00000000-0000-0000-0000-000000046506"
+      const db = yield* drizzle
+      yield* db.insert(schema.transfers).values({
+        id: canonicalTransferId,
+        sourceId: fixture.sourceId,
+        principalId: fixture.principalId,
+        externalId: "reconciled-canonical-transfer",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        type: "cex",
+        fromAccountRef: "coinbase-account-1",
+        toAccountRef: "personal-wallet",
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.2",
+      })
+      yield* db
+        .update(schema.transactionLegs)
+        .set({ sourceTransferId: canonicalTransferId })
+        .where(eq(schema.transactionLegs.id, reportFixtureIds.disposalLegId))
+      yield* db.insert(schema.providerTransfers).values({
+        id: providerTransferId,
+        sourceId: fixture.sourceId,
+        transactionId: reportFixtureIds.buyTransactionId,
+        externalId: "reconciled-provider-transfer",
+        timestamp: new Date("2025-01-10T12:00:00.000Z"),
+        direction: "outbound",
+        fromAccountRef: "coinbase-account-1",
+        toAccountRef: "personal-wallet",
+        amount: "0.2",
+      })
+      yield* db.insert(schema.transferReconciliations).values({
+        principalId: fixture.principalId,
+        providerTransferId,
+        canonicalTransferId,
+        status: "approved",
+        matchReason: "same asset, amount, and destination",
+        confidence: "0.9500",
+        deterministic: false,
+      })
+
+      const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+      const canonicalDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(canonicalDetail.providerTransfers).toEqual([
+        expect.objectContaining({ providerTransferId }),
+      ])
+      expect(canonicalDetail.canonicalTransfers).toEqual([
+        expect.objectContaining({ transferId: canonicalTransferId }),
+      ])
+
+      const providerDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.buyTransactionId },
+      })
+      expect(providerDetail.reconciliations).toEqual([
+        expect.objectContaining({ providerTransferId, canonicalTransferId }),
+      ])
+      expect(providerDetail.canonicalTransfers).toEqual([
+        expect.objectContaining({ transferId: canonicalTransferId }),
       ])
     }).pipe(Effect.provide(HttpLive))
   )
@@ -949,9 +1604,8 @@ describe("SourcesApiLive", () => {
       })
       expect(assetPnl.assets).toEqual([])
 
-      const transactions = yield* client.sources.listSourceTransactions({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 10 },
+      const transactions = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId, limit: 10 },
       })
       expect(transactions.transactions).toEqual([])
       expect(transactions.page).toMatchObject({ hasMore: false, nextCursor: null })
@@ -1000,6 +1654,20 @@ describe("SourcesApiLive", () => {
         toAccountRef: "coinbase-account-1",
         amount: "0.25",
       })
+      yield* db.insert(schema.inventoryMovements).values({
+        id: "00000000-0000-0000-0000-000000046504",
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        transactionId,
+        providerTransferId,
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        direction: "inbound",
+        purpose: "principal",
+        taxTreatment: "non_taxable",
+        reconciliationStatus: "matched",
+        amount: "0.25",
+      })
       yield* db.insert(schema.fifoLots).values({
         principalId: fixture.principalId,
         sourceId: fixture.sourceId,
@@ -1024,6 +1692,13 @@ describe("SourcesApiLive", () => {
         assetCount: 1,
         fifoLotCount: 1,
       })
+      const transactions = yield* client.transactions.listTransactions({
+        urlParams: { sourceId: fixture.sourceId },
+      })
+      expect(transactions.transactions[0]?.totals).toMatchObject({
+        taxTreatment: "non_taxable",
+        calculationStatus: "pending",
+      })
     }).pipe(Effect.provide(HttpLive))
   )
 
@@ -1043,6 +1718,21 @@ describe("SourcesApiLive", () => {
         yield* seedSourceReportTaxTreatmentRows({
           principalId: fixture.principalId,
           sourceId: fixture.sourceId,
+        })
+        const db = yield* drizzle
+        yield* db.insert(schema.inventoryMovements).values({
+          id: "00000000-0000-0000-0000-000000046509",
+          principalId: fixture.principalId,
+          sourceId: fixture.sourceId,
+          transactionId: reportFixtureIds.feeTransactionId,
+          transactionLegId: reportFixtureIds.feeLegId,
+          assetId: TEST_BTC_ASSET_ID,
+          timestamp: new Date("2025-04-10T12:00:00.000Z"),
+          direction: "outbound",
+          purpose: "fee",
+          taxTreatment: "pending_review",
+          reconciliationStatus: "needs_review",
+          amount: "0.01",
         })
 
         const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
@@ -1101,6 +1791,22 @@ describe("SourcesApiLive", () => {
           taxableTreatment: "non_taxable",
         })
         expect(explanation.matchedLots.map((lot) => lot.taxableTreatment)).toEqual(["non_taxable"])
+
+        const transactionPage = yield* client.transactions.listTransactions({
+          urlParams: { sourceId: fixture.sourceId },
+        })
+        const feeTransaction = transactionPage.transactions.find(
+          (item) => item.transactionId === reportFixtureIds.feeTransactionId
+        )
+        expect(feeTransaction?.totals.taxTreatment).toBe("unknown")
+
+        const transaction = yield* client.transactions.getTransaction({
+          path: { transactionId: reportFixtureIds.internalTransferTransactionId },
+        })
+        expect(transaction.disposals[0]).toMatchObject({
+          taxTreatment: "non_taxable",
+          matchedLots: [{ taxTreatment: "non_taxable" }],
+        })
       }).pipe(Effect.provide(HttpLive))
   )
 

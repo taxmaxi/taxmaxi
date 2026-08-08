@@ -83,6 +83,7 @@ type TaxMaxiPublicGroup =
   | "legalReferences"
   | "portfolio"
   | "sources"
+  | "transactions"
 
 export type TaxMaxiEffectClient = Pick<
   TaxMaxiApiFullClient,
@@ -100,6 +101,7 @@ const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClien
   legalReferences: client.legalReferences,
   portfolio: client.portfolio,
   sources: client.sources,
+  transactions: client.transactions,
 })
 
 export const makeTaxMaxiEffectClient = (

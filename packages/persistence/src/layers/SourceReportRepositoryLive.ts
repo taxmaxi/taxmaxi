@@ -43,8 +43,6 @@ import {
   type SourceReportTaxableTreatment,
   type SourceReportTotals,
   type SourceTaxEventRow,
-  type SourceTransactionMovement,
-  type SourceTransactionRow,
 } from "../services/SourceReportRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
@@ -736,111 +734,6 @@ const make = Effect.gen(function* () {
         )
     })
 
-  const listTransactions: SourceReportRepositoryService["listTransactions"] = (params) =>
-    Effect.gen(function* () {
-      yield* loadOwnedSource(params)
-
-      const cursor = yield* parseCursor(params.cursor)
-      const cursorPredicate = Option.match(cursor, {
-        onNone: () => undefined,
-        onSome: (value) =>
-          or(
-            lt(schema.transactions.timestamp, value.timestamp),
-            and(
-              eq(schema.transactions.timestamp, value.timestamp),
-              lt(schema.transactions.id, value.id)
-            )
-          ),
-      })
-
-      const rows = yield* db
-        .select({
-          transactionId: schema.transactions.id,
-          timestamp: schema.transactions.timestamp,
-          externalId: schema.transactions.externalId,
-          externalGroupId: schema.transactions.externalGroupId,
-          transactionType: schema.transactions.transactionType,
-          providerTransactionType: schema.transactions.providerTransactionType,
-          providerStatus: schema.transactions.providerStatus,
-          providerDescription: schema.transactions.providerDescription,
-        })
-        .from(schema.transactions)
-        .where(
-          cursorPredicate === undefined
-            ? eq(schema.transactions.sourceId, params.sourceId)
-            : and(eq(schema.transactions.sourceId, params.sourceId), cursorPredicate)
-        )
-        .orderBy(desc(schema.transactions.timestamp), desc(schema.transactions.id))
-        .limit(params.limit + 1)
-        .pipe(wrapSqlError("sourceReportRepository.listTransactions.transactions"))
-
-      const transactionIds = rows.map((row) => row.transactionId)
-
-      const movementRows =
-        transactionIds.length === 0
-          ? []
-          : yield* db
-              .select({
-                transactionId: schema.transactionLegs.transactionId,
-                legId: schema.transactionLegs.id,
-                assetId: schema.assets.id,
-                symbol: schema.assets.symbol,
-                name: schema.assets.name,
-                kind: schema.transactionLegs.kind,
-                amount: schema.transactionLegs.amount,
-                fiatAmount: schema.transactionLegs.fiatAmount,
-                fiatCurrency: schema.transactionLegs.fiatCurrency,
-                provenance: schema.transactionLegs.provenance,
-                derivationRule: schema.transactionLegs.derivationRule,
-              })
-              .from(schema.transactionLegs)
-              .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
-              .where(inArray(schema.transactionLegs.transactionId, transactionIds))
-              .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
-              .pipe(wrapSqlError("sourceReportRepository.listTransactions.movements"))
-
-      const movementsByTransaction = new Map<string, ReadonlyArray<SourceTransactionMovement>>()
-
-      for (const transactionId of transactionIds) {
-        const movements = movementRows
-          .filter((row) => row.transactionId === transactionId)
-          .map(
-            (row): SourceTransactionMovement => ({
-              legId: row.legId,
-              asset: assetFromRow(row),
-              kind: row.kind,
-              amount: String(row.amount),
-              fiatAmount: row.fiatAmount === null ? null : String(row.fiatAmount),
-              fiatCurrency: row.fiatCurrency,
-              provenance: row.provenance,
-              derivationRule: row.derivationRule,
-            })
-          )
-        movementsByTransaction.set(transactionId, movements)
-      }
-
-      const items = rows.map(
-        (row): SourceTransactionRow => ({
-          transactionId: row.transactionId,
-          timestamp: row.timestamp.toISOString(),
-          externalId: row.externalId,
-          externalGroupId: row.externalGroupId,
-          transactionType: row.transactionType,
-          providerTransactionType: row.providerTransactionType,
-          providerStatus: row.providerStatus,
-          providerDescription: row.providerDescription,
-          movements: movementsByTransaction.get(row.transactionId) ?? [],
-        })
-      )
-
-      return makePage({
-        rows: items,
-        limit: params.limit,
-        cursorFor: (row) =>
-          makeCursor({ timestamp: new Date(row.timestamp), id: row.transactionId }),
-      })
-    })
-
   const listTaxEvents: SourceReportRepositoryService["listTaxEvents"] = (params) =>
     Effect.gen(function* () {
       yield* loadOwnedSource(params)
@@ -1249,7 +1142,6 @@ const make = Effect.gen(function* () {
   return {
     getOverview,
     listAssetPnl,
-    listTransactions,
     listTaxEvents,
     listFifoLots,
     explainDisposal,

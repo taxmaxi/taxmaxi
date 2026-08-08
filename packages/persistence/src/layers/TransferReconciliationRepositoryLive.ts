@@ -560,6 +560,7 @@ const make = Effect.gen(function* () {
                   acquiredAt: schema.fifoLots.acquiredAt,
                   costBasisPerToken: schema.fifoLots.costBasisPerToken,
                   costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                  costBasisStatus: schema.fifoLots.costBasisStatus,
                 })
                 .from(schema.disposalMatches)
                 .innerJoin(
@@ -736,6 +737,7 @@ const make = Effect.gen(function* () {
                   remainingAmount: schema.fifoLots.remainingAmount,
                   costBasisPerToken: schema.fifoLots.costBasisPerToken,
                   costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                  costBasisStatus: schema.fifoLots.costBasisStatus,
                 })
                 .from(schema.fifoLots)
                 .innerJoin(
@@ -793,6 +795,7 @@ const make = Effect.gen(function* () {
                           acquiredAt: schema.fifoLots.acquiredAt,
                           costBasisPerToken: schema.fifoLots.costBasisPerToken,
                           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                          costBasisStatus: schema.fifoLots.costBasisStatus,
                         })
                         .from(schema.inventoryMovements)
                         .innerJoin(
@@ -853,8 +856,10 @@ const make = Effect.gen(function* () {
 
                   let totalCostBasis = BigDecimal.fromBigInt(0n)
                   let fiatCurrency: string | null = null
+                  let costBasisComplete = true
 
                   for (const match of existingMatches) {
+                    if (match.costBasisStatus !== "known") costBasisComplete = false
                     const costBasis = yield* decodeBigDecimal({
                       value: yield* formatDecimal({
                         value: match.costBasis,
@@ -884,7 +889,7 @@ const make = Effect.gen(function* () {
                   return {
                     matches: existingMatches,
                     fiatAmount: roundFiatAmount(totalCostBasis),
-                    fiatCurrency,
+                    fiatCurrency: costBasisComplete ? fiatCurrency : null,
                   }
                 }
 
@@ -907,9 +912,11 @@ const make = Effect.gen(function* () {
                   })
                   let totalCostBasis = BigDecimal.fromBigInt(0n)
                   let fiatCurrency: string | null = null
+                  let costBasisComplete = true
                   const allocations: Array<(typeof existingMatches)[number]> = []
 
                   for (const allocation of custodyAllocations) {
+                    if (allocation.costBasisStatus !== "known") costBasisComplete = false
                     const matchedAmount = yield* decodeBigDecimal({
                       value: yield* formatDecimal({
                         value: allocation.matchedAmount,
@@ -952,6 +959,7 @@ const make = Effect.gen(function* () {
                       acquiredAt: allocation.acquiredAt,
                       costBasisPerToken: allocation.costBasisPerToken,
                       costBasisCurrency: allocation.costBasisCurrency,
+                      costBasisStatus: allocation.costBasisStatus,
                     })
                     totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
                     remainingToMove = BigDecimal.subtract(remainingToMove, matchedAmount)
@@ -1006,7 +1014,7 @@ const make = Effect.gen(function* () {
                   return {
                     matches: allocations,
                     fiatAmount: roundFiatAmount(totalCostBasis),
-                    fiatCurrency,
+                    fiatCurrency: costBasisComplete ? fiatCurrency : null,
                   }
                 }
 
@@ -1023,6 +1031,7 @@ const make = Effect.gen(function* () {
                 })
                 let totalCostBasis = BigDecimal.fromBigInt(0n)
                 let fiatCurrency: string | null = null
+                let costBasisComplete = true
                 const allocations: Array<
                   (typeof existingMatches)[number] & { readonly remainingAmount: string }
                 > = []
@@ -1031,6 +1040,7 @@ const make = Effect.gen(function* () {
                   if (!BigDecimal.greaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
                     break
                   }
+                  if (lot.costBasisStatus !== "known") costBasisComplete = false
 
                   const lotRemaining = yield* decodeBigDecimal({
                     value: yield* formatDecimal({
@@ -1078,6 +1088,7 @@ const make = Effect.gen(function* () {
                     acquiredAt: lot.acquiredAt,
                     costBasisPerToken: lot.costBasisPerToken,
                     costBasisCurrency: lot.costBasisCurrency,
+                    costBasisStatus: lot.costBasisStatus,
                     remainingAmount: BigDecimal.format(updatedRemainingAmount),
                   })
                   totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
@@ -1138,7 +1149,7 @@ const make = Effect.gen(function* () {
                 return {
                   matches: allocations,
                   fiatAmount: roundFiatAmount(totalCostBasis),
-                  fiatCurrency,
+                  fiatCurrency: costBasisComplete ? fiatCurrency : null,
                 }
               })
 
@@ -1398,6 +1409,7 @@ const make = Effect.gen(function* () {
                   readonly acquiredAt: Date
                   readonly costBasisPerToken: unknown
                   readonly costBasisCurrency: string
+                  readonly costBasisStatus: "known" | "pending_review"
                 }>
                 readonly fiatAmount: string
                 readonly fiatCurrency: string | null
@@ -1411,7 +1423,12 @@ const make = Effect.gen(function* () {
                 })
 
                 const existingLots = yield* tx
-                  .select({ id: schema.fifoLots.id })
+                  .select({
+                    id: schema.fifoLots.id,
+                    originalAmount: schema.fifoLots.originalAmount,
+                    remainingAmount: schema.fifoLots.remainingAmount,
+                    sourceLegSequence: schema.fifoLots.sourceLegSequence,
+                  })
                   .from(schema.fifoLots)
                   .where(eq(schema.fifoLots.sourceLegId, destinationLegId))
                   .orderBy(asc(schema.fifoLots.sourceLegSequence))
@@ -1422,20 +1439,125 @@ const make = Effect.gen(function* () {
                   )
 
                 if (existingLots.length > 0) {
-                  yield* tx
-                    .update(schema.fifoLots)
-                    .set({
-                      assetId,
-                      assetRepresentationId,
-                      updatedAt: nowDate(),
-                    })
-                    .where(eq(schema.fifoLots.sourceLegId, destinationLegId))
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.updateExistingLots"
+                  yield* Effect.forEach(existingLots, (existingLot) => {
+                    const match = disposition.matches[existingLot.sourceLegSequence]
+                    if (match === undefined) {
+                      return Effect.gen(function* () {
+                        const [deletedLot] = yield* tx
+                          .delete(schema.fifoLots)
+                          .where(
+                            and(
+                              eq(schema.fifoLots.id, existingLot.id),
+                              eq(schema.fifoLots.remainingAmount, schema.fifoLots.originalAmount)
+                            )
+                          )
+                          .returning({ id: schema.fifoLots.id })
+                          .pipe(
+                            wrapSyncEngineSqlError(
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.deleteExtraExistingLot"
+                            )
+                          )
+
+                        if (deletedLot === undefined) {
+                          return yield* Effect.fail(
+                            new SyncEngineStorageError({
+                              operation:
+                                "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.consumedExtraExistingLot",
+                              cause: `Destination lot ${existingLot.id} no longer has an upstream match but downstream FIFO usage depends on it`,
+                            })
+                          )
+                        }
+                      })
+                    }
+
+                    return Effect.gen(function* () {
+                      const matchedAmount = yield* formatDecimal({
+                        value: match.matchedAmount,
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.existingMatchedAmount",
+                      })
+                      const costBasisPerToken = yield* formatDecimal({
+                        value: match.costBasisPerToken,
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.existingCostBasisPerToken",
+                      })
+                      const [existingOriginal, existingRemaining, refreshedOriginal] =
+                        yield* Effect.all([
+                          decodeBigDecimal({
+                            value: yield* formatDecimal({
+                              value: existingLot.originalAmount,
+                              operation:
+                                "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.existingOriginalAmount",
+                            }),
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.existingOriginalAmount",
+                          }),
+                          decodeBigDecimal({
+                            value: yield* formatDecimal({
+                              value: existingLot.remainingAmount,
+                              operation:
+                                "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.existingRemainingAmount",
+                            }),
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.existingRemainingAmount",
+                          }),
+                          decodeBigDecimal({
+                            value: matchedAmount,
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.refreshedOriginalAmount",
+                          }),
+                        ])
+                      const consumedAmount = BigDecimal.subtract(
+                        existingOriginal,
+                        existingRemaining
                       )
-                    )
-                  return
+                      const refreshedRemaining = BigDecimal.subtract(
+                        refreshedOriginal,
+                        consumedAmount
+                      )
+                      if (BigDecimal.lessThan(refreshedRemaining, BigDecimal.fromBigInt(0n))) {
+                        return yield* Effect.fail(
+                          new SyncEngineStorageError({
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.consumedAmountExceedsRefresh",
+                            cause: `Destination lot ${existingLot.id} cannot shrink below its downstream consumed amount`,
+                          })
+                        )
+                      }
+
+                      yield* tx
+                        .update(schema.fifoLots)
+                        .set({
+                          assetId,
+                          assetRepresentationId,
+                          acquiredAt: match.acquiredAt,
+                          originalAmount: matchedAmount,
+                          remainingAmount: BigDecimal.format(refreshedRemaining),
+                          costBasisPerToken,
+                          costBasisCurrency: match.costBasisCurrency,
+                          costBasisStatus: sql`case
+                            when ${schema.fifoLots.assetId} is not distinct from ${assetId}
+                              and ${schema.fifoLots.assetRepresentationId} is not distinct from ${assetRepresentationId}
+                              and ${schema.fifoLots.acquiredAt} is not distinct from ${match.acquiredAt}
+                              and ${schema.fifoLots.originalAmount} is not distinct from ${matchedAmount}
+                              and ${schema.fifoLots.costBasisPerToken} is not distinct from ${costBasisPerToken}
+                              and ${schema.fifoLots.costBasisCurrency} is not distinct from ${match.costBasisCurrency}
+                              and ${schema.fifoLots.costBasisStatus} is not distinct from cast(${match.costBasisStatus} as fifo_lot_cost_basis_status)
+                              then ${schema.fifoLots.costBasisStatus}
+                            when ${schema.fifoLots.remainingAmount} = ${schema.fifoLots.originalAmount}
+                              then cast(${match.costBasisStatus} as fifo_lot_cost_basis_status)
+                            else 'pending_review'
+                          end`,
+                          updatedAt: nowDate(),
+                        })
+                        .where(eq(schema.fifoLots.id, existingLot.id))
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.refreshExistingLot"
+                          )
+                        )
+                    })
+                  })
                 }
 
                 let sequence = 0
@@ -1463,6 +1585,7 @@ const make = Effect.gen(function* () {
                       remainingAmount: matchedAmount,
                       costBasisPerToken,
                       costBasisCurrency: match.costBasisCurrency,
+                      costBasisStatus: match.costBasisStatus,
                       sourceLegId: destinationLegId,
                       sourceLegSequence: sequence,
                       createdAt: nowDate(),

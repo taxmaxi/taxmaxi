@@ -196,10 +196,59 @@ const assetCanonicalizationResponseBody = JSON.stringify({
   },
 })
 
-const emptySourceTransactionsResponseBody = JSON.stringify({
+const emptyTransactionsResponseBody = JSON.stringify({
   transactions: [],
   page: { nextCursor: null, hasMore: false },
 })
+
+const emptyTransactionDetailResponse = {
+  transactionId: "00000000-0000-4000-8000-000000000009",
+  timestamp: "2026-01-01T00:00:00.000Z",
+  classification: {
+    key: null,
+    label: null,
+    categoryKey: null,
+    categoryLabel: null,
+    reviewState: "unreviewed",
+    needsReview: false,
+  },
+  source: {
+    sourceId: "00000000-0000-4000-8000-000000000001",
+    name: "Test source",
+    kind: "cex",
+    provider: "coinbase",
+    displayReference: "coinbase-account-1",
+  },
+  movements: [],
+  totals: {
+    value: null,
+    fees: "0",
+    proceeds: null,
+    costBasis: null,
+    gainLoss: null,
+    currency: null,
+    taxTreatment: "unknown",
+    calculationStatus: "pending",
+  },
+  externalReferences: {
+    externalId: "transaction-1",
+    externalGroupId: null,
+    providerTransactionType: null,
+    providerStatus: null,
+    providerDescription: null,
+    transactionHash: null,
+  },
+  disposals: [],
+  canonicalTransfers: [],
+  providerTransfers: [],
+  reconciliations: [],
+  venue: null,
+  onchain: null,
+  providerEvidence: null,
+  classificationExplanation: null,
+} as const
+
+const emptyTransactionDetailResponseBody = JSON.stringify(emptyTransactionDetailResponse)
 
 const emptySourceTaxEventsResponseBody = JSON.stringify({
   taxEvents: [],
@@ -491,14 +540,15 @@ describe("TaxMaxi Promise client", () => {
     ])
   })
 
-  it("plumbs source report endpoints through the public sources resource", async () => {
+  it("plumbs source reports and the source-filtered transaction projection", async () => {
     const capturedRequests: Array<CapturedRequest> = []
     const sourceId = "00000000-0000-4000-8000-000000000001"
     const legId = "00000000-0000-4000-8000-000000000006"
     const responseBodies = [
       sourceOverviewResponseBody,
       emptySourceAssetPnlResponseBody,
-      emptySourceTransactionsResponseBody,
+      emptyTransactionsResponseBody,
+      emptyTransactionDetailResponseBody,
       emptySourceTaxEventsResponseBody,
       emptySourceFifoLotsResponseBody,
       sourceDisposalExplanationResponseBody,
@@ -524,7 +574,18 @@ describe("TaxMaxi Promise client", () => {
 
     await taxmaxi.sources.getOverview({ sourceId })
     await taxmaxi.sources.listAssetPnl({ sourceId })
-    await taxmaxi.sources.listTransactions({ sourceId, limit: 25 })
+    await taxmaxi.transactions.list({
+      sourceId,
+      cursor: "transaction-cursor",
+      limit: 25,
+      search: "BTC",
+      classificationKey: "sell_fiat",
+      categoryKey: "trade",
+      reviewState: "approved",
+    })
+    await expect(
+      taxmaxi.transactions.get({ transactionId: emptyTransactionDetailResponse.transactionId })
+    ).resolves.toEqual(emptyTransactionDetailResponse)
     await taxmaxi.sources.listTaxEvents({ sourceId, cursor: "cursor-value", limit: 10 })
     await taxmaxi.sources.listFifoLots({ sourceId })
     await taxmaxi.sources.explainDisposal({ sourceId, legId })
@@ -537,7 +598,10 @@ describe("TaxMaxi Promise client", () => {
         url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/assets/pnl",
       }),
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/transactions?limit=25",
+        url: "https://sdk.example.test/v1/transactions?sourceId=00000000-0000-4000-8000-000000000001&cursor=transaction-cursor&limit=25&search=BTC&classificationKey=sell_fiat&categoryKey=trade&reviewState=approved",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/transactions/00000000-0000-4000-8000-000000000009",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/sources/00000000-0000-4000-8000-000000000001/tax-events?cursor=cursor-value&limit=10",

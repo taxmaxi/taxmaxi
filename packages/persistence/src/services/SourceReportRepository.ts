@@ -134,29 +134,6 @@ export interface SourceAssetPnlRow {
   readonly review: SourceReportReviewSummary
 }
 
-export interface SourceTransactionMovement {
-  readonly legId: string
-  readonly asset: SourceReportAsset
-  readonly kind: "acquisition" | "disposal" | "income" | "fee"
-  readonly amount: string
-  readonly fiatAmount: string | null
-  readonly fiatCurrency: string | null
-  readonly provenance: "deterministic" | "rule" | "ai" | "manual"
-  readonly derivationRule: string | null
-}
-
-export interface SourceTransactionRow {
-  readonly transactionId: string
-  readonly timestamp: string
-  readonly externalId: string | null
-  readonly externalGroupId: string | null
-  readonly transactionType: string | null
-  readonly providerTransactionType: string | null
-  readonly providerStatus: string | null
-  readonly providerDescription: string | null
-  readonly movements: ReadonlyArray<SourceTransactionMovement>
-}
-
 export interface SourceTaxEventRow {
   readonly legId: string
   readonly transactionId: string | null
@@ -233,9 +210,6 @@ export interface SourceReportRepositoryService {
   readonly listAssetPnl: (
     params: SourceReportScope
   ) => Effect.Effect<ReadonlyArray<SourceAssetPnlRow>, SourceReportRepositoryError>
-  readonly listTransactions: (
-    params: SourceReportPageParams
-  ) => Effect.Effect<SourceReportPage<SourceTransactionRow>, SourceReportRepositoryError>
   readonly listTaxEvents: (
     params: SourceReportPageParams
   ) => Effect.Effect<SourceReportPage<SourceTaxEventRow>, SourceReportRepositoryError>

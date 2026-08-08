@@ -74,14 +74,29 @@ export const transactions = pgTable(
       .on(table.sourceId, table.externalId)
       .where(sql`${table.externalId} is not null`),
 
-    index("idx_transactions_source_timestamp").on(table.sourceId, table.timestamp),
-    index("idx_transactions_principal_timestamp").on(table.principalId, table.timestamp),
+    index("idx_transactions_source_timestamp").on(table.sourceId, table.timestamp, table.id),
+    index("idx_transactions_principal_timestamp").on(table.principalId, table.timestamp, table.id),
+    index("idx_transactions_principal_updated_at").on(table.principalId, table.updatedAt),
+    index("idx_transactions_principal_source_updated_at").on(
+      table.principalId,
+      table.sourceId,
+      table.updatedAt
+    ),
     index("idx_transactions_external_group").on(table.sourceId, table.externalGroupId),
     index("idx_transactions_source_provider_type").on(
       table.sourceId,
       table.providerTransactionType
     ),
     index("idx_transactions_source_provider_status").on(table.sourceId, table.providerStatus),
+    index("idx_transactions_external_id_search").using("gin", table.externalId.op("gin_trgm_ops")),
+    index("idx_transactions_external_group_search").using(
+      "gin",
+      table.externalGroupId.op("gin_trgm_ops")
+    ),
+    index("idx_transactions_provider_description_search").using(
+      "gin",
+      table.providerDescription.op("gin_trgm_ops")
+    ),
   ]
 )
 

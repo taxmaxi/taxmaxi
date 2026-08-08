@@ -715,6 +715,103 @@ const make = Effect.gen(function* () {
     Effect.forEach(legs, (leg) =>
       Effect.gen(function* () {
         const now = nowDate()
+        const [existingLeg] =
+          leg.externalId === null
+            ? []
+            : yield* executor
+                .select({
+                  id: schema.transactionLegs.id,
+                  timestamp: schema.transactionLegs.timestamp,
+                  assetId: schema.transactionLegs.assetId,
+                  amount: schema.transactionLegs.amount,
+                  kind: schema.transactionLegs.kind,
+                  derivationRule: schema.transactionLegs.derivationRule,
+                  fiatAmount: schema.transactionLegs.fiatAmount,
+                  fiatCurrency: schema.transactionLegs.fiatCurrency,
+                })
+                .from(schema.transactionLegs)
+                .where(
+                  and(
+                    eq(schema.transactionLegs.sourceId, leg.sourceId),
+                    eq(schema.transactionLegs.externalId, leg.externalId)
+                  )
+                )
+                .limit(1)
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceNormalizationRepository.upsertTransactionLegs.findExisting"
+                  )
+                )
+
+        if (existingLeg?.kind === "disposal") {
+          const [existingMatch] = yield* executor
+            .select({ id: schema.disposalMatches.id })
+            .from(schema.disposalMatches)
+            .where(eq(schema.disposalMatches.disposalLegId, existingLeg.id))
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.upsertTransactionLegs.findExistingMatch"
+              )
+            )
+          const amountUnchanged =
+            (yield* compareDecimalQuantities({
+              left: String(existingLeg.amount),
+              right: leg.amount,
+            })) === 0
+          const fiatAmountUnchanged =
+            existingLeg.fiatAmount === null || leg.fiatAmount === null
+              ? existingLeg.fiatAmount === null && leg.fiatAmount === null
+              : (yield* compareDecimalQuantities({
+                  left: String(existingLeg.fiatAmount),
+                  right: leg.fiatAmount,
+                })) === 0
+          const fifoInputsChanged =
+            existingLeg.timestamp.getTime() !== leg.timestamp.getTime() ||
+            existingLeg.assetId !== leg.assetId ||
+            !amountUnchanged ||
+            existingLeg.kind !== leg.kind ||
+            existingLeg.derivationRule !== leg.derivationRule ||
+            !fiatAmountUnchanged ||
+            existingLeg.fiatCurrency !== leg.fiatCurrency
+
+          if (existingMatch !== undefined && fifoInputsChanged) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation: "sourceNormalizationRepository.upsertTransactionLegs",
+                error: `Disposal leg ${existingLeg.id} changed after FIFO matching; replay the source before applying corrected values`,
+              })
+            )
+          }
+        }
+
+        if (
+          existingLeg !== undefined &&
+          (existingLeg.kind === "acquisition" || existingLeg.kind === "income") &&
+          leg.kind !== "acquisition" &&
+          leg.kind !== "income"
+        ) {
+          const [existingLot] = yield* executor
+            .select({ id: schema.fifoLots.id })
+            .from(schema.fifoLots)
+            .where(eq(schema.fifoLots.sourceLegId, existingLeg.id))
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.upsertTransactionLegs.findExistingLot"
+              )
+            )
+
+          if (existingLot !== undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation: "sourceNormalizationRepository.upsertTransactionLegs",
+                error: `Inbound leg ${existingLeg.id} changed inventory kind; replay the source before applying corrected values`,
+              })
+            )
+          }
+        }
+
         const [persisted] = yield* executor
           .insert(schema.transactionLegs)
           .values({
@@ -853,6 +950,7 @@ const make = Effect.gen(function* () {
       const rows = yield* executor
         .select({
           id: schema.fifoLots.id,
+          assetId: schema.fifoLots.assetId,
           acquiredAt: schema.fifoLots.acquiredAt,
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
@@ -1015,6 +1113,60 @@ const make = Effect.gen(function* () {
         fiatAmount: leg.fiatAmount,
         quantityAmount: leg.amount,
       })
+      const costBasisStatus =
+        leg.fiatAmount === null || leg.fiatCurrency === null ? "pending_review" : "known"
+      const [existingLot] = yield* executor
+        .select({
+          id: schema.fifoLots.id,
+          assetId: schema.fifoLots.assetId,
+          acquiredAt: schema.fifoLots.acquiredAt,
+          originalAmount: schema.fifoLots.originalAmount,
+          remainingAmount: schema.fifoLots.remainingAmount,
+          costBasisPerToken: schema.fifoLots.costBasisPerToken,
+          costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
+        })
+        .from(schema.fifoLots)
+        .where(
+          and(eq(schema.fifoLots.sourceLegId, leg.id), eq(schema.fifoLots.sourceLegSequence, 0))
+        )
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError("sourceNormalizationRepository.ensureFifoLotForLeg.findExisting")
+        )
+
+      if (existingLot !== undefined) {
+        const [amountUnchanged, costBasisUnchanged, remainingComparison] = yield* Effect.all([
+          compareDecimalQuantities({
+            left: String(existingLot.originalAmount),
+            right: leg.amount,
+          }).pipe(Effect.map((comparison) => comparison === 0)),
+          compareDecimalQuantities({
+            left: String(existingLot.costBasisPerToken),
+            right: costBasisPerToken,
+          }).pipe(Effect.map((comparison) => comparison === 0)),
+          compareDecimalQuantities({
+            left: String(existingLot.remainingAmount),
+            right: String(existingLot.originalAmount),
+          }),
+        ])
+        const fifoInputsChanged =
+          existingLot.acquiredAt.getTime() !== leg.timestamp.getTime() ||
+          existingLot.assetId !== leg.assetId ||
+          !amountUnchanged ||
+          !costBasisUnchanged ||
+          existingLot.costBasisCurrency !== (leg.fiatCurrency ?? "EUR") ||
+          existingLot.costBasisStatus !== costBasisStatus
+
+        if (remainingComparison !== 0 && fifoInputsChanged) {
+          return yield* Effect.fail(
+            toSyncEngineStorageError({
+              operation: "sourceNormalizationRepository.ensureFifoLotForLeg",
+              error: `Acquisition lot ${existingLot.id} changed after FIFO consumption; replay the source before applying corrected values`,
+            })
+          )
+        }
+      }
 
       yield* executor
         .insert(schema.fifoLots)
@@ -1028,6 +1180,7 @@ const make = Effect.gen(function* () {
           remainingAmount: leg.amount,
           costBasisPerToken,
           costBasisCurrency: leg.fiatCurrency ?? "EUR",
+          costBasisStatus,
           sourceLegId: leg.id,
           sourceLegSequence: 0,
           createdAt: now,
@@ -1037,10 +1190,30 @@ const make = Effect.gen(function* () {
           target: [schema.fifoLots.sourceLegId, schema.fifoLots.sourceLegSequence],
           targetWhere: sql`${schema.fifoLots.sourceLegId} is not null`,
           set: {
+            assetId: sql.raw("excluded.asset_id"),
             assetRepresentationId: sql.raw("excluded.asset_representation_id"),
+            acquiredAt: sql.raw("excluded.acquired_at"),
+            originalAmount: sql.raw("excluded.original_amount"),
+            remainingAmount: sql`case
+              when ${schema.fifoLots.remainingAmount} = ${schema.fifoLots.originalAmount}
+                then excluded.remaining_amount
+              else ${schema.fifoLots.remainingAmount}
+            end`,
+            costBasisPerToken: sql.raw("excluded.cost_basis_per_token"),
+            costBasisCurrency: sql.raw("excluded.cost_basis_currency"),
+            costBasisStatus: sql`case
+              when ${schema.fifoLots.acquiredAt} is not distinct from excluded.acquired_at
+                and ${schema.fifoLots.originalAmount} is not distinct from excluded.original_amount
+                and ${schema.fifoLots.costBasisPerToken} is not distinct from excluded.cost_basis_per_token
+                and ${schema.fifoLots.costBasisCurrency} is not distinct from excluded.cost_basis_currency
+                and ${schema.fifoLots.costBasisStatus} is not distinct from excluded.cost_basis_status
+                then ${schema.fifoLots.costBasisStatus}
+              when ${schema.fifoLots.remainingAmount} = ${schema.fifoLots.originalAmount}
+                then excluded.cost_basis_status
+              else 'pending_review'
+            end`,
             updatedAt: now,
           },
-          setWhere: eq(schema.fifoLots.assetId, leg.assetId),
         })
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.ensureFifoLotForLeg"))
     })
@@ -1234,17 +1407,20 @@ const make = Effect.gen(function* () {
     providerTransferId,
     assetId,
     amount,
+    acquiredAt,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly providerTransferId: string
     readonly assetId: string
     readonly amount: string
+    readonly acquiredAt: Date
   }) =>
     Effect.gen(function* () {
       const [existingLot] = yield* executor
         .select({
           id: schema.fifoLots.id,
           assetId: schema.fifoLots.assetId,
+          acquiredAt: schema.fifoLots.acquiredAt,
           originalAmount: schema.fifoLots.originalAmount,
           remainingAmount: schema.fifoLots.remainingAmount,
         })
@@ -1269,13 +1445,22 @@ const make = Effect.gen(function* () {
         left: consumedAmount,
         right: "0",
       })
+      const amountComparison = yield* compareDecimalQuantities({
+        left: existingLot.originalAmount,
+        right: amount,
+      })
 
-      if (existingLot.assetId !== assetId && consumedComparison > 0) {
+      if (
+        consumedComparison > 0 &&
+        (existingLot.assetId !== assetId ||
+          existingLot.acquiredAt.getTime() !== acquiredAt.getTime() ||
+          amountComparison !== 0)
+      ) {
         return yield* Effect.fail(
           toSyncEngineStorageError({
             operation:
-              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAsset",
-            error: `Cannot change asset of inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedInputs",
+            error: `Cannot change consumed inbound provider lot ${existingLot.id}; replay the source before applying corrected values`,
           })
         )
       }
@@ -1627,6 +1812,7 @@ const make = Effect.gen(function* () {
             providerTransferId: providerTransfer.id,
             assetId: assetMapping.assetId,
             amount: providerTransfer.amount,
+            acquiredAt: providerTransfer.timestamp,
           })
 
           yield* executor

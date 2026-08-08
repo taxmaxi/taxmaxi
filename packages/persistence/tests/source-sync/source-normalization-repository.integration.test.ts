@@ -401,8 +401,8 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: { provider: "coinbase" },
               transactionId: null,
               sourceTransferId: null,
-              fiatAmount: "10000.00000000",
-              fiatCurrency: "EUR",
+              fiatAmount: null,
+              fiatCurrency: null,
               feeForTransactionId: null,
             },
           ],
@@ -427,107 +427,128 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(acquisitionResult.transaction.externalId).toBe("tx-acquire-1")
     expect(acquisitionResult.feeTransfers).toHaveLength(1)
     expect(acquisitionResult.legs).toHaveLength(1)
-
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-acquire-1",
-            externalGroupId: "group-acquire-1",
-            timestamp: new Date("2025-01-01T10:00:00.000Z"),
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-1",
-            providerDescription: "Seed buy",
-            providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-acquire-1",
-            externalFillId: "fill-acquire-1",
-            side: "buy",
-            instrument: "BTC-EUR",
-            fillPrice: "10000.00",
-            commissionAmount: "10.00",
-            commissionCurrency: "EUR",
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          feeTransfers: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              principalId: TEST_PRINCIPAL_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "tx-acquire-1:commission",
-              externalGroupId: "group-acquire-1",
-              addressId: null,
-              blockchainId: null,
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              type: "fee",
-              fromAddress: null,
-              toAddress: null,
-              fromAccountRef: "coinbase-account-1",
-              toAccountRef: "coinbase:commission",
-              fromPartyType: "account",
-              fromPartyResourcePath: "/v2/accounts/coinbase-account-1",
-              toPartyType: "fee",
-              toPartyResourcePath: null,
-              assetId: TEST_EUR_ASSET_ID,
-              amount: "10.00",
-              tokenId: null,
-              notes: "Coinbase trade commission",
-              metadata: { provider: "coinbase" },
-            },
-          ],
-          legs: [
-            {
-              sourceId: TEST_SOURCE_ID,
-              sourceRawRecordId: TEST_RAW_RECORD_ID,
-              externalId: "leg-acquire-1",
-              txHash: null,
-              timestamp: new Date("2025-01-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-              amount: "1.00000000",
-              kind: "acquisition",
-              provenance: "deterministic",
-              derivationRule: "spot_buy",
-              metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "10000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
-            },
-          ],
-          transactionReview: {
-            principalId: TEST_PRINCIPAL_ID,
-            reviewStatus: "needs_review",
-            originalTypeKey: "buy_fiat",
-            originalConfidence: "0.95",
-            currentTypeKey: "buy_fiat",
-            legalRuleSetVersion: "de-2025-01",
-            categorizationReason: "Fixture review",
-            matchedLayer: "fixture",
-            needsReview: true,
-            userNotes: null,
-            reviewedAt: null,
-          },
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
-      )
+    const [pendingLot] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db.select().from(schema.fifoLots).limit(1)
+      })
     )
+    expect(pendingLot).toEqual(
+      expect.objectContaining({
+        costBasisPerToken: expect.stringContaining("0.000000000000000000"),
+        costBasisStatus: "pending_review",
+      })
+    )
+
+    const persistAcquisition = ({
+      amount,
+      fiatAmount,
+    }: {
+      readonly amount: string
+      readonly fiatAmount: string
+    }) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "tx-acquire-1",
+              externalGroupId: "group-acquire-1",
+              timestamp: new Date("2025-01-01T10:00:00.000Z"),
+              transactionType: "buy_fiat",
+              providerTransactionType: "buy",
+              providerStatus: "completed",
+              providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-acquire-1",
+              providerDescription: "Seed buy",
+              providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
+              providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
+              metadata: { provider: "coinbase" },
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "coinbase-account-1",
+              externalOrderId: "order-acquire-1",
+              externalFillId: "fill-acquire-1",
+              side: "buy",
+              instrument: "BTC-EUR",
+              fillPrice: "10000.00",
+              commissionAmount: "10.00",
+              commissionCurrency: "EUR",
+              metadata: { provider: "coinbase" },
+            },
+            providerTransfers: [],
+            feeTransfers: [
+              {
+                sourceId: TEST_SOURCE_ID,
+                principalId: TEST_PRINCIPAL_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "tx-acquire-1:commission",
+                externalGroupId: "group-acquire-1",
+                addressId: null,
+                blockchainId: null,
+                txHash: null,
+                timestamp: new Date("2025-01-01T10:00:00.000Z"),
+                type: "fee",
+                fromAddress: null,
+                toAddress: null,
+                fromAccountRef: "coinbase-account-1",
+                toAccountRef: "coinbase:commission",
+                fromPartyType: "account",
+                fromPartyResourcePath: "/v2/accounts/coinbase-account-1",
+                toPartyType: "fee",
+                toPartyResourcePath: null,
+                assetId: TEST_EUR_ASSET_ID,
+                amount: "10.00",
+                tokenId: null,
+                notes: "Coinbase trade commission",
+                metadata: { provider: "coinbase" },
+              },
+            ],
+            legs: [
+              {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "leg-acquire-1",
+                txHash: null,
+                timestamp: new Date("2025-01-01T10:00:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                addressId: null,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                amount,
+                kind: "acquisition",
+                provenance: "deterministic",
+                derivationRule: "spot_buy",
+                metadata: { provider: "coinbase" },
+                transactionId: null,
+                sourceTransferId: null,
+                fiatAmount,
+                fiatCurrency: "EUR",
+                feeForTransactionId: null,
+              },
+            ],
+            transactionReview: {
+              principalId: TEST_PRINCIPAL_ID,
+              reviewStatus: "needs_review",
+              originalTypeKey: "buy_fiat",
+              originalConfidence: "0.95",
+              currentTypeKey: "buy_fiat",
+              legalRuleSetVersion: "de-2025-01",
+              categorizationReason: "Fixture review",
+              matchedLayer: "fixture",
+              needsReview: true,
+              userNotes: null,
+              reviewedAt: null,
+            },
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+
+    await persistAcquisition({ amount: "1.00000000", fiatAmount: "10000.00000000" })
 
     await runPg(
       seedRawRecord({
@@ -537,72 +558,75 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    await runRepository(
-      Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
-            externalId: "tx-dispose-1",
-            externalGroupId: "group-dispose-1",
-            timestamp: new Date("2025-02-01T10:00:00.000Z"),
-            transactionType: "sell_fiat",
-            providerTransactionType: "advanced_trade_fill",
-            providerStatus: "completed",
-            providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-dispose-1",
-            providerDescription: "Fixture sell",
-            providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
-            providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
-            metadata: { provider: "coinbase" },
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "cex",
-            cexAccountId: fixture.cexAccountId,
-            externalAccountId: "coinbase-account-1",
-            externalOrderId: "order-dispose-1",
-            externalFillId: "fill-dispose-1",
-            side: "sell",
-            instrument: "BTC-EUR",
-            fillPrice: "15000.00",
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "coinbase" },
-          },
-          providerTransfers: [],
-          feeTransfers: [],
-          legs: [
-            {
+    const persistDisposal = ({ fiatAmount }: { readonly fiatAmount: string }) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
               sourceId: TEST_SOURCE_ID,
               sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
-              externalId: "leg-dispose-1",
-              txHash: null,
+              externalId: "tx-dispose-1",
+              externalGroupId: "group-dispose-1",
               timestamp: new Date("2025-02-01T10:00:00.000Z"),
-              principalId: TEST_PRINCIPAL_ID,
-              addressId: null,
-              assetId: TEST_BTC_ASSET_ID,
-              amount: "0.40000000",
-              kind: "disposal",
-              provenance: "deterministic",
-              derivationRule: "spot_sell",
+              transactionType: "sell_fiat",
+              providerTransactionType: "advanced_trade_fill",
+              providerStatus: "completed",
+              providerResourcePath: "/v2/accounts/coinbase-account-1/transactions/tx-dispose-1",
+              providerDescription: "Fixture sell",
+              providerCreatedAt: new Date("2025-02-01T10:00:00.000Z"),
+              providerUpdatedAt: new Date("2025-02-01T10:00:00.000Z"),
               metadata: { provider: "coinbase" },
-              transactionId: null,
-              sourceTransferId: null,
-              fiatAmount: "6000.00000000",
-              fiatCurrency: "EUR",
-              feeForTransactionId: null,
+              principalId: TEST_PRINCIPAL_ID,
             },
-          ],
-          transactionReview: null,
-          resolvedTransactionType: {
-            ...APPROVED_MAPPING,
-            providerTransactionType: "advanced_trade_fill",
-            transactionType: "sell_fiat",
-            inventoryEffect: "disposal",
-          },
-        })
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "coinbase-account-1",
+              externalOrderId: "order-dispose-1",
+              externalFillId: "fill-dispose-1",
+              side: "sell",
+              instrument: "BTC-EUR",
+              fillPrice: "15000.00",
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: { provider: "coinbase" },
+            },
+            providerTransfers: [],
+            feeTransfers: [],
+            legs: [
+              {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: "00000000-0000-0000-0000-000000000382",
+                externalId: "leg-dispose-1",
+                txHash: null,
+                timestamp: new Date("2025-02-01T10:00:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                addressId: null,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.40000000",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "spot_sell",
+                metadata: { provider: "coinbase" },
+                transactionId: null,
+                sourceTransferId: null,
+                fiatAmount,
+                fiatCurrency: "EUR",
+                feeForTransactionId: null,
+              },
+            ],
+            transactionReview: null,
+            resolvedTransactionType: {
+              ...APPROVED_MAPPING,
+              providerTransactionType: "advanced_trade_fill",
+              transactionType: "sell_fiat",
+              inventoryEffect: "disposal",
+            },
+          })
+        )
       )
-    )
+
+    await persistDisposal({ fiatAmount: "6000.00000000" })
 
     const counts = await runPg(
       Effect.gen(function* () {
@@ -634,6 +658,36 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.reviews).toHaveLength(1)
     expect(String(counts.lot?.remainingAmount)).toContain("0.6")
     expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
+    expect(counts.lot?.costBasisPerToken).toContain("10000.000000000000000000")
+    expect(counts.lot?.costBasisStatus).toBe("known")
+    await expect(persistDisposal({ fiatAmount: "7000.00000000" })).rejects.toThrow(
+      /replay the source/i
+    )
+    await expect(
+      persistAcquisition({ amount: "1.00000000", fiatAmount: "12000.00000000" })
+    ).rejects.toThrow(/replay the source/i)
+
+    const unchangedAfterRejectedReplay = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [lot] = yield* db.select().from(schema.fifoLots).limit(1)
+        const [leg] = yield* db
+          .select({ fiatAmount: schema.transactionLegs.fiatAmount })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.externalId, "leg-acquire-1"))
+          .limit(1)
+        const [match] = yield* db.select().from(schema.disposalMatches).limit(1)
+        return { leg, lot, match }
+      })
+    )
+    expect(unchangedAfterRejectedReplay.leg?.fiatAmount).toContain("10000.00000000")
+    expect(unchangedAfterRejectedReplay.lot?.costBasisPerToken).toContain(
+      "10000.000000000000000000"
+    )
+    expect(unchangedAfterRejectedReplay.lot?.costBasisStatus).toBe("known")
+    expect(unchangedAfterRejectedReplay.match).toEqual(
+      expect.objectContaining({ costBasis: expect.stringContaining("4000.00000000") })
+    )
   })
 
   it("marks disposals with missing FIFO inventory for review instead of failing", async () => {

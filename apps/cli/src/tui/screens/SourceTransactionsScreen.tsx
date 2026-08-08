@@ -1,7 +1,7 @@
 import type { MouseEvent } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Match, Show, Switch } from "solid-js"
-import type { Source, SourceTransactions } from "taxmaxi"
+import type { Source, Transactions } from "taxmaxi"
 import type { CliSession } from "../../session.ts"
 import { fetchSourceTransactions } from "../controller.ts"
 import { formatAmount, formatDate, formatDateTime, formatFiat, truncateText } from "../format.ts"
@@ -12,12 +12,12 @@ import { ListItem, ListItemText } from "../ui/ListItem.tsx"
 import { ScreenFrame } from "../ui/ScreenFrame.tsx"
 import { Spinner } from "../ui/Spinner.tsx"
 
-type TransactionRow = SourceTransactions["transactions"][number]
+type TransactionRow = Transactions["transactions"][number]
 type Movement = TransactionRow["movements"][number]
 
 // Rows used by everything around the transaction list: app header, panel
 // chrome, key hints, the list status line, and the detail pane.
-const RESERVED_ROWS = 24
+const RESERVED_ROWS = 31
 const MAX_DETAIL_MOVEMENTS = 4
 const DESCRIPTION_LENGTH = 36
 
@@ -31,13 +31,34 @@ const movementKindColor = (kind: Movement["kind"]): string => {
   return theme.textMuted
 }
 
+const calculationColor = (status: TransactionRow["totals"]["calculationStatus"]): string => {
+  if (status === "complete") return theme.success
+  if (status === "partial") return theme.warning
+  return theme.textMuted
+}
+
+const totalLabel = ({
+  amount,
+  currency,
+}: {
+  readonly amount: string | null
+  readonly currency: string | null
+}): string => {
+  if (amount === null) return "unknown"
+  if (currency === null) return amount
+  if (currency === "mixed") return `${amount} (mixed currencies)`
+  return formatFiat(amount, currency)
+}
+
 const movementLabel = (movement: Movement): string => {
   const fiat =
-    movement.fiatAmount === null
+    movement.fiatValue === null
       ? ""
-      : ` (${formatFiat(movement.fiatAmount, movement.fiatCurrency)})`
-  const rule = movement.derivationRule === null ? "" : ` · rule ${movement.derivationRule}`
-  return `${formatAmount(movement.amount)} ${movement.asset.symbol}${fiat} · ${movement.provenance}${rule}`
+      : ` (${formatFiat(movement.fiatValue.amount, movement.fiatValue.currency)})`
+  const ruleValue = movement.derivation?.rule
+  const rule = ruleValue === null || ruleValue === undefined ? "" : ` · rule ${ruleValue}`
+  const derivation = movement.derivation?.provenance ?? "custody"
+  return `${formatAmount(movement.amount)} ${movement.asset.symbol}${fiat} · ${derivation}${rule}`
 }
 
 function TransactionLine(props: {
@@ -52,12 +73,18 @@ function TransactionLine(props: {
         {formatDate(props.row.timestamp)}
       </ListItemText>
       <ListItemText selected={props.selected}>
-        {(props.row.transactionType ?? props.row.providerTransactionType ?? "unknown").padEnd(14)}
+        {(props.row.classification.label ?? props.row.classification.key ?? "unknown").padEnd(14)}
       </ListItemText>
       <ListItemText selected={props.selected} color={theme.accent}>
         {`${props.row.movements.length} legs`}
       </ListItemText>
-      <Show when={props.row.providerDescription} keyed>
+      <ListItemText
+        selected={props.selected}
+        color={calculationColor(props.row.totals.calculationStatus)}
+      >
+        {props.row.totals.calculationStatus}
+      </ListItemText>
+      <Show when={props.row.externalReferences.providerDescription} keyed>
         {(description: string) => (
           <ListItemText selected={props.selected} muted>
             {truncateText(description, DESCRIPTION_LENGTH)}
@@ -258,12 +285,47 @@ export function SourceTransactionsScreen(props: {
                   <text fg={theme.textSecondary}>{formatDateTime(row.timestamp)}</text>
                   <Field
                     label="type"
-                    value={`${row.transactionType ?? "unknown"} · provider ${row.providerTransactionType ?? "unknown"}${row.providerStatus === null ? "" : ` (${row.providerStatus})`}`}
+                    value={`${row.classification.label ?? row.classification.key ?? "unknown"} · provider ${row.externalReferences.providerTransactionType ?? "unknown"}${row.externalReferences.providerStatus === null ? "" : ` (${row.externalReferences.providerStatus})`}`}
                   />
-                  <Show when={row.providerDescription} keyed>
+                  <Field
+                    label="calculation"
+                    value={row.totals.calculationStatus}
+                    color={calculationColor(row.totals.calculationStatus)}
+                  />
+                  <Field label="tax treatment" value={row.totals.taxTreatment} />
+                  <Field
+                    label="value"
+                    value={totalLabel({ amount: row.totals.value, currency: row.totals.currency })}
+                  />
+                  <Field
+                    label="proceeds"
+                    value={totalLabel({
+                      amount: row.totals.proceeds,
+                      currency: row.totals.currency,
+                    })}
+                  />
+                  <Field
+                    label="cost basis"
+                    value={totalLabel({
+                      amount: row.totals.costBasis,
+                      currency: row.totals.currency,
+                    })}
+                  />
+                  <Field
+                    label="gain / loss"
+                    value={totalLabel({
+                      amount: row.totals.gainLoss,
+                      currency: row.totals.currency,
+                    })}
+                  />
+                  <Field
+                    label="fees"
+                    value={totalLabel({ amount: row.totals.fees, currency: row.totals.currency })}
+                  />
+                  <Show when={row.externalReferences.providerDescription} keyed>
                     {(description: string) => <Field label="description" value={description} />}
                   </Show>
-                  <Show when={row.externalId} keyed>
+                  <Show when={row.externalReferences.externalId} keyed>
                     {(externalId: string) => <Field label="external id" value={externalId} />}
                   </Show>
                   <For each={row.movements.slice(0, MAX_DETAIL_MOVEMENTS)}>

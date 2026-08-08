@@ -9,7 +9,7 @@ import {
   type SourceSyncJob,
   type SourceSyncStart,
   type SourceTaxEvents,
-  type SourceTransactions,
+  type Transactions,
   type TaxCalculation,
 } from "taxmaxi"
 import { TAX_JURISDICTION } from "../config.ts"
@@ -163,15 +163,13 @@ export const listSourceTransactions = ({
   cursor,
   sessionToken,
   sourceId,
-}: SourceReportPageParams): Effect.Effect<SourceTransactions, CliCommandError> =>
+}: SourceReportPageParams): Effect.Effect<Transactions, CliCommandError> =>
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
-      resolved.sources.listSourceTransactions({
-        path: {
-          sourceId,
-        },
+      resolved.transactions.listTransactions({
         urlParams: {
           cursor: cursor ?? undefined,
+          sourceId,
         },
       })
     ),

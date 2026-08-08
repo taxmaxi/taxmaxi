@@ -1,0 +1,2 @@
+CREATE INDEX "idx_transactions_principal_updated_at" ON "transactions" ("principal_id","updated_at");--> statement-breakpoint
+CREATE INDEX "idx_transactions_principal_source_updated_at" ON "transactions" ("principal_id","source_id","updated_at");

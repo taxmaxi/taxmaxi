@@ -1,4 +1,4 @@
-import { foreignKey, pgTable, text, timestamp } from "drizzle-orm/pg-core"
+import { foreignKey, index, pgTable, text, timestamp } from "drizzle-orm/pg-core"
 import { transactionCategories } from "./TransactionCategoriesTable.ts"
 import { transactionSubcategories } from "./TransactionSubcategoriesTable.ts"
 
@@ -24,6 +24,8 @@ export const transactionTypes = pgTable(
       foreignColumns: [transactionSubcategories.subcategoryKey],
       name: "transaction_types_subcategory_key_fk",
     }),
+    index("idx_transaction_types_key_search").using("gin", table.typeKey.op("gin_trgm_ops")),
+    index("idx_transaction_types_label_en_search").using("gin", table.labelEn.op("gin_trgm_ops")),
   ]
 )
 

@@ -51,6 +51,7 @@ export const sources = pgTable(
       sql`${table.addressId} is not null or ${table.cexAccountId} is not null`
     ),
     index("idx_sources_provider_key").on(table.providerKey),
+    index("idx_sources_name_search").using("gin", table.name.op("gin_trgm_ops")),
     uniqueIndex("sources_principal_address_unique").on(table.principalId, table.addressId),
     uniqueIndex("sources_principal_cex_account_unique").on(table.principalId, table.cexAccountId),
   ]

@@ -76,6 +76,10 @@ export const transferReconciliations = pgTable(
       table.providerTransferId
     ),
     index("idx_transfer_reconciliations_principal_status").on(table.principalId, table.status),
+    index("idx_transfer_reconciliations_principal_updated_at").on(
+      table.principalId,
+      table.updatedAt
+    ),
     index("idx_transfer_reconciliations_canonical_transfer").on(table.canonicalTransferId),
     index("idx_transfer_reconciliations_canonical_transaction").on(table.canonicalTransactionId),
   ]

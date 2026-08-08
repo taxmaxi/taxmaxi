@@ -7,7 +7,6 @@ import {
   SourceListResponse,
   SourceOverviewResponse,
   SourceTaxEventsResponse,
-  SourceTransactionsResponse,
   SourceSyncJobResponse,
   SourceSyncStartResponse,
   TaxCalculationRequest,
@@ -26,7 +25,6 @@ export type SourceSyncJob = Schema.Schema.Encoded<typeof SourceSyncJobResponse>
 export type TaxCalculation = Schema.Schema.Encoded<typeof TaxCalculationResponse>
 export type SourceOverview = Schema.Schema.Encoded<typeof SourceOverviewResponse>
 export type SourceAssetPnl = Schema.Schema.Encoded<typeof SourceAssetPnlResponse>
-export type SourceTransactions = Schema.Schema.Encoded<typeof SourceTransactionsResponse>
 export type SourceTaxEvents = Schema.Schema.Encoded<typeof SourceTaxEventsResponse>
 export type SourceFifoLots = Schema.Schema.Encoded<typeof SourceFifoLotsResponse>
 export type SourceDisposalExplanation = Schema.Schema.Encoded<
@@ -61,9 +59,6 @@ export type SourcesEffectResource = {
   readonly calculateTax: (input: CalculateTaxInput) => Effect.Effect<TaxCalculation, unknown, never>
   readonly getOverview: (input: SourceIdInput) => Effect.Effect<SourceOverview, unknown, never>
   readonly listAssetPnl: (input: SourceIdInput) => Effect.Effect<SourceAssetPnl, unknown, never>
-  readonly listTransactions: (
-    input: SourceReportPageInput
-  ) => Effect.Effect<SourceTransactions, unknown, never>
   readonly listTaxEvents: (
     input: SourceReportPageInput
   ) => Effect.Effect<SourceTaxEvents, unknown, never>
@@ -84,7 +79,6 @@ export type SourcesPromiseResource = {
   readonly calculateTax: (input: CalculateTaxInput) => Promise<TaxCalculation>
   readonly getOverview: (input: SourceIdInput) => Promise<SourceOverview>
   readonly listAssetPnl: (input: SourceIdInput) => Promise<SourceAssetPnl>
-  readonly listTransactions: (input: SourceReportPageInput) => Promise<SourceTransactions>
   readonly listTaxEvents: (input: SourceReportPageInput) => Promise<SourceTaxEvents>
   readonly listFifoLots: (input: SourceReportPageInput) => Promise<SourceFifoLots>
   readonly explainDisposal: (
@@ -99,7 +93,6 @@ const encodeSourceSyncJob = Schema.encodeSync(SourceSyncJobResponse)
 const encodeTaxCalculation = Schema.encodeSync(TaxCalculationResponse)
 const encodeSourceOverview = Schema.encodeSync(SourceOverviewResponse)
 const encodeSourceAssetPnl = Schema.encodeSync(SourceAssetPnlResponse)
-const encodeSourceTransactions = Schema.encodeSync(SourceTransactionsResponse)
 const encodeSourceTaxEvents = Schema.encodeSync(SourceTaxEventsResponse)
 const encodeSourceFifoLots = Schema.encodeSync(SourceFifoLotsResponse)
 const encodeSourceDisposalExplanation = Schema.encodeSync(SourceDisposalExplanationResponse)
@@ -192,21 +185,6 @@ export const makeSourcesEffectResource = (
       ),
       encodeSourceAssetPnl
     ),
-  listTransactions: ({ cursor, limit, sourceId }) =>
-    Effect.map(
-      Effect.flatMap(client, (resolved) =>
-        resolved.sources.listSourceTransactions({
-          path: {
-            sourceId,
-          },
-          urlParams: {
-            cursor: cursor ?? undefined,
-            limit,
-          },
-        })
-      ),
-      encodeSourceTransactions
-    ),
   listTaxEvents: ({ cursor, limit, sourceId }) =>
     Effect.map(
       Effect.flatMap(client, (resolved) =>
@@ -263,7 +241,6 @@ export const makeSourcesPromiseResource = (
   calculateTax: (input) => run(effect.calculateTax(input)),
   getOverview: (input) => run(effect.getOverview(input)),
   listAssetPnl: (input) => run(effect.listAssetPnl(input)),
-  listTransactions: (input) => run(effect.listTransactions(input)),
   listTaxEvents: (input) => run(effect.listTaxEvents(input)),
   listFifoLots: (input) => run(effect.listFifoLots(input)),
   explainDisposal: (input) => run(effect.explainDisposal(input)),

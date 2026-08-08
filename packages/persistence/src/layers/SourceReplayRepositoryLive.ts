@@ -216,6 +216,16 @@ const make = Effect.gen(function* () {
             .pipe(
               wrapSyncEngineSqlError("sourceReplayRepository.resetSourceDerivedState.resetRawRows")
             )
+
+          yield* tx
+            .update(schema.sources)
+            .set({ updatedAt: nowDate() })
+            .where(eq(schema.sources.id, sourceId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.invalidateReadCursors"
+              )
+            )
         })
       )
       .pipe(

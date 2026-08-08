@@ -57,12 +57,9 @@ import {
   SourceReportSyncStatus,
   SourceReportTotals,
   SourceReportAsset,
-  SourceTransactionMovement,
-  SourceTransactionRow,
   SourceTaxEventRow,
   SourceReportPageInfo,
   SourceTaxEventsResponse,
-  SourceTransactionsResponse,
 } from "../definitions/SourcesApi.ts"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import { Layer, Option } from "effect"
@@ -459,33 +456,6 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                 review: reportReviewSummary(row.review),
               })
             ),
-          })
-        })
-      )
-      .handle("listSourceTransactions", ({ path, urlParams }) =>
-        Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal
-          const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
-          const page = yield* sourceReportRepository
-            .listTransactions({ ...scope, ...reportPageParams(urlParams) })
-            .pipe(Effect.mapError(mapReportError("Failed to load source transactions.")))
-
-          return SourceTransactionsResponse.make({
-            transactions: page.items.map((row) =>
-              SourceTransactionRow.make({
-                ...row,
-                movements: row.movements.map((movement) =>
-                  SourceTransactionMovement.make({
-                    ...movement,
-                    asset: reportAsset(movement.asset),
-                  })
-                ),
-              })
-            ),
-            page: SourceReportPageInfo.make({
-              nextCursor: page.nextCursor,
-              hasMore: page.hasMore,
-            }),
           })
         })
       )

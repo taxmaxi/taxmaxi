@@ -18,6 +18,7 @@ export const assets = pgTable(
   },
   (table) => [
     index("asset_symbol_idx").on(table.symbol),
+    index("idx_assets_symbol_search").using("gin", table.symbol.op("gin_trgm_ops")),
     uniqueIndex("asset_coingecko_coin_id_unique_idx").on(table.coingeckoCoinId),
   ]
 )

@@ -287,43 +287,6 @@ export class SourceAssetPnlResponse extends Schema.Class<SourceAssetPnlResponse>
   assets: Schema.Array(SourceAssetPnlRow),
 }) {}
 
-/**
- * SourceTransactionMovement - Asset movement nested under a transaction row.
- */
-export class SourceTransactionMovement extends Schema.Class<SourceTransactionMovement>(
-  "SourceTransactionMovement"
-)({
-  legId: Schema.String,
-  asset: SourceReportAsset,
-  kind: Schema.Literal("acquisition", "disposal", "income", "fee"),
-  amount: SourceReportAmount,
-  fiatAmount: Schema.NullOr(SourceReportAmount),
-  fiatCurrency: Schema.NullOr(Schema.String),
-  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
-  derivationRule: Schema.NullOr(Schema.String),
-}) {}
-
-export class SourceTransactionRow extends Schema.Class<SourceTransactionRow>(
-  "SourceTransactionRow"
-)({
-  transactionId: Schema.String,
-  timestamp: Schema.String,
-  externalId: Schema.NullOr(Schema.String),
-  externalGroupId: Schema.NullOr(Schema.String),
-  transactionType: Schema.NullOr(Schema.String),
-  providerTransactionType: Schema.NullOr(Schema.String),
-  providerStatus: Schema.NullOr(Schema.String),
-  providerDescription: Schema.NullOr(Schema.String),
-  movements: Schema.Array(SourceTransactionMovement),
-}) {}
-
-export class SourceTransactionsResponse extends Schema.Class<SourceTransactionsResponse>(
-  "SourceTransactionsResponse"
-)({
-  transactions: Schema.Array(SourceTransactionRow),
-  page: SourceReportPageInfo,
-}) {}
-
 export class SourceTaxEventRow extends Schema.Class<SourceTaxEventRow>("SourceTaxEventRow")({
   legId: Schema.String,
   transactionId: Schema.NullOr(Schema.String),
@@ -562,23 +525,6 @@ const listSourceAssetPnl = HttpApiEndpoint.get(
     })
   )
 
-const listSourceTransactions = HttpApiEndpoint.get(
-  "listSourceTransactions",
-  "/sources/:sourceId/transactions"
-)
-  .setPath(Schema.Struct({ sourceId: Schema.String }))
-  .setUrlParams(SourceReportPageParams)
-  .addSuccess(SourceTransactionsResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List source transactions",
-      description: "Returns paginated source-scoped normalized transaction rows.",
-    })
-  )
-
 const listSourceTaxEvents = HttpApiEndpoint.get(
   "listSourceTaxEvents",
   "/sources/:sourceId/tax-events"
@@ -641,7 +587,6 @@ export class SourcesApi extends HttpApiGroup.make("sources")
   .add(calculateTaxForSource)
   .add(getSourceOverview)
   .add(listSourceAssetPnl)
-  .add(listSourceTransactions)
   .add(listSourceTaxEvents)
   .add(listSourceFifoLots)
   .add(explainSourceDisposal)
