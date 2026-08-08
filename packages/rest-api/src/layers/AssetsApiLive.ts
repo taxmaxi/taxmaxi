@@ -19,6 +19,8 @@ import {
   AssetNotFoundError,
   AssetRepresentationResponse,
   CanonicalAssetResponse,
+  PendingAssetListResponse,
+  PendingAssetResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
 } from "../definitions/AssetsApi.ts"
@@ -48,6 +50,16 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     mappingStatus: row.mapping?.mappingStatus ?? null,
     reviewerNotes: row.mapping?.reviewerNotes ?? null,
     sourceNotes: row.mapping?.sourceNotes ?? null,
+  })
+
+const toPendingAssetResponse = (row: ProviderAssetReviewRecord) =>
+  PendingAssetResponse.make({
+    id: row.providerAsset.id,
+    provider: row.providerAsset.provider,
+    providerAssetId: row.providerAsset.providerAssetId,
+    symbol: row.providerAsset.currencyCode,
+    name: row.providerAsset.name,
+    providerType: row.providerAsset.providerType,
   })
 
 const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
@@ -92,6 +104,34 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           return yield* Option.match(maybeAsset, {
             onNone: () => Effect.fail(new AssetNotFoundError({ message: "Asset not found." })),
             onSome: (asset) => Effect.succeed(toAssetCatalogAssetResponse(asset)),
+          })
+        })
+      )
+      .handle("listPendingAssets", ({ urlParams }) =>
+        Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultLimit
+          const providerAssets = yield* providerAssetRepository
+            .listProviderAssetReviews({
+              providerKey: urlParams.provider ?? null,
+              mappingKind: "asset",
+              mappingStatus: "pending_review",
+              cursorProviderAssetRowId: urlParams.cursor ?? null,
+              limit: limit + 1,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to list pending assets.")))
+          const visibleProviderAssets = providerAssets.slice(0, limit)
+          const lastProviderAsset = visibleProviderAssets.at(-1)
+          const hasMore = providerAssets.length > limit
+
+          return PendingAssetListResponse.make({
+            pendingAssets: visibleProviderAssets.map(toPendingAssetResponse),
+            page: {
+              nextCursor:
+                hasMore && lastProviderAsset !== undefined
+                  ? lastProviderAsset.providerAsset.id
+                  : null,
+              hasMore,
+            },
           })
         })
       )

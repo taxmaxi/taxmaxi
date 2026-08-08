@@ -82,6 +82,9 @@ export type {
   AssetRepresentation,
   AssetsEffectResource,
   AssetsPromiseResource,
+  PendingAsset,
+  PendingAssetList,
+  PendingAssetListInput,
   TaxMaxiAssetType,
 } from "./assets/index.ts"
 export type {

@@ -55,6 +55,27 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   }),
 }) {}
 
+export class PendingAssetResponse extends Schema.Class<PendingAssetResponse>(
+  "PendingAssetResponse"
+)({
+  id: Schema.String,
+  provider: Schema.String,
+  providerAssetId: Schema.NullOr(Schema.String),
+  symbol: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  providerType: Schema.NullOr(Schema.String),
+}) {}
+
+export class PendingAssetListResponse extends Schema.Class<PendingAssetListResponse>(
+  "PendingAssetListResponse"
+)({
+  pendingAssets: Schema.Array(PendingAssetResponse),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
+}) {}
+
 export class AssetRepresentationResponse extends Schema.Class<AssetRepresentationResponse>(
   "AssetRepresentationResponse"
 )({
@@ -145,6 +166,18 @@ const ProviderAssetReviewQuery = Schema.Struct({
   ),
 })
 
+const PendingAssetListQuery = Schema.Struct({
+  provider: Schema.optional(Schema.String),
+  cursor: Schema.optional(Schema.UUID),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(100)
+    )
+  ),
+})
+
 const AssetCatalogListQuery = Schema.Struct({
   q: Schema.optional(Schema.String),
   limit: Schema.optional(
@@ -180,6 +213,18 @@ const getAsset = HttpApiEndpoint.get("getAsset", "/assets/:assetId")
     OpenApi.annotations({
       summary: "Get canonical asset",
       description: "Returns one non-spam canonical asset from the TaxMaxi asset registry.",
+    })
+  )
+
+const listPendingAssets = HttpApiEndpoint.get("listPendingAssets", "/assets/pending")
+  .setUrlParams(PendingAssetListQuery)
+  .addSuccess(PendingAssetListResponse)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List pending assets",
+      description:
+        "Lists provider assets waiting for TaxMaxi review without exposing internal review data.",
     })
   )
 
@@ -224,6 +269,7 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
+  .add(listPendingAssets)
   .add(listProviderAssetReviews)
   .add(canonicalizeProviderAsset)
   .prefix("/v1")

@@ -1,0 +1,678 @@
+import {
+  ArrowLeft,
+  ChevronRight,
+  CircleDotDashed,
+  Clock3,
+  Coins,
+  LibraryBig,
+  Search,
+  ShieldCheck,
+  X,
+} from "lucide-react"
+import { motion, useReducedMotion } from "motion/react"
+import { Fragment, useEffect, useMemo, useRef, useState } from "react"
+
+import { Badge } from "#/components/ui/badge"
+import { Button } from "#/components/ui/button"
+import { InputGroup, InputGroupAddon, InputGroupInput } from "#/components/ui/input-group"
+import { Separator } from "#/components/ui/separator"
+import { Tabs, TabsList, TabsTrigger } from "#/components/ui/tabs"
+import {
+  describeTaxMaxiAsset,
+  filterTaxMaxiAssets,
+  formatAssetType,
+  formatBlockchainName,
+  type TaxMaxiAsset,
+  type TaxMaxiPendingAsset,
+} from "#/lib/assets"
+import { cn } from "#/lib/utils"
+
+type CatalogItem =
+  | { readonly kind: "approved"; readonly asset: TaxMaxiAsset }
+  | { readonly kind: "pending"; readonly asset: TaxMaxiPendingAsset }
+
+const SURFACE_OPEN_TRANSFORM = "translate3d(0, 0, 0) scale(1)"
+const SURFACE_CLOSED_TRANSFORM = "translate3d(0, 4px, 0) scale(0.992)"
+const SURFACE_ENTER_TRANSITION = { bounce: 0, duration: 0.32, type: "spring" } as const
+const REDUCED_MOTION_TRANSITION = { duration: 0.15 } as const
+const ASSET_CATALOG_LIST_ID = "asset-catalog-list"
+
+export function AssetCatalog({
+  assets,
+  onClose,
+  pendingAssets,
+}: {
+  readonly assets: ReadonlyArray<TaxMaxiAsset>
+  readonly onClose: () => void
+  readonly pendingAssets: ReadonlyArray<TaxMaxiPendingAsset>
+}) {
+  const reduceMotion = useReducedMotion()
+
+  useEffect(() => {
+    window.scrollTo({ left: 0, top: 0 })
+  }, [])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault()
+        onClose()
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [onClose])
+
+  const initialTransform = reduceMotion ? SURFACE_OPEN_TRANSFORM : SURFACE_CLOSED_TRANSFORM
+  const surfaceVariants = {
+    initial: {
+      opacity: 0,
+      transform: initialTransform,
+    },
+    open: {
+      opacity: 1,
+      transform: SURFACE_OPEN_TRANSFORM,
+      transition: reduceMotion ? REDUCED_MOTION_TRANSITION : SURFACE_ENTER_TRANSITION,
+    },
+  }
+
+  return (
+    <div
+      className="relative isolate min-h-dvh overflow-hidden bg-[var(--app-page-fallback)] text-foreground"
+      data-page="app"
+    >
+      <AppBackdrop />
+      <motion.div
+        aria-hidden="true"
+        animate={{ opacity: 1 }}
+        className="fixed inset-0 bg-foreground/20"
+        initial={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+      />
+      <motion.main
+        animate="open"
+        aria-labelledby="asset-catalog-title"
+        className="fixed inset-0 flex min-h-0 flex-col overflow-hidden bg-popover text-popover-foreground shadow-2xl outline-none sm:inset-3 sm:rounded-[1.75rem] sm:ring-1 sm:ring-foreground/10"
+        initial="initial"
+        style={{ transformOrigin: "calc(100% - 3rem) 2rem" }}
+        variants={surfaceVariants}
+      >
+        <FocusSurfaceHeader onClose={onClose} />
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <AssetCatalogNavigator assets={assets} pendingAssets={pendingAssets} />
+        </div>
+      </motion.main>
+    </div>
+  )
+}
+
+function AppBackdrop() {
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute inset-0 overflow-hidden [background:var(--app-page-background)]"
+    >
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage: `linear-gradient(var(--app-grid-line) 1px, transparent 1px), linear-gradient(90deg, var(--app-grid-line) 1px, transparent 1px)`,
+          backgroundSize: "64px 64px",
+        }}
+      />
+    </div>
+  )
+}
+
+function FocusSurfaceHeader({ onClose }: { readonly onClose: () => void }) {
+  return (
+    <>
+      <header className="flex min-h-16 shrink-0 items-center gap-3 px-4 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-secondary text-secondary-foreground">
+            <LibraryBig aria-hidden="true" className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-medium" id="asset-catalog-title">
+              Asset catalog
+            </h1>
+            <p className="truncate text-xs text-muted-foreground">
+              TaxMaxi canonical asset registry
+            </p>
+          </div>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          <span className="hidden text-xs text-muted-foreground md:inline">Esc</span>
+          <Button
+            aria-label="Close asset catalog"
+            className="relative before:absolute before:-inset-0.5"
+            onClick={onClose}
+            size="icon-lg"
+            variant="secondary"
+          >
+            <X />
+          </Button>
+        </div>
+      </header>
+      <Separator />
+    </>
+  )
+}
+
+function AssetCatalogNavigator({
+  assets,
+  pendingAssets,
+}: {
+  readonly assets: ReadonlyArray<TaxMaxiAsset>
+  readonly pendingAssets: ReadonlyArray<TaxMaxiPendingAsset>
+}) {
+  const [query, setQuery] = useState("")
+  const [scope, setScope] = useState<"all" | "approved" | "pending">("all")
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
+  const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
+  const approvedItems = useMemo<ReadonlyArray<CatalogItem>>(
+    () =>
+      filterTaxMaxiAssets({ assets, query }).map((asset) => ({ kind: "approved" as const, asset })),
+    [assets, query]
+  )
+  const pendingItems = useMemo<ReadonlyArray<CatalogItem>>(
+    () =>
+      pendingAssets
+        .filter((asset) => matchesPendingAsset(asset, query))
+        .map((asset) => ({
+          kind: "pending" as const,
+          asset,
+        })),
+    [pendingAssets, query]
+  )
+  const items = useMemo(() => {
+    switch (scope) {
+      case "approved":
+        return approvedItems
+      case "pending":
+        return pendingItems
+      case "all":
+        return [...pendingItems, ...approvedItems]
+    }
+  }, [approvedItems, pendingItems, scope])
+  const visibleItems = useMemo(() => items.slice(0, 80), [items])
+  const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
+  const selectedItem =
+    visibleItems.find((item) => getCatalogItemKey(item) === selectedKey) ?? visibleItems[0]
+  const selectedItemKey = getCatalogItemKey(selectedItem)
+
+  useEffect(() => {
+    if (mobileDetailOpen) {
+      mobileBackButtonRef.current?.focus()
+    }
+  }, [mobileDetailOpen])
+
+  const selectItem = (item: CatalogItem) => {
+    setSelectedKey(getCatalogItemKey(item))
+
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      setMobileDetailOpen(true)
+    }
+  }
+
+  const showMobileList = () => {
+    setMobileDetailOpen(false)
+    window.requestAnimationFrame(() => {
+      document.getElementById(getCatalogItemDomId(selectedItem))?.focus()
+    })
+  }
+
+  useEffect(() => {
+    if (selectedItem === undefined) {
+      return
+    }
+
+    document.getElementById(getCatalogItemDomId(selectedItem))?.scrollIntoView({ block: "nearest" })
+  }, [selectedItem])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        mobileDetailOpen ||
+        (event.key !== "ArrowDown" && event.key !== "ArrowUp") ||
+        visibleItems.length === 0
+      ) {
+        return
+      }
+
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          (target instanceof HTMLInputElement && target.type !== "search"))
+      ) {
+        return
+      }
+
+      event.preventDefault()
+      const currentIndex = Math.max(
+        visibleItems.findIndex((item) => getCatalogItemKey(item) === selectedItemKey),
+        0
+      )
+      const nextIndex =
+        event.key === "ArrowDown"
+          ? Math.min(currentIndex + 1, visibleItems.length - 1)
+          : Math.max(currentIndex - 1, 0)
+      const nextItem = visibleItems[nextIndex]
+
+      if (nextItem === undefined) {
+        return
+      }
+
+      setSelectedKey(getCatalogItemKey(nextItem))
+
+      if (target instanceof HTMLElement && target.closest("[data-asset-catalog-option]") !== null) {
+        window.requestAnimationFrame(() => {
+          document.getElementById(getCatalogItemDomId(nextItem))?.focus()
+        })
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [mobileDetailOpen, selectedItemKey, visibleItems])
+
+  return (
+    <div
+      className="grid h-full min-h-0 lg:grid-cols-[22rem_minmax(0,1fr)]"
+      data-mobile-view={mobileDetailOpen ? "detail" : "list"}
+    >
+      <aside
+        className={cn(
+          "min-h-0 flex-col border-border lg:flex lg:border-r",
+          mobileDetailOpen ? "hidden" : "flex"
+        )}
+      >
+        <div className="flex flex-col gap-3 p-4">
+          <SearchField
+            activeDescendant={
+              selectedItem === undefined ? undefined : getCatalogItemDomId(selectedItem)
+            }
+            controls={ASSET_CATALOG_LIST_ID}
+            onChange={setQuery}
+            query={query}
+          />
+          <Tabs
+            value={scope}
+            onValueChange={(value) => {
+              if (isNavigatorScope(value)) {
+                setScope(value)
+              }
+            }}
+          >
+            <TabsList className="w-full">
+              <TabsTrigger value="all">All</TabsTrigger>
+              <TabsTrigger value="approved">Approved</TabsTrigger>
+              <TabsTrigger value="pending">Pending</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+        <Separator />
+        <div
+          aria-label="Assets"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          id={ASSET_CATALOG_LIST_ID}
+          role="listbox"
+        >
+          {visibleItems.map((item) => (
+            <NavigatorRow
+              active={getCatalogItemKey(item) === selectedItemKey}
+              id={getCatalogItemDomId(item)}
+              item={item}
+              key={getCatalogItemKey(item)}
+              onSelect={() => selectItem(item)}
+            />
+          ))}
+          {items.length === 0 ? <NoResults query={query} /> : null}
+        </div>
+        <div className="hidden border-t border-border px-4 py-3 text-xs text-muted-foreground lg:block">
+          Showing {Math.min(items.length, 80)} of {items.length} matches
+        </div>
+      </aside>
+      <section
+        className={cn(
+          "h-full min-w-0 overflow-y-auto overscroll-contain p-5 pb-28 sm:p-8 sm:pb-28 lg:block lg:p-10",
+          mobileDetailOpen ? "block" : "hidden"
+        )}
+      >
+        {mobileDetailOpen ? (
+          <Button
+            className="-ml-2 mb-6 h-11 lg:hidden"
+            onClick={showMobileList}
+            ref={mobileBackButtonRef}
+            variant="ghost"
+          >
+            <ArrowLeft data-icon="inline-start" />
+            Back to asset list
+          </Button>
+        ) : null}
+        {selectedItem ? <CatalogItemDetail item={selectedItem} /> : <NoResults query={query} />}
+      </section>
+    </div>
+  )
+}
+
+function NavigatorRow({
+  active,
+  id,
+  item,
+  onSelect,
+}: {
+  readonly active: boolean
+  readonly id: string
+  readonly item: CatalogItem
+  readonly onSelect: () => void
+}) {
+  const symbol = item.asset.symbol
+  const name = getCatalogItemName(item)
+
+  return (
+    <button
+      aria-selected={active}
+      className={cn(
+        "flex min-h-16 w-full items-center gap-3 border-b border-border px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+        active ? "bg-secondary" : "[@media(hover:hover)_and_(pointer:fine)]:hover:bg-muted/50"
+      )}
+      data-asset-catalog-option=""
+      id={id}
+      onClick={onSelect}
+      role="option"
+      tabIndex={active ? 0 : -1}
+      type="button"
+    >
+      <AssetMark item={item} size="sm" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium">{symbol}</span>
+          {item.kind === "pending" ? <Badge variant="outline">Pending</Badge> : null}
+        </span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">{name}</span>
+      </span>
+      <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+    </button>
+  )
+}
+
+function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
+  if (item.kind === "pending") {
+    return <PendingAssetDetail asset={item.asset} />
+  }
+
+  const networkNames = getNetworkNames(item.asset)
+
+  return (
+    <div className="mx-auto flex max-w-4xl flex-col gap-8">
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <AssetMark item={item} size="lg" />
+          <div className="min-w-0">
+            <Badge variant="secondary">
+              <ShieldCheck data-icon="inline-start" />
+              Approved
+            </Badge>
+            <h2 className="mt-3 truncate text-3xl font-semibold tracking-tight sm:text-5xl">
+              {item.asset.symbol}
+            </h2>
+            <p className="mt-1 truncate text-base text-muted-foreground">{item.asset.name}</p>
+          </div>
+        </div>
+        <Badge variant="outline">{formatAssetType(item.asset.type)}</Badge>
+      </div>
+
+      <p className="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
+        {describeTaxMaxiAsset(item.asset)}
+      </p>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard label="Representations" value={item.asset.representations.length.toString()} />
+        <StatCard label="Networks" value={networkNames.length.toString()} />
+        <StatCard label="Registry status" value="Approved" />
+      </div>
+
+      <section className="overflow-hidden rounded-2xl border border-border">
+        <div className="px-4 py-3">
+          <h3 className="text-sm font-medium">Network representations</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Identities that resolve to this economic asset.
+          </p>
+        </div>
+        <Separator />
+        {item.asset.representations.length === 0 ? (
+          <p className="px-4 py-8 text-sm text-muted-foreground">
+            This asset currently has no network representation.
+          </p>
+        ) : (
+          item.asset.representations.map((representation, index) => (
+            <Fragment key={representation.id}>
+              <div className="flex items-center gap-3 px-4 py-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-medium">
+                  {formatBlockchainName(representation.blockchainName).slice(0, 2)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">
+                    {formatBlockchainName(representation.blockchainName)}
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {representation.type === "native"
+                      ? "Native network asset"
+                      : (representation.contractAddress ??
+                        representation.mintAddress ??
+                        "Token identity")}
+                  </p>
+                </div>
+                <Badge variant="outline">{representation.type}</Badge>
+              </div>
+              {index < item.asset.representations.length - 1 ? <Separator /> : null}
+            </Fragment>
+          ))
+        )}
+      </section>
+    </div>
+  )
+}
+
+function PendingAssetDetail({ asset }: { readonly asset: TaxMaxiPendingAsset }) {
+  const item: CatalogItem = { kind: "pending", asset }
+
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col gap-8">
+      <div className="flex min-w-0 items-center gap-4">
+        <AssetMark item={item} size="lg" />
+        <div className="min-w-0">
+          <Badge variant="outline">
+            <Clock3 data-icon="inline-start" />
+            Waiting for review
+          </Badge>
+          <h2 className="mt-3 truncate text-3xl font-semibold tracking-tight sm:text-5xl">
+            {asset.symbol}
+          </h2>
+          <p className="mt-1 truncate text-base text-muted-foreground">
+            {getPendingAssetName(asset)}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-secondary p-5 sm:p-6">
+        <div className="flex items-start gap-3">
+          <CircleDotDashed aria-hidden="true" className="mt-0.5 size-5 shrink-0" />
+          <div>
+            <h3 className="text-sm font-medium">This asset is on TaxMaxi’s radar</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              TaxMaxi admins are reviewing whether this provider asset maps to an existing canonical
+              asset. You do not need to take action.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <dl className="overflow-hidden rounded-2xl border border-border">
+        <DetailRow label="Reported by" value={asset.provider} />
+        <Separator />
+        <DetailRow label="Provider asset ID" value={asset.providerAssetId ?? "Not supplied"} />
+        <Separator />
+        <DetailRow label="Provider type" value={asset.providerType ?? "Not supplied"} />
+        <Separator />
+        <DetailRow label="Review status" value="Waiting for TaxMaxi review" />
+      </dl>
+    </div>
+  )
+}
+
+function SearchField({
+  activeDescendant,
+  controls,
+  onChange,
+  query,
+}: {
+  readonly activeDescendant?: string
+  readonly controls: string
+  readonly onChange: (query: string) => void
+  readonly query: string
+}) {
+  return (
+    <InputGroup className="h-11 border border-border bg-background">
+      <InputGroupAddon>
+        <Search aria-hidden="true" />
+      </InputGroupAddon>
+      <InputGroupInput
+        aria-activedescendant={activeDescendant}
+        aria-label="Search assets"
+        aria-autocomplete="list"
+        aria-controls={controls}
+        aria-expanded="true"
+        autoComplete="off"
+        onChange={(event) => onChange(event.currentTarget.value)}
+        placeholder="Search symbol, name, network, or provider"
+        spellCheck={false}
+        type="search"
+        value={query}
+        role="combobox"
+      />
+    </InputGroup>
+  )
+}
+
+function AssetMark({ item, size }: { readonly item: CatalogItem; readonly size: "sm" | "lg" }) {
+  const symbol = item.asset.symbol
+  const logoUrl = item.kind === "approved" ? item.asset.logoUrl : null
+  const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null)
+  const usableLogoUrl = logoUrl === failedLogoUrl ? null : logoUrl
+
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-secondary font-medium text-secondary-foreground",
+        size === "lg" ? "size-16 text-lg" : "size-10 text-xs"
+      )}
+    >
+      {usableLogoUrl ? (
+        <img
+          alt={`${getCatalogItemName(item)} logo`}
+          className="size-full object-cover"
+          loading="lazy"
+          onError={() => setFailedLogoUrl(usableLogoUrl)}
+          src={usableLogoUrl}
+        />
+      ) : (
+        <span aria-hidden="true">{symbol.slice(0, 2)}</span>
+      )}
+    </span>
+  )
+}
+
+function StatCard({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4 text-card-foreground">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-2 text-xl font-medium tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+function DetailRow({ label, value }: { readonly label: string; readonly value: string }) {
+  return (
+    <div className="grid gap-1 px-4 py-3 sm:grid-cols-[8rem_minmax(0,1fr)] sm:items-center sm:gap-4">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="truncate text-sm sm:text-right">{value}</dd>
+    </div>
+  )
+}
+
+function NoResults({ query }: { readonly query: string }) {
+  return (
+    <div className="flex min-h-40 flex-col items-center justify-center px-6 py-10 text-center">
+      <Coins aria-hidden="true" className="size-6 text-muted-foreground" />
+      <p className="mt-3 text-sm font-medium">No assets found</p>
+      <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
+        {query.trim().length === 0
+          ? "The registry has no assets to show yet."
+          : "Try a symbol, provider, network, or contract address."}
+      </p>
+    </div>
+  )
+}
+
+function matchesPendingAsset(asset: TaxMaxiPendingAsset, query: string): boolean {
+  const normalizedQuery = query.trim().toLowerCase()
+
+  if (normalizedQuery.length === 0) {
+    return true
+  }
+
+  return [
+    asset.symbol,
+    asset.name ?? "",
+    asset.provider,
+    asset.providerAssetId ?? "",
+    asset.providerType ?? "",
+  ]
+    .join(" ")
+    .toLowerCase()
+    .includes(normalizedQuery)
+}
+
+function getPendingAssetName(asset: TaxMaxiPendingAsset): string {
+  return asset.name ?? asset.symbol
+}
+
+function getCatalogItemName(item: CatalogItem): string {
+  return item.kind === "pending" ? getPendingAssetName(item.asset) : item.asset.name
+}
+
+function getCatalogItemKey(item: CatalogItem | undefined): string {
+  if (!item) {
+    return ""
+  }
+
+  return `${item.kind}:${item.asset.id}`
+}
+
+function getCatalogItemDomId(item: CatalogItem): string {
+  return `asset-catalog-option-${item.kind}-${item.asset.id}`
+}
+
+function isNavigatorScope(value: string): value is "all" | "approved" | "pending" {
+  return value === "all" || value === "approved" || value === "pending"
+}
+
+function getNetworkNames(asset: TaxMaxiAsset): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      asset.representations.map((representation) =>
+        formatBlockchainName(representation.blockchainName)
+      )
+    )
+  )
+}

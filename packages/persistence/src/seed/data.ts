@@ -55,16 +55,78 @@ const blockchains = [
 ] as const
 
 const economicAssets = [
-  { name: "Bitcoin", symbol: "BTC", coingeckoCoinId: "bitcoin", type: "fungible" },
-  { name: "Ether", symbol: "ETH", coingeckoCoinId: "ethereum", type: "fungible" },
-  { name: "Solana", symbol: "SOL", coingeckoCoinId: "solana", type: "fungible" },
-  { name: "USD Coin", symbol: "USDC", coingeckoCoinId: "usd-coin", type: "fungible" },
-  { name: "Tether", symbol: "USDT", coingeckoCoinId: "tether", type: "fungible" },
-  { name: "Cardano", symbol: "ADA", coingeckoCoinId: "cardano", type: "fungible" },
-  { name: "Polkadot", symbol: "DOT", coingeckoCoinId: "polkadot", type: "fungible" },
-  { name: "Zcash", symbol: "ZEC", coingeckoCoinId: "zcash", type: "fungible" },
-  { name: "EURC", symbol: "EURC", coingeckoCoinId: "euro-coin", type: "fungible" },
-  { name: "Bittensor", symbol: "TAO", coingeckoCoinId: "bittensor", type: "fungible" },
+  {
+    name: "Bitcoin",
+    symbol: "BTC",
+    coingeckoCoinId: "bitcoin",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png?1696501400",
+    type: "fungible",
+  },
+  {
+    name: "Ether",
+    symbol: "ETH",
+    coingeckoCoinId: "ethereum",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/279/large/ethereum.png?1696501628",
+    type: "fungible",
+  },
+  {
+    name: "Solana",
+    symbol: "SOL",
+    coingeckoCoinId: "solana",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/4128/large/solana.png?1718769756",
+    type: "fungible",
+  },
+  {
+    name: "USD Coin",
+    symbol: "USDC",
+    coingeckoCoinId: "usd-coin",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/6319/large/USDC.png?1769615602",
+    type: "fungible",
+  },
+  {
+    name: "Tether",
+    symbol: "USDT",
+    coingeckoCoinId: "tether",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/325/large/Tether.png?1696501661",
+    type: "fungible",
+  },
+  {
+    name: "Cardano",
+    symbol: "ADA",
+    coingeckoCoinId: "cardano",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/975/large/cardano.png?1696502090",
+    type: "fungible",
+  },
+  {
+    name: "Polkadot",
+    symbol: "DOT",
+    coingeckoCoinId: "polkadot",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/12171/large/polkadot.jpg?1766533446",
+    type: "fungible",
+  },
+  {
+    name: "Zcash",
+    symbol: "ZEC",
+    coingeckoCoinId: "zcash",
+    logoUrl:
+      "https://coin-images.coingecko.com/coins/images/486/large/Brandmark-Yellow_%281%29.png?1785810558",
+    type: "fungible",
+  },
+  {
+    name: "EURC",
+    symbol: "EURC",
+    coingeckoCoinId: "euro-coin",
+    logoUrl: "https://coin-images.coingecko.com/coins/images/26045/large/EURC.png?1769615705",
+    type: "fungible",
+  },
+  {
+    name: "Bittensor",
+    symbol: "TAO",
+    coingeckoCoinId: "bittensor",
+    logoUrl:
+      "https://coin-images.coingecko.com/coins/images/28452/large/ARUsPeNQ_400x400.jpeg?1696527447",
+    type: "fungible",
+  },
 ] as const
 
 const assetRepresentations = [
@@ -1085,7 +1147,6 @@ export const seedData = Effect.gen(function* () {
     .values(
       economicAssets.map((asset) => ({
         ...asset,
-        logoUrl: null,
         createdAt: seedTimestamp,
         updatedAt: seedTimestamp,
       }))
@@ -1096,7 +1157,7 @@ export const seedData = Effect.gen(function* () {
         name: sql.raw("excluded.name"),
         symbol: sql.raw("excluded.symbol"),
         coingeckoCoinId: sql.raw("excluded.coingecko_coin_id"),
-        logoUrl: sql`coalesce(excluded.logo_url, ${schema.assets.logoUrl})`,
+        logoUrl: sql`coalesce(${schema.assets.logoUrl}, excluded.logo_url)`,
         type: sql.raw("excluded.type"),
         updatedAt: seedTimestamp,
       },

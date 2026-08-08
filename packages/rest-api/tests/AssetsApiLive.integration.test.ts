@@ -23,11 +23,14 @@ import { afterAll, describe, expect, it } from "vitest"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
+  PendingAssetListResponse,
 } from "../src/definitions/AssetsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
+import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
+import { schema } from "../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
@@ -153,10 +156,15 @@ describe("AssetsApiLive", () => {
     )
 
     const symbols = response.body.assets.map((asset) => asset.symbol)
+    const bitcoin = response.body.assets.find((asset) => asset.symbol === "BTC")
     const usdc = response.body.assets.find((asset) => asset.symbol === "USDC")
 
     expect(response.status).toBe(200)
     expect(symbols).toEqual(expect.arrayContaining(["SOL", "USDC", "USDT"]))
+    expect(bitcoin).toMatchObject({
+      name: "Bitcoin",
+      logoUrl: expect.stringMatching(/^https:\/\//),
+    })
     expect(usdc).toMatchObject({
       name: "USD Coin",
       type: "fungible",
@@ -227,6 +235,72 @@ describe("AssetsApiLive", () => {
         }),
       ]),
     })
+  })
+
+  it("lists pending assets without authentication or internal review fields", async () => {
+    const providerAssetId = crypto.randomUUID()
+    const pendingFiatId = crypto.randomUUID()
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.providerAssets).values([
+          {
+            id: providerAssetId,
+            provider: "public-test-provider",
+            providerAssetId: "public-pending-asset",
+            currencyCode: "PENDING",
+            name: "Pending Asset",
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          },
+          {
+            id: pendingFiatId,
+            provider: "public-test-provider",
+            providerAssetId: "public-pending-fiat",
+            currencyCode: "PENDING_FIAT",
+            name: "Pending Fiat",
+            providerType: "fiat",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          },
+        ])
+        yield* db.insert(schema.providerAssetMappings).values([
+          {
+            providerAssetRowId: providerAssetId,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+            reviewerNotes: "This must remain private.",
+            sourceNotes: "This must also remain private.",
+          },
+          {
+            providerAssetRowId: pendingFiatId,
+            mappingKind: "fiat",
+            mappingStatus: "pending_review",
+          },
+        ])
+      })
+    )
+
+    const response = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets/pending?provider=public-test-provider",
+        responseSchema: PendingAssetListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.pendingAssets).toEqual([
+      {
+        id: providerAssetId,
+        provider: "public-test-provider",
+        providerAssetId: "public-pending-asset",
+        symbol: "PENDING",
+        name: "Pending Asset",
+        providerType: "crypto",
+      },
+    ])
+    expect(JSON.stringify(response.body)).not.toContain("private")
   })
 
   it("keeps provider asset review endpoints admin protected", async () => {

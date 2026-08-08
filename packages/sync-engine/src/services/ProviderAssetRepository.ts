@@ -165,6 +165,7 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly listProviderAssetReviews: (params: {
     readonly providerKey: string | null
+    readonly mappingKind?: ProviderAssetMappingKind
     readonly mappingStatus: ProviderAssetMappingStatus
     readonly cursorProviderAssetRowId: string | null
     readonly limit: number

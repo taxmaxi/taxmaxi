@@ -3,6 +3,7 @@ import type {
   AssetCatalogListResponse,
   AssetCanonicalizationRequest,
   AssetCanonicalizationResponse,
+  PendingAssetListResponse,
   ProviderAssetReviewListResponse,
 } from "@my/rest-api/contracts"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
@@ -19,6 +20,21 @@ type TaxMaxiAssetsClient =
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
+export type PendingAsset = {
+  readonly id: string
+  readonly provider: string
+  readonly providerAssetId: string | null
+  readonly symbol: string
+  readonly name: string | null
+  readonly providerType: string | null
+}
+export type PendingAssetList = {
+  readonly pendingAssets: ReadonlyArray<PendingAsset>
+  readonly page: {
+    readonly nextCursor: string | null
+    readonly hasMore: boolean
+  }
+}
 export type AssetRepresentation = {
   readonly id: string
   readonly blockchainId: string
@@ -60,6 +76,12 @@ export type AssetCatalogDetailInput = {
   readonly assetId: string
 }
 
+export type PendingAssetListInput = {
+  readonly provider?: string
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
 export type ProviderAssetReviewListInput = {
   readonly provider?: string
   readonly status?: "approved" | "pending_review" | "rejected"
@@ -70,11 +92,15 @@ export type ProviderAssetReviewListInput = {
 export type AssetsEffectResource = {
   readonly list: (input?: AssetCatalogListInput) => Effect.Effect<AssetCatalogList, unknown, never>
   readonly get: (input: AssetCatalogDetailInput) => Effect.Effect<AssetCatalogAsset, unknown, never>
+  readonly listPending: (
+    input?: PendingAssetListInput
+  ) => Effect.Effect<PendingAssetList, unknown, never>
 }
 
 export type AssetsPromiseResource = {
   readonly list: (input?: AssetCatalogListInput) => Promise<AssetCatalogList>
   readonly get: (input: AssetCatalogDetailInput) => Promise<AssetCatalogAsset>
+  readonly listPending: (input?: PendingAssetListInput) => Promise<PendingAssetList>
 }
 
 export type InternalAssetsEffectResource = AssetsEffectResource & {
@@ -122,6 +148,21 @@ const toAssetCatalogList = (response: AssetCatalogListResponse): AssetCatalogLis
   assets: response.assets.map(toAssetCatalogAsset),
 })
 
+const toPendingAssetList = (response: PendingAssetListResponse): PendingAssetList => ({
+  pendingAssets: response.pendingAssets.map((asset) => ({
+    id: asset.id,
+    provider: asset.provider,
+    providerAssetId: asset.providerAssetId,
+    symbol: asset.symbol,
+    name: asset.name,
+    providerType: asset.providerType,
+  })),
+  page: {
+    nextCursor: response.page.nextCursor,
+    hasMore: response.page.hasMore,
+  },
+})
+
 export const makeAssetsEffectResource = (
   client: Effect.Effect<TaxMaxiAssetsClient, never>
 ): AssetsEffectResource => ({
@@ -147,6 +188,19 @@ export const makeAssetsEffectResource = (
         })
       ),
       toAssetCatalogAsset
+    ),
+  listPending: (input) =>
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.assets.listPendingAssets({
+          urlParams: {
+            provider: input?.provider,
+            cursor: input?.cursor ?? undefined,
+            limit: input?.limit,
+          },
+        })
+      ),
+      toPendingAssetList
     ),
 })
 
@@ -184,6 +238,7 @@ export const makeAssetsPromiseResource = (
 ): AssetsPromiseResource => ({
   list: (input) => run(effect.list(input)),
   get: (input) => run(effect.get(input)),
+  listPending: (input) => run(effect.listPending(input)),
 })
 
 export const makeInternalAssetsPromiseResource = (

@@ -1,7 +1,14 @@
 import { loadEnv } from "vite"
 import { defineConfig } from "vitest/config"
+import { fileURLToPath, URL } from "node:url"
+
+const wwwAliases = {
+  "#": fileURLToPath(new URL("./apps/www/src", import.meta.url)),
+  "@": fileURLToPath(new URL("./apps/www/src", import.meta.url)),
+}
 
 export default defineConfig({
+  resolve: { alias: wwwAliases },
   test: {
     watch: false,
     coverage: {
@@ -9,6 +16,7 @@ export default defineConfig({
     },
     projects: [
       {
+        resolve: { alias: wwwAliases },
         test: {
           include: [
             "packages/**/tests/**/*.test.ts",
@@ -16,6 +24,7 @@ export default defineConfig({
             "apps/server/tests/**/*.test.ts",
             "apps/worker/tests/**/*.test.ts",
             "apps/www/src/**/*.test.ts",
+            "apps/www/src/**/*.test.tsx",
           ],
           exclude: [
             "packages/**/tests/**/*.integration.test.ts",

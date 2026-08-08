@@ -350,6 +350,7 @@ const make = Effect.gen(function* () {
 
   const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
     providerKey,
+    mappingKind,
     mappingStatus,
     cursorProviderAssetRowId,
     limit,
@@ -398,6 +399,9 @@ const make = Effect.gen(function* () {
       })
       const predicates = [
         eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
+        ...(mappingKind === undefined
+          ? []
+          : [eq(schema.providerAssetMappings.mappingKind, mappingKind)]),
         ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
         ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
       ]

@@ -123,6 +123,22 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   },
 })
 
+const pendingAssetResponse = {
+  id: "00000000-0000-4000-8000-000000000019",
+  provider: "coinbase",
+  providerAssetId: "cbeth",
+  symbol: "cbETH",
+  name: "Coinbase Wrapped Staked ETH",
+  providerType: "crypto",
+} as const
+
+const pendingAssetListResponseBody = JSON.stringify({
+  pendingAssets: [pendingAssetResponse],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
+})
 const assetCatalogAssetResponse = {
   id: "00000000-0000-4000-8000-000000000010",
   name: "USD Coin",
@@ -585,7 +601,11 @@ describe("TaxMaxi Promise client", () => {
 
   it("plumbs asset catalog endpoints through the public assets resource as plain objects", async () => {
     const capturedRequests: Array<CapturedRequest> = []
-    const responseBodies = [assetCatalogListResponseBody, assetCatalogAssetResponseBody]
+    const responseBodies = [
+      assetCatalogListResponseBody,
+      assetCatalogAssetResponseBody,
+      pendingAssetListResponseBody,
+    ]
     const taxmaxi = new TaxMaxi({
       apiKey: "",
       baseUrl: "https://sdk.example.test",
@@ -607,11 +627,22 @@ describe("TaxMaxi Promise client", () => {
 
     const assetList = await taxmaxi.assets.list({ query: "usdc", limit: 25 })
     const asset = await taxmaxi.assets.get({ assetId: assetCatalogAssetResponse.id })
+    const pendingAssetList = await taxmaxi.assets.listPending({
+      provider: "coinbase",
+      limit: 10,
+    })
 
     expect(assetList).toStrictEqual({
       assets: [assetCatalogAssetResponse],
     })
     expect(asset).toStrictEqual(assetCatalogAssetResponse)
+    expect(pendingAssetList).toStrictEqual({
+      pendingAssets: [pendingAssetResponse],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
@@ -619,6 +650,9 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/00000000-0000-4000-8000-000000000010",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/pending?provider=coinbase&limit=10",
       }),
     ])
   })

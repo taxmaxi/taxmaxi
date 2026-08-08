@@ -1,7 +1,8 @@
-import type { AssetCatalogAsset, AssetRepresentation } from "taxmaxi"
+import type { AssetCatalogAsset, PendingAsset } from "taxmaxi"
 
 export type TaxMaxiAsset = AssetCatalogAsset
 export type TaxMaxiAssetType = TaxMaxiAsset["type"]
+export type TaxMaxiPendingAsset = PendingAsset
 
 export function filterTaxMaxiAssets({
   assets,
@@ -59,16 +60,4 @@ export function describeTaxMaxiAsset(asset: TaxMaxiAsset): string {
   const representationLabel = representationCount === 1 ? "representation" : "representations"
 
   return `Economic asset used for transfers, balances, valuation, and tax reports, with ${representationCount} known network ${representationLabel}.`
-}
-
-export function getAssetRepresentationExplorerHref(
-  representation: AssetRepresentation
-): string | null {
-  if (representation.blockchainExplorerUrl === null) {
-    return null
-  }
-
-  const explorerBaseUrl = representation.blockchainExplorerUrl.replace(/\/+$/, "")
-  const address = representation.contractAddress ?? representation.mintAddress
-  return address === null ? explorerBaseUrl : `${explorerBaseUrl}/address/${address}`
 }

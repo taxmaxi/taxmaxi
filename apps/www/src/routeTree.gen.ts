@@ -25,7 +25,6 @@ import { Route as DemoPosthogRouteImport } from './routes/demo/posthog'
 import { Route as DemoAiStructuredRouteImport } from './routes/demo/ai-structured'
 import { Route as DemoAiImageRouteImport } from './routes/demo/ai-image'
 import { Route as DemoAiChatRouteImport } from './routes/demo/ai-chat'
-import { Route as AssetsAssetIdRouteImport } from './routes/assets/$assetId'
 import { Route as DemoGuitarsIndexRouteImport } from './routes/demo/guitars/index'
 import { Route as DemoGuitarsGuitarIdRouteImport } from './routes/demo/guitars/$guitarId'
 import { Route as DemoFormSimpleRouteImport } from './routes/demo/form.simple'
@@ -116,11 +115,6 @@ const DemoAiChatRoute = DemoAiChatRouteImport.update({
   path: '/demo/ai-chat',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AssetsAssetIdRoute = AssetsAssetIdRouteImport.update({
-  id: '/assets/$assetId',
-  path: '/assets/$assetId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const DemoGuitarsIndexRoute = DemoGuitarsIndexRouteImport.update({
   id: '/demo/guitars/',
   path: '/demo/guitars/',
@@ -177,7 +171,6 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
-  '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
   '/demo/ai-structured': typeof DemoAiStructuredRoute
@@ -205,7 +198,6 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
-  '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
   '/demo/ai-structured': typeof DemoAiStructuredRoute
@@ -234,7 +226,6 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
-  '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
   '/demo/ai-structured': typeof DemoAiStructuredRoute
@@ -264,7 +255,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
-    | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
     | '/demo/ai-structured'
@@ -292,7 +282,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
-    | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
     | '/demo/ai-structured'
@@ -320,7 +309,6 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
-    | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
     | '/demo/ai-structured'
@@ -349,7 +337,6 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SignUpRoute: typeof SignUpRoute
   TermsRoute: typeof TermsRoute
-  AssetsAssetIdRoute: typeof AssetsAssetIdRoute
   DemoAiChatRoute: typeof DemoAiChatRoute
   DemoAiImageRoute: typeof DemoAiImageRoute
   DemoAiStructuredRoute: typeof DemoAiStructuredRoute
@@ -482,13 +469,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DemoAiChatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/assets/$assetId': {
-      id: '/assets/$assetId'
-      path: '/assets/$assetId'
-      fullPath: '/assets/$assetId'
-      preLoaderRoute: typeof AssetsAssetIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/demo/guitars/': {
       id: '/demo/guitars/'
       path: '/demo/guitars'
@@ -565,7 +545,6 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SignUpRoute: SignUpRoute,
   TermsRoute: TermsRoute,
-  AssetsAssetIdRoute: AssetsAssetIdRoute,
   DemoAiChatRoute: DemoAiChatRoute,
   DemoAiImageRoute: DemoAiImageRoute,
   DemoAiStructuredRoute: DemoAiStructuredRoute,
