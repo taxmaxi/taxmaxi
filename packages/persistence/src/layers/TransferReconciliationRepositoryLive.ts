@@ -319,6 +319,7 @@ const make = Effect.gen(function* () {
             eq(schema.sources.sourceableType, "onchain"),
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
             ne(schema.transfers.type, "fee"),
+            sql`coalesce(${schema.transfers.metadata}->>'role', 'principal') = 'principal'`,
             ownedSourceAddressCondition,
             canonicalOwnershipCondition,
             canonicalTimestampCondition,

@@ -216,6 +216,7 @@ const seedOnchainReceipt = ({
   assetId = TEST_BTC_ASSET_ID,
   assetRepresentationId = TEST_BTC_REPRESENTATION_ID,
   transferType = "utxo",
+  role,
 }: {
   readonly externalId: string
   readonly txHash: string
@@ -226,6 +227,7 @@ const seedOnchainReceipt = ({
   readonly assetId?: string
   readonly assetRepresentationId?: string
   readonly transferType?: "erc20" | "native" | "spl" | "utxo"
+  readonly role?: "fee" | "principal" | "rent"
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -300,7 +302,7 @@ const seedOnchainReceipt = ({
         amount,
         tokenId: null,
         notes: null,
-        metadata: { provider: "bitcoin" },
+        metadata: { provider: "bitcoin", ...(role === undefined ? {} : { role }) },
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transfers.id })
@@ -1006,6 +1008,209 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it("does not reconcile a hashless transfer with a canonical rent movement", async () => {
+    const walletAddress = "bc1qownedwalletwindowrent00000000000000000000"
+    const timestamp = new Date("2025-04-10T10:48:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-window-rent-provider-asset" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-window-rent",
+        timestamp,
+        amount: "0.01000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "canonical-window-rent-candidate",
+        txHash: "btc-window-rent-canonical-hash",
+        timestamp: new Date("2025-04-10T10:49:00.000Z"),
+        amount: "0.01000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        transferType: "native",
+        role: "rent",
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        pending: 1,
+        autoApplied: 0,
+        needsReview: 0,
+      })
+    )
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: null,
+        status: "pending",
+        matchReason: "no_candidate_onchain_receipt",
+      })
+    )
+  })
+
+  it("selects the principal receipt when a canonical rent movement has the same hashless facts", async () => {
+    const walletAddress = "bc1qownedwalletwindowrentprincipal00000000000000"
+    const timestamp = new Date("2025-04-10T10:50:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-window-rent-principal-provider-asset" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-window-rent-principal",
+        timestamp,
+        amount: "0.01000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "canonical-window-rent-competing-candidate",
+        txHash: "btc-window-rent-competing-hash",
+        timestamp: new Date("2025-04-10T10:51:00.000Z"),
+        amount: "0.01000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        transferType: "native",
+        role: "rent",
+      })
+    )
+    const principalReceipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "canonical-window-principal-candidate",
+        txHash: "btc-window-principal-candidate-hash",
+        timestamp: new Date("2025-04-10T10:52:00.000Z"),
+        amount: "0.01000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        role: "principal",
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        pending: 0,
+        autoApplied: 1,
+        needsReview: 0,
+      })
+    )
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: principalReceipt.transferId,
+        status: "auto_applied",
+      })
+    )
+  })
+
+  it("does not reconcile an exact-hash transfer with a canonical rent movement", async () => {
+    const walletAddress = "bc1qownedwallethashrent0000000000000000000000"
+    const timestamp = new Date("2025-04-10T10:54:00.000Z")
+    const networkHash = "btc-hash-rent-candidate"
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-hash-rent-provider-asset" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-hash-rent",
+        timestamp,
+        amount: "0.01000000",
+        toAddress: walletAddress,
+        networkHash,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "canonical-hash-rent-candidate",
+        txHash: networkHash,
+        timestamp,
+        amount: "0.01000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        transferType: "native",
+        role: "rent",
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        pending: 1,
+        autoApplied: 0,
+        needsReview: 0,
+      })
+    )
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: null,
+        status: "pending",
+        matchReason: "no_candidate_onchain_receipt",
+      })
+    )
+  })
+
   it("does not match an onchain provider movement to its own canonical transfer", async () => {
     const walletAddress = "bc1qownedwallethashdirection0000000000000000"
     const timestamp = new Date("2025-04-10T10:45:00.000Z")
@@ -1460,6 +1665,87 @@ describe("TransferReconciliationServiceLive", () => {
         canonicalTransferId: receipt.transferId,
         status: "auto_applied",
       })
+    )
+  })
+
+  it.each([
+    { caseName: "exactly 12 hours before", offsetMillis: -12 * 60 * 60 * 1000, matches: true },
+    { caseName: "exactly 12 hours after", offsetMillis: 12 * 60 * 60 * 1000, matches: true },
+    {
+      caseName: "one millisecond before the 12-hour window",
+      offsetMillis: -12 * 60 * 60 * 1000 - 1,
+      matches: false,
+    },
+    {
+      caseName: "one millisecond after the 12-hour window",
+      offsetMillis: 12 * 60 * 60 * 1000 + 1,
+      matches: false,
+    },
+  ] as const)("treats a hashless receipt $caseName as matches=$matches", async (testCase) => {
+    const walletAddress = `bc1qownedwalletwindowboundary${testCase.offsetMillis}`
+    const timestamp = new Date("2025-04-10T12:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({
+        providerAssetId: `btc-provider-window-boundary-${testCase.offsetMillis}`,
+      })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: `provider-transfer-window-boundary-${testCase.offsetMillis}`,
+        timestamp,
+        amount: "0.33000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: `onchain-receipt-window-boundary-${testCase.offsetMillis}`,
+        txHash: `btc-window-boundary-hash-${testCase.offsetMillis}`,
+        timestamp: new Date(timestamp.getTime() + testCase.offsetMillis),
+        amount: "0.33000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining(
+        testCase.matches
+          ? { pending: 0, autoApplied: 1, needsReview: 0 }
+          : { pending: 1, autoApplied: 0, needsReview: 0 }
+      )
+    )
+    expect(reconciliation).toEqual(
+      expect.objectContaining(
+        testCase.matches
+          ? { canonicalTransferId: receipt.transferId, status: "auto_applied" }
+          : {
+              canonicalTransferId: null,
+              status: "pending",
+              matchReason: "no_candidate_onchain_receipt",
+            }
+      )
     )
   })
 
