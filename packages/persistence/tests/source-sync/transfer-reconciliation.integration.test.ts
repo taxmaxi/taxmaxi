@@ -3741,6 +3741,106 @@ describe("TransferReconciliationServiceLive", () => {
     expect(earlyOutcome).toBe("blocked")
   })
 
+  it("revalidates candidate uniqueness after concurrent destination persistence", async () => {
+    const walletAddress = "bc1qownedwalletconcurrentcandidate00000000000000"
+    const timestamp = new Date("2025-04-13T13:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-concurrent-candidate" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-concurrent-candidate",
+        timestamp,
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-concurrent-candidate-first",
+        txHash: "btc-concurrent-candidate-first",
+        timestamp: new Date("2025-04-13T13:05:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    const candidatesRead = await Effect.runPromise(Deferred.make<void>())
+    const continueReconciliation = await Effect.runPromise(Deferred.make<void>())
+    const PausingTransferReconciliationRepositoryLive = Layer.effect(
+      TransferReconciliationRepository,
+      Effect.gen(function* () {
+        const repository = yield* TransferReconciliationRepository
+
+        return TransferReconciliationRepository.of({
+          ...repository,
+          findOnchainTransferCandidates: (params) =>
+            repository.findOnchainTransferCandidates(params).pipe(
+              Effect.tap(() => Deferred.succeed(candidatesRead, undefined)),
+              Effect.tap(() => Deferred.await(continueReconciliation))
+            ),
+        })
+      })
+    ).pipe(Layer.provide(TransferReconciliationRepositoryLive))
+    const PausingTransferReconciliationServiceLive = TransferReconciliationServiceLive.pipe(
+      Layer.provide(PausingTransferReconciliationRepositoryLive)
+    )
+    const reconciliationRun = Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        ),
+        layer: PausingTransferReconciliationServiceLive,
+      })
+    )
+
+    await Effect.runPromise(Deferred.await(candidatesRead))
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-concurrent-candidate-second",
+        txHash: "btc-concurrent-candidate-second",
+        timestamp: new Date("2025-04-13T13:06:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await Effect.runPromise(Deferred.succeed(continueReconciliation, undefined))
+
+    const summary = await reconciliationRun
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        pending: 0,
+        needsReview: 1,
+        autoApplied: 0,
+      })
+    )
+    expect(reconciliation).toEqual(
+      expect.objectContaining({
+        canonicalTransferId: null,
+        status: "needs_review",
+        matchReason: "candidate_set_changed_during_reconciliation",
+      })
+    )
+  })
+
   it.each([
     {
       label: "an earlier origin disposal",

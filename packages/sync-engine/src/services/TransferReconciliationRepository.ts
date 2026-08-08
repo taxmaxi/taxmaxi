@@ -79,6 +79,20 @@ export interface TransferReconciliationRecordDraft {
   readonly confidence: string
   readonly deterministic: boolean
   readonly reviewMetadata: unknown
+  /** Physical candidate set observed before persistence acquires principal source locks. */
+  readonly candidateSnapshot?: TransferReconciliationCandidateSnapshot
+}
+
+/** Candidate search and exact matches that must still hold under principal source locks. */
+export interface TransferReconciliationCandidateSnapshot {
+  readonly search: FindOnchainTransferReconciliationCandidatesParams
+  readonly providerAmount: string
+  readonly candidateFingerprints: ReadonlyArray<string>
+}
+
+/** Outcome of one reconciliation-state write. */
+export interface UpsertTransferReconciliationResult {
+  readonly candidateSnapshotChanged: boolean
 }
 
 /** Admin-facing reconciliation state with the provider movement that produced it. */
@@ -182,7 +196,7 @@ export interface TransferReconciliationRepositoryShape {
    */
   readonly upsertTransferReconciliation: (
     params: TransferReconciliationRecordDraft
-  ) => Effect.Effect<void, SyncEngineStorageError>
+  ) => Effect.Effect<UpsertTransferReconciliationResult, SyncEngineStorageError>
 
   /**
    * Replace false provider/onchain tax-visible state with canonical internal-transfer

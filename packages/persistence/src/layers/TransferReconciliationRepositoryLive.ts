@@ -32,6 +32,7 @@ import {
   type DeterministicTransferCanonicalizationSummary,
   type FindOnchainTransferReconciliationCandidatesParams,
   type ListProviderTransfersForReconciliationParams,
+  type OnchainTransferReconciliationCandidate,
   type RecordOnchainRepresentationEvidenceParams,
   type TransferReconciliationRecordDraft,
   type TransferReconciliationRepositoryShape,
@@ -48,6 +49,7 @@ class HistoricalFifoRebuildBlocked extends Data.TaggedError("HistoricalFifoRebui
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type TransferReconciliationExecutor = Pick<typeof db, "select">
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
   const canonicalTransactionTable = aliasedTable(schema.transactions, "canonical_transaction")
   const onchainProviderTransferTable = aliasedTable(
@@ -187,8 +189,9 @@ const make = Effect.gen(function* () {
           )
         )
 
-  const findOnchainTransferCandidates: TransferReconciliationRepositoryShape["findOnchainTransferCandidates"] =
-    ({
+  const findOnchainTransferCandidatesWithExecutor = ({
+    executor,
+    search: {
       principalId,
       direction,
       walletAddress,
@@ -196,32 +199,39 @@ const make = Effect.gen(function* () {
       timestampEnd,
       networkName,
       networkHash,
-    }: FindOnchainTransferReconciliationCandidatesParams) => {
-      const canonicalOwnershipColumn =
-        direction === "outbound" ? schema.transfers.toAddress : schema.transfers.fromAddress
-      const observedOwnershipColumn =
-        direction === "outbound"
-          ? onchainProviderTransferTable.toAddress
-          : onchainProviderTransferTable.fromAddress
-      const observedDirection = direction === "outbound" ? "inbound" : "outbound"
-      const ownedSourceAddressCondition =
-        networkHash !== null || walletAddress === null
-          ? sql`true`
-          : sql`
+    },
+  }: {
+    readonly executor: TransferReconciliationExecutor
+    readonly search: FindOnchainTransferReconciliationCandidatesParams
+  }): Effect.Effect<
+    ReadonlyArray<OnchainTransferReconciliationCandidate>,
+    SyncEngineStorageError
+  > => {
+    const canonicalOwnershipColumn =
+      direction === "outbound" ? schema.transfers.toAddress : schema.transfers.fromAddress
+    const observedOwnershipColumn =
+      direction === "outbound"
+        ? onchainProviderTransferTable.toAddress
+        : onchainProviderTransferTable.fromAddress
+    const observedDirection = direction === "outbound" ? "inbound" : "outbound"
+    const ownedSourceAddressCondition =
+      networkHash !== null || walletAddress === null
+        ? sql`true`
+        : sql`
               case
                 when ${schema.addresses.type} = 'evm'
                   then lower(${schema.addresses.address}) = lower(${walletAddress})
                 else ${schema.addresses.address} = ${walletAddress}
               end
             `
-      const canonicalOwnershipCondition = sql`
+    const canonicalOwnershipCondition = sql`
         case
           when ${schema.addresses.type} = 'evm'
             then lower(${canonicalOwnershipColumn}) = lower(${schema.addresses.address})
           else ${canonicalOwnershipColumn} = ${schema.addresses.address}
         end
       `
-      const observedOwnershipCondition = sql`
+    const observedOwnershipCondition = sql`
         case
           when ${schema.addresses.type} = 'evm'
             then lower(${observedOwnershipColumn}) = lower(${schema.addresses.address})
@@ -229,156 +239,156 @@ const make = Effect.gen(function* () {
         end
       `
 
-      const canonicalNetworkNameCondition =
-        networkName === null
-          ? sql`true`
-          : sql`lower(${schema.blockchains.name}) = lower(${networkName})`
-      const canonicalNetworkHashCondition =
-        networkHash === null
-          ? sql`true`
-          : sql`
+    const canonicalNetworkNameCondition =
+      networkName === null
+        ? sql`true`
+        : sql`lower(${schema.blockchains.name}) = lower(${networkName})`
+    const canonicalNetworkHashCondition =
+      networkHash === null
+        ? sql`true`
+        : sql`
               case
                 when ${schema.addresses.type} = 'evm'
                   then lower(${schema.transfers.txHash}) = lower(${networkHash})
                 else ${schema.transfers.txHash} = ${networkHash}
               end
             `
-      const observedNetworkNameCondition =
-        networkName === null
-          ? sql`true`
-          : sql`lower(${onchainProviderTransferTable.networkName}) = lower(${networkName})`
-      const observedNetworkHashCondition =
-        networkHash === null
-          ? sql`true`
-          : sql`
+    const observedNetworkNameCondition =
+      networkName === null
+        ? sql`true`
+        : sql`lower(${onchainProviderTransferTable.networkName}) = lower(${networkName})`
+    const observedNetworkHashCondition =
+      networkHash === null
+        ? sql`true`
+        : sql`
               case
                 when ${schema.addresses.type} = 'evm'
                   then lower(${onchainProviderTransferTable.networkHash}) = lower(${networkHash})
                 else ${onchainProviderTransferTable.networkHash} = ${networkHash}
               end
             `
-      const canonicalTimestampCondition =
-        networkHash === null
-          ? and(
-              gte(schema.transfers.timestamp, timestampStart),
-              lte(schema.transfers.timestamp, timestampEnd)
-            )
-          : sql`true`
-      const observedTimestampCondition =
-        networkHash === null
-          ? and(
-              gte(onchainProviderTransferTable.timestamp, timestampStart),
-              lte(onchainProviderTransferTable.timestamp, timestampEnd)
-            )
-          : sql`true`
+    const canonicalTimestampCondition =
+      networkHash === null
+        ? and(
+            gte(schema.transfers.timestamp, timestampStart),
+            lte(schema.transfers.timestamp, timestampEnd)
+          )
+        : sql`true`
+    const observedTimestampCondition =
+      networkHash === null
+        ? and(
+            gte(onchainProviderTransferTable.timestamp, timestampStart),
+            lte(onchainProviderTransferTable.timestamp, timestampEnd)
+          )
+        : sql`true`
 
-      const canonicalCandidates = db
-        .select({
-          transferId: schema.transfers.id,
-          observedProviderTransferId: sql<string | null>`null`,
-          transactionId: schema.transactionOnchainContext.transactionId,
-          sourceId: schema.transfers.sourceId,
-          addressId: schema.addresses.id,
-          blockchainId: schema.transfers.blockchainId,
-          blockchainName: schema.blockchains.name,
-          txHash: schema.transfers.txHash,
-          timestamp: schema.transfers.timestamp,
-          fromAddress: schema.transfers.fromAddress,
-          toAddress: schema.transfers.toAddress,
-          providerAssetRowId: sql<string | null>`null`,
-          providerAssetMappingStatus: sql<
-            "approved" | "pending_review" | "rejected" | null
-          >`'approved'`,
-          assetId: schema.transfers.assetId,
-          assetRepresentationId: schema.transfers.assetRepresentationId,
-          representationType: schema.assetRepresentations.type,
-          contractAddress: schema.assetRepresentations.contractAddress,
-          mintAddress: schema.assetRepresentations.mintAddress,
-          decimals: schema.assetRepresentations.decimals,
-          amount: schema.transfers.amount,
-        })
-        .from(schema.transfers)
-        .innerJoin(schema.sources, eq(schema.sources.id, schema.transfers.sourceId))
-        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
-        .leftJoin(schema.blockchains, eq(schema.blockchains.id, schema.transfers.blockchainId))
-        .innerJoin(
-          schema.transactionOnchainContext,
-          and(
-            eq(schema.transactionOnchainContext.addressId, schema.transfers.addressId),
-            eq(schema.transactionOnchainContext.blockchainId, schema.transfers.blockchainId),
-            eq(schema.transactionOnchainContext.chainTxId, schema.transfers.txHash)
-          )
+    const canonicalCandidates = executor
+      .select({
+        transferId: schema.transfers.id,
+        observedProviderTransferId: sql<string | null>`null`,
+        transactionId: schema.transactionOnchainContext.transactionId,
+        sourceId: schema.transfers.sourceId,
+        addressId: schema.addresses.id,
+        blockchainId: schema.transfers.blockchainId,
+        blockchainName: schema.blockchains.name,
+        txHash: schema.transfers.txHash,
+        timestamp: schema.transfers.timestamp,
+        fromAddress: schema.transfers.fromAddress,
+        toAddress: schema.transfers.toAddress,
+        providerAssetRowId: sql<string | null>`null`,
+        providerAssetMappingStatus: sql<
+          "approved" | "pending_review" | "rejected" | null
+        >`'approved'`,
+        assetId: schema.transfers.assetId,
+        assetRepresentationId: schema.transfers.assetRepresentationId,
+        representationType: schema.assetRepresentations.type,
+        contractAddress: schema.assetRepresentations.contractAddress,
+        mintAddress: schema.assetRepresentations.mintAddress,
+        decimals: schema.assetRepresentations.decimals,
+        amount: schema.transfers.amount,
+      })
+      .from(schema.transfers)
+      .innerJoin(schema.sources, eq(schema.sources.id, schema.transfers.sourceId))
+      .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+      .leftJoin(schema.blockchains, eq(schema.blockchains.id, schema.transfers.blockchainId))
+      .innerJoin(
+        schema.transactionOnchainContext,
+        and(
+          eq(schema.transactionOnchainContext.addressId, schema.transfers.addressId),
+          eq(schema.transactionOnchainContext.blockchainId, schema.transfers.blockchainId),
+          eq(schema.transactionOnchainContext.chainTxId, schema.transfers.txHash)
         )
-        .innerJoin(
-          schema.assetRepresentations,
-          eq(schema.assetRepresentations.id, schema.transfers.assetRepresentationId)
+      )
+      .innerJoin(
+        schema.assetRepresentations,
+        eq(schema.assetRepresentations.id, schema.transfers.assetRepresentationId)
+      )
+      .where(
+        and(
+          eq(schema.sources.principalId, principalId),
+          eq(schema.sources.sourceableType, "onchain"),
+          sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
+          ne(schema.transfers.type, "fee"),
+          sql`coalesce(${schema.transfers.metadata}->>'role', 'principal') = 'principal'`,
+          ownedSourceAddressCondition,
+          canonicalOwnershipCondition,
+          canonicalTimestampCondition,
+          canonicalNetworkNameCondition,
+          canonicalNetworkHashCondition
         )
-        .where(
-          and(
-            eq(schema.sources.principalId, principalId),
-            eq(schema.sources.sourceableType, "onchain"),
-            sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
-            ne(schema.transfers.type, "fee"),
-            sql`coalesce(${schema.transfers.metadata}->>'role', 'principal') = 'principal'`,
-            ownedSourceAddressCondition,
-            canonicalOwnershipCondition,
-            canonicalTimestampCondition,
-            canonicalNetworkNameCondition,
-            canonicalNetworkHashCondition
-          )
-        )
-        .orderBy(asc(schema.transfers.timestamp), asc(schema.transfers.id))
+      )
+      .orderBy(asc(schema.transfers.timestamp), asc(schema.transfers.id))
 
-      const observedCandidates = db
-        .select({
-          transferId: sql<string | null>`null`,
-          observedProviderTransferId: onchainProviderTransferTable.id,
-          transactionId: onchainProviderTransferTable.transactionId,
-          sourceId: onchainProviderTransferTable.sourceId,
-          addressId: schema.addresses.id,
-          blockchainId: onchainProviderTransferTable.observedBlockchainId,
-          blockchainName: schema.blockchains.name,
-          txHash: onchainProviderTransferTable.networkHash,
-          timestamp: onchainProviderTransferTable.timestamp,
-          fromAddress: onchainProviderTransferTable.fromAddress,
-          toAddress: onchainProviderTransferTable.toAddress,
-          providerAssetRowId: onchainProviderTransferTable.providerAssetId,
-          providerAssetMappingStatus: schema.providerAssetMappings.mappingStatus,
-          assetId: schema.providerAssetMappings.canonicalAssetId,
-          assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
-          representationType: onchainProviderTransferTable.observedRepresentationType,
-          contractAddress: onchainProviderTransferTable.observedContractAddress,
-          mintAddress: onchainProviderTransferTable.observedMintAddress,
-          decimals: onchainProviderTransferTable.observedDecimals,
-          amount: onchainProviderTransferTable.amount,
-        })
-        .from(onchainProviderTransferTable)
-        .innerJoin(schema.sources, eq(schema.sources.id, onchainProviderTransferTable.sourceId))
-        .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
-        .leftJoin(
-          schema.blockchains,
-          eq(schema.blockchains.id, onchainProviderTransferTable.observedBlockchainId)
+    const observedCandidates = executor
+      .select({
+        transferId: sql<string | null>`null`,
+        observedProviderTransferId: onchainProviderTransferTable.id,
+        transactionId: onchainProviderTransferTable.transactionId,
+        sourceId: onchainProviderTransferTable.sourceId,
+        addressId: schema.addresses.id,
+        blockchainId: onchainProviderTransferTable.observedBlockchainId,
+        blockchainName: schema.blockchains.name,
+        txHash: onchainProviderTransferTable.networkHash,
+        timestamp: onchainProviderTransferTable.timestamp,
+        fromAddress: onchainProviderTransferTable.fromAddress,
+        toAddress: onchainProviderTransferTable.toAddress,
+        providerAssetRowId: onchainProviderTransferTable.providerAssetId,
+        providerAssetMappingStatus: schema.providerAssetMappings.mappingStatus,
+        assetId: schema.providerAssetMappings.canonicalAssetId,
+        assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+        representationType: onchainProviderTransferTable.observedRepresentationType,
+        contractAddress: onchainProviderTransferTable.observedContractAddress,
+        mintAddress: onchainProviderTransferTable.observedMintAddress,
+        decimals: onchainProviderTransferTable.observedDecimals,
+        amount: onchainProviderTransferTable.amount,
+      })
+      .from(onchainProviderTransferTable)
+      .innerJoin(schema.sources, eq(schema.sources.id, onchainProviderTransferTable.sourceId))
+      .innerJoin(schema.addresses, eq(schema.addresses.id, schema.sources.addressId))
+      .leftJoin(
+        schema.blockchains,
+        eq(schema.blockchains.id, onchainProviderTransferTable.observedBlockchainId)
+      )
+      .leftJoin(
+        schema.providerAssetMappings,
+        eq(
+          schema.providerAssetMappings.providerAssetRowId,
+          onchainProviderTransferTable.providerAssetId
         )
-        .leftJoin(
-          schema.providerAssetMappings,
-          eq(
-            schema.providerAssetMappings.providerAssetRowId,
-            onchainProviderTransferTable.providerAssetId
-          )
-        )
-        .where(
-          and(
-            eq(schema.sources.principalId, principalId),
-            eq(schema.sources.sourceableType, "onchain"),
-            eq(onchainProviderTransferTable.direction, observedDirection),
-            sql`coalesce(${onchainProviderTransferTable.metadata}->>'role', 'principal') = 'principal'`,
-            ownedSourceAddressCondition,
-            observedOwnershipCondition,
-            sql`${onchainProviderTransferTable.observedRepresentationType} is not null`,
-            observedTimestampCondition,
-            observedNetworkNameCondition,
-            observedNetworkHashCondition,
-            sql`not exists (
+      )
+      .where(
+        and(
+          eq(schema.sources.principalId, principalId),
+          eq(schema.sources.sourceableType, "onchain"),
+          eq(onchainProviderTransferTable.direction, observedDirection),
+          sql`coalesce(${onchainProviderTransferTable.metadata}->>'role', 'principal') = 'principal'`,
+          ownedSourceAddressCondition,
+          observedOwnershipCondition,
+          sql`${onchainProviderTransferTable.observedRepresentationType} is not null`,
+          observedTimestampCondition,
+          observedNetworkNameCondition,
+          observedNetworkHashCondition,
+          sql`not exists (
               select 1
               from ${schema.transfers}
               inner join ${schema.assetRepresentations}
@@ -398,15 +408,72 @@ const make = Effect.gen(function* () {
                   or ${schema.assetRepresentations.decimals} = ${onchainProviderTransferTable.observedDecimals}
                 )
             )`
-          )
         )
-        .orderBy(asc(onchainProviderTransferTable.timestamp), asc(onchainProviderTransferTable.id))
-
-      return Effect.all([canonicalCandidates, observedCandidates]).pipe(
-        Effect.map(([canonical, observed]) => [...canonical, ...observed]),
-        wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
       )
-    }
+      .orderBy(asc(onchainProviderTransferTable.timestamp), asc(onchainProviderTransferTable.id))
+
+    return Effect.all([canonicalCandidates, observedCandidates]).pipe(
+      Effect.map(([canonical, observed]) => [...canonical, ...observed]),
+      wrapSyncEngineSqlError("transferReconciliationRepository.findOnchainTransferCandidates")
+    )
+  }
+
+  const findOnchainTransferCandidates: TransferReconciliationRepositoryShape["findOnchainTransferCandidates"] =
+    (search) => findOnchainTransferCandidatesWithExecutor({ executor: db, search })
+
+  const reconciliationCandidateFingerprint = (
+    candidate: OnchainTransferReconciliationCandidate
+  ): string =>
+    JSON.stringify([
+      candidate.transferId,
+      candidate.observedProviderTransferId,
+      candidate.transactionId,
+      candidate.sourceId,
+      candidate.addressId,
+      candidate.blockchainId,
+      candidate.blockchainName,
+      candidate.txHash,
+      candidate.timestamp.toISOString(),
+      candidate.fromAddress,
+      candidate.toAddress,
+      candidate.providerAssetRowId,
+      candidate.providerAssetMappingStatus,
+      candidate.assetId,
+      candidate.assetRepresentationId,
+      candidate.representationType,
+      candidate.contractAddress,
+      candidate.mintAddress,
+      candidate.decimals,
+      candidate.amount,
+    ])
+
+  const exactAmountCandidateFingerprints = ({
+    providerAmount,
+    candidates,
+  }: {
+    readonly providerAmount: string
+    readonly candidates: ReadonlyArray<OnchainTransferReconciliationCandidate>
+  }): Effect.Effect<ReadonlyArray<string>, SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      const providerAmountDecimal = yield* decodeBigDecimal({
+        value: providerAmount,
+        operation: "transferReconciliationRepository.compareCandidateSnapshot.providerAmount",
+      })
+      const fingerprints: Array<string> = []
+
+      for (const candidate of candidates) {
+        const candidateAmount = yield* decodeBigDecimal({
+          value: candidate.amount,
+          operation: "transferReconciliationRepository.compareCandidateSnapshot.candidateAmount",
+        })
+
+        if (BigDecimal.equals(providerAmountDecimal, candidateAmount)) {
+          fingerprints.push(reconciliationCandidateFingerprint(candidate))
+        }
+      }
+
+      return fingerprints
+    })
 
   const recordOnchainRepresentationEvidence: TransferReconciliationRepositoryShape["recordOnchainRepresentationEvidence"] =
     ({
@@ -490,6 +557,7 @@ const make = Effect.gen(function* () {
       confidence,
       deterministic,
       reviewMetadata,
+      candidateSnapshot,
     }: TransferReconciliationRecordDraft) =>
       db
         .transaction((tx) =>
@@ -501,6 +569,7 @@ const make = Effect.gen(function* () {
             let persistedMatchReason = matchReason
             let persistedConfidence = confidence
             let persistedDeterministic = deterministic
+            let candidateSnapshotChanged = false
             yield* tx
               .select({ id: schema.sources.id })
               .from(schema.sources)
@@ -512,6 +581,65 @@ const make = Effect.gen(function* () {
                   "transferReconciliationRepository.upsertTransferReconciliation.lockPrincipalSources"
                 )
               )
+
+            if (candidateSnapshot !== undefined) {
+              const currentCandidates = yield* findOnchainTransferCandidatesWithExecutor({
+                executor: tx,
+                search: candidateSnapshot.search,
+              })
+              const currentCandidateFingerprints = yield* exactAmountCandidateFingerprints({
+                providerAmount: candidateSnapshot.providerAmount,
+                candidates: currentCandidates,
+              })
+              const expectedCandidateFingerprints = [
+                ...candidateSnapshot.candidateFingerprints,
+              ].sort()
+              const sortedCurrentCandidateFingerprints = [...currentCandidateFingerprints].sort()
+              candidateSnapshotChanged =
+                expectedCandidateFingerprints.length !==
+                  sortedCurrentCandidateFingerprints.length ||
+                expectedCandidateFingerprints.some(
+                  (candidateFingerprint, index) =>
+                    candidateFingerprint !== sortedCurrentCandidateFingerprints[index]
+                )
+
+              if (candidateSnapshotChanged) {
+                const metadata = yield* Schema.decodeUnknown(
+                  Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
+                persistedCanonicalTransferId = null
+                persistedCanonicalTransactionId = null
+                persistedStatus = "needs_review"
+                persistedMatchReason = "candidate_set_changed_during_reconciliation"
+                persistedConfidence = "0.0000"
+                persistedDeterministic = false
+                persistedReviewMetadata = {
+                  ...metadata,
+                  candidateSnapshot: {
+                    expectedCandidateFingerprints,
+                    currentCandidateFingerprints: sortedCurrentCandidateFingerprints,
+                  },
+                }
+              } else {
+                const metadata = yield* Schema.decodeUnknown(
+                  Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                )(persistedReviewMetadata).pipe(
+                  Effect.orElseSucceed(() => ({ evidence: persistedReviewMetadata }))
+                )
+                persistedReviewMetadata = {
+                  ...metadata,
+                  candidateSnapshot: {
+                    search: {
+                      ...candidateSnapshot.search,
+                      timestampStart: candidateSnapshot.search.timestampStart.toISOString(),
+                      timestampEnd: candidateSnapshot.search.timestampEnd.toISOString(),
+                    },
+                    providerAmount: candidateSnapshot.providerAmount,
+                    candidateFingerprints: expectedCandidateFingerprints,
+                  },
+                }
+              }
+            }
 
             const [existing] = yield* tx
               .select({
@@ -532,8 +660,8 @@ const make = Effect.gen(function* () {
               .limit(1)
 
             if (
-              canonicalTransferId !== null &&
-              (status === "auto_applied" || status === "approved")
+              persistedCanonicalTransferId !== null &&
+              (persistedStatus === "auto_applied" || persistedStatus === "approved")
             ) {
               const [canonicalClaim] = yield* tx
                 .select({
@@ -544,7 +672,10 @@ const make = Effect.gen(function* () {
                 .where(
                   and(
                     eq(schema.transferReconciliations.principalId, principalId),
-                    eq(schema.transferReconciliations.canonicalTransferId, canonicalTransferId),
+                    eq(
+                      schema.transferReconciliations.canonicalTransferId,
+                      persistedCanonicalTransferId
+                    ),
                     ne(schema.transferReconciliations.providerTransferId, providerTransferId),
                     or(
                       inArray(schema.transferReconciliations.status, ["auto_applied", "approved"]),
@@ -588,7 +719,7 @@ const make = Effect.gen(function* () {
                   )(existing.reviewMetadata).pipe(Effect.option)
                 : Option.none()
 
-            if (Option.isSome(blockedRollback) && status === "needs_review") {
+            if (Option.isSome(blockedRollback) && persistedStatus === "needs_review") {
               const metadata = yield* Schema.decodeUnknown(
                 Schema.Record({ key: Schema.String, value: Schema.Unknown })
               )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
@@ -612,9 +743,9 @@ const make = Effect.gen(function* () {
             const invalidatesAppliedMatch =
               existing !== undefined &&
               (existing.status === "auto_applied" || Option.isSome(blockedRollback)) &&
-              (status !== "auto_applied" ||
-                canonicalTransferId !== existing.canonicalTransferId ||
-                canonicalTransactionId !== existing.canonicalTransactionId)
+              (persistedStatus !== "auto_applied" ||
+                persistedCanonicalTransferId !== existing.canonicalTransferId ||
+                persistedCanonicalTransactionId !== existing.canonicalTransactionId)
 
             if (
               invalidatesAppliedMatch &&
@@ -918,6 +1049,8 @@ const make = Effect.gen(function* () {
                 },
                 setWhere: sql`${schema.transferReconciliations.status} not in ('approved', 'rejected')`,
               })
+
+            return { candidateSnapshotChanged }
           })
         )
         .pipe(
