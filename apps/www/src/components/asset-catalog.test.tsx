@@ -252,7 +252,7 @@ describe("AssetCatalog", () => {
     fireEvent.click(pendingScope)
 
     expect(pendingScope.getAttribute("aria-pressed")).toBe("true")
-    expect(screen.getByText("Pending assets unavailable")).toBeTruthy()
+    expect(screen.getAllByText("Pending assets unavailable")).toHaveLength(2)
     expect(screen.queryByRole("tab")).toBeNull()
   })
 
