@@ -127,6 +127,7 @@ const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
     id: row.id,
     name: row.name,
     symbol: row.symbol,
+    coingeckoCoinId: row.coingeckoCoinId,
     logoUrl: row.logoUrl,
     type: row.type,
     representations: row.representations.map((representation) =>

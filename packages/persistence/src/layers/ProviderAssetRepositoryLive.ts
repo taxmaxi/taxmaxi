@@ -19,6 +19,7 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
+import { getAssetCatalogSearchPatterns } from "../query/AssetCatalogSearch.ts"
 import { schema } from "../schema/index.ts"
 
 const makeMissingIdentityError = ({
@@ -372,24 +373,22 @@ const make = Effect.gen(function* () {
                 gt(schema.providerAssets.id, cursor.providerAssetRowId)
               )
             )
-      const trimmedQuery = query?.trim() ?? ""
-      const searchPredicate =
-        trimmedQuery.length === 0
-          ? undefined
-          : or(
-              ilike(schema.providerAssets.provider, `%${trimmedQuery}%`),
-              ilike(schema.providerAssets.providerAssetId, `%${trimmedQuery}%`),
-              ilike(schema.providerAssets.currencyCode, `%${trimmedQuery}%`),
-              ilike(schema.providerAssets.name, `%${trimmedQuery}%`),
-              ilike(schema.providerAssets.providerType, `%${trimmedQuery}%`)
-            )
+      const searchPredicates = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
+        or(
+          ilike(schema.providerAssets.provider, pattern),
+          ilike(schema.providerAssets.providerAssetId, pattern),
+          ilike(schema.providerAssets.currencyCode, pattern),
+          ilike(schema.providerAssets.name, pattern),
+          ilike(schema.providerAssets.providerType, pattern)
+        )
+      )
       const predicates = [
         eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
         ...(mappingKind === undefined
           ? []
           : [eq(schema.providerAssetMappings.mappingKind, mappingKind)]),
         ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
-        ...(searchPredicate === undefined ? [] : [searchPredicate]),
+        ...searchPredicates,
         ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
       ]
 

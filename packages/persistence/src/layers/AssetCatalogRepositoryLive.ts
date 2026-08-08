@@ -4,7 +4,7 @@
  * @module AssetCatalogRepositoryLive
  */
 
-import { and, asc, eq, gt, ilike, or } from "drizzle-orm"
+import { and, asc, eq, exists, gt, ilike, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -16,6 +16,7 @@ import {
 } from "../services/AssetCatalogRepository.ts"
 import { schema } from "../schema/index.ts"
 import { wrapSqlError } from "../errors/RepositoryError.ts"
+import { getAssetCatalogSearchPatterns } from "../query/AssetCatalogSearch.ts"
 import { drizzle } from "./PgClientLive.ts"
 
 const representationColumns = {
@@ -69,18 +70,35 @@ const make = Effect.gen(function* () {
 
   const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({ cursor, limit, query }) =>
     Effect.gen(function* () {
-      const trimmedQuery = query?.trim() ?? ""
-      const searchFilter =
-        trimmedQuery.length === 0
-          ? undefined
-          : or(
-              ilike(schema.assets.name, `%${trimmedQuery}%`),
-              ilike(schema.assets.symbol, `%${trimmedQuery}%`),
-              ilike(schema.assetRepresentations.contractAddress, `%${trimmedQuery}%`),
-              ilike(schema.assetRepresentations.mintAddress, `%${trimmedQuery}%`),
-              ilike(schema.blockchains.name, `%${trimmedQuery}%`),
-              ilike(schema.blockchains.chainType, `%${trimmedQuery}%`)
-            )
+      const searchFilters = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
+        or(
+          ilike(schema.assets.name, pattern),
+          ilike(schema.assets.symbol, pattern),
+          ilike(schema.assets.coingeckoCoinId, pattern),
+          sql<boolean>`${schema.assets.id}::text ilike ${pattern}`,
+          exists(
+            db
+              .select({ id: schema.assetRepresentations.id })
+              .from(schema.assetRepresentations)
+              .leftJoin(
+                schema.blockchains,
+                eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
+              )
+              .where(
+                and(
+                  eq(schema.assetRepresentations.assetId, schema.assets.id),
+                  eq(schema.assetRepresentations.isSpam, false),
+                  or(
+                    ilike(schema.assetRepresentations.contractAddress, pattern),
+                    ilike(schema.assetRepresentations.mintAddress, pattern),
+                    ilike(schema.blockchains.name, pattern),
+                    ilike(schema.blockchains.chainType, pattern)
+                  )
+                )
+              )
+          )
+        )
+      )
       const cursorFilter =
         cursor === null
           ? undefined
@@ -94,26 +112,16 @@ const make = Effect.gen(function* () {
               )
             )
       const rows = yield* db
-        .selectDistinct({
+        .select({
           id: schema.assets.id,
           name: schema.assets.name,
           symbol: schema.assets.symbol,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
           logoUrl: schema.assets.logoUrl,
           type: schema.assets.type,
         })
         .from(schema.assets)
-        .leftJoin(
-          schema.assetRepresentations,
-          and(
-            eq(schema.assetRepresentations.assetId, schema.assets.id),
-            eq(schema.assetRepresentations.isSpam, false)
-          )
-        )
-        .leftJoin(
-          schema.blockchains,
-          eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
-        )
-        .where(and(searchFilter, cursorFilter))
+        .where(and(...searchFilters, cursorFilter))
         .orderBy(asc(schema.assets.symbol), asc(schema.assets.name), asc(schema.assets.id))
         .limit(limit)
         .pipe(wrapSqlError("assetCatalogRepository.listAssets"))
@@ -132,6 +140,7 @@ const make = Effect.gen(function* () {
           id: schema.assets.id,
           name: schema.assets.name,
           symbol: schema.assets.symbol,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
           logoUrl: schema.assets.logoUrl,
           type: schema.assets.type,
         })

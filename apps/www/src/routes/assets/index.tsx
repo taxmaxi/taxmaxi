@@ -38,10 +38,27 @@ export function closeAssetCatalog({
   navigateToFallback({ replace: true, to: "/" })
 }
 
+export async function loadAssetCatalogFeeds({
+  loadApproved,
+  loadPending,
+}: {
+  readonly loadApproved: () => Promise<unknown>
+  readonly loadPending: () => Promise<unknown>
+}): Promise<void> {
+  await Promise.allSettled([loadApproved(), loadPending()])
+}
+
 export const Route = createFileRoute("/assets/")({
   loader: async ({ context }) => {
     const taxmaxi = context.taxmaxi()
-    return context.queryClient.ensureInfiniteQueryData(queries.assetList(taxmaxi, assetListInput))
+    return loadAssetCatalogFeeds({
+      loadApproved: () =>
+        context.queryClient.ensureInfiniteQueryData(queries.assetList(taxmaxi, assetListInput)),
+      loadPending: () =>
+        context.queryClient.ensureInfiniteQueryData(
+          queries.pendingAssetList(taxmaxi, pendingAssetListInput)
+        ),
+    })
   },
   head: () => ({
     meta: seo({
@@ -79,7 +96,8 @@ function AssetsIndexRoute() {
       assets={assets}
       canLoadMoreApproved={assetQuery.hasNextPage}
       canLoadMorePending={pendingAssetQuery.hasNextPage}
-      isLoadingMore={assetQuery.isFetching || pendingAssetQuery.isFetching}
+      isLoadingApproved={assetQuery.isFetching}
+      isLoadingPending={pendingAssetQuery.isFetching}
       onClose={() => {
         closeAssetCatalog({
           history: router.history,

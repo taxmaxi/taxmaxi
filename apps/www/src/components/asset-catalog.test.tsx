@@ -27,14 +27,17 @@ const makeAsset = ({
   id,
   name,
   symbol,
+  coingeckoCoinId = null,
 }: {
   id: string
   name: string
   symbol: string
+  coingeckoCoinId?: string | null
 }): TaxMaxiAsset => ({
   id,
   name,
   symbol,
+  coingeckoCoinId,
   logoUrl: null,
   type: "fungible",
   representations: [],
@@ -145,6 +148,30 @@ describe("AssetCatalog", () => {
 
     await waitFor(() => expect(document.activeElement).toBe(ethereum))
     expect(screen.queryByRole("button", { name: "Back to asset list" })).toBeNull()
+  })
+
+  it("closes mobile detail when the selected asset leaves the feed", async () => {
+    const pendingAsset = makePendingAsset({
+      id: "pending",
+      name: "Pending",
+      provider: "provider",
+      symbol: "PND",
+    })
+    const { rerender } = render(
+      <AssetCatalog assets={[]} onClose={vi.fn()} pendingAssets={[pendingAsset]} />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Pending" }))
+    fireEvent.click(screen.getByRole("option", { name: /PND/ }))
+    expect(screen.getByRole("button", { name: "Back to asset list" })).toBeTruthy()
+
+    rerender(<AssetCatalog assets={[]} onClose={vi.fn()} pendingAssets={[]} />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Back to asset list" })).toBeNull()
+    )
+    expect(screen.queryByRole("heading", { level: 2, name: "PND" })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Search assets" }))
   })
 
   it("loads matches beyond the initial 80-row window", () => {
@@ -275,6 +302,126 @@ describe("AssetCatalog", () => {
     expect(onQueryChange).toHaveBeenCalledWith("later-page")
   })
 
+  it("announces changing result and feed status", () => {
+    const { rerender } = render(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+    const status = screen.getByRole("status")
+
+    expect(status.textContent).toBe("Showing 1 loaded match")
+    expect(status.getAttribute("aria-live")).toBe("polite")
+
+    rerender(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        isLoadingApproved={true}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+    expect(status.textContent).toBe("Loading assets. Showing 1 loaded match")
+
+    rerender(
+      <AssetCatalog
+        approvedAssetsUnavailable={true}
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        isLoadingPending={true}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+    expect(status.textContent).toBe(
+      "Loading assets. Some assets could not be loaded. Showing 1 loaded match"
+    )
+  })
+
+  it.each([
+    {
+      assets: [makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })],
+      expectedName: /BTC/,
+      pendingAssets: [],
+      query: "  bItCoIn   btc ",
+    },
+    {
+      assets: [],
+      expectedName: /cbETH/,
+      pendingAssets: [
+        makePendingAsset({
+          id: "coinbase-cbeth",
+          name: "Wrapped Ether",
+          provider: "Coinbase",
+          symbol: "cbETH",
+        }),
+      ],
+      query: "coinBASE cbeth",
+    },
+    {
+      assets: [makeAsset({ id: "percent", name: "100%_literal asset", symbol: "PCT" })],
+      expectedName: /PCT/,
+      pendingAssets: [],
+      query: "%_literal",
+    },
+    {
+      assets: [
+        makeAsset({
+          id: "usdc",
+          name: "USD Coin",
+          symbol: "USDC",
+          coingeckoCoinId: "usd-coin",
+        }),
+      ],
+      expectedName: /USDC/,
+      pendingAssets: [],
+      query: "usd-coin",
+    },
+    {
+      assets: [
+        makeAsset({
+          id: "00000000-0000-4000-8000-000000000010",
+          name: "USD Coin",
+          symbol: "USDC",
+        }),
+      ],
+      expectedName: /USDC/,
+      pendingAssets: [],
+      query: "00000000-0000-4000-8000-000000000010",
+    },
+  ])("keeps multi-field and literal query matches visible for $query", (testCase) => {
+    render(
+      <AssetCatalog
+        assets={testCase.assets}
+        onClose={vi.fn()}
+        pendingAssets={testCase.pendingAssets}
+      />
+    )
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Search assets" }), {
+      target: { value: testCase.query },
+    })
+
+    expect(screen.getByRole("option", { name: testCase.expectedName })).toBeTruthy()
+  })
+
+  it("does not treat SQL wildcard characters as client-side wildcards", () => {
+    render(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    fireEvent.change(screen.getByRole("combobox", { name: "Search assets" }), {
+      target: { value: "%_" },
+    })
+
+    expect(screen.queryByRole("option")).toBeNull()
+  })
+
   it("shows a retry action when a loaded page fails", () => {
     const onRetryApproved = vi.fn()
 
@@ -288,9 +435,89 @@ describe("AssetCatalog", () => {
       />
     )
 
-    expect(screen.getByText("Some assets could not be loaded.")).toBeTruthy()
+    expect(screen.getByRole("status").textContent).toContain("Some assets could not be loaded.")
     fireEvent.click(screen.getByRole("button", { name: "Retry loading assets" }))
     expect(onRetryApproved).toHaveBeenCalledOnce()
+  })
+
+  it.each(["approved", "pending"] as const)(
+    "keeps the healthy %s feed pageable while the other feed is unavailable",
+    (healthyFeed) => {
+      const approvedUnavailable = healthyFeed === "pending"
+      const pendingUnavailable = healthyFeed === "approved"
+      const onLoadMoreApproved = vi.fn()
+      const onLoadMorePending = vi.fn()
+      const onRetryApproved = vi.fn()
+      const onRetryPending = vi.fn()
+
+      render(
+        <AssetCatalog
+          approvedAssetsUnavailable={approvedUnavailable}
+          assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+          canLoadMoreApproved={!approvedUnavailable}
+          canLoadMorePending={!pendingUnavailable}
+          onClose={vi.fn()}
+          onLoadMoreApproved={onLoadMoreApproved}
+          onLoadMorePending={onLoadMorePending}
+          onRetryApproved={onRetryApproved}
+          onRetryPending={onRetryPending}
+          pendingAssets={[
+            makePendingAsset({
+              id: "pending",
+              name: "Pending",
+              provider: "provider",
+              symbol: "PND",
+            }),
+          ]}
+          pendingAssetsUnavailable={pendingUnavailable}
+        />
+      )
+
+      fireEvent.click(screen.getByRole("button", { name: "Load more assets" }))
+      fireEvent.click(screen.getByRole("button", { name: "Retry loading assets" }))
+
+      if (healthyFeed === "approved") {
+        expect(onLoadMoreApproved).toHaveBeenCalledOnce()
+        expect(onLoadMorePending).not.toHaveBeenCalled()
+        expect(onRetryApproved).not.toHaveBeenCalled()
+        expect(onRetryPending).toHaveBeenCalledOnce()
+      } else {
+        expect(onLoadMoreApproved).not.toHaveBeenCalled()
+        expect(onLoadMorePending).toHaveBeenCalledOnce()
+        expect(onRetryApproved).toHaveBeenCalledOnce()
+        expect(onRetryPending).not.toHaveBeenCalled()
+      }
+    }
+  )
+
+  it("loads the ready feed while the other feed is still fetching", () => {
+    const onLoadMoreApproved = vi.fn()
+    const onLoadMorePending = vi.fn()
+
+    render(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        canLoadMoreApproved={true}
+        canLoadMorePending={true}
+        isLoadingPending={true}
+        onClose={vi.fn()}
+        onLoadMoreApproved={onLoadMoreApproved}
+        onLoadMorePending={onLoadMorePending}
+        pendingAssets={[
+          makePendingAsset({
+            id: "pending",
+            name: "Pending",
+            provider: "provider",
+            symbol: "PND",
+          }),
+        ]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more assets" }))
+
+    expect(onLoadMoreApproved).toHaveBeenCalledOnce()
+    expect(onLoadMorePending).not.toHaveBeenCalled()
   })
 
   it("opens the selected mobile asset with Enter from the search combobox", () => {
@@ -378,5 +605,25 @@ describe("AssetCatalog", () => {
 
     fireEvent.click(duplicateRows[0])
     expect(screen.getByText("duplicate-provider")).toBeTruthy()
+  })
+
+  it("links approved details to their public asset page", () => {
+    render(
+      <AssetCatalog
+        assets={[
+          makeAsset({
+            id: "00000000-0000-4000-8000-000000000010",
+            name: "Bitcoin",
+            symbol: "BTC",
+          }),
+        ]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    expect(screen.getByRole("link", { name: "Open public asset page" }).getAttribute("href")).toBe(
+      "/assets/00000000-0000-4000-8000-000000000010"
+    )
   })
 })

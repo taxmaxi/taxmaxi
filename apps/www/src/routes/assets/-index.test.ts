@@ -1,7 +1,27 @@
 import { createMemoryHistory } from "@tanstack/react-router"
 import { describe, expect, it, vi } from "vitest"
 
-import { closeAssetCatalog } from "./index"
+import { closeAssetCatalog, loadAssetCatalogFeeds } from "./index"
+
+describe("loadAssetCatalogFeeds", () => {
+  it.each(["approved", "pending"] as const)(
+    "keeps the catalog loader successful when the %s feed fails",
+    async (failedFeed) => {
+      const loadApproved =
+        failedFeed === "approved"
+          ? vi.fn().mockRejectedValue(new Error("approved unavailable"))
+          : vi.fn().mockResolvedValue(undefined)
+      const loadPending =
+        failedFeed === "pending"
+          ? vi.fn().mockRejectedValue(new Error("pending unavailable"))
+          : vi.fn().mockResolvedValue(undefined)
+
+      await expect(loadAssetCatalogFeeds({ loadApproved, loadPending })).resolves.toBeUndefined()
+      expect(loadApproved).toHaveBeenCalledOnce()
+      expect(loadPending).toHaveBeenCalledOnce()
+    }
+  )
+})
 
 describe("closeAssetCatalog", () => {
   it("consumes the catalog entry when browser history has a previous route", () => {

@@ -38,6 +38,7 @@ export interface AssetCatalogAssetRecord {
   readonly id: string
   readonly name: string
   readonly symbol: string
+  readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
   readonly type: AssetCatalogAssetType
   readonly representations: ReadonlyArray<AssetCatalogRepresentationRecord>

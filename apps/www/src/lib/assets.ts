@@ -4,6 +4,19 @@ export type TaxMaxiAsset = AssetCatalogAsset
 export type TaxMaxiAssetType = TaxMaxiAsset["type"]
 export type TaxMaxiPendingAsset = PendingAsset
 
+export function matchesAssetCatalogQuery({
+  query,
+  values,
+}: {
+  readonly query: string
+  readonly values: ReadonlyArray<string>
+}): boolean {
+  const searchTokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const searchableText = values.join(" ").toLowerCase()
+
+  return searchTokens.every((token) => searchableText.includes(token))
+}
+
 export function filterTaxMaxiAssets({
   assets,
   query,
@@ -11,26 +24,22 @@ export function filterTaxMaxiAssets({
   readonly assets: ReadonlyArray<TaxMaxiAsset>
   readonly query: string
 }): ReadonlyArray<TaxMaxiAsset> {
-  const normalizedQuery = query.trim().toLowerCase()
-
-  if (normalizedQuery.length === 0) {
-    return assets
-  }
-
   return assets.filter((asset) =>
-    [
-      asset.name,
-      asset.symbol,
-      ...asset.representations.flatMap((representation) => [
-        representation.blockchainName,
-        representation.blockchainChainType,
-        representation.contractAddress ?? "",
-        representation.mintAddress ?? "",
-      ]),
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(normalizedQuery)
+    matchesAssetCatalogQuery({
+      query,
+      values: [
+        asset.id,
+        asset.name,
+        asset.symbol,
+        asset.coingeckoCoinId ?? "",
+        ...asset.representations.flatMap((representation) => [
+          representation.blockchainName,
+          representation.blockchainChainType,
+          representation.contractAddress ?? "",
+          representation.mintAddress ?? "",
+        ]),
+      ],
+    })
   )
 }
 

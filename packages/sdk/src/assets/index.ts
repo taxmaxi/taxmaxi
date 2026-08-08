@@ -54,6 +54,7 @@ export type AssetCatalogAsset = {
   readonly id: string
   readonly name: string
   readonly symbol: string
+  readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
   readonly type: "fungible" | "nft"
   readonly representations: ReadonlyArray<AssetRepresentation>
@@ -131,6 +132,7 @@ const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsse
   id: asset.id,
   name: asset.name,
   symbol: asset.symbol,
+  coingeckoCoinId: asset.coingeckoCoinId,
   logoUrl: asset.logoUrl,
   type: asset.type,
   representations: asset.representations.map((representation) => ({

@@ -100,6 +100,7 @@ export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetRes
   id: Schema.String,
   name: Schema.String,
   symbol: Schema.String,
+  coingeckoCoinId: Schema.NullOr(Schema.String),
   logoUrl: Schema.NullOr(Schema.String),
   type: Schema.Literal("fungible", "nft"),
   representations: Schema.Array(AssetRepresentationResponse),

@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  ArrowUpRight,
   ChevronRight,
   CircleDotDashed,
   Clock3,
@@ -21,6 +22,7 @@ import {
   filterTaxMaxiAssets,
   formatAssetType,
   formatBlockchainName,
+  matchesAssetCatalogQuery,
   type TaxMaxiAsset,
   type TaxMaxiPendingAsset,
 } from "#/lib/assets"
@@ -36,6 +38,7 @@ const SURFACE_CLOSED_TRANSFORM = "translate3d(0, 4px, 0) scale(0.992)"
 const SURFACE_ENTER_TRANSITION = { bounce: 0, duration: 0.32, type: "spring" } as const
 const REDUCED_MOTION_TRANSITION = { duration: 0.15 } as const
 const ASSET_CATALOG_LIST_ID = "asset-catalog-list"
+const ASSET_CATALOG_SEARCH_ID = "asset-catalog-search"
 const INITIAL_VISIBLE_ITEM_LIMIT = 80
 
 export function AssetCatalog({
@@ -43,7 +46,8 @@ export function AssetCatalog({
   assets,
   canLoadMoreApproved = false,
   canLoadMorePending = false,
-  isLoadingMore = false,
+  isLoadingApproved = false,
+  isLoadingPending = false,
   onClose,
   onLoadMoreApproved = () => undefined,
   onLoadMorePending = () => undefined,
@@ -57,7 +61,8 @@ export function AssetCatalog({
   readonly assets: ReadonlyArray<TaxMaxiAsset>
   readonly canLoadMoreApproved?: boolean
   readonly canLoadMorePending?: boolean
-  readonly isLoadingMore?: boolean
+  readonly isLoadingApproved?: boolean
+  readonly isLoadingPending?: boolean
   readonly onClose: () => void
   readonly onLoadMoreApproved?: () => Promise<unknown> | void
   readonly onLoadMorePending?: () => Promise<unknown> | void
@@ -126,7 +131,8 @@ export function AssetCatalog({
             assets={assets}
             canLoadMoreApproved={canLoadMoreApproved}
             canLoadMorePending={canLoadMorePending}
-            isLoadingMore={isLoadingMore}
+            isLoadingApproved={isLoadingApproved}
+            isLoadingPending={isLoadingPending}
             onLoadMoreApproved={onLoadMoreApproved}
             onLoadMorePending={onLoadMorePending}
             onQueryChange={onQueryChange}
@@ -198,7 +204,8 @@ function AssetCatalogNavigator({
   assets,
   canLoadMoreApproved,
   canLoadMorePending,
-  isLoadingMore,
+  isLoadingApproved,
+  isLoadingPending,
   onLoadMoreApproved,
   onLoadMorePending,
   onQueryChange,
@@ -211,7 +218,8 @@ function AssetCatalogNavigator({
   readonly assets: ReadonlyArray<TaxMaxiAsset>
   readonly canLoadMoreApproved: boolean
   readonly canLoadMorePending: boolean
-  readonly isLoadingMore: boolean
+  readonly isLoadingApproved: boolean
+  readonly isLoadingPending: boolean
   readonly onLoadMoreApproved: () => Promise<unknown> | void
   readonly onLoadMorePending: () => Promise<unknown> | void
   readonly onQueryChange: (query: string) => void
@@ -253,8 +261,28 @@ function AssetCatalogNavigator({
   const visibleItems = useMemo(() => items.slice(0, visibleItemLimit), [items, visibleItemLimit])
   const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
   const selectedItem =
-    visibleItems.find((item) => getCatalogItemKey(item) === selectedKey) ?? visibleItems[0]
+    visibleItems.find((item) => getCatalogItemKey(item) === selectedKey) ??
+    (selectedKey.length === 0 ? visibleItems[0] : undefined)
   const selectedItemKey = getCatalogItemKey(selectedItem)
+
+  useEffect(() => {
+    if (selectedKey.length === 0 || selectedItem !== undefined) {
+      return
+    }
+
+    const shouldRestoreFocus = mobileDetailOpen || document.activeElement === document.body
+    const nextItem = visibleItems[0]
+    setMobileDetailOpen(false)
+    setSelectedKey(getCatalogItemKey(nextItem))
+
+    if (shouldRestoreFocus) {
+      window.requestAnimationFrame(() => {
+        const focusTargetId =
+          nextItem === undefined ? ASSET_CATALOG_SEARCH_ID : getCatalogItemDomId(nextItem)
+        document.getElementById(focusTargetId)?.focus()
+      })
+    }
+  }, [mobileDetailOpen, selectedItem, selectedKey, visibleItems])
 
   useEffect(() => {
     if (mobileDetailOpen) {
@@ -272,6 +300,11 @@ function AssetCatalogNavigator({
 
   const showMobileList = () => {
     setMobileDetailOpen(false)
+
+    if (selectedItem === undefined) {
+      return
+    }
+
     window.requestAnimationFrame(() => {
       document.getElementById(getCatalogItemDomId(selectedItem))?.focus()
     })
@@ -366,16 +399,32 @@ function AssetCatalogNavigator({
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [mobileDetailOpen, selectedItem, selectedItemKey, visibleItems])
 
-  const canLoadMoreForScope =
-    scope === "approved"
-      ? canLoadMoreApproved
-      : scope === "pending"
-        ? canLoadMorePending
-        : canLoadMoreApproved || canLoadMorePending
-  const hasMoreItems = visibleItems.length < items.length || canLoadMoreForScope
+  const hasLocallyHiddenItems = visibleItems.length < items.length
+  const canLoadMoreApprovedForScope =
+    scope !== "pending" && canLoadMoreApproved && !approvedAssetsUnavailable
+  const canLoadMorePendingForScope =
+    scope !== "approved" && canLoadMorePending && !pendingAssetsUnavailable
+  const hasMoreItems =
+    hasLocallyHiddenItems || canLoadMoreApprovedForScope || canLoadMorePendingForScope
+  const canLoadMoreNow =
+    hasLocallyHiddenItems ||
+    (canLoadMoreApprovedForScope && !isLoadingApproved) ||
+    (canLoadMorePendingForScope && !isLoadingPending)
   const hasLoadError =
     (scope !== "pending" && approvedAssetsUnavailable) ||
     (scope !== "approved" && pendingAssetsUnavailable)
+  const canRetryApproved = scope !== "pending" && approvedAssetsUnavailable && !isLoadingApproved
+  const canRetryPending = scope !== "approved" && pendingAssetsUnavailable && !isLoadingPending
+  const canRetryNow = canRetryApproved || canRetryPending
+  const isLoadingVisibleFeed =
+    (scope !== "pending" && isLoadingApproved) || (scope !== "approved" && isLoadingPending)
+  const catalogStatus = [
+    isLoadingVisibleFeed ? "Loading assets." : null,
+    hasLoadError ? "Some assets could not be loaded." : null,
+    `Showing ${visibleItems.length} loaded ${visibleItems.length === 1 ? "match" : "matches"}`,
+  ]
+    .filter((message) => message !== null)
+    .join(" ")
   const loadMore = () => {
     const needsMoreLoadedItems = visibleItems.length >= items.length
     setVisibleItemLimit((currentLimit) => currentLimit + INITIAL_VISIBLE_ITEM_LIMIT)
@@ -384,18 +433,18 @@ function AssetCatalogNavigator({
       return
     }
 
-    if (scope !== "pending" && canLoadMoreApproved) {
+    if (canLoadMoreApprovedForScope && !isLoadingApproved) {
       void onLoadMoreApproved()
     }
-    if (scope !== "approved" && canLoadMorePending) {
+    if (canLoadMorePendingForScope && !isLoadingPending) {
       void onLoadMorePending()
     }
   }
   const retryLoad = () => {
-    if (scope !== "pending" && approvedAssetsUnavailable) {
+    if (canRetryApproved) {
       void onRetryApproved()
     }
-    if (scope !== "approved" && pendingAssetsUnavailable) {
+    if (canRetryPending) {
       void onRetryPending()
     }
   }
@@ -477,33 +526,32 @@ function AssetCatalogNavigator({
             />
           ) : null}
         </div>
-        <div className="flex min-h-14 items-center gap-3 border-t border-border px-4 py-2 text-xs text-muted-foreground">
-          <span className="min-w-0 flex-1">
-            {hasLoadError
-              ? "Some assets could not be loaded."
-              : `Showing ${visibleItems.length} loaded ${visibleItems.length === 1 ? "match" : "matches"}`}
+        <div className="flex min-h-14 flex-wrap items-center gap-2 border-t border-border px-4 py-2 text-xs text-muted-foreground">
+          <span aria-atomic="true" aria-live="polite" className="min-w-0 flex-1" role="status">
+            {catalogStatus}
           </span>
-          {hasLoadError ? (
+          {hasMoreItems ? (
             <Button
-              aria-label="Retry loading assets"
+              aria-label={canLoadMoreNow ? "Load more assets" : "Loading assets"}
               className="h-11 shrink-0"
-              disabled={isLoadingMore}
-              onClick={retryLoad}
-              size="sm"
-              variant="outline"
-            >
-              Retry
-            </Button>
-          ) : hasMoreItems ? (
-            <Button
-              aria-label="Load more assets"
-              className="h-11 shrink-0"
-              disabled={isLoadingMore}
+              disabled={!canLoadMoreNow}
               onClick={loadMore}
               size="sm"
               variant="outline"
             >
-              {isLoadingMore ? "Loading…" : "Load more"}
+              {canLoadMoreNow ? "Load more" : "Loading…"}
+            </Button>
+          ) : null}
+          {hasLoadError ? (
+            <Button
+              aria-label={canRetryNow ? "Retry loading assets" : "Retrying asset feeds"}
+              className="h-11 shrink-0"
+              disabled={!canRetryNow}
+              onClick={retryLoad}
+              size="sm"
+              variant="outline"
+            >
+              {canRetryNow ? "Retry" : "Retrying…"}
             </Button>
           ) : null}
         </div>
@@ -609,6 +657,13 @@ function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
       <p className="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
         {describeTaxMaxiAsset(item.asset)}
       </p>
+
+      <Button asChild={true} className="h-11 self-start" variant="outline">
+        <a href={`/assets/${encodeURIComponent(item.asset.id)}`}>
+          Open public asset page
+          <ArrowUpRight data-icon="inline-end" />
+        </a>
+      </Button>
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Representations" value={item.asset.representations.length.toString()} />
@@ -728,6 +783,7 @@ function SearchField({
         aria-controls={controls}
         aria-expanded="true"
         autoComplete="off"
+        id={ASSET_CATALOG_SEARCH_ID}
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder="Search symbol, name, network, or provider"
         spellCheck={false}
@@ -820,22 +876,16 @@ function NoResults({
 }
 
 function matchesPendingAsset(asset: TaxMaxiPendingAsset, query: string): boolean {
-  const normalizedQuery = query.trim().toLowerCase()
-
-  if (normalizedQuery.length === 0) {
-    return true
-  }
-
-  return [
-    asset.symbol,
-    asset.name ?? "",
-    asset.provider,
-    asset.providerAssetId ?? "",
-    asset.providerType ?? "",
-  ]
-    .join(" ")
-    .toLowerCase()
-    .includes(normalizedQuery)
+  return matchesAssetCatalogQuery({
+    query,
+    values: [
+      asset.symbol,
+      asset.name ?? "",
+      asset.provider,
+      asset.providerAssetId ?? "",
+      asset.providerType ?? "",
+    ],
+  })
 }
 
 function getPendingAssetName(asset: TaxMaxiPendingAsset): string {
