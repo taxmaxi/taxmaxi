@@ -260,6 +260,87 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(error).toBeInstanceOf(SyncEngineStorageError)
     })
 
+    it("rejects an update when the expected mapping status changed", async () => {
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "helius-solana",
+            entries: [
+              {
+                providerAssetId: "mapping-status-snapshot-fixture",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Mapping status snapshot fixture",
+                exponent: 8,
+                providerType: "spl-token",
+                payload: { mint: "mapping-status-snapshot-fixture" },
+              },
+            ],
+          })
+        )
+      )
+      const providerAsset = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetByProviderAssetId({
+            providerKey: "helius-solana",
+            providerAssetId: "mapping-status-snapshot-fixture",
+          })
+        )
+      )
+      if (Option.isNone(providerAsset)) {
+        expect.fail("Expected mapping status snapshot provider asset")
+      }
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "rejected",
+                reviewerNotes: "Rejected during review",
+                sourceNotes: "Rejected during review",
+              },
+            ],
+          })
+        )
+      )
+
+      const updateResult = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: "Automatic exact representation match",
+                expectedMappingStatus: "pending_review",
+              },
+            ],
+          })
+        ).pipe(Effect.either)
+      )
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({
+            providerAssetRowId: providerAsset.value.id,
+          })
+        )
+      )
+
+      expect(updateResult._tag).toBe("Left")
+      expect(Option.getOrNull(mapping)).toMatchObject({ mappingStatus: "rejected" })
+    })
+
     it("requires the current approved target before correcting a mapping", async () => {
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>

@@ -159,6 +159,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const mappingsRequiringLock = mappings.filter(
               (mapping) =>
+                mapping.expectedMappingStatus !== undefined ||
                 mapping.expectedObservedRepresentations !== undefined ||
                 mapping.expectedApprovedTarget !== undefined
             )
@@ -199,6 +200,20 @@ const make = Effect.gen(function* () {
               yield* Effect.forEach(
                 mappingsRequiringLock,
                 (mapping) => {
+                  const expectedMappingStatus = mapping.expectedMappingStatus
+                  if (expectedMappingStatus !== undefined) {
+                    const current = lockedMappingById.get(mapping.providerAssetRowId)
+                    if (current?.mappingStatus !== expectedMappingStatus) {
+                      return Effect.fail(
+                        new SyncEngineStorageError({
+                          operation:
+                            "providerAssetRepository.upsertProviderAssetMappings.mappingStatusSnapshot",
+                          cause: "Provider asset mapping status changed before update.",
+                        })
+                      )
+                    }
+                  }
+
                   const expectedTarget = mapping.expectedApprovedTarget
                   if (expectedTarget === undefined) {
                     return Effect.void

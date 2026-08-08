@@ -69,6 +69,8 @@ export interface ProviderAssetMappingDraft {
   readonly mappingStatus: ProviderAssetMappingStatus
   readonly reviewerNotes: string | null
   readonly sourceNotes: string | null
+  /** Current mapping status required before this write may replace the row. */
+  readonly expectedMappingStatus?: ProviderAssetMappingStatus
   /** Observation snapshot that must still be current when this mapping is approved. */
   readonly expectedObservedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
   /** Current approved target required when this upsert intentionally corrects that target. */

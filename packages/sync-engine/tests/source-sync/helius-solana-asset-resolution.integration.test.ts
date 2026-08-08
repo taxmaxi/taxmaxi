@@ -447,6 +447,212 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
+  it("resolves a mint through an existing exact representation without a built-in mapping", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private asset",
+          symbol: "PRIVATE",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "token",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 5,
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Known private asset",
+            decimals: 5,
+            tokenProgram: TOKEN_2022_PROGRAM,
+          }),
+        ])
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      assetKind: "token",
+      mintAddress: UNKNOWN_MINT,
+      decimals: 5,
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+
+    expect(state).toMatchObject({
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+  })
+
+  it("resolves a pending mint after its exact representation is added", async () => {
+    const firstResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Known private asset",
+            decimals: 5,
+            tokenProgram: TOKEN_2022_PROGRAM,
+          }),
+        ])
+    )
+
+    expect(firstResult).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+    })
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private asset",
+          symbol: "PRIVATE",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "token",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 5,
+        })
+      })
+    )
+
+    const replayedResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.dieMessage("DAS should not be called for cached provider metadata")
+    )
+
+    expect(replayedResult).toMatchObject({
+      kind: "canonical",
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+  })
+
+  it.each([
+    { representationType: "token" as const, representationDecimals: 6 },
+    { representationType: "nft" as const, representationDecimals: 5 },
+  ])(
+    "keeps an exact mint pending when its $representationType representation metadata conflicts",
+    async ({ representationType, representationDecimals }) => {
+      await context.runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [solanaBlockchain] = yield* db
+            .select({ id: schema.blockchains.id })
+            .from(schema.blockchains)
+            .where(eq(schema.blockchains.name, "solana"))
+            .limit(1)
+
+          if (solanaBlockchain === undefined) {
+            return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          }
+
+          yield* db.insert(schema.assets).values({
+            id: UNKNOWN_ASSET_ID,
+            name: "Conflicting private asset",
+            symbol: "PRIVATE",
+            type: representationType === "nft" ? "nft" : "fungible",
+          })
+          yield* db.insert(schema.assetRepresentations).values({
+            id: UNKNOWN_REPRESENTATION_ID,
+            assetId: UNKNOWN_ASSET_ID,
+            blockchainId: solanaBlockchain.id,
+            type: representationType,
+            contractAddress: null,
+            mintAddress: UNKNOWN_MINT,
+            decimals: representationDecimals,
+          })
+        })
+      )
+
+      const result = await runAssetService(
+        Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+          service.resolveAsset({
+            kind: "spl",
+            mintAddress: UNKNOWN_MINT,
+          })
+        ),
+        () =>
+          Effect.succeed([
+            makeDasAsset({
+              mintAddress: UNKNOWN_MINT,
+              name: "Conflicting private asset",
+              decimals: 5,
+              tokenProgram: TOKEN_2022_PROGRAM,
+            }),
+          ])
+      )
+
+      expect(result).toMatchObject({
+        kind: "review_required",
+        mappingStatus: "pending_review",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+      })
+    }
+  )
+
   it("persists unknown SPL mints as pending provider asset review instead of failing", async () => {
     const result = await runAssetService(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
