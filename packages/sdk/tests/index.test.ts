@@ -166,6 +166,10 @@ const assetCatalogAssetResponse = {
 
 const assetCatalogListResponseBody = JSON.stringify({
   assets: [assetCatalogAssetResponse],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
 })
 
 const assetCatalogAssetResponseBody = JSON.stringify(assetCatalogAssetResponse)
@@ -625,15 +629,24 @@ describe("TaxMaxi Promise client", () => {
       },
     })
 
-    const assetList = await taxmaxi.assets.list({ query: "usdc", limit: 25 })
+    const assetList = await taxmaxi.assets.list({
+      query: "usdc",
+      cursor: "00000000-0000-4000-8000-000000000009",
+      limit: 25,
+    })
     const asset = await taxmaxi.assets.get({ assetId: assetCatalogAssetResponse.id })
     const pendingAssetList = await taxmaxi.assets.listPending({
+      query: "btc",
       provider: "coinbase",
       limit: 10,
     })
 
     expect(assetList).toStrictEqual({
       assets: [assetCatalogAssetResponse],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
     })
     expect(asset).toStrictEqual(assetCatalogAssetResponse)
     expect(pendingAssetList).toStrictEqual({
@@ -646,13 +659,13 @@ describe("TaxMaxi Promise client", () => {
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets?q=usdc&limit=25",
+        url: "https://sdk.example.test/v1/assets?q=usdc&cursor=00000000-0000-4000-8000-000000000009&limit=25",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/00000000-0000-4000-8000-000000000010",
       }),
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/pending?provider=coinbase&limit=10",
+        url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
       }),
     ])
   })

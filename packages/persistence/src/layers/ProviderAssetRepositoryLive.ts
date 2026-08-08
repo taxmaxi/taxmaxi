@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, ilike, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -352,57 +352,44 @@ const make = Effect.gen(function* () {
     providerKey,
     mappingKind,
     mappingStatus,
-    cursorProviderAssetRowId,
+    cursor,
+    query,
     limit,
   }) =>
     Effect.gen(function* () {
-      const cursorRow =
-        cursorProviderAssetRowId === null
-          ? Option.none<{
-              readonly id: string
-              readonly provider: string
-              readonly currencyCode: string
-            }>()
-          : yield* db
-              .select({
-                id: schema.providerAssets.id,
-                provider: schema.providerAssets.provider,
-                currencyCode: schema.providerAssets.currencyCode,
-              })
-              .from(schema.providerAssets)
-              .where(eq(schema.providerAssets.id, cursorProviderAssetRowId))
-              .limit(1)
-              .pipe(
-                Effect.map(([row]) => Option.fromNullable(row)),
-                wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews.cursor")
+      const cursorPredicate =
+        cursor === null
+          ? undefined
+          : or(
+              gt(schema.providerAssets.provider, cursor.provider),
+              and(
+                eq(schema.providerAssets.provider, cursor.provider),
+                gt(schema.providerAssets.currencyCode, cursor.currencyCode)
+              ),
+              and(
+                eq(schema.providerAssets.provider, cursor.provider),
+                eq(schema.providerAssets.currencyCode, cursor.currencyCode),
+                gt(schema.providerAssets.id, cursor.providerAssetRowId)
               )
-
-      if (cursorProviderAssetRowId !== null && Option.isNone(cursorRow)) {
-        return []
-      }
-
-      const cursorPredicate = Option.match(cursorRow, {
-        onNone: () => undefined,
-        onSome: (row) =>
-          or(
-            gt(schema.providerAssets.provider, row.provider),
-            and(
-              eq(schema.providerAssets.provider, row.provider),
-              gt(schema.providerAssets.currencyCode, row.currencyCode)
-            ),
-            and(
-              eq(schema.providerAssets.provider, row.provider),
-              eq(schema.providerAssets.currencyCode, row.currencyCode),
-              gt(schema.providerAssets.id, row.id)
             )
-          ),
-      })
+      const trimmedQuery = query?.trim() ?? ""
+      const searchPredicate =
+        trimmedQuery.length === 0
+          ? undefined
+          : or(
+              ilike(schema.providerAssets.provider, `%${trimmedQuery}%`),
+              ilike(schema.providerAssets.providerAssetId, `%${trimmedQuery}%`),
+              ilike(schema.providerAssets.currencyCode, `%${trimmedQuery}%`),
+              ilike(schema.providerAssets.name, `%${trimmedQuery}%`),
+              ilike(schema.providerAssets.providerType, `%${trimmedQuery}%`)
+            )
       const predicates = [
         eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
         ...(mappingKind === undefined
           ? []
           : [eq(schema.providerAssetMappings.mappingKind, mappingKind)]),
         ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
+        ...(searchPredicate === undefined ? [] : [searchPredicate]),
         ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
       ]
 

@@ -47,6 +47,11 @@ export interface AssetCatalogAssetRecord {
  * AssetCatalogListParams - Search and limit options for public asset catalog reads.
  */
 export interface AssetCatalogListParams {
+  readonly cursor: {
+    readonly assetId: string
+    readonly name: string
+    readonly symbol: string
+  } | null
   readonly query: string | null
   readonly limit: number
 }

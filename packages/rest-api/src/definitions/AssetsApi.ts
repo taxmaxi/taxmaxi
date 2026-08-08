@@ -109,6 +109,10 @@ export class AssetCatalogListResponse extends Schema.Class<AssetCatalogListRespo
   "AssetCatalogListResponse"
 )({
   assets: Schema.Array(AssetCatalogAssetResponse),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
 }) {}
 
 export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicalizationRequest>(
@@ -156,7 +160,7 @@ export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicaliz
 const ProviderAssetReviewQuery = Schema.Struct({
   provider: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Literal("pending_review", "approved", "rejected")),
-  cursor: Schema.optional(Schema.UUID),
+  cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -167,8 +171,9 @@ const ProviderAssetReviewQuery = Schema.Struct({
 })
 
 const PendingAssetListQuery = Schema.Struct({
+  q: Schema.optional(Schema.String),
   provider: Schema.optional(Schema.String),
-  cursor: Schema.optional(Schema.UUID),
+  cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -180,6 +185,7 @@ const PendingAssetListQuery = Schema.Struct({
 
 const AssetCatalogListQuery = Schema.Struct({
   q: Schema.optional(Schema.String),
+  cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -192,6 +198,7 @@ const AssetCatalogListQuery = Schema.Struct({
 const listAssets = HttpApiEndpoint.get("listAssets", "/assets")
   .setUrlParams(AssetCatalogListQuery)
   .addSuccess(AssetCatalogListResponse)
+  .addError(AssetBadRequestError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -219,6 +226,7 @@ const getAsset = HttpApiEndpoint.get("getAsset", "/assets/:assetId")
 const listPendingAssets = HttpApiEndpoint.get("listPendingAssets", "/assets/pending")
   .setUrlParams(PendingAssetListQuery)
   .addSuccess(PendingAssetListResponse)
+  .addError(AssetBadRequestError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -234,6 +242,7 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
 )
   .setUrlParams(ProviderAssetReviewQuery)
   .addSuccess(ProviderAssetReviewListResponse)
+  .addError(AssetBadRequestError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({

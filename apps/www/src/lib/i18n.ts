@@ -90,6 +90,10 @@ export const translatedPathnames = [
       en: "/assets",
       de: "/assets",
     },
+    "/assets/$assetId": {
+      en: "/assets/$assetId",
+      de: "/assets/$assetId",
+    },
     "/coinbase-sign-in": {
       en: "/coinbase-sign-in",
       de: "/coinbase-sign-in",

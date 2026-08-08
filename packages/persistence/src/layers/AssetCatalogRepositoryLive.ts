@@ -4,7 +4,7 @@
  * @module AssetCatalogRepositoryLive
  */
 
-import { and, asc, eq, ilike, or } from "drizzle-orm"
+import { and, asc, eq, gt, ilike, or } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -67,7 +67,7 @@ const make = Effect.gen(function* () {
       return byAssetId
     })
 
-  const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({ limit, query }) =>
+  const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({ cursor, limit, query }) =>
     Effect.gen(function* () {
       const trimmedQuery = query?.trim() ?? ""
       const searchFilter =
@@ -76,10 +76,22 @@ const make = Effect.gen(function* () {
           : or(
               ilike(schema.assets.name, `%${trimmedQuery}%`),
               ilike(schema.assets.symbol, `%${trimmedQuery}%`),
-              ilike(schema.assets.coingeckoCoinId, `%${trimmedQuery}%`),
               ilike(schema.assetRepresentations.contractAddress, `%${trimmedQuery}%`),
               ilike(schema.assetRepresentations.mintAddress, `%${trimmedQuery}%`),
-              ilike(schema.blockchains.name, `%${trimmedQuery}%`)
+              ilike(schema.blockchains.name, `%${trimmedQuery}%`),
+              ilike(schema.blockchains.chainType, `%${trimmedQuery}%`)
+            )
+      const cursorFilter =
+        cursor === null
+          ? undefined
+          : or(
+              gt(schema.assets.symbol, cursor.symbol),
+              and(eq(schema.assets.symbol, cursor.symbol), gt(schema.assets.name, cursor.name)),
+              and(
+                eq(schema.assets.symbol, cursor.symbol),
+                eq(schema.assets.name, cursor.name),
+                gt(schema.assets.id, cursor.assetId)
+              )
             )
       const rows = yield* db
         .selectDistinct({
@@ -101,7 +113,7 @@ const make = Effect.gen(function* () {
           schema.blockchains,
           eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
         )
-        .where(searchFilter)
+        .where(and(searchFilter, cursorFilter))
         .orderBy(asc(schema.assets.symbol), asc(schema.assets.name), asc(schema.assets.id))
         .limit(limit)
         .pipe(wrapSqlError("assetCatalogRepository.listAssets"))

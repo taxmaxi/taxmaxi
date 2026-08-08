@@ -167,7 +167,12 @@ export interface ProviderAssetRepositoryShape {
     readonly providerKey: string | null
     readonly mappingKind?: ProviderAssetMappingKind
     readonly mappingStatus: ProviderAssetMappingStatus
-    readonly cursorProviderAssetRowId: string | null
+    readonly cursor: {
+      readonly providerAssetRowId: string
+      readonly provider: string
+      readonly currencyCode: string
+    } | null
+    readonly query?: string | null
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<ProviderAssetReviewRecord>, SyncEngineStorageError>
 

@@ -160,6 +160,7 @@ describe("AssetsApiLive", () => {
     const usdc = response.body.assets.find((asset) => asset.symbol === "USDC")
 
     expect(response.status).toBe(200)
+    expect(response.body.page).toMatchObject({ hasMore: false, nextCursor: null })
     expect(symbols).toEqual(expect.arrayContaining(["SOL", "USDC", "USDT"]))
     expect(bitcoin).toMatchObject({
       name: "Bitcoin",
@@ -203,6 +204,80 @@ describe("AssetsApiLive", () => {
     expect(response.body.assets.map((asset) => asset.symbol)).toEqual(["USDC"])
   })
 
+  it("paginates canonical assets without skipping or repeating the boundary asset", async () => {
+    const firstPage = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets?limit=1",
+        responseSchema: AssetCatalogListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const firstAsset = firstPage.body.assets[0]
+
+    expect(firstAsset).toBeDefined()
+    expect(firstPage.body.page).toMatchObject({
+      hasMore: true,
+    })
+    expect(firstPage.body.page.nextCursor).toEqual(expect.any(String))
+    expect(firstPage.body.page.nextCursor).not.toBe(firstAsset?.id)
+
+    if (firstAsset === undefined || firstPage.body.page.nextCursor === null) {
+      return
+    }
+
+    const secondPage = await Effect.runPromise(
+      getJson({
+        path: `/v1/assets?limit=1&cursor=${firstPage.body.page.nextCursor}`,
+        responseSchema: AssetCatalogListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(secondPage.body.assets).toHaveLength(1)
+    expect(secondPage.body.assets[0]?.id).not.toBe(firstAsset.id)
+  })
+
+  it("paginates assets with duplicate names and symbols by stable identity", async () => {
+    const duplicateAssetIds = [crypto.randomUUID(), crypto.randomUUID()]
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.assets).values(
+          duplicateAssetIds.map((id) => ({
+            id,
+            name: "Cursor Duplicate",
+            symbol: "CURSOR_DUPLICATE",
+            type: "fungible" as const,
+          }))
+        )
+      })
+    )
+
+    const firstPage = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets?q=Cursor%20Duplicate&limit=1",
+        responseSchema: AssetCatalogListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const cursor = firstPage.body.page.nextCursor
+
+    expect(cursor).toEqual(expect.any(String))
+    if (cursor === null) {
+      return
+    }
+
+    const secondPage = await Effect.runPromise(
+      getJson({
+        path: `/v1/assets?q=Cursor%20Duplicate&limit=1&cursor=${cursor}`,
+        responseSchema: AssetCatalogListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const pagedIds = [firstPage.body.assets[0]?.id, secondPage.body.assets[0]?.id]
+
+    expect(new Set(pagedIds)).toEqual(new Set(duplicateAssetIds))
+    expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
+  })
+
   it("returns asset details by asset id", async () => {
     const listResponse = await Effect.runPromise(
       getJson({
@@ -239,7 +314,9 @@ describe("AssetsApiLive", () => {
 
   it("lists pending assets without authentication or internal review fields", async () => {
     const providerAssetId = crypto.randomUUID()
+    const secondProviderAssetId = crypto.randomUUID()
     const pendingFiatId = crypto.randomUUID()
+    const rejectedAssetId = crypto.randomUUID()
 
     await context.runPg(
       Effect.gen(function* () {
@@ -256,12 +333,30 @@ describe("AssetsApiLive", () => {
             retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
           },
           {
+            id: secondProviderAssetId,
+            provider: "public-test-provider",
+            providerAssetId: "public-pending-asset-2",
+            currencyCode: "PENDING_TWO",
+            name: "Second Pending Asset",
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          },
+          {
             id: pendingFiatId,
             provider: "public-test-provider",
             providerAssetId: "public-pending-fiat",
             currencyCode: "PENDING_FIAT",
             name: "Pending Fiat",
             providerType: "fiat",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          },
+          {
+            id: rejectedAssetId,
+            provider: "public-test-provider",
+            providerAssetId: "public-rejected-asset",
+            currencyCode: "REJECTED",
+            name: "Rejected Asset",
+            providerType: "crypto",
             retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
           },
         ])
@@ -274,9 +369,19 @@ describe("AssetsApiLive", () => {
             sourceNotes: "This must also remain private.",
           },
           {
+            providerAssetRowId: secondProviderAssetId,
+            mappingKind: "asset",
+            mappingStatus: "pending_review",
+          },
+          {
             providerAssetRowId: pendingFiatId,
             mappingKind: "fiat",
             mappingStatus: "pending_review",
+          },
+          {
+            providerAssetRowId: rejectedAssetId,
+            mappingKind: "asset",
+            mappingStatus: "rejected",
           },
         ])
       })
@@ -284,7 +389,7 @@ describe("AssetsApiLive", () => {
 
     const response = await Effect.runPromise(
       getJson({
-        path: "/v1/assets/pending?provider=public-test-provider",
+        path: "/v1/assets/pending?provider=public-test-provider&limit=1",
         responseSchema: PendingAssetListResponse,
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
@@ -300,7 +405,100 @@ describe("AssetsApiLive", () => {
         providerType: "crypto",
       },
     ])
+    expect(response.body.page).toEqual({
+      hasMore: true,
+      nextCursor: expect.any(String),
+    })
     expect(JSON.stringify(response.body)).not.toContain("private")
+
+    const secondPage = await Effect.runPromise(
+      getJson({
+        path: `/v1/assets/pending?provider=public-test-provider&limit=1&cursor=${response.body.page.nextCursor}`,
+        responseSchema: PendingAssetListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(secondPage.body).toEqual({
+      pendingAssets: [
+        {
+          id: secondProviderAssetId,
+          provider: "public-test-provider",
+          providerAssetId: "public-pending-asset-2",
+          symbol: "PENDING_TWO",
+          name: "Second Pending Asset",
+          providerType: "crypto",
+        },
+      ],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    })
+
+    const searchedPage = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets/pending?provider=public-test-provider&q=PENDING_TWO&limit=1",
+        responseSchema: PendingAssetListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(searchedPage.body.pendingAssets.map((asset) => asset.id)).toEqual([
+      secondProviderAssetId,
+    ])
+    expect(searchedPage.body.page).toEqual({ hasMore: false, nextCursor: null })
+  })
+
+  it("paginates duplicate pending symbols by provider asset identity", async () => {
+    const duplicateIds = [crypto.randomUUID(), crypto.randomUUID()]
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.providerAssets).values(
+          duplicateIds.map((id, index) => ({
+            id,
+            provider: "public-duplicate-provider",
+            providerAssetId: `duplicate-${index + 1}`,
+            currencyCode: "DUPLICATE",
+            name: "Duplicate pending asset",
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          }))
+        )
+        yield* db.insert(schema.providerAssetMappings).values(
+          duplicateIds.map((providerAssetRowId) => ({
+            providerAssetRowId,
+            mappingKind: "asset" as const,
+            mappingStatus: "pending_review" as const,
+          }))
+        )
+      })
+    )
+
+    const firstPage = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets/pending?provider=public-duplicate-provider&limit=1",
+        responseSchema: PendingAssetListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const cursor = firstPage.body.page.nextCursor
+
+    expect(cursor).toEqual(expect.any(String))
+    if (cursor === null) {
+      return
+    }
+
+    const secondPage = await Effect.runPromise(
+      getJson({
+        path: `/v1/assets/pending?provider=public-duplicate-provider&limit=1&cursor=${cursor}`,
+        responseSchema: PendingAssetListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const pagedIds = [firstPage.body.pendingAssets[0]?.id, secondPage.body.pendingAssets[0]?.id]
+
+    expect(new Set(pagedIds)).toEqual(new Set(duplicateIds))
+    expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
   })
 
   it("keeps provider asset review endpoints admin protected", async () => {

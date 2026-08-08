@@ -61,6 +61,10 @@ export type AssetCatalogAsset = {
 export type TaxMaxiAssetType = AssetCatalogAsset["type"]
 export type AssetCatalogList = {
   readonly assets: ReadonlyArray<AssetCatalogAsset>
+  readonly page: {
+    readonly nextCursor: string | null
+    readonly hasMore: boolean
+  }
 }
 export type AssetCanonicalizationInput = {
   readonly id: string
@@ -69,6 +73,7 @@ export type AssetCanonicalization = AssetCanonicalizationResponse
 
 export type AssetCatalogListInput = {
   readonly query?: string | null
+  readonly cursor?: string | null
   readonly limit?: number
 }
 
@@ -77,6 +82,7 @@ export type AssetCatalogDetailInput = {
 }
 
 export type PendingAssetListInput = {
+  readonly query?: string | null
   readonly provider?: string
   readonly cursor?: string | null
   readonly limit?: number
@@ -146,6 +152,10 @@ const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsse
 
 const toAssetCatalogList = (response: AssetCatalogListResponse): AssetCatalogList => ({
   assets: response.assets.map(toAssetCatalogAsset),
+  page: {
+    nextCursor: response.page.nextCursor,
+    hasMore: response.page.hasMore,
+  },
 })
 
 const toPendingAssetList = (response: PendingAssetListResponse): PendingAssetList => ({
@@ -172,6 +182,7 @@ export const makeAssetsEffectResource = (
         resolved.assets.listAssets({
           urlParams: {
             q: input?.query ?? undefined,
+            cursor: input?.cursor ?? undefined,
             limit: input?.limit,
           },
         })
@@ -194,6 +205,7 @@ export const makeAssetsEffectResource = (
       Effect.flatMap(client, (resolved) =>
         resolved.assets.listPendingAssets({
           urlParams: {
+            q: input?.query ?? undefined,
             provider: input?.provider,
             cursor: input?.cursor ?? undefined,
             limit: input?.limit,

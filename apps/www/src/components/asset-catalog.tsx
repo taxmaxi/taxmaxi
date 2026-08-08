@@ -16,7 +16,6 @@ import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "#/components/ui/input-group"
 import { Separator } from "#/components/ui/separator"
-import { Tabs, TabsList, TabsTrigger } from "#/components/ui/tabs"
 import {
   describeTaxMaxiAsset,
   filterTaxMaxiAssets,
@@ -30,21 +29,43 @@ import { cn } from "#/lib/utils"
 type CatalogItem =
   | { readonly kind: "approved"; readonly asset: TaxMaxiAsset }
   | { readonly kind: "pending"; readonly asset: TaxMaxiPendingAsset }
+type CatalogScope = "all" | "approved" | "pending"
 
 const SURFACE_OPEN_TRANSFORM = "translate3d(0, 0, 0) scale(1)"
 const SURFACE_CLOSED_TRANSFORM = "translate3d(0, 4px, 0) scale(0.992)"
 const SURFACE_ENTER_TRANSITION = { bounce: 0, duration: 0.32, type: "spring" } as const
 const REDUCED_MOTION_TRANSITION = { duration: 0.15 } as const
 const ASSET_CATALOG_LIST_ID = "asset-catalog-list"
+const INITIAL_VISIBLE_ITEM_LIMIT = 80
 
 export function AssetCatalog({
+  approvedAssetsUnavailable = false,
   assets,
+  canLoadMoreApproved = false,
+  canLoadMorePending = false,
+  isLoadingMore = false,
   onClose,
+  onLoadMoreApproved = () => undefined,
+  onLoadMorePending = () => undefined,
+  onQueryChange = () => undefined,
+  onRetryApproved = () => undefined,
+  onRetryPending = () => undefined,
   pendingAssets,
+  pendingAssetsUnavailable = false,
 }: {
+  readonly approvedAssetsUnavailable?: boolean
   readonly assets: ReadonlyArray<TaxMaxiAsset>
+  readonly canLoadMoreApproved?: boolean
+  readonly canLoadMorePending?: boolean
+  readonly isLoadingMore?: boolean
   readonly onClose: () => void
+  readonly onLoadMoreApproved?: () => Promise<unknown> | void
+  readonly onLoadMorePending?: () => Promise<unknown> | void
+  readonly onQueryChange?: (query: string) => void
+  readonly onRetryApproved?: () => Promise<unknown> | void
+  readonly onRetryPending?: () => Promise<unknown> | void
   readonly pendingAssets: ReadonlyArray<TaxMaxiPendingAsset>
+  readonly pendingAssetsUnavailable?: boolean
 }) {
   const reduceMotion = useReducedMotion()
 
@@ -100,7 +121,20 @@ export function AssetCatalog({
       >
         <FocusSurfaceHeader onClose={onClose} />
         <div className="min-h-0 flex-1 overflow-hidden">
-          <AssetCatalogNavigator assets={assets} pendingAssets={pendingAssets} />
+          <AssetCatalogNavigator
+            approvedAssetsUnavailable={approvedAssetsUnavailable}
+            assets={assets}
+            canLoadMoreApproved={canLoadMoreApproved}
+            canLoadMorePending={canLoadMorePending}
+            isLoadingMore={isLoadingMore}
+            onLoadMoreApproved={onLoadMoreApproved}
+            onLoadMorePending={onLoadMorePending}
+            onQueryChange={onQueryChange}
+            onRetryApproved={onRetryApproved}
+            onRetryPending={onRetryPending}
+            pendingAssets={pendingAssets}
+            pendingAssetsUnavailable={pendingAssetsUnavailable}
+          />
         </div>
       </motion.main>
     </div>
@@ -160,15 +194,36 @@ function FocusSurfaceHeader({ onClose }: { readonly onClose: () => void }) {
 }
 
 function AssetCatalogNavigator({
+  approvedAssetsUnavailable,
   assets,
+  canLoadMoreApproved,
+  canLoadMorePending,
+  isLoadingMore,
+  onLoadMoreApproved,
+  onLoadMorePending,
+  onQueryChange,
+  onRetryApproved,
+  onRetryPending,
   pendingAssets,
+  pendingAssetsUnavailable,
 }: {
+  readonly approvedAssetsUnavailable: boolean
   readonly assets: ReadonlyArray<TaxMaxiAsset>
+  readonly canLoadMoreApproved: boolean
+  readonly canLoadMorePending: boolean
+  readonly isLoadingMore: boolean
+  readonly onLoadMoreApproved: () => Promise<unknown> | void
+  readonly onLoadMorePending: () => Promise<unknown> | void
+  readonly onQueryChange: (query: string) => void
+  readonly onRetryApproved: () => Promise<unknown> | void
+  readonly onRetryPending: () => Promise<unknown> | void
   readonly pendingAssets: ReadonlyArray<TaxMaxiPendingAsset>
+  readonly pendingAssetsUnavailable: boolean
 }) {
   const [query, setQuery] = useState("")
-  const [scope, setScope] = useState<"all" | "approved" | "pending">("all")
+  const [scope, setScope] = useState<CatalogScope>("all")
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false)
+  const [visibleItemLimit, setVisibleItemLimit] = useState(INITIAL_VISIBLE_ITEM_LIMIT)
   const mobileBackButtonRef = useRef<HTMLButtonElement>(null)
   const approvedItems = useMemo<ReadonlyArray<CatalogItem>>(
     () =>
@@ -195,7 +250,7 @@ function AssetCatalogNavigator({
         return [...pendingItems, ...approvedItems]
     }
   }, [approvedItems, pendingItems, scope])
-  const visibleItems = useMemo(() => items.slice(0, 80), [items])
+  const visibleItems = useMemo(() => items.slice(0, visibleItemLimit), [items, visibleItemLimit])
   const [selectedKey, setSelectedKey] = useState(() => getCatalogItemKey(visibleItems[0]))
   const selectedItem =
     visibleItems.find((item) => getCatalogItemKey(item) === selectedKey) ?? visibleItems[0]
@@ -223,6 +278,27 @@ function AssetCatalogNavigator({
   }
 
   useEffect(() => {
+    const desktopQuery = window.matchMedia("(min-width: 1024px)")
+    const moveFocusToDesktopList = (matches: boolean) => {
+      if (!matches || !mobileDetailOpen || selectedItem === undefined) {
+        return
+      }
+
+      setMobileDetailOpen(false)
+      window.requestAnimationFrame(() => {
+        document.getElementById(getCatalogItemDomId(selectedItem))?.focus()
+      })
+    }
+    const onDesktopChange = (event: MediaQueryListEvent) => {
+      moveFocusToDesktopList(event.matches)
+    }
+
+    moveFocusToDesktopList(desktopQuery.matches)
+    desktopQuery.addEventListener("change", onDesktopChange)
+    return () => desktopQuery.removeEventListener("change", onDesktopChange)
+  }, [mobileDetailOpen, selectedItem])
+
+  useEffect(() => {
     if (selectedItem === undefined) {
       return
     }
@@ -232,6 +308,14 @@ function AssetCatalogNavigator({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      const searchTarget =
+        target instanceof HTMLInputElement && target.getAttribute("role") === "combobox"
+      const optionTarget =
+        target instanceof HTMLElement ? target.closest("[data-asset-catalog-option]") : null
+      const isArrowKey = event.key === "ArrowDown" || event.key === "ArrowUp"
+      const activatesSearchSelection = event.key === "Enter" && searchTarget
+
       if (
         event.defaultPrevented ||
         event.altKey ||
@@ -239,20 +323,18 @@ function AssetCatalogNavigator({
         event.metaKey ||
         event.shiftKey ||
         mobileDetailOpen ||
-        (event.key !== "ArrowDown" && event.key !== "ArrowUp") ||
+        (!isArrowKey && !activatesSearchSelection) ||
+        (!searchTarget && optionTarget === null) ||
         visibleItems.length === 0
       ) {
         return
       }
 
-      const target = event.target
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLSelectElement ||
-          (target instanceof HTMLInputElement && target.type !== "search"))
-      ) {
+      if (activatesSearchSelection) {
+        if (selectedItem !== undefined) {
+          event.preventDefault()
+          selectItem(selectedItem)
+        }
         return
       }
 
@@ -273,7 +355,7 @@ function AssetCatalogNavigator({
 
       setSelectedKey(getCatalogItemKey(nextItem))
 
-      if (target instanceof HTMLElement && target.closest("[data-asset-catalog-option]") !== null) {
+      if (optionTarget !== null) {
         window.requestAnimationFrame(() => {
           document.getElementById(getCatalogItemDomId(nextItem))?.focus()
         })
@@ -282,7 +364,41 @@ function AssetCatalogNavigator({
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [mobileDetailOpen, selectedItemKey, visibleItems])
+  }, [mobileDetailOpen, selectedItem, selectedItemKey, visibleItems])
+
+  const canLoadMoreForScope =
+    scope === "approved"
+      ? canLoadMoreApproved
+      : scope === "pending"
+        ? canLoadMorePending
+        : canLoadMoreApproved || canLoadMorePending
+  const hasMoreItems = visibleItems.length < items.length || canLoadMoreForScope
+  const hasLoadError =
+    (scope !== "pending" && approvedAssetsUnavailable) ||
+    (scope !== "approved" && pendingAssetsUnavailable)
+  const loadMore = () => {
+    const needsMoreLoadedItems = visibleItems.length >= items.length
+    setVisibleItemLimit((currentLimit) => currentLimit + INITIAL_VISIBLE_ITEM_LIMIT)
+
+    if (!needsMoreLoadedItems) {
+      return
+    }
+
+    if (scope !== "pending" && canLoadMoreApproved) {
+      void onLoadMoreApproved()
+    }
+    if (scope !== "approved" && canLoadMorePending) {
+      void onLoadMorePending()
+    }
+  }
+  const retryLoad = () => {
+    if (scope !== "pending" && approvedAssetsUnavailable) {
+      void onRetryApproved()
+    }
+    if (scope !== "approved" && pendingAssetsUnavailable) {
+      void onRetryPending()
+    }
+  }
 
   return (
     <div
@@ -301,23 +417,38 @@ function AssetCatalogNavigator({
               selectedItem === undefined ? undefined : getCatalogItemDomId(selectedItem)
             }
             controls={ASSET_CATALOG_LIST_ID}
-            onChange={setQuery}
+            onChange={(nextQuery) => {
+              setQuery(nextQuery)
+              setVisibleItemLimit(INITIAL_VISIBLE_ITEM_LIMIT)
+              onQueryChange(nextQuery)
+            }}
             query={query}
           />
-          <Tabs
-            value={scope}
-            onValueChange={(value) => {
-              if (isNavigatorScope(value)) {
-                setScope(value)
-              }
-            }}
+          <div
+            aria-label="Asset scope"
+            className="grid h-11 grid-cols-3 rounded-full bg-muted p-1"
+            role="group"
           >
-            <TabsList className="w-full">
-              <TabsTrigger value="all">All</TabsTrigger>
-              <TabsTrigger value="approved">Approved</TabsTrigger>
-              <TabsTrigger value="pending">Pending</TabsTrigger>
-            </TabsList>
-          </Tabs>
+            {(["all", "approved", "pending"] as const).map((value) => (
+              <button
+                aria-pressed={scope === value}
+                className={cn(
+                  "rounded-full px-3 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/50",
+                  scope === value
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground [@media(hover:hover)_and_(pointer:fine)]:hover:text-foreground"
+                )}
+                key={value}
+                onClick={() => {
+                  setScope(value)
+                  setVisibleItemLimit(INITIAL_VISIBLE_ITEM_LIMIT)
+                }}
+                type="button"
+              >
+                {value.charAt(0).toUpperCase() + value.slice(1)}
+              </button>
+            ))}
+          </div>
         </div>
         <Separator />
         <div
@@ -335,10 +466,46 @@ function AssetCatalogNavigator({
               onSelect={() => selectItem(item)}
             />
           ))}
-          {items.length === 0 ? <NoResults query={query} /> : null}
+          {items.length === 0 ? (
+            <NoResults
+              approvedAssetsUnavailable={approvedAssetsUnavailable && scope !== "pending"}
+              pendingAssetsUnavailable={
+                pendingAssetsUnavailable &&
+                (scope === "pending" || (scope === "all" && approvedItems.length === 0))
+              }
+              query={query}
+            />
+          ) : null}
         </div>
-        <div className="hidden border-t border-border px-4 py-3 text-xs text-muted-foreground lg:block">
-          Showing {Math.min(items.length, 80)} of {items.length} matches
+        <div className="flex min-h-14 items-center gap-3 border-t border-border px-4 py-2 text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1">
+            {hasLoadError
+              ? "Some assets could not be loaded."
+              : `Showing ${visibleItems.length} loaded ${visibleItems.length === 1 ? "match" : "matches"}`}
+          </span>
+          {hasLoadError ? (
+            <Button
+              aria-label="Retry loading assets"
+              className="h-11 shrink-0"
+              disabled={isLoadingMore}
+              onClick={retryLoad}
+              size="sm"
+              variant="outline"
+            >
+              Retry
+            </Button>
+          ) : hasMoreItems ? (
+            <Button
+              aria-label="Load more assets"
+              className="h-11 shrink-0"
+              disabled={isLoadingMore}
+              onClick={loadMore}
+              size="sm"
+              variant="outline"
+            >
+              {isLoadingMore ? "Loading…" : "Load more"}
+            </Button>
+          ) : null}
         </div>
       </aside>
       <section
@@ -358,7 +525,15 @@ function AssetCatalogNavigator({
             Back to asset list
           </Button>
         ) : null}
-        {selectedItem ? <CatalogItemDetail item={selectedItem} /> : <NoResults query={query} />}
+        {selectedItem ? (
+          <CatalogItemDetail item={selectedItem} />
+        ) : (
+          <NoResults
+            approvedAssetsUnavailable={approvedAssetsUnavailable && scope !== "pending"}
+            pendingAssetsUnavailable={pendingAssetsUnavailable && scope !== "approved"}
+            query={query}
+          />
+        )}
       </section>
     </div>
   )
@@ -382,7 +557,7 @@ function NavigatorRow({
     <button
       aria-selected={active}
       className={cn(
-        "flex min-h-16 w-full items-center gap-3 border-b border-border px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
+        "flex min-h-16 w-full items-center gap-3 border-b border-border px-4 py-3 text-left outline-none [content-visibility:auto] [contain-intrinsic-size:auto_4rem] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/50",
         active ? "bg-secondary" : "[@media(hover:hover)_and_(pointer:fine)]:hover:bg-muted/50"
       )}
       data-asset-catalog-option=""
@@ -610,15 +785,35 @@ function DetailRow({ label, value }: { readonly label: string; readonly value: s
   )
 }
 
-function NoResults({ query }: { readonly query: string }) {
+function NoResults({
+  approvedAssetsUnavailable = false,
+  pendingAssetsUnavailable = false,
+  query,
+}: {
+  readonly approvedAssetsUnavailable?: boolean
+  readonly pendingAssetsUnavailable?: boolean
+  readonly query: string
+}) {
   return (
     <div className="flex min-h-40 flex-col items-center justify-center px-6 py-10 text-center">
       <Coins aria-hidden="true" className="size-6 text-muted-foreground" />
-      <p className="mt-3 text-sm font-medium">No assets found</p>
+      <p className="mt-3 text-sm font-medium">
+        {approvedAssetsUnavailable
+          ? "Approved assets unavailable"
+          : pendingAssetsUnavailable
+            ? "Pending assets unavailable"
+            : "No assets found"}
+      </p>
       <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
-        {query.trim().length === 0
-          ? "The registry has no assets to show yet."
-          : "Try a symbol, provider, network, or contract address."}
+        {approvedAssetsUnavailable
+          ? pendingAssetsUnavailable
+            ? "The asset feeds are unavailable. Try again in a moment."
+            : "Pending assets are still available. Try loading approved assets again."
+          : pendingAssetsUnavailable
+            ? "Approved assets are still available. Try loading pending assets again."
+            : query.trim().length === 0
+              ? "The registry has no assets to show yet."
+              : "Try a symbol, provider, network, or contract address."}
       </p>
     </div>
   )
@@ -661,10 +856,6 @@ function getCatalogItemKey(item: CatalogItem | undefined): string {
 
 function getCatalogItemDomId(item: CatalogItem): string {
   return `asset-catalog-option-${item.kind}-${item.asset.id}`
-}
-
-function isNavigatorScope(value: string): value is "all" | "approved" | "pending" {
-  return value === "all" || value === "approved" || value === "pending"
 }
 
 function getNetworkNames(asset: TaxMaxiAsset): ReadonlyArray<string> {

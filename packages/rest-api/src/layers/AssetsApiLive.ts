@@ -9,6 +9,7 @@ import { AssetCatalogRepository, type AssetCatalogAssetRecord } from "@my/persis
 import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   AssetCatalogAssetResponse,
@@ -32,6 +33,65 @@ const defaultAssetLimit = 500
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
+
+const AssetCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  assetId: Schema.UUID,
+  name: Schema.String,
+  symbol: Schema.String,
+})
+
+const ProviderAssetCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  providerAssetRowId: Schema.UUID,
+  provider: Schema.String,
+  currencyCode: Schema.String,
+})
+
+const EncodedAssetCursorPayload = Schema.parseJson(AssetCursorPayload)
+const EncodedProviderAssetCursorPayload = Schema.parseJson(ProviderAssetCursorPayload)
+
+const encodeCursor = (payload: Record<string, unknown>): string =>
+  Buffer.from(JSON.stringify(payload)).toString("base64url")
+
+const decodeCursor = <A>(
+  cursor: string,
+  schema: Schema.Schema<A, string>
+): Effect.Effect<A, AssetBadRequestError> =>
+  Effect.gen(function* () {
+    const decoded = yield* Effect.try({
+      try: () => Buffer.from(cursor, "base64url").toString("utf8"),
+      catch: () => new AssetBadRequestError({ message: "Invalid asset cursor." }),
+    })
+
+    return yield* Schema.decodeUnknown(schema)(decoded).pipe(
+      Effect.mapError(() => new AssetBadRequestError({ message: "Invalid asset cursor." }))
+    )
+  })
+
+const decodeAssetCursor = (cursor: string | undefined) =>
+  cursor === undefined ? Effect.succeed(null) : decodeCursor(cursor, EncodedAssetCursorPayload)
+
+const decodeProviderAssetCursor = (cursor: string | undefined) =>
+  cursor === undefined
+    ? Effect.succeed(null)
+    : decodeCursor(cursor, EncodedProviderAssetCursorPayload)
+
+const assetCursorFor = (asset: AssetCatalogAssetRecord): string =>
+  encodeCursor({
+    version: 1,
+    assetId: asset.id,
+    name: asset.name,
+    symbol: asset.symbol,
+  })
+
+const providerAssetCursorFor = (row: ProviderAssetReviewRecord): string =>
+  encodeCursor({
+    version: 1,
+    providerAssetRowId: row.providerAsset.id,
+    provider: row.providerAsset.provider,
+    currencyCode: row.providerAsset.currencyCode,
+  })
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
   ProviderAssetReviewRow.make({
@@ -83,15 +143,25 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
     return handlers
       .handle("listAssets", ({ urlParams }) =>
         Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultAssetLimit
+          const cursor = yield* decodeAssetCursor(urlParams.cursor)
           const assets = yield* assetCatalogRepository
             .listAssets({
+              cursor,
               query: urlParams.q ?? null,
-              limit: urlParams.limit ?? defaultAssetLimit,
+              limit: limit + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list assets.")))
+          const visibleAssets = assets.slice(0, limit)
+          const lastAsset = visibleAssets.at(-1)
+          const hasMore = assets.length > limit
 
           return AssetCatalogListResponse.make({
-            assets: assets.map(toAssetCatalogAssetResponse),
+            assets: visibleAssets.map(toAssetCatalogAssetResponse),
+            page: {
+              nextCursor: hasMore && lastAsset !== undefined ? assetCursorFor(lastAsset) : null,
+              hasMore,
+            },
           })
         })
       )
@@ -110,12 +180,14 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       .handle("listPendingAssets", ({ urlParams }) =>
         Effect.gen(function* () {
           const limit = urlParams.limit ?? defaultLimit
+          const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
           const providerAssets = yield* providerAssetRepository
             .listProviderAssetReviews({
               providerKey: urlParams.provider ?? null,
               mappingKind: "asset",
               mappingStatus: "pending_review",
-              cursorProviderAssetRowId: urlParams.cursor ?? null,
+              cursor,
+              query: urlParams.q ?? null,
               limit: limit + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list pending assets.")))
@@ -128,7 +200,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             page: {
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
-                  ? lastProviderAsset.providerAsset.id
+                  ? providerAssetCursorFor(lastProviderAsset)
                   : null,
               hasMore,
             },
@@ -137,11 +209,12 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       )
       .handle("listProviderAssetReviews", ({ urlParams }) =>
         Effect.gen(function* () {
+          const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
           const providerAssets = yield* providerAssetRepository
             .listProviderAssetReviews({
               providerKey: urlParams.provider ?? null,
               mappingStatus: urlParams.status ?? "pending_review",
-              cursorProviderAssetRowId: urlParams.cursor ?? null,
+              cursor,
               limit: (urlParams.limit ?? defaultLimit) + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list provider assets.")))
@@ -155,7 +228,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             page: {
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
-                  ? lastProviderAsset.providerAsset.id
+                  ? providerAssetCursorFor(lastProviderAsset)
                   : null,
               hasMore,
             },
