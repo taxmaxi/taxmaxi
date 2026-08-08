@@ -4,7 +4,7 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { aliasedTable, and, asc, eq, inArray, ne, or, sql } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, gte, inArray, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -241,6 +241,9 @@ const make = Effect.gen(function* () {
                 id: schema.transactionLegs.id,
                 transactionId: schema.transactionLegs.transactionId,
                 derivationRule: schema.transactionLegs.derivationRule,
+                sourceId: schema.transactionLegs.sourceId,
+                assetId: schema.transactionLegs.assetId,
+                timestamp: schema.transactionLegs.timestamp,
               })
               .from(schema.transactionLegs)
               .where(
@@ -276,6 +279,58 @@ const make = Effect.gen(function* () {
                     .from(schema.fifoLots)
                     .where(inArray(schema.fifoLots.sourceLegId, acquisitionLegIds))
             const destinationLotIds = destinationLots.map(({ id }) => id)
+            const originDisposalLeg = internalLegs.find(
+              ({ derivationRule }) => derivationRule === "internal_transfer_out"
+            )
+
+            if (originDisposalLeg !== undefined && originDisposalLeg.sourceId !== sourceId) {
+              const dependentOriginDisposals = yield* tx
+                .select({ dependentSourceId: schema.transactionLegs.sourceId })
+                .from(schema.disposalMatches)
+                .innerJoin(
+                  schema.transactionLegs,
+                  eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+                )
+                .where(
+                  and(
+                    eq(schema.transactionLegs.sourceId, originDisposalLeg.sourceId),
+                    eq(schema.transactionLegs.assetId, originDisposalLeg.assetId),
+                    gte(schema.transactionLegs.timestamp, originDisposalLeg.timestamp),
+                    ne(schema.transactionLegs.id, originDisposalLeg.id)
+                  )
+                )
+              const dependentOriginAllocations = yield* tx
+                .select({ dependentSourceId: schema.inventoryMovements.sourceId })
+                .from(schema.inventoryMovementAllocations)
+                .innerJoin(
+                  schema.inventoryMovements,
+                  eq(
+                    schema.inventoryMovements.id,
+                    schema.inventoryMovementAllocations.inventoryMovementId
+                  )
+                )
+                .where(
+                  and(
+                    eq(schema.inventoryMovements.sourceId, originDisposalLeg.sourceId),
+                    eq(schema.inventoryMovements.assetId, originDisposalLeg.assetId),
+                    gte(schema.inventoryMovements.timestamp, originDisposalLeg.timestamp)
+                  )
+                )
+              const dependentOriginSourceIds = [
+                ...dependentOriginDisposals,
+                ...dependentOriginAllocations,
+              ].map(({ dependentSourceId }) => dependentSourceId)
+
+              if (dependentOriginSourceIds.length > 0) {
+                return yield* Effect.fail(
+                  new SourceReplayDependencyError({
+                    sourceId,
+                    dependentSourceIds: [...new Set(dependentOriginSourceIds)].sort(),
+                    affectedPrincipalIds: [expectedPrincipalId],
+                  })
+                )
+              }
+            }
 
             if (destinationLotIds.length > 0) {
               const dependentDisposals = yield* tx

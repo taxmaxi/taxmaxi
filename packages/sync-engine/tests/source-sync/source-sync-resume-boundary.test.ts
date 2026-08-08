@@ -141,6 +141,8 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("listProviderAssetReviews should not be called"),
             listProviderAssetSources: () =>
               Effect.dieMessage("listProviderAssetSources should not be called"),
+            listProviderAssetObservedRepresentations: () =>
+              Effect.dieMessage("listProviderAssetObservedRepresentations should not be called"),
             findProviderAssetMapping: () =>
               Effect.dieMessage("findProviderAssetMapping should not be called"),
           })

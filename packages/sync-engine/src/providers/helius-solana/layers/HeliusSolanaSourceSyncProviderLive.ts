@@ -1401,12 +1401,18 @@ const make = ({
         ]
       })
 
-    const movementComparisonKey = (movement: SolanaBalanceMovement): string =>
-      [
-        movement.asset.mintAddress ?? SOLANA_WRAPPED_NATIVE_MINT,
-        movement.direction,
-        movement.rawUnits,
-      ].join(":")
+    const movementsAgree = ({
+      authoritative,
+      transferRow,
+    }: {
+      readonly authoritative: SolanaBalanceMovement
+      readonly transferRow: SolanaBalanceMovement
+    }): boolean =>
+      (authoritative.asset.mintAddress ?? SOLANA_WRAPPED_NATIVE_MINT) ===
+        (transferRow.asset.mintAddress ?? SOLANA_WRAPPED_NATIVE_MINT) &&
+      authoritative.direction === transferRow.direction &&
+      (authoritative.rawUnits === transferRow.rawUnits ||
+        (authoritative.observedDecimals === null && authoritative.amount === transferRow.amount))
 
     const findTransferRowContradictions = ({
       transferRows,
@@ -1415,9 +1421,13 @@ const make = ({
       readonly transferRows: ReadonlyArray<SolanaBalanceMovement>
       readonly authoritativeMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<MovementContradiction> => {
-      const authoritativeKeys = new Set(authoritativeMovements.map(movementComparisonKey))
       return transferRows
-        .filter((movement) => !authoritativeKeys.has(movementComparisonKey(movement)))
+        .filter(
+          (transferRow) =>
+            !authoritativeMovements.some((authoritative) =>
+              movementsAgree({ authoritative, transferRow })
+            )
+        )
         .map((movement) => ({
           reason: "Helius transfer-row evidence contradicts full transaction movement evidence.",
           evidence: {
@@ -1449,7 +1459,7 @@ const make = ({
           supplementalTransferRow === null ||
           movement.evidenceKind === "transfer_row" ||
           transferRowMovement === undefined ||
-          movementComparisonKey(movement) !== movementComparisonKey(transferRowMovement)
+          !movementsAgree({ authoritative: movement, transferRow: transferRowMovement })
         ) {
           return movement
         }

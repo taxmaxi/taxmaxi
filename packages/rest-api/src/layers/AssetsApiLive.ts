@@ -6,7 +6,12 @@
 
 import { HttpApiBuilder } from "@effect/platform"
 import { AssetCatalogRepository, type AssetCatalogAssetRecord } from "@my/persistence/services"
-import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
+import {
+  ProviderAssetRepository,
+  TransferReconciliationRepository,
+  type ProviderAssetReviewRecord,
+  type TransferReconciliationReviewRecord,
+} from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
@@ -21,6 +26,8 @@ import {
   CanonicalAssetResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
+  TransferReconciliationReviewListResponse,
+  TransferReconciliationReviewRow,
 } from "../definitions/AssetsApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
@@ -62,10 +69,19 @@ const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
     ),
   })
 
+const toTransferReconciliationReviewRow = (row: TransferReconciliationReviewRecord) =>
+  TransferReconciliationReviewRow.make({
+    ...row,
+    providerTimestamp: row.providerTimestamp.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  })
+
 export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>
   Effect.gen(function* () {
     const assetCatalogRepository = yield* AssetCatalogRepository
     const providerAssetRepository = yield* ProviderAssetRepository
+    const transferReconciliationRepository = yield* TransferReconciliationRepository
     const assetCanonicalizationService = yield* AssetCanonicalizationService
 
     return handlers
@@ -117,6 +133,34 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
                 hasMore && lastProviderAsset !== undefined
                   ? lastProviderAsset.providerAsset.id
                   : null,
+              hasMore,
+            },
+          })
+        })
+      )
+      .handle("listTransferReconciliationReviews", ({ urlParams }) =>
+        Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultLimit
+          const reconciliations = yield* transferReconciliationRepository
+            .listTransferReconciliationReviews({
+              status: urlParams.status ?? "needs_review",
+              cursorId: urlParams.cursor ?? null,
+              limit: limit + 1,
+            })
+            .pipe(
+              Effect.mapError(() =>
+                toInternalServerError("Failed to list transfer reconciliations.")
+              )
+            )
+          const visibleReconciliations = reconciliations.slice(0, limit)
+          const lastReconciliation = visibleReconciliations.at(-1)
+          const hasMore = reconciliations.length > limit
+
+          return TransferReconciliationReviewListResponse.make({
+            reconciliations: visibleReconciliations.map(toTransferReconciliationReviewRow),
+            page: {
+              nextCursor:
+                hasMore && lastReconciliation !== undefined ? lastReconciliation.id : null,
               hasMore,
             },
           })

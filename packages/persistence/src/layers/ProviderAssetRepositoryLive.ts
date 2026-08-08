@@ -4,12 +4,13 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
   ProviderAssetRepository,
+  type ProviderAssetObservedRepresentationRecord,
   type ProviderAssetRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
@@ -38,6 +39,31 @@ const makeMissingIdentityError = ({
       },
     })
   )
+
+const observationKey = (observation: ProviderAssetObservedRepresentationRecord) =>
+  JSON.stringify([
+    observation.blockchainName,
+    observation.representationType,
+    observation.contractAddress,
+    observation.mintAddress,
+    observation.decimals,
+  ])
+
+const observationSnapshotMatches = ({
+  expected,
+  current,
+}: {
+  readonly expected: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+  readonly current: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+}) => {
+  const expectedKeys = expected.map(observationKey).sort()
+  const currentKeys = current.map(observationKey).sort()
+
+  return (
+    expectedKeys.length === currentKeys.length &&
+    expectedKeys.every((key, index) => key === currentKeys[index])
+  )
+}
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -129,39 +155,183 @@ const make = Effect.gen(function* () {
 
         const now = nowDate()
 
-        yield* db
-          .insert(schema.providerAssetMappings)
-          .values(
-            mappings.map((mapping) => ({
-              providerAssetRowId: mapping.providerAssetRowId,
-              mappingKind: mapping.mappingKind,
-              canonicalAssetId: mapping.canonicalAssetId,
-              assetRepresentationId: mapping.assetRepresentationId,
-              canonicalFiatCurrency: mapping.canonicalFiatCurrency,
-              mappingStatus: mapping.mappingStatus,
-              reviewerNotes: mapping.reviewerNotes,
-              sourceNotes: mapping.sourceNotes,
-              createdAt: now,
-              updatedAt: now,
-            }))
-          )
-          .onConflictDoUpdate({
-            target: schema.providerAssetMappings.providerAssetRowId,
-            set: {
-              mappingKind: sql.raw("excluded.mapping_kind"),
-              canonicalAssetId: sql.raw("excluded.canonical_asset_id"),
-              assetRepresentationId: sql.raw("excluded.asset_representation_id"),
-              canonicalFiatCurrency: sql.raw("excluded.canonical_fiat_currency"),
-              mappingStatus: sql.raw("excluded.mapping_status"),
-              reviewerNotes: sql.raw("excluded.reviewer_notes"),
-              sourceNotes: sql.raw("excluded.source_notes"),
-              updatedAt: now,
-            },
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            const mappingsRequiringLock = mappings.filter(
+              (mapping) =>
+                mapping.expectedObservedRepresentations !== undefined ||
+                mapping.expectedApprovedTarget !== undefined
+            )
+            if (mappingsRequiringLock.length > 0) {
+              const mappingIds = [
+                ...new Set(
+                  mappingsRequiringLock.map(({ providerAssetRowId }) => providerAssetRowId)
+                ),
+              ].sort()
+              const lockedMappings = yield* tx
+                .select({
+                  providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+                  mappingKind: schema.providerAssetMappings.mappingKind,
+                  canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+                  assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+                  canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
+                  mappingStatus: schema.providerAssetMappings.mappingStatus,
+                })
+                .from(schema.providerAssetMappings)
+                .where(inArray(schema.providerAssetMappings.providerAssetRowId, mappingIds))
+                .orderBy(asc(schema.providerAssetMappings.providerAssetRowId))
+                .for("update")
+
+              if (lockedMappings.length !== mappingIds.length) {
+                return yield* Effect.fail(
+                  new SyncEngineStorageError({
+                    operation:
+                      "providerAssetRepository.upsertProviderAssetMappings.observationSnapshot",
+                    cause: "Provider asset mapping changed before approval.",
+                  })
+                )
+              }
+
+              const lockedMappingById = new Map(
+                lockedMappings.map((mapping) => [mapping.providerAssetRowId, mapping])
+              )
+
+              yield* Effect.forEach(
+                mappingsRequiringLock,
+                (mapping) => {
+                  const expectedTarget = mapping.expectedApprovedTarget
+                  if (expectedTarget === undefined) {
+                    return Effect.void
+                  }
+
+                  const current = lockedMappingById.get(mapping.providerAssetRowId)
+                  return current?.mappingStatus === "approved" &&
+                    current.mappingKind === expectedTarget.mappingKind &&
+                    current.canonicalAssetId === expectedTarget.canonicalAssetId &&
+                    current.assetRepresentationId === expectedTarget.assetRepresentationId &&
+                    current.canonicalFiatCurrency === expectedTarget.canonicalFiatCurrency
+                    ? Effect.void
+                    : Effect.fail(
+                        new SyncEngineStorageError({
+                          operation:
+                            "providerAssetRepository.upsertProviderAssetMappings.approvedTargetSnapshot",
+                          cause: "Approved provider asset mapping changed before correction.",
+                        })
+                      )
+                },
+                { discard: true }
+              )
+
+              yield* Effect.forEach(
+                mappingsRequiringLock.filter(
+                  (mapping) => mapping.expectedObservedRepresentations !== undefined
+                ),
+                (mapping) =>
+                  Effect.gen(function* () {
+                    const currentObservations = yield* tx
+                      .selectDistinct({
+                        blockchainName: schema.blockchains.name,
+                        representationType: sql<
+                          "native" | "token" | "nft"
+                        >`${schema.providerTransfers.observedRepresentationType}`,
+                        contractAddress: schema.providerTransfers.observedContractAddress,
+                        mintAddress: schema.providerTransfers.observedMintAddress,
+                        decimals: schema.providerTransfers.observedDecimals,
+                      })
+                      .from(schema.providerTransfers)
+                      .innerJoin(
+                        schema.blockchains,
+                        eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
+                      )
+                      .where(
+                        and(
+                          eq(schema.providerTransfers.providerAssetId, mapping.providerAssetRowId),
+                          sql`${schema.providerTransfers.observedRepresentationType} is not null`
+                        )
+                      )
+
+                    if (
+                      !observationSnapshotMatches({
+                        expected: mapping.expectedObservedRepresentations ?? [],
+                        current: currentObservations,
+                      })
+                    ) {
+                      return yield* Effect.fail(
+                        new SyncEngineStorageError({
+                          operation:
+                            "providerAssetRepository.upsertProviderAssetMappings.observationSnapshot",
+                          cause: "Provider asset observations changed before approval.",
+                        })
+                      )
+                    }
+                  }),
+                { discard: true }
+              )
+            }
+
+            const approvedCorrectionIds = mappings
+              .filter((mapping) => mapping.expectedApprovedTarget !== undefined)
+              .map(({ providerAssetRowId }) => providerAssetRowId)
+            const approvedCorrectionCondition =
+              approvedCorrectionIds.length === 0
+                ? sql`false`
+                : inArray(schema.providerAssetMappings.providerAssetRowId, approvedCorrectionIds)
+
+            const persistedMappings = yield* tx
+              .insert(schema.providerAssetMappings)
+              .values(
+                mappings.map((mapping) => ({
+                  providerAssetRowId: mapping.providerAssetRowId,
+                  mappingKind: mapping.mappingKind,
+                  canonicalAssetId: mapping.canonicalAssetId,
+                  assetRepresentationId: mapping.assetRepresentationId,
+                  canonicalFiatCurrency: mapping.canonicalFiatCurrency,
+                  mappingStatus: mapping.mappingStatus,
+                  reviewerNotes: mapping.reviewerNotes,
+                  sourceNotes: mapping.sourceNotes,
+                  createdAt: now,
+                  updatedAt: now,
+                }))
+              )
+              .onConflictDoUpdate({
+                target: schema.providerAssetMappings.providerAssetRowId,
+                set: {
+                  mappingKind: sql.raw("excluded.mapping_kind"),
+                  canonicalAssetId: sql.raw("excluded.canonical_asset_id"),
+                  assetRepresentationId: sql.raw("excluded.asset_representation_id"),
+                  canonicalFiatCurrency: sql.raw("excluded.canonical_fiat_currency"),
+                  mappingStatus: sql.raw("excluded.mapping_status"),
+                  reviewerNotes: sql.raw("excluded.reviewer_notes"),
+                  sourceNotes: sql.raw("excluded.source_notes"),
+                  updatedAt: now,
+                },
+                setWhere: sql`
+                  ${schema.providerAssetMappings.mappingStatus} <> 'approved'
+                  or (
+                    excluded.mapping_status = 'approved'
+                    and ${schema.providerAssetMappings.mappingKind} = excluded.mapping_kind
+                    and ${schema.providerAssetMappings.canonicalAssetId} is not distinct from excluded.canonical_asset_id
+                    and ${schema.providerAssetMappings.assetRepresentationId} is not distinct from excluded.asset_representation_id
+                    and ${schema.providerAssetMappings.canonicalFiatCurrency} is not distinct from excluded.canonical_fiat_currency
+                  )
+                  or ${approvedCorrectionCondition}
+                `,
+              })
+              .returning({ providerAssetRowId: schema.providerAssetMappings.providerAssetRowId })
+
+            if (persistedMappings.length !== mappings.length) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "providerAssetRepository.upsertProviderAssetMappings.approvedTarget",
+                  cause: "Approved provider asset mappings cannot change target.",
+                })
+              )
+            }
           })
-          .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssetMappings"))
+        )
 
         return mappings.length
-      })
+      }).pipe(wrapSyncEngineStorageError("providerAssetRepository.upsertProviderAssetMappings"))
 
   const seedProviderAssetMappingsIfMissing: ProviderAssetRepositoryShape["seedProviderAssetMappingsIfMissing"] =
     ({ mappings }) =>
@@ -454,6 +624,40 @@ const make = Effect.gen(function* () {
       .orderBy(asc(schema.sources.id))
       .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetSources"))
 
+  const listProviderAssetObservedRepresentations: ProviderAssetRepositoryShape["listProviderAssetObservedRepresentations"] =
+    ({ providerAssetRowId }) =>
+      db
+        .selectDistinct({
+          blockchainName: schema.blockchains.name,
+          representationType: sql<
+            "native" | "token" | "nft"
+          >`${schema.providerTransfers.observedRepresentationType}`,
+          contractAddress: schema.providerTransfers.observedContractAddress,
+          mintAddress: schema.providerTransfers.observedMintAddress,
+          decimals: schema.providerTransfers.observedDecimals,
+        })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
+        )
+        .where(
+          and(
+            eq(schema.providerTransfers.providerAssetId, providerAssetRowId),
+            sql`${schema.providerTransfers.observedRepresentationType} is not null`
+          )
+        )
+        .orderBy(
+          asc(schema.blockchains.name),
+          asc(schema.providerTransfers.observedRepresentationType),
+          asc(schema.providerTransfers.observedContractAddress),
+          asc(schema.providerTransfers.observedMintAddress),
+          asc(schema.providerTransfers.observedDecimals)
+        )
+        .pipe(
+          wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetObservedRepresentations")
+        )
+
   return ProviderAssetRepository.of({
     upsertProviderAssets,
     upsertProviderAssetMappings,
@@ -464,6 +668,7 @@ const make = Effect.gen(function* () {
     findProviderAssetReviewById,
     listProviderAssetReviews,
     listProviderAssetSources,
+    listProviderAssetObservedRepresentations,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })

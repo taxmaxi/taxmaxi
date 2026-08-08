@@ -624,5 +624,31 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
       mappingStatus: "approved",
     })
+
+    await context.runPg(
+      Effect.flatMap(drizzle, (db) =>
+        db
+          .update(schema.providerAssets)
+          .set({ exponent: 5 })
+          .where(eq(schema.providerAssets.id, providerAssetState.providerAssetRowId))
+      )
+    )
+
+    const changedDecimalsResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ).pipe(Effect.either),
+      () => Effect.dieMessage("DAS should not be called when approved mapping is cached")
+    )
+
+    expect(changedDecimalsResult).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "HeliusSolanaBrokenApprovedProviderAssetMappingError",
+      },
+    })
   })
 })

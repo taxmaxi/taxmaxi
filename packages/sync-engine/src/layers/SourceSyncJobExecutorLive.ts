@@ -10,6 +10,7 @@
  */
 
 import * as Config from "effect/Config"
+import * as Duration from "effect/Duration"
 import * as Either from "effect/Either"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -109,6 +110,19 @@ const SOURCE_SYNC_PAGE_SIZE_CONFIG = Config.integer("SOURCE_SYNC_PAGE_SIZE").pip
   Config.orElse(() => Config.succeed(DEFAULT_SYNC_PAGE_SIZE))
 )
 
+const SOURCE_SYNC_RECONCILIATION_HEARTBEAT_INTERVAL_CONFIG = Config.duration(
+  "SOURCE_SYNC_RECONCILIATION_HEARTBEAT_INTERVAL"
+).pipe(Config.withDefault("10 seconds"))
+
+const MIN_RECONCILIATION_HEARTBEAT_INTERVAL = Duration.millis(1)
+const MAX_RECONCILIATION_HEARTBEAT_INTERVAL = Duration.seconds(10)
+
+export const clampReconciliationHeartbeatInterval = (interval: Duration.DurationInput) =>
+  Duration.clamp(interval, {
+    minimum: MIN_RECONCILIATION_HEARTBEAT_INTERVAL,
+    maximum: MAX_RECONCILIATION_HEARTBEAT_INTERVAL,
+  })
+
 const errorMessage = (error: unknown): string => {
   if (typeof error === "string" && error.trim() !== "") {
     return error
@@ -145,6 +159,9 @@ const make = Effect.gen(function* () {
   const sourceReplayRepository = yield* SourceReplayRepository
   const transferReconciliationService = yield* TransferReconciliationService
   const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
+  const reconciliationHeartbeatInterval = clampReconciliationHeartbeatInterval(
+    yield* SOURCE_SYNC_RECONCILIATION_HEARTBEAT_INTERVAL_CONFIG
+  )
 
   const loadSource = ({
     principalId,
@@ -494,40 +511,51 @@ const make = Effect.gen(function* () {
         } satisfies PrincipalReconciliationSummary,
         (summary, candidateSource) =>
           Effect.gen(function* () {
-            const reconciliation = yield* transferReconciliationService
-              .reconcileTransferCandidates({
-                principalId,
-                sourceId: candidateSource.id,
-              })
-              .pipe(
-                sourceSyncSpan({
-                  name: `${spanPrefix}.reconcile-transfers`,
-                  attributes: {
-                    sourceId: candidateSource.id,
-                    triggerSourceId,
-                    jobId,
-                    provider,
-                  },
-                  kind: "client",
+            const { reconciliation, canonicalization } = yield* Effect.gen(function* () {
+              const reconciliation = yield* transferReconciliationService
+                .reconcileTransferCandidates({
+                  principalId,
+                  sourceId: candidateSource.id,
                 })
-              )
-            const canonicalization = yield* transferReconciliationService
-              .applyDeterministicInternalTransferCanonicalization({
-                principalId,
-                sourceId: candidateSource.id,
-              })
-              .pipe(
-                sourceSyncSpan({
-                  name: `${spanPrefix}.apply-transfer-canonicalization`,
-                  attributes: {
-                    sourceId: candidateSource.id,
-                    triggerSourceId,
-                    jobId,
-                    provider,
-                  },
-                  kind: "client",
+                .pipe(
+                  sourceSyncSpan({
+                    name: `${spanPrefix}.reconcile-transfers`,
+                    attributes: {
+                      sourceId: candidateSource.id,
+                      triggerSourceId,
+                      jobId,
+                      provider,
+                    },
+                    kind: "client",
+                  })
+                )
+              const canonicalization = yield* transferReconciliationService
+                .applyDeterministicInternalTransferCanonicalization({
+                  principalId,
+                  sourceId: candidateSource.id,
                 })
+                .pipe(
+                  sourceSyncSpan({
+                    name: `${spanPrefix}.apply-transfer-canonicalization`,
+                    attributes: {
+                      sourceId: candidateSource.id,
+                      triggerSourceId,
+                      jobId,
+                      provider,
+                    },
+                    kind: "client",
+                  })
+                )
+
+              return { reconciliation, canonicalization }
+            }).pipe(
+              Effect.raceFirst(
+                Effect.sleep(reconciliationHeartbeatInterval).pipe(
+                  Effect.zipRight(heartbeatSourceSyncJob({ jobId, workerId })),
+                  Effect.forever
+                )
               )
+            )
 
             yield* heartbeatSourceSyncJob({ jobId, workerId })
 
@@ -871,7 +899,13 @@ const make = Effect.gen(function* () {
             name: "source-replay.reset-derived-state",
             attributes: { sourceId: source.id, jobId, provider },
             kind: "client",
-          })
+          }),
+          Effect.raceFirst(
+            Effect.sleep(reconciliationHeartbeatInterval).pipe(
+              Effect.zipRight(heartbeatSourceSyncJob({ jobId, workerId })),
+              Effect.forever
+            )
+          )
         )
       yield* heartbeatSourceSyncJob({ jobId, workerId })
       const rawRecords = yield* sourceRawRecordRepository

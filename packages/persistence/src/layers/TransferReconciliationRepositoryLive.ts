@@ -5,8 +5,23 @@
  * @module TransferReconciliationRepositoryLive
  */
 
-import { aliasedTable, and, asc, count, eq, gt, gte, inArray, lte, ne, or, sql } from "drizzle-orm"
+import {
+  aliasedTable,
+  and,
+  asc,
+  count,
+  eq,
+  gt,
+  gte,
+  inArray,
+  lte,
+  ne,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -25,6 +40,12 @@ import { drizzle } from "./PgClientLive.ts"
 import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 
+class HistoricalFifoRebuildBlocked extends Data.TaggedError("HistoricalFifoRebuildBlocked")<{
+  readonly affectedSourceIds: ReadonlyArray<string>
+  readonly reconciliationId: string
+  readonly reviewMetadata: unknown
+}> {}
+
 const make = Effect.gen(function* () {
   const db = yield* drizzle
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
@@ -38,6 +59,48 @@ const make = Effect.gen(function* () {
     "Deterministic provider transfer reconciled to a principal-owned onchain transfer."
   const FIFO_INVENTORY_REVIEW_LAYER = "fifo_inventory"
   const FIFO_INVENTORY_REVIEW_REASON_PREFIX = "fifo_inventory:"
+
+  const listTransferReconciliationReviews: TransferReconciliationRepositoryShape["listTransferReconciliationReviews"] =
+    ({ status, cursorId, limit }) =>
+      db
+        .select({
+          id: schema.transferReconciliations.id,
+          principalId: schema.transferReconciliations.principalId,
+          providerTransferId: schema.transferReconciliations.providerTransferId,
+          providerSourceId: schema.providerTransfers.sourceId,
+          providerTimestamp: schema.providerTransfers.timestamp,
+          providerDirection: schema.providerTransfers.direction,
+          providerAmount: schema.providerTransfers.amount,
+          networkName: schema.providerTransfers.networkName,
+          networkHash: schema.providerTransfers.networkHash,
+          canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+          canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+          status: schema.transferReconciliations.status,
+          matchReason: schema.transferReconciliations.matchReason,
+          confidence: schema.transferReconciliations.confidence,
+          deterministic: schema.transferReconciliations.deterministic,
+          reviewMetadata: schema.transferReconciliations.reviewMetadata,
+          createdAt: schema.transferReconciliations.createdAt,
+          updatedAt: schema.transferReconciliations.updatedAt,
+        })
+        .from(schema.transferReconciliations)
+        .innerJoin(
+          schema.providerTransfers,
+          eq(schema.providerTransfers.id, schema.transferReconciliations.providerTransferId)
+        )
+        .where(
+          and(
+            eq(schema.transferReconciliations.status, status),
+            ...(cursorId === null ? [] : [gt(schema.transferReconciliations.id, cursorId)])
+          )
+        )
+        .orderBy(asc(schema.transferReconciliations.id))
+        .limit(limit)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "transferReconciliationRepository.listTransferReconciliationReviews"
+          )
+        )
 
   const decodeBigDecimal = ({
     value,
@@ -96,6 +159,10 @@ const make = Effect.gen(function* () {
         })
         .from(schema.providerTransfers)
         .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+        .innerJoin(
+          schema.transactions,
+          eq(schema.transactions.id, schema.providerTransfers.transactionId)
+        )
         .leftJoin(
           schema.providerAssetMappings,
           and(
@@ -107,7 +174,9 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.sources.principalId, principalId),
+            eq(schema.sources.sourceableType, "cex"),
             eq(schema.providerTransfers.sourceId, sourceId),
+            sql`lower(coalesce(${schema.transactions.providerStatus}, '')) in ('completed', 'succeeded')`,
             sql`coalesce(${schema.providerTransfers.metadata}->>'role', 'principal') = 'principal'`
           )
         )
@@ -249,6 +318,7 @@ const make = Effect.gen(function* () {
             eq(schema.sources.principalId, principalId),
             eq(schema.sources.sourceableType, "onchain"),
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
+            ne(schema.transfers.type, "fee"),
             ownedSourceAddressCondition,
             canonicalOwnershipCondition,
             canonicalTimestampCondition,
@@ -300,6 +370,7 @@ const make = Effect.gen(function* () {
             eq(schema.sources.principalId, principalId),
             eq(schema.sources.sourceableType, "onchain"),
             eq(onchainProviderTransferTable.direction, observedDirection),
+            sql`coalesce(${onchainProviderTransferTable.metadata}->>'role', 'principal') = 'principal'`,
             ownedSourceAddressCondition,
             observedOwnershipCondition,
             sql`${onchainProviderTransferTable.observedRepresentationType} is not null`,
@@ -429,6 +500,18 @@ const make = Effect.gen(function* () {
             let persistedMatchReason = matchReason
             let persistedConfidence = confidence
             let persistedDeterministic = deterministic
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.principalId, principalId))
+              .orderBy(asc(schema.sources.id))
+              .for("update")
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "transferReconciliationRepository.upsertTransferReconciliation.lockPrincipalSources"
+                )
+              )
+
             const [existing] = yield* tx
               .select({
                 status: schema.transferReconciliations.status,
@@ -447,13 +530,57 @@ const make = Effect.gen(function* () {
               .for("update")
               .limit(1)
 
+            if (
+              canonicalTransferId !== null &&
+              (status === "auto_applied" || status === "approved")
+            ) {
+              const [canonicalClaim] = yield* tx
+                .select({
+                  reconciliationId: schema.transferReconciliations.id,
+                  providerTransferId: schema.transferReconciliations.providerTransferId,
+                })
+                .from(schema.transferReconciliations)
+                .where(
+                  and(
+                    eq(schema.transferReconciliations.principalId, principalId),
+                    eq(schema.transferReconciliations.canonicalTransferId, canonicalTransferId),
+                    ne(schema.transferReconciliations.providerTransferId, providerTransferId),
+                    or(
+                      inArray(schema.transferReconciliations.status, ["auto_applied", "approved"]),
+                      and(
+                        eq(schema.transferReconciliations.status, "needs_review"),
+                        sql`${schema.transferReconciliations.reviewMetadata}->'rollback'->>'appliedEffectsRetained' = 'true'`
+                      )
+                    )
+                  )
+                )
+                .limit(1)
+
+              if (canonicalClaim !== undefined) {
+                const metadata = yield* Schema.decodeUnknown(
+                  Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
+                persistedStatus = "needs_review"
+                persistedMatchReason = "canonical_transfer_already_reconciled"
+                persistedConfidence = "0.0000"
+                persistedDeterministic = false
+                persistedReviewMetadata = {
+                  ...metadata,
+                  canonicalClaim,
+                }
+              }
+            }
+
             const blockedRollback =
               existing?.status === "needs_review"
                 ? yield* Schema.decodeUnknown(
                     Schema.Struct({
                       rollback: Schema.Struct({
                         status: Schema.Literal("blocked"),
-                        reason: Schema.Literal("dependent_destination_lot_usage"),
+                        reason: Schema.Literal(
+                          "dependent_destination_lot_usage",
+                          "dependent_origin_fifo_usage"
+                        ),
                         appliedEffectsRetained: Schema.Literal(true),
                       }),
                     })
@@ -507,6 +634,9 @@ const make = Effect.gen(function* () {
                   id: schema.transactionLegs.id,
                   transactionId: schema.transactionLegs.transactionId,
                   derivationRule: schema.transactionLegs.derivationRule,
+                  sourceId: schema.transactionLegs.sourceId,
+                  assetId: schema.transactionLegs.assetId,
+                  timestamp: schema.transactionLegs.timestamp,
                 })
                 .from(schema.transactionLegs)
                 .where(
@@ -535,6 +665,7 @@ const make = Effect.gen(function* () {
                       .where(inArray(schema.fifoLots.sourceLegId, acquisitionLegIds))
               const destinationLotIds = destinationLots.map(({ id }) => id)
               let hasDependentDestinationUsage = false
+              let hasDependentOriginUsage = false
 
               if (destinationLotIds.length > 0) {
                 const [dependentDisposal] = yield* tx
@@ -552,7 +683,50 @@ const make = Effect.gen(function* () {
                   dependentDisposal !== undefined || dependentAllocation !== undefined
               }
 
-              if (hasDependentDestinationUsage) {
+              const originDisposalLeg = internalLegs.find(
+                ({ derivationRule }) => derivationRule === "internal_transfer_out"
+              )
+              if (originDisposalLeg !== undefined) {
+                const [dependentDisposal] = yield* tx
+                  .select({ id: schema.disposalMatches.id })
+                  .from(schema.disposalMatches)
+                  .innerJoin(
+                    schema.transactionLegs,
+                    eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+                  )
+                  .where(
+                    and(
+                      eq(schema.transactionLegs.sourceId, originDisposalLeg.sourceId),
+                      eq(schema.transactionLegs.assetId, originDisposalLeg.assetId),
+                      gte(schema.transactionLegs.timestamp, originDisposalLeg.timestamp),
+                      ne(schema.transactionLegs.id, originDisposalLeg.id)
+                    )
+                  )
+                  .limit(1)
+                const [dependentAllocation] = yield* tx
+                  .select({ id: schema.inventoryMovementAllocations.id })
+                  .from(schema.inventoryMovementAllocations)
+                  .innerJoin(
+                    schema.inventoryMovements,
+                    eq(
+                      schema.inventoryMovements.id,
+                      schema.inventoryMovementAllocations.inventoryMovementId
+                    )
+                  )
+                  .where(
+                    and(
+                      eq(schema.inventoryMovements.sourceId, originDisposalLeg.sourceId),
+                      eq(schema.inventoryMovements.assetId, originDisposalLeg.assetId),
+                      gte(schema.inventoryMovements.timestamp, originDisposalLeg.timestamp)
+                    )
+                  )
+                  .limit(1)
+
+                hasDependentOriginUsage =
+                  dependentDisposal !== undefined || dependentAllocation !== undefined
+              }
+
+              if (hasDependentDestinationUsage || hasDependentOriginUsage) {
                 const metadata = yield* Schema.decodeUnknown(
                   Schema.Record({ key: Schema.String, value: Schema.Unknown })
                 )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
@@ -560,18 +734,18 @@ const make = Effect.gen(function* () {
                   ...metadata,
                   rollback: {
                     status: "blocked",
-                    reason: "dependent_destination_lot_usage",
+                    reason: hasDependentDestinationUsage
+                      ? "dependent_destination_lot_usage"
+                      : "dependent_origin_fifo_usage",
                     appliedEffectsRetained: true,
                   },
                 }
                 persistedCanonicalTransferId = existing.canonicalTransferId
                 persistedCanonicalTransactionId = existing.canonicalTransactionId
-                if (status === "auto_applied") {
-                  persistedStatus = "needs_review"
-                  persistedMatchReason = "applied_match_replacement_rollback_blocked"
-                  persistedConfidence = "0.0000"
-                  persistedDeterministic = false
-                }
+                persistedStatus = "needs_review"
+                persistedMatchReason = "applied_match_replacement_rollback_blocked"
+                persistedConfidence = "0.0000"
+                persistedDeterministic = false
               } else {
                 persistedReviewMetadata = reviewMetadata
                 const disposalMatches =
@@ -766,6 +940,7 @@ const make = Effect.gen(function* () {
                   providerTransactionId: schema.providerTransfers.transactionId,
                   canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
                   canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+                  reviewMetadata: schema.transferReconciliations.reviewMetadata,
                   canonicalTransferExternalId: schema.transfers.externalId,
                   assetId: schema.transfers.assetId,
                   assetRepresentationId: schema.transfers.assetRepresentationId,
@@ -978,6 +1153,190 @@ const make = Effect.gen(function* () {
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadDependentUsageCount"
                   )
                 )
+
+            const hasUnreviewedLaterFifoUsage = ({
+              sourceId: inventorySourceId,
+              assetId,
+              timestamp,
+              excludedTransactionIds,
+              rebuildReviewedSuffix,
+            }: {
+              readonly sourceId: string
+              readonly assetId: string
+              readonly timestamp: Date
+              readonly excludedTransactionIds: ReadonlyArray<string>
+              readonly rebuildReviewedSuffix: boolean
+            }) =>
+              Effect.gen(function* () {
+                const reviewedDisposals = rebuildReviewedSuffix
+                  ? yield* tx
+                      .select({ timestamp: schema.transactionLegs.timestamp })
+                      .from(schema.transactionLegs)
+                      .innerJoin(
+                        schema.transactionReviews,
+                        eq(
+                          schema.transactionReviews.transactionId,
+                          schema.transactionLegs.transactionId
+                        )
+                      )
+                      .where(
+                        and(
+                          eq(schema.transactionLegs.sourceId, inventorySourceId),
+                          eq(schema.transactionLegs.assetId, assetId),
+                          eq(schema.transactionLegs.kind, "disposal"),
+                          gte(schema.transactionLegs.timestamp, timestamp),
+                          eq(schema.transactionReviews.needsReview, true),
+                          sql`cast(${FIFO_INVENTORY_REVIEW_LAYER} as text) = any(
+                            string_to_array(
+                              coalesce(${schema.transactionReviews.matchedLayer}, ''),
+                              ','
+                            )
+                          )`
+                        )
+                      )
+                  : []
+                const reviewedMovements = rebuildReviewedSuffix
+                  ? yield* tx
+                      .select({ timestamp: schema.inventoryMovements.timestamp })
+                      .from(schema.inventoryMovements)
+                      .innerJoin(
+                        schema.transactionReviews,
+                        eq(
+                          schema.transactionReviews.transactionId,
+                          schema.inventoryMovements.transactionId
+                        )
+                      )
+                      .where(
+                        and(
+                          eq(schema.inventoryMovements.sourceId, inventorySourceId),
+                          eq(schema.inventoryMovements.assetId, assetId),
+                          eq(schema.inventoryMovements.direction, "outbound"),
+                          gte(schema.inventoryMovements.timestamp, timestamp),
+                          eq(schema.transactionReviews.needsReview, true),
+                          sql`cast(${FIFO_INVENTORY_REVIEW_LAYER} as text) = any(
+                            string_to_array(
+                              coalesce(${schema.transactionReviews.matchedLayer}, ''),
+                              ','
+                            )
+                          )`
+                        )
+                      )
+                  : []
+                const reviewedSuffixCutoff = [...reviewedDisposals, ...reviewedMovements]
+                  .map(({ timestamp: reviewedTimestamp }) => reviewedTimestamp)
+                  .sort((left, right) => left.getTime() - right.getTime())[0]
+                const [laterDisposal] = yield* tx
+                  .select({ id: schema.disposalMatches.id })
+                  .from(schema.disposalMatches)
+                  .innerJoin(
+                    schema.transactionLegs,
+                    eq(schema.transactionLegs.id, schema.disposalMatches.disposalLegId)
+                  )
+                  .leftJoin(
+                    schema.transactionReviews,
+                    eq(
+                      schema.transactionReviews.transactionId,
+                      schema.transactionLegs.transactionId
+                    )
+                  )
+                  .leftJoin(
+                    schema.transferReconciliations,
+                    sql`${schema.transferReconciliations.providerTransferId}::text = ${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId'`
+                  )
+                  .where(
+                    and(
+                      eq(schema.transactionLegs.sourceId, inventorySourceId),
+                      eq(schema.transactionLegs.assetId, assetId),
+                      gte(schema.transactionLegs.timestamp, timestamp),
+                      ...(reviewedSuffixCutoff === undefined
+                        ? []
+                        : [
+                            sql`(
+                              ${schema.transactionLegs.timestamp} < ${reviewedSuffixCutoff}
+                              or (
+                                ${schema.transactionLegs.derivationRule} = 'internal_transfer_out'
+                                and not coalesce(
+                                  ${schema.transferReconciliations.status} = 'approved'
+                                  or (
+                                    ${schema.transferReconciliations.status} = 'auto_applied'
+                                    and ${schema.transferReconciliations.deterministic} = true
+                                  ),
+                                  false
+                                )
+                              )
+                            )`,
+                          ]),
+                      notInArray(schema.transactionLegs.transactionId, [...excludedTransactionIds])
+                    )
+                  )
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnreviewedLaterFifoUsage.disposal"
+                    )
+                  )
+                const [laterAllocation] = yield* tx
+                  .select({ id: schema.inventoryMovementAllocations.id })
+                  .from(schema.inventoryMovementAllocations)
+                  .innerJoin(
+                    schema.inventoryMovements,
+                    eq(
+                      schema.inventoryMovements.id,
+                      schema.inventoryMovementAllocations.inventoryMovementId
+                    )
+                  )
+                  .leftJoin(
+                    schema.transactionReviews,
+                    eq(
+                      schema.transactionReviews.transactionId,
+                      schema.inventoryMovements.transactionId
+                    )
+                  )
+                  .leftJoin(
+                    schema.transferReconciliations,
+                    eq(
+                      schema.transferReconciliations.providerTransferId,
+                      schema.inventoryMovements.providerTransferId
+                    )
+                  )
+                  .where(
+                    and(
+                      eq(schema.inventoryMovements.sourceId, inventorySourceId),
+                      eq(schema.inventoryMovements.assetId, assetId),
+                      eq(schema.inventoryMovements.direction, "outbound"),
+                      gte(schema.inventoryMovements.timestamp, timestamp),
+                      ...(reviewedSuffixCutoff === undefined
+                        ? []
+                        : [
+                            sql`(
+                              ${schema.inventoryMovements.timestamp} < ${reviewedSuffixCutoff}
+                              or (
+                                ${schema.inventoryMovements.reconciliationStatus} = 'matched'
+                                and not coalesce(
+                                  ${schema.transferReconciliations.status} = 'approved'
+                                  or (
+                                    ${schema.transferReconciliations.status} = 'auto_applied'
+                                    and ${schema.transferReconciliations.deterministic} = true
+                                  ),
+                                  false
+                                )
+                              )
+                            )`,
+                          ]),
+                      notInArray(schema.inventoryMovements.transactionId, [
+                        ...excludedTransactionIds,
+                      ])
+                    )
+                  )
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.hasUnreviewedLaterFifoUsage.allocation"
+                    )
+                  )
+
+                return laterDisposal !== undefined || laterAllocation !== undefined
+              })
 
             const removeUnusedInboundProviderLot = ({
               providerTransferId,
@@ -2310,14 +2669,26 @@ const make = Effect.gen(function* () {
               readonly transactionId: string
             }) =>
               tx
-                .update(schema.transactionReviews)
-                .set({
-                  reviewStatus: sql`case
+                .insert(schema.transactionReviews)
+                .values({
+                  transactionId,
+                  principalId,
+                  reviewStatus: "needs_review",
+                  categorizationReason: FIFO_REBUILD_REASON,
+                  matchedLayer: FIFO_INVENTORY_REVIEW_LAYER,
+                  needsReview: true,
+                  createdAt: nowDate(),
+                  updatedAt: nowDate(),
+                })
+                .onConflictDoUpdate({
+                  target: schema.transactionReviews.transactionId,
+                  set: {
+                    reviewStatus: sql`case
                     when ${schema.transactionReviews.reviewStatus} in ('approved', 'changed')
                       then ${schema.transactionReviews.reviewStatus}
                     else 'needs_review'
                   end`,
-                  categorizationReason: sql`case
+                    categorizationReason: sql`case
                     when strpos(
                       coalesce(${schema.transactionReviews.categorizationReason}, ''),
                       cast(${FIFO_REBUILD_REASON} as text)
@@ -2329,7 +2700,7 @@ const make = Effect.gen(function* () {
                       || E'\n'
                       || cast(${FIFO_REBUILD_REASON} as text)
                   end`,
-                  matchedLayer: sql`case
+                    matchedLayer: sql`case
                     when cast(${FIFO_INVENTORY_REVIEW_LAYER} as text) = any(
                       string_to_array(coalesce(${schema.transactionReviews.matchedLayer}, ''), ',')
                     )
@@ -2340,10 +2711,10 @@ const make = Effect.gen(function* () {
                       cast(${FIFO_INVENTORY_REVIEW_LAYER} as text)
                     )
                   end`,
-                  needsReview: true,
-                  updatedAt: nowDate(),
+                    needsReview: true,
+                    updatedAt: nowDate(),
+                  },
                 })
-                .where(eq(schema.transactionReviews.transactionId, transactionId))
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.markInternalTransferForFifoRebuild"
@@ -2353,8 +2724,12 @@ const make = Effect.gen(function* () {
 
             const rebuildReviewedDestinationFifoEffects = ({
               destinationSourceId,
+              reconciliationId: currentReconciliationId,
+              reviewMetadata,
             }: {
               readonly destinationSourceId: string
+              readonly reconciliationId: string
+              readonly reviewMetadata: unknown
             }) =>
               Effect.gen(function* () {
                 const reviewedTransactions = yield* tx
@@ -2834,18 +3209,6 @@ const make = Effect.gen(function* () {
 
                 const inventoryKeyForEffect = (effect: (typeof effects)[number]) =>
                   `${effect.principalId}:${effect.assetId}`
-                const disposalInventoryKeys = new Map(
-                  disposalsToRebuild.map((disposal) => [
-                    disposal.id,
-                    `${disposal.principalId}:${disposal.assetId}`,
-                  ])
-                )
-                const movementInventoryKeys = new Map(
-                  movementsToRebuild.map((movement) => [
-                    movement.id,
-                    `${movement.principalId}:${movement.assetId}`,
-                  ])
-                )
                 const restoredAmountByLotId = new Map<string, BigDecimal.BigDecimal>()
 
                 for (const allocation of [...disposalMatches, ...movementAllocations]) {
@@ -2973,14 +3336,21 @@ const make = Effect.gen(function* () {
                   }
                 }
 
-                const disposalMatchesToRebuild = disposalMatches.filter((match) => {
-                  const inventoryKey = disposalInventoryKeys.get(match.disposalLegId)
-                  return inventoryKey !== undefined && !blockedInventoryKeys.has(inventoryKey)
-                })
-                const movementAllocationsToRebuild = movementAllocations.filter((allocation) => {
-                  const inventoryKey = movementInventoryKeys.get(allocation.inventoryMovementId)
-                  return inventoryKey !== undefined && !blockedInventoryKeys.has(inventoryKey)
-                })
+                if (unrebuildableInventoryKeys.size > 0) {
+                  return yield* Effect.fail(
+                    new HistoricalFifoRebuildBlocked({
+                      affectedSourceIds: [destinationSourceId],
+                      reconciliationId: currentReconciliationId,
+                      reviewMetadata,
+                    })
+                  )
+                }
+
+                // A blocked reviewed effect must not keep its old allocation after the new
+                // incoming lot changes FIFO order. Restore and remove every suffix allocation;
+                // effects that remain underfunded stay unallocated and in review.
+                const disposalMatchesToRebuild = disposalMatches
+                const movementAllocationsToRebuild = movementAllocations
 
                 yield* Effect.forEach(
                   [...disposalMatchesToRebuild, ...movementAllocationsToRebuild],
@@ -3180,6 +3550,20 @@ const make = Effect.gen(function* () {
                   )
                 }
 
+                const blockedTransactionIds = [
+                  ...new Set(
+                    effects
+                      .filter((effect) => blockedInventoryKeys.has(inventoryKeyForEffect(effect)))
+                      .map(({ transactionId }) => transactionId)
+                      .filter((transactionId): transactionId is string => transactionId !== null)
+                  ),
+                ]
+                yield* Effect.forEach(
+                  blockedTransactionIds,
+                  (transactionId) => markInternalTransferForFifoRebuild({ transactionId }),
+                  { discard: true }
+                )
+
                 for (const { transactionId } of reviewedTransactions) {
                   const reviewedInventoryKeys = [
                     ...allDisposals.filter((disposal) => disposal.transactionId === transactionId),
@@ -3262,6 +3646,29 @@ const make = Effect.gen(function* () {
                 const { destinationTransaction, originTransaction } =
                   resolveReconciliationTransactions({ canonicalTransactionId, row })
 
+                const [existingReconciliationLeg] = yield* tx
+                  .select({ id: schema.transactionLegs.id })
+                  .from(schema.transactionLegs)
+                  .where(
+                    and(
+                      inArray(schema.transactionLegs.transactionId, [
+                        originTransaction.id,
+                        destinationTransaction.id,
+                      ]),
+                      inArray(schema.transactionLegs.derivationRule, [
+                        "internal_transfer_out",
+                        "internal_transfer_in",
+                      ]),
+                      sql`${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId' = ${row.providerTransferId}`
+                    )
+                  )
+                  .limit(1)
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadExistingReconciliationLeg"
+                    )
+                  )
+
                 const originExternalId = `${originTransaction.externalId ?? originTransaction.id}:internal_transfer_out`
                 const destinationExternalId = `${destinationTransaction.externalId ?? destinationTransaction.id}:internal_transfer_in`
                 const originSourceTransferId =
@@ -3336,6 +3743,62 @@ const make = Effect.gen(function* () {
                     "Skipping deterministic internal transfer canonicalization because dependent downstream usage prevents a required rewrite"
                   )
                   return { applied: false, invalidatedReconciliations: [] }
+                }
+
+                if (existingReconciliationLeg === undefined) {
+                  const excludedTransactionIds = [originTransaction.id, destinationTransaction.id]
+                  const originHasLaterUsage = yield* hasUnreviewedLaterFifoUsage({
+                    sourceId: originTransaction.sourceId,
+                    assetId: row.assetId,
+                    timestamp: originTransaction.timestamp,
+                    excludedTransactionIds,
+                    rebuildReviewedSuffix: false,
+                  })
+                  const destinationHasLaterUsage = yield* hasUnreviewedLaterFifoUsage({
+                    sourceId: destinationTransaction.sourceId,
+                    assetId: row.assetId,
+                    timestamp: destinationTransaction.timestamp,
+                    excludedTransactionIds,
+                    rebuildReviewedSuffix: true,
+                  })
+
+                  if (originHasLaterUsage || destinationHasLaterUsage) {
+                    const metadata = yield* Schema.decodeUnknown(
+                      Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                    )(row.reviewMetadata).pipe(
+                      Effect.orElseSucceed(() => ({ evidence: row.reviewMetadata }))
+                    )
+                    const blockedSourceIds = [
+                      ...(originHasLaterUsage ? [originTransaction.sourceId] : []),
+                      ...(destinationHasLaterUsage ? [destinationTransaction.sourceId] : []),
+                    ]
+
+                    yield* tx
+                      .update(schema.transferReconciliations)
+                      .set({
+                        status: "needs_review",
+                        matchReason: "historical_fifo_rebuild_required",
+                        confidence: "0.0000",
+                        deterministic: false,
+                        reviewMetadata: {
+                          ...metadata,
+                          canonicalization: {
+                            status: "blocked",
+                            reason: "later_fifo_usage",
+                            affectedSourceIds: [...new Set(blockedSourceIds)].sort(),
+                          },
+                        },
+                        updatedAt: nowDate(),
+                      })
+                      .where(eq(schema.transferReconciliations.id, row.reconciliationId))
+                      .pipe(
+                        wrapSyncEngineSqlError(
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.blockHistoricalFifoRewrite"
+                        )
+                      )
+
+                    return { applied: false, invalidatedReconciliations: [] }
+                  }
                 }
 
                 if (!originAlreadyCanonical) {
@@ -3476,6 +3939,8 @@ const make = Effect.gen(function* () {
                 })
                 const invalidatedReconciliations = yield* rebuildReviewedDestinationFifoEffects({
                   destinationSourceId: destinationTransaction.sourceId,
+                  reconciliationId: row.reconciliationId,
+                  reviewMetadata: row.reviewMetadata,
                 })
 
                 if (row.providerDirection === "inbound") {
@@ -3557,12 +4022,45 @@ const make = Effect.gen(function* () {
           })
         )
         .pipe(
+          Effect.catchTag("HistoricalFifoRebuildBlocked", (error) =>
+            Effect.gen(function* () {
+              const metadata = yield* Schema.decodeUnknown(
+                Schema.Record({ key: Schema.String, value: Schema.Unknown })
+              )(error.reviewMetadata).pipe(
+                Effect.orElseSucceed(() => ({ evidence: error.reviewMetadata }))
+              )
+
+              yield* db
+                .update(schema.transferReconciliations)
+                .set({
+                  status: "needs_review",
+                  matchReason: "historical_fifo_rebuild_required",
+                  confidence: "0.0000",
+                  deterministic: false,
+                  reviewMetadata: {
+                    ...metadata,
+                    canonicalization: {
+                      status: "blocked",
+                      reason: "later_fifo_usage",
+                      affectedSourceIds: [...new Set(error.affectedSourceIds)].sort(),
+                    },
+                  },
+                  updatedAt: nowDate(),
+                })
+                .where(eq(schema.transferReconciliations.id, error.reconciliationId))
+
+              return {
+                canonicalizedPairs: 0,
+              } satisfies DeterministicTransferCanonicalizationSummary
+            })
+          ),
           wrapSyncEngineSqlError(
             "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization"
           )
         )
 
   return TransferReconciliationRepository.of({
+    listTransferReconciliationReviews,
     listProviderTransfersForReconciliation,
     findOnchainTransferCandidates,
     recordOnchainRepresentationEvidence,

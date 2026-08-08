@@ -1983,6 +1983,12 @@ const make = Effect.gen(function* () {
               transfer.externalId === null ? [] : [transfer.externalId]
             )
           )
+          const observedProviderAssetIds = params.providerTransfers.flatMap((providerTransfer) =>
+            providerTransfer.providerAssetId !== null &&
+            providerTransfer.observedRepresentationType !== null
+              ? [providerTransfer.providerAssetId]
+              : []
+          )
           const providerAssetIdsMissingCanonicalTransfers = yield* Effect.forEach(
             params.providerTransfers,
             (providerTransfer) =>
@@ -1997,17 +2003,23 @@ const make = Effect.gen(function* () {
                 )
               )
           ).pipe(Effect.map((ids) => [...new Set(ids.filter((id) => id !== null))]))
+          const observedProviderAssetIdSet = new Set(observedProviderAssetIds)
+          const providerAssetIdsMissingCanonicalTransferSet = new Set(
+            providerAssetIdsMissingCanonicalTransfers
+          )
           const lockedMappings =
-            providerAssetIdsMissingCanonicalTransfers.length === 0
+            observedProviderAssetIdSet.size === 0
               ? []
               : yield* tx
-                  .select({ mappingStatus: schema.providerAssetMappings.mappingStatus })
+                  .select({
+                    providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+                    mappingStatus: schema.providerAssetMappings.mappingStatus,
+                  })
                   .from(schema.providerAssetMappings)
                   .where(
-                    inArray(
-                      schema.providerAssetMappings.providerAssetRowId,
-                      providerAssetIdsMissingCanonicalTransfers
-                    )
+                    inArray(schema.providerAssetMappings.providerAssetRowId, [
+                      ...observedProviderAssetIdSet,
+                    ])
                   )
                   .orderBy(asc(schema.providerAssetMappings.providerAssetRowId))
                   .for("share")
@@ -2017,7 +2029,9 @@ const make = Effect.gen(function* () {
                     )
                   )
           const requiresReplay = lockedMappings.some(
-            ({ mappingStatus }) => mappingStatus === "approved"
+            ({ providerAssetRowId, mappingStatus }) =>
+              mappingStatus === "approved" &&
+              providerAssetIdsMissingCanonicalTransferSet.has(providerAssetRowId)
           )
 
           if (requiresReplay && params.replayRequestJobId !== undefined) {

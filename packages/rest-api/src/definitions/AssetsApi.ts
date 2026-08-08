@@ -55,6 +55,39 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   }),
 }) {}
 
+export class TransferReconciliationReviewRow extends Schema.Class<TransferReconciliationReviewRow>(
+  "TransferReconciliationReviewRow"
+)({
+  id: Schema.UUID,
+  principalId: Schema.UUID,
+  providerTransferId: Schema.UUID,
+  providerSourceId: Schema.UUID,
+  providerTimestamp: Schema.String,
+  providerDirection: Schema.Literal("inbound", "outbound"),
+  providerAmount: Schema.String,
+  networkName: Schema.NullOr(Schema.String),
+  networkHash: Schema.NullOr(Schema.String),
+  canonicalTransferId: Schema.NullOr(Schema.UUID),
+  canonicalTransactionId: Schema.NullOr(Schema.UUID),
+  status: Schema.Literal("pending", "needs_review", "approved", "rejected", "auto_applied"),
+  matchReason: Schema.String,
+  confidence: Schema.String,
+  deterministic: Schema.Boolean,
+  reviewMetadata: Schema.Unknown,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+}) {}
+
+export class TransferReconciliationReviewListResponse extends Schema.Class<TransferReconciliationReviewListResponse>(
+  "TransferReconciliationReviewListResponse"
+)({
+  reconciliations: Schema.Array(TransferReconciliationReviewRow),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.UUID),
+    hasMore: Schema.Boolean,
+  }),
+}) {}
+
 export class AssetRepresentationResponse extends Schema.Class<AssetRepresentationResponse>(
   "AssetRepresentationResponse"
 )({
@@ -153,6 +186,20 @@ const ProviderAssetReviewQuery = Schema.Struct({
   ),
 })
 
+const TransferReconciliationReviewQuery = Schema.Struct({
+  status: Schema.optional(
+    Schema.Literal("pending", "needs_review", "approved", "rejected", "auto_applied")
+  ),
+  cursor: Schema.optional(Schema.UUID),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(100)
+    )
+  ),
+})
+
 const AssetCatalogListQuery = Schema.Struct({
   q: Schema.optional(Schema.String),
   limit: Schema.optional(
@@ -202,6 +249,21 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
     OpenApi.annotations({
       summary: "List provider asset review rows",
       description: "Lists provider assets by mapping review status.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const listTransferReconciliationReviews = HttpApiEndpoint.get(
+  "listTransferReconciliationReviews",
+  "/assets/transfer-reconciliations"
+)
+  .setUrlParams(TransferReconciliationReviewQuery)
+  .addSuccess(TransferReconciliationReviewListResponse)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List transfer reconciliation review rows",
+      description: "Lists durable transfer reconciliation decisions and their candidate evidence.",
     })
   )
   .middleware(AdminAuthMiddleware)
@@ -256,6 +318,7 @@ export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
   .add(listProviderAssetReviews)
+  .add(listTransferReconciliationReviews)
   .add(approveProviderAsset)
   .add(canonicalizeProviderAsset)
   .prefix("/v1")

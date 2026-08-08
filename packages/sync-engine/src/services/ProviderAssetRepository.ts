@@ -19,6 +19,14 @@ export type ProviderAssetMappingKind = "asset" | "fiat"
  */
 export type ProviderAssetMappingStatus = "approved" | "pending_review" | "rejected"
 
+/** Previously approved target that must still be current before an explicit correction. */
+export interface ProviderAssetApprovedTargetSnapshot {
+  readonly mappingKind: ProviderAssetMappingKind
+  readonly canonicalAssetId: string | null
+  readonly assetRepresentationId: string | null
+  readonly canonicalFiatCurrency: string | null
+}
+
 /**
  * ProviderAssetCatalogEntry - Durable provider asset catalog row.
  */
@@ -61,6 +69,10 @@ export interface ProviderAssetMappingDraft {
   readonly mappingStatus: ProviderAssetMappingStatus
   readonly reviewerNotes: string | null
   readonly sourceNotes: string | null
+  /** Observation snapshot that must still be current when this mapping is approved. */
+  readonly expectedObservedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+  /** Current approved target required when this upsert intentionally corrects that target. */
+  readonly expectedApprovedTarget?: ProviderAssetApprovedTargetSnapshot
 }
 
 /**
@@ -100,6 +112,15 @@ export interface ProviderAssetReviewRecord {
 export interface ProviderAssetSourceRecord {
   readonly principalId: string
   readonly sourceId: string
+}
+
+/** Exact on-chain identity observed on a movement using one provider asset. */
+export interface ProviderAssetObservedRepresentationRecord {
+  readonly blockchainName: string
+  readonly representationType: "native" | "token" | "nft"
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
 }
 
 /**
@@ -180,6 +201,14 @@ export interface ProviderAssetRepositoryShape {
   readonly listProviderAssetSources: (params: {
     readonly providerAssetRowId: string
   }) => Effect.Effect<ReadonlyArray<ProviderAssetSourceRecord>, SyncEngineStorageError>
+
+  /** List the exact on-chain identities observed on movements for one provider asset. */
+  readonly listProviderAssetObservedRepresentations: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<
+    ReadonlyArray<ProviderAssetObservedRepresentationRecord>,
+    SyncEngineStorageError
+  >
 
   /**
    * Load the current mapping for one provider asset.

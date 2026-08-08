@@ -123,6 +123,14 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   },
 })
 
+const emptyTransferReconciliationReviewsResponseBody = JSON.stringify({
+  reconciliations: [],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
+})
+
 const assetCatalogAssetResponse = {
   id: "00000000-0000-4000-8000-000000000010",
   name: "USD Coin",
@@ -646,6 +654,7 @@ describe("TaxMaxi Promise client", () => {
     const providerAssetId = "00000000-0000-4000-8000-000000000009"
     const responseBodies = [
       emptyProviderAssetReviewsResponseBody,
+      emptyTransferReconciliationReviewsResponseBody,
       assetCanonicalizationResponseBody,
       providerAssetApprovalResponseBody,
     ]
@@ -683,6 +692,19 @@ describe("TaxMaxi Promise client", () => {
       },
     })
     await expect(
+      taxmaxi.assets.listTransferReconciliationReviews({
+        status: "needs_review",
+        cursor: "00000000-0000-4000-8000-00000000000a",
+        limit: 10,
+      })
+    ).resolves.toEqual({
+      reconciliations: [],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    })
+    await expect(
       taxmaxi.assets.canonicalizeProviderAsset({
         id: providerAssetId,
         reviewerNotes: "Looks correct.",
@@ -708,6 +730,9 @@ describe("TaxMaxi Promise client", () => {
     expect(capturedRequests).toEqual([
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/transfer-reconciliations?status=needs_review&cursor=00000000-0000-4000-8000-00000000000a&limit=10",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",

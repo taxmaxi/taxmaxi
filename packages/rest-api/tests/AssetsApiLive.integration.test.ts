@@ -23,11 +23,14 @@ import { afterAll, describe, expect, it } from "vitest"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
+  TransferReconciliationReviewListResponse,
 } from "../src/definitions/AssetsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
+import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
+import { schema } from "../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
@@ -139,6 +142,23 @@ const getStatus = (path: string) =>
     return response.status
   })
 
+const getAdminJson = <Response, Encoded, Requirements>({
+  path,
+  responseSchema,
+}: {
+  readonly path: string
+  readonly responseSchema: Schema.Schema<Response, Encoded, Requirements>
+}) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(path).pipe(
+      HttpClientRequest.bearerToken(`user_${crypto.randomUUID()}_admin`),
+      HttpClient.execute
+    )
+    const body = yield* response.json
+    const decodedBody = yield* Schema.decodeUnknown(responseSchema)(body)
+    return { status: response.status, body: decodedBody }
+  })
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AssetsApiLive", () => {
@@ -235,5 +255,99 @@ describe("AssetsApiLive", () => {
     )
 
     expect(status).toBe(401)
+  })
+
+  it("exposes ambiguous transfer candidate evidence to admins", async () => {
+    const reconciliationId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const principalId = crypto.randomUUID()
+        const addressId = crypto.randomUUID()
+        const sourceId = crypto.randomUUID()
+        const transactionId = crypto.randomUUID()
+        const providerTransferId = crypto.randomUUID()
+        const reconciliationId = crypto.randomUUID()
+        const timestamp = new Date("2026-08-07T12:00:00.000Z")
+
+        yield* db.insert(schema.principals).values({
+          id: principalId,
+          kind: "anonymous_wallet",
+          userId: null,
+        })
+        yield* db.insert(schema.addresses).values({
+          id: addressId,
+          address: `bc1q${crypto.randomUUID().replaceAll("-", "")}`,
+          type: "bitcoin",
+          name: "Ambiguous reconciliation fixture",
+          principalId,
+        })
+        yield* db.insert(schema.sources).values({
+          id: sourceId,
+          principalId,
+          name: "Ambiguous reconciliation source",
+          providerKey: "bitcoin",
+          sourceableType: "onchain",
+          addressId,
+          cexAccountId: null,
+        })
+        yield* db.insert(schema.transactions).values({
+          id: transactionId,
+          sourceId,
+          externalId: "ambiguous-reconciliation-transaction",
+          timestamp,
+          principalId,
+        })
+        yield* db.insert(schema.providerTransfers).values({
+          id: providerTransferId,
+          sourceId,
+          transactionId,
+          externalId: "ambiguous-reconciliation-transfer",
+          timestamp,
+          direction: "outbound",
+          fromAccountRef: "fixture-account",
+          toAddress: "bc1qambiguousdestination",
+          networkName: "bitcoin",
+          networkHash: null,
+          amount: "0.25000000",
+          metadata: { role: "principal" },
+        })
+        yield* db.insert(schema.transferReconciliations).values({
+          id: reconciliationId,
+          principalId,
+          providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: null,
+          status: "needs_review",
+          matchReason: "multiple_candidate_onchain_receipts",
+          confidence: "0.5000",
+          deterministic: false,
+          reviewMetadata: {
+            candidateCount: 2,
+            candidates: [{ transferId: "candidate-1" }, { transferId: "candidate-2" }],
+          },
+        })
+
+        return reconciliationId
+      })
+    )
+
+    const response = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/transfer-reconciliations",
+        responseSchema: TransferReconciliationReviewListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.reconciliations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: reconciliationId,
+          status: "needs_review",
+          matchReason: "multiple_candidate_onchain_receipts",
+          reviewMetadata: expect.objectContaining({ candidateCount: 2 }),
+        }),
+      ])
+    )
   })
 })

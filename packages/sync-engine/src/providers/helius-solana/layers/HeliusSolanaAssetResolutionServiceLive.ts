@@ -748,7 +748,9 @@ const make = Effect.gen(function* () {
       if (
         Option.isNone(representation) ||
         representation.value.assetId !== mapping.canonicalAssetId ||
-        representation.value.id !== mapping.assetRepresentationId
+        representation.value.id !== mapping.assetRepresentationId ||
+        (providerAsset.exponent !== null &&
+          representation.value.decimals !== providerAsset.exponent)
       ) {
         return yield* Effect.fail(
           new HeliusSolanaBrokenApprovedProviderAssetMappingError({

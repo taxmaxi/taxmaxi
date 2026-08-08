@@ -8,6 +8,7 @@ import {
   deriveNativeAssetDecimals,
   representationIdForProviderObservation,
   selectNativePlatform,
+  validateManualRepresentationIdentity,
   validateNativeProviderIdentity,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import {
@@ -49,6 +50,55 @@ describe("AssetCanonicalizationService", () => {
     ).toBeNull()
   })
 
+  it("keeps an exact EVM representation when durable movement evidence supplies the chain", () => {
+    const representationId = "00000000-0000-4000-8000-000000000002"
+
+    expect(
+      representationIdForProviderObservation({
+        providerAsset: makeProviderAsset(),
+        representationId,
+        observedRepresentations: [
+          {
+            blockchainName: "ethereum",
+            representationType: "token",
+            contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            mintAddress: null,
+            decimals: 6,
+          },
+        ],
+      })
+    ).toBe(representationId)
+  })
+
+  it("validates an EVM representation against durable contract and decimals evidence", () => {
+    const result = Effect.runSync(
+      validateManualRepresentationIdentity({
+        providerAsset: makeProviderAsset(),
+        representation: {
+          id: "00000000-0000-4000-8000-000000000002",
+          assetId: "00000000-0000-4000-8000-000000000003",
+          symbol: "USDC",
+          blockchainName: "ethereum",
+          representationType: "token",
+          contractAddress: "0xa0B86991c6218b36c1d19d4a2e9eb0cE3606eB48",
+          mintAddress: null,
+          decimals: 6,
+        },
+        observedRepresentations: [
+          {
+            blockchainName: "ethereum",
+            representationType: "token",
+            contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            mintAddress: null,
+            decimals: 6,
+          },
+        ],
+      }).pipe(Effect.either)
+    )
+
+    expect(result._tag).toBe("Right")
+  })
+
   it("keeps an exact representation for an observed Solana mint", () => {
     const representationId = "00000000-0000-4000-8000-000000000002"
 
@@ -84,17 +134,25 @@ describe("AssetCanonicalizationService", () => {
   it("supports replay retries and manual approval for an observed Solana token", async () => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000003"
     const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
+    const alternateCanonicalAssetId = "00000000-0000-4000-8000-00000000000c"
     const representationId = "00000000-0000-4000-8000-000000000005"
+    const alternateRepresentationId = "00000000-0000-4000-8000-00000000000d"
     const mismatchedRepresentationId = "00000000-0000-4000-8000-00000000000a"
     const mismatchedDecimalsRepresentationId = "00000000-0000-4000-8000-00000000000b"
     const blockchainId = "00000000-0000-4000-8000-000000000006"
     const principalId = "00000000-0000-4000-8000-000000000007"
     const sourceId = "00000000-0000-4000-8000-000000000008"
+    const secondSourceId = "00000000-0000-4000-8000-00000000000e"
     const mintAddress = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     const events: Array<string> = []
     const sourceNotes: Array<string | null> = []
     let mappingApproved = false
+    let approvedCanonicalAssetId = canonicalAssetId
+    let approvedRepresentationId = representationId
     let replayAttempts = 0
+    let coinGeckoDecimals = 6
+    let includeAdditionalCoinGeckoPlatform = false
+    let observedRepresentationsAvailable = true
     let providerAsset: ProviderAssetRecord = makeProviderAsset({
       id: providerAssetRowId,
       provider: "helius-solana",
@@ -102,13 +160,18 @@ describe("AssetCanonicalizationService", () => {
       naturalKey: `solana:mint:${mintAddress}`,
       currencyCode: "USDC",
       name: "USD Coin",
-      exponent: 6,
+      exponent: null,
       providerType: "spl-token",
     })
     const providerAssetRepository: ProviderAssetRepositoryShape = {
       upsertProviderAssets: () => Effect.dieMessage("upsertProviderAssets should not be called"),
       upsertProviderAssetMappings: ({ mappings }) =>
         Effect.sync(() => {
+          const [mapping] = mappings
+          if (mapping !== undefined) {
+            approvedCanonicalAssetId = mapping.canonicalAssetId ?? canonicalAssetId
+            approvedRepresentationId = mapping.assetRepresentationId ?? representationId
+          }
           mappingApproved = true
           events.push("approve")
           sourceNotes.push(mappings[0]?.sourceNotes ?? null)
@@ -129,8 +192,8 @@ describe("AssetCanonicalizationService", () => {
             mapping: {
               providerAssetRowId,
               mappingKind: "asset",
-              canonicalAssetId: mappingApproved ? canonicalAssetId : null,
-              assetRepresentationId: mappingApproved ? representationId : null,
+              canonicalAssetId: mappingApproved ? approvedCanonicalAssetId : null,
+              assetRepresentationId: mappingApproved ? approvedRepresentationId : null,
               canonicalFiatCurrency: null,
               mappingStatus: mappingApproved ? "approved" : "pending_review",
               reviewerNotes: null,
@@ -143,8 +206,27 @@ describe("AssetCanonicalizationService", () => {
       listProviderAssetSources: () =>
         Effect.sync(() => {
           events.push("list-sources")
-          return [{ principalId, sourceId }]
+          return replayAttempts === 0
+            ? [
+                { principalId, sourceId },
+                { principalId, sourceId: secondSourceId },
+              ]
+            : [{ principalId, sourceId }]
         }),
+      listProviderAssetObservedRepresentations: () =>
+        Effect.succeed(
+          observedRepresentationsAvailable
+            ? [
+                {
+                  blockchainName: "solana",
+                  representationType: "token" as const,
+                  contractAddress: null,
+                  mintAddress,
+                  decimals: 6,
+                },
+              ]
+            : []
+        ),
       findProviderAssetMapping: () =>
         Effect.dieMessage("findProviderAssetMapping should not be called"),
     }
@@ -154,8 +236,8 @@ describe("AssetCanonicalizationService", () => {
         Layer.succeed(AssetRepository, {
           findAssetById: ({ assetId }) =>
             Effect.succeed(
-              assetId === canonicalAssetId
-                ? Option.some({ id: canonicalAssetId, symbol: "USDC" })
+              assetId === canonicalAssetId || assetId === alternateCanonicalAssetId
+                ? Option.some({ id: assetId, symbol: "USDC" })
                 : Option.none()
             ),
           findAssetByCoinGeckoId: () =>
@@ -173,29 +255,40 @@ describe("AssetCanonicalizationService", () => {
                     mintAddress,
                     decimals: 6,
                   })
-                : assetRepresentationId === mismatchedRepresentationId
+                : assetRepresentationId === alternateRepresentationId
                   ? Option.some({
-                      id: mismatchedRepresentationId,
-                      assetId: canonicalAssetId,
+                      id: alternateRepresentationId,
+                      assetId: alternateCanonicalAssetId,
                       symbol: "USDC",
-                      blockchainName: "ethereum",
+                      blockchainName: "solana",
                       representationType: "token" as const,
-                      contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-                      mintAddress: null,
+                      contractAddress: null,
+                      mintAddress,
                       decimals: 6,
                     })
-                  : assetRepresentationId === mismatchedDecimalsRepresentationId
+                  : assetRepresentationId === mismatchedRepresentationId
                     ? Option.some({
-                        id: mismatchedDecimalsRepresentationId,
+                        id: mismatchedRepresentationId,
                         assetId: canonicalAssetId,
                         symbol: "USDC",
-                        blockchainName: "solana",
+                        blockchainName: "ethereum",
                         representationType: "token" as const,
-                        contractAddress: null,
-                        mintAddress,
-                        decimals: 9,
+                        contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                        mintAddress: null,
+                        decimals: 6,
                       })
-                    : Option.none()
+                    : assetRepresentationId === mismatchedDecimalsRepresentationId
+                      ? Option.some({
+                          id: mismatchedDecimalsRepresentationId,
+                          assetId: canonicalAssetId,
+                          symbol: "USDC",
+                          blockchainName: "solana",
+                          representationType: "token" as const,
+                          contractAddress: null,
+                          mintAddress,
+                          decimals: 9,
+                        })
+                      : Option.none()
             ),
           findNativeRepresentationForBlockchain: () =>
             Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
@@ -227,9 +320,18 @@ describe("AssetCanonicalizationService", () => {
               name: "USD Coin",
               symbol: "usdc",
               asset_platform_id: "solana",
-              platforms: { solana: mintAddress },
+              platforms: includeAdditionalCoinGeckoPlatform
+                ? {
+                    solana: mintAddress,
+                    ethereum: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                  }
+                : { solana: mintAddress },
               detail_platforms: {
-                solana: { contract_address: mintAddress, decimal_place: 6 },
+                solana: { contract_address: mintAddress, decimal_place: coinGeckoDecimals },
+                ethereum: {
+                  contract_address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                  decimal_place: 6,
+                },
               },
             }),
           listMarkets: () => Effect.dieMessage("listMarkets should not be called"),
@@ -284,7 +386,12 @@ describe("AssetCanonicalizationService", () => {
     expect(sourceNotes).toEqual([
       "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
     ])
-    expect(events).toEqual(["approve", "list-sources", `replay:${principalId}:${sourceId}`])
+    expect(events).toEqual([
+      "approve",
+      "list-sources",
+      `replay:${principalId}:${sourceId}`,
+      `replay:${principalId}:${secondSourceId}`,
+    ])
 
     const result = await Effect.runPromise(canonicalize().pipe(Effect.provide(layer)))
 
@@ -297,6 +404,29 @@ describe("AssetCanonicalizationService", () => {
       "approve",
       "list-sources",
       `replay:${principalId}:${sourceId}`,
+      `replay:${principalId}:${secondSourceId}`,
+      "approve",
+      "list-sources",
+      `replay:${principalId}:${sourceId}`,
+    ])
+
+    const approvedRemap = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId: alternateCanonicalAssetId,
+          assetRepresentationId: alternateRepresentationId,
+          reviewerNotes: "Change approved target",
+        })
+      ).pipe(Effect.provide(layer))
+    )
+
+    expect(approvedRemap.mapping).toMatchObject({
+      canonicalAssetId: alternateCanonicalAssetId,
+      assetRepresentationId: alternateRepresentationId,
+      mappingStatus: "approved",
+    })
+    expect(events.slice(-3)).toEqual([
       "approve",
       "list-sources",
       `replay:${principalId}:${sourceId}`,
@@ -343,6 +473,30 @@ describe("AssetCanonicalizationService", () => {
     }
     expect(events).toEqual(eventsBeforeMismatch)
 
+    mappingApproved = false
+    observedRepresentationsAvailable = false
+    const approvalDuringReplay = await Effect.runPromise(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId,
+          assetRepresentationId: representationId,
+          reviewerNotes: "Approve during replay",
+        })
+      ).pipe(Effect.either, Effect.provide(layer))
+    )
+
+    expect(approvalDuringReplay).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "AssetCanonicalizationBadRequestError",
+        message:
+          "Observed on-chain identity is temporarily unavailable; finish source replay before approval.",
+      },
+    })
+    expect(events).toEqual(eventsBeforeMismatch)
+    observedRepresentationsAvailable = true
+
     const manuallyApproved = await Effect.runPromise(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.approveProviderAssetMapping({
@@ -363,8 +517,38 @@ describe("AssetCanonicalizationService", () => {
       "transfer_reconciliation_evidence: observed Solana mint\nApproved by an admin with an existing canonical asset."
     )
 
+    const eventsBeforeCoinGeckoMismatch = [...events]
+    coinGeckoDecimals = 9
+    const mismatchedCoinGeckoApproval = await Effect.runPromise(
+      canonicalize().pipe(Effect.either, Effect.provide(layer))
+    )
+
+    expect(mismatchedCoinGeckoApproval).toMatchObject({
+      _tag: "Left",
+      left: {
+        _tag: "AssetCanonicalizationBadRequestError",
+        message: "CoinGecko representation does not match observed on-chain movement evidence.",
+      },
+    })
+    expect(events).toEqual(eventsBeforeCoinGeckoMismatch)
+    coinGeckoDecimals = 6
+
+    mappingApproved = false
+    includeAdditionalCoinGeckoPlatform = true
+    const observedPlatformApproval = await Effect.runPromise(
+      canonicalize().pipe(Effect.provide(layer))
+    )
+
+    expect(observedPlatformApproval.canonicalAsset).toMatchObject({
+      blockchainName: "solana",
+      mintAddress,
+      representationType: "token",
+    })
+    includeAdditionalCoinGeckoPlatform = false
+
     const eventsBeforeChainlessApproval = [...events]
     providerAsset = makeProviderAsset({ id: providerAssetRowId })
+    observedRepresentationsAvailable = false
     const chainlessApproval = await Effect.runPromise(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.approveProviderAssetMapping({

@@ -8,6 +8,8 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_EUR_REPRESENTATION_ID,
+  TEST_PRINCIPAL_ID,
+  TEST_SOURCE_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -26,6 +28,8 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
 
 describe("ProviderAssetRepositoryLive", () => {
+  let baseBlockchainId: string
+
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
@@ -34,6 +38,7 @@ describe("ProviderAssetRepositoryLive", () => {
     beforeEach(async () => {
       await Effect.runPromise(context.recreateTestDatabase())
       const fixture = await runPg(seedSyncEngineRepositoryFixture())
+      baseBlockchainId = fixture.baseBlockchainId
       await runPg(
         seedSyncEngineAssets({
           baseBlockchainId: fixture.baseBlockchainId,
@@ -253,6 +258,288 @@ describe("ProviderAssetRepositoryLive", () => {
       )
 
       expect(error).toBeInstanceOf(SyncEngineStorageError)
+    })
+
+    it("requires the current approved target before correcting a mapping", async () => {
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "helius-solana",
+            entries: [
+              {
+                providerAssetId: "approved-target-fixture",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "spl-token",
+                payload: { mint: "approved-target-fixture" },
+              },
+              {
+                providerAssetId: "approved-target-batch-peer",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin batch peer",
+                exponent: 8,
+                providerType: "spl-token",
+                payload: { mint: "approved-target-batch-peer" },
+              },
+            ],
+          })
+        )
+      )
+      const providerAsset = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetByProviderAssetId({
+            providerKey: "helius-solana",
+            providerAssetId: "approved-target-fixture",
+          })
+        )
+      )
+      if (Option.isNone(providerAsset)) {
+        expect.fail("Expected approved target provider asset")
+      }
+      const batchPeerAsset = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetByProviderAssetId({
+            providerKey: "helius-solana",
+            providerAssetId: "approved-target-batch-peer",
+          })
+        )
+      )
+      if (Option.isNone(batchPeerAsset)) {
+        expect.fail("Expected approved target batch peer provider asset")
+      }
+      const eurAssetId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [representation] = yield* db
+            .select({ assetId: schema.assetRepresentations.assetId })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.id, TEST_EUR_REPRESENTATION_ID))
+          if (representation === undefined) {
+            return yield* Effect.dieMessage("Expected EUR representation fixture")
+          }
+          return representation.assetId
+        })
+      )
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Initial approval",
+                sourceNotes: "Initial approval",
+              },
+            ],
+          })
+        )
+      )
+      const remapResult = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: eurAssetId,
+                assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Conflicting approval",
+                sourceNotes: "Conflicting approval",
+              },
+              {
+                providerAssetRowId: batchPeerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Valid batch peer approval",
+                sourceNotes: "Valid batch peer approval",
+              },
+            ],
+          })
+        ).pipe(Effect.either)
+      )
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.value.id })
+        )
+      )
+      const batchPeerMapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({
+            providerAssetRowId: batchPeerAsset.value.id,
+          })
+        )
+      )
+
+      expect(remapResult._tag).toBe("Left")
+      expect(Option.getOrNull(mapping)).toMatchObject({
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: null,
+        mappingStatus: "approved",
+      })
+      expect(Option.isNone(batchPeerMapping)).toBe(true)
+
+      const corrected = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: eurAssetId,
+                assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Explicit correction",
+                sourceNotes: "Explicit correction",
+                expectedApprovedTarget: {
+                  mappingKind: "asset",
+                  canonicalAssetId: TEST_BTC_ASSET_ID,
+                  assetRepresentationId: null,
+                  canonicalFiatCurrency: null,
+                },
+              },
+            ],
+          })
+        )
+      )
+      const correctedMapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.value.id })
+        )
+      )
+
+      expect(corrected).toBe(1)
+      expect(Option.getOrNull(correctedMapping)).toMatchObject({
+        canonicalAssetId: eurAssetId,
+        assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
+        mappingStatus: "approved",
+      })
+    })
+
+    it("rejects approval when the observed representation snapshot changed", async () => {
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssets({
+            providerKey: "helius-solana",
+            entries: [
+              {
+                providerAssetId: "stale-observation-fixture",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Stale observation fixture",
+                exponent: null,
+                providerType: "spl-token",
+                payload: { mint: "stale-observation-fixture" },
+              },
+            ],
+          })
+        )
+      )
+      const providerAsset = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetByProviderAssetId({
+            providerKey: "helius-solana",
+            providerAssetId: "stale-observation-fixture",
+          })
+        )
+      )
+      if (Option.isNone(providerAsset)) {
+        expect.fail("Expected stale observation provider asset")
+      }
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: "Pending observation review",
+              },
+            ],
+          })
+        )
+      )
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [transaction] = yield* db
+            .insert(schema.transactions)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              externalId: "stale-observation-transaction",
+              timestamp: new Date("2025-04-10T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.transactions.id })
+          if (transaction === undefined) {
+            return yield* Effect.dieMessage("Failed to seed stale observation transaction")
+          }
+          yield* db.insert(schema.providerTransfers).values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: transaction.id,
+            externalId: "stale-observation-provider-transfer",
+            providerAssetId: providerAsset.value.id,
+            timestamp: new Date("2025-04-10T10:00:00.000Z"),
+            direction: "inbound",
+            fromAddress: "0x0000000000000000000000000000000000000001",
+            toAddress: "0x0000000000000000000000000000000000000002",
+            observedBlockchainId: baseBlockchainId,
+            observedRepresentationType: "token",
+            observedContractAddress: "0x0000000000000000000000000000000000000c96",
+            observedDecimals: 8,
+            amount: "1.00000000",
+            metadata: { role: "principal" },
+          })
+        })
+      )
+
+      const approvalResult = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Approve stale snapshot",
+                sourceNotes: "Approve stale snapshot",
+                expectedObservedRepresentations: [],
+              },
+            ],
+          })
+        ).pipe(Effect.either)
+      )
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.value.id })
+        )
+      )
+
+      expect(approvalResult._tag).toBe("Left")
+      expect(Option.getOrNull(mapping)).toMatchObject({ mappingStatus: "pending_review" })
     })
 
     it("pages provider asset reviews with a stable provider asset cursor", async () => {

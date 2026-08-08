@@ -11,6 +11,7 @@ import {
   type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
   type EconomicAssetDraft,
+  type ProviderAssetObservedRepresentationRecord,
   type ProviderAssetRecord,
   type ProviderAssetReviewRecord,
   type SyncEngineAssetRepresentation,
@@ -166,6 +167,48 @@ export const deriveNativeAssetDecimals = ({
 
 const makeBadRequest = (message: string) => new AssetCanonicalizationBadRequestError({ message })
 
+interface RepresentationIdentity {
+  readonly blockchainName: string
+  readonly representationType: "native" | "token" | "nft"
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number
+}
+
+const matchesObservedRepresentation = ({
+  representation,
+  observed,
+}: {
+  readonly representation: RepresentationIdentity
+  readonly observed: ProviderAssetObservedRepresentationRecord
+}) =>
+  normalize(representation.blockchainName) === normalize(observed.blockchainName) &&
+  representation.representationType === observed.representationType &&
+  (observed.contractAddress === null
+    ? representation.contractAddress === null
+    : representation.contractAddress !== null &&
+      normalize(representation.contractAddress) === normalize(observed.contractAddress)) &&
+  representation.mintAddress === observed.mintAddress &&
+  (observed.decimals === null || representation.decimals === observed.decimals)
+
+const approvedTargetSnapshot = ({
+  providerAssetReview,
+}: {
+  readonly providerAssetReview: ProviderAssetReviewRecord
+}) => {
+  const mapping = providerAssetReview.mapping
+  if (mapping?.mappingStatus !== "approved") {
+    return undefined
+  }
+
+  return {
+    mappingKind: mapping.mappingKind,
+    canonicalAssetId: mapping.canonicalAssetId,
+    assetRepresentationId: mapping.assetRepresentationId,
+    canonicalFiatCurrency: mapping.canonicalFiatCurrency,
+  } as const
+}
+
 export const selectNativePlatform = ({
   coinId,
   assetPlatforms,
@@ -255,24 +298,31 @@ const isNativeOnchainObservation = (providerAsset: ProviderAssetRecord): boolean
 export const representationIdForProviderObservation = ({
   providerAsset,
   representationId,
+  observedRepresentations = [],
 }: {
   readonly providerAsset: ProviderAssetRecord
   readonly representationId: string
+  readonly observedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
 }): string | null =>
-  isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null
+  observedRepresentations.length > 0 ||
+  isNativeOnchainObservation(providerAsset) ||
+  observedProviderTokenId(providerAsset) !== null
     ? representationId
     : null
 
 const validateManualRepresentationSelection = ({
   providerAsset,
   assetRepresentationId,
+  observedRepresentations,
 }: {
   readonly providerAsset: ProviderAssetRecord
   readonly assetRepresentationId: string | null
+  readonly observedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
 }): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
   const observedRepresentationId = representationIdForProviderObservation({
     providerAsset,
     representationId: assetRepresentationId ?? "",
+    observedRepresentations,
   })
 
   if (observedRepresentationId === null && assetRepresentationId !== null) {
@@ -290,13 +340,52 @@ const validateManualRepresentationSelection = ({
   return Effect.void
 }
 
+const validateDurableObservationAvailability = ({
+  providerAsset,
+  observedRepresentations,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly observedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> =>
+  (isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null) &&
+  observedRepresentations.length === 0
+    ? Effect.fail(
+        makeBadRequest(
+          "Observed on-chain identity is temporarily unavailable; finish source replay before approval."
+        )
+      )
+    : Effect.void
+
 export const validateManualRepresentationIdentity = ({
   providerAsset,
   representation,
+  observedRepresentations = [],
 }: {
   readonly providerAsset: ProviderAssetRecord
   readonly representation: SyncEngineAssetRepresentation
+  readonly observedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
 }): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+  if (
+    observedRepresentations.length > 0 &&
+    !observedRepresentations.every((observed) =>
+      matchesObservedRepresentation({ representation, observed })
+    )
+  ) {
+    if (isNativeOnchainObservation(providerAsset)) {
+      return Effect.fail(
+        makeBadRequest("Selected representation does not match the observed Solana native asset.")
+      )
+    }
+
+    return Effect.fail(
+      makeBadRequest(
+        observedRepresentations.every((observed) => normalize(observed.blockchainName) === "solana")
+          ? "Selected representation does not match the observed Solana mint."
+          : "Selected representation does not match the observed on-chain identity."
+      )
+    )
+  }
+
   if (isNativeOnchainObservation(providerAsset)) {
     return normalize(representation.blockchainName) === "solana" &&
       representation.representationType === "native"
@@ -517,6 +606,20 @@ const make = Effect.gen(function* () {
       )
     )
 
+  const loadProviderAssetObservedRepresentations = ({
+    providerAssetRowId,
+  }: {
+    readonly providerAssetRowId: string
+  }) =>
+    providerAssetRepository.listProviderAssetObservedRepresentations({ providerAssetRowId }).pipe(
+      Effect.mapError(
+        () =>
+          new AssetCanonicalizationInternalError({
+            message: "Failed to load observed provider asset representations.",
+          })
+      )
+    )
+
   const validateApprovableProviderAsset = (
     providerAssetReview: ProviderAssetReviewRecord
   ): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
@@ -568,7 +671,7 @@ const make = Effect.gen(function* () {
         )
       }
 
-      yield* Effect.forEach(affectedSources, ({ principalId, sourceId }) =>
+      const replayResults = yield* Effect.forEach(affectedSources, ({ principalId, sourceId }) =>
         sourceSyncService.replaySourceSyncJob({ principalId, sourceId }).pipe(
           Effect.tap(({ jobId, status }) =>
             Effect.logInfo(
@@ -582,14 +685,16 @@ const make = Effect.gen(function* () {
               "Failed to queue source replay after provider asset approval"
             )
           ),
-          Effect.mapError(
-            () =>
-              new AssetCanonicalizationInternalError({
-                message: `Failed to queue source replay for source ${sourceId}.`,
-              })
-          )
+          Effect.either
         )
       )
+      if (replayResults.some((result) => result._tag === "Left")) {
+        return yield* Effect.fail(
+          new AssetCanonicalizationInternalError({
+            message: "Failed to queue one or more source replays.",
+          })
+        )
+      }
 
       return approvedProviderAsset.value
     })
@@ -599,11 +704,14 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
         yield* validateApprovableProviderAsset(providerAssetReview)
+        const observedRepresentations = yield* loadProviderAssetObservedRepresentations({
+          providerAssetRowId,
+        })
         yield* validateManualRepresentationSelection({
           providerAsset: providerAssetReview.providerAsset,
           assetRepresentationId,
+          observedRepresentations,
         })
-
         const canonicalAsset = yield* assetRepository
           .findAssetById({ assetId: canonicalAssetId })
           .pipe(
@@ -620,6 +728,10 @@ const make = Effect.gen(function* () {
           )
         }
 
+        yield* validateDurableObservationAvailability({
+          providerAsset: providerAssetReview.providerAsset,
+          observedRepresentations,
+        })
         if (assetRepresentationId !== null) {
           const representation = yield* assetRepository
             .findRepresentationById({ assetRepresentationId })
@@ -645,8 +757,11 @@ const make = Effect.gen(function* () {
           yield* validateManualRepresentationIdentity({
             providerAsset: providerAssetReview.providerAsset,
             representation: representation.value,
+            observedRepresentations,
           })
         }
+
+        const expectedApprovedTarget = approvedTargetSnapshot({ providerAssetReview })
 
         yield* providerAssetRepository
           .upsertProviderAssetMappings({
@@ -663,6 +778,8 @@ const make = Effect.gen(function* () {
                   existing: providerAssetReview.mapping?.sourceNotes,
                   note: MANUAL_SOURCE_NOTES,
                 }),
+                expectedObservedRepresentations: observedRepresentations,
+                ...(expectedApprovedTarget === undefined ? {} : { expectedApprovedTarget }),
               },
             ],
           })
@@ -680,8 +797,10 @@ const make = Effect.gen(function* () {
 
   const resolveCoinGeckoDrafts = ({
     providerAsset,
+    observedRepresentations,
   }: {
     readonly providerAsset: ProviderAssetRecord
+    readonly observedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
   }) =>
     Effect.gen(function* () {
       const searchCoins = yield* coinGeckoClient
@@ -744,8 +863,30 @@ const make = Effect.gen(function* () {
       const tokenPlatforms = Object.entries(coin.platforms).filter(([, contractAddress]) =>
         isNonEmptyString(contractAddress)
       )
+      const observedTokenPlatforms = tokenPlatforms.filter(([platformId, contractAddress]) => {
+        const platform = assetPlatforms.find((candidate) => candidate.id === platformId)
+        if (platform === undefined) {
+          return false
+        }
 
-      if (tokenPlatforms.length !== 1) {
+        return observedRepresentations.some((observed) => {
+          const matchesBlockchain =
+            normalize(observed.blockchainName) === normalize(platform.id) ||
+            normalize(observed.blockchainName) === normalize(platform.name)
+          if (!matchesBlockchain) {
+            return false
+          }
+
+          return deriveChainType(platform) === "solana"
+            ? observed.mintAddress === contractAddress
+            : observed.contractAddress !== null &&
+                normalize(observed.contractAddress) === normalize(contractAddress)
+        })
+      })
+      const candidateTokenPlatforms =
+        observedRepresentations.length === 0 ? tokenPlatforms : observedTokenPlatforms
+
+      if (candidateTokenPlatforms.length !== 1) {
         return yield* Effect.fail(
           makeBadRequest(
             `CoinGecko did not identify a single canonical platform for ${providerAsset.currencyCode}.`
@@ -753,7 +894,7 @@ const make = Effect.gen(function* () {
         )
       }
 
-      const tokenPlatformEntry = tokenPlatforms[0]
+      const tokenPlatformEntry = candidateTokenPlatforms[0]
       if (tokenPlatformEntry === undefined) {
         return yield* Effect.fail(
           makeBadRequest(
@@ -800,9 +941,37 @@ const make = Effect.gen(function* () {
         const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
         yield* validateApprovableProviderAsset(providerAssetReview)
 
+        const observedRepresentations = yield* loadProviderAssetObservedRepresentations({
+          providerAssetRowId,
+        })
+        yield* validateDurableObservationAvailability({
+          providerAsset: providerAssetReview.providerAsset,
+          observedRepresentations,
+        })
+
         const resolved = yield* resolveCoinGeckoDrafts({
           providerAsset: providerAssetReview.providerAsset,
+          observedRepresentations,
         })
+        const resolvedIdentity: RepresentationIdentity = {
+          blockchainName: resolved.blockchain.name,
+          representationType: resolved.representation.type,
+          contractAddress: resolved.representation.contractAddress,
+          mintAddress: resolved.representation.mintAddress,
+          decimals: resolved.representation.decimals,
+        }
+        if (
+          observedRepresentations.length > 0 &&
+          !observedRepresentations.every((observed) =>
+            matchesObservedRepresentation({ representation: resolvedIdentity, observed })
+          )
+        ) {
+          return yield* Effect.fail(
+            makeBadRequest(
+              "CoinGecko representation does not match observed on-chain movement evidence."
+            )
+          )
+        }
         const canonicalAsset = yield* assetRepository
           .upsertEconomicAssetRepresentation({
             blockchain: resolved.blockchain,
@@ -817,7 +986,12 @@ const make = Effect.gen(function* () {
                 })
             )
           )
-
+        const approvedRepresentationId = representationIdForProviderObservation({
+          providerAsset: providerAssetReview.providerAsset,
+          representationId: canonicalAsset.representationId,
+          observedRepresentations,
+        })
+        const expectedApprovedTarget = approvedTargetSnapshot({ providerAssetReview })
         yield* providerAssetRepository
           .upsertProviderAssetMappings({
             mappings: [
@@ -825,10 +999,7 @@ const make = Effect.gen(function* () {
                 providerAssetRowId,
                 mappingKind: "asset",
                 canonicalAssetId: canonicalAsset.id,
-                assetRepresentationId: representationIdForProviderObservation({
-                  providerAsset: providerAssetReview.providerAsset,
-                  representationId: canonicalAsset.representationId,
-                }),
+                assetRepresentationId: approvedRepresentationId,
                 canonicalFiatCurrency: null,
                 mappingStatus: "approved",
                 reviewerNotes,
@@ -836,6 +1007,8 @@ const make = Effect.gen(function* () {
                   existing: providerAssetReview.mapping?.sourceNotes,
                   note: COINGECKO_SOURCE_NOTES,
                 }),
+                expectedObservedRepresentations: observedRepresentations,
+                ...(expectedApprovedTarget === undefined ? {} : { expectedApprovedTarget }),
               },
             ],
           })

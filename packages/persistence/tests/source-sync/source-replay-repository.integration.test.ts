@@ -241,12 +241,13 @@ describe("SourceReplayRepositoryLive", () => {
 
   it.each([
     {
-      label: "approved",
+      label: "approved cleanup",
       status: "approved" as const,
       reviewMetadata: null,
+      laterOriginUsage: null,
     },
     {
-      label: "retained blocked",
+      label: "retained blocked cleanup",
       status: "needs_review" as const,
       reviewMetadata: {
         rollback: {
@@ -255,10 +256,23 @@ describe("SourceReplayRepositoryLive", () => {
           appliedEffectsRetained: true,
         },
       },
+      laterOriginUsage: null,
+    },
+    {
+      label: "same-timestamp origin disposal dependency",
+      status: "approved" as const,
+      reviewMetadata: null,
+      laterOriginUsage: "disposal" as const,
+    },
+    {
+      label: "same-timestamp origin allocation dependency",
+      status: "approved" as const,
+      reviewMetadata: null,
+      laterOriginUsage: "allocation" as const,
     },
   ])(
-    "removes $label reconciliation effects when the replayed source consumes the destination lot",
-    async ({ status, reviewMetadata }) => {
+    "handles $label when the replayed source consumes the destination lot",
+    async ({ status, reviewMetadata, laterOriginUsage }) => {
       const timestamp = new Date("2025-04-10T10:00:00.000Z")
       const fixtureState = await runPg(
         Effect.gen(function* () {
@@ -388,7 +402,7 @@ describe("SourceReplayRepositoryLive", () => {
               assetId: TEST_BTC_ASSET_ID,
               acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
               originalAmount: "1.00000000",
-              remainingAmount: "0.75000000",
+              remainingAmount: laterOriginUsage === null ? "0.75000000" : "0.65000000",
               costBasisPerToken: "50000.000000000000000000",
               costBasisCurrency: "EUR",
               sourceLegId: openingLeg.id,
@@ -447,6 +461,60 @@ describe("SourceReplayRepositoryLive", () => {
             proceeds: "12500.00000000",
             gainLoss: "0.00000000",
           })
+          if (laterOriginUsage !== null) {
+            const [laterOriginConsumer] = yield* db
+              .insert(schema.transactionLegs)
+              .values({
+                sourceId: TEST_SOURCE_ID,
+                externalId: "replay-later-origin-consumer",
+                timestamp,
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.10000000",
+                kind: laterOriginUsage === "disposal" ? "disposal" : "fee",
+                provenance: "deterministic",
+                derivationRule: "fixture_later_origin_consumer",
+              })
+              .returning({ id: schema.transactionLegs.id })
+            if (laterOriginConsumer === undefined) {
+              return yield* Effect.dieMessage("Failed to seed later origin FIFO usage")
+            }
+            if (laterOriginUsage === "disposal") {
+              yield* db.insert(schema.disposalMatches).values({
+                disposalLegId: laterOriginConsumer.id,
+                fifoLotId: openingLot.id,
+                matchedAmount: "0.10000000",
+                costBasis: "5000.00000000",
+                proceeds: "6000.00000000",
+                gainLoss: "1000.00000000",
+              })
+            } else {
+              const [movement] = yield* db
+                .insert(schema.inventoryMovements)
+                .values({
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceId: TEST_SOURCE_ID,
+                  transactionId: originTransaction.id,
+                  transactionLegId: laterOriginConsumer.id,
+                  assetId: TEST_BTC_ASSET_ID,
+                  timestamp,
+                  direction: "outbound",
+                  purpose: "fee",
+                  taxTreatment: "pending_review",
+                  reconciliationStatus: "unmatched",
+                  amount: "0.10000000",
+                })
+                .returning({ id: schema.inventoryMovements.id })
+              if (movement === undefined) {
+                return yield* Effect.dieMessage("Failed to seed later origin allocation")
+              }
+              yield* db.insert(schema.inventoryMovementAllocations).values({
+                inventoryMovementId: movement.id,
+                fifoLotId: openingLot.id,
+                matchedAmount: "0.10000000",
+              })
+            }
+          }
           const [destinationLot] = yield* db
             .insert(schema.fifoLots)
             .values({
@@ -532,14 +600,28 @@ describe("SourceReplayRepositoryLive", () => {
         })
       )
 
-      await runReplayRepository(
+      const replayResult = await runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
           repository.resetSourceDerivedState({
             sourceId: REPLAY_DESTINATION_SOURCE_ID,
             expectedPrincipalId: TEST_PRINCIPAL_ID,
           })
-        )
+        ).pipe(Effect.either)
       )
+
+      if (laterOriginUsage !== null) {
+        expect(replayResult).toMatchObject({
+          _tag: "Left",
+          left: {
+            _tag: "SourceReplayDependencyError",
+            sourceId: REPLAY_DESTINATION_SOURCE_ID,
+            dependentSourceIds: [TEST_SOURCE_ID],
+            affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+          },
+        })
+      } else {
+        expect(replayResult).toMatchObject({ _tag: "Right" })
+      }
 
       const state = await runPg(
         Effect.gen(function* () {
@@ -582,15 +664,27 @@ describe("SourceReplayRepositoryLive", () => {
         })
       )
 
-      expect(state.openingLot?.remainingAmount).toContain("1.00000000")
-      expect(state.originTransaction?.transactionType).toBeNull()
-      expect(state.internalLegs).toEqual([])
-      expect(state.reconciliations).toEqual([])
-      expect(state.sameSourceConsumer).toBeUndefined()
-      expect(state.movement).toEqual({
-        taxTreatment: "pending_review",
-        reconciliationStatus: "unmatched",
-      })
+      if (laterOriginUsage !== null) {
+        expect(state.openingLot?.remainingAmount).toContain("0.65000000")
+        expect(state.originTransaction?.transactionType).toBe("internal_transfer")
+        expect(state.internalLegs).toHaveLength(1)
+        expect(state.reconciliations).toHaveLength(1)
+        expect(state.sameSourceConsumer).toBeDefined()
+        expect(state.movement).toEqual({
+          taxTreatment: "non_taxable",
+          reconciliationStatus: "matched",
+        })
+      } else {
+        expect(state.openingLot?.remainingAmount).toContain("1.00000000")
+        expect(state.originTransaction?.transactionType).toBeNull()
+        expect(state.internalLegs).toEqual([])
+        expect(state.reconciliations).toEqual([])
+        expect(state.sameSourceConsumer).toBeUndefined()
+        expect(state.movement).toEqual({
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        })
+      }
     }
   )
 

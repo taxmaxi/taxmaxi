@@ -5,6 +5,7 @@ import type {
   AssetCanonicalizationResponse,
   ProviderAssetApprovalRequest,
   ProviderAssetReviewListResponse,
+  TransferReconciliationReviewListResponse,
 } from "@my/rest-api/contracts"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import { HttpApiClient, type HttpApi } from "@effect/platform"
@@ -20,6 +21,7 @@ type TaxMaxiAssetsClient =
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
+export type TransferReconciliationReviewList = TransferReconciliationReviewListResponse
 export type AssetRepresentation = {
   readonly id: string
   readonly blockchainId: string
@@ -71,6 +73,12 @@ export type ProviderAssetReviewListInput = {
   readonly limit?: number
 }
 
+export type TransferReconciliationReviewListInput = {
+  readonly status?: "pending" | "needs_review" | "approved" | "rejected" | "auto_applied"
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
 export type AssetsEffectResource = {
   readonly list: (input?: AssetCatalogListInput) => Effect.Effect<AssetCatalogList, unknown, never>
   readonly get: (input: AssetCatalogDetailInput) => Effect.Effect<AssetCatalogAsset, unknown, never>
@@ -85,6 +93,9 @@ export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly listProviderAssetReviews: (
     input?: ProviderAssetReviewListInput
   ) => Effect.Effect<ProviderAssetReviewList, unknown, never>
+  readonly listTransferReconciliationReviews: (
+    input?: TransferReconciliationReviewListInput
+  ) => Effect.Effect<TransferReconciliationReviewList, unknown, never>
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Effect.Effect<AssetCanonicalization, unknown, never>
@@ -97,6 +108,9 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly listProviderAssetReviews: (
     input?: ProviderAssetReviewListInput
   ) => Promise<ProviderAssetReviewList>
+  readonly listTransferReconciliationReviews: (
+    input?: TransferReconciliationReviewListInput
+  ) => Promise<TransferReconciliationReviewList>
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Promise<AssetCanonicalization>
@@ -173,6 +187,16 @@ export const makeInternalAssetsEffectResource = (
         },
       })
     ),
+  listTransferReconciliationReviews: (input) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.listTransferReconciliationReviews({
+        urlParams: {
+          status: input?.status,
+          cursor: input?.cursor ?? undefined,
+          limit: input?.limit,
+        },
+      })
+    ),
   canonicalizeProviderAsset: ({ id, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.canonicalizeProviderAsset({
@@ -211,6 +235,8 @@ export const makeInternalAssetsPromiseResource = (
 ): InternalAssetsPromiseResource => ({
   ...makeAssetsPromiseResource(effect, run),
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),
+  listTransferReconciliationReviews: (input) =>
+    run(effect.listTransferReconciliationReviews(input)),
   canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
   approveProviderAsset: (input) => run(effect.approveProviderAsset(input)),
 })

@@ -1,8 +1,13 @@
+import * as ConfigProvider from "effect/ConfigProvider"
+import * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { describe, expect, it } from "vitest"
-import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
+import {
+  clampReconciliationHeartbeatInterval,
+  SourceSyncJobExecutorLive,
+} from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import {
   FetchProviderRawBatchResult,
   ProviderRawRecord,
@@ -91,6 +96,9 @@ const makeExecutorLayer = ({
   replayRawRecords = [],
   replayCandidates = [],
   failNormalizeOnce = false,
+  replayResetDelayMillis = 0,
+  reconciliationDelayMillis = 0,
+  canonicalizationDelayMillis = 0,
   additionalPrincipalSources = [],
   events,
 }: {
@@ -103,6 +111,9 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
+  readonly replayResetDelayMillis?: number
+  readonly reconciliationDelayMillis?: number
+  readonly canonicalizationDelayMillis?: number
   readonly additionalPrincipalSources?: ReadonlyArray<SourceSyncSource>
   readonly events: Array<string>
 }) => {
@@ -370,8 +381,11 @@ const makeExecutorLayer = ({
   const SourceReplayRepositoryTestLive = Layer.succeed(SourceReplayRepository, {
     resetSourceDerivedState: () =>
       Effect.sync(() => {
-        events.push("reset-derived-state")
-      }),
+        events.push("reset-derived-state:start")
+      }).pipe(
+        Effect.zipRight(Effect.sleep(`${replayResetDelayMillis} millis`)),
+        Effect.tap(() => Effect.sync(() => events.push("reset-derived-state")))
+      ),
   })
 
   const SourceNormalizationRepositoryTestLive = Layer.succeed(SourceNormalizationRepository, {
@@ -382,19 +396,29 @@ const makeExecutorLayer = ({
   const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
     reconcileTransferCandidates: ({ sourceId }) =>
       Effect.sync(() => {
-        events.push(`reconcile:${sourceId}`)
-        return {
-          evaluatedProviderTransfers: 0,
-          pending: 0,
-          needsReview: 0,
-          autoApplied: 0,
-        }
-      }),
+        events.push(`reconcile-start:${sourceId}`)
+      }).pipe(
+        Effect.zipRight(Effect.sleep(`${reconciliationDelayMillis} millis`)),
+        Effect.map(() => {
+          events.push(`reconcile:${sourceId}`)
+          return {
+            evaluatedProviderTransfers: 0,
+            pending: 0,
+            needsReview: 0,
+            autoApplied: 0,
+          }
+        })
+      ),
     applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
       Effect.sync(() => {
-        events.push(`canonicalize:${sourceId}`)
-        return { canonicalizedPairs: 0 }
-      }),
+        events.push(`canonicalize-start:${sourceId}`)
+      }).pipe(
+        Effect.zipRight(Effect.sleep(`${canonicalizationDelayMillis} millis`)),
+        Effect.map(() => {
+          events.push(`canonicalize:${sourceId}`)
+          return { canonicalizedPairs: 0 }
+        })
+      ),
   })
 
   return SourceSyncJobExecutorLive.pipe(
@@ -410,6 +434,13 @@ const makeExecutorLayer = ({
 }
 
 describe("SourceSyncJobExecutor", () => {
+  it("bounds reconciliation heartbeats below the stale-job window", () => {
+    expect(Duration.toMillis(clampReconciliationHeartbeatInterval(Duration.seconds(30)))).toBe(
+      10_000
+    )
+    expect(Duration.toMillis(clampReconciliationHeartbeatInterval(Duration.zero))).toBe(1)
+  })
+
   it("runs sync mode and marks the job completed", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
@@ -604,6 +635,89 @@ describe("SourceSyncJobExecutor", () => {
     const originCanonicalizationIndex = events.indexOf("canonicalize:origin-source")
     expect(events[originCanonicalizationIndex + 1]).toBe("heartbeat:source-sync-inline-executor")
     expect(events).toContain("complete:1:1")
+  })
+
+  it("heartbeats periodically through sibling reconciliation and canonicalization", async () => {
+    const events: Array<string> = []
+    const siblingSource: SourceSyncSource = {
+      ...source,
+      id: "slow-sibling-source",
+    }
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            additionalPrincipalSources: [siblingSource],
+            reconciliationDelayMillis: 60,
+            canonicalizationDelayMillis: 50,
+            events,
+          })
+        ),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(
+            new Map([["SOURCE_SYNC_RECONCILIATION_HEARTBEAT_INTERVAL", "10 millis"]])
+          )
+        )
+      )
+    )
+
+    const siblingStartIndex = events.indexOf("reconcile-start:slow-sibling-source")
+    const siblingDoneIndex = events.indexOf("canonicalize:slow-sibling-source")
+    const heartbeatCount = events.filter(
+      (event, index) =>
+        event === "heartbeat:source-sync-inline-executor" &&
+        index > siblingStartIndex &&
+        index < siblingDoneIndex
+    ).length
+    const heartbeatCountAfterCompletion = events.filter(
+      (event) => event === "heartbeat:source-sync-inline-executor"
+    )
+
+    expect(heartbeatCount).toBeGreaterThanOrEqual(5)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(
+      events.filter((event) => event === "heartbeat:source-sync-inline-executor")
+    ).toHaveLength(heartbeatCountAfterCompletion.length)
+  })
+
+  it("heartbeats periodically while replay resets derived state", async () => {
+    const events: Array<string> = []
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayResetDelayMillis: 65,
+            events,
+          })
+        ),
+        Effect.withConfigProvider(
+          ConfigProvider.fromMap(
+            new Map([["SOURCE_SYNC_RECONCILIATION_HEARTBEAT_INTERVAL", "10 millis"]])
+          )
+        )
+      )
+    )
+
+    const resetStartIndex = events.indexOf("reset-derived-state:start")
+    const resetDoneIndex = events.indexOf("reset-derived-state")
+    const resetHeartbeatCount = events.filter(
+      (event, index) =>
+        event === "heartbeat:source-sync-inline-executor" &&
+        index > resetStartIndex &&
+        index < resetDoneIndex
+    ).length
+
+    expect(resetHeartbeatCount).toBeGreaterThanOrEqual(5)
   })
 
   it("records retry metadata and returns a retryable error before the final attempt", async () => {

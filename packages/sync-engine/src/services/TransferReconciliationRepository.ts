@@ -81,6 +81,28 @@ export interface TransferReconciliationRecordDraft {
   readonly reviewMetadata: unknown
 }
 
+/** Admin-facing reconciliation state with the provider movement that produced it. */
+export interface TransferReconciliationReviewRecord {
+  readonly id: string
+  readonly principalId: string
+  readonly providerTransferId: string
+  readonly providerSourceId: string
+  readonly providerTimestamp: Date
+  readonly providerDirection: "inbound" | "outbound"
+  readonly providerAmount: string
+  readonly networkName: string | null
+  readonly networkHash: string | null
+  readonly canonicalTransferId: string | null
+  readonly canonicalTransactionId: string | null
+  readonly status: TransferReconciliationStatus
+  readonly matchReason: string
+  readonly confidence: string
+  readonly deterministic: boolean
+  readonly reviewMetadata: unknown
+  readonly createdAt: Date
+  readonly updatedAt: Date
+}
+
 /**
  * DeterministicTransferCanonicalizationSummary - Counts for reconciliation-driven
  * internal-transfer canonicalization applied after a sync or replay pass.
@@ -126,6 +148,13 @@ export interface RecordOnchainRepresentationEvidenceParams {
  * reconciliation service.
  */
 export interface TransferReconciliationRepositoryShape {
+  /** List durable reconciliation rows for the admin review queue. */
+  readonly listTransferReconciliationReviews: (params: {
+    readonly status: TransferReconciliationStatus
+    readonly cursorId: string | null
+    readonly limit: number
+  }) => Effect.Effect<ReadonlyArray<TransferReconciliationReviewRecord>, SyncEngineStorageError>
+
   /**
    * List provider transfers for one principal-owned source, including any approved canonical asset mapping.
    */
