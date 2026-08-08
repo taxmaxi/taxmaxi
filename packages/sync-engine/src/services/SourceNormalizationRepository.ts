@@ -148,6 +148,12 @@ export interface SourceProviderTransferDraft {
   readonly externalId: string | null
   readonly externalGroupId: string | null
   readonly providerAssetId: string | null
+  /** Asset mapping used while this movement's canonical artifacts were prepared. */
+  readonly resolvedMapping?: {
+    readonly mappingStatus: "approved" | "pending_review" | "rejected"
+    readonly canonicalAssetId: string | null
+    readonly assetRepresentationId: string | null
+  }
   readonly timestamp: Date
   readonly direction: SourceProviderTransferDirection
   readonly fromAccountRef: string | null

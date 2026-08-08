@@ -324,9 +324,19 @@ describe("SourceNormalizationRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
-  it("requests replay when an asset mapping was approved after artifacts were prepared", async () => {
+  it.each([
+    {
+      name: "an asset mapping was approved after artifacts were prepared",
+      preparedStaleTransfer: false,
+    },
+    {
+      name: "an approved asset target changed after artifacts were prepared",
+      preparedStaleTransfer: true,
+    },
+  ])("requests replay when $name", async ({ preparedStaleTransfer }) => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000701"
     const replayRequestJobId = "00000000-0000-4000-8000-000000000703"
+    const staleAssetId = "00000000-0000-4000-8000-000000000704"
     const timestamp = new Date("2025-01-01T10:00:00.000Z")
 
     await runPg(
@@ -345,6 +355,14 @@ describe("SourceNormalizationRepositoryLive", () => {
           discoveredAt: timestamp,
           retrievedAt: timestamp,
         })
+        if (preparedStaleTransfer) {
+          yield* db.insert(schema.assets).values({
+            id: staleAssetId,
+            name: "Stale prepared asset",
+            symbol: "STALE",
+            type: "fungible",
+          })
+        }
         yield* db.insert(schema.providerAssetMappings).values({
           providerAssetRowId,
           mappingKind: "asset",
@@ -424,7 +442,36 @@ describe("SourceNormalizationRepositoryLive", () => {
               },
             },
           ],
-          feeTransfers: [],
+          feeTransfers: preparedStaleTransfer
+            ? [
+                {
+                  sourceId: TEST_SOURCE_ID,
+                  principalId: TEST_PRINCIPAL_ID,
+                  sourceRawRecordId: TEST_RAW_RECORD_ID,
+                  externalId: "signature-stale-approval-1:principal:0",
+                  externalGroupId: "signature-stale-approval-1",
+                  addressId: null,
+                  blockchainId: fixture.baseBlockchainId,
+                  txHash: null,
+                  timestamp,
+                  type: "erc20",
+                  fromAddress: "sender",
+                  toAddress: "recipient",
+                  fromAccountRef: null,
+                  toAccountRef: null,
+                  fromPartyType: "address",
+                  fromPartyResourcePath: null,
+                  toPartyType: "address",
+                  toPartyResourcePath: null,
+                  assetId: staleAssetId,
+                  assetRepresentationId: null,
+                  amount: "1.00000000",
+                  tokenId: null,
+                  notes: null,
+                  metadata: { role: "principal" },
+                },
+              ]
+            : [],
           transactionReview: null,
           resolvedTransactionType: {
             providerTransactionType: "solana_transaction_full",

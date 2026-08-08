@@ -1122,6 +1122,11 @@ const make = Effect.gen(function* () {
         providerTransfers: normalized.providerTransfers.map((providerTransfer) => ({
           ...providerTransfer,
           providerAssetId: providerTransfer.providerAssetId ?? primaryProviderAssetId,
+          resolvedMapping: {
+            mappingStatus: primaryAssetResolution.requiresReview ? "pending_review" : "approved",
+            canonicalAssetId: Option.getOrNull(primaryAssetResolution.assetId),
+            assetRepresentationId: null,
+          },
         })),
         feeTransfers: normalized.feeTransfers,
         transactionReview,

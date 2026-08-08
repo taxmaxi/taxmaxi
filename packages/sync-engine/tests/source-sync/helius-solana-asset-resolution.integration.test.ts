@@ -34,6 +34,10 @@ const WRAPPED_SOL_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001605"
 const USDC_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001602"
 const USDT_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001603"
 const UNKNOWN_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001604"
+const REPLAY_USER_ID = "00000000-0000-0000-0000-000000001611"
+const REPLAY_PRINCIPAL_ID = "00000000-0000-0000-0000-000000001612"
+const REPLAY_ADDRESS_ID = "00000000-0000-0000-0000-000000001613"
+const REPLAY_SOURCE_ID = "00000000-0000-0000-0000-000000001614"
 const UNKNOWN_MINT = "Drift111111111111111111111111111111111111111"
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
@@ -223,6 +227,100 @@ const fetchProviderAssetState = ({ mintAddress }: { readonly mintAddress: string
       .limit(1)
 
     return state ?? null
+  })
+
+const seedObservedProviderTransfer = ({
+  providerAssetRowId,
+  observedDecimals,
+  observedRepresentationType = "token",
+  activeJob,
+}: {
+  readonly providerAssetRowId: string
+  readonly observedDecimals: number
+  readonly observedRepresentationType?: "native" | "token" | "nft" | null
+  readonly activeJob: boolean
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [solanaBlockchain] = yield* db
+      .select({ id: schema.blockchains.id })
+      .from(schema.blockchains)
+      .where(eq(schema.blockchains.name, "solana"))
+      .limit(1)
+    if (solanaBlockchain === undefined) {
+      return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+    }
+
+    const now = new Date("2025-04-11T10:00:00.000Z")
+    yield* db.insert(schema.users).values({
+      id: REPLAY_USER_ID,
+      email: "helius-replay@taxmaxi.test",
+      name: "Helius replay fixture",
+    })
+    yield* db.insert(schema.principals).values({
+      id: REPLAY_PRINCIPAL_ID,
+      kind: "user",
+      userId: REPLAY_USER_ID,
+    })
+    yield* db.insert(schema.addresses).values({
+      id: REPLAY_ADDRESS_ID,
+      address: "Replay11111111111111111111111111111111111111",
+      type: "solana",
+      name: "Helius replay wallet",
+      principalId: REPLAY_PRINCIPAL_ID,
+      createdAt: now,
+      updatedAt: now,
+    })
+    yield* db.insert(schema.sources).values({
+      id: REPLAY_SOURCE_ID,
+      principalId: REPLAY_PRINCIPAL_ID,
+      name: "Helius replay source",
+      providerKey: "helius-solana",
+      sourceableType: "onchain",
+      cexAccountId: null,
+      addressId: REPLAY_ADDRESS_ID,
+      createdAt: now,
+      updatedAt: now,
+    })
+    const [transaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: REPLAY_SOURCE_ID,
+        externalId: "helius-replay-transaction",
+        timestamp: now,
+        providerStatus: "confirmed",
+        principalId: REPLAY_PRINCIPAL_ID,
+      })
+      .returning({ id: schema.transactions.id })
+    if (transaction === undefined) {
+      return yield* Effect.dieMessage("Failed to seed Helius replay transaction")
+    }
+    yield* db.insert(schema.providerTransfers).values({
+      sourceId: REPLAY_SOURCE_ID,
+      transactionId: transaction.id,
+      externalId: "helius-replay-provider-transfer",
+      providerAssetId: providerAssetRowId,
+      timestamp: now,
+      direction: "inbound",
+      fromAddress: "Sender11111111111111111111111111111111111111",
+      toAddress: "Replay11111111111111111111111111111111111111",
+      observedBlockchainId: solanaBlockchain.id,
+      observedRepresentationType,
+      observedContractAddress: null,
+      observedMintAddress: UNKNOWN_MINT,
+      observedDecimals,
+      amount: "1.00000",
+      metadata: { role: "principal" },
+    })
+    if (activeJob) {
+      yield* db.insert(schema.processingJobs).values({
+        sourceId: REPLAY_SOURCE_ID,
+        principalId: REPLAY_PRINCIPAL_ID,
+        mode: "sync",
+        status: "processing",
+        startedAt: now,
+      })
+    }
   })
 
 describe("HeliusSolanaAssetResolutionServiceLive", () => {
@@ -516,30 +614,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
-  it("resolves a pending mint after its exact representation is added", async () => {
-    const firstResult = await runAssetService(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        service.resolveAsset({
-          kind: "spl",
-          mintAddress: UNKNOWN_MINT,
-        })
-      ),
-      () =>
-        Effect.succeed([
-          makeDasAsset({
-            mintAddress: UNKNOWN_MINT,
-            name: "Known private asset",
-            decimals: 5,
-            tokenProgram: TOKEN_2022_PROGRAM,
-          }),
-        ])
-    )
-
-    expect(firstResult).toMatchObject({
-      kind: "review_required",
-      mappingStatus: "pending_review",
-    })
-
+  it("resolves an exact representation when DAS metadata omits decimals", async () => {
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -571,6 +646,220 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       })
     )
 
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      assetKind: "token",
+      mintAddress: UNKNOWN_MINT,
+      decimals: 5,
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+
+    expect(state).toMatchObject({
+      exponent: null,
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+
+    const conflictingMovement = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service
+          .resolveAsset({
+            kind: "spl",
+            mintAddress: UNKNOWN_MINT,
+            observedDecimals: [6],
+          })
+          .pipe(Effect.either)
+      ),
+      () => Effect.dieMessage("DAS should not be called for an approved cached mapping")
+    )
+    expect(conflictingMovement._tag).toBe("Left")
+  })
+
+  it("keeps an exact representation pending when transaction decimals conflict", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private asset",
+          symbol: "PRIVATE",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "token",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 5,
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: [6],
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+  })
+
+  it("infers an exact NFT representation when DAS metadata is missing", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private NFT",
+          symbol: "PRIVATE-NFT",
+          type: "nft",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "nft",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 0,
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: [0],
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      assetKind: "nft",
+      decimals: 0,
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+  })
+
+  it("resolves a pending mint after its exact representation is added", async () => {
+    const firstResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Known private asset",
+            decimals: 5,
+            tokenProgram: TOKEN_2022_PROGRAM,
+          }),
+        ])
+    )
+
+    expect(firstResult).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+    })
+
+    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    if (pendingState === null) {
+      expect.fail("Expected pending provider asset state")
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private asset",
+          symbol: "PRIVATE",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "token",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 5,
+        })
+
+        yield* seedObservedProviderTransfer({
+          providerAssetRowId: pendingState.providerAssetRowId,
+          observedDecimals: 5,
+          activeJob: true,
+        })
+      })
+    )
+
     const replayedResult = await runAssetService(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         service.resolveAsset({
@@ -587,6 +876,186 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       canonicalAssetId: UNKNOWN_ASSET_ID,
       assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
     })
+
+    const replayJob = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .select({ followUpMode: schema.processingJobs.followUpMode })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, REPLAY_SOURCE_ID))
+          .limit(1)
+        return job ?? null
+      })
+    )
+    expect(replayJob).toEqual({ followUpMode: "replay" })
+  })
+
+  it("keeps a pending mint unresolved when historical movement evidence conflicts", async () => {
+    const firstResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: [6],
+        })
+      ),
+      () => Effect.succeed([])
+    )
+    expect(firstResult).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+    })
+
+    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    if (pendingState === null) {
+      expect.fail("Expected pending provider asset state")
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private asset",
+          symbol: "PRIVATE",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "token",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 5,
+        })
+        yield* seedObservedProviderTransfer({
+          providerAssetRowId: pendingState.providerAssetRowId,
+          observedDecimals: 6,
+          activeJob: false,
+        })
+      })
+    )
+
+    const laterCompatibleResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: [5],
+        })
+      ),
+      () => Effect.succeed([])
+    )
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+
+    expect(laterCompatibleResult).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+    expect(state).toMatchObject({ mappingStatus: "pending_review" })
+  })
+
+  it("resolves a pending NFT after a DAS-miss type guess was stored as unknown", async () => {
+    const firstResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: [0],
+        })
+      ),
+      () => Effect.succeed([])
+    )
+    expect(firstResult).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      representationTypeObserved: false,
+    })
+
+    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    if (pendingState === null) {
+      expect.fail("Expected pending NFT provider asset state")
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Known private NFT",
+          symbol: "PRIVATE-NFT",
+          type: "nft",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          type: "nft",
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 0,
+        })
+        yield* seedObservedProviderTransfer({
+          providerAssetRowId: pendingState.providerAssetRowId,
+          observedDecimals: 0,
+          observedRepresentationType: null,
+          activeJob: true,
+        })
+      })
+    )
+
+    const resolved = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: [0],
+        })
+      ),
+      () => Effect.succeed([])
+    )
+    const replayJob = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .select({ followUpMode: schema.processingJobs.followUpMode })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, REPLAY_SOURCE_ID))
+          .limit(1)
+        return job ?? null
+      })
+    )
+
+    expect(resolved).toMatchObject({
+      kind: "canonical",
+      assetKind: "nft",
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+    expect(replayJob).toEqual({ followUpMode: "replay" })
   })
 
   it.each([

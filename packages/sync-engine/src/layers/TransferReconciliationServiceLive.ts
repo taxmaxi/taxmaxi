@@ -263,6 +263,28 @@ const make = Effect.gen(function* () {
         },
         providerAmount: providerTransfer.amount,
         candidateFingerprints: exactAmountCandidates.map(reconciliationCandidateFingerprint),
+        providerAssetRowIds: [
+          ...new Set(
+            [
+              providerTransfer.providerAssetId,
+              ...exactAmountCandidates.map((candidate) => candidate.providerAssetRowId),
+            ].filter((providerAssetRowId) => providerAssetRowId !== null)
+          ),
+        ],
+        providerTransfer: {
+          sourceId: providerTransfer.providerSourceId,
+          transactionId: providerTransfer.providerTransactionId,
+          providerAssetRowId: providerTransfer.providerAssetId,
+          canonicalAssetId: providerTransfer.canonicalAssetId,
+          assetRepresentationId: providerTransfer.assetRepresentationId,
+          timestamp: providerTransfer.timestamp,
+          direction: providerTransfer.direction,
+          fromAddress: providerTransfer.fromAddress,
+          toAddress: providerTransfer.toAddress,
+          networkName: providerTransfer.networkName,
+          networkHash: providerTransfer.networkHash,
+          amount: providerTransfer.amount,
+        },
       }
       const persistCandidateState = (
         draft: Omit<TransferReconciliationRecordDraft, "candidateSnapshot">

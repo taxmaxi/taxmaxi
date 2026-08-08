@@ -131,7 +131,7 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(representationId)
   })
 
-  it("supports replay retries and manual approval for an observed Solana token", async () => {
+  it("supports repeated and corrected approval for an observed Solana token", async () => {
     const providerAssetRowId = "00000000-0000-4000-8000-000000000003"
     const canonicalAssetId = "00000000-0000-4000-8000-000000000004"
     const alternateCanonicalAssetId = "00000000-0000-4000-8000-00000000000c"
@@ -146,6 +146,8 @@ describe("AssetCanonicalizationService", () => {
     const mintAddress = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     const events: Array<string> = []
     const sourceNotes: Array<string | null> = []
+    const replayRequests: Array<boolean | undefined> = []
+    const providerSnapshotDates: Array<Date | undefined> = []
     let mappingApproved = false
     let approvedCanonicalAssetId = canonicalAssetId
     let approvedRepresentationId = representationId
@@ -175,6 +177,8 @@ describe("AssetCanonicalizationService", () => {
           mappingApproved = true
           events.push("approve")
           sourceNotes.push(mappings[0]?.sourceNotes ?? null)
+          replayRequests.push(mappings[0]?.requestReplayOnApproval)
+          providerSnapshotDates.push(mappings[0]?.expectedProviderAssetRetrievedAt)
           return 1
         }),
       seedProviderAssetMappingsIfMissing: () =>
@@ -378,20 +382,14 @@ describe("AssetCanonicalizationService", () => {
       canonicalize().pipe(Effect.either, Effect.provide(layer))
     )
 
-    expect(firstResult._tag).toBe("Left")
-    if (firstResult._tag === "Left") {
-      expect(firstResult.left._tag).toBe("AssetCanonicalizationInternalError")
-    }
+    expect(firstResult._tag).toBe("Right")
     expect(mappingApproved).toBe(true)
     expect(sourceNotes).toEqual([
       "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
     ])
-    expect(events).toEqual([
-      "approve",
-      "list-sources",
-      `replay:${principalId}:${sourceId}`,
-      `replay:${principalId}:${secondSourceId}`,
-    ])
+    expect(events).toEqual(["approve"])
+    expect(replayRequests).toEqual([true])
+    expect(providerSnapshotDates).toEqual([providerAsset.retrievedAt])
 
     const result = await Effect.runPromise(canonicalize().pipe(Effect.provide(layer)))
 
@@ -400,15 +398,9 @@ describe("AssetCanonicalizationService", () => {
       "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
       "transfer_reconciliation_evidence: observed Solana mint\nApproved with CoinGecko asset/platform metadata.",
     ])
-    expect(events).toEqual([
-      "approve",
-      "list-sources",
-      `replay:${principalId}:${sourceId}`,
-      `replay:${principalId}:${secondSourceId}`,
-      "approve",
-      "list-sources",
-      `replay:${principalId}:${sourceId}`,
-    ])
+    expect(events).toEqual(["approve", "approve"])
+    expect(replayRequests).toEqual([true, true])
+    expect(providerSnapshotDates).toEqual([providerAsset.retrievedAt, providerAsset.retrievedAt])
 
     const approvedRemap = await Effect.runPromise(
       Effect.flatMap(AssetCanonicalizationService, (service) =>
@@ -426,11 +418,9 @@ describe("AssetCanonicalizationService", () => {
       assetRepresentationId: alternateRepresentationId,
       mappingStatus: "approved",
     })
-    expect(events.slice(-3)).toEqual([
-      "approve",
-      "list-sources",
-      `replay:${principalId}:${sourceId}`,
-    ])
+    expect(events.slice(-1)).toEqual(["approve"])
+    expect(replayRequests.at(-1)).toBe(true)
+    expect(providerSnapshotDates.at(-1)).toEqual(providerAsset.retrievedAt)
 
     const eventsBeforeMismatch = [...events]
     const mismatchedApproval = await Effect.runPromise(
@@ -516,6 +506,8 @@ describe("AssetCanonicalizationService", () => {
     expect(sourceNotes.at(-1)).toBe(
       "transfer_reconciliation_evidence: observed Solana mint\nApproved by an admin with an existing canonical asset."
     )
+    expect(replayRequests.at(-1)).toBe(true)
+    expect(providerSnapshotDates.at(-1)).toEqual(providerAsset.retrievedAt)
 
     const eventsBeforeCoinGeckoMismatch = [...events]
     coinGeckoDecimals = 9

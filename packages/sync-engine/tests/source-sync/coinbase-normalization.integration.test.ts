@@ -718,6 +718,76 @@ const seedMatchedOnchainSend = ({
       updatedAt: new Date("2025-04-01T10:00:00.000Z"),
     })
 
+    const inventoryTimestamp = new Date("2025-03-01T10:00:00.000Z")
+    const [inventoryTransaction] = yield* db
+      .insert(schema.transactions)
+      .values({
+        sourceId: ownedOnchainSourceId,
+        sourceRawRecordId: null,
+        externalId: "onchain-inventory-1",
+        externalGroupId: "onchain-inventory-1",
+        timestamp: inventoryTimestamp,
+        transactionType: null,
+        providerTransactionType: null,
+        providerStatus: "confirmed",
+        providerResourcePath: null,
+        providerDescription: "Owned wallet opening inventory",
+        providerCreatedAt: inventoryTimestamp,
+        providerUpdatedAt: inventoryTimestamp,
+        metadata: { provider: "bitcoin", fixture: "opening_inventory" },
+        principalId,
+      })
+      .returning({ id: schema.transactions.id })
+
+    if (inventoryTransaction === undefined) {
+      return yield* Effect.dieMessage("Failed to create onchain inventory transaction fixture")
+    }
+
+    const [inventoryLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values({
+        sourceId: ownedOnchainSourceId,
+        sourceRawRecordId: null,
+        externalId: "onchain-inventory-1:main",
+        txHash: null,
+        timestamp: inventoryTimestamp,
+        principalId,
+        addressId: ownedOnchainAddressId,
+        assetId: btcAsset.id,
+        amount,
+        kind: "acquisition",
+        provenance: "deterministic",
+        derivationRule: "fixture_opening_inventory",
+        metadata: { provider: "bitcoin", fixture: "opening_inventory" },
+        transactionId: inventoryTransaction.id,
+        sourceTransferId: null,
+        fiatAmount: "1000.00000000",
+        fiatCurrency: "EUR",
+        feeForTransactionId: null,
+        createdAt: inventoryTimestamp,
+        updatedAt: inventoryTimestamp,
+      })
+      .returning({ id: schema.transactionLegs.id })
+
+    if (inventoryLeg === undefined) {
+      return yield* Effect.dieMessage("Failed to create onchain inventory leg fixture")
+    }
+
+    yield* db.insert(schema.fifoLots).values({
+      principalId,
+      sourceId: ownedOnchainSourceId,
+      assetId: btcAsset.id,
+      acquiredAt: inventoryTimestamp,
+      originalAmount: amount,
+      remainingAmount: amount,
+      costBasisPerToken: "10000.000000000000000000",
+      costBasisCurrency: "EUR",
+      sourceLegId: inventoryLeg.id,
+      sourceLegSequence: 0,
+      createdAt: inventoryTimestamp,
+      updatedAt: inventoryTimestamp,
+    })
+
     const [transaction] = yield* db
       .insert(schema.transactions)
       .values({

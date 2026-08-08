@@ -47,6 +47,8 @@ export type HeliusSolanaAssetKind = "native" | "spl"
 export interface HeliusSolanaAssetReference {
   readonly kind: HeliusSolanaAssetKind
   readonly mintAddress: string | null
+  /** Distinct decimal scales observed in the transaction for this mint. */
+  readonly observedDecimals?: ReadonlyArray<number>
   readonly rawProviderPayload?: unknown
 }
 
@@ -56,6 +58,8 @@ export interface HeliusSolanaAssetReference {
 export interface HeliusSolanaResolvedAsset {
   readonly kind: "canonical" | "review_required"
   readonly assetKind: "native" | "token" | "nft"
+  /** False when the type is only a fallback guess because DAS metadata was unavailable. */
+  readonly representationTypeObserved?: boolean
   readonly mintAddress: string | null
   readonly providerAssetRowId: string
   readonly providerAssetId: string | null

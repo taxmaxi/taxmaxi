@@ -458,13 +458,6 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const now = new Date()
             yield* tx
-              .select({ id: schema.sources.id })
-              .from(schema.sources)
-              .where(eq(schema.sources.id, params.sourceId))
-              .for("update")
-              .pipe(wrapSqlError("principalClaimRepository.claimAnonymousSourceForUser.lockSource"))
-
-            yield* tx
               .select({ id: schema.principals.id })
               .from(schema.principals)
               .where(
@@ -478,6 +471,13 @@ const make = Effect.gen(function* () {
               .pipe(
                 wrapSqlError("principalClaimRepository.claimAnonymousSourceForUser.lockInventory")
               )
+
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, params.sourceId))
+              .for("update")
+              .pipe(wrapSqlError("principalClaimRepository.claimAnonymousSourceForUser.lockSource"))
 
             const [claimRow] = yield* tx
               .select({
@@ -727,17 +727,6 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const now = new Date()
             yield* tx
-              .select({ id: schema.sources.id })
-              .from(schema.sources)
-              .where(eq(schema.sources.id, params.sourceId))
-              .for("update")
-              .pipe(
-                wrapSqlError(
-                  "principalClaimRepository.claimAnonymousSourceForUserByPayer.lockSource"
-                )
-              )
-
-            yield* tx
               .select({ id: schema.principals.id })
               .from(schema.principals)
               .where(
@@ -751,6 +740,17 @@ const make = Effect.gen(function* () {
               .pipe(
                 wrapSqlError(
                   "principalClaimRepository.claimAnonymousSourceForUserByPayer.lockInventory"
+                )
+              )
+
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, params.sourceId))
+              .for("update")
+              .pipe(
+                wrapSqlError(
+                  "principalClaimRepository.claimAnonymousSourceForUserByPayer.lockSource"
                 )
               )
 

@@ -95,6 +95,10 @@ export const providerTransfers = pgTable(
         and ${table.observedMintAddress} is null
         and ${table.observedDecimals} is null
       ) or (
+        ${table.observedRepresentationType} is null
+        and ${table.observedBlockchainId} is not null
+        and num_nonnulls(${table.observedContractAddress}, ${table.observedMintAddress}) = 1
+      ) or (
         ${table.observedRepresentationType} = 'native'
         and ${table.observedBlockchainId} is not null
         and ${table.observedContractAddress} is null

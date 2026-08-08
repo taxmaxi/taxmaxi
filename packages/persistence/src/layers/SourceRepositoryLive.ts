@@ -14,6 +14,7 @@ import {
 } from "@my/core/source"
 import { EntityNotFoundError, PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { addresses } from "../schema/AddressesTable.ts"
+import { principals } from "../schema/PrincipalsTable.ts"
 import { sources, type SourceRow } from "../schema/SourcesTable.ts"
 import { drizzle } from "./PgClientLive.ts"
 import {
@@ -189,14 +190,16 @@ const make = Effect.gen(function* () {
     }).pipe(wrapSqlError("findByPrincipalAndSourceRef"))
 
   const findOnchainSourceByAddressId = ({
+    executor,
     principalId,
     addressId,
   }: {
+    readonly executor: Pick<typeof db, "select">
     readonly principalId: string
     readonly addressId: string
   }) =>
     Effect.gen(function* () {
-      const [row] = yield* db
+      const [row] = yield* executor
         .select(selectSourceFields)
         .from(sources)
         .where(
@@ -222,125 +225,150 @@ const make = Effect.gen(function* () {
     walletAddress,
     name,
   }) =>
-    Effect.gen(function* () {
-      const now = new Date()
-      const [addressRow] = yield* db
-        .insert(addresses)
-        .values({
-          address: walletAddress,
-          type: chainType,
-          name,
-          principalId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: [addresses.address, addresses.principalId],
-          set: {
-            name,
-            type: chainType,
-            updatedAt: now,
-          },
-        })
-        .returning({ id: addresses.id })
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx
+            .select({ id: principals.id })
+            .from(principals)
+            .where(eq(principals.id, principalId))
+            .for("update")
 
-      if (addressRow === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceRepository.createOrReuseOnchainSource.address",
-            cause: "failed to create or reuse address",
+          const now = new Date()
+          const [addressRow] = yield* tx
+            .insert(addresses)
+            .values({
+              address: walletAddress,
+              type: chainType,
+              name,
+              principalId,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoUpdate({
+              target: [addresses.address, addresses.principalId],
+              set: {
+                name,
+                type: chainType,
+                updatedAt: now,
+              },
+            })
+            .returning({ id: addresses.id })
+
+          if (addressRow === undefined) {
+            return yield* Effect.fail(
+              new PersistenceError({
+                operation: "sourceRepository.createOrReuseOnchainSource.address",
+                cause: "failed to create or reuse address",
+              })
+            )
+          }
+
+          const maybeExistingSource = yield* findOnchainSourceByAddressId({
+            executor: tx,
+            principalId,
+            addressId: addressRow.id,
           })
-        )
-      }
 
-      const maybeExistingSource = yield* findOnchainSourceByAddressId({
-        principalId,
-        addressId: addressRow.id,
-      })
+          if (Option.isSome(maybeExistingSource)) {
+            return { source: maybeExistingSource.value, created: false }
+          }
 
-      if (Option.isSome(maybeExistingSource)) {
-        return { source: maybeExistingSource.value, created: false }
-      }
+          const sourceId = SourceId.make(crypto.randomUUID())
+          const providerKey = providerKeyForOnchainSource(chainType)
+          const [created] = yield* tx
+            .insert(sources)
+            .values({
+              id: sourceId,
+              principalId,
+              name,
+              providerKey,
+              providerMetadata: { chainType, walletAddress },
+              sourceableType: "onchain",
+              addressId: addressRow.id,
+              cexAccountId: null,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .onConflictDoNothing({
+              target: [sources.principalId, sources.addressId],
+            })
+            .returning(selectSourceFields)
 
-      const sourceId = SourceId.make(crypto.randomUUID())
-      const providerKey = providerKeyForOnchainSource(chainType)
-      const [created] = yield* db
-        .insert(sources)
-        .values({
-          id: sourceId,
-          principalId,
-          name,
-          providerKey,
-          providerMetadata: { chainType, walletAddress },
-          sourceableType: "onchain",
-          addressId: addressRow.id,
-          cexAccountId: null,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoNothing({
-          target: [sources.principalId, sources.addressId],
-        })
-        .returning(selectSourceFields)
+          if (created !== undefined) {
+            return { source: yield* rowToSource(created), created: true }
+          }
 
-      if (created !== undefined) {
-        return { source: yield* rowToSource(created), created: true }
-      }
-
-      const maybeConcurrentSource = yield* findOnchainSourceByAddressId({
-        principalId,
-        addressId: addressRow.id,
-      })
-
-      if (Option.isNone(maybeConcurrentSource)) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceRepository.createOrReuseOnchainSource.source",
-            cause: "failed to create or reuse onchain source",
+          const maybeConcurrentSource = yield* findOnchainSourceByAddressId({
+            executor: tx,
+            principalId,
+            addressId: addressRow.id,
           })
-        )
-      }
 
-      return { source: maybeConcurrentSource.value, created: false }
-    }).pipe(wrapSqlError("createOrReuseOnchainSource"))
+          if (Option.isNone(maybeConcurrentSource)) {
+            return yield* Effect.fail(
+              new PersistenceError({
+                operation: "sourceRepository.createOrReuseOnchainSource.source",
+                cause: "failed to create or reuse onchain source",
+              })
+            )
+          }
+
+          return { source: maybeConcurrentSource.value, created: false }
+        })
+      )
+      .pipe(wrapSqlError("createOrReuseOnchainSource"))
 
   const create: SourceRepositoryService["create"] = (source) =>
-    Effect.gen(function* () {
-      const now = new Date()
-      const baseValues = {
-        id: source.id,
-        principalId: source.principalId,
-        name: source.name,
-        providerKey: source.providerKey ?? null,
-        providerMetadata: source.providerMetadata ?? null,
-        sourceableType: source.sourceRef._tag,
-        createdAt: now,
-        updatedAt: now,
-      } as const
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          yield* tx
+            .select({ id: principals.id })
+            .from(principals)
+            .where(eq(principals.id, source.principalId))
+            .for("update")
 
-      const sourceValues =
-        source.sourceRef._tag === "cex"
-          ? {
-              ...baseValues,
-              cexAccountId: source.sourceRef.cexAccountId,
-              addressId: null,
-            }
-          : {
-              ...baseValues,
-              cexAccountId: null,
-              addressId: source.sourceRef.addressId,
-            }
+          const now = new Date()
+          const baseValues = {
+            id: source.id,
+            principalId: source.principalId,
+            name: source.name,
+            providerKey: source.providerKey ?? null,
+            providerMetadata: source.providerMetadata ?? null,
+            sourceableType: source.sourceRef._tag,
+            createdAt: now,
+            updatedAt: now,
+          } as const
 
-      const [created] = yield* db.insert(sources).values(sourceValues).returning(selectSourceFields)
+          const sourceValues =
+            source.sourceRef._tag === "cex"
+              ? {
+                  ...baseValues,
+                  cexAccountId: source.sourceRef.cexAccountId,
+                  addressId: null,
+                }
+              : {
+                  ...baseValues,
+                  cexAccountId: null,
+                  addressId: source.sourceRef.addressId,
+                }
 
-      if (!created) {
-        return yield* Effect.fail(
-          new EntityNotFoundError({ entityType: "Source", entityId: source.id })
-        )
-      }
+          const [created] = yield* tx
+            .insert(sources)
+            .values(sourceValues)
+            .returning(selectSourceFields)
 
-      return yield* rowToSource(created)
-    }).pipe(wrapSqlError("create"))
+          if (!created) {
+            return yield* Effect.fail(
+              new EntityNotFoundError({ entityType: "Source", entityId: source.id })
+            )
+          }
+
+          return yield* rowToSource(created)
+        })
+      )
+      .pipe(wrapSqlError("create"))
 
   return {
     findById,

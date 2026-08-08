@@ -1,9 +1,13 @@
+import { eq } from "drizzle-orm"
+import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
+import { SourceRepositoryLive } from "../../src/layers/SourceRepositoryLive.ts"
 import { SyncEngineSourceRepositoryLive } from "../../src/layers/SyncEngineSourceRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
+import { SourceRepository as PersistenceSourceRepository } from "../../src/services/SourceRepository.ts"
 import {
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
@@ -11,6 +15,7 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
 import { SourceRepository } from "@my/sync-engine/services"
+import { PrincipalId } from "@my/core/ownership"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_sync_engine_source_repo",
@@ -22,6 +27,10 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SyncEngineSourceRepositoryLive }))
+
+const runPersistenceSourceRepository = <A, E>(
+  effect: Effect.Effect<A, E, PersistenceSourceRepository>
+) => Effect.runPromise(context.runWithLayer({ effect, layer: SourceRepositoryLive }))
 
 describe("SyncEngineSourceRepositoryLive", () => {
   beforeEach(async () => {
@@ -169,5 +178,48 @@ describe("SyncEngineSourceRepositoryLive", () => {
       id: inconsistentSourceId,
       walletAddress: null,
     })
+  })
+
+  it("waits for the principal reconciliation lock before onboarding a source", async () => {
+    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseLock = await Effect.runPromise(Deferred.make<void>())
+    const walletAddress = "SourceBarrier111111111111111111111111111111111"
+    const lockHolder = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.principals.id })
+              .from(schema.principals)
+              .where(eq(schema.principals.id, TEST_PRINCIPAL_ID))
+              .for("update")
+            yield* Deferred.succeed(lockAcquired, undefined)
+            yield* Deferred.await(releaseLock)
+          })
+        )
+      })
+    )
+    await Effect.runPromise(Deferred.await(lockAcquired))
+
+    const creation = runPersistenceSourceRepository(
+      Effect.flatMap(PersistenceSourceRepository, (repository) =>
+        repository.createOrReuseOnchainSource({
+          principalId: PrincipalId.make(TEST_PRINCIPAL_ID),
+          chainType: "solana",
+          walletAddress,
+          name: "Source barrier wallet",
+        })
+      )
+    )
+
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "principals" })
+
+    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+    await lockHolder
+    const created = await creation
+
+    expect(created.created).toBe(true)
+    expect(created.source.principalId).toBe(TEST_PRINCIPAL_ID)
   })
 })

@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { PrincipalId } from "@my/core/ownership"
 import { SourceId } from "@my/core/source"
 import * as Deferred from "effect/Deferred"
@@ -102,31 +102,29 @@ describe("PrincipalClaimRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
-  it("locks the source before either ownership principal", async () => {
-    // Given another transaction owns the source row lock.
-    const sourceLockAcquired = await Effect.runPromise(Deferred.make<void>())
-    const releaseSourceLock = await Effect.runPromise(Deferred.make<void>())
-    const heldSourceLock = runPg(
+  it("locks ownership principals before the source", async () => {
+    const principalLockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releasePrincipalLock = await Effect.runPromise(Deferred.make<void>())
+    const heldPrincipalLock = runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db.transaction((tx) =>
           Effect.gen(function* () {
             yield* tx
-              .select({ id: schema.sources.id })
-              .from(schema.sources)
-              .where(eq(schema.sources.id, SOURCE_ID))
+              .select({ id: schema.principals.id })
+              .from(schema.principals)
+              .where(eq(schema.principals.id, ANONYMOUS_PRINCIPAL_ID))
               .for("update")
-            yield* Deferred.succeed(sourceLockAcquired, undefined)
-            yield* Deferred.await(releaseSourceLock)
+            yield* Deferred.succeed(principalLockAcquired, undefined)
+            yield* Deferred.await(releasePrincipalLock)
           })
         )
       })
     )
 
-    await Effect.runPromise(Deferred.await(sourceLockAcquired))
+    await Effect.runPromise(Deferred.await(principalLockAcquired))
 
-    // When a claim starts, it must wait for the source before locking either principal.
-    const claimWaitingForSource = runPrincipalClaim(
+    const claimWaitingForPrincipal = runPrincipalClaim(
       Effect.flatMap(PrincipalClaimRepository, (repository) =>
         repository.claimAnonymousSourceForUser({
           anonymousPrincipalId: ANONYMOUS_PRINCIPAL_ID,
@@ -138,31 +136,26 @@ describe("PrincipalClaimRepositoryLive", () => {
       )
     )
 
-    await context.waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "principals" })
 
-    // The claim should be waiting on the source row without holding either
-    // principal row, so this independent principal lock must complete.
-    const principalLockProbe = runPg(
+    const sourceLockProbe = runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
         yield* db.transaction((tx) =>
           tx
-            .select({ id: schema.principals.id })
-            .from(schema.principals)
-            .where(inArray(schema.principals.id, [ANONYMOUS_PRINCIPAL_ID, USER_PRINCIPAL_ID]))
-            .orderBy(asc(schema.principals.id))
+            .select({ id: schema.sources.id })
+            .from(schema.sources)
+            .where(eq(schema.sources.id, SOURCE_ID))
             .for("update", { noWait: true })
         )
       })
     ).then(() => "completed" as const)
-    const principalLockProbeOutcome = await principalLockProbe
+    const sourceLockProbeOutcome = await sourceLockProbe
 
-    // Then the principal rows remain lockable while the claim waits.
-    expect(principalLockProbeOutcome).toBe("completed")
+    expect(sourceLockProbeOutcome).toBe("completed")
 
-    // And the claim finishes successfully after the source lock is released.
-    await Effect.runPromise(Deferred.succeed(releaseSourceLock, undefined))
-    const [, claimedSourceId] = await Promise.all([heldSourceLock, claimWaitingForSource])
+    await Effect.runPromise(Deferred.succeed(releasePrincipalLock, undefined))
+    const [, claimedSourceId] = await Promise.all([heldPrincipalLock, claimWaitingForPrincipal])
 
     expect(claimedSourceId).toBe(SOURCE_ID)
   })

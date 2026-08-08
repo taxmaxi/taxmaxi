@@ -88,6 +88,23 @@ export interface TransferReconciliationCandidateSnapshot {
   readonly search: FindOnchainTransferReconciliationCandidatesParams
   readonly providerAmount: string
   readonly candidateFingerprints: ReadonlyArray<string>
+  /** Provider-asset rows whose mappings participate in the decision. */
+  readonly providerAssetRowIds: ReadonlyArray<string>
+  /** Provider-side movement and approved mapping that must still back this decision. */
+  readonly providerTransfer: {
+    readonly sourceId: string
+    readonly transactionId: string
+    readonly providerAssetRowId: string | null
+    readonly canonicalAssetId: string | null
+    readonly assetRepresentationId: string | null
+    readonly timestamp: Date
+    readonly direction: "inbound" | "outbound"
+    readonly fromAddress: string | null
+    readonly toAddress: string | null
+    readonly networkName: string | null
+    readonly networkHash: string | null
+    readonly amount: string
+  }
 }
 
 /** Outcome of one reconciliation-state write. */

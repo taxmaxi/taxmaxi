@@ -11,6 +11,7 @@ import {
 } from "../../src/providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts"
 import {
   HeliusSolanaAssetResolutionService,
+  type HeliusSolanaAssetReference,
   type HeliusSolanaResolvedAsset,
 } from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import {
@@ -115,9 +116,11 @@ const makeProviderLayer = ({
         nextCursor: null,
       },
     }),
+  onResolveAssets,
 }: {
   readonly fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"]
   readonly fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
+  readonly onResolveAssets?: (assets: ReadonlyArray<HeliusSolanaAssetReference>) => void
 }) =>
   HeliusSolanaSourceSyncProviderFromClientLive.pipe(
     Layer.provide(
@@ -163,8 +166,9 @@ const makeProviderLayer = ({
               assetRepresentationId: "representation-sol",
               canonicalFiatCurrency: null,
             } satisfies HeliusSolanaResolvedAsset),
-          resolveAssets: ({ assets }) =>
-            Effect.succeed(
+          resolveAssets: ({ assets }) => {
+            onResolveAssets?.(assets)
+            return Effect.succeed(
               assets.flatMap(
                 (asset): ReadonlyArray<HeliusSolanaResolvedAsset> =>
                   asset.mintAddress === null
@@ -195,6 +199,7 @@ const makeProviderLayer = ({
                             {
                               kind: "review_required",
                               assetKind: "token",
+                              representationTypeObserved: false,
                               mintAddress: asset.mintAddress,
                               providerAssetRowId: `provider-asset-${asset.mintAddress}`,
                               providerAssetId: asset.mintAddress,
@@ -232,7 +237,8 @@ const makeProviderLayer = ({
                             } satisfies HeliusSolanaResolvedAsset,
                           ]
               )
-            ),
+            )
+          },
         })
       )
     ),
@@ -251,14 +257,17 @@ const makeProviderLayer = ({
 const runProvider = <A, E>(
   effect: Effect.Effect<A, E, HeliusSolanaSourceSyncProvider>,
   fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"],
-  fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
+  fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"],
+  onResolveAssets?: (assets: ReadonlyArray<HeliusSolanaAssetReference>) => void
 ) =>
   Effect.runPromise(
     effect.pipe(
       Effect.provide(
-        fetchTransfersForAddress === undefined
-          ? makeProviderLayer({ fetchTransactionsForAddress })
-          : makeProviderLayer({ fetchTransactionsForAddress, fetchTransfersForAddress })
+        makeProviderLayer({
+          fetchTransactionsForAddress,
+          ...(fetchTransfersForAddress === undefined ? {} : { fetchTransfersForAddress }),
+          ...(onResolveAssets === undefined ? {} : { onResolveAssets }),
+        })
       )
     )
   )
@@ -1316,6 +1325,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   })
 
   it("persists token-balance decimals for an unresolved SPL asset", async () => {
+    const resolvedAssetReferences: Array<HeliusSolanaAssetReference> = []
     const payload = {
       slot: 128,
       transactionIndex: 4,
@@ -1365,7 +1375,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      undefined,
+      (assets) => resolvedAssetReferences.push(...assets)
     )
 
     const providerTransfer = result.providerTransfers.find(
@@ -1375,7 +1387,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(providerTransfer).toMatchObject({
       amount: "1.23456",
       observedMintAddress: UNKNOWN_MINT,
+      observedRepresentationType: null,
       observedDecimals: 5,
+    })
+    expect(resolvedAssetReferences).toContainEqual({
+      kind: "spl",
+      mintAddress: UNKNOWN_MINT,
+      observedDecimals: [5],
     })
   })
 

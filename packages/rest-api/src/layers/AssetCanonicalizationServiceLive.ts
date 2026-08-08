@@ -7,7 +7,6 @@
 import {
   AssetRepository,
   ProviderAssetRepository,
-  SourceSyncService,
   type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
   type EconomicAssetDraft,
@@ -64,6 +63,12 @@ export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 
 const normalize = (value: string) => value.trim().toLowerCase()
+const MissingHeliusDasPayload = Schema.Struct({
+  source: Schema.Literal("helius_das_get_asset_batch_missing"),
+})
+
+const hasMissingHeliusDasMetadata = (providerAsset: ProviderAssetRecord): boolean =>
+  Schema.is(MissingHeliusDasPayload)(providerAsset.rawProviderPayload)
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
@@ -183,7 +188,8 @@ const matchesObservedRepresentation = ({
   readonly observed: ProviderAssetObservedRepresentationRecord
 }) =>
   normalize(representation.blockchainName) === normalize(observed.blockchainName) &&
-  representation.representationType === observed.representationType &&
+  (observed.representationType === null ||
+    representation.representationType === observed.representationType) &&
   (observed.contractAddress === null
     ? representation.contractAddress === null
     : representation.contractAddress !== null &&
@@ -404,7 +410,8 @@ export const validateManualRepresentationIdentity = ({
     providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
   const expectedType = providerType === "nft" ? "nft" : "token"
   return normalize(representation.blockchainName) === "solana" &&
-    representation.representationType === expectedType &&
+    (hasMissingHeliusDasMetadata(providerAsset) ||
+      representation.representationType === expectedType) &&
     representation.mintAddress === observedTokenId &&
     (providerAsset.exponent === null || representation.decimals === providerAsset.exponent)
     ? Effect.void
@@ -578,7 +585,6 @@ const make = Effect.gen(function* () {
   const coinGeckoClient = yield* CoinGeckoClient
   const providerAssetRepository = yield* ProviderAssetRepository
   const assetRepository = yield* AssetRepository
-  const sourceSyncService = yield* SourceSyncService
 
   const mapCoinGeckoError = (error: { readonly message: string }) =>
     new AssetCanonicalizationProviderError({ message: error.message })
@@ -635,23 +641,12 @@ const make = Effect.gen(function* () {
       : Effect.void
   }
 
-  const loadApprovedProviderAssetAndReplay = ({
+  const loadApprovedProviderAsset = ({
     providerAssetRowId,
   }: {
     readonly providerAssetRowId: string
   }) =>
     Effect.gen(function* () {
-      const affectedSources = yield* providerAssetRepository
-        .listProviderAssetSources({ providerAssetRowId })
-        .pipe(
-          Effect.mapError(
-            () =>
-              new AssetCanonicalizationInternalError({
-                message: "Failed to load sources affected by provider asset approval.",
-              })
-          )
-        )
-
       const approvedProviderAsset = yield* providerAssetRepository
         .findProviderAssetReviewById({ providerAssetRowId })
         .pipe(
@@ -667,31 +662,6 @@ const make = Effect.gen(function* () {
         return yield* Effect.fail(
           new AssetCanonicalizationInternalError({
             message: "Approved provider asset mapping was not available after update.",
-          })
-        )
-      }
-
-      const replayResults = yield* Effect.forEach(affectedSources, ({ principalId, sourceId }) =>
-        sourceSyncService.replaySourceSyncJob({ principalId, sourceId }).pipe(
-          Effect.tap(({ jobId, status }) =>
-            Effect.logInfo(
-              { principalId, sourceId, providerAssetRowId, jobId, status },
-              "Queued source replay after provider asset approval"
-            )
-          ),
-          Effect.tapError((error) =>
-            Effect.logError(
-              { principalId, sourceId, providerAssetRowId, error },
-              "Failed to queue source replay after provider asset approval"
-            )
-          ),
-          Effect.either
-        )
-      )
-      if (replayResults.some((result) => result._tag === "Left")) {
-        return yield* Effect.fail(
-          new AssetCanonicalizationInternalError({
-            message: "Failed to queue one or more source replays.",
           })
         )
       }
@@ -779,7 +749,9 @@ const make = Effect.gen(function* () {
                   note: MANUAL_SOURCE_NOTES,
                 }),
                 expectedObservedRepresentations: observedRepresentations,
+                expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
                 ...(expectedApprovedTarget === undefined ? {} : { expectedApprovedTarget }),
+                requestReplayOnApproval: true,
               },
             ],
           })
@@ -792,7 +764,7 @@ const make = Effect.gen(function* () {
             )
           )
 
-        return yield* loadApprovedProviderAssetAndReplay({ providerAssetRowId })
+        return yield* loadApprovedProviderAsset({ providerAssetRowId })
       })
 
   const resolveCoinGeckoDrafts = ({
@@ -1008,7 +980,9 @@ const make = Effect.gen(function* () {
                   note: COINGECKO_SOURCE_NOTES,
                 }),
                 expectedObservedRepresentations: observedRepresentations,
+                expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
                 ...(expectedApprovedTarget === undefined ? {} : { expectedApprovedTarget }),
+                requestReplayOnApproval: true,
               },
             ],
           })
@@ -1021,7 +995,7 @@ const make = Effect.gen(function* () {
             )
           )
 
-        const approvedProviderAsset = yield* loadApprovedProviderAssetAndReplay({
+        const approvedProviderAsset = yield* loadApprovedProviderAsset({
           providerAssetRowId,
         })
 

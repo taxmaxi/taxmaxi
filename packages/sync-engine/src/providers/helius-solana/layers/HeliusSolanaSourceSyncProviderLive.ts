@@ -798,6 +798,11 @@ const buildProviderTransferDraft = ({
   externalId: `${signature}:provider:${movement.role}:${movement.position}`,
   externalGroupId: signature,
   providerAssetId: movement.asset.providerAssetRowId,
+  resolvedMapping: {
+    mappingStatus: movement.asset.mappingStatus,
+    canonicalAssetId: movement.asset.canonicalAssetId,
+    assetRepresentationId: movement.asset.assetRepresentationId,
+  },
   timestamp,
   direction: movement.direction,
   fromAccountRef: null,
@@ -807,7 +812,8 @@ const buildProviderTransferDraft = ({
   networkName: SOLANA_BLOCKCHAIN_NAME,
   networkHash: signature,
   observedBlockchainId: blockchainId,
-  observedRepresentationType: movement.asset.assetKind,
+  observedRepresentationType:
+    movement.asset.representationTypeObserved === false ? null : movement.asset.assetKind,
   observedContractAddress: null,
   observedMintAddress: movement.asset.mintAddress,
   observedDecimals: movement.observedDecimals,
@@ -890,6 +896,38 @@ const collectSplTokenMints = ({
       ...walletTransferEvidence.map((transfer) => transfer.mint),
     ])
   )
+
+const collectObservedDecimalsByMint = ({
+  payload,
+  walletTransferEvidence,
+}: {
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletTransferEvidence: ReadonlyArray<HeliusSolanaWalletTransfer>
+}): ReadonlyMap<string, ReadonlyArray<number>> => {
+  const observed = new Map<string, Set<number>>()
+  const add = (mintAddress: string, decimals: number) => {
+    const decimalsForMint = observed.get(mintAddress) ?? new Set<number>()
+    decimalsForMint.add(decimals)
+    observed.set(mintAddress, decimalsForMint)
+  }
+
+  for (const balance of [
+    ...(payload.meta?.preTokenBalances ?? []),
+    ...(payload.meta?.postTokenBalances ?? []),
+  ]) {
+    add(balance.mint, balance.uiTokenAmount.decimals)
+  }
+  for (const transfer of walletTransferEvidence) {
+    add(transfer.mint, transfer.decimals)
+  }
+
+  return new Map(
+    [...observed.entries()].map(([mintAddress, decimals]) => [
+      mintAddress,
+      [...decimals].sort((left, right) => left - right),
+    ])
+  )
+}
 
 const mapAssetsByMint = (
   requestedMints: ReadonlyArray<string>,
@@ -1853,12 +1891,17 @@ const make = ({
           )
 
           const tokenMints = collectSplTokenMints({ payload, walletTransferEvidence })
+          const observedDecimalsByMint = collectObservedDecimalsByMint({
+            payload,
+            walletTransferEvidence,
+          })
 
           const resolvedTokens = yield* assetResolutionService
             .resolveAssets({
               assets: tokenMints.map((mintAddress) => ({
                 kind: "spl",
                 mintAddress,
+                observedDecimals: observedDecimalsByMint.get(mintAddress) ?? [],
               })),
             })
             .pipe(

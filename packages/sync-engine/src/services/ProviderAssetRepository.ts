@@ -73,8 +73,12 @@ export interface ProviderAssetMappingDraft {
   readonly expectedMappingStatus?: ProviderAssetMappingStatus
   /** Observation snapshot that must still be current when this mapping is approved. */
   readonly expectedObservedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+  /** Provider metadata version that was validated before this approval write. */
+  readonly expectedProviderAssetRetrievedAt?: Date
   /** Current approved target required when this upsert intentionally corrects that target. */
   readonly expectedApprovedTarget?: ProviderAssetApprovedTargetSnapshot
+  /** Request durable source replay when this write changes a used mapping to approved. */
+  readonly requestReplayOnApproval?: boolean
 }
 
 /**
@@ -119,7 +123,7 @@ export interface ProviderAssetSourceRecord {
 /** Exact on-chain identity observed on a movement using one provider asset. */
 export interface ProviderAssetObservedRepresentationRecord {
   readonly blockchainName: string
-  readonly representationType: "native" | "token" | "nft"
+  readonly representationType: "native" | "token" | "nft" | null
   readonly contractAddress: string | null
   readonly mintAddress: string | null
   readonly decimals: number | null

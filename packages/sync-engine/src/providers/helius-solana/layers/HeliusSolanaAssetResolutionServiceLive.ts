@@ -52,6 +52,7 @@ interface DefaultAssetMapping {
 interface NormalizedAssetReference {
   readonly kind: "native" | "spl"
   readonly mintAddress: string | null
+  readonly observedDecimals: ReadonlyArray<number>
   readonly rawProviderPayload: unknown
 }
 
@@ -325,6 +326,7 @@ const normalizeReference = (
     return Effect.succeed({
       kind: "native",
       mintAddress: null,
+      observedDecimals: [],
       rawProviderPayload: reference.rawProviderPayload,
     })
   }
@@ -343,6 +345,9 @@ const normalizeReference = (
   return Effect.succeed({
     kind: "spl",
     mintAddress,
+    observedDecimals: Array.from(new Set(reference.observedDecimals ?? [])).sort(
+      (left, right) => left - right
+    ),
     rawProviderPayload: reference.rawProviderPayload,
   })
 }
@@ -644,40 +649,62 @@ const make = Effect.gen(function* () {
     const mintAddress = reference.mintAddress
     const providerDecimals = providerAsset.exponent
 
-    if (reference.kind === "native" || mintAddress === null || providerDecimals === null) {
+    if (reference.kind === "native" || mintAddress === null) {
       return Effect.succeed(Option.none())
     }
 
-    return assetRepository
-      .findRepresentationByBlockchainAndAddress({
+    return Effect.all({
+      representation: assetRepository.findRepresentationByBlockchainAndAddress({
         blockchainName: SOLANA_BLOCKCHAIN_NAME,
         address: mintAddress,
-      })
-      .pipe(
-        Effect.map(
-          Option.filter(
-            (representation) =>
-              representation.representationType === assetKindFromProviderAsset(providerAsset) &&
-              representation.decimals === providerDecimals
-          )
+      }),
+      observedRepresentations: providerAssetRepository.listProviderAssetObservedRepresentations({
+        providerAssetRowId: providerAsset.id,
+      }),
+    }).pipe(
+      Effect.map(({ representation, observedRepresentations }) => ({
+        observedRepresentations,
+        representation: Option.filter(
+          representation,
+          (representation) =>
+            (!hasHeliusDasPayload(providerAsset) ||
+              representation.representationType === assetKindFromProviderAsset(providerAsset)) &&
+            (providerDecimals === null || representation.decimals === providerDecimals) &&
+            reference.observedDecimals.every(
+              (observedDecimals) => representation.decimals === observedDecimals
+            ) &&
+            observedRepresentations.every(
+              (observed) =>
+                observed.blockchainName === representation.blockchainName &&
+                (observed.representationType === null ||
+                  observed.representationType === representation.representationType) &&
+                observed.contractAddress === representation.contractAddress &&
+                observed.mintAddress === representation.mintAddress &&
+                (observed.decimals === null || observed.decimals === representation.decimals)
+            )
         ),
-        Effect.map(
-          Option.map(
-            (representation) =>
-              ({
-                providerAssetRowId: providerAsset.id,
-                mappingKind: "asset",
-                canonicalAssetId: representation.assetId,
-                assetRepresentationId: representation.id,
-                canonicalFiatCurrency: null,
-                mappingStatus: "approved",
-                reviewerNotes: null,
-                sourceNotes:
-                  "Matched an existing TaxMaxi Solana representation by exact mint, type, and decimals.",
-              }) satisfies ProviderAssetMappingDraft
-          )
+      })),
+      Effect.map(({ representation, observedRepresentations }) =>
+        Option.map(
+          representation,
+          (representation) =>
+            ({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: representation.assetId,
+              assetRepresentationId: representation.id,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: null,
+              sourceNotes:
+                "Matched an existing TaxMaxi Solana representation by exact mint, type, and compatible decimals.",
+              requestReplayOnApproval: true,
+              expectedObservedRepresentations: observedRepresentations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            }) satisfies ProviderAssetMappingDraft
         )
       )
+    )
   }
 
   const loadProviderAssetMapping = ({
@@ -819,7 +846,10 @@ const make = Effect.gen(function* () {
         representation.value.assetId !== mapping.canonicalAssetId ||
         representation.value.id !== mapping.assetRepresentationId ||
         (providerAsset.exponent !== null &&
-          representation.value.decimals !== providerAsset.exponent)
+          representation.value.decimals !== providerAsset.exponent) ||
+        !reference.observedDecimals.every(
+          (observedDecimals) => representation.value.decimals === observedDecimals
+        )
       ) {
         return yield* Effect.fail(
           new HeliusSolanaBrokenApprovedProviderAssetMappingError({
@@ -847,16 +877,35 @@ const make = Effect.gen(function* () {
         mapping,
       })
 
+      const mappedRepresentation =
+        mapping.assetRepresentationId === null
+          ? Option.none()
+          : yield* assetRepository.findRepresentationById({
+              assetRepresentationId: mapping.assetRepresentationId,
+            })
+
       return {
         kind: resolvedKindFromMapping(mapping),
-        assetKind: assetKindFromProviderAsset(providerAsset),
+        assetKind: Option.match(mappedRepresentation, {
+          onNone: () => assetKindFromProviderAsset(providerAsset),
+          onSome: (representation) => representation.representationType,
+        }),
+        representationTypeObserved:
+          reference.kind === "native" ||
+          hasHeliusDasPayload(providerAsset) ||
+          Option.isSome(mappedRepresentation),
         mintAddress: reference.mintAddress,
         providerAssetRowId: providerAsset.id,
         providerAssetId: providerAsset.providerAssetId,
         naturalKey: providerAsset.naturalKey,
         currencyCode: providerAsset.currencyCode,
         name: providerAsset.name,
-        decimals: providerAsset.exponent,
+        decimals:
+          providerAsset.exponent ??
+          Option.match(mappedRepresentation, {
+            onNone: () => null,
+            onSome: (representation) => representation.decimals,
+          }),
         tokenProgram: storedTokenProgram(providerAsset),
         nftHint: storedNftHint(providerAsset),
         mappingStatus: mapping.mappingStatus,

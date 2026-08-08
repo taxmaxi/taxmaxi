@@ -1978,47 +1978,60 @@ const make = Effect.gen(function* () {
             )
           }
 
-          const preparedCanonicalTransferIds = new Set(
-            params.feeTransfers.flatMap((transfer) =>
-              transfer.externalId === null ? [] : [transfer.externalId]
-            )
+          const referencedProviderAssetIds = params.providerTransfers.flatMap((providerTransfer) =>
+            providerTransfer.providerAssetId === null ? [] : [providerTransfer.providerAssetId]
           )
-          const observedProviderAssetIds = params.providerTransfers.flatMap((providerTransfer) =>
-            providerTransfer.providerAssetId !== null &&
-            providerTransfer.observedRepresentationType !== null
-              ? [providerTransfer.providerAssetId]
-              : []
-          )
-          const providerAssetIdsMissingCanonicalTransfers = yield* Effect.forEach(
+          const uniqueProviderAssetIds = [...new Set(referencedProviderAssetIds)].sort()
+
+          if (uniqueProviderAssetIds.length > 0) {
+            yield* tx
+              .select({ id: schema.providerAssets.id })
+              .from(schema.providerAssets)
+              .where(inArray(schema.providerAssets.id, uniqueProviderAssetIds))
+              .orderBy(asc(schema.providerAssets.id))
+              .for("update")
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.persistNormalizedArtifacts.lockProviderAssets"
+                )
+              )
+          }
+
+          const preparedMappingTargets = yield* Effect.forEach(
             params.providerTransfers,
             (providerTransfer) =>
               decodeCanonicalTransferExternalId(providerTransfer.metadata).pipe(
-                Effect.map((canonicalTransferExternalId) =>
-                  providerTransfer.providerAssetId !== null &&
-                  providerTransfer.observedRepresentationType !== null &&
-                  canonicalTransferExternalId !== null &&
-                  !preparedCanonicalTransferIds.has(canonicalTransferExternalId)
-                    ? providerTransfer.providerAssetId
-                    : null
-                )
+                Effect.map((canonicalTransferExternalId) => ({
+                  providerAssetRowId: providerTransfer.providerAssetId,
+                  resolvedMapping: providerTransfer.resolvedMapping,
+                  representationObserved:
+                    providerTransfer.observedRepresentationType !== null ||
+                    providerTransfer.observedContractAddress !== null ||
+                    providerTransfer.observedMintAddress !== null,
+                  preparedTransfer:
+                    canonicalTransferExternalId === null
+                      ? undefined
+                      : params.feeTransfers.find(
+                          (transfer) => transfer.externalId === canonicalTransferExternalId
+                        ),
+                }))
               )
-          ).pipe(Effect.map((ids) => [...new Set(ids.filter((id) => id !== null))]))
-          const observedProviderAssetIdSet = new Set(observedProviderAssetIds)
-          const providerAssetIdsMissingCanonicalTransferSet = new Set(
-            providerAssetIdsMissingCanonicalTransfers
           )
+          const referencedProviderAssetIdSet = new Set(referencedProviderAssetIds)
           const lockedMappings =
-            observedProviderAssetIdSet.size === 0
+            referencedProviderAssetIdSet.size === 0
               ? []
               : yield* tx
                   .select({
                     providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
                     mappingStatus: schema.providerAssetMappings.mappingStatus,
+                    canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+                    assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
                   })
                   .from(schema.providerAssetMappings)
                   .where(
                     inArray(schema.providerAssetMappings.providerAssetRowId, [
-                      ...observedProviderAssetIdSet,
+                      ...referencedProviderAssetIdSet,
                     ])
                   )
                   .orderBy(asc(schema.providerAssetMappings.providerAssetRowId))
@@ -2028,10 +2041,35 @@ const make = Effect.gen(function* () {
                       "sourceNormalizationRepository.persistNormalizedArtifacts.lockApprovalState"
                     )
                   )
-          const requiresReplay = lockedMappings.some(
-            ({ providerAssetRowId, mappingStatus }) =>
-              mappingStatus === "approved" &&
-              providerAssetIdsMissingCanonicalTransferSet.has(providerAssetRowId)
+          const lockedMappingByProviderAssetId = new Map(
+            lockedMappings.map((mapping) => [mapping.providerAssetRowId, mapping])
+          )
+          const requiresReplay = preparedMappingTargets.some(
+            ({ providerAssetRowId, preparedTransfer, representationObserved, resolvedMapping }) => {
+              if (providerAssetRowId === null) {
+                return false
+              }
+
+              const mapping = lockedMappingByProviderAssetId.get(providerAssetRowId)
+              if (resolvedMapping !== undefined) {
+                return (
+                  mapping?.mappingStatus !== resolvedMapping.mappingStatus ||
+                  mapping.canonicalAssetId !== resolvedMapping.canonicalAssetId ||
+                  mapping.assetRepresentationId !== resolvedMapping.assetRepresentationId
+                )
+              }
+              if (preparedTransfer === undefined) {
+                return mapping?.mappingStatus === "approved"
+              }
+
+              return (
+                mapping?.mappingStatus !== "approved" ||
+                mapping.canonicalAssetId !== preparedTransfer.assetId ||
+                (representationObserved &&
+                  mapping.assetRepresentationId !==
+                    (preparedTransfer.assetRepresentationId ?? null))
+              )
+            }
           )
 
           if (requiresReplay && params.replayRequestJobId !== undefined) {
