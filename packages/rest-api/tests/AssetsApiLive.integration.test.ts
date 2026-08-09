@@ -178,6 +178,15 @@ const getAdminStatus = (path: string) =>
 const encodeTestCursor = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
 
+const decodeTestProviderAssetCursor = Schema.decodeUnknownSync(
+  Schema.parseJson(
+    Schema.Struct({
+      version: Schema.Literal(2),
+      providerAssetRowId: Schema.UUID,
+    })
+  )
+)
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AssetsApiLive", () => {
@@ -255,6 +264,37 @@ describe("AssetsApiLive", () => {
 
       expect(acceptedStatus).toBe(200)
       expect(rejectedStatus).toBe(400)
+    }
+  )
+
+  it.each([
+    { endpoint: "canonical assets", max: 500, path: "/v1/assets", requiresAdmin: false },
+    { endpoint: "pending assets", max: 100, path: "/v1/assets/pending", requiresAdmin: false },
+    {
+      endpoint: "admin provider assets",
+      max: 100,
+      path: "/v1/assets/provider-assets",
+      requiresAdmin: true,
+    },
+  ] as const)(
+    "enforces list limit boundaries for $endpoint",
+    async ({ max, path, requiresAdmin }) => {
+      for (const { expectedStatus, limit } of [
+        { expectedStatus: 400, limit: 0 },
+        { expectedStatus: 200, limit: 1 },
+        { expectedStatus: 200, limit: max },
+        { expectedStatus: 400, limit: max + 1 },
+      ]) {
+        const requestPath = `${path}?limit=${limit}`
+        const status = await Effect.runPromise(
+          (requiresAdmin ? getAdminStatus(requestPath) : getStatus(requestPath)).pipe(
+            Effect.provide(HttpLive),
+            Effect.scoped
+          )
+        )
+
+        expect(status).toBe(expectedStatus)
+      }
     }
   )
 
@@ -834,6 +874,11 @@ describe("AssetsApiLive", () => {
       requiresAdmin: true,
     },
     {
+      endpoint: "admin provider assets with a legacy raw UUID cursor",
+      path: `/v1/assets/provider-assets?cursor=${crypto.randomUUID()}`,
+      requiresAdmin: true,
+    },
+    {
       endpoint: "admin provider assets with a canonical cursor",
       path: `/v1/assets/provider-assets?cursor=${encodeTestCursor({ version: 2, assetId: crypto.randomUUID() })}`,
       requiresAdmin: true,
@@ -884,12 +929,19 @@ describe("AssetsApiLive", () => {
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
     const cursor = firstPage.body.page.nextCursor
+    const firstProviderAsset = firstPage.body.providerAssets[0]
 
     expect(firstPage.status).toBe(200)
     expect(cursor).toEqual(expect.any(String))
-    if (cursor === null) {
+    if (cursor === null || firstProviderAsset === undefined) {
       return
     }
+    expect(
+      decodeTestProviderAssetCursor(Buffer.from(cursor, "base64url").toString("utf8"))
+    ).toEqual({
+      version: 2,
+      providerAssetRowId: firstProviderAsset.id,
+    })
 
     const secondPage = await Effect.runPromise(
       getAdminJson({

@@ -96,6 +96,10 @@ export type ProviderAssetReviewListInput = {
   readonly limit?: number
 }
 
+export type AssetRequestOptions = {
+  readonly signal?: AbortSignal
+}
+
 export type AssetsEffectResource = {
   readonly list: (input?: AssetCatalogListInput) => Effect.Effect<AssetCatalogList, unknown, never>
   readonly get: (input: AssetCatalogDetailInput) => Effect.Effect<AssetCatalogAsset, unknown, never>
@@ -105,9 +109,18 @@ export type AssetsEffectResource = {
 }
 
 export type AssetsPromiseResource = {
-  readonly list: (input?: AssetCatalogListInput) => Promise<AssetCatalogList>
-  readonly get: (input: AssetCatalogDetailInput) => Promise<AssetCatalogAsset>
-  readonly listPending: (input?: PendingAssetListInput) => Promise<PendingAssetList>
+  readonly list: (
+    input?: AssetCatalogListInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetCatalogList>
+  readonly get: (
+    input: AssetCatalogDetailInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetCatalogAsset>
+  readonly listPending: (
+    input?: PendingAssetListInput,
+    options?: AssetRequestOptions
+  ) => Promise<PendingAssetList>
 }
 
 export type InternalAssetsEffectResource = AssetsEffectResource & {
@@ -248,16 +261,16 @@ export const makeInternalAssetsEffectResource = (
 
 export const makeAssetsPromiseResource = (
   effect: AssetsEffectResource,
-  run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
+  run: <A>(effect: Effect.Effect<A, unknown, never>, options?: AssetRequestOptions) => Promise<A>
 ): AssetsPromiseResource => ({
-  list: (input) => run(effect.list(input)),
-  get: (input) => run(effect.get(input)),
-  listPending: (input) => run(effect.listPending(input)),
+  list: (input, options) => run(effect.list(input), options),
+  get: (input, options) => run(effect.get(input), options),
+  listPending: (input, options) => run(effect.listPending(input), options),
 })
 
 export const makeInternalAssetsPromiseResource = (
   effect: InternalAssetsEffectResource,
-  run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
+  run: <A>(effect: Effect.Effect<A, unknown, never>, options?: AssetRequestOptions) => Promise<A>
 ): InternalAssetsPromiseResource => ({
   ...makeAssetsPromiseResource(effect, run),
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),

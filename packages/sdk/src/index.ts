@@ -31,6 +31,7 @@ import {
 import {
   makeAssetsEffectResource,
   makeAssetsPromiseResource,
+  type AssetRequestOptions,
   type AssetsEffectResource,
   type AssetsPromiseResource,
 } from "./assets/index.ts"
@@ -80,6 +81,7 @@ export type {
   AssetCatalogList,
   AssetCatalogListInput,
   AssetRepresentation,
+  AssetRequestOptions,
   AssetsEffectResource,
   AssetsPromiseResource,
   PendingAsset,
@@ -232,9 +234,12 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
     })
   }
 
-  private readonly run = async <A>(effect: Effect.Effect<A, unknown, never>): Promise<A> => {
+  private readonly run = async <A>(
+    effect: Effect.Effect<A, unknown, never>,
+    options?: AssetRequestOptions
+  ): Promise<A> => {
     try {
-      return await Effect.runPromise(effect)
+      return await Effect.runPromise(effect, options)
     } catch (error) {
       throw toTaxMaxiError(error)
     }

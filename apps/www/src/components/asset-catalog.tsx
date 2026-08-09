@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import { AssetCatalogDetailPane } from "#/components/asset-catalog-detail-pane"
 import { AssetCatalogListPane } from "#/components/asset-catalog-list-pane"
 import {
+  ASSET_CATALOG_SEARCH_ID,
   matchesPendingAsset,
   type CatalogItem,
   type CatalogScope,
@@ -55,11 +56,15 @@ export function AssetCatalog({
 
   useEffect(() => {
     window.scrollTo({ left: 0, top: 0 })
+
+    if (document.activeElement === document.body) {
+      document.getElementById(ASSET_CATALOG_SEARCH_ID)?.focus()
+    }
   }, [])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !event.isComposing) {
         event.preventDefault()
         onClose()
       }
@@ -261,6 +266,7 @@ function AssetCatalogNavigator({
         catalogStatus={paging.catalogStatus}
         hasLoadError={paging.hasLoadError}
         hasMoreItems={paging.hasMoreItems}
+        isLoading={paging.isLoadingVisibleFeed}
         mobileDetailOpen={selection.mobileDetailOpen}
         onLoadMore={paging.loadMore}
         onQueryChange={(nextQuery) => {
@@ -283,6 +289,7 @@ function AssetCatalogNavigator({
       />
       <AssetCatalogDetailPane
         approvedAssetsUnavailable={approvedAssetsUnavailable}
+        isLoading={paging.isLoadingVisibleFeed}
         mobileBackButtonRef={selection.mobileBackButtonRef}
         mobileDetailOpen={selection.mobileDetailOpen}
         onShowMobileList={selection.showMobileList}

@@ -7,6 +7,8 @@ import {
   type CatalogItem,
 } from "./asset-catalog-model"
 
+const ASSET_CATALOG_DESKTOP_MEDIA_QUERY = "(min-width: 64rem)"
+
 export function useAssetCatalogSelection({
   visibleItems,
 }: {
@@ -48,7 +50,7 @@ export function useAssetCatalogSelection({
   const selectItem = useCallback((item: CatalogItem) => {
     setSelectedKey(getCatalogItemKey(item))
 
-    if (window.matchMedia("(max-width: 1023px)").matches) {
+    if (!window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY).matches) {
       setMobileDetailOpen(true)
     }
   }, [])
@@ -66,7 +68,7 @@ export function useAssetCatalogSelection({
   }, [selectedItem])
 
   useEffect(() => {
-    const desktopQuery = window.matchMedia("(min-width: 1024px)")
+    const desktopQuery = window.matchMedia(ASSET_CATALOG_DESKTOP_MEDIA_QUERY)
     const moveFocusToDesktopList = (matches: boolean) => {
       if (!matches || !mobileDetailOpen || selectedItem === undefined) {
         return
@@ -106,6 +108,7 @@ export function useAssetCatalogSelection({
 
       if (
         event.defaultPrevented ||
+        event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||

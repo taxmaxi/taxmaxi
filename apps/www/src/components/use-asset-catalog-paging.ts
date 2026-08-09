@@ -106,6 +106,7 @@ export function useAssetCatalogPaging({
     catalogStatus,
     hasLoadError,
     hasMoreItems,
+    isLoadingVisibleFeed,
     loadMore,
     resetVisibleItems,
     retryLoad,

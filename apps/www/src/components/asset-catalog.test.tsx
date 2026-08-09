@@ -11,6 +11,7 @@ import {
 import { AssetCatalog } from "./asset-catalog"
 
 let desktopViewport = false
+let pixelDesktopViewport: boolean | undefined
 const desktopChangeListeners = new Set<EventListenerOrEventListenerObject>()
 
 const setDesktopViewport = (matches: boolean) => {
@@ -29,12 +30,14 @@ const setDesktopViewport = (matches: boolean) => {
 
 const makeAsset = ({
   id,
+  logoUrl = null,
   name,
   representations = [],
   symbol,
   coingeckoCoinId = null,
 }: {
   id: string
+  logoUrl?: string | null
   name: string
   representations?: TaxMaxiAsset["representations"]
   symbol: string
@@ -44,7 +47,7 @@ const makeAsset = ({
   name,
   symbol,
   coingeckoCoinId,
-  logoUrl: null,
+  logoUrl,
   type: "fungible",
   representations,
 })
@@ -72,24 +75,32 @@ describe("AssetCatalog", () => {
   beforeAll(() => {
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
-      value: (query: string): MediaQueryList => ({
-        get matches() {
-          return query === "(min-width: 1024px)" ? desktopViewport : !desktopViewport
-        },
-        media: query,
-        onchange: null,
-        addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
-          if (query === "(min-width: 1024px)") {
-            desktopChangeListeners.add(listener)
-          }
-        },
-        removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
-          desktopChangeListeners.delete(listener)
-        },
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(() => true),
-      }),
+      value: (query: string): MediaQueryList => {
+        return {
+          get matches() {
+            if (query === "(min-width: 64rem)") {
+              return desktopViewport
+            }
+            if (query === "(min-width: 1024px)") {
+              return pixelDesktopViewport ?? desktopViewport
+            }
+            return !(pixelDesktopViewport ?? desktopViewport)
+          },
+          media: query,
+          onchange: null,
+          addEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+            if (query === "(min-width: 1024px)" || query === "(min-width: 64rem)") {
+              desktopChangeListeners.add(listener)
+            }
+          },
+          removeEventListener: (_type: string, listener: EventListenerOrEventListenerObject) => {
+            desktopChangeListeners.delete(listener)
+          },
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          dispatchEvent: vi.fn(() => true),
+        }
+      },
     })
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
@@ -101,7 +112,24 @@ describe("AssetCatalog", () => {
   afterEach(() => {
     cleanup()
     desktopViewport = false
+    pixelDesktopViewport = undefined
     desktopChangeListeners.clear()
+  })
+
+  it("moves focus to search when the catalog opens", () => {
+    document.body.innerHTML = '<button id="catalog-entry-opener"></button>'
+    document.getElementById("catalog-entry-opener")?.focus()
+    document.getElementById("catalog-entry-opener")?.remove()
+
+    render(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Search assets" }))
   })
 
   it("selects the next and previous visible asset with the arrow keys", () => {
@@ -346,6 +374,22 @@ describe("AssetCatalog", () => {
     expect(status.textContent).toBe(
       "Loading assets. Some assets could not be loaded. Showing 1 loaded match"
     )
+  })
+
+  it("shows loading state instead of an empty registry before the first feeds settle", () => {
+    render(
+      <AssetCatalog
+        assets={[]}
+        isLoadingApproved={true}
+        isLoadingPending={true}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    expect(screen.getAllByText("Loading assets")).toHaveLength(2)
+    expect(screen.queryByText("No assets found")).toBeNull()
+    expect(screen.queryByText("The registry has no assets to show yet.")).toBeNull()
   })
 
   it.each([
@@ -627,6 +671,69 @@ describe("AssetCatalog", () => {
     expect(screen.getByRole("heading", { level: 2, name: "ETH" })).toBeTruthy()
   })
 
+  it.each(["ArrowDown", "ArrowUp", "Enter"])(
+    "does not handle %s while the search input is composing text",
+    (key) => {
+      render(
+        <AssetCatalog
+          assets={[
+            makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" }),
+            makeAsset({ id: "ethereum", name: "Ether", symbol: "ETH" }),
+          ]}
+          onClose={vi.fn()}
+          pendingAssets={[]}
+        />
+      )
+
+      const search = screen.getByRole("combobox", { name: "Search assets" })
+      const wasNotCancelled = fireEvent.keyDown(search, { isComposing: true, key })
+
+      expect(wasNotCancelled).toBe(true)
+      expect(search.getAttribute("aria-activedescendant")).toBe(
+        "asset-catalog-option-approved-bitcoin"
+      )
+      expect(screen.queryByRole("button", { name: "Back to asset list" })).toBeNull()
+      expect(document.activeElement).toBe(search)
+    }
+  )
+
+  it("does not close the catalog when Escape cancels text composition", () => {
+    const onClose = vi.fn()
+    render(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        onClose={onClose}
+        pendingAssets={[]}
+      />
+    )
+
+    const search = screen.getByRole("combobox", { name: "Search assets" })
+    const wasNotCancelled = fireEvent.keyDown(search, { isComposing: true, key: "Escape" })
+
+    expect(wasNotCancelled).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+    expect(document.activeElement).toBe(search)
+  })
+
+  it("closes the catalog on an ordinary Escape press", () => {
+    const onClose = vi.fn()
+    render(
+      <AssetCatalog
+        assets={[makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" })]}
+        onClose={onClose}
+        pendingAssets={[]}
+      />
+    )
+
+    const wasNotCancelled = fireEvent.keyDown(
+      screen.getByRole("combobox", { name: "Search assets" }),
+      { key: "Escape" }
+    )
+
+    expect(wasNotCancelled).toBe(false)
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
   it("does not hijack arrow keys from unrelated controls", () => {
     render(
       <AssetCatalog
@@ -647,6 +754,29 @@ describe("AssetCatalog", () => {
   })
 
   it("moves focus to the selected row when the mobile detail crosses the desktop breakpoint", async () => {
+    render(
+      <AssetCatalog
+        assets={[
+          makeAsset({ id: "bitcoin", name: "Bitcoin", symbol: "BTC" }),
+          makeAsset({ id: "ethereum", name: "Ether", symbol: "ETH" }),
+        ]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    const ethereum = screen.getByRole("option", { name: /ETH/ })
+    fireEvent.click(ethereum)
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Back to asset list" }))
+
+    setDesktopViewport(true)
+
+    await waitFor(() => expect(document.activeElement).toBe(ethereum))
+    expect(screen.queryByRole("button", { name: "Back to asset list" })).toBeNull()
+  })
+
+  it("keeps selection and resize behavior aligned with Tailwind's rem breakpoint", async () => {
+    pixelDesktopViewport = true
     render(
       <AssetCatalog
         assets={[
@@ -694,6 +824,35 @@ describe("AssetCatalog", () => {
     expect(screen.getByText("duplicate-provider")).toBeTruthy()
   })
 
+  it("falls back to the asset symbol when a remote logo fails", () => {
+    render(
+      <AssetCatalog
+        assets={[
+          makeAsset({
+            id: "bitcoin",
+            logoUrl: "https://assets.example.test/bitcoin.png",
+            name: "Bitcoin",
+            symbol: "BTC",
+          }),
+        ]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    const listLogo = screen.getAllByRole("img", { name: "Bitcoin logo" })[0]
+    const mark = listLogo?.parentElement
+
+    expect(listLogo).toBeDefined()
+    if (listLogo === undefined) {
+      return
+    }
+    fireEvent.error(listLogo)
+
+    expect(mark?.querySelector("img")).toBeNull()
+    expect(mark?.textContent).toBe("BT")
+  })
+
   it("links approved details to their public asset page", () => {
     render(
       <AssetCatalog
@@ -712,5 +871,30 @@ describe("AssetCatalog", () => {
     expect(screen.getByRole("link", { name: "Open public asset page" }).getAttribute("href")).toBe(
       "/assets/00000000-0000-4000-8000-000000000010"
     )
+  })
+
+  it("keeps the active locale in approved asset links", () => {
+    window.history.replaceState(null, "", "/de/assets")
+    try {
+      render(
+        <AssetCatalog
+          assets={[
+            makeAsset({
+              id: "00000000-0000-4000-8000-000000000010",
+              name: "Bitcoin",
+              symbol: "BTC",
+            }),
+          ]}
+          onClose={vi.fn()}
+          pendingAssets={[]}
+        />
+      )
+
+      expect(
+        screen.getByRole("link", { name: "Open public asset page" }).getAttribute("href")
+      ).toBe("/de/assets/00000000-0000-4000-8000-000000000010")
+    } finally {
+      window.history.replaceState(null, "", "/")
+    }
   })
 })

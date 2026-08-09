@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import * as Effect from "effect/Effect"
 import {
   DEFAULT_BASE_URL,
@@ -669,6 +669,32 @@ describe("TaxMaxi Promise client", () => {
         url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
       }),
     ])
+  })
+
+  it("aborts an asset request when its signal is cancelled", async () => {
+    let requestSignal: AbortSignal | undefined
+    const taxmaxi = new TaxMaxi({
+      apiKey: "",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (_input, init) => {
+        requestSignal = init?.signal ?? undefined
+        return new Promise<Response>((_resolve, reject) => {
+          requestSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Request aborted", "AbortError")),
+            { once: true }
+          )
+        })
+      },
+    })
+    const controller = new AbortController()
+    const request = taxmaxi.assets.list({}, { signal: controller.signal })
+
+    await vi.waitFor(() => expect(requestSignal).toBeDefined())
+    controller.abort()
+
+    await expect(request).rejects.toBeInstanceOf(TaxMaxiError)
+    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true))
   })
 
   it("plumbs asset review endpoints through the internal assets resource", async () => {

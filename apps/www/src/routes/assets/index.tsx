@@ -70,26 +70,52 @@ export function retryAssetCatalogFeed({
   return isFetchNextPageError ? fetchNextPage() : refetch()
 }
 
-export async function loadAssetCatalogFeeds({
+export function loadAssetCatalogFeeds({
+  cancelApproved,
+  cancelPending,
   loadApproved,
   loadPending,
+  signal,
 }: {
+  readonly cancelApproved: () => Promise<unknown>
+  readonly cancelPending: () => Promise<unknown>
   readonly loadApproved: () => Promise<unknown>
   readonly loadPending: () => Promise<unknown>
-}): Promise<void> {
-  await Promise.allSettled([loadApproved(), loadPending()])
+  readonly signal: AbortSignal
+}): void {
+  if (signal.aborted) {
+    return
+  }
+
+  const cancelLoads = () => {
+    void Promise.allSettled([cancelApproved(), cancelPending()])
+  }
+  signal.addEventListener("abort", cancelLoads, { once: true })
+
+  if (signal.aborted) {
+    cancelLoads()
+    return
+  }
+
+  void Promise.allSettled([loadApproved(), loadPending()]).finally(() => {
+    signal.removeEventListener("abort", cancelLoads)
+  })
 }
 
 export const Route = createFileRoute("/assets/")({
-  loader: async ({ context }) => {
+  loader: async ({ abortController, context }) => {
     const taxmaxi = context.taxmaxi()
+    const approvedQuery = queries.assetList(taxmaxi, assetListInput)
+    const pendingQuery = queries.pendingAssetList(taxmaxi, pendingAssetListInput)
+
     return loadAssetCatalogFeeds({
-      loadApproved: () =>
-        context.queryClient.ensureInfiniteQueryData(queries.assetList(taxmaxi, assetListInput)),
-      loadPending: () =>
-        context.queryClient.ensureInfiniteQueryData(
-          queries.pendingAssetList(taxmaxi, pendingAssetListInput)
-        ),
+      cancelApproved: () =>
+        context.queryClient.cancelQueries({ exact: true, queryKey: approvedQuery.queryKey }),
+      cancelPending: () =>
+        context.queryClient.cancelQueries({ exact: true, queryKey: pendingQuery.queryKey }),
+      loadApproved: () => context.queryClient.ensureInfiniteQueryData(approvedQuery),
+      loadPending: () => context.queryClient.ensureInfiniteQueryData(pendingQuery),
+      signal: abortController.signal,
     })
   },
   head: () => ({

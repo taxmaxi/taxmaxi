@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect"
 import {
   makeInternalAssetsEffectResource,
   makeInternalAssetsPromiseResource,
+  type AssetRequestOptions,
   type InternalAssetsEffectResource,
   type InternalAssetsPromiseResource,
 } from "./assets/index.ts"
@@ -90,9 +91,12 @@ export class TaxMaxiInternal implements TaxMaxiInternalPromiseResources {
     return makeTaxMaxiInternalEffectClient(options)
   }
 
-  private readonly run = async <A>(effect: Effect.Effect<A, unknown, never>): Promise<A> => {
+  private readonly run = async <A>(
+    effect: Effect.Effect<A, unknown, never>,
+    options?: AssetRequestOptions
+  ): Promise<A> => {
     try {
-      return await Effect.runPromise(effect)
+      return await Effect.runPromise(effect, options)
     } catch (error) {
       throw toTaxMaxiError(error)
     }

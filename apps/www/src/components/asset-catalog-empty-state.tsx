@@ -2,10 +2,12 @@ import { Coins } from "lucide-react"
 
 export function AssetCatalogEmptyState({
   approvedAssetsUnavailable = false,
+  isLoading = false,
   pendingAssetsUnavailable = false,
   query,
 }: {
   readonly approvedAssetsUnavailable?: boolean
+  readonly isLoading?: boolean
   readonly pendingAssetsUnavailable?: boolean
   readonly query: string
 }) {
@@ -17,18 +19,26 @@ export function AssetCatalogEmptyState({
           ? "Approved assets unavailable"
           : pendingAssetsUnavailable
             ? "Pending assets unavailable"
-            : "No assets found"}
+            : isLoading
+              ? "Loading assets"
+              : "No assets found"}
       </p>
       <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
         {approvedAssetsUnavailable
           ? pendingAssetsUnavailable
             ? "The asset feeds are unavailable. Try again in a moment."
-            : "Pending assets are still available. Try loading approved assets again."
+            : isLoading
+              ? "Pending assets are still loading."
+              : "Pending assets are still available. Try loading approved assets again."
           : pendingAssetsUnavailable
-            ? "Approved assets are still available. Try loading pending assets again."
-            : query.trim().length === 0
-              ? "The registry has no assets to show yet."
-              : "Try a symbol, provider, network, or contract address."}
+            ? isLoading
+              ? "Approved assets are still loading."
+              : "Approved assets are still available. Try loading pending assets again."
+            : isLoading
+              ? "Fetching the asset registry."
+              : query.trim().length === 0
+                ? "The registry has no assets to show yet."
+                : "Try a symbol, provider, network, or contract address."}
       </p>
     </div>
   )

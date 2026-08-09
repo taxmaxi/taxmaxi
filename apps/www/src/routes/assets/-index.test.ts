@@ -50,9 +50,15 @@ describe("useDebouncedCatalogQuery", () => {
 })
 
 describe("loadAssetCatalogFeeds", () => {
+  const makeLoaderControls = () => ({
+    cancelApproved: vi.fn().mockResolvedValue(undefined),
+    cancelPending: vi.fn().mockResolvedValue(undefined),
+    signal: new AbortController().signal,
+  })
+
   it.each(["approved", "pending"] as const)(
     "keeps the catalog loader successful when the %s feed fails",
-    async (failedFeed) => {
+    (failedFeed) => {
       const loadApproved =
         failedFeed === "approved"
           ? vi.fn().mockRejectedValue(new Error("approved unavailable"))
@@ -62,19 +68,54 @@ describe("loadAssetCatalogFeeds", () => {
           ? vi.fn().mockRejectedValue(new Error("pending unavailable"))
           : vi.fn().mockResolvedValue(undefined)
 
-      await expect(loadAssetCatalogFeeds({ loadApproved, loadPending })).resolves.toBeUndefined()
+      expect(
+        loadAssetCatalogFeeds({ ...makeLoaderControls(), loadApproved, loadPending })
+      ).toBeUndefined()
       expect(loadApproved).toHaveBeenCalledOnce()
       expect(loadPending).toHaveBeenCalledOnce()
     }
   )
 
-  it("keeps the catalog loader successful when both feeds fail", async () => {
+  it("keeps the catalog loader successful when both feeds fail", () => {
     const loadApproved = vi.fn().mockRejectedValue(new Error("approved unavailable"))
     const loadPending = vi.fn().mockRejectedValue(new Error("pending unavailable"))
 
-    await expect(loadAssetCatalogFeeds({ loadApproved, loadPending })).resolves.toBeUndefined()
+    expect(
+      loadAssetCatalogFeeds({ ...makeLoaderControls(), loadApproved, loadPending })
+    ).toBeUndefined()
     expect(loadApproved).toHaveBeenCalledOnce()
     expect(loadPending).toHaveBeenCalledOnce()
+  })
+
+  it("does not wait for a slow feed before completing the route loader", () => {
+    const loadApproved = vi.fn().mockResolvedValue(undefined)
+    const loadPending = vi.fn().mockReturnValue(new Promise(() => undefined))
+
+    expect(
+      loadAssetCatalogFeeds({ ...makeLoaderControls(), loadApproved, loadPending })
+    ).toBeUndefined()
+    expect(loadApproved).toHaveBeenCalledOnce()
+    expect(loadPending).toHaveBeenCalledOnce()
+  })
+
+  it("cancels both detached feed loads when route preloading is abandoned", () => {
+    const abortController = new AbortController()
+    const cancelApproved = vi.fn().mockResolvedValue(undefined)
+    const cancelPending = vi.fn().mockResolvedValue(undefined)
+    const loadApproved = vi.fn().mockReturnValue(new Promise(() => undefined))
+    const loadPending = vi.fn().mockReturnValue(new Promise(() => undefined))
+
+    loadAssetCatalogFeeds({
+      cancelApproved,
+      cancelPending,
+      loadApproved,
+      loadPending,
+      signal: abortController.signal,
+    })
+    abortController.abort()
+
+    expect(cancelApproved).toHaveBeenCalledOnce()
+    expect(cancelPending).toHaveBeenCalledOnce()
   })
 })
 

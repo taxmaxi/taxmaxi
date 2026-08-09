@@ -12,6 +12,7 @@ import {
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import { Separator } from "#/components/ui/separator"
+import { localizeHref } from "#/paraglide/runtime"
 import {
   describeTaxMaxiAsset,
   formatAssetType,
@@ -22,6 +23,7 @@ import { cn } from "#/lib/utils"
 
 export function AssetCatalogDetailPane({
   approvedAssetsUnavailable,
+  isLoading,
   mobileBackButtonRef,
   mobileDetailOpen,
   onShowMobileList,
@@ -31,6 +33,7 @@ export function AssetCatalogDetailPane({
   selectedItem,
 }: {
   readonly approvedAssetsUnavailable: boolean
+  readonly isLoading: boolean
   readonly mobileBackButtonRef: RefObject<HTMLButtonElement | null>
   readonly mobileDetailOpen: boolean
   readonly onShowMobileList: () => void
@@ -62,6 +65,7 @@ export function AssetCatalogDetailPane({
       ) : (
         <AssetCatalogEmptyState
           approvedAssetsUnavailable={approvedAssetsUnavailable && scope !== "pending"}
+          isLoading={isLoading}
           pendingAssetsUnavailable={pendingAssetsUnavailable && scope !== "approved"}
           query={query}
         />
@@ -101,7 +105,7 @@ function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
       </p>
 
       <Button asChild={true} className="h-11 self-start" variant="outline">
-        <a href={`/assets/${encodeURIComponent(item.asset.id)}`}>
+        <a href={localizeHref(`/assets/${encodeURIComponent(item.asset.id)}`)}>
           Open public asset page
           <ArrowUpRight data-icon="inline-end" />
         </a>

@@ -26,6 +26,7 @@ export function AssetCatalogListPane({
   catalogStatus,
   hasLoadError,
   hasMoreItems,
+  isLoading,
   mobileDetailOpen,
   onLoadMore,
   onQueryChange,
@@ -46,6 +47,7 @@ export function AssetCatalogListPane({
   readonly catalogStatus: string
   readonly hasLoadError: boolean
   readonly hasMoreItems: boolean
+  readonly isLoading: boolean
   readonly mobileDetailOpen: boolean
   readonly onLoadMore: () => void
   readonly onQueryChange: (query: string) => void
@@ -117,6 +119,7 @@ export function AssetCatalogListPane({
         {visibleItems.length === 0 ? (
           <AssetCatalogEmptyState
             approvedAssetsUnavailable={approvedAssetsUnavailable && scope !== "pending"}
+            isLoading={isLoading}
             pendingAssetsUnavailable={
               pendingAssetsUnavailable &&
               (scope === "pending" || (scope === "all" && approvedItemsCount === 0))

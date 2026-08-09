@@ -50,8 +50,8 @@ export const queries = {
 
     return infiniteQueryOptions({
       queryKey: queryKeys.assetList(normalizedInput),
-      queryFn: async ({ pageParam }) =>
-        taxmaxi.assets.list({ ...normalizedInput, cursor: pageParam }),
+      queryFn: ({ pageParam, signal }) =>
+        taxmaxi.assets.list({ ...normalizedInput, cursor: pageParam }, { signal }),
       initialPageParam: getInitialPageCursor(),
       getNextPageParam: (lastPage) => lastPage.page.nextCursor ?? undefined,
       placeholderData: keepPreviousData,
@@ -69,8 +69,8 @@ export const queries = {
 
     return infiniteQueryOptions({
       queryKey: queryKeys.pendingAssetList(normalizedInput),
-      queryFn: async ({ pageParam }) =>
-        taxmaxi.assets.listPending({ ...normalizedInput, cursor: pageParam }),
+      queryFn: ({ pageParam, signal }) =>
+        taxmaxi.assets.listPending({ ...normalizedInput, cursor: pageParam }, { signal }),
       initialPageParam: getInitialPageCursor(),
       getNextPageParam: (lastPage) => lastPage.page.nextCursor ?? undefined,
       placeholderData: keepPreviousData,
