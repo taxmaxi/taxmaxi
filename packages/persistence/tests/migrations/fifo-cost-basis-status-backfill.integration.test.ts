@@ -51,6 +51,7 @@ describe("FIFO cost basis status backfill", () => {
     const pendingDownstreamDestinationLegId = "00000000-0000-0000-0000-000000000708"
     const providerPendingOriginLegId = "00000000-0000-0000-0000-000000000709"
     const providerPendingDestinationLegId = "00000000-0000-0000-0000-000000000710"
+    const knownTwinSourceLegId = "00000000-0000-0000-0000-000000000718"
     const pendingSourceLotId = "00000000-0000-0000-0000-000000000711"
     const pendingDestinationLotId = "00000000-0000-0000-0000-000000000712"
     const knownSourceLotId = "00000000-0000-0000-0000-000000000713"
@@ -58,6 +59,8 @@ describe("FIFO cost basis status backfill", () => {
     const pendingDownstreamDestinationLotId = "00000000-0000-0000-0000-000000000715"
     const providerPendingSourceLotId = "00000000-0000-0000-0000-000000000716"
     const providerPendingDestinationLotId = "00000000-0000-0000-0000-000000000717"
+    const knownTwinSourceLotId = "00000000-0000-0000-0000-000000000718"
+    const knownTwinDestinationLotId = "00000000-0000-0000-0000-000000000719"
     const providerTransactionId = "00000000-0000-0000-0000-000000000731"
     const providerTransferId = "00000000-0000-0000-0000-000000000732"
     const providerCanonicalTransferId = "00000000-0000-0000-0000-000000000733"
@@ -140,7 +143,7 @@ describe("FIFO cost basis status backfill", () => {
             externalId: "legacy-pending-transfer-out",
             timestamp: new Date("2024-02-01T00:00:00.000Z"),
             assetId: TEST_BTC_ASSET_ID,
-            amount: "1",
+            amount: "2",
             kind: "disposal",
             provenance: "deterministic",
             derivationRule: "internal_transfer_out",
@@ -158,7 +161,7 @@ describe("FIFO cost basis status backfill", () => {
             externalId: "legacy-pending-transfer-in",
             timestamp: new Date("2024-02-01T00:00:00.000Z"),
             assetId: TEST_BTC_ASSET_ID,
-            amount: "1",
+            amount: "2",
             kind: "acquisition",
             provenance: "deterministic",
             derivationRule: "internal_transfer_in",
@@ -168,6 +171,20 @@ describe("FIFO cost basis status backfill", () => {
                 canonicalTransferId: "00000000-0000-0000-0000-000000000722",
               },
             },
+          },
+          {
+            id: knownTwinSourceLegId,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: "legacy-known-twin-acquisition",
+            timestamp: new Date("2024-01-01T00:00:00.000Z"),
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1",
+            kind: "acquisition",
+            provenance: "deterministic",
+            derivationRule: "spot_buy",
+            fiatAmount: "0",
+            fiatCurrency: "EUR",
           },
           {
             id: knownSourceLegId,
@@ -306,6 +323,7 @@ describe("FIFO cost basis status backfill", () => {
             costBasisCurrency: "EUR",
             costBasisStatus: "known",
             sourceLegId: pendingSourceLegId,
+            createdAt: new Date("2024-01-01T00:00:00.000Z"),
           },
           {
             id: pendingDestinationLotId,
@@ -319,6 +337,35 @@ describe("FIFO cost basis status backfill", () => {
             costBasisCurrency: "EUR",
             costBasisStatus: "known",
             sourceLegId: pendingDestinationLegId,
+            sourceLegSequence: 0,
+          },
+          {
+            id: knownTwinSourceLotId,
+            principalId: fixture.principalId,
+            sourceId: fixture.sourceId,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2024-01-01T00:00:00.000Z"),
+            originalAmount: "1",
+            remainingAmount: "0",
+            costBasisPerToken: "0",
+            costBasisCurrency: "EUR",
+            costBasisStatus: "known",
+            sourceLegId: knownTwinSourceLegId,
+            createdAt: new Date("2024-01-01T00:00:01.000Z"),
+          },
+          {
+            id: knownTwinDestinationLotId,
+            principalId: fixture.principalId,
+            sourceId: secondSourceId,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2024-01-01T00:00:00.000Z"),
+            originalAmount: "1",
+            remainingAmount: "1",
+            costBasisPerToken: "0",
+            costBasisCurrency: "EUR",
+            costBasisStatus: "known",
+            sourceLegId: pendingDestinationLegId,
+            sourceLegSequence: 1,
           },
           {
             id: knownSourceLotId,
@@ -391,6 +438,14 @@ describe("FIFO cost basis status backfill", () => {
           {
             disposalLegId: pendingOriginLegId,
             fifoLotId: pendingSourceLotId,
+            matchedAmount: "1",
+            costBasis: "0",
+            proceeds: "0",
+            gainLoss: "0",
+          },
+          {
+            disposalLegId: pendingOriginLegId,
+            fifoLotId: knownTwinSourceLotId,
             matchedAmount: "1",
             costBasis: "0",
             proceeds: "0",
@@ -532,6 +587,8 @@ describe("FIFO cost basis status backfill", () => {
               pendingDownstreamDestinationLotId,
               providerPendingSourceLotId,
               providerPendingDestinationLotId,
+              knownTwinSourceLotId,
+              knownTwinDestinationLotId,
             ])
           )
       })
@@ -544,5 +601,7 @@ describe("FIFO cost basis status backfill", () => {
     expect(statusById.get(providerPendingDestinationLotId)).toBe("pending_review")
     expect(statusById.get(knownSourceLotId)).toBe("known")
     expect(statusById.get(knownDestinationLotId)).toBe("known")
+    expect(statusById.get(knownTwinSourceLotId)).toBe("known")
+    expect(statusById.get(knownTwinDestinationLotId)).toBe("known")
   })
 })

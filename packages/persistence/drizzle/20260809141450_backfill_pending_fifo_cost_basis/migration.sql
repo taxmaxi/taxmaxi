@@ -1,4 +1,16 @@
-WITH RECURSIVE pending_lots (id) AS (
+WITH RECURSIVE ranked_transfer_matches AS (
+	SELECT
+		transfer_match.disposal_leg_id,
+		transfer_match.fifo_lot_id,
+		row_number() OVER (
+			PARTITION BY transfer_match.disposal_leg_id
+			ORDER BY source_lot.acquired_at, source_lot.created_at
+		) - 1 AS source_leg_sequence
+	FROM disposal_matches transfer_match
+	INNER JOIN fifo_lots source_lot
+		ON source_lot.id = transfer_match.fifo_lot_id
+),
+pending_lots (id) AS (
 	SELECT lot.id
 	FROM fifo_lots lot
 	WHERE lot.cost_basis_status = 'pending_review'
@@ -16,9 +28,7 @@ WITH RECURSIVE pending_lots (id) AS (
 
 	SELECT destination_lot.id
 	FROM pending_lots pending_lot
-	INNER JOIN fifo_lots pending_source_lot
-		ON pending_source_lot.id = pending_lot.id
-	INNER JOIN disposal_matches transfer_match
+	INNER JOIN ranked_transfer_matches transfer_match
 		ON transfer_match.fifo_lot_id = pending_lot.id
 	INNER JOIN transaction_legs origin_leg
 		ON origin_leg.id = transfer_match.disposal_leg_id
@@ -32,11 +42,7 @@ WITH RECURSIVE pending_lots (id) AS (
 			IS NOT DISTINCT FROM origin_leg.metadata #>> '{reconciliation,canonicalTransferId}'
 	INNER JOIN fifo_lots destination_lot
 		ON destination_lot.source_leg_id = destination_leg.id
-		AND destination_lot.asset_id = pending_source_lot.asset_id
-		AND destination_lot.acquired_at IS NOT DISTINCT FROM pending_source_lot.acquired_at
-		AND destination_lot.original_amount IS NOT DISTINCT FROM transfer_match.matched_amount
-		AND destination_lot.cost_basis_per_token IS NOT DISTINCT FROM pending_source_lot.cost_basis_per_token
-		AND destination_lot.cost_basis_currency IS NOT DISTINCT FROM pending_source_lot.cost_basis_currency
+		AND destination_lot.source_leg_sequence = transfer_match.source_leg_sequence
 )
 UPDATE fifo_lots lot
 SET
