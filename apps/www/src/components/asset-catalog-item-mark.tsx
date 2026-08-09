@@ -1,6 +1,7 @@
 import { useState } from "react"
 
 import { cn } from "#/lib/utils"
+import { m } from "#/paraglide/messages"
 import { getCatalogItemName, type CatalogItem } from "./asset-catalog-model"
 
 export function AssetCatalogItemMark({
@@ -24,7 +25,7 @@ export function AssetCatalogItemMark({
     >
       {usableLogoUrl ? (
         <img
-          alt={`${getCatalogItemName(item)} logo`}
+          alt={m["assetCatalog.logoAlt"]({ name: getCatalogItemName(item) })}
           className="size-full object-cover"
           loading="lazy"
           onError={() => setFailedLogoUrl(usableLogoUrl)}

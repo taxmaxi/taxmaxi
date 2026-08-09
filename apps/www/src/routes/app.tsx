@@ -14,6 +14,7 @@ import { PageShell } from "#/components/page-shell"
 import { Button } from "#/components/ui/button"
 import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
 import type { Account } from "#/lib/dashboard-types"
+import { m } from "#/paraglide/messages"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
 
@@ -132,14 +133,14 @@ function RouteComponent() {
             variant="outline"
           >
             <Link
-              aria-label="Asset catalog"
+              aria-label={m["assetCatalog.open"]()}
               id={ASSET_CATALOG_OPENER_ID}
               preload="intent"
-              title="Asset catalog"
+              title={m["assetCatalog.open"]()}
               to="/assets"
             >
               <LibraryBig data-icon="inline-start" />
-              <span className="hidden sm:inline">Asset catalog</span>
+              <span className="hidden sm:inline">{m["assetCatalog.open"]()}</span>
             </Link>
           </Button>
         </AppHeader>

@@ -8,7 +8,65 @@ import {
   type TaxMaxiAsset,
   type TaxMaxiPendingAsset,
 } from "#/lib/assets"
-import { AssetCatalog } from "./asset-catalog"
+import { m } from "#/paraglide/messages"
+import { AssetCatalog as AssetCatalogView } from "./asset-catalog"
+
+function AssetCatalog({
+  approvedAssetsUnavailable = false,
+  assets,
+  canLoadMoreApproved = false,
+  canLoadMorePending = false,
+  isLoadingApproved = false,
+  isLoadingPending = false,
+  onClose,
+  onLoadMoreApproved,
+  onLoadMorePending,
+  onQueryChange,
+  onRetryApproved,
+  onRetryPending,
+  pendingAssets,
+  pendingAssetsUnavailable = false,
+}: {
+  readonly approvedAssetsUnavailable?: boolean
+  readonly assets: ReadonlyArray<TaxMaxiAsset>
+  readonly canLoadMoreApproved?: boolean
+  readonly canLoadMorePending?: boolean
+  readonly isLoadingApproved?: boolean
+  readonly isLoadingPending?: boolean
+  readonly onClose: () => void
+  readonly onLoadMoreApproved?: () => Promise<unknown> | void
+  readonly onLoadMorePending?: () => Promise<unknown> | void
+  readonly onQueryChange?: (query: string) => void
+  readonly onRetryApproved?: () => Promise<unknown> | void
+  readonly onRetryPending?: () => Promise<unknown> | void
+  readonly pendingAssets: ReadonlyArray<TaxMaxiPendingAsset>
+  readonly pendingAssetsUnavailable?: boolean
+}) {
+  return (
+    <AssetCatalogView
+      feeds={{
+        approved: {
+          canLoadMore: canLoadMoreApproved,
+          isLoading: isLoadingApproved,
+          items: assets,
+          loadMore: onLoadMoreApproved,
+          retry: onRetryApproved,
+          unavailable: approvedAssetsUnavailable,
+        },
+        pending: {
+          canLoadMore: canLoadMorePending,
+          isLoading: isLoadingPending,
+          items: pendingAssets,
+          loadMore: onLoadMorePending,
+          retry: onRetryPending,
+          unavailable: pendingAssetsUnavailable,
+        },
+      }}
+      onClose={onClose}
+      onQueryChange={onQueryChange}
+    />
+  )
+}
 
 let desktopViewport = false
 let pixelDesktopViewport: boolean | undefined
@@ -891,7 +949,9 @@ describe("AssetCatalog", () => {
       )
 
       expect(
-        screen.getByRole("link", { name: "Open public asset page" }).getAttribute("href")
+        screen
+          .getByRole("link", { name: m["assetCatalog.actions.openPublicPage"]() })
+          .getAttribute("href")
       ).toBe("/de/assets/00000000-0000-4000-8000-000000000010")
     } finally {
       window.history.replaceState(null, "", "/")

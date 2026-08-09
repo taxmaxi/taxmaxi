@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "#/com
 import { Separator } from "#/components/ui/separator"
 import {
   describeTaxMaxiAsset,
+  formatAssetRepresentationType,
   formatBlockchainName,
   formatAssetType,
   getAssetRepresentationExplorerHref,
@@ -16,6 +17,7 @@ import {
 } from "#/lib/assets"
 import { isTaxMaxiAssetNotFoundError, queries } from "#/integrations/taxmaxi/queries"
 import { seo } from "#/lib/seo"
+import { m } from "#/paraglide/messages"
 
 export const Route = createFileRoute("/assets/$assetId")({
   loader: async ({ context, params }) => {
@@ -32,11 +34,14 @@ export const Route = createFileRoute("/assets/$assetId")({
   head: ({ loaderData }) => ({
     meta: seo({
       title: loaderData
-        ? `${loaderData.symbol} (${loaderData.name}) | TaxMaxi Assets`
-        : "Asset | TaxMaxi",
+        ? m["assetCatalog.publicPage.title"]({
+            name: loaderData.name,
+            symbol: loaderData.symbol,
+          })
+        : m["assetCatalog.publicPage.fallbackTitle"](),
       description: loaderData
         ? describeTaxMaxiAsset(loaderData)
-        : "Canonical crypto asset supported by TaxMaxi.",
+        : m["assetCatalog.publicPage.fallbackDescription"](),
     }),
   }),
   notFoundComponent: AssetNotFoundRoute,
@@ -58,7 +63,7 @@ function AssetDetailRoute() {
         >
           <Link to="/assets">
             <ArrowLeft data-icon="inline-start" />
-            All assets
+            {m["assetCatalog.publicPage.allAssets"]()}
           </Link>
         </Button>
 
@@ -69,7 +74,7 @@ function AssetDetailRoute() {
                 <AssetSymbolMark asset={asset} />
                 <div className="min-w-0">
                   <p className="m-0 text-sm font-medium uppercase tracking-[0.18em] text-marketing-muted">
-                    Economic asset
+                    {m["assetCatalog.publicPage.economicAsset"]()}
                   </p>
                   <h1 className="mt-2 truncate font-display text-5xl font-semibold leading-none text-off-white sm:text-6xl">
                     {asset.symbol}
@@ -90,10 +95,13 @@ function AssetDetailRoute() {
             <Separator className="bg-marketing-border-muted" />
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <AssetDetailItem label="Asset ID" value={asset.id} />
-              <AssetDetailItem label="Type" value={formatAssetType(asset.type)} />
+              <AssetDetailItem label={m["assetCatalog.publicPage.assetId"]()} value={asset.id} />
               <AssetDetailItem
-                label="Network representations"
+                label={m["assetCatalog.publicPage.type"]()}
+                value={formatAssetType(asset.type)}
+              />
+              <AssetDetailItem
+                label={m["assetCatalog.publicPage.networkRepresentations"]()}
                 value={asset.representations.length.toString()}
               />
             </div>
@@ -101,15 +109,15 @@ function AssetDetailRoute() {
 
           <Card className="border border-marketing-border-muted bg-marketing-surface text-marketing-foreground shadow-none ring-0">
             <CardHeader>
-              <CardTitle>Network representations</CardTitle>
+              <CardTitle>{m["assetCatalog.publicPage.networkRepresentations"]()}</CardTitle>
               <CardDescription className="text-marketing-muted">
-                Exact native, contract, and mint identities that resolve to this economic asset.
+                {m["assetCatalog.publicPage.networkDescription"]()}
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               {asset.representations.length === 0 ? (
                 <p className="m-0 text-sm leading-6 text-marketing-muted">
-                  This custody asset has no network-specific representation.
+                  {m["assetCatalog.publicPage.custodyAssetNoRepresentation"]()}
                 </p>
               ) : (
                 asset.representations.map((representation) => (
@@ -125,12 +133,12 @@ function AssetDetailRoute() {
 
         <section className="grid gap-4 md:grid-cols-2">
           <AssetInfoCard
-            description="Balances, valuation, FIFO lots, and tax reports use this economic asset ID across every custody source."
-            title="Economic identity"
+            description={m["assetCatalog.publicPage.economicIdentityDescription"]()}
+            title={m["assetCatalog.publicPage.economicIdentityTitle"]()}
           />
           <AssetInfoCard
-            description="On-chain observations also keep the exact network representation used during import and normalization."
-            title="Normalization"
+            description={m["assetCatalog.publicPage.normalizationDescription"]()}
+            title={m["assetCatalog.publicPage.normalizationTitle"]()}
           />
         </section>
       </div>
@@ -145,8 +153,7 @@ function AssetRepresentationCard({
 }) {
   const explorerHref = getAssetRepresentationExplorerHref(representation)
   const address = representation.contractAddress ?? representation.mintAddress
-  const typeLabel =
-    representation.type === "native" ? "Native" : representation.type === "nft" ? "NFT" : "Token"
+  const typeLabel = formatAssetRepresentationType(representation.type)
 
   return (
     <div className="flex flex-col gap-3 rounded-2xl border border-marketing-border-muted bg-marketing-surface-active p-4">
@@ -156,13 +163,18 @@ function AssetRepresentationCard({
             {formatBlockchainName(representation.blockchainName)}
           </p>
           <p className="mt-1 text-sm text-marketing-muted">
-            {typeLabel} · {representation.decimals} decimals
+            {m["assetCatalog.publicPage.representationMeta"]({
+              decimals: representation.decimals,
+              type: typeLabel,
+            })}
           </p>
         </div>
         {explorerHref ? (
           <Button asChild size="icon-sm" variant="ghost">
             <a
-              aria-label={`View ${representation.blockchainName} representation on explorer`}
+              aria-label={m["assetCatalog.publicPage.viewOnExplorer"]({
+                network: representation.blockchainName,
+              })}
               href={explorerHref}
               rel="noreferrer"
               target="_blank"
@@ -173,7 +185,9 @@ function AssetRepresentationCard({
         ) : null}
       </div>
       {address === null ? (
-        <p className="m-0 text-sm text-marketing-muted">Native network asset</p>
+        <p className="m-0 text-sm text-marketing-muted">
+          {m["assetCatalog.publicPage.nativeNetworkAsset"]()}
+        </p>
       ) : (
         <code className="break-all text-xs text-marketing-foreground">{address}</code>
       )}
@@ -186,18 +200,18 @@ function AssetNotFoundRoute() {
     <AssetsPageShell>
       <div className="max-w-2xl rounded-[2rem] border border-marketing-border-muted bg-marketing-surface p-6 text-marketing-foreground sm:p-8">
         <p className="m-0 text-sm font-medium uppercase tracking-[0.18em] text-marketing-muted">
-          Asset not found
+          {m["assetCatalog.publicPage.notFoundLabel"]()}
         </p>
         <h1 className="mt-3 font-display text-4xl font-semibold text-off-white">
-          No asset matches this ID.
+          {m["assetCatalog.publicPage.notFoundTitle"]()}
         </h1>
         <p className="mt-4 max-w-xl text-base leading-7 text-marketing-text">
-          Check the supported asset list for the current canonical IDs.
+          {m["assetCatalog.publicPage.notFoundDescription"]()}
         </p>
         <LandingButton asChild className="mt-6" size="pill" variant="control">
           <Link to="/assets">
             <ArrowLeft data-icon="inline-start" />
-            Back to assets
+            {m["assetCatalog.publicPage.backToAssets"]()}
           </Link>
         </LandingButton>
       </div>
@@ -229,7 +243,11 @@ function AssetSymbolMark({ asset }: { readonly asset: TaxMaxiAsset }) {
   return (
     <div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] border border-marketing-border-muted bg-marketing-surface-active text-xl font-semibold text-marketing-foreground sm:size-24">
       {asset.logoUrl ? (
-        <img alt={`${asset.name} logo`} className="size-full object-cover" src={asset.logoUrl} />
+        <img
+          alt={m["assetCatalog.logoAlt"]({ name: asset.name })}
+          className="size-full object-cover"
+          src={asset.logoUrl}
+        />
       ) : (
         <span aria-hidden="true">{asset.symbol.slice(0, 2)}</span>
       )}

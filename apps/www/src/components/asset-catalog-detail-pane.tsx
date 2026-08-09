@@ -1,47 +1,41 @@
 import { ArrowLeft, ArrowUpRight, CircleDotDashed, Clock3, ShieldCheck } from "lucide-react"
-import { Fragment, type RefObject } from "react"
+import { Fragment } from "react"
 
+import { useAssetCatalog } from "#/components/asset-catalog-context"
 import { AssetCatalogEmptyState } from "#/components/asset-catalog-empty-state"
 import { AssetCatalogItemMark } from "#/components/asset-catalog-item-mark"
 import {
   getNetworkNames,
   getPendingAssetName,
   type CatalogItem,
-  type CatalogScope,
 } from "#/components/asset-catalog-model"
 import { Badge } from "#/components/ui/badge"
 import { Button } from "#/components/ui/button"
 import { Separator } from "#/components/ui/separator"
+import { m } from "#/paraglide/messages"
 import { localizeHref } from "#/paraglide/runtime"
 import {
   describeTaxMaxiAsset,
+  formatAssetRepresentationType,
   formatAssetType,
   formatBlockchainName,
   type TaxMaxiPendingAsset,
 } from "#/lib/assets"
 import { cn } from "#/lib/utils"
 
-export function AssetCatalogDetailPane({
-  approvedAssetsUnavailable,
-  isLoading,
-  mobileBackButtonRef,
-  mobileDetailOpen,
-  onShowMobileList,
-  pendingAssetsUnavailable,
-  query,
-  scope,
-  selectedItem,
-}: {
-  readonly approvedAssetsUnavailable: boolean
-  readonly isLoading: boolean
-  readonly mobileBackButtonRef: RefObject<HTMLButtonElement | null>
-  readonly mobileDetailOpen: boolean
-  readonly onShowMobileList: () => void
-  readonly pendingAssetsUnavailable: boolean
-  readonly query: string
-  readonly scope: CatalogScope
-  readonly selectedItem: CatalogItem | undefined
-}) {
+export function AssetCatalogDetailPane() {
+  const {
+    approvedAssetsUnavailable,
+    isLoading,
+    mobileBackButtonRef,
+    mobileDetailOpen,
+    onShowMobileList,
+    pendingAssetsUnavailable,
+    query,
+    scope,
+    selectedItem,
+  } = useAssetCatalog()
+
   return (
     <section
       className={cn(
@@ -57,7 +51,7 @@ export function AssetCatalogDetailPane({
           variant="ghost"
         >
           <ArrowLeft data-icon="inline-start" />
-          Back to asset list
+          {m["assetCatalog.actions.backToList"]()}
         </Button>
       ) : null}
       {selectedItem ? (
@@ -89,7 +83,7 @@ function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
           <div className="min-w-0">
             <Badge variant="secondary">
               <ShieldCheck data-icon="inline-start" />
-              Approved
+              {m["assetCatalog.detail.approved"]()}
             </Badge>
             <h2 className="mt-3 truncate text-3xl font-semibold tracking-tight sm:text-5xl">
               {item.asset.symbol}
@@ -106,28 +100,39 @@ function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
 
       <Button asChild={true} className="h-11 self-start" variant="outline">
         <a href={localizeHref(`/assets/${encodeURIComponent(item.asset.id)}`)}>
-          Open public asset page
+          {m["assetCatalog.actions.openPublicPage"]()}
           <ArrowUpRight data-icon="inline-end" />
         </a>
       </Button>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Representations" value={item.asset.representations.length.toString()} />
-        <StatCard label="Networks" value={networkNames.length.toString()} />
-        <StatCard label="Registry status" value="Approved" />
+        <StatCard
+          label={m["assetCatalog.detail.representations"]()}
+          value={item.asset.representations.length.toString()}
+        />
+        <StatCard
+          label={m["assetCatalog.detail.networks"]()}
+          value={networkNames.length.toString()}
+        />
+        <StatCard
+          label={m["assetCatalog.detail.registryStatus"]()}
+          value={m["assetCatalog.detail.approved"]()}
+        />
       </div>
 
       <section className="overflow-hidden rounded-2xl border border-border">
         <div className="px-4 py-3">
-          <h3 className="text-sm font-medium">Network representations</h3>
+          <h3 className="text-sm font-medium">
+            {m["assetCatalog.detail.networkRepresentations"]()}
+          </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Identities that resolve to this economic asset.
+            {m["assetCatalog.detail.networkRepresentationsDescription"]()}
           </p>
         </div>
         <Separator />
         {item.asset.representations.length === 0 ? (
           <p className="px-4 py-8 text-sm text-muted-foreground">
-            This asset currently has no network representation.
+            {m["assetCatalog.detail.noNetworkRepresentation"]()}
           </p>
         ) : (
           item.asset.representations.map((representation, index) => (
@@ -142,13 +147,15 @@ function CatalogItemDetail({ item }: { readonly item: CatalogItem }) {
                   </p>
                   <p className="mt-0.5 truncate text-xs text-muted-foreground">
                     {representation.type === "native"
-                      ? "Native network asset"
+                      ? m["assetCatalog.detail.nativeNetworkAsset"]()
                       : (representation.contractAddress ??
                         representation.mintAddress ??
-                        "Token identity")}
+                        m["assetCatalog.detail.tokenIdentity"]())}
                   </p>
                 </div>
-                <Badge variant="outline">{representation.type}</Badge>
+                <Badge variant="outline">
+                  {formatAssetRepresentationType(representation.type)}
+                </Badge>
               </div>
               {index < item.asset.representations.length - 1 ? <Separator /> : null}
             </Fragment>
@@ -169,7 +176,7 @@ function PendingAssetDetail({ asset }: { readonly asset: TaxMaxiPendingAsset }) 
         <div className="min-w-0">
           <Badge variant="outline">
             <Clock3 data-icon="inline-start" />
-            Waiting for review
+            {m["assetCatalog.detail.waitingForReview"]()}
           </Badge>
           <h2 className="mt-3 truncate text-3xl font-semibold tracking-tight sm:text-5xl">
             {asset.symbol}
@@ -184,23 +191,31 @@ function PendingAssetDetail({ asset }: { readonly asset: TaxMaxiPendingAsset }) 
         <div className="flex items-start gap-3">
           <CircleDotDashed aria-hidden="true" className="mt-0.5 size-5 shrink-0" />
           <div>
-            <h3 className="text-sm font-medium">This asset is on TaxMaxi’s radar</h3>
+            <h3 className="text-sm font-medium">{m["assetCatalog.detail.radarTitle"]()}</h3>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              TaxMaxi admins are reviewing whether this provider asset maps to an existing canonical
-              asset. You do not need to take action.
+              {m["assetCatalog.detail.radarDescription"]()}
             </p>
           </div>
         </div>
       </div>
 
       <dl className="overflow-hidden rounded-2xl border border-border">
-        <DetailRow label="Reported by" value={asset.provider} />
+        <DetailRow label={m["assetCatalog.detail.reportedBy"]()} value={asset.provider} />
         <Separator />
-        <DetailRow label="Provider asset ID" value={asset.providerAssetId ?? "Not supplied"} />
+        <DetailRow
+          label={m["assetCatalog.detail.providerAssetId"]()}
+          value={asset.providerAssetId ?? m["assetCatalog.detail.notSupplied"]()}
+        />
         <Separator />
-        <DetailRow label="Provider type" value={asset.providerType ?? "Not supplied"} />
+        <DetailRow
+          label={m["assetCatalog.detail.providerType"]()}
+          value={asset.providerType ?? m["assetCatalog.detail.notSupplied"]()}
+        />
         <Separator />
-        <DetailRow label="Review status" value="Waiting for TaxMaxi review" />
+        <DetailRow
+          label={m["assetCatalog.detail.reviewStatus"]()}
+          value={m["assetCatalog.detail.waitingForTaxMaxiReview"]()}
+        />
       </dl>
     </div>
   )

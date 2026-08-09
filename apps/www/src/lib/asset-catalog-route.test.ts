@@ -17,7 +17,7 @@ import {
   loadAssetCatalogFeeds,
   retryAssetCatalogFeed,
   useDebouncedCatalogQuery,
-} from "./index"
+} from "#/lib/asset-catalog-route"
 import { ASSET_CATALOG_OPENER_ID, restoreAssetCatalogReturnFocus } from "#/lib/asset-catalog-focus"
 
 afterEach(() => {

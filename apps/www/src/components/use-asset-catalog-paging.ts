@@ -5,6 +5,7 @@ import {
   type CatalogItem,
   type CatalogScope,
 } from "./asset-catalog-model"
+import { m } from "#/paraglide/messages"
 
 export function useAssetCatalogPaging({
   approvedAssetsUnavailable,
@@ -54,10 +55,13 @@ export function useAssetCatalogPaging({
   const canRetryNow = canRetryApproved || canRetryPending
   const isLoadingVisibleFeed =
     (scope !== "pending" && isLoadingApproved) || (scope !== "approved" && isLoadingPending)
+  const visibleMatchCount = visibleItems.length
   const catalogStatus = [
-    isLoadingVisibleFeed ? "Loading assets." : null,
-    hasLoadError ? "Some assets could not be loaded." : null,
-    `Showing ${visibleItems.length} loaded ${visibleItems.length === 1 ? "match" : "matches"}`,
+    isLoadingVisibleFeed ? m["assetCatalog.status.loading"]() : null,
+    hasLoadError ? m["assetCatalog.status.partialError"]() : null,
+    visibleMatchCount === 1
+      ? m["assetCatalog.status.showingOne"]({ count: visibleMatchCount })
+      : m["assetCatalog.status.showingMany"]({ count: visibleMatchCount }),
   ]
     .filter((message) => message !== null)
     .join(" ")

@@ -27,6 +27,116 @@
     "title": "TaxMaxi App",
     "description": "Du bist angemeldet. Der App-Workspace entsteht hier."
   },
+  "assetCatalog": {
+    "title": "Asset-Katalog",
+    "subtitle": "Kanonisches Asset-Register von TaxMaxi",
+    "open": "Asset-Katalog",
+    "close": "Asset-Katalog schließen",
+    "seoTitle": "Asset-Katalog | TaxMaxi",
+    "seoDescription": "Durchsuche den öffentlichen kanonischen Asset-Katalog von TaxMaxi.",
+    "scopeLabel": "Asset-Status",
+    "listLabel": "Assets",
+    "scope": {
+      "all": "Alle",
+      "approved": "Freigegeben",
+      "pending": "Ausstehend"
+    },
+    "search": {
+      "label": "Assets durchsuchen",
+      "placeholder": "Nach Symbol, Name, Netzwerk oder Anbieter suchen"
+    },
+    "actions": {
+      "backToList": "Zurück zur Asset-Liste",
+      "openPublicPage": "Öffentliche Asset-Seite öffnen",
+      "loadMore": "Mehr laden",
+      "loadMoreLabel": "Weitere Assets laden",
+      "loading": "Wird geladen…",
+      "loadingLabel": "Assets werden geladen",
+      "retry": "Erneut versuchen",
+      "retryLabel": "Assets erneut laden",
+      "retrying": "Neuer Versuch…",
+      "retryingLabel": "Asset-Quellen werden erneut geladen"
+    },
+    "status": {
+      "loading": "Assets werden geladen.",
+      "partialError": "Einige Assets konnten nicht geladen werden.",
+      "showingOne": "{count} geladener Treffer wird angezeigt",
+      "showingMany": "{count} geladene Treffer werden angezeigt"
+    },
+    "empty": {
+      "approvedUnavailableTitle": "Freigegebene Assets nicht verfügbar",
+      "pendingUnavailableTitle": "Ausstehende Assets nicht verfügbar",
+      "loadingTitle": "Assets werden geladen",
+      "notFoundTitle": "Keine Assets gefunden",
+      "allUnavailable": "Die Asset-Quellen sind nicht verfügbar. Versuche es gleich noch einmal.",
+      "pendingLoading": "Ausstehende Assets werden noch geladen.",
+      "pendingAvailable": "Ausstehende Assets sind weiterhin verfügbar. Versuche erneut, die freigegebenen Assets zu laden.",
+      "approvedLoading": "Freigegebene Assets werden noch geladen.",
+      "approvedAvailable": "Freigegebene Assets sind weiterhin verfügbar. Versuche erneut, die ausstehenden Assets zu laden.",
+      "fetching": "Das Asset-Register wird geladen.",
+      "registryEmpty": "Das Register enthält noch keine Assets.",
+      "searchHint": "Suche nach einem Symbol, Anbieter, Netzwerk oder einer Contract-Adresse."
+    },
+    "detail": {
+      "approved": "Freigegeben",
+      "pending": "Ausstehend",
+      "representations": "Repräsentationen",
+      "networks": "Netzwerke",
+      "registryStatus": "Registerstatus",
+      "networkRepresentations": "Netzwerk-Repräsentationen",
+      "networkRepresentationsDescription": "Identitäten, die diesem wirtschaftlichen Asset zugeordnet sind.",
+      "noNetworkRepresentation": "Dieses Asset hat derzeit keine Netzwerk-Repräsentation.",
+      "nativeNetworkAsset": "Natives Netzwerk-Asset",
+      "tokenIdentity": "Token-Identität",
+      "waitingForReview": "Prüfung ausstehend",
+      "radarTitle": "Dieses Asset wird von TaxMaxi geprüft",
+      "radarDescription": "TaxMaxi prüft, ob dieses Anbieter-Asset einem bestehenden kanonischen Asset zugeordnet werden kann. Du musst nichts tun.",
+      "reportedBy": "Gemeldet von",
+      "providerAssetId": "Anbieter-Asset-ID",
+      "providerType": "Anbietertyp",
+      "reviewStatus": "Prüfstatus",
+      "notSupplied": "Nicht angegeben",
+      "waitingForTaxMaxiReview": "TaxMaxi-Prüfung ausstehend"
+    },
+    "assetType": {
+      "fungible": "Fungibles Asset",
+      "nft": "NFT"
+    },
+    "representationType": {
+      "native": "Nativ",
+      "token": "Token",
+      "nft": "NFT"
+    },
+    "description": {
+      "nft": "Wirtschaftliche NFT-Identität, die über Verwahrungsquellen und Netzwerkaktivitäten hinweg einheitlich verwendet wird.",
+      "fungibleOne": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannter Netzwerk-Repräsentation.",
+      "fungibleMany": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannten Netzwerk-Repräsentationen."
+    },
+    "logoAlt": "Logo von {name}",
+    "publicPage": {
+      "title": "{symbol} ({name}) | TaxMaxi Assets",
+      "fallbackTitle": "Asset | TaxMaxi",
+      "fallbackDescription": "Von TaxMaxi unterstütztes kanonisches Krypto-Asset.",
+      "allAssets": "Alle Assets",
+      "economicAsset": "Wirtschaftliches Asset",
+      "assetId": "Asset-ID",
+      "type": "Typ",
+      "networkRepresentations": "Netzwerk-Repräsentationen",
+      "networkDescription": "Exakte native, Contract- und Mint-Identitäten, die diesem wirtschaftlichen Asset zugeordnet sind.",
+      "custodyAssetNoRepresentation": "Dieses Verwahrungs-Asset hat keine netzwerkspezifische Repräsentation.",
+      "representationMeta": "{type} · {decimals} Dezimalstellen",
+      "viewOnExplorer": "{network}-Repräsentation im Explorer anzeigen",
+      "nativeNetworkAsset": "Natives Netzwerk-Asset",
+      "economicIdentityTitle": "Wirtschaftliche Identität",
+      "economicIdentityDescription": "Bestände, Bewertungen, FIFO-Lots und Steuerberichte verwenden diese wirtschaftliche Asset-ID über alle Verwahrungsquellen hinweg.",
+      "normalizationTitle": "Normalisierung",
+      "normalizationDescription": "On-Chain-Beobachtungen behalten außerdem die exakte Netzwerk-Repräsentation bei, die bei Import und Normalisierung verwendet wurde.",
+      "notFoundLabel": "Asset nicht gefunden",
+      "notFoundTitle": "Kein Asset stimmt mit dieser ID überein.",
+      "notFoundDescription": "Prüfe die Liste der unterstützten Assets auf die aktuellen kanonischen IDs.",
+      "backToAssets": "Zurück zu den Assets"
+    }
+  },
   "header": {
     "apiProduct": "API",
     "assets": "Assets",

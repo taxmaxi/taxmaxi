@@ -1,5 +1,6 @@
 import { ChevronRight, Search } from "lucide-react"
 
+import { useAssetCatalog } from "#/components/asset-catalog-context"
 import { AssetCatalogEmptyState } from "#/components/asset-catalog-empty-state"
 import { AssetCatalogItemMark } from "#/components/asset-catalog-item-mark"
 import {
@@ -17,50 +18,32 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "#/components/ui/in
 import { Separator } from "#/components/ui/separator"
 import { ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH } from "#/lib/assets"
 import { cn } from "#/lib/utils"
+import { m } from "#/paraglide/messages"
 
-export function AssetCatalogListPane({
-  approvedAssetsUnavailable,
-  approvedItemsCount,
-  canLoadMoreNow,
-  canRetryNow,
-  catalogStatus,
-  hasLoadError,
-  hasMoreItems,
-  isLoading,
-  mobileDetailOpen,
-  onLoadMore,
-  onQueryChange,
-  onRetry,
-  onScopeChange,
-  onSelect,
-  pendingAssetsUnavailable,
-  query,
-  scope,
-  selectedItem,
-  selectedItemKey,
-  visibleItems,
-}: {
-  readonly approvedAssetsUnavailable: boolean
-  readonly approvedItemsCount: number
-  readonly canLoadMoreNow: boolean
-  readonly canRetryNow: boolean
-  readonly catalogStatus: string
-  readonly hasLoadError: boolean
-  readonly hasMoreItems: boolean
-  readonly isLoading: boolean
-  readonly mobileDetailOpen: boolean
-  readonly onLoadMore: () => void
-  readonly onQueryChange: (query: string) => void
-  readonly onRetry: () => void
-  readonly onScopeChange: (scope: CatalogScope) => void
-  readonly onSelect: (item: CatalogItem) => void
-  readonly pendingAssetsUnavailable: boolean
-  readonly query: string
-  readonly scope: CatalogScope
-  readonly selectedItem: CatalogItem | undefined
-  readonly selectedItemKey: string
-  readonly visibleItems: ReadonlyArray<CatalogItem>
-}) {
+export function AssetCatalogListPane() {
+  const {
+    approvedAssetsUnavailable,
+    approvedItemsCount,
+    canLoadMoreNow,
+    canRetryNow,
+    catalogStatus,
+    hasLoadError,
+    hasMoreItems,
+    isLoading,
+    mobileDetailOpen,
+    onLoadMore,
+    onQueryChange,
+    onRetry,
+    onScopeChange,
+    onSelect,
+    pendingAssetsUnavailable,
+    query,
+    scope,
+    selectedItem,
+    selectedItemKey,
+    visibleItems,
+  } = useAssetCatalog()
+
   return (
     <aside
       className={cn(
@@ -78,7 +61,7 @@ export function AssetCatalogListPane({
           query={query}
         />
         <div
-          aria-label="Asset scope"
+          aria-label={m["assetCatalog.scopeLabel"]()}
           className="grid h-11 grid-cols-3 rounded-full bg-muted p-1"
           role="group"
         >
@@ -95,14 +78,14 @@ export function AssetCatalogListPane({
               onClick={() => onScopeChange(value)}
               type="button"
             >
-              {value.charAt(0).toUpperCase() + value.slice(1)}
+              {getScopeLabel(value)}
             </button>
           ))}
         </div>
       </div>
       <Separator />
       <div
-        aria-label="Assets"
+        aria-label={m["assetCatalog.listLabel"]()}
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
         id={ASSET_CATALOG_LIST_ID}
         role="listbox"
@@ -134,26 +117,36 @@ export function AssetCatalogListPane({
         </span>
         {hasMoreItems ? (
           <Button
-            aria-label={canLoadMoreNow ? "Load more assets" : "Loading assets"}
+            aria-label={
+              canLoadMoreNow
+                ? m["assetCatalog.actions.loadMoreLabel"]()
+                : m["assetCatalog.actions.loadingLabel"]()
+            }
             className="h-11 shrink-0"
             disabled={!canLoadMoreNow}
             onClick={onLoadMore}
             size="sm"
             variant="outline"
           >
-            {canLoadMoreNow ? "Load more" : "Loading…"}
+            {canLoadMoreNow
+              ? m["assetCatalog.actions.loadMore"]()
+              : m["assetCatalog.actions.loading"]()}
           </Button>
         ) : null}
         {hasLoadError ? (
           <Button
-            aria-label={canRetryNow ? "Retry loading assets" : "Retrying asset feeds"}
+            aria-label={
+              canRetryNow
+                ? m["assetCatalog.actions.retryLabel"]()
+                : m["assetCatalog.actions.retryingLabel"]()
+            }
             className="h-11 shrink-0"
             disabled={!canRetryNow}
             onClick={onRetry}
             size="sm"
             variant="outline"
           >
-            {canRetryNow ? "Retry" : "Retrying…"}
+            {canRetryNow ? m["assetCatalog.actions.retry"]() : m["assetCatalog.actions.retrying"]()}
           </Button>
         ) : null}
       </div>
@@ -193,7 +186,9 @@ function NavigatorRow({
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
           <span className="truncate text-sm font-medium">{symbol}</span>
-          {item.kind === "pending" ? <Badge variant="outline">Pending</Badge> : null}
+          {item.kind === "pending" ? (
+            <Badge variant="outline">{m["assetCatalog.detail.pending"]()}</Badge>
+          ) : null}
         </span>
         <span className="mt-0.5 block truncate text-xs text-muted-foreground">{name}</span>
       </span>
@@ -223,12 +218,12 @@ function SearchField({
         aria-autocomplete="list"
         aria-controls={controls}
         aria-expanded="true"
-        aria-label="Search assets"
+        aria-label={m["assetCatalog.search.label"]()}
         autoComplete="off"
         id={ASSET_CATALOG_SEARCH_ID}
         maxLength={ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH}
         onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder="Search symbol, name, network, or provider"
+        placeholder={m["assetCatalog.search.placeholder"]()}
         role="combobox"
         spellCheck={false}
         type="search"
@@ -236,4 +231,15 @@ function SearchField({
       />
     </InputGroup>
   )
+}
+
+function getScopeLabel(scope: CatalogScope): string {
+  switch (scope) {
+    case "all":
+      return m["assetCatalog.scope.all"]()
+    case "approved":
+      return m["assetCatalog.scope.approved"]()
+    case "pending":
+      return m["assetCatalog.scope.pending"]()
+  }
 }
