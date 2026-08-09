@@ -94,6 +94,24 @@ link_env_mount() {
     "$environment_name" "$source_path"
 }
 
+create_www_env_local() {
+  local target_path="$SCRIPT_DIR/apps/www/.env.local"
+
+  if [[ -e "$target_path" || -L "$target_path" ]]; then
+    printf 'Found www env: %s\n' "$target_path"
+    return 0
+  fi
+
+  cat >"$target_path" <<'EOF'
+VITE_POSTHOG_KEY=phc_rTqIM7RX677xpUoAHTCQKFtafRswFEI4vs0OnlEGvIs
+VITE_POSTHOG_HOST=https://eu.i.posthog.com
+VITE_TAXMAXI_API_BASE_URL=http://localhost:4000
+TAXMAXI_API_BASE_URL=http://localhost:4000
+EOF
+
+  printf 'Created www env: %s\n' "$target_path"
+}
+
 main() {
   local env_source_tree
 
@@ -130,6 +148,9 @@ main() {
   fi
   link_env_mount "server" "apps/server/.env" "TaxMaxi Server Dev" "$env_source_tree"
   link_env_mount "worker" "apps/worker/.env" "TaxMaxi Worker Dev" "$env_source_tree"
+
+  log "Creating www env"
+  create_www_env_local
 
   log "Installing dependencies"
   mise x -- pnpm install
