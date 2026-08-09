@@ -5,7 +5,11 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
-import { AssetCatalogRepository, type AssetCatalogAssetRecord } from "@my/persistence/services"
+import {
+  AssetCatalogRepository,
+  type AssetCatalogAssetRecord,
+  type PendingAssetCatalogRecord,
+} from "@my/persistence/services"
 import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
@@ -79,10 +83,10 @@ const assetCursorFor = (asset: AssetCatalogAssetRecord): string =>
     assetId: asset.id,
   })
 
-const providerAssetCursorFor = (row: ProviderAssetReviewRecord): string =>
+const providerAssetCursorFor = (providerAssetRowId: string): string =>
   encodeCursor({
     version: 2,
-    providerAssetRowId: row.providerAsset.id,
+    providerAssetRowId,
   })
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
@@ -104,14 +108,14 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     sourceNotes: row.mapping?.sourceNotes ?? null,
   })
 
-const toPendingAssetResponse = (row: ProviderAssetReviewRecord) =>
+const toPendingAssetResponse = (row: PendingAssetCatalogRecord) =>
   PendingAssetResponse.make({
-    id: row.providerAsset.id,
-    provider: row.providerAsset.provider,
-    providerAssetId: row.providerAsset.providerAssetId,
-    symbol: row.providerAsset.currencyCode,
-    name: row.providerAsset.name,
-    providerType: row.providerAsset.providerType,
+    id: row.id,
+    provider: row.provider,
+    providerAssetId: row.providerAssetId,
+    symbol: row.symbol,
+    name: row.name,
+    providerType: row.providerType,
   })
 
 const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
@@ -174,11 +178,9 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
         Effect.gen(function* () {
           const limit = urlParams.limit ?? defaultLimit
           const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
-          const providerAssets = yield* providerAssetRepository
-            .listProviderAssetReviews({
-              providerKey: urlParams.provider ?? null,
-              mappingKind: "asset",
-              mappingStatus: "pending_review",
+          const providerAssets = yield* assetCatalogRepository
+            .listPendingAssets({
+              provider: urlParams.provider ?? null,
               cursor,
               query: urlParams.q ?? null,
               limit: limit + 1,
@@ -193,7 +195,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             page: {
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
-                  ? providerAssetCursorFor(lastProviderAsset)
+                  ? providerAssetCursorFor(lastProviderAsset.id)
                   : null,
               hasMore,
             },
@@ -221,7 +223,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             page: {
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
-                  ? providerAssetCursorFor(lastProviderAsset)
+                  ? providerAssetCursorFor(lastProviderAsset.providerAsset.id)
                   : null,
               hasMore,
             },

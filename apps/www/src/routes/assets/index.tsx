@@ -8,6 +8,7 @@ import {
   DEFAULT_TAXMAXI_PENDING_ASSET_LIMIT,
   queries,
 } from "#/integrations/taxmaxi/queries"
+import { restoreAssetCatalogReturnFocus } from "#/lib/asset-catalog-focus"
 import { seo } from "#/lib/seo"
 
 const assetListInput = { limit: DEFAULT_TAXMAXI_ASSET_LIMIT }
@@ -41,16 +42,32 @@ type AssetCatalogFallbackNavigation = {
 export function closeAssetCatalog({
   history,
   navigateToFallback,
+  restoreFocus = restoreAssetCatalogReturnFocus,
 }: {
   readonly history: AssetCatalogHistory
   readonly navigateToFallback: (navigation: AssetCatalogFallbackNavigation) => void
+  readonly restoreFocus?: () => void
 }) {
   if (history.canGoBack()) {
     history.back()
+    restoreFocus()
     return
   }
 
   navigateToFallback({ replace: true, to: "/" })
+  restoreFocus()
+}
+
+export function retryAssetCatalogFeed({
+  fetchNextPage,
+  isFetchNextPageError,
+  refetch,
+}: {
+  readonly fetchNextPage: () => Promise<unknown>
+  readonly isFetchNextPageError: boolean
+  readonly refetch: () => Promise<unknown>
+}): Promise<unknown> {
+  return isFetchNextPageError ? fetchNextPage() : refetch()
 }
 
 export async function loadAssetCatalogFeeds({
@@ -125,12 +142,18 @@ function AssetsIndexRoute() {
       onLoadMorePending={pendingAssetQuery.fetchNextPage}
       onQueryChange={setCatalogQuery}
       onRetryApproved={() =>
-        assetQuery.isFetchNextPageError ? assetQuery.fetchNextPage() : assetQuery.refetch()
+        retryAssetCatalogFeed({
+          fetchNextPage: assetQuery.fetchNextPage,
+          isFetchNextPageError: assetQuery.isFetchNextPageError,
+          refetch: assetQuery.refetch,
+        })
       }
       onRetryPending={() =>
-        pendingAssetQuery.isFetchNextPageError
-          ? pendingAssetQuery.fetchNextPage()
-          : pendingAssetQuery.refetch()
+        retryAssetCatalogFeed({
+          fetchNextPage: pendingAssetQuery.fetchNextPage,
+          isFetchNextPageError: pendingAssetQuery.isFetchNextPageError,
+          refetch: pendingAssetQuery.refetch,
+        })
       }
       pendingAssets={pendingAssets}
       pendingAssetsUnavailable={pendingAssetQuery.isError || pendingAssetQuery.isFetchNextPageError}

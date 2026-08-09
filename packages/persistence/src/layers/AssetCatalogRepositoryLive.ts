@@ -13,6 +13,7 @@ import {
   type AssetCatalogAssetRecord,
   type AssetCatalogRepositoryShape,
   type AssetCatalogRepresentationRecord,
+  type PendingAssetCatalogRecord,
 } from "../services/AssetCatalogRepository.ts"
 import { schema } from "../schema/index.ts"
 import { wrapSqlError } from "../errors/RepositoryError.ts"
@@ -33,6 +34,15 @@ const representationColumns = {
   decimals: schema.assetRepresentations.decimals,
   logoUrl: schema.assetRepresentations.logoUrl,
   metadata: schema.assetRepresentations.metadata,
+} as const
+
+const pendingAssetColumns = {
+  id: schema.providerAssets.id,
+  provider: schema.providerAssets.provider,
+  providerAssetId: schema.providerAssets.providerAssetId,
+  symbol: schema.providerAssets.currencyCode,
+  name: schema.providerAssets.name,
+  providerType: schema.providerAssets.providerType,
 } as const
 
 const make = Effect.gen(function* () {
@@ -150,9 +160,51 @@ const make = Effect.gen(function* () {
       })
     })
 
+  const listPendingAssets: AssetCatalogRepositoryShape["listPendingAssets"] = ({
+    cursor,
+    limit,
+    provider,
+    query,
+  }) =>
+    Effect.gen(function* () {
+      const searchFilters = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
+        or(
+          ilike(schema.providerAssets.provider, pattern),
+          ilike(schema.providerAssets.providerAssetId, pattern),
+          ilike(schema.providerAssets.currencyCode, pattern),
+          ilike(schema.providerAssets.name, pattern),
+          ilike(schema.providerAssets.providerType, pattern)
+        )
+      )
+      const cursorFilter =
+        cursor === null ? undefined : gt(schema.providerAssets.id, cursor.providerAssetRowId)
+      const rows: ReadonlyArray<PendingAssetCatalogRecord> = yield* db
+        .select(pendingAssetColumns)
+        .from(schema.providerAssets)
+        .innerJoin(
+          schema.providerAssetMappings,
+          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+        )
+        .where(
+          and(
+            eq(schema.providerAssetMappings.mappingKind, "asset"),
+            eq(schema.providerAssetMappings.mappingStatus, "pending_review"),
+            provider === null ? undefined : eq(schema.providerAssets.provider, provider),
+            ...searchFilters,
+            cursorFilter
+          )
+        )
+        .orderBy(asc(schema.providerAssets.id))
+        .limit(limit)
+        .pipe(wrapSqlError("assetCatalogRepository.listPendingAssets"))
+
+      return rows
+    })
+
   return AssetCatalogRepository.of({
     findAssetById,
     listAssets,
+    listPendingAssets,
   } satisfies AssetCatalogRepositoryShape)
 })
 

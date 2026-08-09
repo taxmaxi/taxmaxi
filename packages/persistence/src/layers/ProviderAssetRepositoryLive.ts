@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, ilike, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -19,7 +19,6 @@ import {
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
-import { getAssetCatalogSearchPatterns } from "../query/AssetCatalogSearch.ts"
 import { schema } from "../schema/index.ts"
 
 const makeMissingIdentityError = ({
@@ -351,31 +350,16 @@ const make = Effect.gen(function* () {
 
   const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
     providerKey,
-    mappingKind,
     mappingStatus,
     cursor,
-    query,
     limit,
   }) =>
     Effect.gen(function* () {
       const cursorPredicate =
         cursor === null ? undefined : gt(schema.providerAssets.id, cursor.providerAssetRowId)
-      const searchPredicates = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
-        or(
-          ilike(schema.providerAssets.provider, pattern),
-          ilike(schema.providerAssets.providerAssetId, pattern),
-          ilike(schema.providerAssets.currencyCode, pattern),
-          ilike(schema.providerAssets.name, pattern),
-          ilike(schema.providerAssets.providerType, pattern)
-        )
-      )
       const predicates = [
         eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
-        ...(mappingKind === undefined
-          ? []
-          : [eq(schema.providerAssetMappings.mappingKind, mappingKind)]),
         ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
-        ...searchPredicates,
         ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
       ]
 

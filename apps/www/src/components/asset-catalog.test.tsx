@@ -30,11 +30,13 @@ const setDesktopViewport = (matches: boolean) => {
 const makeAsset = ({
   id,
   name,
+  representations = [],
   symbol,
   coingeckoCoinId = null,
 }: {
   id: string
   name: string
+  representations?: TaxMaxiAsset["representations"]
   symbol: string
   coingeckoCoinId?: string | null
 }): TaxMaxiAsset => ({
@@ -44,7 +46,7 @@ const makeAsset = ({
   coingeckoCoinId,
   logoUrl: null,
   type: "fungible",
-  representations: [],
+  representations,
 })
 
 const makePendingAsset = ({
@@ -413,6 +415,57 @@ describe("AssetCatalog", () => {
     expect(screen.getByRole("option", { name: testCase.expectedName })).toBeTruthy()
   })
 
+  it.each(["ethereum", "evm", "0xassetcontract", "solana-mint-address"])(
+    "keeps approved representation matches visible for %s",
+    (query) => {
+      const representedAsset = makeAsset({
+        id: "represented-asset",
+        name: "Represented Asset",
+        representations: [
+          {
+            id: "ethereum-representation",
+            blockchainId: "ethereum",
+            blockchainName: "Ethereum",
+            blockchainChainType: "evm",
+            blockchainChainId: 1,
+            blockchainExplorerUrl: "https://etherscan.io",
+            blockchainLogoUrl: null,
+            type: "token",
+            contractAddress: "0xassetcontract",
+            mintAddress: null,
+            decimals: 18,
+            logoUrl: null,
+            metadata: null,
+          },
+          {
+            id: "solana-representation",
+            blockchainId: "solana",
+            blockchainName: "Solana",
+            blockchainChainType: "solana",
+            blockchainChainId: null,
+            blockchainExplorerUrl: "https://explorer.solana.com",
+            blockchainLogoUrl: null,
+            type: "token",
+            contractAddress: null,
+            mintAddress: "solana-mint-address",
+            decimals: 6,
+            logoUrl: null,
+            metadata: null,
+          },
+        ],
+        symbol: "RPA",
+      })
+
+      render(<AssetCatalog assets={[representedAsset]} onClose={vi.fn()} pendingAssets={[]} />)
+
+      fireEvent.change(screen.getByRole("combobox", { name: "Search assets" }), {
+        target: { value: query },
+      })
+
+      expect(screen.getByRole("option", { name: /RPA/ })).toBeTruthy()
+    }
+  )
+
   it("does not treat SQL wildcard characters as client-side wildcards", () => {
     render(
       <AssetCatalog
@@ -445,6 +498,33 @@ describe("AssetCatalog", () => {
     expect(screen.getByRole("status").textContent).toContain("Some assets could not be loaded.")
     fireEvent.click(screen.getByRole("button", { name: "Retry loading assets" }))
     expect(onRetryApproved).toHaveBeenCalledOnce()
+  })
+
+  it("retries both feeds when approved and pending assets are unavailable", () => {
+    const onRetryApproved = vi.fn()
+    const onRetryPending = vi.fn()
+
+    render(
+      <AssetCatalog
+        approvedAssetsUnavailable={true}
+        assets={[]}
+        onClose={vi.fn()}
+        onRetryApproved={onRetryApproved}
+        onRetryPending={onRetryPending}
+        pendingAssets={[]}
+        pendingAssetsUnavailable={true}
+      />
+    )
+
+    expect(screen.getByRole("status").textContent).toContain("Some assets could not be loaded.")
+    expect(
+      screen.getAllByText("The asset feeds are unavailable. Try again in a moment.")
+    ).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry loading assets" }))
+
+    expect(onRetryApproved).toHaveBeenCalledOnce()
+    expect(onRetryPending).toHaveBeenCalledOnce()
   })
 
   it.each(["approved", "pending"] as const)(

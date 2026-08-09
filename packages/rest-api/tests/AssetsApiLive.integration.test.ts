@@ -24,6 +24,7 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   PendingAssetListResponse,
+  ProviderAssetReviewListResponse,
 } from "../src/definitions/AssetsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
@@ -46,6 +47,7 @@ const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
 const TestConfigProvider = ConfigProvider.fromMap(
   new Map([["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"]])
 )
+const ADMIN_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000099_admin"
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
@@ -142,6 +144,39 @@ const getStatus = (path: string) =>
     const response = yield* HttpClientRequest.get(path).pipe(HttpClient.execute)
     return response.status
   })
+
+const getAdminJson = <Response, Encoded, Requirements>({
+  path,
+  responseSchema,
+}: {
+  readonly path: string
+  readonly responseSchema: Schema.Schema<Response, Encoded, Requirements>
+}) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(path).pipe(
+      HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+      HttpClient.execute
+    )
+    const body = yield* response.json
+    const decodedBody = yield* Schema.decodeUnknown(responseSchema)(body)
+
+    return {
+      status: response.status,
+      body: decodedBody,
+    }
+  })
+
+const getAdminStatus = (path: string) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(path).pipe(
+      HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+      HttpClient.execute
+    )
+    return response.status
+  })
+
+const encodeTestCursor = (payload: Record<string, unknown>): string =>
+  Buffer.from(JSON.stringify(payload)).toString("base64url")
 
 await Effect.runPromise(context.recreateTestDatabase())
 
@@ -770,6 +805,102 @@ describe("AssetsApiLive", () => {
     )
 
     expect(response.body.pendingAssets.map((asset) => asset.id)).toEqual([literalPendingId])
+  })
+
+  it.each([
+    {
+      endpoint: "canonical assets",
+      path: `/v1/assets?cursor=${Buffer.from("not-json").toString("base64url")}`,
+      requiresAdmin: false,
+    },
+    {
+      endpoint: "pending assets",
+      path: `/v1/assets/pending?cursor=${encodeTestCursor({ version: 1, providerAssetRowId: crypto.randomUUID() })}`,
+      requiresAdmin: false,
+    },
+    {
+      endpoint: "canonical assets with a provider cursor",
+      path: `/v1/assets?cursor=${encodeTestCursor({ version: 2, providerAssetRowId: crypto.randomUUID() })}`,
+      requiresAdmin: false,
+    },
+    {
+      endpoint: "pending assets with a canonical cursor",
+      path: `/v1/assets/pending?cursor=${encodeTestCursor({ version: 2, assetId: crypto.randomUUID() })}`,
+      requiresAdmin: false,
+    },
+    {
+      endpoint: "admin provider assets",
+      path: `/v1/assets/provider-assets?cursor=${Buffer.from("not-json").toString("base64url")}`,
+      requiresAdmin: true,
+    },
+    {
+      endpoint: "admin provider assets with a canonical cursor",
+      path: `/v1/assets/provider-assets?cursor=${encodeTestCursor({ version: 2, assetId: crypto.randomUUID() })}`,
+      requiresAdmin: true,
+    },
+  ] as const)("rejects an invalid cursor for $endpoint", async ({ path, requiresAdmin }) => {
+    const status = await Effect.runPromise(
+      (requiresAdmin ? getAdminStatus(path) : getStatus(path)).pipe(
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+    )
+
+    expect(status).toBe(400)
+  })
+
+  it("paginates authenticated provider asset reviews with the opaque cursor", async () => {
+    const providerAssetIds = [crypto.randomUUID(), crypto.randomUUID()]
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.providerAssets).values(
+          providerAssetIds.map((id, index) => ({
+            id,
+            provider: "admin-cursor-provider",
+            providerAssetId: `admin-cursor-${index + 1}`,
+            currencyCode: `ADMIN_CURSOR_${index + 1}`,
+            name: `Admin cursor asset ${index + 1}`,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          }))
+        )
+        yield* db.insert(schema.providerAssetMappings).values(
+          providerAssetIds.map((providerAssetRowId) => ({
+            providerAssetRowId,
+            mappingKind: "asset" as const,
+            mappingStatus: "pending_review" as const,
+          }))
+        )
+      })
+    )
+
+    const firstPage = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/provider-assets?provider=admin-cursor-provider&limit=1",
+        responseSchema: ProviderAssetReviewListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const cursor = firstPage.body.page.nextCursor
+
+    expect(firstPage.status).toBe(200)
+    expect(cursor).toEqual(expect.any(String))
+    if (cursor === null) {
+      return
+    }
+
+    const secondPage = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/provider-assets?provider=admin-cursor-provider&limit=1&cursor=${cursor}`,
+        responseSchema: ProviderAssetReviewListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const pagedIds = [firstPage.body.providerAssets[0]?.id, secondPage.body.providerAssets[0]?.id]
+
+    expect(new Set(pagedIds)).toEqual(new Set(providerAssetIds))
+    expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
   })
 
   it("keeps provider asset review endpoints admin protected", async () => {

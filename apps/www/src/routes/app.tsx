@@ -12,6 +12,7 @@ import { AppHeader } from "#/components/app-header"
 import { Dashboard } from "#/components/dashboard"
 import { PageShell } from "#/components/page-shell"
 import { Button } from "#/components/ui/button"
+import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
 import type { Account } from "#/lib/dashboard-types"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
@@ -130,7 +131,13 @@ function RouteComponent() {
             size="icon-lg"
             variant="outline"
           >
-            <Link aria-label="Asset catalog" preload="intent" title="Asset catalog" to="/assets">
+            <Link
+              aria-label="Asset catalog"
+              id={ASSET_CATALOG_OPENER_ID}
+              preload="intent"
+              title="Asset catalog"
+              to="/assets"
+            >
               <LibraryBig data-icon="inline-start" />
               <span className="hidden sm:inline">Asset catalog</span>
             </Link>
