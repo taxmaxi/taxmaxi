@@ -1,0 +1,4 @@
+interface:
+  display_name: "Address PR Review"
+  short_description: "Fix, publish, and resolve PR feedback"
+  default_prompt: "Use $address-pr-review to resolve the current PR's feedback holistically, publish the implemented revision, and resolve the review threads it addresses."
