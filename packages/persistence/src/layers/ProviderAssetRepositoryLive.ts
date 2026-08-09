@@ -359,20 +359,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const cursorPredicate =
-        cursor === null
-          ? undefined
-          : or(
-              gt(schema.providerAssets.provider, cursor.provider),
-              and(
-                eq(schema.providerAssets.provider, cursor.provider),
-                gt(schema.providerAssets.currencyCode, cursor.currencyCode)
-              ),
-              and(
-                eq(schema.providerAssets.provider, cursor.provider),
-                eq(schema.providerAssets.currencyCode, cursor.currencyCode),
-                gt(schema.providerAssets.id, cursor.providerAssetRowId)
-              )
-            )
+        cursor === null ? undefined : gt(schema.providerAssets.id, cursor.providerAssetRowId)
       const searchPredicates = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
         or(
           ilike(schema.providerAssets.provider, pattern),
@@ -400,11 +387,7 @@ const make = Effect.gen(function* () {
           eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
         )
         .where(and(...predicates))
-        .orderBy(
-          asc(schema.providerAssets.provider),
-          asc(schema.providerAssets.currencyCode),
-          asc(schema.providerAssets.id)
-        )
+        .orderBy(asc(schema.providerAssets.id))
         .limit(limit)
         .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews"))
     })

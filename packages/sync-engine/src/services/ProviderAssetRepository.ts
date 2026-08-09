@@ -169,8 +169,6 @@ export interface ProviderAssetRepositoryShape {
     readonly mappingStatus: ProviderAssetMappingStatus
     readonly cursor: {
       readonly providerAssetRowId: string
-      readonly provider: string
-      readonly currencyCode: string
     } | null
     readonly query?: string | null
     readonly limit: number

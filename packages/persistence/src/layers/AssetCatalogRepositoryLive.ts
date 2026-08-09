@@ -99,18 +99,7 @@ const make = Effect.gen(function* () {
           )
         )
       )
-      const cursorFilter =
-        cursor === null
-          ? undefined
-          : or(
-              gt(schema.assets.symbol, cursor.symbol),
-              and(eq(schema.assets.symbol, cursor.symbol), gt(schema.assets.name, cursor.name)),
-              and(
-                eq(schema.assets.symbol, cursor.symbol),
-                eq(schema.assets.name, cursor.name),
-                gt(schema.assets.id, cursor.assetId)
-              )
-            )
+      const cursorFilter = cursor === null ? undefined : gt(schema.assets.id, cursor.assetId)
       const rows = yield* db
         .select({
           id: schema.assets.id,
@@ -122,7 +111,7 @@ const make = Effect.gen(function* () {
         })
         .from(schema.assets)
         .where(and(...searchFilters, cursorFilter))
-        .orderBy(asc(schema.assets.symbol), asc(schema.assets.name), asc(schema.assets.id))
+        .orderBy(asc(schema.assets.id))
         .limit(limit)
         .pipe(wrapSqlError("assetCatalogRepository.listAssets"))
       const representations = yield* loadRepresentations({ assetIds: rows.map(({ id }) => id) })

@@ -4,6 +4,8 @@ export type TaxMaxiAsset = AssetCatalogAsset
 export type TaxMaxiAssetType = TaxMaxiAsset["type"]
 export type TaxMaxiPendingAsset = PendingAsset
 
+export const ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH = 128
+
 export function matchesAssetCatalogQuery({
   query,
   values,

@@ -1,6 +1,6 @@
 import { useInfiniteQuery } from "@tanstack/react-query"
 import { createFileRoute, useRouter } from "@tanstack/react-router"
-import { useDeferredValue, useState } from "react"
+import { useEffect, useState } from "react"
 
 import { AssetCatalog } from "#/components/asset-catalog"
 import {
@@ -12,6 +12,21 @@ import { seo } from "#/lib/seo"
 
 const assetListInput = { limit: DEFAULT_TAXMAXI_ASSET_LIMIT }
 const pendingAssetListInput = { limit: DEFAULT_TAXMAXI_PENDING_ASSET_LIMIT }
+export const ASSET_CATALOG_SEARCH_DEBOUNCE_MS = 300
+
+export function useDebouncedCatalogQuery(query: string): string {
+  const [debouncedQuery, setDebouncedQuery] = useState(query)
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedQuery(query)
+    }, ASSET_CATALOG_SEARCH_DEBOUNCE_MS)
+
+    return () => window.clearTimeout(timeout)
+  }, [query])
+
+  return debouncedQuery
+}
 
 type AssetCatalogHistory = {
   readonly back: () => void
@@ -74,14 +89,14 @@ function AssetsIndexRoute() {
   const navigate = Route.useNavigate()
   const router = useRouter()
   const [catalogQuery, setCatalogQuery] = useState("")
-  const deferredCatalogQuery = useDeferredValue(catalogQuery.trim())
+  const debouncedCatalogQuery = useDebouncedCatalogQuery(catalogQuery.trim())
   const searchedAssetListInput = {
     ...assetListInput,
-    ...(deferredCatalogQuery.length > 0 ? { query: deferredCatalogQuery } : {}),
+    ...(debouncedCatalogQuery.length > 0 ? { query: debouncedCatalogQuery } : {}),
   }
   const searchedPendingAssetListInput = {
     ...pendingAssetListInput,
-    ...(deferredCatalogQuery.length > 0 ? { query: deferredCatalogQuery } : {}),
+    ...(debouncedCatalogQuery.length > 0 ? { query: debouncedCatalogQuery } : {}),
   }
   const assetQuery = useInfiniteQuery(queries.assetList(taxmaxi(), searchedAssetListInput))
   const pendingAssetQuery = useInfiniteQuery(

@@ -25,6 +25,13 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
   HttpApiSchema.annotations({ status: 404 })
 ) {}
 
+/** Maximum accepted length for public asset catalog search queries. */
+export const ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH = 128
+
+const AssetCatalogSearchQuery = Schema.String.pipe(
+  Schema.maxLength(ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH)
+)
+
 export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>(
   "ProviderAssetReviewRow"
 )({
@@ -172,7 +179,7 @@ const ProviderAssetReviewQuery = Schema.Struct({
 })
 
 const PendingAssetListQuery = Schema.Struct({
-  q: Schema.optional(Schema.String),
+  q: Schema.optional(AssetCatalogSearchQuery),
   provider: Schema.optional(Schema.String),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
@@ -185,7 +192,7 @@ const PendingAssetListQuery = Schema.Struct({
 })
 
 const AssetCatalogListQuery = Schema.Struct({
-  q: Schema.optional(Schema.String),
+  q: Schema.optional(AssetCatalogSearchQuery),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(

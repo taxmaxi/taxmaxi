@@ -29,6 +29,7 @@ import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
+import { eq } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
@@ -205,6 +206,23 @@ describe("AssetsApiLive", () => {
     expect(response.body.assets.map((asset) => asset.symbol)).toEqual(["USDC"])
   })
 
+  it.each(["/v1/assets", "/v1/assets/pending"])(
+    "bounds public asset searches at the API boundary for %s",
+    async (path) => {
+      const acceptedQuery = "a".repeat(128)
+      const rejectedQuery = "a".repeat(129)
+      const acceptedStatus = await Effect.runPromise(
+        getStatus(`${path}?q=${acceptedQuery}`).pipe(Effect.provide(HttpLive), Effect.scoped)
+      )
+      const rejectedStatus = await Effect.runPromise(
+        getStatus(`${path}?q=${rejectedQuery}`).pipe(Effect.provide(HttpLive), Effect.scoped)
+      )
+
+      expect(acceptedStatus).toBe(200)
+      expect(rejectedStatus).toBe(400)
+    }
+  )
+
   it("preserves canonical asset search by CoinGecko id", async () => {
     const response = await Effect.runPromise(
       getJson({
@@ -334,6 +352,63 @@ describe("AssetsApiLive", () => {
     expect(nonMatch.body.assets).toEqual([])
   })
 
+  it("does not repeat an approved asset when its display fields change between pages", async () => {
+    const assetIds = [
+      "00000000-0000-4000-8000-000000000101",
+      "00000000-0000-4000-8000-000000000102",
+      "00000000-0000-4000-8000-000000000103",
+    ] as const
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.assets).values(
+          assetIds.map((id, index) => ({
+            id,
+            name: `Mutable cursor asset ${index + 1}`,
+            symbol: `MUTABLE_${index + 1}`,
+            coingeckoCoinId: `mutable-cursor-${index + 1}`,
+            type: "fungible" as const,
+          }))
+        )
+      })
+    )
+
+    const firstPage = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets?q=mutable-cursor&limit=1",
+        responseSchema: AssetCatalogListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const seenIds = firstPage.body.assets.map((asset) => asset.id)
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db
+          .update(schema.assets)
+          .set({ name: "Z moved cursor asset", symbol: "ZZZ_MOVED" })
+          .where(eq(schema.assets.id, assetIds[0]))
+      })
+    )
+
+    let cursor = firstPage.body.page.nextCursor
+    while (cursor !== null) {
+      const page = await Effect.runPromise(
+        getJson({
+          path: `/v1/assets?q=mutable-cursor&limit=1&cursor=${cursor}`,
+          responseSchema: AssetCatalogListResponse,
+        }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      )
+      seenIds.push(...page.body.assets.map((asset) => asset.id))
+      cursor = page.body.page.nextCursor
+    }
+
+    expect(seenIds).toEqual(assetIds)
+  })
+
   it("treats SQL wildcard characters as literal asset search text", async () => {
     const literalAssetId = crypto.randomUUID()
 
@@ -395,10 +470,10 @@ describe("AssetsApiLive", () => {
   })
 
   it("lists pending assets without authentication or internal review fields", async () => {
-    const providerAssetId = crypto.randomUUID()
-    const secondProviderAssetId = crypto.randomUUID()
-    const pendingFiatId = crypto.randomUUID()
-    const rejectedAssetId = crypto.randomUUID()
+    const providerAssetId = "10000000-0000-4000-8000-000000000001"
+    const secondProviderAssetId = "20000000-0000-4000-8000-000000000002"
+    const pendingFiatId = "30000000-0000-4000-8000-000000000003"
+    const rejectedAssetId = "40000000-0000-4000-8000-000000000004"
 
     await context.runPg(
       Effect.gen(function* () {
@@ -581,6 +656,72 @@ describe("AssetsApiLive", () => {
 
     expect(new Set(pagedIds)).toEqual(new Set(duplicateIds))
     expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
+  })
+
+  it("does not repeat a pending asset when its currency code changes between pages", async () => {
+    const providerAssetIds = [
+      "00000000-0000-4000-8000-000000000201",
+      "00000000-0000-4000-8000-000000000202",
+      "00000000-0000-4000-8000-000000000203",
+    ] as const
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db.insert(schema.providerAssets).values(
+          providerAssetIds.map((id, index) => ({
+            id,
+            provider: "public-mutable-cursor-provider",
+            providerAssetId: `mutable-${index + 1}`,
+            currencyCode: `MUTABLE_${index + 1}`,
+            name: `Mutable pending asset ${index + 1}`,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-08T10:00:00.000Z"),
+          }))
+        )
+        yield* db.insert(schema.providerAssetMappings).values(
+          providerAssetIds.map((providerAssetRowId) => ({
+            providerAssetRowId,
+            mappingKind: "asset" as const,
+            mappingStatus: "pending_review" as const,
+          }))
+        )
+      })
+    )
+
+    const firstPage = await Effect.runPromise(
+      getJson({
+        path: "/v1/assets/pending?provider=public-mutable-cursor-provider&limit=1",
+        responseSchema: PendingAssetListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const seenIds = firstPage.body.pendingAssets.map((asset) => asset.id)
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+
+        yield* db
+          .update(schema.providerAssets)
+          .set({ currencyCode: "ZZZ_MOVED" })
+          .where(eq(schema.providerAssets.id, providerAssetIds[0]))
+      })
+    )
+
+    let cursor = firstPage.body.page.nextCursor
+    while (cursor !== null) {
+      const page = await Effect.runPromise(
+        getJson({
+          path: `/v1/assets/pending?provider=public-mutable-cursor-provider&limit=1&cursor=${cursor}`,
+          responseSchema: PendingAssetListResponse,
+        }).pipe(Effect.provide(HttpLive), Effect.scoped)
+      )
+      seenIds.push(...page.body.pendingAssets.map((asset) => asset.id))
+      cursor = page.body.page.nextCursor
+    }
+
+    expect(seenIds).toEqual(providerAssetIds)
   })
 
   it("treats SQL wildcard characters as literal pending-asset search text", async () => {

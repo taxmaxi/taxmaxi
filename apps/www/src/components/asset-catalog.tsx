@@ -18,6 +18,7 @@ import { Button } from "#/components/ui/button"
 import { InputGroup, InputGroupAddon, InputGroupInput } from "#/components/ui/input-group"
 import { Separator } from "#/components/ui/separator"
 import {
+  ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH,
   describeTaxMaxiAsset,
   filterTaxMaxiAssets,
   formatAssetType,
@@ -784,6 +785,7 @@ function SearchField({
         aria-expanded="true"
         autoComplete="off"
         id={ASSET_CATALOG_SEARCH_ID}
+        maxLength={ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH}
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder="Search symbol, name, network, or provider"
         spellCheck={false}

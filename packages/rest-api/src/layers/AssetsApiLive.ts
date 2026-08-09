@@ -35,17 +35,13 @@ const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 
 const AssetCursorPayload = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   assetId: Schema.UUID,
-  name: Schema.String,
-  symbol: Schema.String,
 })
 
 const ProviderAssetCursorPayload = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   providerAssetRowId: Schema.UUID,
-  provider: Schema.String,
-  currencyCode: Schema.String,
 })
 
 const EncodedAssetCursorPayload = Schema.parseJson(AssetCursorPayload)
@@ -79,18 +75,14 @@ const decodeProviderAssetCursor = (cursor: string | undefined) =>
 
 const assetCursorFor = (asset: AssetCatalogAssetRecord): string =>
   encodeCursor({
-    version: 1,
+    version: 2,
     assetId: asset.id,
-    name: asset.name,
-    symbol: asset.symbol,
   })
 
 const providerAssetCursorFor = (row: ProviderAssetReviewRecord): string =>
   encodeCursor({
-    version: 1,
+    version: 2,
     providerAssetRowId: row.providerAsset.id,
-    provider: row.providerAsset.provider,
-    currencyCode: row.providerAsset.currencyCode,
   })
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>

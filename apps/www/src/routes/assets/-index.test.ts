@@ -1,7 +1,42 @@
-import { createMemoryHistory } from "@tanstack/react-router"
-import { describe, expect, it, vi } from "vitest"
+// @vitest-environment jsdom
 
-import { closeAssetCatalog, loadAssetCatalogFeeds } from "./index"
+import { createMemoryHistory } from "@tanstack/react-router"
+import { act, renderHook } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+import {
+  ASSET_CATALOG_SEARCH_DEBOUNCE_MS,
+  closeAssetCatalog,
+  loadAssetCatalogFeeds,
+  useDebouncedCatalogQuery,
+} from "./index"
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+describe("useDebouncedCatalogQuery", () => {
+  it("publishes only the last query after the idle window", async () => {
+    vi.useFakeTimers()
+    const { result, rerender } = renderHook(
+      ({ query }: { readonly query: string }) => useDebouncedCatalogQuery(query),
+      { initialProps: { query: "" } }
+    )
+
+    rerender({ query: "bit" })
+    rerender({ query: "bitcoin" })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ASSET_CATALOG_SEARCH_DEBOUNCE_MS - 1)
+    })
+    expect(result.current).toBe("")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(result.current).toBe("bitcoin")
+  })
+})
 
 describe("loadAssetCatalogFeeds", () => {
   it.each(["approved", "pending"] as const)(

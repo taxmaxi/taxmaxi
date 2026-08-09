@@ -3,7 +3,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
 
-import type { TaxMaxiAsset, TaxMaxiPendingAsset } from "#/lib/assets"
+import {
+  ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH,
+  type TaxMaxiAsset,
+  type TaxMaxiPendingAsset,
+} from "#/lib/assets"
 import { AssetCatalog } from "./asset-catalog"
 
 let desktopViewport = false
@@ -300,6 +304,9 @@ describe("AssetCatalog", () => {
     })
 
     expect(onQueryChange).toHaveBeenCalledWith("later-page")
+    expect(screen.getByRole("combobox", { name: "Search assets" }).getAttribute("maxlength")).toBe(
+      String(ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH)
+    )
   })
 
   it("announces changing result and feed status", () => {

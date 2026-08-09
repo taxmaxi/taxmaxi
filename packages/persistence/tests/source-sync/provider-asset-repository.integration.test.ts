@@ -345,7 +345,7 @@ describe("ProviderAssetRepositoryLive", () => {
         )
       )
 
-      expect(firstPage.map((row) => row.providerAsset.currencyCode)).toEqual(["ADA", "ETH"])
+      expect(firstPage).toHaveLength(2)
       const lastFirstPageRow = firstPage.at(-1)
 
       if (lastFirstPageRow === undefined) {
@@ -359,15 +359,16 @@ describe("ProviderAssetRepositoryLive", () => {
             mappingStatus: "pending_review",
             cursor: {
               providerAssetRowId: lastFirstPageRow.providerAsset.id,
-              provider: lastFirstPageRow.providerAsset.provider,
-              currencyCode: lastFirstPageRow.providerAsset.currencyCode,
             },
             limit: 2,
           })
         )
       )
 
-      expect(secondPage.map((row) => row.providerAsset.currencyCode)).toEqual(["SOL"])
+      expect(secondPage).toHaveLength(1)
+      expect(
+        new Set([...firstPage, ...secondPage].map((review) => review.providerAsset.currencyCode))
+      ).toEqual(new Set(["ADA", "ETH", "SOL"]))
     })
 
     it("keeps reviewed natural-key mappings preferred when a stable provider asset id arrives later", async () => {
