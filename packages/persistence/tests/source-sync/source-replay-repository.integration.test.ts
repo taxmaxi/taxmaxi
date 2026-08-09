@@ -470,7 +470,7 @@ describe("SourceReplayRepositoryLive", () => {
   )
 
   it.each(["provider", "canonical"] as const)(
-    "blocks $s replay when reconciliation copied FIFO state into another source",
+    "allows $s replay when reconciliation can refresh copied FIFO state",
     async (replaySide) => {
       const dependentSourceId = "00000000-0000-0000-0000-000000000292"
       const originTransactionId = "00000000-0000-0000-0000-000000000293"
@@ -609,7 +609,6 @@ describe("SourceReplayRepositoryLive", () => {
       )
 
       const replaySourceId = replaySide === "provider" ? TEST_SOURCE_ID : dependentSourceId
-      const dependentReplaySourceId = replaySide === "provider" ? dependentSourceId : TEST_SOURCE_ID
       const replayResult = await runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
           repository.resetSourceDerivedState({ sourceId: replaySourceId })
@@ -617,13 +616,7 @@ describe("SourceReplayRepositoryLive", () => {
       )
 
       expect(replayResult).toMatchObject({
-        _tag: "Left",
-        left: {
-          _tag: "SourceReplayDependencyError",
-          sourceId: replaySourceId,
-          dependentSourceIds: [dependentReplaySourceId],
-          affectedPrincipalIds: [TEST_PRINCIPAL_ID],
-        },
+        _tag: "Right",
       })
 
       const transactions = await runPg(
@@ -632,8 +625,11 @@ describe("SourceReplayRepositoryLive", () => {
           return yield* db.select().from(schema.transactions)
         })
       )
-      expect(transactions.map((transaction) => transaction.id)).toEqual(
-        expect.arrayContaining([originTransactionId, destinationTransactionId])
+      expect(transactions.map((transaction) => transaction.id)).not.toContain(
+        replaySide === "provider" ? originTransactionId : destinationTransactionId
+      )
+      expect(transactions.map((transaction) => transaction.id)).toContain(
+        replaySide === "provider" ? destinationTransactionId : originTransactionId
       )
     }
   )
