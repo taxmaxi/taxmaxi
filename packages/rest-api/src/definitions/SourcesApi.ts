@@ -245,7 +245,7 @@ export class SourceReportTotals extends Schema.Class<SourceReportTotals>("Source
   disposalCount: Schema.Number,
   incomeCount: Schema.Number,
   feeCount: Schema.Number,
-  realizedGainLoss: SourceReportAmount,
+  realizedGainLoss: Schema.NullOr(SourceReportAmount),
   incomeTotal: SourceReportAmount,
   currency: Schema.NullOr(Schema.String),
 }) {}
@@ -275,8 +275,8 @@ export class SourceAssetPnlRow extends Schema.Class<SourceAssetPnlRow>("SourceAs
   openAmount: SourceReportAmount,
   costBasis: Schema.NullOr(SourceReportAmount),
   costBasisStatus: Schema.Literal("known", "pending_review"),
-  proceeds: SourceReportAmount,
-  realizedGainLoss: SourceReportAmount,
+  proceeds: Schema.NullOr(SourceReportAmount),
+  realizedGainLoss: Schema.NullOr(SourceReportAmount),
   currency: Schema.NullOr(Schema.String),
   review: SourceReportReviewSummary,
 }) {}
@@ -316,9 +316,9 @@ export class SourceFifoLotDisposalSummary extends Schema.Class<SourceFifoLotDisp
 )({
   disposalLegId: Schema.String,
   matchedAmount: SourceReportAmount,
-  proceeds: SourceReportAmount,
-  costBasis: SourceReportAmount,
-  gainLoss: SourceReportAmount,
+  proceeds: Schema.NullOr(SourceReportAmount),
+  costBasis: Schema.NullOr(SourceReportAmount),
+  gainLoss: Schema.NullOr(SourceReportAmount),
 }) {}
 
 export class SourceFifoLotRow extends Schema.Class<SourceFifoLotRow>("SourceFifoLotRow")({
@@ -349,9 +349,9 @@ export class SourceDisposalMatchedLot extends Schema.Class<SourceDisposalMatched
   asset: SourceReportAsset,
   acquiredAt: Schema.String,
   matchedAmount: SourceReportAmount,
-  costBasis: SourceReportAmount,
-  proceeds: SourceReportAmount,
-  gainLoss: SourceReportAmount,
+  costBasis: Schema.NullOr(SourceReportAmount),
+  proceeds: Schema.NullOr(SourceReportAmount),
+  gainLoss: Schema.NullOr(SourceReportAmount),
   taxableTreatment: SourceReportTaxableTreatment,
 }) {}
 
@@ -363,8 +363,8 @@ export class SourceDisposalExplanationResponse extends Schema.Class<SourceDispos
   asset: SourceReportAsset,
   amount: SourceReportAmount,
   proceeds: Schema.NullOr(SourceReportAmount),
-  costBasis: SourceReportAmount,
-  gainLoss: SourceReportAmount,
+  costBasis: Schema.NullOr(SourceReportAmount),
+  gainLoss: Schema.NullOr(SourceReportAmount),
   acquiredAt: Schema.NullOr(Schema.String),
   disposedAt: Schema.String,
   taxableTreatment: SourceReportTaxableTreatment,

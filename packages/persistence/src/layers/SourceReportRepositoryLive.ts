@@ -73,6 +73,8 @@ interface AssetAccumulator {
   realizedGainLoss: BigDecimal.BigDecimal
   currency: string | null
   hasPendingCostBasis: boolean
+  hasPendingProceeds: boolean
+  hasPendingRealizedGainLoss: boolean
 }
 
 interface ReviewProjectionRow {
@@ -448,8 +450,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceReportRepository.getOverview.transactionCount"))
       const legRows = yield* db
         .select({
+          legId: schema.transactionLegs.id,
           assetId: schema.transactionLegs.assetId,
           kind: schema.transactionLegs.kind,
+          amount: schema.transactionLegs.amount,
           derivationRule: schema.transactionLegs.derivationRule,
           fiatAmount: schema.transactionLegs.fiatAmount,
           fiatCurrency: schema.transactionLegs.fiatCurrency,
@@ -464,27 +468,71 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceReportRepository.getOverview.fifoLots"))
       const matchRows = yield* db
         .select({
+          disposalLegId: schema.disposalMatches.disposalLegId,
+          matchedAmount: schema.disposalMatches.matchedAmount,
           gainLoss: schema.disposalMatches.gainLoss,
-          proceeds: schema.disposalMatches.proceeds,
           proceedsCurrency: schema.transactionLegs.fiatCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
+          derivationRule: schema.transactionLegs.derivationRule,
         })
         .from(schema.disposalMatches)
         .innerJoin(
           schema.transactionLegs,
           eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
         )
+        .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.getOverview.matches"))
 
       let realizedGainLoss = zeroDecimal()
+      let hasPendingRealizedGainLoss = false
       let currency: string | null = null
       for (const row of matchRows) {
+        if (row.derivationRule === "internal_transfer_out") {
+          continue
+        }
+        if (row.costBasisStatus === "pending_review") {
+          hasPendingRealizedGainLoss = true
+          currency = emptyCurrency(currency, row.proceedsCurrency)
+          continue
+        }
         const amount = yield* decodeDecimal({
           operation: "sourceReportRepository.getOverview.gainLoss",
           value: row.gainLoss,
         })
         realizedGainLoss = BigDecimal.sum(realizedGainLoss, amount)
         currency = emptyCurrency(currency, row.proceedsCurrency)
+      }
+
+      for (const leg of legRows) {
+        if (leg.kind !== "disposal" || leg.derivationRule === "internal_transfer_out") {
+          continue
+        }
+        if (leg.fiatAmount === null || leg.fiatCurrency === null) {
+          hasPendingRealizedGainLoss = true
+        }
+        const disposalAmount = BigDecimal.abs(
+          yield* decodeDecimal({
+            operation: "sourceReportRepository.getOverview.disposalAmount",
+            value: leg.amount,
+          })
+        )
+        let matchedAmount = zeroDecimal()
+        for (const match of matchRows) {
+          if (match.disposalLegId !== leg.legId) {
+            continue
+          }
+          matchedAmount = BigDecimal.sum(
+            matchedAmount,
+            yield* decodeDecimal({
+              operation: "sourceReportRepository.getOverview.matchedAmount",
+              value: match.matchedAmount,
+            })
+          )
+        }
+        if (!BigDecimal.equals(disposalAmount, matchedAmount)) {
+          hasPendingRealizedGainLoss = true
+        }
       }
 
       let incomeTotal = zeroDecimal()
@@ -524,7 +572,7 @@ const make = Effect.gen(function* () {
         disposalCount,
         incomeCount,
         feeCount,
-        realizedGainLoss: formatDecimal(realizedGainLoss),
+        realizedGainLoss: hasPendingRealizedGainLoss ? null : formatDecimal(realizedGainLoss),
         incomeTotal: formatDecimal(incomeTotal),
         currency,
       } satisfies SourceReportTotals
@@ -538,12 +586,15 @@ const make = Effect.gen(function* () {
       const reviewRows = yield* loadReportReviewRows({ sourceId: params.sourceId })
       const legRows = yield* db
         .select({
+          legId: schema.transactionLegs.id,
           assetId: schema.transactionLegs.assetId,
           symbol: schema.assets.symbol,
           name: schema.assets.name,
           kind: schema.transactionLegs.kind,
           amount: schema.transactionLegs.amount,
           derivationRule: schema.transactionLegs.derivationRule,
+          fiatAmount: schema.transactionLegs.fiatAmount,
+          fiatCurrency: schema.transactionLegs.fiatCurrency,
         })
         .from(schema.transactionLegs)
         .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
@@ -573,16 +624,19 @@ const make = Effect.gen(function* () {
           assetId: schema.transactionLegs.assetId,
           symbol: schema.assets.symbol,
           name: schema.assets.name,
-          proceeds: schema.disposalMatches.proceeds,
           gainLoss: schema.disposalMatches.gainLoss,
-          fiatCurrency: schema.transactionLegs.fiatCurrency,
           derivationRule: schema.transactionLegs.derivationRule,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
+          disposalLegId: schema.disposalMatches.disposalLegId,
+          disposalAmount: schema.transactionLegs.amount,
+          matchedAmount: schema.disposalMatches.matchedAmount,
         })
         .from(schema.disposalMatches)
         .innerJoin(
           schema.transactionLegs,
           eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
         )
+        .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
         .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
         .where(eq(schema.transactionLegs.sourceId, params.sourceId))
         .pipe(wrapSqlError("sourceReportRepository.listAssetPnl.matches"))
@@ -624,6 +678,8 @@ const make = Effect.gen(function* () {
           realizedGainLoss: zeroDecimal(),
           currency: null,
           hasPendingCostBasis: false,
+          hasPendingProceeds: false,
+          hasPendingRealizedGainLoss: false,
         }
         accumulators.set(asset.assetId, created)
         return created
@@ -646,6 +702,20 @@ const make = Effect.gen(function* () {
             accumulator.disposedAmount,
             BigDecimal.abs(amount)
           )
+          const fiatAmount = yield* optionalDecimal({
+            operation: "sourceReportRepository.listAssetPnl.fiatAmount",
+            value: row.fiatAmount,
+          })
+          if (Option.isNone(fiatAmount) || row.fiatCurrency === null) {
+            accumulator.hasPendingProceeds = true
+            accumulator.hasPendingRealizedGainLoss = true
+          } else {
+            accumulator.proceeds = BigDecimal.sum(
+              accumulator.proceeds,
+              BigDecimal.abs(fiatAmount.value)
+            )
+            accumulator.currency = emptyCurrency(accumulator.currency, row.fiatCurrency)
+          }
         }
       }
 
@@ -677,7 +747,9 @@ const make = Effect.gen(function* () {
           accumulator.openCostBasis,
           BigDecimal.round(BigDecimal.multiply(remainingAmount, costBasisPerToken), { scale: 8 })
         )
-        accumulator.currency = emptyCurrency(accumulator.currency, row.costBasisCurrency)
+        if (row.costBasisStatus === "known") {
+          accumulator.currency = emptyCurrency(accumulator.currency, row.costBasisCurrency)
+        }
       }
 
       for (const row of custodyAllocationRows) {
@@ -694,17 +766,57 @@ const make = Effect.gen(function* () {
           continue
         }
         const accumulator = getAccumulator(assetFromRow(row))
-        const proceeds = yield* decodeDecimal({
-          operation: "sourceReportRepository.listAssetPnl.proceeds",
-          value: row.proceeds,
-        })
         const gainLoss = yield* decodeDecimal({
           operation: "sourceReportRepository.listAssetPnl.gainLoss",
           value: row.gainLoss,
         })
-        accumulator.proceeds = BigDecimal.sum(accumulator.proceeds, proceeds)
-        accumulator.realizedGainLoss = BigDecimal.sum(accumulator.realizedGainLoss, gainLoss)
-        accumulator.currency = emptyCurrency(accumulator.currency, row.fiatCurrency)
+        if (row.costBasisStatus === "pending_review") {
+          accumulator.hasPendingRealizedGainLoss = true
+        } else {
+          accumulator.realizedGainLoss = BigDecimal.sum(accumulator.realizedGainLoss, gainLoss)
+        }
+      }
+
+      const disposalCoverage = new Map<
+        string,
+        {
+          readonly accumulator: AssetAccumulator
+          matched: BigDecimal.BigDecimal
+          required: BigDecimal.BigDecimal
+        }
+      >()
+      for (const row of matchRows) {
+        if (row.derivationRule === "internal_transfer_out") {
+          continue
+        }
+        const existing = disposalCoverage.get(row.disposalLegId)
+        const matchedAmount = yield* decodeDecimal({
+          operation: "sourceReportRepository.listAssetPnl.matchedAmount",
+          value: row.matchedAmount,
+        })
+        if (existing === undefined) {
+          disposalCoverage.set(row.disposalLegId, {
+            accumulator: getAccumulator(assetFromRow(row)),
+            matched: matchedAmount,
+            required: BigDecimal.abs(
+              yield* decodeDecimal({
+                operation: "sourceReportRepository.listAssetPnl.disposalAmount",
+                value: row.disposalAmount,
+              })
+            ),
+          })
+        } else {
+          existing.matched = BigDecimal.sum(existing.matched, matchedAmount)
+        }
+      }
+      for (const row of legRows) {
+        if (row.kind !== "disposal" || row.derivationRule === "internal_transfer_out") {
+          continue
+        }
+        const coverage = disposalCoverage.get(row.legId)
+        if (coverage === undefined || !BigDecimal.equals(coverage.matched, coverage.required)) {
+          getAccumulator(assetFromRow(row)).hasPendingRealizedGainLoss = true
+        }
       }
 
       const reviewRowsByAssetId = new Map<string, ReadonlyArray<ReviewProjectionRow>>()
@@ -726,8 +838,10 @@ const make = Effect.gen(function* () {
             openAmount: formatDecimal(row.openAmount),
             costBasis: row.hasPendingCostBasis ? null : formatDecimal(row.openCostBasis),
             costBasisStatus: row.hasPendingCostBasis ? "pending_review" : "known",
-            proceeds: formatDecimal(row.proceeds),
-            realizedGainLoss: formatDecimal(row.realizedGainLoss),
+            proceeds: row.hasPendingProceeds ? null : formatDecimal(row.proceeds),
+            realizedGainLoss: row.hasPendingRealizedGainLoss
+              ? null
+              : formatDecimal(row.realizedGainLoss),
             currency: row.currency,
             review: summarizeReviewRows(reviewRowsByAssetId.get(row.asset.assetId) ?? []),
           })
@@ -786,9 +900,10 @@ const make = Effect.gen(function* () {
               .select({
                 disposalLegId: schema.disposalMatches.disposalLegId,
                 costBasis: schema.disposalMatches.costBasis,
-                proceeds: schema.disposalMatches.proceeds,
                 gainLoss: schema.disposalMatches.gainLoss,
                 acquiredAt: schema.fifoLots.acquiredAt,
+                costBasisStatus: schema.fifoLots.costBasisStatus,
+                matchedAmount: schema.disposalMatches.matchedAmount,
               })
               .from(schema.disposalMatches)
               .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
@@ -798,32 +913,53 @@ const make = Effect.gen(function* () {
       const items = yield* Effect.forEach(rows, (row) =>
         Effect.gen(function* () {
           let costBasis = zeroDecimal()
-          let proceeds = zeroDecimal()
           let gainLoss = zeroDecimal()
+          let matchedAmount = zeroDecimal()
 
           const treatments: Array<SourceReportTaxableTreatment> = []
           const matches = matchRows.filter((match) => match.disposalLegId === row.legId)
+          const hasPendingCostBasis = matches.some(
+            (match) => match.costBasisStatus === "pending_review"
+          )
 
           for (const match of matches) {
             const matchCostBasis = yield* decodeDecimal({
               operation: "sourceReportRepository.listTaxEvents.costBasis",
               value: match.costBasis,
             })
-            const matchProceeds = yield* decodeDecimal({
-              operation: "sourceReportRepository.listTaxEvents.proceeds",
-              value: match.proceeds,
-            })
             const matchGainLoss = yield* decodeDecimal({
               operation: "sourceReportRepository.listTaxEvents.gainLoss",
               value: match.gainLoss,
             })
             costBasis = BigDecimal.sum(costBasis, matchCostBasis)
-            proceeds = BigDecimal.sum(proceeds, matchProceeds)
             gainLoss = BigDecimal.sum(gainLoss, matchGainLoss)
+            matchedAmount = BigDecimal.sum(
+              matchedAmount,
+              yield* decodeDecimal({
+                operation: "sourceReportRepository.listTaxEvents.matchedAmount",
+                value: match.matchedAmount,
+              })
+            )
             treatments.push(
               taxableTreatmentForDates({ acquiredAt: match.acquiredAt, disposedAt: row.timestamp })
             )
           }
+
+          const amount = yield* decodeDecimal({
+            operation: "sourceReportRepository.listTaxEvents.amount",
+            value: row.amount,
+          })
+          const fiatAmount = yield* optionalDecimal({
+            operation: "sourceReportRepository.listTaxEvents.fiatAmount",
+            value: row.fiatAmount,
+          })
+          const hasIncompleteCoverage =
+            row.kind === "disposal" && !BigDecimal.equals(BigDecimal.abs(amount), matchedAmount)
+          const hasIncompleteGainLoss =
+            hasPendingCostBasis ||
+            hasIncompleteCoverage ||
+            Option.isNone(fiatAmount) ||
+            row.fiatCurrency === null
 
           return {
             legId: row.legId,
@@ -831,12 +967,25 @@ const make = Effect.gen(function* () {
             timestamp: row.timestamp.toISOString(),
             kind: row.kind,
             asset: assetFromRow(row),
-            amount: String(row.amount),
-            fiatAmount: row.fiatAmount === null ? null : String(row.fiatAmount),
+            amount: formatDecimal(amount),
+            fiatAmount: Option.match(fiatAmount, {
+              onNone: () => null,
+              onSome: formatDecimal,
+            }),
             fiatCurrency: row.fiatCurrency,
-            costBasis: matches.length === 0 ? null : formatDecimal(costBasis),
-            proceeds: matches.length === 0 ? null : formatDecimal(proceeds),
-            gainLoss: matches.length === 0 ? null : formatDecimal(gainLoss),
+            costBasis:
+              matches.length === 0 || hasPendingCostBasis || hasIncompleteCoverage
+                ? null
+                : formatDecimal(costBasis),
+            proceeds:
+              row.kind !== "disposal"
+                ? null
+                : Option.match(fiatAmount, {
+                    onNone: () => null,
+                    onSome: (value) => (row.fiatCurrency === null ? null : formatDecimal(value)),
+                  }),
+            gainLoss:
+              matches.length === 0 || hasIncompleteGainLoss ? null : formatDecimal(gainLoss),
             taxableTreatment:
               row.kind === "disposal"
                 ? disposalTaxableTreatment({
@@ -914,8 +1063,16 @@ const make = Effect.gen(function* () {
                 proceeds: schema.disposalMatches.proceeds,
                 costBasis: schema.disposalMatches.costBasis,
                 gainLoss: schema.disposalMatches.gainLoss,
+                costBasisStatus: schema.fifoLots.costBasisStatus,
+                disposalFiatAmount: schema.transactionLegs.fiatAmount,
+                disposalFiatCurrency: schema.transactionLegs.fiatCurrency,
               })
               .from(schema.disposalMatches)
+              .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
+              .innerJoin(
+                schema.transactionLegs,
+                eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
+              )
               .where(inArray(schema.disposalMatches.fifoLotId, lotIds))
               .orderBy(asc(schema.disposalMatches.createdAt), asc(schema.disposalMatches.id))
               .pipe(wrapSqlError("sourceReportRepository.listFifoLots.matches"))
@@ -947,9 +1104,17 @@ const make = Effect.gen(function* () {
               return {
                 disposalLegId: row.disposalLegId,
                 matchedAmount: formatDecimal(matchedAmount),
-                proceeds: formatDecimal(proceeds),
-                costBasis: formatDecimal(costBasis),
-                gainLoss: formatDecimal(gainLoss),
+                proceeds:
+                  row.disposalFiatAmount === null || row.disposalFiatCurrency === null
+                    ? null
+                    : formatDecimal(proceeds),
+                costBasis: row.costBasisStatus === "known" ? formatDecimal(costBasis) : null,
+                gainLoss:
+                  row.costBasisStatus === "known" &&
+                  row.disposalFiatAmount !== null &&
+                  row.disposalFiatCurrency !== null
+                    ? formatDecimal(gainLoss)
+                    : null,
               } satisfies SourceFifoLotDisposalSummary
             })
         )
@@ -1014,6 +1179,7 @@ const make = Effect.gen(function* () {
           name: schema.assets.name,
           amount: schema.transactionLegs.amount,
           fiatAmount: schema.transactionLegs.fiatAmount,
+          fiatCurrency: schema.transactionLegs.fiatCurrency,
           timestamp: schema.transactionLegs.timestamp,
           provenance: schema.transactionLegs.provenance,
           derivationRule: schema.transactionLegs.derivationRule,
@@ -1047,6 +1213,7 @@ const make = Effect.gen(function* () {
           proceeds: schema.disposalMatches.proceeds,
           costBasis: schema.disposalMatches.costBasis,
           gainLoss: schema.disposalMatches.gainLoss,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
         })
         .from(schema.disposalMatches)
         .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
@@ -1056,13 +1223,17 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceReportRepository.explainDisposal.matches"))
 
       let costBasis = zeroDecimal()
-      let proceeds = zeroDecimal()
       let gainLoss = zeroDecimal()
       let firstAcquiredAt: Date | null = null
+      let hasPendingCostBasis = false
+      let matchedAmountTotal = zeroDecimal()
 
       const matchedLots: Array<SourceDisposalMatchedLot> = []
 
       for (const row of matches) {
+        if (row.costBasisStatus === "pending_review") {
+          hasPendingCostBasis = true
+        }
         const rowCostBasis = yield* decodeDecimal({
           operation: "sourceReportRepository.explainDisposal.costBasis",
           value: row.costBasis,
@@ -1079,9 +1250,9 @@ const make = Effect.gen(function* () {
           operation: "sourceReportRepository.explainDisposal.matchedAmount",
           value: row.matchedAmount,
         })
+        matchedAmountTotal = BigDecimal.sum(matchedAmountTotal, matchedAmount)
 
         costBasis = BigDecimal.sum(costBasis, rowCostBasis)
-        proceeds = BigDecimal.sum(proceeds, rowProceeds)
         gainLoss = BigDecimal.sum(gainLoss, rowGainLoss)
         firstAcquiredAt =
           firstAcquiredAt === null || row.acquiredAt.getTime() < firstAcquiredAt.getTime()
@@ -1093,9 +1264,15 @@ const make = Effect.gen(function* () {
           asset: assetFromRow(row),
           acquiredAt: row.acquiredAt.toISOString(),
           matchedAmount: formatDecimal(matchedAmount),
-          costBasis: formatDecimal(rowCostBasis),
-          proceeds: formatDecimal(rowProceeds),
-          gainLoss: formatDecimal(rowGainLoss),
+          costBasis: row.costBasisStatus === "known" ? formatDecimal(rowCostBasis) : null,
+          proceeds:
+            leg.fiatAmount === null || leg.fiatCurrency === null
+              ? null
+              : formatDecimal(rowProceeds),
+          gainLoss:
+            row.costBasisStatus === "known" && leg.fiatAmount !== null && leg.fiatCurrency !== null
+              ? formatDecimal(rowGainLoss)
+              : null,
           taxableTreatment:
             leg.derivationRule === "internal_transfer_out"
               ? "non_taxable"
@@ -1115,6 +1292,12 @@ const make = Effect.gen(function* () {
         operation: "sourceReportRepository.explainDisposal.fiatAmount",
         value: leg.fiatAmount,
       })
+      const hasIncompleteCoverage = !BigDecimal.equals(BigDecimal.abs(amount), matchedAmountTotal)
+      const hasIncompleteGainLoss =
+        hasPendingCostBasis ||
+        hasIncompleteCoverage ||
+        Option.isNone(fiatAmount) ||
+        leg.fiatCurrency === null
 
       return {
         disposalLegId: leg.legId,
@@ -1122,11 +1305,11 @@ const make = Effect.gen(function* () {
         asset: assetFromRow(leg),
         amount: formatDecimal(amount),
         proceeds: Option.match(fiatAmount, {
-          onNone: () => (matches.length === 0 ? null : formatDecimal(proceeds)),
-          onSome: formatDecimal,
+          onNone: () => null,
+          onSome: (value) => (leg.fiatCurrency === null ? null : formatDecimal(value)),
         }),
-        costBasis: formatDecimal(costBasis),
-        gainLoss: formatDecimal(gainLoss),
+        costBasis: hasPendingCostBasis || hasIncompleteCoverage ? null : formatDecimal(costBasis),
+        gainLoss: hasIncompleteGainLoss ? null : formatDecimal(gainLoss),
         acquiredAt: isoOrNull(firstAcquiredAt),
         disposedAt: leg.timestamp.toISOString(),
         taxableTreatment: disposalTaxableTreatment({

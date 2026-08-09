@@ -104,12 +104,10 @@ interface CustodyRow {
 interface MatchSummaryRow {
   readonly transactionId: string | null
   readonly legId: string
-  readonly costBasisCurrency: string
+  readonly costBasisCurrency: string | null
   readonly costBasisComplete: boolean
   readonly matchedAmount: string
   readonly costBasis: string | null
-  readonly proceeds: string | null
-  readonly gainLoss: string | null
   readonly hasTaxableLots: boolean
   readonly hasTaxFreeLots: boolean
 }
@@ -443,81 +441,72 @@ interface DisposalTotals {
   readonly complete: boolean
   readonly valuationComplete: boolean
   readonly costBasisComplete: boolean
-  readonly hasMatches: boolean
+  readonly hasDisposals: boolean
 }
 
 const calculateDisposalTotals = ({
   currencyComplete,
   legRows,
-  summaries,
   summariesByLeg,
 }: {
   readonly currencyComplete: boolean
   readonly legRows: ReadonlyArray<LegRow>
-  readonly summaries: ReadonlyArray<MatchSummaryRow>
   readonly summariesByLeg: ReadonlyMap<string, MatchSummaryRow>
 }): Effect.Effect<DisposalTotals, PersistenceError> =>
   Effect.gen(function* () {
     const taxDisposalLegs = legRows.filter(
       (leg) => leg.kind === "disposal" && leg.derivationRule !== "internal_transfer_out"
     )
-    const taxDisposalLegIds = new Set(taxDisposalLegs.map((leg) => leg.legId))
-    const taxSummaries = summaries.filter((summary) => taxDisposalLegIds.has(summary.legId))
     let proceeds = zero
     let costBasis = zero
-    let gainLoss = zero
-
-    if (currencyComplete) {
-      for (const summary of taxSummaries) {
-        if (summary.proceeds === null || summary.costBasis === null || summary.gainLoss === null) {
-          continue
-        }
-        const values = yield* Effect.all([
-          decodeDecimal({
-            operation: "accountingTransactionReadRepository.assemble.proceeds",
-            value: summary.proceeds,
-          }),
-          decodeDecimal({
-            operation: "accountingTransactionReadRepository.assemble.costBasis",
-            value: summary.costBasis,
-          }),
-          decodeDecimal({
-            operation: "accountingTransactionReadRepository.assemble.gainLoss",
-            value: summary.gainLoss,
-          }),
-        ])
-        proceeds = BigDecimal.sum(proceeds, values[0])
-        costBasis = BigDecimal.sum(costBasis, values[1])
-        gainLoss = BigDecimal.sum(gainLoss, values[2])
-      }
-    }
 
     let complete = true
     let valuationComplete = true
     let costBasisComplete = true
     for (const leg of taxDisposalLegs) {
       const summary = summariesByLeg.get(leg.legId)
-      if (
-        !(yield* isFullyMatched({
-          amount: String(leg.amount),
-          matchedAmount: summary?.matchedAmount,
-          operation: "accountingTransactionReadRepository.assemble.disposal",
-        }))
-      ) {
+      const legComplete = yield* isFullyMatched({
+        amount: String(leg.amount),
+        matchedAmount: summary?.matchedAmount,
+        operation: "accountingTransactionReadRepository.assemble.disposal",
+      })
+      if (!legComplete) {
         complete = false
       }
-      if (leg.fiatAmount === null || leg.fiatCurrency === null) valuationComplete = false
-      if (summary === undefined || !summary.costBasisComplete) costBasisComplete = false
+      if (leg.fiatAmount === null || leg.fiatCurrency === null) {
+        valuationComplete = false
+      } else if (currencyComplete) {
+        const legProceeds = yield* decodeDecimal({
+          operation: "accountingTransactionReadRepository.assemble.proceeds",
+          value: String(leg.fiatAmount),
+        })
+        proceeds = BigDecimal.sum(proceeds, BigDecimal.abs(legProceeds))
+      }
+
+      if (
+        !legComplete ||
+        summary === undefined ||
+        !summary.costBasisComplete ||
+        summary.costBasis === null
+      ) {
+        costBasisComplete = false
+      } else if (currencyComplete) {
+        const legCostBasis = yield* decodeDecimal({
+          operation: "accountingTransactionReadRepository.assemble.costBasis",
+          value: summary.costBasis,
+        })
+        costBasis = BigDecimal.sum(costBasis, legCostBasis)
+      }
     }
 
     return {
       proceeds,
       costBasis,
-      gainLoss,
+      gainLoss: BigDecimal.subtract(proceeds, costBasis),
       complete,
       valuationComplete,
       costBasisComplete,
-      hasMatches: taxSummaries.length > 0,
+      hasDisposals: taxDisposalLegs.length > 0,
     }
   })
 
@@ -537,7 +526,7 @@ const calculateTotals = ({
     const currencyComplete = currency !== "mixed"
     const [legTotals, disposalTotals] = yield* Effect.all([
       calculateLegTotals({ currencyComplete, custodyRows, legRows, summariesByLeg }),
-      calculateDisposalTotals({ currencyComplete, legRows, summaries, summariesByLeg }),
+      calculateDisposalTotals({ currencyComplete, legRows, summariesByLeg }),
     ])
 
     const hasSomeCalculation =
@@ -568,15 +557,19 @@ const calculateTotals = ({
           : null
         : "0",
       proceeds:
-        disposalTotals.hasMatches && disposalTotals.valuationComplete && currencyComplete
+        disposalTotals.hasDisposals && disposalTotals.valuationComplete && currencyComplete
           ? formatDecimal(disposalTotals.proceeds)
           : null,
       costBasis:
-        disposalTotals.hasMatches && disposalTotals.costBasisComplete && currencyComplete
+        disposalTotals.hasDisposals &&
+        disposalTotals.complete &&
+        disposalTotals.costBasisComplete &&
+        currencyComplete
           ? formatDecimal(disposalTotals.costBasis)
           : null,
       gainLoss:
-        disposalTotals.hasMatches &&
+        disposalTotals.hasDisposals &&
+        disposalTotals.complete &&
         disposalTotals.valuationComplete &&
         disposalTotals.costBasisComplete &&
         currencyComplete
@@ -649,7 +642,11 @@ const assembleDisposal = ({
     const isInternalTransfer = leg.derivationRule === "internal_transfer_out"
     const valuationKnown = leg.fiatAmount !== null && leg.fiatCurrency !== null
     const costBasisComplete = matches.every((match) => match.costBasisStatus === "known")
-    const matchCurrencies = new Set(matches.map((match) => match.costBasisCurrency))
+    const matchCurrencies = new Set(
+      matches
+        .filter((match) => match.costBasisStatus === "known")
+        .map((match) => match.costBasisCurrency)
+    )
     const currencyComplete =
       transactionCurrencyComplete &&
       matchCurrencies.size <= 1 &&
@@ -682,18 +679,20 @@ const assembleDisposal = ({
       matchedAmount: formatDecimal(matchedAmount),
       operation: "accountingTransactionReadRepository.getById.disposal",
     })
-    const sumField = (field: "costBasis" | "proceeds" | "gainLoss") =>
-      Effect.reduce(matches, zero, (total, match) =>
-        decodeDecimal({
-          operation: `accountingTransactionReadRepository.getById.${field}`,
-          value: String(match[field]),
-        }).pipe(Effect.map((amountValue) => BigDecimal.sum(total, amountValue)))
-      )
-    const [costBasis, proceeds, gainLoss] = yield* Effect.all([
-      sumField("costBasis"),
-      sumField("proceeds"),
-      sumField("gainLoss"),
-    ])
+    const costBasis = yield* Effect.reduce(matches, zero, (total, match) =>
+      decodeDecimal({
+        operation: "accountingTransactionReadRepository.getById.costBasis",
+        value: String(match.costBasis),
+      }).pipe(Effect.map((amountValue) => BigDecimal.sum(total, amountValue)))
+    )
+    const proceeds =
+      valuationKnown && leg.fiatAmount !== null
+        ? yield* decodeDecimal({
+            operation: "accountingTransactionReadRepository.getById.proceeds",
+            value: String(leg.fiatAmount),
+          })
+        : zero
+    const gainLoss = BigDecimal.subtract(BigDecimal.abs(proceeds), costBasis)
 
     return {
       legId: leg.legId,
@@ -701,15 +700,17 @@ const assembleDisposal = ({
       amount: String(leg.amount),
       disposedAt: leg.timestamp.toISOString(),
       proceeds:
-        matchedLots.length === 0 || !valuationKnown || !currencyComplete
-          ? null
-          : formatDecimal(proceeds),
+        !valuationKnown || !currencyComplete ? null : formatDecimal(BigDecimal.abs(proceeds)),
       costBasis:
-        matchedLots.length === 0 || !costBasisComplete || !currencyComplete
+        !complete || matchedLots.length === 0 || !costBasisComplete || !currencyComplete
           ? null
           : formatDecimal(costBasis),
       gainLoss:
-        matchedLots.length === 0 || !valuationKnown || !costBasisComplete || !currencyComplete
+        !complete ||
+        matchedLots.length === 0 ||
+        !valuationKnown ||
+        !costBasisComplete ||
+        !currencyComplete
           ? null
           : formatDecimal(gainLoss),
       taxTreatment: isInternalTransfer
@@ -718,11 +719,15 @@ const assembleDisposal = ({
           ? combineTreatments(matchedLots.map((match) => match.taxTreatment))
           : "unknown",
       calculationStatus:
-        matchedLots.length === 0
-          ? "pending"
-          : complete && valuationKnown && costBasisComplete && currencyComplete
-            ? "complete"
-            : "partial",
+        complete &&
+        matchedLots.length > 0 &&
+        valuationKnown &&
+        costBasisComplete &&
+        currencyComplete
+          ? "complete"
+          : valuationKnown || matchedLots.length > 0
+            ? "partial"
+            : "pending",
       matchedLots,
     }
   })
@@ -785,6 +790,15 @@ const make = Effect.gen(function* () {
                   select max(review_generation.updated_at)
                   from ${schema.transactionReviews} review_generation
                   where review_generation.principal_id = ${principalId}
+                    and (
+                      cast(${sourceId} as uuid) is null
+                      or exists (
+                        select 1
+                        from ${schema.transactions} reviewed_transaction
+                        where reviewed_transaction.id = review_generation.transaction_id
+                          and reviewed_transaction.source_id = cast(${sourceId} as uuid)
+                      )
+                    )
                 ),
                 timestamp '1970-01-01 00:00:00'
               ),
@@ -805,6 +819,27 @@ const make = Effect.gen(function* () {
                   select max(reconciliation_generation.updated_at)
                   from ${schema.transferReconciliations} reconciliation_generation
                   where reconciliation_generation.principal_id = ${principalId}
+                    and (
+                      cast(${sourceId} as uuid) is null
+                      or exists (
+                        select 1
+                        from ${schema.providerTransfers} reconciliation_provider_transfer
+                        where reconciliation_provider_transfer.id = reconciliation_generation.provider_transfer_id
+                          and reconciliation_provider_transfer.source_id = cast(${sourceId} as uuid)
+                      )
+                      or exists (
+                        select 1
+                        from ${schema.transactions} reconciliation_canonical_transaction
+                        where reconciliation_canonical_transaction.id = reconciliation_generation.canonical_transaction_id
+                          and reconciliation_canonical_transaction.source_id = cast(${sourceId} as uuid)
+                      )
+                      or exists (
+                        select 1
+                        from ${schema.transfers} reconciliation_canonical_transfer
+                        where reconciliation_canonical_transfer.id = reconciliation_generation.canonical_transfer_id
+                          and reconciliation_canonical_transfer.source_id = cast(${sourceId} as uuid)
+                      )
+                    )
                 ),
                 timestamp '1970-01-01 00:00:00'
               )
@@ -986,26 +1021,23 @@ const make = Effect.gen(function* () {
           .select({
             transactionId: schema.transactionLegs.transactionId,
             legId: schema.transactionLegs.id,
-            costBasisCurrency: sql<string>`case
-              when count(distinct ${schema.fifoLots.costBasisCurrency}) = 1
-                then min(${schema.fifoLots.costBasisCurrency})
+            costBasisCurrency: sql<string | null>`case
+              when count(*) filter (where ${schema.fifoLots.costBasisStatus} = 'known') = 0
+                then null
+              when count(distinct ${schema.fifoLots.costBasisCurrency}) filter (
+                where ${schema.fifoLots.costBasisStatus} = 'known'
+              ) = 1
+                then min(${schema.fifoLots.costBasisCurrency}) filter (
+                  where ${schema.fifoLots.costBasisStatus} = 'known'
+                )
               else 'mixed'
             end`,
             costBasisComplete: sql<boolean>`bool_and(${schema.fifoLots.costBasisStatus} = 'known')`,
             matchedAmount: sql<string>`sum(${schema.disposalMatches.matchedAmount})`,
             costBasis: sql<string | null>`case
-              when count(distinct ${schema.fifoLots.costBasisCurrency}) = 1
+              when bool_and(${schema.fifoLots.costBasisStatus} = 'known')
+                and count(distinct ${schema.fifoLots.costBasisCurrency}) = 1
                 then sum(${schema.disposalMatches.costBasis})
-              else null
-            end`,
-            proceeds: sql<string | null>`case
-              when count(distinct ${schema.fifoLots.costBasisCurrency}) = 1
-                then sum(${schema.disposalMatches.proceeds})
-              else null
-            end`,
-            gainLoss: sql<string | null>`case
-              when count(distinct ${schema.fifoLots.costBasisCurrency}) = 1
-                then sum(${schema.disposalMatches.gainLoss})
               else null
             end`,
             hasTaxableLots: sql<boolean>`bool_or(

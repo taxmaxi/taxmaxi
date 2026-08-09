@@ -35,7 +35,10 @@ export const formatFiat = (value: string, currency: string | null): string => {
 /**
  * Formats a gain/loss amount with an explicit sign, for example "+12.3".
  */
-export const formatSigned = (value: string): string => {
+export const formatSigned = (value: string | null): string => {
+  if (value === null) {
+    return "Pending review"
+  }
   const formatted = formatAmount(value)
   return value.startsWith("-") || isZeroAmount(value) ? formatted : `+${formatted}`
 }
@@ -43,7 +46,10 @@ export const formatSigned = (value: string): string => {
 /**
  * Picks the display color for a gain/loss amount.
  */
-export const gainLossColor = (value: string): string => {
+export const gainLossColor = (value: string | null): string => {
+  if (value === null) {
+    return theme.warning
+  }
   if (isZeroAmount(value)) {
     return theme.textSoft
   }

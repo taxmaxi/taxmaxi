@@ -103,7 +103,7 @@ export interface SourceReportTotals {
   readonly disposalCount: number
   readonly incomeCount: number
   readonly feeCount: number
-  readonly realizedGainLoss: string
+  readonly realizedGainLoss: string | null
   readonly incomeTotal: string
   readonly currency: string | null
 }
@@ -128,8 +128,8 @@ export interface SourceAssetPnlRow {
   readonly openAmount: string
   readonly costBasis: string | null
   readonly costBasisStatus: "known" | "pending_review"
-  readonly proceeds: string
-  readonly realizedGainLoss: string
+  readonly proceeds: string | null
+  readonly realizedGainLoss: string | null
   readonly currency: string | null
   readonly review: SourceReportReviewSummary
 }
@@ -154,9 +154,9 @@ export interface SourceTaxEventRow {
 export interface SourceFifoLotDisposalSummary {
   readonly disposalLegId: string
   readonly matchedAmount: string
-  readonly proceeds: string
-  readonly costBasis: string
-  readonly gainLoss: string
+  readonly proceeds: string | null
+  readonly costBasis: string | null
+  readonly gainLoss: string | null
 }
 
 export interface SourceFifoLotRow {
@@ -178,9 +178,9 @@ export interface SourceDisposalMatchedLot {
   readonly asset: SourceReportAsset
   readonly acquiredAt: string
   readonly matchedAmount: string
-  readonly costBasis: string
-  readonly proceeds: string
-  readonly gainLoss: string
+  readonly costBasis: string | null
+  readonly proceeds: string | null
+  readonly gainLoss: string | null
   readonly taxableTreatment: SourceReportTaxableTreatment
 }
 
@@ -190,8 +190,8 @@ export interface SourceDisposalExplanation {
   readonly asset: SourceReportAsset
   readonly amount: string
   readonly proceeds: string | null
-  readonly costBasis: string
-  readonly gainLoss: string
+  readonly costBasis: string | null
+  readonly gainLoss: string | null
   readonly acquiredAt: string | null
   readonly disposedAt: string
   readonly taxableTreatment: SourceReportTaxableTreatment

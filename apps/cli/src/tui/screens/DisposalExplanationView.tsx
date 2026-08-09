@@ -113,7 +113,12 @@ export function DisposalExplanationView(props: {
                   label="proceeds"
                   value={data.proceeds === null ? "unknown" : formatFiat(data.proceeds, null)}
                 />
-                <Field label="cost basis" value={formatFiat(data.costBasis, null)} />
+                <Field
+                  label="cost basis"
+                  value={
+                    data.costBasis === null ? "Pending review" : formatFiat(data.costBasis, null)
+                  }
+                />
                 <Field
                   label="gain/loss"
                   value={formatSigned(data.gainLoss)}
@@ -151,9 +156,9 @@ export function DisposalExplanationView(props: {
                       <text fg={theme.textSoft}>
                         {`${formatAmount(lot.matchedAmount)} ${lot.asset.symbol}`}
                       </text>
-                      <text
-                        fg={theme.textSecondary}
-                      >{`basis ${formatFiat(lot.costBasis, null)}`}</text>
+                      <text fg={theme.textSecondary}>{`basis ${
+                        lot.costBasis === null ? "pending review" : formatFiat(lot.costBasis, null)
+                      }`}</text>
                       <text fg={gainLossColor(lot.gainLoss)}>{formatSigned(lot.gainLoss)}</text>
                       <text fg={treatmentColor(lot.taxableTreatment)}>
                         {formatLabel(lot.taxableTreatment)}

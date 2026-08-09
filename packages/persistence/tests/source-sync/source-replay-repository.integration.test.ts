@@ -211,6 +211,17 @@ describe("SourceReplayRepositoryLive", () => {
       )
     )
 
+    const replayGenerationBefore = new Date("2000-01-01T00:00:00.000Z")
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.sources)
+          .set({ updatedAt: replayGenerationBefore })
+          .where(eq(schema.sources.id, TEST_SOURCE_ID))
+      })
+    )
+
     await runReplayRepository(
       Effect.flatMap(SourceReplayRepository, (repository) =>
         repository.resetSourceDerivedState({
@@ -251,6 +262,11 @@ describe("SourceReplayRepositoryLive", () => {
           .select()
           .from(schema.sourceRecordsRaw)
           .where(eq(schema.sourceRecordsRaw.sourceId, TEST_SOURCE_ID))
+        const [source] = yield* db
+          .select({ updatedAt: schema.sources.updatedAt })
+          .from(schema.sources)
+          .where(eq(schema.sources.id, TEST_SOURCE_ID))
+          .limit(1)
         return {
           transactions,
           transfers,
@@ -258,6 +274,7 @@ describe("SourceReplayRepositoryLive", () => {
           reviews,
           fifoLots,
           rawRows,
+          source,
         }
       })
     )
@@ -271,6 +288,7 @@ describe("SourceReplayRepositoryLive", () => {
     expect(snapshot.rawRows[0]?.externalRecordId).toBe("raw-replay-1")
     expect(snapshot.rawRows[0]?.normalizedAt).toBeNull()
     expect(snapshot.rawRows[0]?.normalizationError).toBeNull()
+    expect(snapshot.source?.updatedAt.getTime()).toBeGreaterThan(replayGenerationBefore.getTime())
   })
 
   it.each([
@@ -448,6 +466,175 @@ describe("SourceReplayRepositoryLive", () => {
       expect(state.allocations).toHaveLength(dependencyKind === "inventory allocation" ? 1 : 0)
       expect(state.matches).toHaveLength(dependencyKind === "disposal match" ? 1 : 0)
       expect(state.lots[0]?.remainingAmount).toContain("0.60000000")
+    }
+  )
+
+  it.each(["provider", "canonical"] as const)(
+    "blocks $s replay when reconciliation copied FIFO state into another source",
+    async (replaySide) => {
+      const dependentSourceId = "00000000-0000-0000-0000-000000000292"
+      const originTransactionId = "00000000-0000-0000-0000-000000000293"
+      const destinationTransactionId = "00000000-0000-0000-0000-000000000294"
+      const providerTransferId = "00000000-0000-0000-0000-000000000295"
+      const canonicalTransferId = "00000000-0000-0000-0000-000000000296"
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [address] = yield* db
+            .insert(schema.addresses)
+            .values({
+              address: "bc1qsource-replay-reconciled-copy",
+              type: "bitcoin",
+              name: "Replay reconciliation destination",
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.addresses.id })
+
+          if (address === undefined) {
+            return yield* Effect.dieMessage("Failed to create replay reconciliation address")
+          }
+
+          yield* db.insert(schema.sources).values({
+            id: dependentSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            name: "Replay reconciliation destination",
+            providerKey: "bitcoin-rpc",
+            sourceableType: "onchain",
+            cexAccountId: null,
+            addressId: address.id,
+          })
+          yield* db.insert(schema.transactions).values([
+            {
+              id: originTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-reconciliation-origin",
+              timestamp: new Date("2025-01-02T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            {
+              id: destinationTransactionId,
+              sourceId: dependentSourceId,
+              externalId: "replay-reconciliation-destination",
+              timestamp: new Date("2025-01-02T10:05:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ])
+          yield* db.insert(schema.providerTransfers).values({
+            id: providerTransferId,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: originTransactionId,
+            externalId: "replay-reconciliation-provider-transfer",
+            timestamp: new Date("2025-01-02T10:00:00.000Z"),
+            direction: "outbound",
+            fromAccountRef: "coinbase-account-1",
+            toAddress: "bc1qsource-replay-reconciled-copy",
+            amount: "0.5",
+          })
+          yield* db.insert(schema.transfers).values({
+            id: canonicalTransferId,
+            sourceId: dependentSourceId,
+            principalId: TEST_PRINCIPAL_ID,
+            externalId: "replay-reconciliation-canonical-transfer",
+            timestamp: new Date("2025-01-02T10:05:00.000Z"),
+            type: "utxo",
+            fromAddress: "coinbase-account-1",
+            toAddress: "bc1qsource-replay-reconciled-copy",
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.5",
+          })
+          yield* db.insert(schema.transferReconciliations).values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId,
+            canonicalTransferId,
+            canonicalTransactionId: destinationTransactionId,
+            status: "approved",
+            matchReason: "replay_dependency_fixture",
+            confidence: "1",
+            deterministic: true,
+          })
+
+          const reconciliationMetadata = {
+            reconciliation: { providerTransferId, canonicalTransferId },
+          }
+          const [, destinationLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values([
+              {
+                sourceId: TEST_SOURCE_ID,
+                externalId: "replay-reconciliation-origin:internal-transfer-out",
+                timestamp: new Date("2025-01-02T10:00:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.5",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_out",
+                metadata: reconciliationMetadata,
+                transactionId: originTransactionId,
+              },
+              {
+                sourceId: dependentSourceId,
+                externalId: "replay-reconciliation-destination:internal-transfer-in",
+                timestamp: new Date("2025-01-02T10:05:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                amount: "0.5",
+                kind: "acquisition",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_in",
+                metadata: reconciliationMetadata,
+                transactionId: destinationTransactionId,
+                sourceTransferId: canonicalTransferId,
+              },
+            ])
+            .returning({ id: schema.transactionLegs.id })
+
+          if (destinationLeg === undefined) {
+            return yield* Effect.dieMessage("Failed to create replay reconciliation legs")
+          }
+
+          yield* db.insert(schema.fifoLots).values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: dependentSourceId,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+            originalAmount: "0.5",
+            remainingAmount: "0.5",
+            costBasisPerToken: "10000",
+            costBasisCurrency: "EUR",
+            sourceLegId: destinationLeg.id,
+          })
+        })
+      )
+
+      const replaySourceId = replaySide === "provider" ? TEST_SOURCE_ID : dependentSourceId
+      const dependentReplaySourceId = replaySide === "provider" ? dependentSourceId : TEST_SOURCE_ID
+      const replayResult = await runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: replaySourceId })
+        ).pipe(Effect.either)
+      )
+
+      expect(replayResult).toMatchObject({
+        _tag: "Left",
+        left: {
+          _tag: "SourceReplayDependencyError",
+          sourceId: replaySourceId,
+          dependentSourceIds: [dependentReplaySourceId],
+          affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+        },
+      })
+
+      const transactions = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db.select().from(schema.transactions)
+        })
+      )
+      expect(transactions.map((transaction) => transaction.id)).toEqual(
+        expect.arrayContaining([originTransactionId, destinationTransactionId])
+      )
     }
   )
 })

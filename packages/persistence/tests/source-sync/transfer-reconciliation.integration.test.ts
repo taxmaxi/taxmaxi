@@ -854,6 +854,7 @@ describe("TransferReconciliationServiceLive", () => {
             remainingAmount: "0.90000000",
             costBasisPerToken: "50000.000000000000000000",
             costBasisCurrency: "EUR",
+            costBasisStatus: "pending_review",
             sourceLegId: leg.id,
             sourceLegSequence: 0,
           })
@@ -1469,6 +1470,7 @@ describe("TransferReconciliationServiceLive", () => {
             remainingAmount: schema.fifoLots.remainingAmount,
             costBasisPerToken: schema.fifoLots.costBasisPerToken,
             costBasisCurrency: schema.fifoLots.costBasisCurrency,
+            costBasisStatus: schema.fifoLots.costBasisStatus,
           })
           .from(schema.fifoLots)
           .where(
@@ -1490,6 +1492,7 @@ describe("TransferReconciliationServiceLive", () => {
         remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
       }),
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
@@ -1498,6 +1501,7 @@ describe("TransferReconciliationServiceLive", () => {
         remainingAmount: expect.stringContaining("0.08000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
       }),
     ])
 
@@ -1720,6 +1724,14 @@ describe("TransferReconciliationServiceLive", () => {
     const replayRepresentationId = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        const consumedDestinationLot = movedLots[0]
+        if (consumedDestinationLot === undefined) {
+          return yield* Effect.dieMessage("Missing consumed destination lot fixture")
+        }
+        yield* db
+          .update(schema.fifoLots)
+          .set({ costBasisStatus: "known" })
+          .where(eq(schema.fifoLots.id, consumedDestinationLot.id))
         const [representation] = yield* db
           .insert(schema.assetRepresentations)
           .values({
@@ -1777,7 +1789,10 @@ describe("TransferReconciliationServiceLive", () => {
         }
 
         const destinationLots = yield* db
-          .select({ assetRepresentationId: schema.fifoLots.assetRepresentationId })
+          .select({
+            assetRepresentationId: schema.fifoLots.assetRepresentationId,
+            costBasisStatus: schema.fifoLots.costBasisStatus,
+          })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.sourceLegId, destinationLeg.id))
 
@@ -1789,7 +1804,9 @@ describe("TransferReconciliationServiceLive", () => {
     expect(replayState.destinationLots.length).toBeGreaterThan(0)
     expect(
       replayState.destinationLots.every(
-        (lot) => lot.assetRepresentationId === replayRepresentationId
+        (lot) =>
+          lot.assetRepresentationId === replayRepresentationId &&
+          lot.costBasisStatus === "pending_review"
       )
     ).toBe(true)
   })

@@ -4,7 +4,7 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { and, eq, ne, sql } from "drizzle-orm"
+import { aliasedTable, and, eq, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -22,6 +22,11 @@ import {
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const replayCanonicalTransaction = aliasedTable(
+    schema.transactions,
+    "replay_canonical_transaction"
+  )
+  const replayDependentLeg = aliasedTable(schema.transactionLegs, "replay_dependent_leg")
 
   const resetSourceDerivedState: SourceReplayRepositoryShape["resetSourceDerivedState"] = ({
     sourceId,
@@ -97,7 +102,56 @@ const make = Effect.gen(function* () {
               )
             )
 
-          const crossSourceDependencies = [...crossSourceAllocations, ...crossSourceDisposalMatches]
+          const crossSourceReconciliations = yield* tx
+            .select({
+              dependentSourceId: replayDependentLeg.sourceId,
+              affectedPrincipalId: schema.transferReconciliations.principalId,
+            })
+            .from(schema.transferReconciliations)
+            .innerJoin(
+              schema.providerTransfers,
+              eq(schema.providerTransfers.id, schema.transferReconciliations.providerTransferId)
+            )
+            .leftJoin(
+              schema.transfers,
+              eq(schema.transfers.id, schema.transferReconciliations.canonicalTransferId)
+            )
+            .leftJoin(
+              replayCanonicalTransaction,
+              eq(
+                replayCanonicalTransaction.id,
+                schema.transferReconciliations.canonicalTransactionId
+              )
+            )
+            .innerJoin(
+              replayDependentLeg,
+              and(
+                sql`${replayDependentLeg.metadata} #>> '{reconciliation,providerTransferId}' = ${schema.providerTransfers.id}::text`,
+                sql`${replayDependentLeg.derivationRule} in ('internal_transfer_in', 'internal_transfer_out')`
+              )
+            )
+            .where(
+              and(
+                eq(schema.transferReconciliations.principalId, source.principalId),
+                or(
+                  eq(schema.providerTransfers.sourceId, sourceId),
+                  eq(schema.transfers.sourceId, sourceId),
+                  eq(replayCanonicalTransaction.sourceId, sourceId)
+                ),
+                ne(replayDependentLeg.sourceId, sourceId)
+              )
+            )
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceReplayRepository.resetSourceDerivedState.selectCrossSourceReconciliation"
+              )
+            )
+
+          const crossSourceDependencies = [
+            ...crossSourceAllocations,
+            ...crossSourceDisposalMatches,
+            ...crossSourceReconciliations,
+          ]
 
           if (crossSourceDependencies.length > 0) {
             return yield* Effect.fail(

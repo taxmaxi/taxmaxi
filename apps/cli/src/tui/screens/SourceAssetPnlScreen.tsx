@@ -204,7 +204,11 @@ export function SourceAssetPnlScreen(props: {
                   />
                   <Field
                     label="proceeds"
-                    value={`${formatAmount(row.proceeds)} ${row.currency ?? ""}`.trim()}
+                    value={
+                      row.proceeds === null
+                        ? "Pending review"
+                        : `${formatAmount(row.proceeds)} ${row.currency ?? ""}`.trim()
+                    }
                   />
                   <Field
                     label="realized p&l"

@@ -324,7 +324,11 @@ export function SourceFifoLotsScreen(props: {
                                   {`matched ${formatAmount(match.matchedAmount)}`}
                                 </ListItemText>
                                 <ListItemText selected={isSelected()} color={theme.accent}>
-                                  {`proceeds ${formatFiat(match.proceeds, row.costBasisCurrency)}`}
+                                  {`proceeds ${
+                                    match.proceeds === null
+                                      ? "pending review"
+                                      : formatFiat(match.proceeds, row.costBasisCurrency)
+                                  }`}
                                 </ListItemText>
                                 <ListItemText
                                   selected={isSelected()}
