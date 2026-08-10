@@ -1630,6 +1630,14 @@ describe("SourcesApiLive", () => {
       })
       const rawRecordId = "00000000-0000-0000-0000-000000046507"
       const addressId = "00000000-0000-0000-0000-000000046508"
+      const onchainOnlyTransactionId = "00000000-0000-0000-0000-000000046509"
+      const explicitFeeLegId = "00000000-0000-0000-0000-000000046510"
+      const externallyPaidFeeTransactionId = "00000000-0000-0000-0000-000000046511"
+      const solanaAddressId = "00000000-0000-0000-0000-000000046512"
+      const solanaOwnedFeeTransactionId = "00000000-0000-0000-0000-000000046513"
+      const solanaCaseMismatchTransactionId = "00000000-0000-0000-0000-000000046514"
+      const ownedAddress = "0xAbCd0000000000000000000000000000046508"
+      const solanaOwnedAddress = "SoLaNaOwnedAddress1111111111111111111111111"
       const db = yield* drizzle
       yield* db.insert(schema.sourceRecordsRaw).values({
         id: rawRecordId,
@@ -1666,9 +1674,16 @@ describe("SourcesApiLive", () => {
       yield* db.insert(schema.addresses).values({
         id: addressId,
         principalId: fixture.principalId,
-        address: "0x0000000000000000000000000000000000046508",
+        address: ownedAddress,
         type: "evm",
         name: "Evidence wallet",
+      })
+      yield* db.insert(schema.addresses).values({
+        id: solanaAddressId,
+        principalId: fixture.principalId,
+        address: solanaOwnedAddress,
+        type: "solana",
+        name: "Solana evidence wallet",
       })
       yield* db.insert(schema.transactionOnchainContext).values({
         transactionId: reportFixtureIds.sellTransactionId,
@@ -1677,7 +1692,7 @@ describe("SourcesApiLive", () => {
         chainTxId: "0xevidence",
         blockHeight: "12345",
         blockHash: "0xblock",
-        fromAddress: "0xfrom",
+        fromAddress: ownedAddress.toLowerCase(),
         toAddress: "0xto",
         functionName: "transfer",
         feeAmount: "21",
@@ -1686,6 +1701,94 @@ describe("SourcesApiLive", () => {
         feeCostBasisCurrency: "EUR",
         metadata: { privateChainField: "must-not-leak" },
       })
+      yield* db.insert(schema.transactions).values({
+        id: onchainOnlyTransactionId,
+        sourceId: fixture.sourceId,
+        principalId: fixture.principalId,
+        externalId: "helius-onchain-fee-only",
+        timestamp: new Date("2025-03-11T12:00:00.000Z"),
+        providerTransactionType: "unknown",
+        providerStatus: "confirmed",
+      })
+      yield* db.insert(schema.transactionOnchainContext).values({
+        transactionId: onchainOnlyTransactionId,
+        blockchainId: fixture.baseBlockchainId,
+        addressId,
+        chainTxId: "0xfeeonly",
+        fromAddress: ownedAddress.toLowerCase(),
+        toAddress: "0xto",
+        feeAmount: "5000",
+        feeAssetId: TEST_BTC_ASSET_ID,
+        feeCostBasisAmount: null,
+        feeCostBasisCurrency: null,
+      })
+      yield* db.insert(schema.transactions).values({
+        id: externallyPaidFeeTransactionId,
+        sourceId: fixture.sourceId,
+        principalId: fixture.principalId,
+        externalId: "helius-externally-paid-fee",
+        timestamp: new Date("2025-03-11T13:00:00.000Z"),
+        providerTransactionType: "receive",
+        providerStatus: "confirmed",
+      })
+      yield* db.insert(schema.transactionOnchainContext).values({
+        transactionId: externallyPaidFeeTransactionId,
+        blockchainId: fixture.baseBlockchainId,
+        addressId,
+        chainTxId: "0xexternalfee",
+        fromAddress: "0xexternal-fee-payer",
+        toAddress: ownedAddress,
+        feeAmount: "7000",
+        feeAssetId: TEST_BTC_ASSET_ID,
+        feeCostBasisAmount: "4",
+        feeCostBasisCurrency: "EUR",
+      })
+      yield* db.insert(schema.transactions).values([
+        {
+          id: solanaOwnedFeeTransactionId,
+          sourceId: fixture.sourceId,
+          principalId: fixture.principalId,
+          externalId: "helius-solana-owned-fee",
+          timestamp: new Date("2025-03-11T14:00:00.000Z"),
+          providerTransactionType: "unknown",
+          providerStatus: "confirmed",
+        },
+        {
+          id: solanaCaseMismatchTransactionId,
+          sourceId: fixture.sourceId,
+          principalId: fixture.principalId,
+          externalId: "helius-solana-case-mismatch-fee",
+          timestamp: new Date("2025-03-11T15:00:00.000Z"),
+          providerTransactionType: "receive",
+          providerStatus: "confirmed",
+        },
+      ])
+      yield* db.insert(schema.transactionOnchainContext).values([
+        {
+          transactionId: solanaOwnedFeeTransactionId,
+          blockchainId: fixture.baseBlockchainId,
+          addressId: solanaAddressId,
+          chainTxId: "solana-owned-fee-signature",
+          fromAddress: solanaOwnedAddress,
+          toAddress: solanaOwnedAddress,
+          feeAmount: "8000",
+          feeAssetId: TEST_BTC_ASSET_ID,
+          feeCostBasisAmount: "5",
+          feeCostBasisCurrency: "EUR",
+        },
+        {
+          transactionId: solanaCaseMismatchTransactionId,
+          blockchainId: fixture.baseBlockchainId,
+          addressId: solanaAddressId,
+          chainTxId: "solana-case-mismatch-signature",
+          fromAddress: solanaOwnedAddress.toLowerCase(),
+          toAddress: solanaOwnedAddress,
+          feeAmount: "9000",
+          feeAssetId: TEST_BTC_ASSET_ID,
+          feeCostBasisAmount: "6",
+          feeCostBasisCurrency: "EUR",
+        },
+      ])
       yield* db.insert(schema.transactionReviews).values({
         transactionId: reportFixtureIds.sellTransactionId,
         principalId: fixture.principalId,
@@ -1702,6 +1805,39 @@ describe("SourcesApiLive", () => {
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
       const detail = yield* client.transactions.getTransaction({
         path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(detail.totals).toMatchObject({
+        fees: "2",
+        currency: "EUR",
+        calculationStatus: "complete",
+      })
+      const onchainOnlyDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: onchainOnlyTransactionId },
+      })
+      expect(onchainOnlyDetail.totals).toMatchObject({
+        fees: null,
+        calculationStatus: "pending",
+      })
+      const externallyPaidFeeDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: externallyPaidFeeTransactionId },
+      })
+      expect(externallyPaidFeeDetail.totals).toMatchObject({
+        fees: "0",
+        calculationStatus: "pending",
+      })
+      const solanaOwnedFeeDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: solanaOwnedFeeTransactionId },
+      })
+      expect(solanaOwnedFeeDetail.totals).toMatchObject({
+        fees: "5",
+        calculationStatus: "pending",
+      })
+      const solanaCaseMismatchDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: solanaCaseMismatchTransactionId },
+      })
+      expect(solanaCaseMismatchDetail.totals).toMatchObject({
+        fees: "0",
+        calculationStatus: "pending",
       })
       const hashSearch = yield* client.transactions.listTransactions({
         urlParams: { search: "evidence", limit: 10 },
@@ -1740,6 +1876,66 @@ describe("SourcesApiLive", () => {
         userNotes: "Reviewed",
       })
       expect(JSON.stringify(detail)).not.toContain("must-not-leak")
+
+      yield* db
+        .update(schema.transactionOnchainContext)
+        .set({ feeCostBasisCurrency: "USD" })
+        .where(
+          eq(schema.transactionOnchainContext.transactionId, reportFixtureIds.sellTransactionId)
+        )
+      const mixedCurrencyDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(mixedCurrencyDetail.totals).toMatchObject({
+        fees: null,
+        currency: "mixed",
+        calculationStatus: "partial",
+      })
+
+      yield* db
+        .update(schema.transactionOnchainContext)
+        .set({ feeCostBasisAmount: null, feeCostBasisCurrency: null })
+        .where(
+          eq(schema.transactionOnchainContext.transactionId, reportFixtureIds.sellTransactionId)
+        )
+      const unvaluedFeeDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(unvaluedFeeDetail.totals).toMatchObject({
+        fees: null,
+        currency: "EUR",
+        calculationStatus: "partial",
+      })
+
+      yield* db.insert(schema.transactionLegs).values({
+        id: explicitFeeLegId,
+        sourceId: fixture.sourceId,
+        principalId: fixture.principalId,
+        externalId: "report-sell-1:gas-fee",
+        timestamp: new Date("2025-03-10T12:00:00.000Z"),
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "21",
+        kind: "fee",
+        provenance: "deterministic",
+        derivationRule: "gas_fee",
+        transactionId: reportFixtureIds.sellTransactionId,
+        fiatAmount: "3",
+        fiatCurrency: "EUR",
+      })
+      yield* db
+        .update(schema.transactionOnchainContext)
+        .set({ feeCostBasisAmount: "2", feeCostBasisCurrency: "EUR" })
+        .where(
+          eq(schema.transactionOnchainContext.transactionId, reportFixtureIds.sellTransactionId)
+        )
+      const derivedFeeDetail = yield* client.transactions.getTransaction({
+        path: { transactionId: reportFixtureIds.sellTransactionId },
+      })
+      expect(derivedFeeDetail.totals).toMatchObject({
+        fees: "3",
+        currency: "EUR",
+        calculationStatus: "complete",
+      })
     }).pipe(Effect.provide(HttpLive))
   )
 

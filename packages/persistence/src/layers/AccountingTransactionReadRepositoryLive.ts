@@ -4,7 +4,20 @@
  * @module AccountingTransactionReadRepositoryLive
  */
 
-import { and, asc, desc, eq, ilike, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm"
+import {
+  aliasedTable,
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -87,6 +100,10 @@ interface BaseRow {
   readonly providerStatus: string | null
   readonly providerDescription: string | null
   readonly transactionHash: string | null
+  readonly onchainFeeAmount: string | null
+  readonly onchainFeeCostBasisAmount: string | null
+  readonly onchainFeeCostBasisCurrency: string | null
+  readonly onchainFeePaidByPrincipal: boolean | null
   readonly sourceRawRecordId: string | null
 }
 
@@ -341,13 +358,26 @@ const treatmentFromInventory = (
 
 const currencyForRows = (
   legRows: ReadonlyArray<LegRow>,
-  summaries: ReadonlyArray<MatchSummaryRow>
+  summaries: ReadonlyArray<MatchSummaryRow>,
+  onchainFeeCurrency: string | null
 ): string | null => {
   let currency: string | null = null
   for (const leg of legRows) currency = combineCurrency(currency, leg.fiatCurrency)
   for (const summary of summaries) currency = combineCurrency(currency, summary.costBasisCurrency)
+  currency = combineCurrency(currency, onchainFeeCurrency)
   return currency
 }
+
+interface OnchainFeeEvidence {
+  readonly amount: string | null
+  readonly fiatAmount: string | null
+  readonly fiatCurrency: string | null
+  readonly paidByPrincipal: boolean
+}
+
+const hasOnchainFeeEvidence = (fee: OnchainFeeEvidence): boolean =>
+  fee.paidByPrincipal &&
+  (fee.amount !== null || fee.fiatAmount !== null || fee.fiatCurrency !== null)
 
 const isFullyMatched = ({
   amount,
@@ -404,12 +434,16 @@ const calculateLegTotals = ({
   currencyComplete,
   custodyRows,
   legRows,
+  onchainFee,
   summariesByLeg,
+  useOnchainFee,
 }: {
   readonly currencyComplete: boolean
   readonly custodyRows: ReadonlyArray<CustodyRow>
   readonly legRows: ReadonlyArray<LegRow>
+  readonly onchainFee: OnchainFeeEvidence
   readonly summariesByLeg: ReadonlyMap<string, MatchSummaryRow>
+  readonly useOnchainFee: boolean
 }): Effect.Effect<LegTotals, PersistenceError> =>
   Effect.gen(function* () {
     let incomingValue = zero
@@ -455,6 +489,19 @@ const calculateLegTotals = ({
         incomingValue = BigDecimal.sum(incomingValue, BigDecimal.abs(amountValue))
       } else {
         outgoingValue = BigDecimal.sum(outgoingValue, BigDecimal.abs(amountValue))
+      }
+    }
+
+    if (useOnchainFee) {
+      hasFee = true
+      if (onchainFee.fiatAmount === null || onchainFee.fiatCurrency === null || !currencyComplete) {
+        feeComplete = false
+      } else {
+        const amountValue = yield* decodeDecimal({
+          operation: "accountingTransactionReadRepository.assemble.onchainFee",
+          value: onchainFee.fiatAmount,
+        })
+        fees = BigDecimal.sum(fees, BigDecimal.abs(amountValue))
       }
     }
 
@@ -548,25 +595,43 @@ const calculateDisposalTotals = ({
 const calculateTotals = ({
   custodyRows,
   legRows,
+  onchainFee,
   summaries,
   summariesByLeg,
 }: {
   readonly custodyRows: ReadonlyArray<CustodyRow>
   readonly legRows: ReadonlyArray<LegRow>
+  readonly onchainFee: OnchainFeeEvidence
   readonly summaries: ReadonlyArray<MatchSummaryRow>
   readonly summariesByLeg: ReadonlyMap<string, MatchSummaryRow>
 }): Effect.Effect<AccountingTransactionTotals, PersistenceError> =>
   Effect.gen(function* () {
-    const currency = currencyForRows(legRows, summaries)
+    const hasExplicitFee =
+      legRows.some((leg) => leg.kind === "fee") ||
+      custodyRows.some((movement) => movement.purpose === "fee")
+    const useOnchainFee = !hasExplicitFee && hasOnchainFeeEvidence(onchainFee)
+    const currency = currencyForRows(
+      legRows,
+      summaries,
+      useOnchainFee ? onchainFee.fiatCurrency : null
+    )
     const currencyComplete = currency !== "mixed"
     const [legTotals, disposalTotals] = yield* Effect.all([
-      calculateLegTotals({ currencyComplete, custodyRows, legRows, summariesByLeg }),
+      calculateLegTotals({
+        currencyComplete,
+        custodyRows,
+        legRows,
+        onchainFee,
+        summariesByLeg,
+        useOnchainFee,
+      }),
       calculateDisposalTotals({ currencyComplete, legRows, summariesByLeg }),
     ])
 
     const hasSomeCalculation =
       legRows.some((leg) => leg.fiatAmount !== null && leg.fiatCurrency !== null) ||
-      summaries.length > 0
+      summaries.length > 0 ||
+      (useOnchainFee && onchainFee.fiatAmount !== null && onchainFee.fiatCurrency !== null)
     const allCalculationsComplete =
       legTotals.valueComplete &&
       legTotals.feeComplete &&
@@ -639,7 +704,18 @@ const assembleListItem = ({
   readonly summariesByLeg: ReadonlyMap<string, MatchSummaryRow>
 }): Effect.Effect<AccountingTransactionListItem, PersistenceError> =>
   Effect.gen(function* () {
-    const totals = yield* calculateTotals({ custodyRows, legRows, summaries, summariesByLeg })
+    const totals = yield* calculateTotals({
+      custodyRows,
+      legRows,
+      onchainFee: {
+        amount: base.onchainFeeAmount,
+        fiatAmount: base.onchainFeeCostBasisAmount,
+        fiatCurrency: base.onchainFeeCostBasisCurrency,
+        paidByPrincipal: base.onchainFeePaidByPrincipal ?? false,
+      },
+      summaries,
+      summariesByLeg,
+    })
     return {
       transactionId: base.transactionId,
       timestamp: base.timestamp.toISOString(),
@@ -893,6 +969,8 @@ const make = Effect.gen(function* () {
       return row?.generation ?? new Date(0)
     })
 
+  const onchainAddress = aliasedTable(schema.addresses, "transaction_onchain_address")
+
   const baseSelection = {
     transactionId: schema.transactions.id,
     timestamp: schema.transactions.timestamp,
@@ -923,6 +1001,17 @@ const make = Effect.gen(function* () {
     providerStatus: schema.transactions.providerStatus,
     providerDescription: schema.transactions.providerDescription,
     transactionHash: schema.transactionOnchainContext.chainTxId,
+    onchainFeeAmount: schema.transactionOnchainContext.feeAmount,
+    onchainFeeCostBasisAmount: schema.transactionOnchainContext.feeCostBasisAmount,
+    onchainFeeCostBasisCurrency: schema.transactionOnchainContext.feeCostBasisCurrency,
+    onchainFeePaidByPrincipal: sql<boolean | null>`
+      case
+        when ${schema.transactionOnchainContext.transactionId} is null then null
+        when ${onchainAddress.type} = 'evm'
+          then lower(${schema.transactionOnchainContext.fromAddress}) = lower(${onchainAddress.address})
+        else ${schema.transactionOnchainContext.fromAddress} = ${onchainAddress.address}
+      end
+    `,
     sourceRawRecordId: schema.transactions.sourceRawRecordId,
   } as const
 
@@ -955,6 +1044,7 @@ const make = Effect.gen(function* () {
         schema.transactionOnchainContext,
         eq(schema.transactions.id, schema.transactionOnchainContext.transactionId)
       )
+      .leftJoin(onchainAddress, eq(schema.transactionOnchainContext.addressId, onchainAddress.id))
 
   const loadLegs = (tx: ReadTransaction, transactionIds: ReadonlyArray<string>) =>
     transactionIds.length === 0
