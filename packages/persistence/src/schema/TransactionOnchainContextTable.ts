@@ -77,6 +77,10 @@ export const transactionOnchainContext = pgTable(
       table.addressId
     ),
     index("idx_transaction_onchain_context_tx_hash").on(table.chainTxId),
+    index("idx_transaction_onchain_context_tx_hash_search").using(
+      "gin",
+      table.chainTxId.op("gin_trgm_ops")
+    ),
     index("idx_transaction_onchain_context_blockchain_tx_hash").on(
       table.blockchainId,
       table.chainTxId

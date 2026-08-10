@@ -1,0 +1,1 @@
+CREATE INDEX "idx_transaction_onchain_context_tx_hash_search" ON "transaction_onchain_context" USING gin ("tx_hash" gin_trgm_ops);

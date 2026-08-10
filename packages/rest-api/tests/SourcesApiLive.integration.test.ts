@@ -846,15 +846,45 @@ describe("SourcesApiLive", () => {
       expect(transactions.transactions[0]?.classification.key).toBe("sell_fiat")
       expect(transactions.transactions[0]?.totals).toMatchObject({
         value: "6000",
+        fees: null,
         proceeds: "6000",
         costBasis: "4000",
         gainLoss: "2000",
         currency: "EUR",
         taxTreatment: "unknown",
-        calculationStatus: "complete",
+        calculationStatus: "partial",
       })
       expect(transactions.page.hasMore).toBe(true)
       expect(transactions.page.nextCursor).not.toBeNull()
+
+      const firstPageCursor = transactions.page.nextCursor
+      if (firstPageCursor === null) {
+        return yield* Effect.dieMessage("Expected transaction cursor fixture")
+      }
+      const mismatchedCursorResults = yield* Effect.forEach(
+        [
+          { cursor: firstPageCursor, sourceId: fixture.sourceId, search: "BTC" },
+          { cursor: firstPageCursor, sourceId: fixture.sourceId, classificationKey: "buy_fiat" },
+          { cursor: firstPageCursor, sourceId: fixture.sourceId, categoryKey: "trade" },
+          {
+            cursor: firstPageCursor,
+            sourceId: fixture.sourceId,
+            reviewState: "approved" as const,
+          },
+          { cursor: firstPageCursor },
+        ],
+        (urlParams) => client.transactions.listTransactions({ urlParams }).pipe(Effect.either)
+      )
+      for (const result of mismatchedCursorResults) {
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("TransactionBadRequestError")
+        }
+      }
+      const limitOnlyContinuation = yield* client.transactions.listTransactions({
+        urlParams: { cursor: firstPageCursor, sourceId: fixture.sourceId, limit: 2 },
+      })
+      expect(limitOnlyContinuation.transactions).toHaveLength(1)
 
       const transaction = yield* client.transactions.getTransaction({
         path: { transactionId: reportFixtureIds.sellTransactionId },
@@ -898,6 +928,17 @@ describe("SourcesApiLive", () => {
       expect(searchedTransactions.transactions.map((row) => row.transactionId)).toEqual([
         reportFixtureIds.sellTransactionId,
       ])
+      const scopedSearchFirstPage = yield* client.transactions.listTransactions({
+        urlParams: { search: "btc", limit: 1 },
+      })
+      const scopedSearchCursor = scopedSearchFirstPage.page.nextCursor
+      if (scopedSearchCursor === null) {
+        return yield* Effect.dieMessage("Expected scoped transaction cursor fixture")
+      }
+      const equivalentScopedSearch = yield* client.transactions.listTransactions({
+        urlParams: { cursor: scopedSearchCursor, search: " BTC ", limit: 2 },
+      })
+      expect(equivalentScopedSearch.transactions).toHaveLength(1)
       const literalWildcardSearch = yield* client.transactions.listTransactions({
         urlParams: { search: "_", limit: 10 },
       })
@@ -1662,6 +1703,15 @@ describe("SourcesApiLive", () => {
       const detail = yield* client.transactions.getTransaction({
         path: { transactionId: reportFixtureIds.sellTransactionId },
       })
+      const hashSearch = yield* client.transactions.listTransactions({
+        urlParams: { search: "evidence", limit: 10 },
+      })
+      expect(hashSearch.transactions).toEqual([
+        expect.objectContaining({
+          transactionId: reportFixtureIds.sellTransactionId,
+          externalReferences: expect.objectContaining({ transactionHash: "0xevidence" }),
+        }),
+      ])
       expect(detail.venue).toMatchObject({
         type: "cex",
         accountReference: "coinbase-account-1",

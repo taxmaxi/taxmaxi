@@ -9,6 +9,7 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
@@ -31,10 +32,31 @@ import {
 } from "../services/AccountingTransactionReadRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
 
+const CursorScopeSchema = Schema.Struct({
+  sourceId: Schema.NullOr(Schema.String),
+  search: Schema.String,
+  classificationKey: Schema.NullOr(Schema.String),
+  categoryKey: Schema.NullOr(Schema.String),
+  reviewState: Schema.NullOr(Schema.String),
+})
+
+const CursorPayloadSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  generation: Schema.String,
+  timestamp: Schema.String,
+  id: Schema.UUID,
+  scope: CursorScopeSchema,
+})
+
+const EncodedCursorPayloadSchema = Schema.parseJson(CursorPayloadSchema)
+
+type CursorScope = typeof CursorScopeSchema.Type
+
 interface CursorParts {
   readonly generation: Date
   readonly timestamp: Date
   readonly id: string
+  readonly scope: CursorScope
 }
 
 interface BaseRow {
@@ -129,8 +151,26 @@ interface MatchRow {
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const zero = BigDecimal.fromBigInt(0n)
 
-const makeCursor = ({ generation, timestamp, id }: CursorParts): string =>
-  `${generation.toISOString()}|${timestamp.toISOString()}|${id}`
+const makeCursor = ({ generation, timestamp, id, scope }: CursorParts): string =>
+  Buffer.from(
+    JSON.stringify({
+      version: 1,
+      generation: generation.toISOString(),
+      timestamp: timestamp.toISOString(),
+      id,
+      scope,
+    })
+  ).toString("base64url")
+
+const normalizeSearch = (search: string | null | undefined): string =>
+  search?.trim().toLowerCase() ?? ""
+
+const cursorScopeMatches = (left: CursorScope, right: CursorScope): boolean =>
+  left.sourceId === right.sourceId &&
+  left.search === right.search &&
+  left.classificationKey === right.classificationKey &&
+  left.categoryKey === right.categoryKey &&
+  left.reviewState === right.reviewState
 
 const parseCursor = (cursor: string | null) =>
   Effect.gen(function* () {
@@ -138,30 +178,24 @@ const parseCursor = (cursor: string | null) =>
       return Option.none<CursorParts>()
     }
 
-    const parts = cursor.split("|")
-    const generationPart = parts[0]
-    const timestampPart = parts[1]
-    const idPart = parts[2]
-    if (
-      parts.length !== 3 ||
-      generationPart === undefined ||
-      timestampPart === undefined ||
-      idPart === undefined
-    ) {
-      return yield* Effect.fail(new AccountingTransactionInvalidCursorError({ cursor }))
-    }
-
-    const generation = new Date(generationPart)
-    const timestamp = new Date(timestampPart)
+    const decoded = yield* Effect.try({
+      try: () => Buffer.from(cursor, "base64url").toString("utf8"),
+      catch: () => new AccountingTransactionInvalidCursorError({ cursor }),
+    })
+    const payload = yield* Schema.decodeUnknown(EncodedCursorPayloadSchema)(decoded).pipe(
+      Effect.mapError(() => new AccountingTransactionInvalidCursorError({ cursor }))
+    )
+    const generation = new Date(payload.generation)
+    const timestamp = new Date(payload.timestamp)
     if (
       Number.isNaN(generation.getTime()) ||
       Number.isNaN(timestamp.getTime()) ||
-      !uuidPattern.test(idPart)
+      !uuidPattern.test(payload.id)
     ) {
       return yield* Effect.fail(new AccountingTransactionInvalidCursorError({ cursor }))
     }
 
-    return Option.some({ generation, timestamp, id: idPart })
+    return Option.some({ generation, timestamp, id: payload.id, scope: payload.scope })
   })
 
 const decodeDecimal = ({
@@ -382,8 +416,9 @@ const calculateLegTotals = ({
     let outgoingValue = zero
     let fees = zero
     let valueComplete = legRows.length > 0
-    let feeComplete = true
-    let hasFee = false
+    const hasUnvaluedCustodyFee = custodyRows.some((movement) => movement.purpose === "fee")
+    let feeComplete = !hasUnvaluedCustodyFee
+    let hasFee = hasUnvaluedCustodyFee
     const treatments: Array<AccountingTransactionTaxTreatment> = custodyRows.map((movement) =>
       treatmentFromInventory(movement.taxTreatment)
     )
@@ -1095,9 +1130,21 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if (params.sourceId !== null)
           yield* assertOwnedSource(tx, params.principalId, params.sourceId)
+        const normalizedSearch = normalizeSearch(params.search)
+        const scope: CursorScope = {
+          sourceId: params.sourceId,
+          search: normalizedSearch,
+          classificationKey: params.classificationKey,
+          categoryKey: params.categoryKey,
+          reviewState: params.reviewState,
+        }
         const cursor = yield* parseCursor(params.cursor)
         const generation = yield* loadGeneration(tx, params.principalId, params.sourceId)
-        if (Option.isSome(cursor) && cursor.value.generation.getTime() !== generation.getTime()) {
+        if (
+          Option.isSome(cursor) &&
+          (cursor.value.generation.getTime() !== generation.getTime() ||
+            !cursorScopeMatches(cursor.value.scope, scope))
+        ) {
           return yield* Effect.fail(
             new AccountingTransactionInvalidCursorError({ cursor: params.cursor ?? "" })
           )
@@ -1113,7 +1160,6 @@ const make = Effect.gen(function* () {
               )
             ),
         })
-        const normalizedSearch = params.search?.trim() ?? ""
         const searchPattern = `%${escapeSearchPattern(normalizedSearch)}%`
         const searchCondition =
           normalizedSearch === ""
@@ -1125,6 +1171,7 @@ const make = Effect.gen(function* () {
                 ilike(schema.sources.name, searchPattern),
                 ilike(schema.transactionTypes.typeKey, searchPattern),
                 ilike(schema.transactionTypes.labelEn, searchPattern),
+                ilike(schema.transactionOnchainContext.chainTxId, searchPattern),
                 sql<boolean>`exists (
                 select 1 from transaction_legs search_leg
                 inner join assets search_asset on search_asset.id = search_leg.asset_id
@@ -1185,7 +1232,12 @@ const make = Effect.gen(function* () {
           hasMore,
           nextCursor:
             hasMore && last !== undefined
-              ? makeCursor({ generation, timestamp: last.timestamp, id: last.transactionId })
+              ? makeCursor({
+                  generation,
+                  timestamp: last.timestamp,
+                  id: last.transactionId,
+                  scope,
+                })
               : null,
         } satisfies AccountingTransactionPage
       })
