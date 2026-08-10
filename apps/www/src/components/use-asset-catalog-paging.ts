@@ -37,25 +37,36 @@ export function useAssetCatalogPaging({
   const [visibleItemLimit, setVisibleItemLimit] = useState(INITIAL_VISIBLE_ITEM_LIMIT)
   const visibleItems = useMemo(() => items.slice(0, visibleItemLimit), [items, visibleItemLimit])
   const hasLocallyHiddenItems = visibleItems.length < items.length
+
   const canLoadMoreApprovedForScope =
     scope !== "pending" && canLoadMoreApproved && !approvedAssetsUnavailable
+
   const canLoadMorePendingForScope =
     scope !== "approved" && canLoadMorePending && !pendingAssetsUnavailable
+
   const hasMoreItems =
     hasLocallyHiddenItems || canLoadMoreApprovedForScope || canLoadMorePendingForScope
+
   const canLoadMoreNow =
     hasLocallyHiddenItems ||
     (canLoadMoreApprovedForScope && !isLoadingApproved) ||
     (canLoadMorePendingForScope && !isLoadingPending)
+
   const hasLoadError =
     (scope !== "pending" && approvedAssetsUnavailable) ||
     (scope !== "approved" && pendingAssetsUnavailable)
+
   const canRetryApproved = scope !== "pending" && approvedAssetsUnavailable && !isLoadingApproved
+
   const canRetryPending = scope !== "approved" && pendingAssetsUnavailable && !isLoadingPending
+
   const canRetryNow = canRetryApproved || canRetryPending
+
   const isLoadingVisibleFeed =
     (scope !== "pending" && isLoadingApproved) || (scope !== "approved" && isLoadingPending)
+
   const visibleMatchCount = visibleItems.length
+
   const catalogStatus = [
     isLoadingVisibleFeed ? m["assetCatalog.status.loading"]() : null,
     hasLoadError ? m["assetCatalog.status.partialError"]() : null,

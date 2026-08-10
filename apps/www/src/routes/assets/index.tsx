@@ -51,6 +51,7 @@ function AssetsIndexRoute() {
   const router = useRouter()
   const [catalogQuery, setCatalogQuery] = useState("")
   const debouncedCatalogQuery = useDebouncedCatalogQuery(catalogQuery.trim())
+
   const searchedAssetListInput = useMemo(
     () => ({
       ...assetListInput,
@@ -58,6 +59,7 @@ function AssetsIndexRoute() {
     }),
     [debouncedCatalogQuery]
   )
+
   const searchedPendingAssetListInput = useMemo(
     () => ({
       ...pendingAssetListInput,
@@ -65,17 +67,22 @@ function AssetsIndexRoute() {
     }),
     [debouncedCatalogQuery]
   )
+
   const assetQuery = useInfiniteQuery(queries.assetList(taxmaxi(), searchedAssetListInput))
+
   const pendingAssetQuery = useInfiniteQuery(
     queries.pendingAssetList(taxmaxi(), searchedPendingAssetListInput)
   )
+
   const assetPages = assetQuery.data?.pages
   const pendingAssetPages = pendingAssetQuery.data?.pages
   const assets = useMemo(() => assetPages?.flatMap((page) => page.assets) ?? [], [assetPages])
+
   const pendingAssets = useMemo(
     () => pendingAssetPages?.flatMap((page) => page.pendingAssets) ?? [],
     [pendingAssetPages]
   )
+
   const retryApproved = useCallback(
     () =>
       retryAssetCatalogFeed({
@@ -85,6 +92,7 @@ function AssetsIndexRoute() {
       }),
     [assetQuery.fetchNextPage, assetQuery.isFetchNextPageError, assetQuery.refetch]
   )
+
   const retryPending = useCallback(
     () =>
       retryAssetCatalogFeed({
@@ -98,6 +106,7 @@ function AssetsIndexRoute() {
       pendingAssetQuery.refetch,
     ]
   )
+
   const feeds = useMemo<AssetCatalogFeeds>(
     () => ({
       approved: {
@@ -134,6 +143,7 @@ function AssetsIndexRoute() {
       retryPending,
     ]
   )
+
   const closeCatalog = useCallback(() => {
     closeAssetCatalog({
       history: router.history,

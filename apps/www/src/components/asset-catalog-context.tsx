@@ -34,6 +34,7 @@ function useAssetCatalogController({
 }) {
   const [query, setQuery] = useState("")
   const [scope, setScope] = useState<CatalogScope>("all")
+
   const approvedItems = useMemo<ReadonlyArray<CatalogItem>>(
     () =>
       filterTaxMaxiAssets({ assets: feeds.approved.items, query }).map((asset) => ({
@@ -42,6 +43,7 @@ function useAssetCatalogController({
       })),
     [feeds.approved.items, query]
   )
+
   const pendingItems = useMemo<ReadonlyArray<CatalogItem>>(
     () =>
       feeds.pending.items
@@ -49,6 +51,7 @@ function useAssetCatalogController({
         .map((asset) => ({ kind: "pending" as const, asset })),
     [feeds.pending.items, query]
   )
+
   const items = useMemo(() => {
     switch (scope) {
       case "approved":
@@ -59,6 +62,7 @@ function useAssetCatalogController({
         return [...pendingItems, ...approvedItems]
     }
   }, [approvedItems, pendingItems, scope])
+
   const paging = useAssetCatalogPaging({
     approvedAssetsUnavailable: feeds.approved.unavailable ?? false,
     canLoadMoreApproved: feeds.approved.canLoadMore ?? false,
@@ -73,7 +77,9 @@ function useAssetCatalogController({
     pendingAssetsUnavailable: feeds.pending.unavailable ?? false,
     scope,
   })
+
   const selection = useAssetCatalogSelection({ visibleItems: paging.visibleItems })
+
   const changeQuery = useCallback(
     (nextQuery: string) => {
       setQuery(nextQuery)
@@ -82,6 +88,7 @@ function useAssetCatalogController({
     },
     [onQueryChange, paging.resetVisibleItems]
   )
+
   const changeScope = useCallback(
     (nextScope: CatalogScope) => {
       setScope(nextScope)
