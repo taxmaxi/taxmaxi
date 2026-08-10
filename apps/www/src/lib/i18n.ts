@@ -12,6 +12,7 @@ type PublicRoutePath = Exclude<RoutePath, `${string}${(typeof excludedPaths)[num
 
 type UrlPatterns = NonNullable<CompilerOptions["urlPatterns"]>
 type RouteStrategies = NonNullable<CompilerOptions["routeStrategies"]>
+type LocaleStrategy = NonNullable<CompilerOptions["strategy"]>
 
 type TranslatedPathname = {
   pattern: string
@@ -74,6 +75,8 @@ const preferenceLocalePathnames = [
     ],
   },
 ] satisfies UrlPatterns
+
+export const localeStrategy = ["url", "cookie", "baseLocale"] satisfies LocaleStrategy
 
 export const translatedPathnames = [
   ...preferenceLocalePathnames,

@@ -38,15 +38,39 @@ export interface AssetCatalogAssetRecord {
   readonly id: string
   readonly name: string
   readonly symbol: string
+  readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
   readonly type: AssetCatalogAssetType
   readonly representations: ReadonlyArray<AssetCatalogRepresentationRecord>
+}
+
+/** Public pending provider asset projection. */
+export interface PendingAssetCatalogRecord {
+  readonly id: string
+  readonly provider: string
+  readonly providerAssetId: string | null
+  readonly symbol: string
+  readonly name: string | null
+  readonly providerType: string | null
 }
 
 /**
  * AssetCatalogListParams - Search and limit options for public asset catalog reads.
  */
 export interface AssetCatalogListParams {
+  readonly cursor: {
+    readonly assetId: string
+  } | null
+  readonly query: string | null
+  readonly limit: number
+}
+
+/** Search and paging options for public pending asset reads. */
+export interface PendingAssetCatalogListParams {
+  readonly cursor: {
+    readonly providerAssetRowId: string
+  } | null
+  readonly provider: string | null
   readonly query: string | null
   readonly limit: number
 }
@@ -61,6 +85,13 @@ export interface AssetCatalogRepositoryShape {
   readonly listAssets: (
     params: AssetCatalogListParams
   ) => Effect.Effect<ReadonlyArray<AssetCatalogAssetRecord>, PersistenceError>
+
+  /**
+   * List pending crypto provider observations using only public catalog fields.
+   */
+  readonly listPendingAssets: (
+    params: PendingAssetCatalogListParams
+  ) => Effect.Effect<ReadonlyArray<PendingAssetCatalogRecord>, PersistenceError>
 
   /**
    * Find one non-spam canonical asset by database id.

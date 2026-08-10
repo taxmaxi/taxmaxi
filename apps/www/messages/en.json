@@ -27,6 +27,116 @@
     "title": "TaxMaxi App",
     "description": "You are signed in. The app workspace will live here."
   },
+  "assetCatalog": {
+    "title": "Asset catalog",
+    "subtitle": "TaxMaxi canonical asset registry",
+    "open": "Asset catalog",
+    "close": "Close asset catalog",
+    "seoTitle": "Asset catalog | TaxMaxi",
+    "seoDescription": "Browse TaxMaxi's public canonical asset catalog.",
+    "scopeLabel": "Asset scope",
+    "listLabel": "Assets",
+    "scope": {
+      "all": "All",
+      "approved": "Approved",
+      "pending": "Pending"
+    },
+    "search": {
+      "label": "Search assets",
+      "placeholder": "Search symbol, name, network, or provider"
+    },
+    "actions": {
+      "backToList": "Back to asset list",
+      "openPublicPage": "Open public asset page",
+      "loadMore": "Load more",
+      "loadMoreLabel": "Load more assets",
+      "loading": "Loading…",
+      "loadingLabel": "Loading assets",
+      "retry": "Retry",
+      "retryLabel": "Retry loading assets",
+      "retrying": "Retrying…",
+      "retryingLabel": "Retrying asset feeds"
+    },
+    "status": {
+      "loading": "Loading assets.",
+      "partialError": "Some assets could not be loaded.",
+      "showingOne": "Showing {count} loaded match",
+      "showingMany": "Showing {count} loaded matches"
+    },
+    "empty": {
+      "approvedUnavailableTitle": "Approved assets unavailable",
+      "pendingUnavailableTitle": "Pending assets unavailable",
+      "loadingTitle": "Loading assets",
+      "notFoundTitle": "No assets found",
+      "allUnavailable": "The asset feeds are unavailable. Try again in a moment.",
+      "pendingLoading": "Pending assets are still loading.",
+      "pendingAvailable": "Pending assets are still available. Try loading approved assets again.",
+      "approvedLoading": "Approved assets are still loading.",
+      "approvedAvailable": "Approved assets are still available. Try loading pending assets again.",
+      "fetching": "Fetching the asset registry.",
+      "registryEmpty": "The registry has no assets to show yet.",
+      "searchHint": "Try a symbol, provider, network, or contract address."
+    },
+    "detail": {
+      "approved": "Approved",
+      "pending": "Pending",
+      "representations": "Representations",
+      "networks": "Networks",
+      "registryStatus": "Registry status",
+      "networkRepresentations": "Network representations",
+      "networkRepresentationsDescription": "Identities that resolve to this economic asset.",
+      "noNetworkRepresentation": "This asset currently has no network representation.",
+      "nativeNetworkAsset": "Native network asset",
+      "tokenIdentity": "Token identity",
+      "waitingForReview": "Waiting for review",
+      "radarTitle": "This asset is on TaxMaxi’s radar",
+      "radarDescription": "TaxMaxi admins are reviewing whether this provider asset maps to an existing canonical asset. You do not need to take action.",
+      "reportedBy": "Reported by",
+      "providerAssetId": "Provider asset ID",
+      "providerType": "Provider type",
+      "reviewStatus": "Review status",
+      "notSupplied": "Not supplied",
+      "waitingForTaxMaxiReview": "Waiting for TaxMaxi review"
+    },
+    "assetType": {
+      "fungible": "Fungible asset",
+      "nft": "NFT"
+    },
+    "representationType": {
+      "native": "Native",
+      "token": "Token",
+      "nft": "NFT"
+    },
+    "description": {
+      "nft": "Economic NFT identity used consistently across custody sources and network activity.",
+      "fungibleOne": "Economic asset used for transfers, balances, valuation, and tax reports, with {count} known network representation.",
+      "fungibleMany": "Economic asset used for transfers, balances, valuation, and tax reports, with {count} known network representations."
+    },
+    "logoAlt": "{name} logo",
+    "publicPage": {
+      "title": "{symbol} ({name}) | TaxMaxi Assets",
+      "fallbackTitle": "Asset | TaxMaxi",
+      "fallbackDescription": "Canonical crypto asset supported by TaxMaxi.",
+      "allAssets": "All assets",
+      "economicAsset": "Economic asset",
+      "assetId": "Asset ID",
+      "type": "Type",
+      "networkRepresentations": "Network representations",
+      "networkDescription": "Exact native, contract, and mint identities that resolve to this economic asset.",
+      "custodyAssetNoRepresentation": "This custody asset has no network-specific representation.",
+      "representationMeta": "{type} · {decimals} decimals",
+      "viewOnExplorer": "View {network} representation on explorer",
+      "nativeNetworkAsset": "Native network asset",
+      "economicIdentityTitle": "Economic identity",
+      "economicIdentityDescription": "Balances, valuation, FIFO lots, and tax reports use this economic asset ID across every custody source.",
+      "normalizationTitle": "Normalization",
+      "normalizationDescription": "On-chain observations also keep the exact network representation used during import and normalization.",
+      "notFoundLabel": "Asset not found",
+      "notFoundTitle": "No asset matches this ID.",
+      "notFoundDescription": "Check the supported asset list for the current canonical IDs.",
+      "backToAssets": "Back to assets"
+    }
+  },
   "header": {
     "apiProduct": "API",
     "assets": "Assets",

@@ -1,27 +1,22 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import { Link, createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQueries, useSuspenseQuery } from "@tanstack/react-query"
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { LibraryBig } from "lucide-react"
+import { useCallback, useMemo } from "react"
 import {
   isTaxMaxiUnauthorizedError,
   type Source as TaxMaxiSource,
   type SourceOverview,
 } from "taxmaxi"
 
+import { AppHeader } from "#/components/app-header"
 import { Dashboard } from "#/components/dashboard"
-import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
-import ThemeToggle from "#/components/theme-toggle"
+import { Button } from "#/components/ui/button"
+import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
 import type { Account } from "#/lib/dashboard-types"
+import { m } from "#/paraglide/messages"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
-import { cn } from "#/lib/utils"
-
-const COMPACT_SCROLL_THRESHOLD = 72
-
-const headerWidthClasses = {
-  compact: "max-w-[var(--content-width-xl)]",
-  expanded: "max-w-[var(--content-width-2xl)]",
-} as const
 
 export const Route = createFileRoute("/app")({
   beforeLoad: async () => {
@@ -130,7 +125,25 @@ function RouteComponent() {
       />
 
       <div className="relative z-10">
-        <AppHeader />
+        <AppHeader>
+          <Button
+            asChild
+            className="relative size-11 gap-0 px-0 before:absolute before:-inset-0.5 sm:h-9 sm:w-auto sm:gap-1.5 sm:px-3 sm:has-data-[icon=inline-start]:pl-2.5"
+            size="icon-lg"
+            variant="outline"
+          >
+            <Link
+              aria-label={m["assetCatalog.open"]()}
+              id={ASSET_CATALOG_OPENER_ID}
+              preload="intent"
+              title={m["assetCatalog.open"]()}
+              to="/assets"
+            >
+              <LibraryBig data-icon="inline-start" />
+              <span className="hidden sm:inline">{m["assetCatalog.open"]()}</span>
+            </Link>
+          </Button>
+        </AppHeader>
         <Dashboard
           accounts={sourceAccounts}
           getSourceSyncJob={getSourceSyncJob}
@@ -186,78 +199,4 @@ function formatLastSync(lastSyncedAt: string | null): string {
     minute: "2-digit",
     timeZone: "UTC",
   }).format(new Date(lastSyncedAt))
-}
-
-function AppHeader() {
-  const [isCompact, setIsCompact] = useState(false)
-  const frameRef = useRef<number | null>(null)
-
-  useEffect(() => {
-    const syncHeaderState = () => {
-      const nextIsCompact = window.scrollY > COMPACT_SCROLL_THRESHOLD
-
-      startTransition(() => {
-        setIsCompact((currentIsCompact) =>
-          currentIsCompact === nextIsCompact ? currentIsCompact : nextIsCompact
-        )
-      })
-    }
-
-    const scheduleSync = () => {
-      if (frameRef.current !== null) {
-        return
-      }
-
-      frameRef.current = window.requestAnimationFrame(() => {
-        frameRef.current = null
-        syncHeaderState()
-      })
-    }
-
-    syncHeaderState()
-
-    window.addEventListener("scroll", scheduleSync, { passive: true })
-    window.addEventListener("resize", scheduleSync)
-
-    return () => {
-      window.removeEventListener("scroll", scheduleSync)
-      window.removeEventListener("resize", scheduleSync)
-
-      if (frameRef.current !== null) {
-        window.cancelAnimationFrame(frameRef.current)
-      }
-    }
-  }, [])
-
-  return (
-    <header className="fixed inset-x-0 top-0 z-50 flex justify-center pt-4">
-      <div
-        className={cn(
-          "w-[calc(100vw-3rem)] transition-[max-width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] sm:w-[calc(100vw-4rem)]",
-          isCompact ? headerWidthClasses.compact : headerWidthClasses.expanded
-        )}
-      >
-        <div
-          className={cn(
-            "relative flex flex-col overflow-hidden rounded-[1.75rem] border py-0 text-marketing-foreground transition-[background-color,border-color,box-shadow,backdrop-filter] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-            isCompact
-              ? "border-marketing-border [background:var(--app-header-background)] [box-shadow:var(--app-header-shadow)] supports-[backdrop-filter]:backdrop-blur-[48px]"
-              : "border-transparent bg-transparent shadow-none max-md:border-marketing-border max-md:[background:var(--app-header-background)] max-md:[box-shadow:var(--app-header-shadow)] max-md:supports-[backdrop-filter]:backdrop-blur-[48px]"
-          )}
-        >
-          <div
-            className={cn(
-              "relative z-10 flex h-16 items-center",
-              isCompact ? "px-4" : "px-4 md:px-0"
-            )}
-          >
-            <Logo size="small" />
-            <div className="ml-auto">
-              <ThemeToggle />
-            </div>
-          </div>
-        </div>
-      </div>
-    </header>
-  )
 }

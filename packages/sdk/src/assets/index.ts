@@ -3,6 +3,7 @@ import type {
   AssetCatalogListResponse,
   AssetCanonicalizationRequest,
   AssetCanonicalizationResponse,
+  PendingAssetListResponse,
   ProviderAssetReviewListResponse,
 } from "@my/rest-api/contracts"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
@@ -19,6 +20,21 @@ type TaxMaxiAssetsClient =
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
+export type PendingAsset = {
+  readonly id: string
+  readonly provider: string
+  readonly providerAssetId: string | null
+  readonly symbol: string
+  readonly name: string | null
+  readonly providerType: string | null
+}
+export type PendingAssetList = {
+  readonly pendingAssets: ReadonlyArray<PendingAsset>
+  readonly page: {
+    readonly nextCursor: string | null
+    readonly hasMore: boolean
+  }
+}
 export type AssetRepresentation = {
   readonly id: string
   readonly blockchainId: string
@@ -38,6 +54,7 @@ export type AssetCatalogAsset = {
   readonly id: string
   readonly name: string
   readonly symbol: string
+  readonly coingeckoCoinId: string | null
   readonly logoUrl: string | null
   readonly type: "fungible" | "nft"
   readonly representations: ReadonlyArray<AssetRepresentation>
@@ -45,6 +62,10 @@ export type AssetCatalogAsset = {
 export type TaxMaxiAssetType = AssetCatalogAsset["type"]
 export type AssetCatalogList = {
   readonly assets: ReadonlyArray<AssetCatalogAsset>
+  readonly page: {
+    readonly nextCursor: string | null
+    readonly hasMore: boolean
+  }
 }
 export type AssetCanonicalizationInput = {
   readonly id: string
@@ -53,11 +74,19 @@ export type AssetCanonicalization = AssetCanonicalizationResponse
 
 export type AssetCatalogListInput = {
   readonly query?: string | null
+  readonly cursor?: string | null
   readonly limit?: number
 }
 
 export type AssetCatalogDetailInput = {
   readonly assetId: string
+}
+
+export type PendingAssetListInput = {
+  readonly query?: string | null
+  readonly provider?: string
+  readonly cursor?: string | null
+  readonly limit?: number
 }
 
 export type ProviderAssetReviewListInput = {
@@ -67,14 +96,31 @@ export type ProviderAssetReviewListInput = {
   readonly limit?: number
 }
 
+export type AssetRequestOptions = {
+  readonly signal?: AbortSignal
+}
+
 export type AssetsEffectResource = {
   readonly list: (input?: AssetCatalogListInput) => Effect.Effect<AssetCatalogList, unknown, never>
   readonly get: (input: AssetCatalogDetailInput) => Effect.Effect<AssetCatalogAsset, unknown, never>
+  readonly listPending: (
+    input?: PendingAssetListInput
+  ) => Effect.Effect<PendingAssetList, unknown, never>
 }
 
 export type AssetsPromiseResource = {
-  readonly list: (input?: AssetCatalogListInput) => Promise<AssetCatalogList>
-  readonly get: (input: AssetCatalogDetailInput) => Promise<AssetCatalogAsset>
+  readonly list: (
+    input?: AssetCatalogListInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetCatalogList>
+  readonly get: (
+    input: AssetCatalogDetailInput,
+    options?: AssetRequestOptions
+  ) => Promise<AssetCatalogAsset>
+  readonly listPending: (
+    input?: PendingAssetListInput,
+    options?: AssetRequestOptions
+  ) => Promise<PendingAssetList>
 }
 
 export type InternalAssetsEffectResource = AssetsEffectResource & {
@@ -99,6 +145,7 @@ const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsse
   id: asset.id,
   name: asset.name,
   symbol: asset.symbol,
+  coingeckoCoinId: asset.coingeckoCoinId,
   logoUrl: asset.logoUrl,
   type: asset.type,
   representations: asset.representations.map((representation) => ({
@@ -120,6 +167,25 @@ const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsse
 
 const toAssetCatalogList = (response: AssetCatalogListResponse): AssetCatalogList => ({
   assets: response.assets.map(toAssetCatalogAsset),
+  page: {
+    nextCursor: response.page.nextCursor,
+    hasMore: response.page.hasMore,
+  },
+})
+
+const toPendingAssetList = (response: PendingAssetListResponse): PendingAssetList => ({
+  pendingAssets: response.pendingAssets.map((asset) => ({
+    id: asset.id,
+    provider: asset.provider,
+    providerAssetId: asset.providerAssetId,
+    symbol: asset.symbol,
+    name: asset.name,
+    providerType: asset.providerType,
+  })),
+  page: {
+    nextCursor: response.page.nextCursor,
+    hasMore: response.page.hasMore,
+  },
 })
 
 export const makeAssetsEffectResource = (
@@ -131,6 +197,7 @@ export const makeAssetsEffectResource = (
         resolved.assets.listAssets({
           urlParams: {
             q: input?.query ?? undefined,
+            cursor: input?.cursor ?? undefined,
             limit: input?.limit,
           },
         })
@@ -147,6 +214,20 @@ export const makeAssetsEffectResource = (
         })
       ),
       toAssetCatalogAsset
+    ),
+  listPending: (input) =>
+    Effect.map(
+      Effect.flatMap(client, (resolved) =>
+        resolved.assets.listPendingAssets({
+          urlParams: {
+            q: input?.query ?? undefined,
+            provider: input?.provider,
+            cursor: input?.cursor ?? undefined,
+            limit: input?.limit,
+          },
+        })
+      ),
+      toPendingAssetList
     ),
 })
 
@@ -180,15 +261,16 @@ export const makeInternalAssetsEffectResource = (
 
 export const makeAssetsPromiseResource = (
   effect: AssetsEffectResource,
-  run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
+  run: <A>(effect: Effect.Effect<A, unknown, never>, options?: AssetRequestOptions) => Promise<A>
 ): AssetsPromiseResource => ({
-  list: (input) => run(effect.list(input)),
-  get: (input) => run(effect.get(input)),
+  list: (input, options) => run(effect.list(input), options),
+  get: (input, options) => run(effect.get(input), options),
+  listPending: (input, options) => run(effect.listPending(input), options),
 })
 
 export const makeInternalAssetsPromiseResource = (
   effect: InternalAssetsEffectResource,
-  run: <A>(effect: Effect.Effect<A, unknown, never>) => Promise<A>
+  run: <A>(effect: Effect.Effect<A, unknown, never>, options?: AssetRequestOptions) => Promise<A>
 ): InternalAssetsPromiseResource => ({
   ...makeAssetsPromiseResource(effect, run),
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),

@@ -25,6 +25,13 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
   HttpApiSchema.annotations({ status: 404 })
 ) {}
 
+/** Maximum accepted length for public asset catalog search queries. */
+export const ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH = 128
+
+const AssetCatalogSearchQuery = Schema.String.pipe(
+  Schema.maxLength(ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH)
+)
+
 export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>(
   "ProviderAssetReviewRow"
 )({
@@ -55,6 +62,27 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   }),
 }) {}
 
+export class PendingAssetResponse extends Schema.Class<PendingAssetResponse>(
+  "PendingAssetResponse"
+)({
+  id: Schema.String,
+  provider: Schema.String,
+  providerAssetId: Schema.NullOr(Schema.String),
+  symbol: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  providerType: Schema.NullOr(Schema.String),
+}) {}
+
+export class PendingAssetListResponse extends Schema.Class<PendingAssetListResponse>(
+  "PendingAssetListResponse"
+)({
+  pendingAssets: Schema.Array(PendingAssetResponse),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
+}) {}
+
 export class AssetRepresentationResponse extends Schema.Class<AssetRepresentationResponse>(
   "AssetRepresentationResponse"
 )({
@@ -79,6 +107,7 @@ export class AssetCatalogAssetResponse extends Schema.Class<AssetCatalogAssetRes
   id: Schema.String,
   name: Schema.String,
   symbol: Schema.String,
+  coingeckoCoinId: Schema.NullOr(Schema.String),
   logoUrl: Schema.NullOr(Schema.String),
   type: Schema.Literal("fungible", "nft"),
   representations: Schema.Array(AssetRepresentationResponse),
@@ -88,6 +117,10 @@ export class AssetCatalogListResponse extends Schema.Class<AssetCatalogListRespo
   "AssetCatalogListResponse"
 )({
   assets: Schema.Array(AssetCatalogAssetResponse),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
 }) {}
 
 export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicalizationRequest>(
@@ -135,7 +168,20 @@ export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicaliz
 const ProviderAssetReviewQuery = Schema.Struct({
   provider: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Literal("pending_review", "approved", "rejected")),
-  cursor: Schema.optional(Schema.UUID),
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(100)
+    )
+  ),
+})
+
+const PendingAssetListQuery = Schema.Struct({
+  q: Schema.optional(AssetCatalogSearchQuery),
+  provider: Schema.optional(Schema.String),
+  cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -146,7 +192,8 @@ const ProviderAssetReviewQuery = Schema.Struct({
 })
 
 const AssetCatalogListQuery = Schema.Struct({
-  q: Schema.optional(Schema.String),
+  q: Schema.optional(AssetCatalogSearchQuery),
+  cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.pipe(
       Schema.int(),
@@ -159,6 +206,7 @@ const AssetCatalogListQuery = Schema.Struct({
 const listAssets = HttpApiEndpoint.get("listAssets", "/assets")
   .setUrlParams(AssetCatalogListQuery)
   .addSuccess(AssetCatalogListResponse)
+  .addError(AssetBadRequestError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -183,12 +231,26 @@ const getAsset = HttpApiEndpoint.get("getAsset", "/assets/:assetId")
     })
   )
 
+const listPendingAssets = HttpApiEndpoint.get("listPendingAssets", "/assets/pending")
+  .setUrlParams(PendingAssetListQuery)
+  .addSuccess(PendingAssetListResponse)
+  .addError(AssetBadRequestError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List pending assets",
+      description:
+        "Lists provider assets waiting for TaxMaxi review without exposing internal review data.",
+    })
+  )
+
 const listProviderAssetReviews = HttpApiEndpoint.get(
   "listProviderAssetReviews",
   "/assets/provider-assets"
 )
   .setUrlParams(ProviderAssetReviewQuery)
   .addSuccess(ProviderAssetReviewListResponse)
+  .addError(AssetBadRequestError)
   .addError(InternalServerError)
   .annotateContext(
     OpenApi.annotations({
@@ -224,6 +286,7 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
+  .add(listPendingAssets)
   .add(listProviderAssetReviews)
   .add(canonicalizeProviderAsset)
   .prefix("/v1")

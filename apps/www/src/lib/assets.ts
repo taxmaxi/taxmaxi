@@ -1,7 +1,25 @@
-import type { AssetCatalogAsset, AssetRepresentation } from "taxmaxi"
+import type { AssetCatalogAsset, AssetRepresentation, PendingAsset } from "taxmaxi"
+
+import { m } from "#/paraglide/messages"
 
 export type TaxMaxiAsset = AssetCatalogAsset
 export type TaxMaxiAssetType = TaxMaxiAsset["type"]
+export type TaxMaxiPendingAsset = PendingAsset
+
+export const ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH = 128
+
+export function matchesAssetCatalogQuery({
+  query,
+  values,
+}: {
+  readonly query: string
+  readonly values: ReadonlyArray<string>
+}): boolean {
+  const searchTokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const searchableText = values.join(" ").toLowerCase()
+
+  return searchTokens.every((token) => searchableText.includes(token))
+}
 
 export function filterTaxMaxiAssets({
   assets,
@@ -10,36 +28,42 @@ export function filterTaxMaxiAssets({
   readonly assets: ReadonlyArray<TaxMaxiAsset>
   readonly query: string
 }): ReadonlyArray<TaxMaxiAsset> {
-  const normalizedQuery = query.trim().toLowerCase()
-
-  if (normalizedQuery.length === 0) {
-    return assets
-  }
-
   return assets.filter((asset) =>
-    [
-      asset.id,
-      asset.name,
-      asset.symbol,
-      ...asset.representations.flatMap((representation) => [
-        representation.blockchainName,
-        representation.blockchainChainType,
-        representation.contractAddress ?? "",
-        representation.mintAddress ?? "",
-      ]),
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(normalizedQuery)
+    matchesAssetCatalogQuery({
+      query,
+      values: [
+        asset.id,
+        asset.name,
+        asset.symbol,
+        asset.coingeckoCoinId ?? "",
+        ...asset.representations.flatMap((representation) => [
+          representation.blockchainName,
+          representation.blockchainChainType,
+          representation.contractAddress ?? "",
+          representation.mintAddress ?? "",
+        ]),
+      ],
+    })
   )
 }
 
 export function formatAssetType(assetType: TaxMaxiAssetType): string {
   switch (assetType) {
     case "fungible":
-      return "Fungible asset"
+      return m["assetCatalog.assetType.fungible"]()
     case "nft":
-      return "NFT"
+      return m["assetCatalog.assetType.nft"]()
+  }
+}
+
+export function formatAssetRepresentationType(type: AssetRepresentation["type"]): string {
+  switch (type) {
+    case "native":
+      return m["assetCatalog.representationType.native"]()
+    case "nft":
+      return m["assetCatalog.representationType.nft"]()
+    case "token":
+      return m["assetCatalog.representationType.token"]()
   }
 }
 
@@ -52,13 +76,13 @@ export function formatBlockchainName(name: string): string {
 
 export function describeTaxMaxiAsset(asset: TaxMaxiAsset): string {
   if (asset.type === "nft") {
-    return "Economic NFT identity used consistently across custody sources and network activity."
+    return m["assetCatalog.description.nft"]()
   }
 
   const representationCount = asset.representations.length
-  const representationLabel = representationCount === 1 ? "representation" : "representations"
-
-  return `Economic asset used for transfers, balances, valuation, and tax reports, with ${representationCount} known network ${representationLabel}.`
+  return representationCount === 1
+    ? m["assetCatalog.description.fungibleOne"]({ count: representationCount })
+    : m["assetCatalog.description.fungibleMany"]({ count: representationCount })
 }
 
 export function getAssetRepresentationExplorerHref(

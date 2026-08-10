@@ -339,26 +339,36 @@ describe("ProviderAssetRepositoryLive", () => {
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
-            cursorProviderAssetRowId: null,
+            cursor: null,
             limit: 2,
           })
         )
       )
 
-      expect(firstPage.map((row) => row.providerAsset.currencyCode)).toEqual(["ADA", "ETH"])
+      expect(firstPage).toHaveLength(2)
+      const lastFirstPageRow = firstPage.at(-1)
+
+      if (lastFirstPageRow === undefined) {
+        throw new Error("Expected the first provider asset page to contain rows.")
+      }
 
       const secondPage = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
-            cursorProviderAssetRowId: firstPage[1]?.providerAsset.id ?? null,
+            cursor: {
+              providerAssetRowId: lastFirstPageRow.providerAsset.id,
+            },
             limit: 2,
           })
         )
       )
 
-      expect(secondPage.map((row) => row.providerAsset.currencyCode)).toEqual(["SOL"])
+      expect(secondPage).toHaveLength(1)
+      expect(
+        new Set([...firstPage, ...secondPage].map((review) => review.providerAsset.currencyCode))
+      ).toEqual(new Set(["ADA", "ETH", "SOL"]))
     })
 
     it("keeps reviewed natural-key mappings preferred when a stable provider asset id arrives later", async () => {

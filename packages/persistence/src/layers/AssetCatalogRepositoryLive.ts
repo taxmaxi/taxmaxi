@@ -4,7 +4,7 @@
  * @module AssetCatalogRepositoryLive
  */
 
-import { and, asc, eq, ilike, or } from "drizzle-orm"
+import { and, asc, eq, exists, gt, ilike, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -13,9 +13,11 @@ import {
   type AssetCatalogAssetRecord,
   type AssetCatalogRepositoryShape,
   type AssetCatalogRepresentationRecord,
+  type PendingAssetCatalogRecord,
 } from "../services/AssetCatalogRepository.ts"
 import { schema } from "../schema/index.ts"
 import { wrapSqlError } from "../errors/RepositoryError.ts"
+import { getAssetCatalogSearchPatterns } from "../query/AssetCatalogSearch.ts"
 import { drizzle } from "./PgClientLive.ts"
 
 const representationColumns = {
@@ -32,6 +34,15 @@ const representationColumns = {
   decimals: schema.assetRepresentations.decimals,
   logoUrl: schema.assetRepresentations.logoUrl,
   metadata: schema.assetRepresentations.metadata,
+} as const
+
+const pendingAssetColumns = {
+  id: schema.providerAssets.id,
+  provider: schema.providerAssets.provider,
+  providerAssetId: schema.providerAssets.providerAssetId,
+  symbol: schema.providerAssets.currencyCode,
+  name: schema.providerAssets.name,
+  providerType: schema.providerAssets.providerType,
 } as const
 
 const make = Effect.gen(function* () {
@@ -67,42 +78,50 @@ const make = Effect.gen(function* () {
       return byAssetId
     })
 
-  const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({ limit, query }) =>
+  const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({ cursor, limit, query }) =>
     Effect.gen(function* () {
-      const trimmedQuery = query?.trim() ?? ""
-      const searchFilter =
-        trimmedQuery.length === 0
-          ? undefined
-          : or(
-              ilike(schema.assets.name, `%${trimmedQuery}%`),
-              ilike(schema.assets.symbol, `%${trimmedQuery}%`),
-              ilike(schema.assets.coingeckoCoinId, `%${trimmedQuery}%`),
-              ilike(schema.assetRepresentations.contractAddress, `%${trimmedQuery}%`),
-              ilike(schema.assetRepresentations.mintAddress, `%${trimmedQuery}%`),
-              ilike(schema.blockchains.name, `%${trimmedQuery}%`)
-            )
+      const searchFilters = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
+        or(
+          ilike(schema.assets.name, pattern),
+          ilike(schema.assets.symbol, pattern),
+          ilike(schema.assets.coingeckoCoinId, pattern),
+          sql<boolean>`${schema.assets.id}::text ilike ${pattern}`,
+          exists(
+            db
+              .select({ id: schema.assetRepresentations.id })
+              .from(schema.assetRepresentations)
+              .leftJoin(
+                schema.blockchains,
+                eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
+              )
+              .where(
+                and(
+                  eq(schema.assetRepresentations.assetId, schema.assets.id),
+                  eq(schema.assetRepresentations.isSpam, false),
+                  or(
+                    ilike(schema.assetRepresentations.contractAddress, pattern),
+                    ilike(schema.assetRepresentations.mintAddress, pattern),
+                    ilike(schema.blockchains.name, pattern),
+                    ilike(schema.blockchains.chainType, pattern)
+                  )
+                )
+              )
+          )
+        )
+      )
+      const cursorFilter = cursor === null ? undefined : gt(schema.assets.id, cursor.assetId)
       const rows = yield* db
-        .selectDistinct({
+        .select({
           id: schema.assets.id,
           name: schema.assets.name,
           symbol: schema.assets.symbol,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
           logoUrl: schema.assets.logoUrl,
           type: schema.assets.type,
         })
         .from(schema.assets)
-        .leftJoin(
-          schema.assetRepresentations,
-          and(
-            eq(schema.assetRepresentations.assetId, schema.assets.id),
-            eq(schema.assetRepresentations.isSpam, false)
-          )
-        )
-        .leftJoin(
-          schema.blockchains,
-          eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
-        )
-        .where(searchFilter)
-        .orderBy(asc(schema.assets.symbol), asc(schema.assets.name), asc(schema.assets.id))
+        .where(and(...searchFilters, cursorFilter))
+        .orderBy(asc(schema.assets.id))
         .limit(limit)
         .pipe(wrapSqlError("assetCatalogRepository.listAssets"))
       const representations = yield* loadRepresentations({ assetIds: rows.map(({ id }) => id) })
@@ -120,6 +139,7 @@ const make = Effect.gen(function* () {
           id: schema.assets.id,
           name: schema.assets.name,
           symbol: schema.assets.symbol,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
           logoUrl: schema.assets.logoUrl,
           type: schema.assets.type,
         })
@@ -140,9 +160,51 @@ const make = Effect.gen(function* () {
       })
     })
 
+  const listPendingAssets: AssetCatalogRepositoryShape["listPendingAssets"] = ({
+    cursor,
+    limit,
+    provider,
+    query,
+  }) =>
+    Effect.gen(function* () {
+      const searchFilters = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
+        or(
+          ilike(schema.providerAssets.provider, pattern),
+          ilike(schema.providerAssets.providerAssetId, pattern),
+          ilike(schema.providerAssets.currencyCode, pattern),
+          ilike(schema.providerAssets.name, pattern),
+          ilike(schema.providerAssets.providerType, pattern)
+        )
+      )
+      const cursorFilter =
+        cursor === null ? undefined : gt(schema.providerAssets.id, cursor.providerAssetRowId)
+      const rows: ReadonlyArray<PendingAssetCatalogRecord> = yield* db
+        .select(pendingAssetColumns)
+        .from(schema.providerAssets)
+        .innerJoin(
+          schema.providerAssetMappings,
+          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+        )
+        .where(
+          and(
+            eq(schema.providerAssetMappings.mappingKind, "asset"),
+            eq(schema.providerAssetMappings.mappingStatus, "pending_review"),
+            provider === null ? undefined : eq(schema.providerAssets.provider, provider),
+            ...searchFilters,
+            cursorFilter
+          )
+        )
+        .orderBy(asc(schema.providerAssets.id))
+        .limit(limit)
+        .pipe(wrapSqlError("assetCatalogRepository.listPendingAssets"))
+
+      return rows
+    })
+
   return AssetCatalogRepository.of({
     findAssetById,
     listAssets,
+    listPendingAssets,
   } satisfies AssetCatalogRepositoryShape)
 })
 

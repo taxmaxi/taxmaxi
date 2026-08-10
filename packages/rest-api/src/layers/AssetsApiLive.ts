@@ -5,10 +5,15 @@
  */
 
 import { HttpApiBuilder } from "@effect/platform"
-import { AssetCatalogRepository, type AssetCatalogAssetRecord } from "@my/persistence/services"
+import {
+  AssetCatalogRepository,
+  type AssetCatalogAssetRecord,
+  type PendingAssetCatalogRecord,
+} from "@my/persistence/services"
 import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { InternalServerError } from "../definitions/ApiErrors.ts"
 import {
   AssetCatalogAssetResponse,
@@ -19,6 +24,8 @@ import {
   AssetNotFoundError,
   AssetRepresentationResponse,
   CanonicalAssetResponse,
+  PendingAssetListResponse,
+  PendingAssetResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
 } from "../definitions/AssetsApi.ts"
@@ -30,6 +37,57 @@ const defaultAssetLimit = 500
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
+
+const AssetCursorPayload = Schema.Struct({
+  version: Schema.Literal(2),
+  assetId: Schema.UUID,
+})
+
+const ProviderAssetCursorPayload = Schema.Struct({
+  version: Schema.Literal(2),
+  providerAssetRowId: Schema.UUID,
+})
+
+const EncodedAssetCursorPayload = Schema.parseJson(AssetCursorPayload)
+const EncodedProviderAssetCursorPayload = Schema.parseJson(ProviderAssetCursorPayload)
+
+const encodeCursor = (payload: Record<string, unknown>): string =>
+  Buffer.from(JSON.stringify(payload)).toString("base64url")
+
+const decodeCursor = <A>(
+  cursor: string,
+  schema: Schema.Schema<A, string>
+): Effect.Effect<A, AssetBadRequestError> =>
+  Effect.gen(function* () {
+    const decoded = yield* Effect.try({
+      try: () => Buffer.from(cursor, "base64url").toString("utf8"),
+      catch: () => new AssetBadRequestError({ message: "Invalid asset cursor." }),
+    })
+
+    return yield* Schema.decodeUnknown(schema)(decoded).pipe(
+      Effect.mapError(() => new AssetBadRequestError({ message: "Invalid asset cursor." }))
+    )
+  })
+
+const decodeAssetCursor = (cursor: string | undefined) =>
+  cursor === undefined ? Effect.succeed(null) : decodeCursor(cursor, EncodedAssetCursorPayload)
+
+const decodeProviderAssetCursor = (cursor: string | undefined) =>
+  cursor === undefined
+    ? Effect.succeed(null)
+    : decodeCursor(cursor, EncodedProviderAssetCursorPayload)
+
+const assetCursorFor = (asset: AssetCatalogAssetRecord): string =>
+  encodeCursor({
+    version: 2,
+    assetId: asset.id,
+  })
+
+const providerAssetCursorFor = (providerAssetRowId: string): string =>
+  encodeCursor({
+    version: 2,
+    providerAssetRowId,
+  })
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
   ProviderAssetReviewRow.make({
@@ -50,11 +108,22 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     sourceNotes: row.mapping?.sourceNotes ?? null,
   })
 
+const toPendingAssetResponse = (row: PendingAssetCatalogRecord) =>
+  PendingAssetResponse.make({
+    id: row.id,
+    provider: row.provider,
+    providerAssetId: row.providerAssetId,
+    symbol: row.symbol,
+    name: row.name,
+    providerType: row.providerType,
+  })
+
 const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
   AssetCatalogAssetResponse.make({
     id: row.id,
     name: row.name,
     symbol: row.symbol,
+    coingeckoCoinId: row.coingeckoCoinId,
     logoUrl: row.logoUrl,
     type: row.type,
     representations: row.representations.map((representation) =>
@@ -71,15 +140,25 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
     return handlers
       .handle("listAssets", ({ urlParams }) =>
         Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultAssetLimit
+          const cursor = yield* decodeAssetCursor(urlParams.cursor)
           const assets = yield* assetCatalogRepository
             .listAssets({
+              cursor,
               query: urlParams.q ?? null,
-              limit: urlParams.limit ?? defaultAssetLimit,
+              limit: limit + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list assets.")))
+          const visibleAssets = assets.slice(0, limit)
+          const lastAsset = visibleAssets.at(-1)
+          const hasMore = assets.length > limit
 
           return AssetCatalogListResponse.make({
-            assets: assets.map(toAssetCatalogAssetResponse),
+            assets: visibleAssets.map(toAssetCatalogAssetResponse),
+            page: {
+              nextCursor: hasMore && lastAsset !== undefined ? assetCursorFor(lastAsset) : null,
+              hasMore,
+            },
           })
         })
       )
@@ -95,13 +174,42 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
+      .handle("listPendingAssets", ({ urlParams }) =>
+        Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultLimit
+          const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
+          const providerAssets = yield* assetCatalogRepository
+            .listPendingAssets({
+              provider: urlParams.provider ?? null,
+              cursor,
+              query: urlParams.q ?? null,
+              limit: limit + 1,
+            })
+            .pipe(Effect.mapError(() => toInternalServerError("Failed to list pending assets.")))
+          const visibleProviderAssets = providerAssets.slice(0, limit)
+          const lastProviderAsset = visibleProviderAssets.at(-1)
+          const hasMore = providerAssets.length > limit
+
+          return PendingAssetListResponse.make({
+            pendingAssets: visibleProviderAssets.map(toPendingAssetResponse),
+            page: {
+              nextCursor:
+                hasMore && lastProviderAsset !== undefined
+                  ? providerAssetCursorFor(lastProviderAsset.id)
+                  : null,
+              hasMore,
+            },
+          })
+        })
+      )
       .handle("listProviderAssetReviews", ({ urlParams }) =>
         Effect.gen(function* () {
+          const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
           const providerAssets = yield* providerAssetRepository
             .listProviderAssetReviews({
               providerKey: urlParams.provider ?? null,
               mappingStatus: urlParams.status ?? "pending_review",
-              cursorProviderAssetRowId: urlParams.cursor ?? null,
+              cursor,
               limit: (urlParams.limit ?? defaultLimit) + 1,
             })
             .pipe(Effect.mapError(() => toInternalServerError("Failed to list provider assets.")))
@@ -115,7 +223,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             page: {
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
-                  ? lastProviderAsset.providerAsset.id
+                  ? providerAssetCursorFor(lastProviderAsset.providerAsset.id)
                   : null,
               hasMore,
             },

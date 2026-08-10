@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import * as Effect from "effect/Effect"
 import {
   DEFAULT_BASE_URL,
@@ -123,10 +123,27 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   },
 })
 
+const pendingAssetResponse = {
+  id: "00000000-0000-4000-8000-000000000019",
+  provider: "coinbase",
+  providerAssetId: "cbeth",
+  symbol: "cbETH",
+  name: "Coinbase Wrapped Staked ETH",
+  providerType: "crypto",
+} as const
+
+const pendingAssetListResponseBody = JSON.stringify({
+  pendingAssets: [pendingAssetResponse],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
+})
 const assetCatalogAssetResponse = {
   id: "00000000-0000-4000-8000-000000000010",
   name: "USD Coin",
   symbol: "USDC",
+  coingeckoCoinId: "usd-coin",
   logoUrl: null,
   type: "fungible",
   representations: [
@@ -150,6 +167,10 @@ const assetCatalogAssetResponse = {
 
 const assetCatalogListResponseBody = JSON.stringify({
   assets: [assetCatalogAssetResponse],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
 })
 
 const assetCatalogAssetResponseBody = JSON.stringify(assetCatalogAssetResponse)
@@ -585,7 +606,11 @@ describe("TaxMaxi Promise client", () => {
 
   it("plumbs asset catalog endpoints through the public assets resource as plain objects", async () => {
     const capturedRequests: Array<CapturedRequest> = []
-    const responseBodies = [assetCatalogListResponseBody, assetCatalogAssetResponseBody]
+    const responseBodies = [
+      assetCatalogListResponseBody,
+      assetCatalogAssetResponseBody,
+      pendingAssetListResponseBody,
+    ]
     const taxmaxi = new TaxMaxi({
       apiKey: "",
       baseUrl: "https://sdk.example.test",
@@ -605,22 +630,71 @@ describe("TaxMaxi Promise client", () => {
       },
     })
 
-    const assetList = await taxmaxi.assets.list({ query: "usdc", limit: 25 })
+    const assetList = await taxmaxi.assets.list({
+      query: "usdc",
+      cursor: "00000000-0000-4000-8000-000000000009",
+      limit: 25,
+    })
     const asset = await taxmaxi.assets.get({ assetId: assetCatalogAssetResponse.id })
+    const pendingAssetList = await taxmaxi.assets.listPending({
+      query: "btc",
+      provider: "coinbase",
+      limit: 10,
+    })
 
     expect(assetList).toStrictEqual({
       assets: [assetCatalogAssetResponse],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
     })
     expect(asset).toStrictEqual(assetCatalogAssetResponse)
+    expect(pendingAssetList).toStrictEqual({
+      pendingAssets: [pendingAssetResponse],
+      page: {
+        nextCursor: null,
+        hasMore: false,
+      },
+    })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets?q=usdc&limit=25",
+        url: "https://sdk.example.test/v1/assets?q=usdc&cursor=00000000-0000-4000-8000-000000000009&limit=25",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/00000000-0000-4000-8000-000000000010",
       }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/pending?q=btc&provider=coinbase&limit=10",
+      }),
     ])
+  })
+
+  it("aborts an asset request when its signal is cancelled", async () => {
+    let requestSignal: AbortSignal | undefined
+    const taxmaxi = new TaxMaxi({
+      apiKey: "",
+      baseUrl: "https://sdk.example.test",
+      fetch: async (_input, init) => {
+        requestSignal = init?.signal ?? undefined
+        return new Promise<Response>((_resolve, reject) => {
+          requestSignal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Request aborted", "AbortError")),
+            { once: true }
+          )
+        })
+      },
+    })
+    const controller = new AbortController()
+    const request = taxmaxi.assets.list({}, { signal: controller.signal })
+
+    await vi.waitFor(() => expect(requestSignal).toBeDefined())
+    controller.abort()
+
+    await expect(request).rejects.toBeInstanceOf(TaxMaxiError)
+    await vi.waitFor(() => expect(requestSignal?.aborted).toBe(true))
   })
 
   it("plumbs asset review endpoints through the internal assets resource", async () => {
