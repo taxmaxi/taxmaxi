@@ -374,44 +374,46 @@ describe("SourceNormalizationRepositoryLive", () => {
       },
     ]
 
+    const normalizedArtifacts = {
+      transaction: {
+        sourceId: TEST_SOURCE_ID,
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+        externalId: "tx-observed-representations",
+        externalGroupId: "group-observed-representations",
+        timestamp: occurredAt,
+        transactionType: "buy_fiat",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerResourcePath: null,
+        providerDescription: null,
+        providerCreatedAt: occurredAt,
+        providerUpdatedAt: occurredAt,
+        metadata: { provider: "test-onchain-adapter" },
+        principalId: TEST_PRINCIPAL_ID,
+      },
+      venueContext: {
+        venueType: "dex",
+        cexAccountId: null,
+        externalAccountId: "owned-address",
+        externalOrderId: null,
+        externalFillId: null,
+        side: null,
+        instrument: null,
+        fillPrice: null,
+        commissionAmount: null,
+        commissionCurrency: null,
+        metadata: { provider: "test-onchain-adapter" },
+      },
+      providerTransfers,
+      feeTransfers: [],
+      legs: [],
+      transactionReview: null,
+      resolvedTransactionType: APPROVED_MAPPING,
+    } as const
+
     const result = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.persistNormalizedArtifacts({
-          transaction: {
-            sourceId: TEST_SOURCE_ID,
-            sourceRawRecordId: TEST_RAW_RECORD_ID,
-            externalId: "tx-observed-representations",
-            externalGroupId: "group-observed-representations",
-            timestamp: occurredAt,
-            transactionType: "buy_fiat",
-            providerTransactionType: "buy",
-            providerStatus: "completed",
-            providerResourcePath: null,
-            providerDescription: null,
-            providerCreatedAt: occurredAt,
-            providerUpdatedAt: occurredAt,
-            metadata: { provider: "test-onchain-adapter" },
-            principalId: TEST_PRINCIPAL_ID,
-          },
-          venueContext: {
-            venueType: "dex",
-            cexAccountId: null,
-            externalAccountId: "owned-address",
-            externalOrderId: null,
-            externalFillId: null,
-            side: null,
-            instrument: null,
-            fillPrice: null,
-            commissionAmount: null,
-            commissionCurrency: null,
-            metadata: { provider: "test-onchain-adapter" },
-          },
-          providerTransfers,
-          feeTransfers: [],
-          legs: [],
-          transactionReview: null,
-          resolvedTransactionType: APPROVED_MAPPING,
-        })
+        repository.persistNormalizedArtifacts(normalizedArtifacts)
       )
     )
 
@@ -451,6 +453,69 @@ describe("SourceNormalizationRepositoryLive", () => {
         }),
       ])
     )
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ observedMintAddress: null })
+            .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({
+              observedContractAddress: "0x0000000000000000000000000000000000000096",
+            })
+            .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ observedDecimals: -1 })
+            .where(eq(schema.providerTransfers.externalId, "observed-native"))
+        })
+      )
+    ).rejects.toThrow()
+
+    const retryResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-unknown-type"
+              ? {
+                  ...transfer,
+                  observedDecimals: null,
+                  metadata: { provider: "retry-without-exact-decimal-evidence" },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const retriedUnknownType = retryResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-unknown-type"
+    )
+
+    expect(retriedUnknownType).toMatchObject({
+      observedDecimals: 5,
+      metadata: { provider: "test-onchain-adapter" },
+    })
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

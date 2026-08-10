@@ -681,13 +681,18 @@ const make = Effect.gen(function* () {
               toAddress: sql.raw("excluded.to_address"),
               networkName: sql.raw("excluded.network_name"),
               networkHash: sql.raw("excluded.network_hash"),
-              observedBlockchainId: sql.raw("excluded.observed_blockchain_id"),
-              observedRepresentationType: sql.raw("excluded.observed_representation_type"),
-              observedContractAddress: sql.raw("excluded.observed_contract_address"),
-              observedMintAddress: sql.raw("excluded.observed_mint_address"),
-              observedDecimals: sql.raw("excluded.observed_decimals"),
+              observedBlockchainId: sql`coalesce(excluded.observed_blockchain_id, ${schema.providerTransfers.observedBlockchainId})`,
+              observedRepresentationType: sql`coalesce(excluded.observed_representation_type, ${schema.providerTransfers.observedRepresentationType})`,
+              observedContractAddress: sql`coalesce(excluded.observed_contract_address, ${schema.providerTransfers.observedContractAddress})`,
+              observedMintAddress: sql`coalesce(excluded.observed_mint_address, ${schema.providerTransfers.observedMintAddress})`,
+              observedDecimals: sql`coalesce(excluded.observed_decimals, ${schema.providerTransfers.observedDecimals})`,
               amount: sql.raw("excluded.amount"),
-              metadata: sql.raw("excluded.metadata"),
+              metadata: sql`case
+                when excluded.observed_decimals is null
+                  and ${schema.providerTransfers.observedDecimals} is not null
+                then ${schema.providerTransfers.metadata}
+                else excluded.metadata
+              end`,
               updatedAt: now,
             },
           })

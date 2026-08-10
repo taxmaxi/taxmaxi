@@ -33,6 +33,7 @@ const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 const NFT_MINT = "NftMint111111111111111111111111111111111111"
 const UNKNOWN_MINT = "UnknownMint11111111111111111111111111111111"
+const STALE_DECIMALS_MINT = "StaleDecimals1111111111111111111111111111111"
 
 const makeFetchParams = ({
   providerKey = HELIUS_SOLANA_PROVIDER_KEY,
@@ -245,7 +246,7 @@ const makeProviderLayer = ({
                                 naturalKey: `spl:${asset.mintAddress}`,
                                 currencyCode: "USDC",
                                 name: "USD Coin",
-                                decimals: 6,
+                                decimals: asset.mintAddress === STALE_DECIMALS_MINT ? 8 : 6,
                                 tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                                 nftHint: false,
                                 mappingStatus: "approved",
@@ -1071,6 +1072,200 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(splTransfer?.metadata).toMatchObject({
       evidenceKind: "parsed_transfer",
       rawUnits: "123456789012123456",
+    })
+  })
+
+  it("enriches reordered parsed SPL movements with exact wallet-row decimals", async () => {
+    const payload = {
+      slot: 126,
+      transactionIndex: 2,
+      transaction: {
+        signatures: ["signature-reordered-transfer-row-evidence"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-usdc", signer: false },
+            { pubkey: "counterparty-unknown", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+      tokenTransfers: [
+        {
+          mint: USDC_MINT,
+          tokenAmount: "2.5",
+          fromUserAccount: "counterparty-usdc",
+          toUserAccount: WALLET_ADDRESS,
+        },
+        {
+          mint: UNKNOWN_MINT,
+          tokenAmount: "1.23456",
+          fromUserAccount: "counterparty-unknown",
+          toUserAccount: WALLET_ADDRESS,
+        },
+      ],
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () =>
+        Effect.succeed({
+          data: [
+            {
+              signature: "signature-reordered-transfer-row-evidence",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-unknown",
+              mint: UNKNOWN_MINT,
+              symbol: null,
+              amount: 1.23456,
+              amountRaw: "123456",
+              decimals: 5,
+            },
+            {
+              signature: "signature-reordered-transfer-row-evidence",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-usdc",
+              mint: USDC_MINT,
+              symbol: "USDC",
+              amount: 2.5,
+              amountRaw: "2500000",
+              decimals: 6,
+            },
+          ],
+          pagination: {
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+    )
+
+    const unknownTransfer = result.providerTransfers.find(
+      (transfer) => transfer.providerAssetId === `provider-asset-${UNKNOWN_MINT}`
+    )
+
+    expect(unknownTransfer).toMatchObject({
+      amount: "1.23456",
+      observedRepresentationType: null,
+      observedMintAddress: UNKNOWN_MINT,
+      observedDecimals: 5,
+      metadata: {
+        evidenceKind: "parsed_transfer",
+        rawUnits: "123456",
+        supplementalTransferRow: {
+          signature: "signature-reordered-transfer-row-evidence",
+          amountRaw: "123456",
+          decimals: 5,
+        },
+      },
+    })
+    expect(result.transaction.metadata).toMatchObject({
+      transferEvidenceContradictions: [],
+    })
+  })
+
+  it("prefers exact wallet-row decimals over stale catalog decimals for parsed transfers", async () => {
+    const payload = {
+      slot: 126,
+      transactionIndex: 2,
+      transaction: {
+        signatures: ["signature-stale-catalog-decimals"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_999_995_000, 0],
+        preTokenBalances: [],
+        postTokenBalances: [],
+      },
+      blockTime: 1_735_689_600,
+      tokenTransfers: [
+        {
+          mint: STALE_DECIMALS_MINT,
+          tokenAmount: "1.5",
+          fromUserAccount: "counterparty-address",
+          toUserAccount: WALLET_ADDRESS,
+        },
+      ],
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () =>
+        Effect.succeed({
+          data: [
+            {
+              signature: "signature-stale-catalog-decimals",
+              timestamp: 1_735_689_600,
+              direction: "in",
+              counterparty: "counterparty-address",
+              mint: STALE_DECIMALS_MINT,
+              symbol: "STALE",
+              amount: 1.5,
+              amountRaw: "1500000",
+              decimals: 6,
+            },
+          ],
+          pagination: {
+            hasMore: false,
+            nextCursor: null,
+          },
+        })
+    )
+
+    const providerTransfer = result.providerTransfers.find(
+      (transfer) => transfer.providerAssetId === `provider-asset-${STALE_DECIMALS_MINT}`
+    )
+
+    expect(providerTransfer).toMatchObject({
+      amount: "1.5",
+      observedDecimals: 6,
+      metadata: {
+        rawUnits: "1500000",
+        supplementalTransferRow: {
+          amountRaw: "1500000",
+          decimals: 6,
+        },
+      },
+    })
+    expect(result.transaction.metadata).toMatchObject({
+      transferEvidenceContradictions: [],
     })
   })
 

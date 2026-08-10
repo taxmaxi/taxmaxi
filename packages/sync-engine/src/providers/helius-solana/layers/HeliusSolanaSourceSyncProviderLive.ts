@@ -59,7 +59,6 @@ import {
 import {
   HeliusSolanaAssetResolutionService,
   SOLANA_BLOCKCHAIN_NAME,
-  SOLANA_WRAPPED_NATIVE_MINT,
   type HeliusSolanaResolvedAsset,
 } from "../services/HeliusSolanaAssetResolutionService.ts"
 import {
@@ -1402,12 +1401,42 @@ const make = ({
         ]
       })
 
-    const movementComparisonKey = (movement: SolanaBalanceMovement): string =>
-      [
-        movement.asset.mintAddress ?? SOLANA_WRAPPED_NATIVE_MINT,
-        movement.direction,
-        movement.rawUnits,
-      ].join(":")
+    const movementAmountsEqual = (
+      left: SolanaBalanceMovement,
+      right: SolanaBalanceMovement
+    ): boolean => {
+      if (left.evidenceKind === "parsed_transfer" && right.evidenceKind === "transfer_row") {
+        const leftAmount = BigDecimal.fromString(left.amount)
+        const rightAmount = BigDecimal.fromString(right.amount)
+
+        return (
+          Option.isSome(leftAmount) &&
+          Option.isSome(rightAmount) &&
+          BigDecimal.equals(leftAmount.value, rightAmount.value)
+        )
+      }
+
+      if (left.observedDecimals !== null && right.observedDecimals !== null) {
+        return left.observedDecimals === right.observedDecimals && left.rawUnits === right.rawUnits
+      }
+
+      const leftAmount = BigDecimal.fromString(left.amount)
+      const rightAmount = BigDecimal.fromString(right.amount)
+
+      return (
+        Option.isSome(leftAmount) &&
+        Option.isSome(rightAmount) &&
+        BigDecimal.equals(leftAmount.value, rightAmount.value)
+      )
+    }
+
+    const movementsMatch = (
+      authoritativeMovement: SolanaBalanceMovement,
+      transferRowMovement: SolanaBalanceMovement
+    ): boolean =>
+      authoritativeMovement.asset.mintAddress === transferRowMovement.asset.mintAddress &&
+      authoritativeMovement.direction === transferRowMovement.direction &&
+      movementAmountsEqual(authoritativeMovement, transferRowMovement)
 
     const findTransferRowContradictions = ({
       transferRows,
@@ -1416,48 +1445,74 @@ const make = ({
       readonly transferRows: ReadonlyArray<SolanaBalanceMovement>
       readonly authoritativeMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<MovementContradiction> => {
-      const authoritativeKeys = new Set(authoritativeMovements.map(movementComparisonKey))
-      return transferRows
-        .filter((movement) => !authoritativeKeys.has(movementComparisonKey(movement)))
-        .map((movement) => ({
-          reason: "Helius transfer-row evidence contradicts full transaction movement evidence.",
-          evidence: {
-            mintAddress: movement.asset.mintAddress,
-            direction: movement.direction,
-            amount: movement.amount,
-            rawUnits: movement.rawUnits,
-            evidenceKind: movement.evidenceKind,
+      const unmatchedAuthoritativeMovements = [...authoritativeMovements]
+
+      return transferRows.flatMap((movement) => {
+        const matchIndex = unmatchedAuthoritativeMovements.findIndex((candidate) =>
+          movementsMatch(candidate, movement)
+        )
+
+        if (matchIndex !== -1) {
+          unmatchedAuthoritativeMovements.splice(matchIndex, 1)
+          return []
+        }
+
+        return [
+          {
+            reason: "Helius transfer-row evidence contradicts full transaction movement evidence.",
+            evidence: {
+              mintAddress: movement.asset.mintAddress,
+              direction: movement.direction,
+              amount: movement.amount,
+              rawUnits: movement.rawUnits,
+              evidenceKind: movement.evidenceKind,
+            },
           },
-        }))
+        ]
+      })
     }
 
-    const joinTransferRowEvidenceByPosition = ({
+    const joinTransferRowEvidence = ({
       authoritativeMovements,
       transferRowMovements,
     }: {
       readonly authoritativeMovements: ReadonlyArray<SolanaBalanceMovement>
       readonly transferRowMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<SolanaBalanceMovement> => {
-      const transferRowsByPosition = new Map(
-        transferRowMovements.map((movement) => [movement.position, movement])
-      )
+      const unmatchedTransferRows = [...transferRowMovements]
 
       return authoritativeMovements.map((movement) => {
-        const transferRowMovement = transferRowsByPosition.get(movement.position)
+        const positionMatchIndex = unmatchedTransferRows.findIndex(
+          (candidate) =>
+            candidate.position === movement.position && movementsMatch(movement, candidate)
+        )
+        const matchIndex =
+          positionMatchIndex === -1
+            ? unmatchedTransferRows.findIndex((candidate) => movementsMatch(movement, candidate))
+            : positionMatchIndex
+        const [transferRowMovement] =
+          matchIndex === -1 ? [] : unmatchedTransferRows.splice(matchIndex, 1)
         const supplementalTransferRow = transferRowMovement?.supplementalTransferRow ?? null
 
         if (
           supplementalTransferRow === null ||
           movement.evidenceKind === "transfer_row" ||
-          transferRowMovement === undefined ||
-          movementComparisonKey(movement) !== movementComparisonKey(transferRowMovement)
+          transferRowMovement === undefined
         ) {
           return movement
         }
 
+        const preferTransferRowAmountEvidence = movement.evidenceKind === "parsed_transfer"
+
         return {
           ...movement,
-          observedDecimals: movement.observedDecimals ?? transferRowMovement.observedDecimals,
+          rawUnits:
+            preferTransferRowAmountEvidence || movement.observedDecimals === null
+              ? transferRowMovement.rawUnits
+              : movement.rawUnits,
+          observedDecimals: preferTransferRowAmountEvidence
+            ? transferRowMovement.observedDecimals
+            : (movement.observedDecimals ?? transferRowMovement.observedDecimals),
           supplementalTransferRow,
         }
       })
@@ -1900,7 +1955,7 @@ const make = ({
           const joinedSplMovements =
             splMovements === transferRowSplMovements
               ? splMovements
-              : joinTransferRowEvidenceByPosition({
+              : joinTransferRowEvidence({
                   authoritativeMovements: splMovements,
                   transferRowMovements: transferRowSplMovements,
                 })

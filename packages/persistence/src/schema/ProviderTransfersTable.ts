@@ -88,7 +88,7 @@ export const providerTransfers = pgTable(
     check("provider_transfers_amount_positive", sql`${table.amount} > 0`),
     check(
       "provider_transfers_observed_representation_complete",
-      sql`(
+      sql`coalesce((
         ${table.observedRepresentationType} is null
         and ${table.observedBlockchainId} is null
         and ${table.observedContractAddress} is null
@@ -107,7 +107,7 @@ export const providerTransfers = pgTable(
         ${table.observedRepresentationType} in ('token', 'nft')
         and ${table.observedBlockchainId} is not null
         and num_nonnulls(${table.observedContractAddress}, ${table.observedMintAddress}) = 1
-      )`
+      ), false)`
     ),
     check(
       "provider_transfers_observed_decimals_non_negative",

@@ -154,6 +154,7 @@ const decodeStoredProviderPayload = Schema.decodeUnknownEither(
     source: Schema.optional(Schema.String),
     tokenProgram: Schema.optional(Schema.NullOr(Schema.String)),
     nftHint: Schema.optional(Schema.Boolean),
+    asset: Schema.optional(DasAssetSchema),
   })
 )
 
@@ -228,6 +229,11 @@ const providerAssetCatalogEntryForDefault = (
 const tokenStandardFromDasAsset = (asset: DasAsset): string | null =>
   asset.content?.metadata?.token_standard ?? null
 
+const normalizedDasTypeEvidence = (value: string | null | undefined): string =>
+  value?.toLowerCase().replaceAll(/[^a-z0-9]/g, "") ?? ""
+
+const EXPLICIT_DAS_NFT_INTERFACES = new Set(["v1print", "mplcoreasset", "mplcorecollection"])
+
 const dasAssetName = (asset: DasAsset): string | null =>
   normalizeText(asset.content?.metadata?.name)
 
@@ -237,16 +243,27 @@ const dasAssetSymbol = (asset: DasAsset): string | null =>
 const fallbackCurrencyCode = (mintAddress: string): string =>
   `SOLANA_MINT_${mintAddress.slice(0, 8).toUpperCase()}`
 
-const isNftDasAsset = (asset: DasAsset): boolean => {
-  const interfaceName = asset.interface?.toLowerCase() ?? ""
-  const tokenStandard = tokenStandardFromDasAsset(asset)?.toLowerCase() ?? ""
-
-  return (
-    interfaceName.includes("nft") ||
-    tokenStandard.includes("nft") ||
-    asset.compression?.compressed === true
+const representationTypeFromDasAsset = (asset: DasAsset): "token" | "nft" | null => {
+  const typeEvidence = [asset.interface, tokenStandardFromDasAsset(asset)].map(
+    normalizedDasTypeEvidence
   )
+
+  if (
+    asset.compression?.compressed === true ||
+    typeEvidence.some(
+      (value) =>
+        value.includes("nft") ||
+        value.includes("nonfungible") ||
+        EXPLICIT_DAS_NFT_INTERFACES.has(value)
+    )
+  ) {
+    return "nft"
+  }
+
+  return typeEvidence.some((value) => value.includes("fungible")) ? "token" : null
 }
+
+const isNftDasAsset = (asset: DasAsset): boolean => representationTypeFromDasAsset(asset) === "nft"
 
 const providerTypeFromDasAsset = (asset: DasAsset): DecodedDasAsset["providerType"] => {
   if (isNftDasAsset(asset)) {
@@ -273,7 +290,8 @@ const decodeDasAsset = (
     }
 
     const tokenProgram = normalizeText(asset.token_info?.token_program)
-    const nftHint = isNftDasAsset(asset)
+    const representationType = representationTypeFromDasAsset(asset)
+    const nftHint = representationType === "nft"
     const providerType = providerTypeFromDasAsset(asset)
 
     return {
@@ -375,6 +393,20 @@ const hasHeliusDasPayload = (providerAsset: ProviderAssetRecord): boolean => {
   }
 
   return decoded.right.source === "helius_das_get_asset_batch"
+}
+
+const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): boolean => {
+  const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
+
+  if (
+    Either.isLeft(decoded) ||
+    decoded.right.source !== "helius_das_get_asset_batch" ||
+    decoded.right.asset === undefined
+  ) {
+    return false
+  }
+
+  return representationTypeFromDasAsset(decoded.right.asset) !== null
 }
 
 const assetKindFromProviderAsset = (
@@ -781,7 +813,7 @@ const make = Effect.gen(function* () {
         assetKind: assetKindFromProviderAsset(providerAsset),
         representationTypeObserved:
           reference.kind === "native" ||
-          hasHeliusDasPayload(providerAsset) ||
+          hasObservedRepresentationType(providerAsset) ||
           defaultMappingForReference(reference) !== null,
         mintAddress: reference.mintAddress,
         providerAssetRowId: providerAsset.id,
