@@ -28,17 +28,17 @@
     "description": "Du bist angemeldet. Der App-Workspace entsteht hier."
   },
   "assetCatalog": {
-    "title": "Asset-Katalog",
-    "subtitle": "Kanonisches Asset-Register von TaxMaxi",
-    "open": "Asset-Katalog",
-    "close": "Asset-Katalog schließen",
-    "seoTitle": "Asset-Katalog | TaxMaxi",
-    "seoDescription": "Durchsuche den öffentlichen kanonischen Asset-Katalog von TaxMaxi.",
-    "scopeLabel": "Asset-Status",
+    "title": "Asset Katalog",
+    "subtitle": "Alle Assets die von TaxMaxi unterstützt werden",
+    "open": "Asset Katalog",
+    "close": "Asset Katalog schließen",
+    "seoTitle": "Asset Katalog | TaxMaxi",
+    "seoDescription": "Durchsuche alle Assets die von TaxMaxi unterstützt werden.",
+    "scopeLabel": "Asset Status",
     "listLabel": "Assets",
     "scope": {
       "all": "Alle",
-      "approved": "Freigegeben",
+      "approved": "Geprüft",
       "pending": "Ausstehend"
     },
     "search": {
@@ -46,8 +46,8 @@
       "placeholder": "Nach Symbol, Name, Netzwerk oder Anbieter suchen"
     },
     "actions": {
-      "backToList": "Zurück zur Asset-Liste",
-      "openPublicPage": "Öffentliche Asset-Seite öffnen",
+      "backToList": "Zurück zur Asset Liste",
+      "openPublicPage": "Öffentliche Asset Seite öffnen",
       "loadMore": "Mehr laden",
       "loadMoreLabel": "Weitere Assets laden",
       "loading": "Wird geladen…",
@@ -55,7 +55,7 @@
       "retry": "Erneut versuchen",
       "retryLabel": "Assets erneut laden",
       "retrying": "Neuer Versuch…",
-      "retryingLabel": "Asset-Quellen werden erneut geladen"
+      "retryingLabel": "Asset Quellen werden erneut geladen"
     },
     "status": {
       "loading": "Assets werden geladen.",
@@ -78,25 +78,25 @@
       "searchHint": "Suche nach einem Symbol, Anbieter, Netzwerk oder einer Contract-Adresse."
     },
     "detail": {
-      "approved": "Freigegeben",
+      "approved": "Geprüft",
       "pending": "Ausstehend",
-      "representations": "Repräsentationen",
+      "representations": "Abbildungen",
       "networks": "Netzwerke",
       "registryStatus": "Registerstatus",
-      "networkRepresentations": "Netzwerk-Repräsentationen",
+      "networkRepresentations": "Netzwerk Abbildungen",
       "networkRepresentationsDescription": "Identitäten, die diesem wirtschaftlichen Asset zugeordnet sind.",
-      "noNetworkRepresentation": "Dieses Asset hat derzeit keine Netzwerk-Repräsentation.",
-      "nativeNetworkAsset": "Natives Netzwerk-Asset",
-      "tokenIdentity": "Token-Identität",
+      "noNetworkRepresentation": "Dieses Asset hat derzeit keine Netzwerk Abbildungen.",
+      "nativeNetworkAsset": "Natives Asset",
+      "tokenIdentity": "Token Identität",
       "waitingForReview": "Prüfung ausstehend",
       "radarTitle": "Dieses Asset wird von TaxMaxi geprüft",
-      "radarDescription": "TaxMaxi prüft, ob dieses Anbieter-Asset einem bestehenden kanonischen Asset zugeordnet werden kann. Du musst nichts tun.",
+      "radarDescription": "TaxMaxi prüft, ob dieses Provider Asset einem bestehenden Asset im TaxMaxi Register zugeordnet werden kann. Du musst nichts tun.",
       "reportedBy": "Gemeldet von",
-      "providerAssetId": "Anbieter-Asset-ID",
+      "providerAssetId": "Provider Asset ID",
       "providerType": "Anbietertyp",
       "reviewStatus": "Prüfstatus",
       "notSupplied": "Nicht angegeben",
-      "waitingForTaxMaxiReview": "TaxMaxi-Prüfung ausstehend"
+      "waitingForTaxMaxiReview": "TaxMaxi Prüfung ausstehend"
     },
     "assetType": {
       "fungible": "Fungibles Asset",
@@ -109,28 +109,28 @@
     },
     "description": {
       "nft": "Wirtschaftliche NFT-Identität, die über Verwahrungsquellen und Netzwerkaktivitäten hinweg einheitlich verwendet wird.",
-      "fungibleOne": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannter Netzwerk-Repräsentation.",
-      "fungibleMany": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannten Netzwerk-Repräsentationen."
+      "fungibleOne": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannter Netzwerk Abbildungen.",
+      "fungibleMany": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannten Netzwerk Abbildungen."
     },
     "logoAlt": "Logo von {name}",
     "publicPage": {
       "title": "{symbol} ({name}) | TaxMaxi Assets",
       "fallbackTitle": "Asset | TaxMaxi",
-      "fallbackDescription": "Von TaxMaxi unterstütztes kanonisches Krypto-Asset.",
+      "fallbackDescription": "Von TaxMaxi unterstütztes Krypto Asset.",
       "allAssets": "Alle Assets",
       "economicAsset": "Wirtschaftliches Asset",
-      "assetId": "Asset-ID",
+      "assetId": "Asset ID",
       "type": "Typ",
-      "networkRepresentations": "Netzwerk-Repräsentationen",
+      "networkRepresentations": "Netzwerk Abbildungen",
       "networkDescription": "Exakte native, Contract- und Mint-Identitäten, die diesem wirtschaftlichen Asset zugeordnet sind.",
-      "custodyAssetNoRepresentation": "Dieses Verwahrungs-Asset hat keine netzwerkspezifische Repräsentation.",
+      "custodyAssetNoRepresentation": "Dieses Verwahrungs Asset hat keine netzwerkspezifische Abbildung.",
       "representationMeta": "{type} · {decimals} Dezimalstellen",
-      "viewOnExplorer": "{network}-Repräsentation im Explorer anzeigen",
-      "nativeNetworkAsset": "Natives Netzwerk-Asset",
+      "viewOnExplorer": "{network} Abbildung im Explorer anzeigen",
+      "nativeNetworkAsset": "Natives Asset",
       "economicIdentityTitle": "Wirtschaftliche Identität",
-      "economicIdentityDescription": "Bestände, Bewertungen, FIFO-Lots und Steuerberichte verwenden diese wirtschaftliche Asset-ID über alle Verwahrungsquellen hinweg.",
+      "economicIdentityDescription": "Bestände, Bewertungen, FIFO Lots und Steuerberichte verwenden diese wirtschaftliche Asset ID über alle Verwahrungsquellen hinweg.",
       "normalizationTitle": "Normalisierung",
-      "normalizationDescription": "On-Chain-Beobachtungen behalten außerdem die exakte Netzwerk-Repräsentation bei, die bei Import und Normalisierung verwendet wurde.",
+      "normalizationDescription": "Onchain Beobachtungen behalten außerdem die exakte Netzwerk Abbildung bei, die bei Import und Normalisierung verwendet wurde.",
       "notFoundLabel": "Asset nicht gefunden",
       "notFoundTitle": "Kein Asset stimmt mit dieser ID überein.",
       "notFoundDescription": "Prüfe die Liste der unterstützten Assets auf die aktuellen kanonischen IDs.",
