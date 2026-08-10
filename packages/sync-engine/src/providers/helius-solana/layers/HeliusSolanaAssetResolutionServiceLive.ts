@@ -779,6 +779,10 @@ const make = Effect.gen(function* () {
       return {
         kind: resolvedKindFromMapping(mapping),
         assetKind: assetKindFromProviderAsset(providerAsset),
+        representationTypeObserved:
+          reference.kind === "native" ||
+          hasHeliusDasPayload(providerAsset) ||
+          defaultMappingForReference(reference) !== null,
         mintAddress: reference.mintAddress,
         providerAssetRowId: providerAsset.id,
         providerAssetId: providerAsset.providerAssetId,

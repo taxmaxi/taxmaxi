@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm"
 import {
   check,
   index,
+  integer,
   jsonb,
   numeric,
   pgEnum,
@@ -11,6 +12,8 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
+import { assetRepresentationTypeEnum } from "./AssetRepresentationsTable.ts"
+import { blockchains } from "./BlockchainsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 import { sourceRecordsRaw } from "./SourceRecordsRawTable.ts"
 import { sources } from "./SourcesTable.ts"
@@ -57,6 +60,11 @@ export const providerTransfers = pgTable(
     toAddress: text("to_address"),
     networkName: text("network_name"),
     networkHash: text("network_hash"),
+    observedBlockchainId: uuid("observed_blockchain_id").references(() => blockchains.id),
+    observedRepresentationType: assetRepresentationTypeEnum("observed_representation_type"),
+    observedContractAddress: text("observed_contract_address"),
+    observedMintAddress: text("observed_mint_address"),
+    observedDecimals: integer("observed_decimals"),
 
     amount: numeric("amount", { precision: 100, scale: 30 }).notNull(),
     metadata: jsonb("metadata"),
@@ -78,6 +86,33 @@ export const providerTransfers = pgTable(
       sql`${table.toAddress} is not null or ${table.toAccountRef} is not null`
     ),
     check("provider_transfers_amount_positive", sql`${table.amount} > 0`),
+    check(
+      "provider_transfers_observed_representation_complete",
+      sql`(
+        ${table.observedRepresentationType} is null
+        and ${table.observedBlockchainId} is null
+        and ${table.observedContractAddress} is null
+        and ${table.observedMintAddress} is null
+        and ${table.observedDecimals} is null
+      ) or (
+        ${table.observedRepresentationType} is null
+        and ${table.observedBlockchainId} is not null
+        and num_nonnulls(${table.observedContractAddress}, ${table.observedMintAddress}) = 1
+      ) or (
+        ${table.observedRepresentationType} = 'native'
+        and ${table.observedBlockchainId} is not null
+        and ${table.observedContractAddress} is null
+        and ${table.observedMintAddress} is null
+      ) or (
+        ${table.observedRepresentationType} in ('token', 'nft')
+        and ${table.observedBlockchainId} is not null
+        and num_nonnulls(${table.observedContractAddress}, ${table.observedMintAddress}) = 1
+      )`
+    ),
+    check(
+      "provider_transfers_observed_decimals_non_negative",
+      sql`${table.observedDecimals} is null or ${table.observedDecimals} >= 0`
+    ),
     uniqueIndex("provider_transfers_source_external_id_unique_idx")
       .on(table.sourceId, table.externalId)
       .where(sql`${table.externalId} is not null`),

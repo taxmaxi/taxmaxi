@@ -31,6 +31,8 @@ import { FetchProviderRawBatchParams } from "../../src/shared/SourceProviderRawB
 const WALLET_ADDRESS = "So11111111111111111111111111111111111111112"
 const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+const NFT_MINT = "NftMint111111111111111111111111111111111111"
+const UNKNOWN_MINT = "UnknownMint11111111111111111111111111111111"
 
 const makeFetchParams = ({
   providerKey = HELIUS_SOLANA_PROVIDER_KEY,
@@ -189,26 +191,70 @@ const makeProviderLayer = ({
                             canonicalFiatCurrency: null,
                           } satisfies HeliusSolanaResolvedAsset,
                         ]
-                      : [
-                          {
-                            kind: "canonical",
-                            assetKind: "token",
-                            mintAddress: asset.mintAddress,
-                            providerAssetRowId: `provider-asset-${asset.mintAddress}`,
-                            providerAssetId: asset.mintAddress,
-                            naturalKey: `spl:${asset.mintAddress}`,
-                            currencyCode: "USDC",
-                            name: "USD Coin",
-                            decimals: 6,
-                            tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                            nftHint: false,
-                            mappingStatus: "approved",
-                            mappingKind: "asset",
-                            canonicalAssetId: "asset-usdc",
-                            assetRepresentationId: "representation-usdc-solana",
-                            canonicalFiatCurrency: null,
-                          } satisfies HeliusSolanaResolvedAsset,
-                        ]
+                      : asset.mintAddress === NFT_MINT
+                        ? [
+                            {
+                              kind: "canonical",
+                              assetKind: "nft",
+                              representationTypeObserved: true,
+                              mintAddress: asset.mintAddress,
+                              providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                              providerAssetId: asset.mintAddress,
+                              naturalKey: `spl:${asset.mintAddress}`,
+                              currencyCode: "TEST-NFT",
+                              name: "Test NFT",
+                              decimals: 0,
+                              tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                              nftHint: true,
+                              mappingStatus: "approved",
+                              mappingKind: "asset",
+                              canonicalAssetId: "asset-test-nft",
+                              assetRepresentationId: "representation-test-nft-solana",
+                              canonicalFiatCurrency: null,
+                            } satisfies HeliusSolanaResolvedAsset,
+                          ]
+                        : asset.mintAddress === UNKNOWN_MINT
+                          ? [
+                              {
+                                kind: "review_required",
+                                assetKind: "token",
+                                representationTypeObserved: false,
+                                mintAddress: asset.mintAddress,
+                                providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                                providerAssetId: asset.mintAddress,
+                                naturalKey: `spl:${asset.mintAddress}`,
+                                currencyCode: asset.mintAddress,
+                                name: null,
+                                decimals: null,
+                                tokenProgram: null,
+                                nftHint: false,
+                                mappingStatus: "pending_review",
+                                mappingKind: "asset",
+                                canonicalAssetId: null,
+                                assetRepresentationId: null,
+                                canonicalFiatCurrency: null,
+                              } satisfies HeliusSolanaResolvedAsset,
+                            ]
+                          : [
+                              {
+                                kind: "canonical",
+                                assetKind: "token",
+                                mintAddress: asset.mintAddress,
+                                providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                                providerAssetId: asset.mintAddress,
+                                naturalKey: `spl:${asset.mintAddress}`,
+                                currencyCode: "USDC",
+                                name: "USD Coin",
+                                decimals: 6,
+                                tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                                nftHint: false,
+                                mappingStatus: "approved",
+                                mappingKind: "asset",
+                                canonicalAssetId: "asset-usdc",
+                                assetRepresentationId: "representation-usdc-solana",
+                                canonicalFiatCurrency: null,
+                              } satisfies HeliusSolanaResolvedAsset,
+                            ]
               )
             ),
         })
@@ -659,6 +705,16 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5", "0.000005"])
     expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native", "fee"])
     expect(result.providerTransfers).toHaveLength(2)
+    const principalProviderTransfer = result.providerTransfers.find((transfer) =>
+      transfer.externalId?.includes(":provider:principal:")
+    )
+    expect(principalProviderTransfer).toMatchObject({
+      observedBlockchainId: "solana-blockchain-id",
+      observedRepresentationType: "native",
+      observedContractAddress: null,
+      observedMintAddress: null,
+      observedDecimals: 9,
+    })
     expect(result.transactionReview).toBeNull()
   })
 
@@ -937,6 +993,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         signature: "signature-spl-normalized",
         amountRaw: "12500000",
       },
+    })
+    expect(splProviderTransfer).toMatchObject({
+      observedBlockchainId: "solana-blockchain-id",
+      observedRepresentationType: "token",
+      observedContractAddress: null,
+      observedMintAddress: USDC_MINT,
+      observedDecimals: 6,
     })
     expect(new Set(result.providerTransfers.map((transfer) => transfer.externalId)).size).toBe(
       result.providerTransfers.length
@@ -1273,6 +1336,162 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
     expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
     expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
+  })
+
+  it("preserves an unknown SPL type while recording its exact mint and decimals", async () => {
+    const payload = {
+      slot: 128,
+      transactionIndex: 4,
+      transaction: {
+        signatures: ["signature-unknown-token-balance"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-unknown-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: UNKNOWN_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 5 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: UNKNOWN_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "123456", decimals: 5 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const providerTransfer = result.providerTransfers.find(
+      (transfer) => transfer.providerAssetId === `provider-asset-${UNKNOWN_MINT}`
+    )
+
+    expect(providerTransfer).toMatchObject({
+      amount: "1.23456",
+      observedBlockchainId: "solana-blockchain-id",
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: UNKNOWN_MINT,
+      observedDecimals: 5,
+    })
+  })
+
+  it("records separate SPL token and NFT facts in a multi-transfer transaction", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: ["signature-multi-asset-token-balances"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-usdc-account", signer: false },
+            { pubkey: "wallet-nft-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0, 0],
+        postBalances: [1_999_995_000, 0, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+          {
+            accountIndex: 3,
+            mint: NFT_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 0 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "2500000", decimals: 6 },
+          },
+          {
+            accountIndex: 3,
+            mint: NFT_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "1", decimals: 0 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ payload }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const principalTransfers = result.providerTransfers.filter(
+      (transfer) =>
+        transfer.providerAssetId === `provider-asset-${USDC_MINT}` ||
+        transfer.providerAssetId === `provider-asset-${NFT_MINT}`
+    )
+
+    expect(principalTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          observedRepresentationType: "token",
+          observedMintAddress: USDC_MINT,
+          observedDecimals: 6,
+        }),
+        expect.objectContaining({
+          observedRepresentationType: "nft",
+          observedMintAddress: NFT_MINT,
+          observedDecimals: 0,
+        }),
+      ])
+    )
+    expect(principalTransfers).toHaveLength(2)
   })
 
   it("prefers exact token balance deltas over parsed SPL token summaries", async () => {

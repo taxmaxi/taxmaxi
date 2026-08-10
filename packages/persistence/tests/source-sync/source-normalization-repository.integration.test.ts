@@ -323,6 +323,136 @@ describe("SourceNormalizationRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
+  it("persists exact observed provider transfer representations", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const sharedTransfer = {
+      sourceId: TEST_SOURCE_ID,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+      externalGroupId: "group-observed-representations",
+      providerAssetId: null,
+      timestamp: occurredAt,
+      direction: "inbound" as const,
+      fromAccountRef: null,
+      toAccountRef: null,
+      fromAddress: "external-address",
+      toAddress: "owned-address",
+      networkName: "base",
+      networkHash: "hash-observed-representations",
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedContractAddress: null,
+      observedMintAddress: null,
+      amount: "1",
+      metadata: { provider: "test-onchain-adapter" },
+    }
+    const providerTransfers = [
+      {
+        ...sharedTransfer,
+        externalId: "observed-native",
+        observedRepresentationType: "native" as const,
+        observedDecimals: 18,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-token",
+        observedRepresentationType: "token" as const,
+        observedContractAddress: "0x0000000000000000000000000000000000000096",
+        observedDecimals: 6,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-nft",
+        observedRepresentationType: "nft" as const,
+        observedMintAddress: "NftMint111111111111111111111111111111111111",
+        observedDecimals: 0,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-unknown-type",
+        observedRepresentationType: null,
+        observedMintAddress: "UnknownMint11111111111111111111111111111111",
+        observedDecimals: 5,
+      },
+    ]
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "tx-observed-representations",
+            externalGroupId: "group-observed-representations",
+            timestamp: occurredAt,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: occurredAt,
+            providerUpdatedAt: occurredAt,
+            metadata: { provider: "test-onchain-adapter" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "dex",
+            cexAccountId: null,
+            externalAccountId: "owned-address",
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "test-onchain-adapter" },
+          },
+          providerTransfers,
+          feeTransfers: [],
+          legs: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+
+    expect(result.providerTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          externalId: "observed-native",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "native",
+          observedContractAddress: null,
+          observedMintAddress: null,
+          observedDecimals: 18,
+        }),
+        expect.objectContaining({
+          externalId: "observed-token",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "token",
+          observedContractAddress: "0x0000000000000000000000000000000000000096",
+          observedMintAddress: null,
+          observedDecimals: 6,
+        }),
+        expect.objectContaining({
+          externalId: "observed-nft",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "nft",
+          observedContractAddress: null,
+          observedMintAddress: "NftMint111111111111111111111111111111111111",
+          observedDecimals: 0,
+        }),
+        expect.objectContaining({
+          externalId: "observed-unknown-type",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: null,
+          observedContractAddress: null,
+          observedMintAddress: "UnknownMint11111111111111111111111111111111",
+          observedDecimals: 5,
+        }),
+      ])
+    )
+  })
+
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
     const acquisitionResult = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>

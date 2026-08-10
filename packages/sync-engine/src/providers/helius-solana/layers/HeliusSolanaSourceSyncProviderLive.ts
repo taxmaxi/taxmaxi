@@ -254,6 +254,7 @@ interface SolanaBalanceMovement {
   readonly asset: HeliusSolanaResolvedAsset
   readonly amount: string
   readonly rawUnits: string
+  readonly observedDecimals: number | null
   readonly direction: "inbound" | "outbound"
   readonly fromAddress: string
   readonly toAddress: string
@@ -780,12 +781,14 @@ const buildTransferDraft = ({
 const buildProviderTransferDraft = ({
   sourceId,
   sourceRawRecordId,
+  blockchainId,
   signature,
   timestamp,
   movement,
 }: {
   readonly sourceId: string
   readonly sourceRawRecordId: string
+  readonly blockchainId: string
   readonly signature: string
   readonly timestamp: Date
   readonly movement: SolanaBalanceMovement
@@ -803,6 +806,12 @@ const buildProviderTransferDraft = ({
   toAddress: movement.toAddress,
   networkName: SOLANA_BLOCKCHAIN_NAME,
   networkHash: signature,
+  observedBlockchainId: blockchainId,
+  observedRepresentationType:
+    movement.asset.representationTypeObserved === false ? null : movement.asset.assetKind,
+  observedContractAddress: null,
+  observedMintAddress: movement.asset.mintAddress,
+  observedDecimals: movement.observedDecimals,
   amount: movement.amount,
   metadata: {
     provider: HELIUS_SOLANA_PROVIDER_KEY,
@@ -1179,6 +1188,7 @@ const make = ({
                 asset: nativeAsset,
                 amount: lamportsToSol(principalDelta < 0n ? -principalDelta : principalDelta),
                 rawUnits: String(principalDelta < 0n ? -principalDelta : principalDelta),
+                observedDecimals: nativeAsset.decimals,
                 direction: principalDelta > 0n ? "inbound" : "outbound",
                 fromAddress: principalDelta > 0n ? counterparty : walletAddress,
                 toAddress: principalDelta > 0n ? walletAddress : counterparty,
@@ -1200,6 +1210,7 @@ const make = ({
           asset: nativeAsset,
           amount: lamportsToSol(fee),
           rawUnits: String(fee),
+          observedDecimals: nativeAsset.decimals,
           direction: "outbound",
           fromAddress: walletAddress,
           toAddress: "solana:fee",
@@ -1278,6 +1289,7 @@ const make = ({
               decimals: balance.uiTokenAmount.decimals,
             }),
             rawUnits: String(absoluteDelta),
+            observedDecimals: balance.uiTokenAmount.decimals,
             direction,
             fromAddress: direction === "inbound" ? counterparty : walletAddress,
             toAddress: direction === "inbound" ? walletAddress : counterparty,
@@ -1334,6 +1346,7 @@ const make = ({
             asset,
             amount: movementAmount.amount,
             rawUnits: movementAmount.rawUnits,
+            observedDecimals: asset.decimals,
             direction,
             fromAddress: fromAddress ?? "solana:unknown_sender",
             toAddress: toAddress ?? "solana:unknown_recipient",
@@ -1377,6 +1390,7 @@ const make = ({
             asset,
             amount,
             rawUnits: transfer.amountRaw,
+            observedDecimals: transfer.decimals,
             direction,
             fromAddress: direction === "inbound" ? transfer.counterparty : walletAddress,
             toAddress: direction === "inbound" ? walletAddress : transfer.counterparty,
@@ -1443,6 +1457,7 @@ const make = ({
 
         return {
           ...movement,
+          observedDecimals: movement.observedDecimals ?? transferRowMovement.observedDecimals,
           supplementalTransferRow,
         }
       })
@@ -1914,6 +1929,7 @@ const make = ({
             buildProviderTransferDraft({
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,
+              blockchainId,
               signature,
               timestamp,
               movement,

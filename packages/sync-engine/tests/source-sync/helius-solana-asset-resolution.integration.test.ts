@@ -496,6 +496,27 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
+  it("marks token-versus-NFT type as unknown when DAS metadata is missing", async () => {
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      assetKind: "token",
+      representationTypeObserved: false,
+      mintAddress: UNKNOWN_MINT,
+      decimals: null,
+      mappingStatus: "pending_review",
+    })
+  })
+
   it("fails with a typed decode error for malformed DAS asset metadata", async () => {
     const result = await runAssetService(
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
