@@ -470,21 +470,95 @@ describe("SourceReplayRepositoryLive", () => {
   )
 
   it.each([
-    { replaySide: "provider", downstreamUsage: null, outcome: "clears" },
-    { replaySide: "canonical", downstreamUsage: null, outcome: "clears" },
-    { replaySide: "provider", downstreamUsage: "disposal", outcome: "blocks" },
-    { replaySide: "provider", downstreamUsage: "allocation", outcome: "blocks" },
-    { replaySide: "canonical", downstreamUsage: "disposal", outcome: "clears" },
-    { replaySide: "canonical", downstreamUsage: "allocation", outcome: "clears" },
+    {
+      replaySide: "provider",
+      downstreamUsage: null,
+      remainingReconciliationStatus: "approved",
+      outcome: "clears",
+    },
+    {
+      replaySide: "canonical",
+      downstreamUsage: null,
+      remainingReconciliationStatus: "approved",
+      outcome: "clears",
+    },
+    {
+      replaySide: "provider",
+      downstreamUsage: "disposal",
+      remainingReconciliationStatus: "approved",
+      outcome: "blocks",
+    },
+    {
+      replaySide: "provider",
+      downstreamUsage: "allocation",
+      remainingReconciliationStatus: "approved",
+      outcome: "blocks",
+    },
+    {
+      replaySide: "canonical",
+      downstreamUsage: "disposal",
+      remainingReconciliationStatus: "approved",
+      outcome: "clears",
+    },
+    {
+      replaySide: "canonical",
+      downstreamUsage: "allocation",
+      remainingReconciliationStatus: "approved",
+      outcome: "clears",
+    },
+    {
+      replaySide: "provider",
+      downstreamUsage: null,
+      remainingReconciliationStatus: null,
+      outcome: "clears last",
+    },
+    {
+      replaySide: "canonical",
+      downstreamUsage: null,
+      remainingReconciliationStatus: null,
+      outcome: "clears last",
+    },
+    {
+      replaySide: "provider",
+      downstreamUsage: null,
+      remainingReconciliationStatus: "pending",
+      outcome: "ignores pending",
+    },
+    {
+      replaySide: "provider",
+      downstreamUsage: null,
+      remainingReconciliationStatus: "auto_applied",
+      outcome: "preserves auto-applied",
+    },
+    {
+      replaySide: "provider",
+      downstreamUsage: null,
+      remainingReconciliationStatus: "approved_cascades",
+      outcome: "ignores cascading approved",
+    },
+    {
+      replaySide: "canonical",
+      downstreamUsage: null,
+      remainingReconciliationStatus: "approved_cascades",
+      outcome: "ignores canonical cascading approved",
+    },
   ] as const)(
     "$outcome copied FIFO state before replaying the $replaySide side of a reconciliation",
-    async ({ replaySide, downstreamUsage }) => {
+    async ({ replaySide, downstreamUsage, remainingReconciliationStatus }) => {
       const dependentSourceId = "00000000-0000-0000-0000-000000000292"
       const originTransactionId = "00000000-0000-0000-0000-000000000293"
       const destinationTransactionId = "00000000-0000-0000-0000-000000000294"
       const providerTransferId = "00000000-0000-0000-0000-000000000295"
       const canonicalTransferId = "00000000-0000-0000-0000-000000000296"
       const basisTransactionId = "00000000-0000-0000-0000-000000000298"
+      const unrelatedProviderTransferId = "00000000-0000-0000-0000-000000000299"
+      const unrelatedCanonicalTransferId = "00000000-0000-0000-0000-000000000300"
+      const destinationProviderTransferId = "00000000-0000-0000-0000-000000000301"
+      const destinationCanonicalTransferId = "00000000-0000-0000-0000-000000000302"
+      const cascadingProviderTransferId = "00000000-0000-0000-0000-000000000309"
+      const cascadingCanonicalTransferId = "00000000-0000-0000-0000-000000000310"
+      const durableRemainingReconciliationStatus =
+        remainingReconciliationStatus === "approved_cascades" ? null : remainingReconciliationStatus
 
       await runPg(
         Effect.gen(function* () {
@@ -565,52 +639,196 @@ describe("SourceReplayRepositoryLive", () => {
               needsReview: true,
             },
           ])
-          yield* db.insert(schema.providerTransfers).values({
-            id: providerTransferId,
-            sourceId: TEST_SOURCE_ID,
-            transactionId: originTransactionId,
-            externalId: "replay-reconciliation-provider-transfer",
-            timestamp: new Date("2025-01-02T10:00:00.000Z"),
-            direction: "outbound",
-            fromAccountRef: "coinbase-account-1",
-            toAddress: "bc1qsource-replay-reconciled-copy",
-            amount: "0.5",
-          })
-          yield* db.insert(schema.inventoryMovements).values({
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-            transactionId: originTransactionId,
-            providerTransferId,
-            assetId: TEST_BTC_ASSET_ID,
-            timestamp: new Date("2025-01-02T10:00:00.000Z"),
-            direction: "outbound",
-            purpose: "principal",
-            taxTreatment: "non_taxable",
-            reconciliationStatus: "matched",
-            amount: "0.5",
-          })
-          yield* db.insert(schema.transfers).values({
-            id: canonicalTransferId,
-            sourceId: dependentSourceId,
-            principalId: TEST_PRINCIPAL_ID,
-            externalId: "replay-reconciliation-canonical-transfer",
-            timestamp: new Date("2025-01-02T10:05:00.000Z"),
-            type: "utxo",
-            fromAddress: "coinbase-account-1",
-            toAddress: "bc1qsource-replay-reconciled-copy",
-            assetId: TEST_BTC_ASSET_ID,
-            amount: "0.5",
-          })
-          yield* db.insert(schema.transferReconciliations).values({
-            principalId: TEST_PRINCIPAL_ID,
-            providerTransferId,
-            canonicalTransferId,
-            canonicalTransactionId: destinationTransactionId,
-            status: "approved",
-            matchReason: "replay_dependency_fixture",
-            confidence: "1",
-            deterministic: true,
-          })
+          yield* db.insert(schema.providerTransfers).values([
+            {
+              id: providerTransferId,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: originTransactionId,
+              externalId: "replay-reconciliation-provider-transfer",
+              timestamp: new Date("2025-01-02T10:00:00.000Z"),
+              direction: "outbound",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qsource-replay-reconciled-copy",
+              amount: "0.5",
+            },
+            {
+              id: unrelatedProviderTransferId,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: originTransactionId,
+              externalId: "replay-unrelated-provider-transfer",
+              timestamp: new Date("2025-01-02T10:01:00.000Z"),
+              direction: "outbound",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qunrelated-reconciliation",
+              amount: "0.25",
+            },
+            {
+              id: destinationProviderTransferId,
+              sourceId: dependentSourceId,
+              transactionId: destinationTransactionId,
+              externalId: "replay-destination-unrelated-provider-transfer",
+              timestamp: new Date("2025-01-02T10:07:00.000Z"),
+              direction: "outbound",
+              fromAccountRef: "dependent-account",
+              toAddress: "bc1qdestination-unrelated-reconciliation",
+              amount: "0.125",
+            },
+          ])
+          yield* db.insert(schema.inventoryMovements).values([
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: originTransactionId,
+              providerTransferId,
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: new Date("2025-01-02T10:00:00.000Z"),
+              direction: "outbound",
+              purpose: "principal",
+              taxTreatment: "non_taxable",
+              reconciliationStatus: "matched",
+              amount: "0.5",
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: originTransactionId,
+              providerTransferId: unrelatedProviderTransferId,
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: new Date("2025-01-02T10:01:00.000Z"),
+              direction: "outbound",
+              purpose: "principal",
+              taxTreatment:
+                durableRemainingReconciliationStatus === "pending"
+                  ? "pending_review"
+                  : "non_taxable",
+              reconciliationStatus:
+                durableRemainingReconciliationStatus === "pending" ? "unmatched" : "matched",
+              amount: "0.25",
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: dependentSourceId,
+              transactionId: destinationTransactionId,
+              providerTransferId: destinationProviderTransferId,
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: new Date("2025-01-02T10:07:00.000Z"),
+              direction: "outbound",
+              purpose: "principal",
+              taxTreatment:
+                durableRemainingReconciliationStatus === "pending"
+                  ? "pending_review"
+                  : "non_taxable",
+              reconciliationStatus:
+                durableRemainingReconciliationStatus === "pending" ? "unmatched" : "matched",
+              amount: "0.125",
+            },
+          ])
+          yield* db.insert(schema.transfers).values([
+            {
+              id: canonicalTransferId,
+              sourceId: dependentSourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              externalId: "replay-reconciliation-canonical-transfer",
+              timestamp: new Date("2025-01-02T10:05:00.000Z"),
+              type: "utxo",
+              fromAddress: "coinbase-account-1",
+              toAddress: "bc1qsource-replay-reconciled-copy",
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.5",
+            },
+            {
+              id: unrelatedCanonicalTransferId,
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              externalId: "replay-unrelated-canonical-transfer",
+              timestamp: new Date("2025-01-02T10:06:00.000Z"),
+              type: "utxo",
+              fromAddress: "coinbase-account-1",
+              toAddress: "bc1qunrelated-reconciliation",
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.25",
+            },
+            {
+              id: destinationCanonicalTransferId,
+              sourceId: dependentSourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              externalId: "replay-destination-unrelated-canonical-transfer",
+              timestamp: new Date("2025-01-02T10:08:00.000Z"),
+              type: "utxo",
+              fromAddress: "dependent-account",
+              toAddress: "bc1qdestination-unrelated-reconciliation",
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.125",
+            },
+          ])
+          yield* db.insert(schema.transferReconciliations).values([
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              providerTransferId,
+              canonicalTransferId,
+              canonicalTransactionId: destinationTransactionId,
+              status: durableRemainingReconciliationStatus ?? "approved",
+              matchReason: "replay_dependency_fixture",
+              confidence: "1",
+              deterministic: true,
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              providerTransferId: destinationProviderTransferId,
+              canonicalTransferId: destinationCanonicalTransferId,
+              canonicalTransactionId: destinationTransactionId,
+              status: durableRemainingReconciliationStatus ?? "approved",
+              matchReason: "destination_unrelated_reconciliation_fixture",
+              confidence: "1",
+              deterministic: true,
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              providerTransferId: unrelatedProviderTransferId,
+              canonicalTransferId: unrelatedCanonicalTransferId,
+              canonicalTransactionId: originTransactionId,
+              status: "approved",
+              matchReason: "unrelated_reconciliation_fixture",
+              confidence: "1",
+              deterministic: true,
+            },
+          ])
+
+          if (remainingReconciliationStatus === "approved_cascades") {
+            yield* db.insert(schema.providerTransfers).values({
+              id: cascadingProviderTransferId,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: originTransactionId,
+              externalId: "replay-cascading-provider-transfer",
+              timestamp: new Date("2025-01-02T10:09:00.000Z"),
+              direction: "outbound",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qcascading-reconciliation",
+              amount: "0.0625",
+            })
+            yield* db.insert(schema.transfers).values({
+              id: cascadingCanonicalTransferId,
+              sourceId: dependentSourceId,
+              principalId: TEST_PRINCIPAL_ID,
+              externalId: "replay-cascading-canonical-transfer",
+              timestamp: new Date("2025-01-02T10:10:00.000Z"),
+              type: "utxo",
+              fromAddress: "coinbase-account-1",
+              toAddress: "bc1qcascading-reconciliation",
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.0625",
+            })
+            yield* db.insert(schema.transferReconciliations).values({
+              principalId: TEST_PRINCIPAL_ID,
+              providerTransferId: cascadingProviderTransferId,
+              canonicalTransferId: cascadingCanonicalTransferId,
+              canonicalTransactionId: destinationTransactionId,
+              status: "approved",
+              matchReason: "cascading_reconciliation_fixture",
+              confidence: "1",
+              deterministic: true,
+            })
+          }
 
           const reconciliationMetadata = {
             reconciliation: { providerTransferId, canonicalTransferId },
@@ -715,6 +933,15 @@ describe("SourceReplayRepositoryLive", () => {
             })
             .returning({ id: schema.fifoLots.id })
 
+          if (durableRemainingReconciliationStatus === null) {
+            yield* db
+              .delete(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.id, unrelatedProviderTransferId))
+            yield* db
+              .delete(schema.providerTransfers)
+              .where(eq(schema.providerTransfers.id, destinationProviderTransferId))
+          }
+
           if (downstreamUsage === null) {
             return
           }
@@ -798,6 +1025,9 @@ describe("SourceReplayRepositoryLive", () => {
         ).pipe(Effect.either)
       )
       const shouldBlock = replaySide === "provider" && downstreamUsage !== null
+      const preservesReconciliationState =
+        durableRemainingReconciliationStatus === "approved" ||
+        durableRemainingReconciliationStatus === "auto_applied"
 
       if (shouldBlock) {
         expect(replayResult).toMatchObject({
@@ -840,7 +1070,7 @@ describe("SourceReplayRepositoryLive", () => {
         expect(
           state.lots.find((lot) => lot.sourceId === TEST_SOURCE_ID)?.remainingAmount
         ).toContain("0.00000000")
-        expect(state.reconciliations).toHaveLength(1)
+        expect(state.reconciliations).toHaveLength(3)
         expect(state.reviews).toHaveLength(2)
         expect(state.allocations).toHaveLength(downstreamUsage === "allocation" ? 1 : 0)
       } else {
@@ -850,7 +1080,9 @@ describe("SourceReplayRepositoryLive", () => {
         expect(state.transactions.map((transaction) => transaction.id)).toContain(
           replaySide === "provider" ? destinationTransactionId : originTransactionId
         )
-        expect(state.reconciliations).toHaveLength(0)
+        expect(state.reconciliations).toHaveLength(
+          durableRemainingReconciliationStatus === null ? 0 : 1
+        )
 
         const survivingReconciliationTransaction = state.transactions.find(
           (transaction) =>
@@ -858,53 +1090,295 @@ describe("SourceReplayRepositoryLive", () => {
             (replaySide === "provider" ? destinationTransactionId : originTransactionId)
         )
         expect(survivingReconciliationTransaction?.transactionType).toBe(
-          replaySide === "provider" ? null : "internal_transfer"
+          preservesReconciliationState || replaySide === "canonical" ? "internal_transfer" : null
         )
 
         if (replaySide === "provider") {
           expect(state.legs).toHaveLength(0)
           expect(state.lots).toHaveLength(0)
-          expect(state.movements).toHaveLength(0)
-          expect(state.reviews).toEqual([
-            expect.objectContaining({
-              transactionId: destinationTransactionId,
-              reviewStatus: "needs_review",
-              originalTypeKey: null,
-              originalConfidence: null,
-              currentTypeKey: null,
-              categorizationReason: "fifo_inventory: Preserve this unrelated review.",
-              matchedLayer: "fifo_inventory",
-              needsReview: true,
-            }),
-          ])
+          if (durableRemainingReconciliationStatus === null) {
+            expect(state.movements).toHaveLength(0)
+          } else {
+            expect(state.movements).toEqual([
+              expect.objectContaining({
+                providerTransferId: destinationProviderTransferId,
+                taxTreatment: preservesReconciliationState ? "non_taxable" : "pending_review",
+                reconciliationStatus: preservesReconciliationState ? "matched" : "unmatched",
+              }),
+            ])
+          }
+          expect(state.reviews).toEqual(
+            preservesReconciliationState
+              ? [
+                  expect.objectContaining({
+                    transactionId: destinationTransactionId,
+                    reviewStatus: "needs_review",
+                    originalTypeKey: "internal_transfer",
+                    originalConfidence: "1.00",
+                    currentTypeKey: "internal_transfer",
+                    categorizationReason:
+                      "fifo_inventory: Preserve this unrelated review.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+                    matchedLayer: "fifo_inventory,transfer_reconciliation",
+                    needsReview: true,
+                  }),
+                ]
+              : [
+                  expect.objectContaining({
+                    transactionId: destinationTransactionId,
+                    reviewStatus: "needs_review",
+                    originalTypeKey: null,
+                    originalConfidence: null,
+                    currentTypeKey: null,
+                    categorizationReason: "fifo_inventory: Preserve this unrelated review.",
+                    matchedLayer: "fifo_inventory",
+                    needsReview: true,
+                  }),
+                ]
+          )
         } else {
           expect(state.legs).toHaveLength(1)
           expect(state.lots).toHaveLength(1)
           expect(state.lots[0]?.sourceId).toBe(TEST_SOURCE_ID)
           expect(state.lots[0]?.remainingAmount).toContain("0.50000000")
-          expect(state.movements).toEqual([
-            expect.objectContaining({
-              providerTransferId,
-              taxTreatment: "pending_review",
-              reconciliationStatus: "unmatched",
-            }),
-          ])
-          expect(state.reviews).toEqual([
-            expect.objectContaining({
-              transactionId: originTransactionId,
-              reviewStatus: "changed",
-              originalTypeKey: null,
-              originalConfidence: null,
-              currentTypeKey: "internal_transfer",
-              categorizationReason: null,
-              matchedLayer: null,
-              needsReview: false,
-              userNotes: "Keep this manual internal-transfer decision.",
-              reviewedAt: new Date("2025-01-04T10:00:00.000Z"),
-            }),
-          ])
+          expect(state.movements).toHaveLength(preservesReconciliationState ? 2 : 1)
+          expect(state.movements).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                providerTransferId,
+                taxTreatment: "pending_review",
+                reconciliationStatus: "unmatched",
+              }),
+              ...(preservesReconciliationState
+                ? [
+                    expect.objectContaining({
+                      providerTransferId: unrelatedProviderTransferId,
+                      taxTreatment: "non_taxable",
+                      reconciliationStatus: "matched",
+                    }),
+                  ]
+                : []),
+            ])
+          )
+          expect(state.reviews).toEqual(
+            preservesReconciliationState
+              ? [
+                  expect.objectContaining({
+                    transactionId: originTransactionId,
+                    reviewStatus: "changed",
+                    originalTypeKey: "internal_transfer",
+                    originalConfidence: "1.00",
+                    currentTypeKey: "internal_transfer",
+                    categorizationReason:
+                      "Deterministic provider transfer reconciled to a principal-owned onchain transfer.",
+                    matchedLayer: "transfer_reconciliation",
+                    needsReview: false,
+                    userNotes: "Keep this manual internal-transfer decision.",
+                    reviewedAt: new Date("2025-01-04T10:00:00.000Z"),
+                  }),
+                ]
+              : [
+                  expect.objectContaining({
+                    transactionId: originTransactionId,
+                    reviewStatus: "changed",
+                    originalTypeKey: null,
+                    originalConfidence: null,
+                    currentTypeKey: "internal_transfer",
+                    categorizationReason: null,
+                    matchedLayer: null,
+                    needsReview: false,
+                    userNotes: "Keep this manual internal-transfer decision.",
+                    reviewedAt: new Date("2025-01-04T10:00:00.000Z"),
+                  }),
+                ]
+          )
         }
       }
     }
   )
+
+  it("resets the distinct canonical custody movement for an inbound reconciliation", async () => {
+    const canonicalSourceId = "00000000-0000-0000-0000-000000000303"
+    const providerTransactionId = "00000000-0000-0000-0000-000000000304"
+    const canonicalTransactionId = "00000000-0000-0000-0000-000000000305"
+    const providerTransferId = "00000000-0000-0000-0000-000000000306"
+    const custodyProviderTransferId = "00000000-0000-0000-0000-000000000307"
+    const canonicalTransferId = "00000000-0000-0000-0000-000000000308"
+    const canonicalTransferExternalId = "replay-inbound-canonical-transfer"
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "bc1qreplay-inbound-canonical",
+            type: "bitcoin",
+            name: "Replay inbound canonical source",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.addresses.id })
+
+        if (address === undefined) {
+          return yield* Effect.dieMessage("Failed to create replay inbound address")
+        }
+
+        yield* db.insert(schema.sources).values({
+          id: canonicalSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Replay inbound canonical source",
+          providerKey: "bitcoin-rpc",
+          sourceableType: "onchain",
+          cexAccountId: null,
+          addressId: address.id,
+        })
+        yield* db.insert(schema.transactions).values([
+          {
+            id: providerTransactionId,
+            sourceId: TEST_SOURCE_ID,
+            externalId: "replay-inbound-provider-transaction",
+            timestamp: new Date("2025-02-02T10:05:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            transactionType: "internal_transfer",
+          },
+          {
+            id: canonicalTransactionId,
+            sourceId: canonicalSourceId,
+            externalId: "replay-inbound-canonical-transaction",
+            timestamp: new Date("2025-02-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            transactionType: "internal_transfer",
+          },
+        ])
+        yield* db.insert(schema.providerTransfers).values([
+          {
+            id: providerTransferId,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransactionId,
+            externalId: "replay-inbound-provider-transfer",
+            timestamp: new Date("2025-02-02T10:05:00.000Z"),
+            direction: "inbound",
+            fromAddress: "bc1qreplay-inbound-canonical",
+            toAccountRef: "coinbase-account-1",
+            amount: "0.5",
+          },
+          {
+            id: custodyProviderTransferId,
+            sourceId: canonicalSourceId,
+            transactionId: canonicalTransactionId,
+            externalId: "replay-inbound-custody-transfer",
+            timestamp: new Date("2025-02-02T10:00:00.000Z"),
+            direction: "outbound",
+            fromAddress: "bc1qreplay-inbound-canonical",
+            toAddress: "coinbase-account-1",
+            amount: "0.5",
+            metadata: { canonicalTransferExternalId },
+          },
+        ])
+        yield* db.insert(schema.inventoryMovements).values([
+          {
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransactionId,
+            providerTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-02-02T10:05:00.000Z"),
+            direction: "inbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.5",
+          },
+          {
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: canonicalSourceId,
+            transactionId: canonicalTransactionId,
+            providerTransferId: custodyProviderTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-02-02T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.5",
+          },
+        ])
+        yield* db.insert(schema.transfers).values({
+          id: canonicalTransferId,
+          sourceId: canonicalSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          externalId: canonicalTransferExternalId,
+          timestamp: new Date("2025-02-02T10:00:00.000Z"),
+          type: "utxo",
+          fromAddress: "bc1qreplay-inbound-canonical",
+          toAddress: "coinbase-account-1",
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "0.5",
+        })
+        yield* db.insert(schema.transferReconciliations).values({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId,
+          canonicalTransferId,
+          canonicalTransactionId,
+          status: "approved",
+          matchReason: "replay_inbound_custody_fixture",
+          confidence: "1",
+          deterministic: true,
+        })
+        const reconciliationMetadata = {
+          reconciliation: { providerTransferId, canonicalTransferId },
+        }
+        yield* db.insert(schema.transactionLegs).values([
+          {
+            sourceId: TEST_SOURCE_ID,
+            externalId: "replay-inbound-provider:internal-transfer-in",
+            timestamp: new Date("2025-02-02T10:05:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.5",
+            kind: "acquisition",
+            provenance: "deterministic",
+            derivationRule: "internal_transfer_in",
+            metadata: reconciliationMetadata,
+            transactionId: providerTransactionId,
+          },
+          {
+            sourceId: canonicalSourceId,
+            externalId: "replay-inbound-canonical:internal-transfer-out",
+            timestamp: new Date("2025-02-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.5",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "internal_transfer_out",
+            metadata: reconciliationMetadata,
+            transactionId: canonicalTransactionId,
+          },
+        ])
+      })
+    )
+
+    await runReplayRepository(
+      Effect.flatMap(SourceReplayRepository, (repository) =>
+        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const reconciliations = yield* db.select().from(schema.transferReconciliations)
+        const movements = yield* db.select().from(schema.inventoryMovements)
+        return { reconciliations, movements }
+      })
+    )
+    expect(state.reconciliations).toHaveLength(0)
+    expect(state.movements).toEqual([
+      expect.objectContaining({
+        providerTransferId: custodyProviderTransferId,
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+      }),
+    ])
+  })
 })

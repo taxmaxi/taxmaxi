@@ -4,7 +4,7 @@
  * @module SourceReplayRepositoryLive
  */
 
-import { aliasedTable, and, asc, eq, inArray, ne, or, sql } from "drizzle-orm"
+import { aliasedTable, and, asc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle } from "./PgClientLive.ts"
@@ -30,6 +30,10 @@ const make = Effect.gen(function* () {
     "replay_canonical_transaction"
   )
   const replayDependentLeg = aliasedTable(schema.transactionLegs, "replay_dependent_leg")
+  const replayCustodyProviderTransfer = aliasedTable(
+    schema.providerTransfers,
+    "replay_custody_provider_transfer"
+  )
 
   const resetSourceDerivedState: SourceReplayRepositoryShape["resetSourceDerivedState"] = ({
     sourceId,
@@ -314,6 +318,51 @@ const make = Effect.gen(function* () {
           const affectedReconciliationIds = [
             ...new Set(affectedReconciliationLegs.map((row) => row.reconciliationId)),
           ]
+          const affectedCanonicalCustodyProviderTransfers =
+            affectedReconciliationIds.length === 0
+              ? []
+              : yield* tx
+                  .selectDistinct({
+                    providerTransferId: schema.inventoryMovements.providerTransferId,
+                  })
+                  .from(schema.transferReconciliations)
+                  .innerJoin(
+                    schema.providerTransfers,
+                    eq(
+                      schema.providerTransfers.id,
+                      schema.transferReconciliations.providerTransferId
+                    )
+                  )
+                  .innerJoin(
+                    schema.transfers,
+                    eq(schema.transfers.id, schema.transferReconciliations.canonicalTransferId)
+                  )
+                  .innerJoin(
+                    schema.inventoryMovements,
+                    eq(
+                      schema.inventoryMovements.transactionId,
+                      schema.transferReconciliations.canonicalTransactionId
+                    )
+                  )
+                  .innerJoin(
+                    replayCustodyProviderTransfer,
+                    eq(
+                      replayCustodyProviderTransfer.id,
+                      schema.inventoryMovements.providerTransferId
+                    )
+                  )
+                  .where(
+                    and(
+                      inArray(schema.transferReconciliations.id, affectedReconciliationIds),
+                      eq(schema.providerTransfers.direction, "inbound"),
+                      sql`${replayCustodyProviderTransfer.metadata}->>'canonicalTransferExternalId' = ${schema.transfers.externalId}`
+                    )
+                  )
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceReplayRepository.resetSourceDerivedState.loadAffectedCanonicalCustodyTransfers"
+                    )
+                  )
           if (affectedReconciliationIds.length > 0) {
             yield* tx
               .delete(schema.transferReconciliations)
@@ -334,7 +383,80 @@ const make = Effect.gen(function* () {
               )
             ),
           ]
-          if (survivingReconciliationTransactionIds.length > 0) {
+          const remainingReconciliationTransactions =
+            survivingReconciliationTransactionIds.length === 0
+              ? []
+              : yield* tx
+                  .select({
+                    canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+                    providerTransactionId: schema.providerTransfers.transactionId,
+                  })
+                  .from(schema.transferReconciliations)
+                  .innerJoin(
+                    schema.providerTransfers,
+                    eq(
+                      schema.providerTransfers.id,
+                      schema.transferReconciliations.providerTransferId
+                    )
+                  )
+                  .leftJoin(
+                    schema.transfers,
+                    eq(schema.transfers.id, schema.transferReconciliations.canonicalTransferId)
+                  )
+                  .leftJoin(
+                    replayCanonicalTransaction,
+                    eq(
+                      replayCanonicalTransaction.id,
+                      schema.transferReconciliations.canonicalTransactionId
+                    )
+                  )
+                  .where(
+                    and(
+                      or(
+                        inArray(
+                          schema.transferReconciliations.canonicalTransactionId,
+                          survivingReconciliationTransactionIds
+                        ),
+                        inArray(
+                          schema.providerTransfers.transactionId,
+                          survivingReconciliationTransactionIds
+                        )
+                      ),
+                      or(
+                        eq(schema.transferReconciliations.status, "approved"),
+                        and(
+                          eq(schema.transferReconciliations.status, "auto_applied"),
+                          eq(schema.transferReconciliations.deterministic, true)
+                        )
+                      ),
+                      ne(schema.providerTransfers.sourceId, sourceId),
+                      or(
+                        isNull(schema.transferReconciliations.canonicalTransferId),
+                        ne(schema.transfers.sourceId, sourceId)
+                      ),
+                      or(
+                        isNull(schema.transferReconciliations.canonicalTransactionId),
+                        ne(replayCanonicalTransaction.sourceId, sourceId)
+                      )
+                    )
+                  )
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "sourceReplayRepository.resetSourceDerivedState.loadRemainingReconciliationTransactions"
+                    )
+                  )
+          const remainingReconciliationTransactionIds = new Set(
+            remainingReconciliationTransactions.flatMap((row) => [
+              ...(row.canonicalTransactionId === null ? [] : [row.canonicalTransactionId]),
+              row.providerTransactionId,
+            ])
+          )
+          const reconciliationTransactionIdsToInvalidate =
+            survivingReconciliationTransactionIds.filter(
+              (transactionId) => !remainingReconciliationTransactionIds.has(transactionId)
+            )
+
+          if (reconciliationTransactionIdsToInvalidate.length > 0) {
             yield* tx
               .update(schema.transactions)
               .set({
@@ -355,7 +477,7 @@ const make = Effect.gen(function* () {
                 end`,
                 updatedAt: nowDate(),
               })
-              .where(inArray(schema.transactions.id, survivingReconciliationTransactionIds))
+              .where(inArray(schema.transactions.id, reconciliationTransactionIdsToInvalidate))
               .pipe(
                 wrapSyncEngineSqlError(
                   "sourceReplayRepository.resetSourceDerivedState.invalidateReconciliationTransactions"
@@ -368,7 +490,7 @@ const make = Effect.gen(function* () {
                 and(
                   inArray(
                     schema.transactionReviews.transactionId,
-                    survivingReconciliationTransactionIds
+                    reconciliationTransactionIdsToInvalidate
                   ),
                   sql`${schema.transactionReviews.reviewStatus} not in ('approved', 'changed')`,
                   sql`not exists (
@@ -432,7 +554,7 @@ const make = Effect.gen(function* () {
               .where(
                 inArray(
                   schema.transactionReviews.transactionId,
-                  survivingReconciliationTransactionIds
+                  reconciliationTransactionIdsToInvalidate
                 )
               )
               .pipe(
@@ -443,31 +565,14 @@ const make = Effect.gen(function* () {
           }
 
           const affectedProviderTransferIds = [
-            ...new Set(affectedReconciliationLegs.map((row) => row.providerTransferId)),
+            ...new Set([
+              ...affectedReconciliationLegs.map((row) => row.providerTransferId),
+              ...affectedCanonicalCustodyProviderTransfers.flatMap((row) =>
+                row.providerTransferId === null ? [] : [row.providerTransferId]
+              ),
+            ]),
           ]
-          if (
-            survivingReconciliationTransactionIds.length > 0 ||
-            affectedProviderTransferIds.length > 0
-          ) {
-            const survivingMovementFilter =
-              survivingReconciliationTransactionIds.length === 0
-                ? inArray(schema.inventoryMovements.providerTransferId, affectedProviderTransferIds)
-                : affectedProviderTransferIds.length === 0
-                  ? inArray(
-                      schema.inventoryMovements.transactionId,
-                      survivingReconciliationTransactionIds
-                    )
-                  : or(
-                      inArray(
-                        schema.inventoryMovements.transactionId,
-                        survivingReconciliationTransactionIds
-                      ),
-                      inArray(
-                        schema.inventoryMovements.providerTransferId,
-                        affectedProviderTransferIds
-                      )
-                    )
-
+          if (affectedProviderTransferIds.length > 0) {
             yield* tx
               .update(schema.inventoryMovements)
               .set({
@@ -475,7 +580,9 @@ const make = Effect.gen(function* () {
                 reconciliationStatus: "unmatched",
                 updatedAt: nowDate(),
               })
-              .where(survivingMovementFilter)
+              .where(
+                inArray(schema.inventoryMovements.providerTransferId, affectedProviderTransferIds)
+              )
               .pipe(
                 wrapSyncEngineSqlError(
                   "sourceReplayRepository.resetSourceDerivedState.invalidateReconciliationMovements"
