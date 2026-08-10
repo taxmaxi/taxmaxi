@@ -23,7 +23,14 @@ export function useAssetCatalogSelection({
   const selectedItemKey = getCatalogItemKey(selectedItem)
 
   useEffect(() => {
-    if (selectedKey.length === 0 || selectedItem !== undefined) {
+    if (selectedKey.length === 0) {
+      if (selectedItemKey.length > 0) {
+        setSelectedKey(selectedItemKey)
+      }
+      return
+    }
+
+    if (selectedItem !== undefined) {
       return
     }
 
@@ -39,7 +46,7 @@ export function useAssetCatalogSelection({
         document.getElementById(focusTargetId)?.focus()
       })
     }
-  }, [mobileDetailOpen, selectedItem, selectedKey, visibleItems])
+  }, [mobileDetailOpen, selectedItem, selectedItemKey, selectedKey, visibleItems])
 
   useEffect(() => {
     if (mobileDetailOpen) {

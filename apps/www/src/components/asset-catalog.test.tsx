@@ -217,6 +217,27 @@ describe("AssetCatalog", () => {
     expect(screen.getByRole("heading", { level: 2, name: "BTC" })).toBeTruthy()
   })
 
+  it("keeps the first loaded asset selected when another feed is prepended", async () => {
+    const approvedAsset = makeAsset({ id: "approved", name: "Approved", symbol: "APP" })
+    const pendingAsset = makePendingAsset({
+      id: "pending",
+      name: "Pending",
+      provider: "provider",
+      symbol: "PND",
+    })
+    const { rerender } = render(<AssetCatalog assets={[]} onClose={vi.fn()} pendingAssets={[]} />)
+
+    rerender(<AssetCatalog assets={[approvedAsset]} onClose={vi.fn()} pendingAssets={[]} />)
+    await waitFor(() => expect(screen.getByRole("heading", { level: 2, name: "APP" })).toBeTruthy())
+
+    rerender(
+      <AssetCatalog assets={[approvedAsset]} onClose={vi.fn()} pendingAssets={[pendingAsset]} />
+    )
+
+    expect(screen.getByRole("heading", { level: 2, name: "APP" })).toBeTruthy()
+    expect(screen.queryByRole("heading", { level: 2, name: "PND" })).toBeNull()
+  })
+
   it("opens a mobile detail view and returns focus to the selected asset", async () => {
     render(
       <AssetCatalog
