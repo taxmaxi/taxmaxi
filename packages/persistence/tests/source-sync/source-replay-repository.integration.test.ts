@@ -469,14 +469,22 @@ describe("SourceReplayRepositoryLive", () => {
     }
   )
 
-  it.each(["provider", "canonical"] as const)(
-    "blocks $s replay while reconciliation owns copied FIFO state in another source",
-    async (replaySide) => {
+  it.each([
+    { replaySide: "provider", downstreamUsage: null, outcome: "clears" },
+    { replaySide: "canonical", downstreamUsage: null, outcome: "clears" },
+    { replaySide: "provider", downstreamUsage: "disposal", outcome: "blocks" },
+    { replaySide: "provider", downstreamUsage: "allocation", outcome: "blocks" },
+    { replaySide: "canonical", downstreamUsage: "disposal", outcome: "clears" },
+    { replaySide: "canonical", downstreamUsage: "allocation", outcome: "clears" },
+  ] as const)(
+    "$outcome copied FIFO state before replaying the $replaySide side of a reconciliation",
+    async ({ replaySide, downstreamUsage }) => {
       const dependentSourceId = "00000000-0000-0000-0000-000000000292"
       const originTransactionId = "00000000-0000-0000-0000-000000000293"
       const destinationTransactionId = "00000000-0000-0000-0000-000000000294"
       const providerTransferId = "00000000-0000-0000-0000-000000000295"
       const canonicalTransferId = "00000000-0000-0000-0000-000000000296"
+      const basisTransactionId = "00000000-0000-0000-0000-000000000298"
 
       await runPg(
         Effect.gen(function* () {
@@ -511,6 +519,7 @@ describe("SourceReplayRepositoryLive", () => {
               externalId: "replay-reconciliation-origin",
               timestamp: new Date("2025-01-02T10:00:00.000Z"),
               principalId: TEST_PRINCIPAL_ID,
+              transactionType: "internal_transfer",
             },
             {
               id: destinationTransactionId,
@@ -518,6 +527,42 @@ describe("SourceReplayRepositoryLive", () => {
               externalId: "replay-reconciliation-destination",
               timestamp: new Date("2025-01-02T10:05:00.000Z"),
               principalId: TEST_PRINCIPAL_ID,
+              transactionType: "internal_transfer",
+            },
+            {
+              id: basisTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-reconciliation-basis",
+              timestamp: new Date("2025-01-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ])
+          yield* db.insert(schema.transactionReviews).values([
+            {
+              transactionId: originTransactionId,
+              principalId: TEST_PRINCIPAL_ID,
+              reviewStatus: "changed",
+              originalTypeKey: "internal_transfer",
+              originalConfidence: "1",
+              currentTypeKey: "internal_transfer",
+              categorizationReason:
+                "Deterministic provider transfer reconciled to a principal-owned onchain transfer.",
+              matchedLayer: "transfer_reconciliation",
+              needsReview: false,
+              userNotes: "Keep this manual internal-transfer decision.",
+              reviewedAt: new Date("2025-01-04T10:00:00.000Z"),
+            },
+            {
+              transactionId: destinationTransactionId,
+              principalId: TEST_PRINCIPAL_ID,
+              reviewStatus: "needs_review",
+              originalTypeKey: "internal_transfer",
+              originalConfidence: "1",
+              currentTypeKey: "internal_transfer",
+              categorizationReason:
+                "fifo_inventory: Preserve this unrelated review.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+              matchedLayer: "fifo_inventory,transfer_reconciliation",
+              needsReview: true,
             },
           ])
           yield* db.insert(schema.providerTransfers).values({
@@ -529,6 +574,19 @@ describe("SourceReplayRepositoryLive", () => {
             direction: "outbound",
             fromAccountRef: "coinbase-account-1",
             toAddress: "bc1qsource-replay-reconciled-copy",
+            amount: "0.5",
+          })
+          yield* db.insert(schema.inventoryMovements).values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: originTransactionId,
+            providerTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-01-02T10:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
             amount: "0.5",
           })
           yield* db.insert(schema.transfers).values({
@@ -557,7 +615,7 @@ describe("SourceReplayRepositoryLive", () => {
           const reconciliationMetadata = {
             reconciliation: { providerTransferId, canonicalTransferId },
           }
-          const [, destinationLeg] = yield* db
+          const [originLeg, destinationLeg] = yield* db
             .insert(schema.transactionLegs)
             .values([
               {
@@ -590,41 +648,172 @@ describe("SourceReplayRepositoryLive", () => {
             ])
             .returning({ id: schema.transactionLegs.id })
 
-          if (destinationLeg === undefined) {
+          if (originLeg === undefined || destinationLeg === undefined) {
             return yield* Effect.dieMessage("Failed to create replay reconciliation legs")
           }
 
-          yield* db.insert(schema.fifoLots).values({
-            principalId: TEST_PRINCIPAL_ID,
-            sourceId: dependentSourceId,
-            assetId: TEST_BTC_ASSET_ID,
-            acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
-            originalAmount: "0.5",
-            remainingAmount: "0.5",
-            costBasisPerToken: "10000",
-            costBasisCurrency: "EUR",
-            sourceLegId: destinationLeg.id,
+          const [basisLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-reconciliation-basis:acquisition",
+              timestamp: new Date("2025-01-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.5",
+              kind: "acquisition",
+              provenance: "deterministic",
+              derivationRule: "fixture_acquisition",
+              transactionId: basisTransactionId,
+            })
+            .returning({ id: schema.transactionLegs.id })
+
+          if (basisLeg === undefined) {
+            return yield* Effect.dieMessage("Failed to create source basis leg")
+          }
+
+          const [basisLot] = yield* db
+            .insert(schema.fifoLots)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+              originalAmount: "0.5",
+              remainingAmount: "0",
+              costBasisPerToken: "10000",
+              costBasisCurrency: "EUR",
+              sourceLegId: basisLeg.id,
+            })
+            .returning({ id: schema.fifoLots.id })
+
+          if (basisLot === undefined) {
+            return yield* Effect.dieMessage("Failed to create source basis lot")
+          }
+
+          yield* db.insert(schema.disposalMatches).values({
+            disposalLegId: originLeg.id,
+            fifoLotId: basisLot.id,
+            matchedAmount: "0.5",
+            costBasis: "5000",
+            proceeds: "0",
+            gainLoss: "-5000",
           })
+
+          const [destinationLot] = yield* db
+            .insert(schema.fifoLots)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: dependentSourceId,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: new Date("2025-01-01T10:00:00.000Z"),
+              originalAmount: "0.5",
+              remainingAmount: downstreamUsage === null ? "0.5" : "0.4",
+              costBasisPerToken: "10000",
+              costBasisCurrency: "EUR",
+              sourceLegId: destinationLeg.id,
+            })
+            .returning({ id: schema.fifoLots.id })
+
+          if (downstreamUsage === null) {
+            return
+          }
+
+          if (destinationLot === undefined) {
+            return yield* Effect.dieMessage("Failed to create copied reconciliation lot")
+          }
+
+          const downstreamTransactionId = "00000000-0000-0000-0000-000000000297"
+          yield* db.insert(schema.transactions).values({
+            id: downstreamTransactionId,
+            sourceId: dependentSourceId,
+            externalId: "replay-reconciliation-downstream-disposal",
+            timestamp: new Date("2025-01-03T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          const [downstreamLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values({
+              sourceId: dependentSourceId,
+              externalId: `replay-reconciliation-downstream-${downstreamUsage}:${downstreamUsage}`,
+              timestamp: new Date("2025-01-03T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.1",
+              kind: downstreamUsage === "disposal" ? "disposal" : "fee",
+              provenance: "deterministic",
+              derivationRule: "fixture_disposal",
+              transactionId: downstreamTransactionId,
+            })
+            .returning({ id: schema.transactionLegs.id })
+
+          if (downstreamLeg === undefined) {
+            return yield* Effect.dieMessage("Failed to create downstream disposal leg")
+          }
+
+          if (downstreamUsage === "disposal") {
+            yield* db.insert(schema.disposalMatches).values({
+              disposalLegId: downstreamLeg.id,
+              fifoLotId: destinationLot.id,
+              matchedAmount: "0.1",
+              costBasis: "1000",
+              proceeds: "1100",
+              gainLoss: "100",
+            })
+          } else {
+            const [movement] = yield* db
+              .insert(schema.inventoryMovements)
+              .values({
+                principalId: TEST_PRINCIPAL_ID,
+                sourceId: dependentSourceId,
+                transactionId: downstreamTransactionId,
+                transactionLegId: downstreamLeg.id,
+                assetId: TEST_BTC_ASSET_ID,
+                timestamp: new Date("2025-01-03T10:00:00.000Z"),
+                direction: "outbound",
+                purpose: "fee",
+                taxTreatment: "pending_review",
+                reconciliationStatus: "unmatched",
+                amount: "0.1",
+              })
+              .returning({ id: schema.inventoryMovements.id })
+
+            if (movement === undefined) {
+              return yield* Effect.dieMessage("Failed to create downstream custody movement")
+            }
+
+            yield* db.insert(schema.inventoryMovementAllocations).values({
+              inventoryMovementId: movement.id,
+              fifoLotId: destinationLot.id,
+              matchedAmount: "0.1",
+            })
+          }
         })
       )
 
       const replaySourceId = replaySide === "provider" ? TEST_SOURCE_ID : dependentSourceId
-      const dependentReplaySourceId = replaySide === "provider" ? dependentSourceId : TEST_SOURCE_ID
       const replayResult = await runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
           repository.resetSourceDerivedState({ sourceId: replaySourceId })
         ).pipe(Effect.either)
       )
+      const shouldBlock = replaySide === "provider" && downstreamUsage !== null
 
-      expect(replayResult).toMatchObject({
-        _tag: "Left",
-        left: {
-          _tag: "SourceReplayDependencyError",
-          sourceId: replaySourceId,
-          dependentSourceIds: [dependentReplaySourceId],
-          affectedPrincipalIds: [TEST_PRINCIPAL_ID],
-        },
-      })
+      if (shouldBlock) {
+        expect(replayResult).toMatchObject({
+          _tag: "Left",
+          left: {
+            _tag: "SourceReplayDependencyError",
+            sourceId: replaySourceId,
+            dependentSourceIds: [dependentSourceId],
+            affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+          },
+        })
+      } else {
+        expect(replayResult).toMatchObject({
+          _tag: "Right",
+        })
+      }
 
       const state = await runPg(
         Effect.gen(function* () {
@@ -633,16 +822,89 @@ describe("SourceReplayRepositoryLive", () => {
           const legs = yield* db.select().from(schema.transactionLegs)
           const lots = yield* db.select().from(schema.fifoLots)
           const reconciliations = yield* db.select().from(schema.transferReconciliations)
-          return { transactions, legs, lots, reconciliations }
+          const reviews = yield* db.select().from(schema.transactionReviews)
+          const movements = yield* db.select().from(schema.inventoryMovements)
+          const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
+          return { transactions, legs, lots, reconciliations, reviews, movements, allocations }
         })
       )
-      expect(state.transactions.map((transaction) => transaction.id)).toEqual(
-        expect.arrayContaining([originTransactionId, destinationTransactionId])
-      )
-      expect(state.legs).toHaveLength(2)
-      expect(state.lots).toHaveLength(1)
-      expect(state.lots[0]?.remainingAmount).toContain("0.50000000")
-      expect(state.reconciliations).toHaveLength(1)
+      if (shouldBlock) {
+        expect(state.transactions.map((transaction) => transaction.id)).toEqual(
+          expect.arrayContaining([originTransactionId, destinationTransactionId])
+        )
+        expect(state.legs).toHaveLength(4)
+        expect(state.lots).toHaveLength(2)
+        expect(
+          state.lots.find((lot) => lot.sourceId === dependentSourceId)?.remainingAmount
+        ).toContain("0.40000000")
+        expect(
+          state.lots.find((lot) => lot.sourceId === TEST_SOURCE_ID)?.remainingAmount
+        ).toContain("0.00000000")
+        expect(state.reconciliations).toHaveLength(1)
+        expect(state.reviews).toHaveLength(2)
+        expect(state.allocations).toHaveLength(downstreamUsage === "allocation" ? 1 : 0)
+      } else {
+        expect(state.transactions.map((transaction) => transaction.id)).not.toContain(
+          replaySide === "provider" ? originTransactionId : destinationTransactionId
+        )
+        expect(state.transactions.map((transaction) => transaction.id)).toContain(
+          replaySide === "provider" ? destinationTransactionId : originTransactionId
+        )
+        expect(state.reconciliations).toHaveLength(0)
+
+        const survivingReconciliationTransaction = state.transactions.find(
+          (transaction) =>
+            transaction.id ===
+            (replaySide === "provider" ? destinationTransactionId : originTransactionId)
+        )
+        expect(survivingReconciliationTransaction?.transactionType).toBe(
+          replaySide === "provider" ? null : "internal_transfer"
+        )
+
+        if (replaySide === "provider") {
+          expect(state.legs).toHaveLength(0)
+          expect(state.lots).toHaveLength(0)
+          expect(state.movements).toHaveLength(0)
+          expect(state.reviews).toEqual([
+            expect.objectContaining({
+              transactionId: destinationTransactionId,
+              reviewStatus: "needs_review",
+              originalTypeKey: null,
+              originalConfidence: null,
+              currentTypeKey: null,
+              categorizationReason: "fifo_inventory: Preserve this unrelated review.",
+              matchedLayer: "fifo_inventory",
+              needsReview: true,
+            }),
+          ])
+        } else {
+          expect(state.legs).toHaveLength(1)
+          expect(state.lots).toHaveLength(1)
+          expect(state.lots[0]?.sourceId).toBe(TEST_SOURCE_ID)
+          expect(state.lots[0]?.remainingAmount).toContain("0.50000000")
+          expect(state.movements).toEqual([
+            expect.objectContaining({
+              providerTransferId,
+              taxTreatment: "pending_review",
+              reconciliationStatus: "unmatched",
+            }),
+          ])
+          expect(state.reviews).toEqual([
+            expect.objectContaining({
+              transactionId: originTransactionId,
+              reviewStatus: "changed",
+              originalTypeKey: null,
+              originalConfidence: null,
+              currentTypeKey: "internal_transfer",
+              categorizationReason: null,
+              matchedLayer: null,
+              needsReview: false,
+              userNotes: "Keep this manual internal-transfer decision.",
+              reviewedAt: new Date("2025-01-04T10:00:00.000Z"),
+            }),
+          ])
+        }
+      }
     }
   )
 })
