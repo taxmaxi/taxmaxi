@@ -59,9 +59,16 @@ const make = Effect.gen(function* () {
               .select({
                 reconciliationId: schema.transferReconciliations.id,
                 providerTransferId: schema.providerTransfers.id,
+                providerTransactionId: schema.providerTransfers.transactionId,
+                providerSourceId: schema.providerTransfers.sourceId,
+                providerDirection: schema.providerTransfers.direction,
+                providerTimestamp: schema.providerTransfers.timestamp,
+                providerAmount: schema.providerTransfers.amount,
                 legId: replayDependentLeg.id,
                 legSourceId: replayDependentLeg.sourceId,
                 legKind: replayDependentLeg.kind,
+                legAssetId: replayDependentLeg.assetId,
+                legAssetRepresentationId: replayDependentLeg.assetRepresentationId,
                 transactionId: replayDependentLeg.transactionId,
                 affectedPrincipalId: schema.transferReconciliations.principalId,
               })
@@ -304,6 +311,49 @@ const make = Effect.gen(function* () {
           )
 
           const affectedReconciliationLegIds = affectedReconciliationLegs.map((row) => row.legId)
+          const inboundProviderLotsToRestore = [
+            ...new Map(
+              affectedReconciliationLegs
+                .filter(
+                  (row) =>
+                    row.providerDirection === "inbound" &&
+                    row.providerSourceId !== sourceId &&
+                    row.transactionId === row.providerTransactionId &&
+                    (row.legKind === "acquisition" || row.legKind === "income")
+                )
+                .map((row) => [row.providerTransferId, row])
+            ).values(),
+          ]
+          yield* Effect.forEach(inboundProviderLotsToRestore, (row) =>
+            tx
+              .insert(schema.fifoLots)
+              .values({
+                principalId: row.affectedPrincipalId,
+                sourceId: row.providerSourceId,
+                assetId: row.legAssetId,
+                assetRepresentationId: row.legAssetRepresentationId,
+                acquiredAt: row.providerTimestamp,
+                originalAmount: row.providerAmount,
+                remainingAmount: row.providerAmount,
+                costBasisPerToken: "0",
+                costBasisCurrency: "EUR",
+                costBasisStatus: "pending_review",
+                sourceLegId: null,
+                sourceProviderTransferId: row.providerTransferId,
+                sourceLegSequence: 0,
+                createdAt: nowDate(),
+                updatedAt: nowDate(),
+              })
+              .onConflictDoNothing({
+                target: schema.fifoLots.sourceProviderTransferId,
+                where: sql`${schema.fifoLots.sourceProviderTransferId} is not null`,
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceReplayRepository.resetSourceDerivedState.restoreInboundProviderLots"
+                )
+              )
+          )
           if (affectedReconciliationLegIds.length > 0) {
             yield* tx
               .delete(schema.transactionLegs)

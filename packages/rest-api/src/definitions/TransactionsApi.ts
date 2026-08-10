@@ -111,14 +111,35 @@ export class TransactionMovement extends Schema.Class<TransactionMovement>("Tran
 }) {}
 
 export class TransactionTotals extends Schema.Class<TransactionTotals>("TransactionTotals")({
-  value: Schema.NullOr(Schema.String),
-  fees: Schema.NullOr(Schema.String),
-  proceeds: Schema.NullOr(Schema.String),
-  costBasis: Schema.NullOr(Schema.String),
-  gainLoss: Schema.NullOr(Schema.String),
-  currency: Schema.NullOr(Schema.String),
+  value: Schema.NullOr(Schema.String).annotations({
+    description:
+      "The transaction value when every non-fee leg has a valuation in one currency; null otherwise.",
+  }),
+  fees: Schema.NullOr(Schema.String).annotations({
+    description:
+      'The total fee valuation. "0" means no fee exists; null means a fee exists but its valuation is incomplete or mixed.',
+  }),
+  proceeds: Schema.NullOr(Schema.String).annotations({
+    description:
+      "Disposal proceeds, excluding internal transfers, when every disposal is valued in one currency; null when there is no reportable disposal or a valuation is incomplete.",
+  }),
+  costBasis: Schema.NullOr(Schema.String).annotations({
+    description:
+      "Disposal cost basis, excluding internal transfers, when FIFO coverage and basis are complete in one currency; null otherwise.",
+  }),
+  gainLoss: Schema.NullOr(Schema.String).annotations({
+    description:
+      "Accounting gain or loss when proceeds and cost basis are both complete in one currency; use taxTreatment to determine whether it is taxable.",
+  }),
+  currency: Schema.NullOr(Schema.String).annotations({
+    description:
+      'The single fiat currency used by known totals, null when none is known, or "mixed" when known amounts use multiple currencies.',
+  }),
   taxTreatment: TransactionTaxTreatment,
-  calculationStatus: TransactionCalculationStatus,
+  calculationStatus: TransactionCalculationStatus.annotations({
+    description:
+      "Complete when all applicable totals are known in one currency, partial when only some calculations are available, and pending when normalized accounting legs or calculated amounts are not available yet.",
+  }),
 }) {}
 
 export class TransactionExternalReferences extends Schema.Class<TransactionExternalReferences>(
@@ -242,7 +263,10 @@ export class TransactionOnchainContext extends Schema.Class<TransactionOnchainCo
   toAddress: Schema.NullOr(Schema.String),
   functionName: Schema.NullOr(Schema.String),
   failed: Schema.Boolean,
-  feeAmount: Schema.NullOr(Schema.String),
+  feeAmount: Schema.NullOr(Schema.String).annotations({
+    description:
+      "The chain fee in whole units of feeAssetSymbol after conversion from base units; null when the fee or native-asset decimal metadata is unavailable.",
+  }),
   feeAssetSymbol: Schema.NullOr(Schema.String),
   feeFiatValue: Schema.NullOr(TransactionFiatValue),
 }) {}

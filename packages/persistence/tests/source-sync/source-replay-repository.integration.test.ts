@@ -9,6 +9,7 @@ import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayReposit
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
   TEST_RAW_RECORD_ID,
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
@@ -1196,189 +1197,254 @@ describe("SourceReplayRepositoryLive", () => {
     }
   )
 
-  it("resets the distinct canonical custody movement for an inbound reconciliation", async () => {
-    const canonicalSourceId = "00000000-0000-0000-0000-000000000303"
-    const providerTransactionId = "00000000-0000-0000-0000-000000000304"
-    const canonicalTransactionId = "00000000-0000-0000-0000-000000000305"
-    const providerTransferId = "00000000-0000-0000-0000-000000000306"
-    const custodyProviderTransferId = "00000000-0000-0000-0000-000000000307"
-    const canonicalTransferId = "00000000-0000-0000-0000-000000000308"
-    const canonicalTransferExternalId = "replay-inbound-canonical-transfer"
+  it.each(["provider", "canonical"] as const)(
+    "resets inbound reconciliation inventory when replaying the %s source",
+    async (replaySide) => {
+      const canonicalSourceId = "00000000-0000-0000-0000-000000000303"
+      const providerTransactionId = "00000000-0000-0000-0000-000000000304"
+      const canonicalTransactionId = "00000000-0000-0000-0000-000000000305"
+      const providerTransferId = "00000000-0000-0000-0000-000000000306"
+      const custodyProviderTransferId = "00000000-0000-0000-0000-000000000307"
+      const canonicalTransferId = "00000000-0000-0000-0000-000000000308"
+      const canonicalTransferExternalId = "replay-inbound-canonical-transfer"
 
-    await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [address] = yield* db
-          .insert(schema.addresses)
-          .values({
-            address: "bc1qreplay-inbound-canonical",
-            type: "bitcoin",
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [address] = yield* db
+            .insert(schema.addresses)
+            .values({
+              address: "bc1qreplay-inbound-canonical",
+              type: "bitcoin",
+              name: "Replay inbound canonical source",
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.addresses.id })
+
+          if (address === undefined) {
+            return yield* Effect.dieMessage("Failed to create replay inbound address")
+          }
+
+          yield* db.insert(schema.sources).values({
+            id: canonicalSourceId,
+            principalId: TEST_PRINCIPAL_ID,
             name: "Replay inbound canonical source",
-            principalId: TEST_PRINCIPAL_ID,
+            providerKey: "bitcoin-rpc",
+            sourceableType: "onchain",
+            cexAccountId: null,
+            addressId: address.id,
           })
-          .returning({ id: schema.addresses.id })
-
-        if (address === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay inbound address")
-        }
-
-        yield* db.insert(schema.sources).values({
-          id: canonicalSourceId,
-          principalId: TEST_PRINCIPAL_ID,
-          name: "Replay inbound canonical source",
-          providerKey: "bitcoin-rpc",
-          sourceableType: "onchain",
-          cexAccountId: null,
-          addressId: address.id,
-        })
-        yield* db.insert(schema.transactions).values([
-          {
-            id: providerTransactionId,
-            sourceId: TEST_SOURCE_ID,
-            externalId: "replay-inbound-provider-transaction",
-            timestamp: new Date("2025-02-02T10:05:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-            transactionType: "internal_transfer",
-          },
-          {
-            id: canonicalTransactionId,
+          yield* db.insert(schema.transactions).values([
+            {
+              id: providerTransactionId,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-inbound-provider-transaction",
+              timestamp: new Date("2025-02-02T10:05:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              transactionType: "internal_transfer",
+            },
+            {
+              id: canonicalTransactionId,
+              sourceId: canonicalSourceId,
+              externalId: "replay-inbound-canonical-transaction",
+              timestamp: new Date("2025-02-02T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              transactionType: "internal_transfer",
+            },
+          ])
+          yield* db.insert(schema.providerTransfers).values([
+            {
+              id: providerTransferId,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: providerTransactionId,
+              externalId: "replay-inbound-provider-transfer",
+              timestamp: new Date("2025-02-02T10:05:00.000Z"),
+              direction: "inbound",
+              fromAddress: "bc1qreplay-inbound-canonical",
+              toAccountRef: "coinbase-account-1",
+              amount: "0.5",
+            },
+            {
+              id: custodyProviderTransferId,
+              sourceId: canonicalSourceId,
+              transactionId: canonicalTransactionId,
+              externalId: "replay-inbound-custody-transfer",
+              timestamp: new Date("2025-02-02T10:00:00.000Z"),
+              direction: "outbound",
+              fromAddress: "bc1qreplay-inbound-canonical",
+              toAddress: "coinbase-account-1",
+              amount: "0.5",
+              metadata: { canonicalTransferExternalId },
+            },
+          ])
+          yield* db.insert(schema.inventoryMovements).values([
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: TEST_SOURCE_ID,
+              transactionId: providerTransactionId,
+              providerTransferId,
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: new Date("2025-02-02T10:05:00.000Z"),
+              direction: "inbound",
+              purpose: "principal",
+              taxTreatment: "non_taxable",
+              reconciliationStatus: "matched",
+              amount: "0.5",
+            },
+            {
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: canonicalSourceId,
+              transactionId: canonicalTransactionId,
+              providerTransferId: custodyProviderTransferId,
+              assetId: TEST_BTC_ASSET_ID,
+              timestamp: new Date("2025-02-02T10:00:00.000Z"),
+              direction: "outbound",
+              purpose: "principal",
+              taxTreatment: "non_taxable",
+              reconciliationStatus: "matched",
+              amount: "0.5",
+            },
+          ])
+          yield* db.insert(schema.transfers).values({
+            id: canonicalTransferId,
             sourceId: canonicalSourceId,
-            externalId: "replay-inbound-canonical-transaction",
-            timestamp: new Date("2025-02-02T10:00:00.000Z"),
             principalId: TEST_PRINCIPAL_ID,
-            transactionType: "internal_transfer",
-          },
-        ])
-        yield* db.insert(schema.providerTransfers).values([
-          {
-            id: providerTransferId,
-            sourceId: TEST_SOURCE_ID,
-            transactionId: providerTransactionId,
-            externalId: "replay-inbound-provider-transfer",
-            timestamp: new Date("2025-02-02T10:05:00.000Z"),
-            direction: "inbound",
-            fromAddress: "bc1qreplay-inbound-canonical",
-            toAccountRef: "coinbase-account-1",
-            amount: "0.5",
-          },
-          {
-            id: custodyProviderTransferId,
-            sourceId: canonicalSourceId,
-            transactionId: canonicalTransactionId,
-            externalId: "replay-inbound-custody-transfer",
+            externalId: canonicalTransferExternalId,
             timestamp: new Date("2025-02-02T10:00:00.000Z"),
-            direction: "outbound",
+            type: "utxo",
             fromAddress: "bc1qreplay-inbound-canonical",
             toAddress: "coinbase-account-1",
+            assetId: TEST_BTC_ASSET_ID,
             amount: "0.5",
-            metadata: { canonicalTransferExternalId },
-          },
-        ])
-        yield* db.insert(schema.inventoryMovements).values([
-          {
+          })
+          yield* db.insert(schema.transferReconciliations).values({
             principalId: TEST_PRINCIPAL_ID,
-            sourceId: TEST_SOURCE_ID,
-            transactionId: providerTransactionId,
             providerTransferId,
-            assetId: TEST_BTC_ASSET_ID,
-            timestamp: new Date("2025-02-02T10:05:00.000Z"),
-            direction: "inbound",
-            purpose: "principal",
-            taxTreatment: "non_taxable",
-            reconciliationStatus: "matched",
-            amount: "0.5",
-          },
-          {
+            canonicalTransferId,
+            canonicalTransactionId,
+            status: "approved",
+            matchReason: "replay_inbound_custody_fixture",
+            confidence: "1",
+            deterministic: true,
+          })
+          const reconciliationMetadata = {
+            reconciliation: { providerTransferId, canonicalTransferId },
+          }
+          const reconciliationLegs = yield* db
+            .insert(schema.transactionLegs)
+            .values([
+              {
+                sourceId: TEST_SOURCE_ID,
+                externalId: "replay-inbound-provider:internal-transfer-in",
+                timestamp: new Date("2025-02-02T10:05:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                amount: "0.5",
+                kind: "acquisition",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_in",
+                metadata: reconciliationMetadata,
+                transactionId: providerTransactionId,
+              },
+              {
+                sourceId: canonicalSourceId,
+                externalId: "replay-inbound-canonical:internal-transfer-out",
+                timestamp: new Date("2025-02-02T10:00:00.000Z"),
+                principalId: TEST_PRINCIPAL_ID,
+                assetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+                amount: "0.5",
+                kind: "disposal",
+                provenance: "deterministic",
+                derivationRule: "internal_transfer_out",
+                metadata: reconciliationMetadata,
+                transactionId: canonicalTransactionId,
+              },
+            ])
+            .returning({
+              id: schema.transactionLegs.id,
+              transactionId: schema.transactionLegs.transactionId,
+            })
+          const providerLeg = reconciliationLegs.find(
+            (leg) => leg.transactionId === providerTransactionId
+          )
+
+          if (providerLeg === undefined) {
+            return yield* Effect.dieMessage("Failed to create inbound provider reconciliation leg")
+          }
+
+          yield* db.insert(schema.fifoLots).values({
             principalId: TEST_PRINCIPAL_ID,
-            sourceId: canonicalSourceId,
-            transactionId: canonicalTransactionId,
-            providerTransferId: custodyProviderTransferId,
-            assetId: TEST_BTC_ASSET_ID,
-            timestamp: new Date("2025-02-02T10:00:00.000Z"),
-            direction: "outbound",
-            purpose: "principal",
-            taxTreatment: "non_taxable",
-            reconciliationStatus: "matched",
-            amount: "0.5",
-          },
-        ])
-        yield* db.insert(schema.transfers).values({
-          id: canonicalTransferId,
-          sourceId: canonicalSourceId,
-          principalId: TEST_PRINCIPAL_ID,
-          externalId: canonicalTransferExternalId,
-          timestamp: new Date("2025-02-02T10:00:00.000Z"),
-          type: "utxo",
-          fromAddress: "bc1qreplay-inbound-canonical",
-          toAddress: "coinbase-account-1",
-          assetId: TEST_BTC_ASSET_ID,
-          amount: "0.5",
-        })
-        yield* db.insert(schema.transferReconciliations).values({
-          principalId: TEST_PRINCIPAL_ID,
-          providerTransferId,
-          canonicalTransferId,
-          canonicalTransactionId,
-          status: "approved",
-          matchReason: "replay_inbound_custody_fixture",
-          confidence: "1",
-          deterministic: true,
-        })
-        const reconciliationMetadata = {
-          reconciliation: { providerTransferId, canonicalTransferId },
-        }
-        yield* db.insert(schema.transactionLegs).values([
-          {
             sourceId: TEST_SOURCE_ID,
-            externalId: "replay-inbound-provider:internal-transfer-in",
-            timestamp: new Date("2025-02-02T10:05:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
             assetId: TEST_BTC_ASSET_ID,
-            amount: "0.5",
-            kind: "acquisition",
-            provenance: "deterministic",
-            derivationRule: "internal_transfer_in",
-            metadata: reconciliationMetadata,
-            transactionId: providerTransactionId,
-          },
-          {
-            sourceId: canonicalSourceId,
-            externalId: "replay-inbound-canonical:internal-transfer-out",
-            timestamp: new Date("2025-02-02T10:00:00.000Z"),
-            principalId: TEST_PRINCIPAL_ID,
-            assetId: TEST_BTC_ASSET_ID,
-            amount: "0.5",
-            kind: "disposal",
-            provenance: "deterministic",
-            derivationRule: "internal_transfer_out",
-            metadata: reconciliationMetadata,
-            transactionId: canonicalTransactionId,
-          },
-        ])
-      })
-    )
-
-    await runReplayRepository(
-      Effect.flatMap(SourceReplayRepository, (repository) =>
-        repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            acquiredAt: new Date("2025-02-02T09:00:00.000Z"),
+            originalAmount: "0.5",
+            remainingAmount: "0.5",
+            costBasisPerToken: "20000",
+            costBasisCurrency: "EUR",
+            costBasisStatus: "known",
+            sourceLegId: providerLeg.id,
+            sourceProviderTransferId: null,
+            sourceLegSequence: 0,
+          })
+        })
       )
-    )
 
-    const state = await runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const reconciliations = yield* db.select().from(schema.transferReconciliations)
-        const movements = yield* db.select().from(schema.inventoryMovements)
-        return { reconciliations, movements }
-      })
-    )
-    expect(state.reconciliations).toHaveLength(0)
-    expect(state.movements).toEqual([
-      expect.objectContaining({
-        providerTransferId: custodyProviderTransferId,
-        taxTreatment: "pending_review",
-        reconciliationStatus: "unmatched",
-      }),
-    ])
-  })
+      const replaySourceId = replaySide === "provider" ? TEST_SOURCE_ID : canonicalSourceId
+      await runReplayRepository(
+        Effect.flatMap(SourceReplayRepository, (repository) =>
+          repository.resetSourceDerivedState({ sourceId: replaySourceId })
+        )
+      )
+      if (replaySide === "canonical") {
+        await runReplayRepository(
+          Effect.flatMap(SourceReplayRepository, (repository) =>
+            repository.resetSourceDerivedState({ sourceId: replaySourceId })
+          )
+        )
+      }
+
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const reconciliations = yield* db.select().from(schema.transferReconciliations)
+          const movements = yield* db.select().from(schema.inventoryMovements)
+          const lots = yield* db.select().from(schema.fifoLots)
+          return { lots, reconciliations, movements }
+        })
+      )
+      expect(state.reconciliations).toHaveLength(0)
+      const survivingProviderTransferId =
+        replaySide === "provider" ? custodyProviderTransferId : providerTransferId
+      expect(state.movements).toEqual([
+        expect.objectContaining({
+          providerTransferId: survivingProviderTransferId,
+          taxTreatment: "pending_review",
+          reconciliationStatus: "unmatched",
+        }),
+      ])
+      if (replaySide === "provider") {
+        expect(state.lots).toEqual([])
+      } else {
+        expect(state.lots).toEqual([
+          expect.objectContaining({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            acquiredAt: new Date("2025-02-02T10:05:00.000Z"),
+            originalAmount: "0.500000000000000000000000000000",
+            remainingAmount: "0.500000000000000000000000000000",
+            costBasisPerToken: "0.000000000000000000",
+            costBasisCurrency: "EUR",
+            costBasisStatus: "pending_review",
+            sourceLegId: null,
+            sourceProviderTransferId: providerTransferId,
+          }),
+        ])
+      }
+    }
+  )
 })

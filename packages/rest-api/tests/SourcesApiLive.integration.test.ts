@@ -758,6 +758,25 @@ describe("SourcesApiLive", () => {
     await Effect.runPromise(context.recreateTestDatabase())
   })
 
+  it.effect("requires authentication for transaction list and detail reads", () =>
+    Effect.gen(function* () {
+      const client = yield* makeUnauthenticatedClient()
+      const [listResult, detailResult] = yield* Effect.all([
+        client.transactions.listTransactions({ urlParams: {} }).pipe(Effect.either),
+        client.transactions
+          .getTransaction({ path: { transactionId: crypto.randomUUID() } })
+          .pipe(Effect.either),
+      ])
+
+      for (const result of [listResult, detailResult]) {
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left._tag).toBe("UnauthorizedError")
+        }
+      }
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
   it.effect("returns source-generic report read projections for a populated source", () =>
     Effect.gen(function* () {
       const fixture = yield* seedSyncEngineRepositoryFixture()
@@ -889,6 +908,7 @@ describe("SourcesApiLive", () => {
       const transaction = yield* client.transactions.getTransaction({
         path: { transactionId: reportFixtureIds.sellTransactionId },
       })
+      expect(transaction.classificationExplanation).toBeNull()
       expect(transaction.disposals[0]).toMatchObject({
         legId: reportFixtureIds.disposalLegId,
         proceeds: "6000",
@@ -1636,9 +1656,35 @@ describe("SourcesApiLive", () => {
       const solanaAddressId = "00000000-0000-0000-0000-000000046512"
       const solanaOwnedFeeTransactionId = "00000000-0000-0000-0000-000000046513"
       const solanaCaseMismatchTransactionId = "00000000-0000-0000-0000-000000046514"
+      const solAssetId = "00000000-0000-0000-0000-000000046515"
+      const solRepresentationId = "00000000-0000-0000-0000-000000046516"
+      const solProviderTransferId = "00000000-0000-0000-0000-000000046517"
       const ownedAddress = "0xAbCd0000000000000000000000000000046508"
       const solanaOwnedAddress = "SoLaNaOwnedAddress1111111111111111111111111"
       const db = yield* drizzle
+      const [solanaBlockchain] = yield* db
+        .select({ id: schema.blockchains.id })
+        .from(schema.blockchains)
+        .where(eq(schema.blockchains.name, "solana"))
+        .limit(1)
+
+      if (solanaBlockchain === undefined) {
+        return yield* Effect.dieMessage("Failed to load the Solana blockchain fixture")
+      }
+
+      yield* db.insert(schema.assets).values({
+        id: solAssetId,
+        name: "Solana",
+        symbol: "SOL",
+        type: "fungible",
+      })
+      yield* db.insert(schema.assetRepresentations).values({
+        id: solRepresentationId,
+        assetId: solAssetId,
+        blockchainId: solanaBlockchain.id,
+        type: "native",
+        decimals: 9,
+      })
       yield* db.insert(schema.sourceRecordsRaw).values({
         id: rawRecordId,
         sourceId: fixture.sourceId,
@@ -1738,7 +1784,7 @@ describe("SourcesApiLive", () => {
         chainTxId: "0xexternalfee",
         fromAddress: "0xexternal-fee-payer",
         toAddress: ownedAddress,
-        feeAmount: "7000",
+        feeAmount: null,
         feeAssetId: TEST_BTC_ASSET_ID,
         feeCostBasisAmount: "4",
         feeCostBasisCurrency: "EUR",
@@ -1748,7 +1794,7 @@ describe("SourcesApiLive", () => {
           id: solanaOwnedFeeTransactionId,
           sourceId: fixture.sourceId,
           principalId: fixture.principalId,
-          externalId: "helius-solana-owned-fee",
+          externalId: "helius-owned-fee",
           timestamp: new Date("2025-03-11T14:00:00.000Z"),
           providerTransactionType: "unknown",
           providerStatus: "confirmed",
@@ -1757,7 +1803,7 @@ describe("SourcesApiLive", () => {
           id: solanaCaseMismatchTransactionId,
           sourceId: fixture.sourceId,
           principalId: fixture.principalId,
-          externalId: "helius-solana-case-mismatch-fee",
+          externalId: "helius-case-mismatch-fee",
           timestamp: new Date("2025-03-11T15:00:00.000Z"),
           providerTransactionType: "receive",
           providerStatus: "confirmed",
@@ -1766,29 +1812,54 @@ describe("SourcesApiLive", () => {
       yield* db.insert(schema.transactionOnchainContext).values([
         {
           transactionId: solanaOwnedFeeTransactionId,
-          blockchainId: fixture.baseBlockchainId,
+          blockchainId: solanaBlockchain.id,
           addressId: solanaAddressId,
-          chainTxId: "solana-owned-fee-signature",
+          chainTxId: "owned-fee-signature",
           fromAddress: solanaOwnedAddress,
           toAddress: solanaOwnedAddress,
-          feeAmount: "8000",
-          feeAssetId: TEST_BTC_ASSET_ID,
+          feeAmount: "5000",
+          feeAssetId: solAssetId,
           feeCostBasisAmount: "5",
           feeCostBasisCurrency: "EUR",
         },
         {
           transactionId: solanaCaseMismatchTransactionId,
-          blockchainId: fixture.baseBlockchainId,
+          blockchainId: solanaBlockchain.id,
           addressId: solanaAddressId,
-          chainTxId: "solana-case-mismatch-signature",
+          chainTxId: "case-mismatch-signature",
           fromAddress: solanaOwnedAddress.toLowerCase(),
           toAddress: solanaOwnedAddress,
-          feeAmount: "9000",
-          feeAssetId: TEST_BTC_ASSET_ID,
+          feeAmount: "0",
+          feeAssetId: solAssetId,
           feeCostBasisAmount: "6",
           feeCostBasisCurrency: "EUR",
         },
       ])
+      yield* db.insert(schema.providerTransfers).values({
+        id: solProviderTransferId,
+        sourceId: fixture.sourceId,
+        transactionId: solanaOwnedFeeTransactionId,
+        externalId: "custody-search-transfer",
+        timestamp: new Date("2025-03-11T14:00:00.000Z"),
+        direction: "inbound",
+        fromAddress: "custody-search-origin",
+        toAccountRef: "custody-search-account",
+        amount: "1",
+      })
+      yield* db.insert(schema.inventoryMovements).values({
+        principalId: fixture.principalId,
+        sourceId: fixture.sourceId,
+        transactionId: solanaOwnedFeeTransactionId,
+        providerTransferId: solProviderTransferId,
+        assetId: solAssetId,
+        assetRepresentationId: solRepresentationId,
+        timestamp: new Date("2025-03-11T14:00:00.000Z"),
+        direction: "inbound",
+        purpose: "principal",
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+        amount: "1",
+      })
       yield* db.insert(schema.transactionReviews).values({
         transactionId: reportFixtureIds.sellTransactionId,
         principalId: fixture.principalId,
@@ -1825,12 +1896,21 @@ describe("SourcesApiLive", () => {
         fees: "0",
         calculationStatus: "pending",
       })
+      expect(externallyPaidFeeDetail.onchain).toMatchObject({
+        feeAmount: null,
+        feeAssetSymbol: "BTC",
+      })
       const solanaOwnedFeeDetail = yield* client.transactions.getTransaction({
         path: { transactionId: solanaOwnedFeeTransactionId },
       })
       expect(solanaOwnedFeeDetail.totals).toMatchObject({
         fees: "5",
         calculationStatus: "pending",
+      })
+      expect(solanaOwnedFeeDetail.onchain).toMatchObject({
+        blockchain: "solana",
+        feeAmount: "0.000005",
+        feeAssetSymbol: "SOL",
       })
       const solanaCaseMismatchDetail = yield* client.transactions.getTransaction({
         path: { transactionId: solanaCaseMismatchTransactionId },
@@ -1839,6 +1919,16 @@ describe("SourcesApiLive", () => {
         fees: "0",
         calculationStatus: "pending",
       })
+      expect(solanaCaseMismatchDetail.onchain).toMatchObject({
+        feeAmount: "0",
+        feeAssetSymbol: "SOL",
+      })
+      const custodyAssetSearch = yield* client.transactions.listTransactions({
+        urlParams: { search: "SOL" },
+      })
+      expect(custodyAssetSearch.transactions.map((row) => row.transactionId)).toEqual([
+        solanaOwnedFeeTransactionId,
+      ])
       const hashSearch = yield* client.transactions.listTransactions({
         urlParams: { search: "evidence", limit: 10 },
       })

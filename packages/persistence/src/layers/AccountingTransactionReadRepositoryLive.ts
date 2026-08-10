@@ -233,6 +233,24 @@ const decodeDecimal = ({
 
 const formatDecimal = (value: BigDecimal.BigDecimal): string => BigDecimal.format(value)
 
+const formatBaseUnitAmount = ({
+  amount,
+  decimals,
+}: {
+  readonly amount: string
+  readonly decimals: number
+}): string => {
+  const negative = amount.startsWith("-")
+  const digits = negative ? amount.slice(1) : amount
+  if (decimals === 0) return amount
+
+  const padded = digits.padStart(decimals + 1, "0")
+  const whole = padded.slice(0, -decimals)
+  const fraction = padded.slice(-decimals).replace(/0+$/, "")
+  const sign = negative ? "-" : ""
+  return fraction === "" ? `${sign}${whole}` : `${sign}${whole}.${fraction}`
+}
+
 const combineCurrency = (current: string | null, next: string | null): string | null => {
   if (next === null) return current
   if (current === null) return next
@@ -1267,6 +1285,13 @@ const make = Effect.gen(function* () {
                 inner join assets search_asset on search_asset.id = search_leg.asset_id
                 where search_leg.transaction_id = ${schema.transactions.id}
                   and search_asset.symbol ilike ${searchPattern}
+              )`,
+                sql<boolean>`exists (
+                select 1 from inventory_movements search_movement
+                inner join assets search_custody_asset
+                  on search_custody_asset.id = search_movement.asset_id
+                where search_movement.transaction_id = ${schema.transactions.id}
+                  and search_custody_asset.symbol ilike ${searchPattern}
               )`
               )
         const reviewCondition =
@@ -1366,6 +1391,7 @@ const make = Effect.gen(function* () {
         failed: schema.transactionOnchainContext.isError,
         feeAmount: schema.transactionOnchainContext.feeAmount,
         feeAssetSymbol: schema.assets.symbol,
+        feeAssetDecimals: schema.assetRepresentations.decimals,
         feeCostBasisAmount: schema.transactionOnchainContext.feeCostBasisAmount,
         feeCostBasisCurrency: schema.transactionOnchainContext.feeCostBasisCurrency,
       })
@@ -1375,6 +1401,17 @@ const make = Effect.gen(function* () {
         eq(schema.transactionOnchainContext.blockchainId, schema.blockchains.id)
       )
       .leftJoin(schema.assets, eq(schema.transactionOnchainContext.feeAssetId, schema.assets.id))
+      .leftJoin(
+        schema.assetRepresentations,
+        and(
+          eq(schema.assetRepresentations.assetId, schema.transactionOnchainContext.feeAssetId),
+          eq(
+            schema.assetRepresentations.blockchainId,
+            schema.transactionOnchainContext.blockchainId
+          ),
+          eq(schema.assetRepresentations.type, "native")
+        )
+      )
       .where(eq(schema.transactionOnchainContext.transactionId, transactionId))
       .limit(1)
       .pipe(wrapSqlError("accountingTransactionReadRepository.getById.onchain"))
@@ -1703,7 +1740,13 @@ const make = Effect.gen(function* () {
                   toAddress: onchain.toAddress,
                   functionName: onchain.functionName,
                   failed: onchain.failed,
-                  feeAmount: onchain.feeAmount === null ? null : String(onchain.feeAmount),
+                  feeAmount:
+                    onchain.feeAmount === null || onchain.feeAssetDecimals === null
+                      ? null
+                      : formatBaseUnitAmount({
+                          amount: String(onchain.feeAmount),
+                          decimals: onchain.feeAssetDecimals,
+                        }),
                   feeAssetSymbol: onchain.feeAssetSymbol,
                   feeFiatValue:
                     onchain.feeCostBasisAmount === null || onchain.feeCostBasisCurrency === null

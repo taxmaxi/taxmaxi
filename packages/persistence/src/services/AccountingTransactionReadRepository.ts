@@ -98,6 +98,23 @@ export interface AccountingTransactionMovement {
   } | null
 }
 
+/**
+ * Fiat totals for one transaction.
+ *
+ * Amounts are present only when every fact needed for that field is known in one currency.
+ * `fees` is `"0"` when no fee exists and `null` when a fee exists but its valuation is
+ * incomplete. `proceeds` is available once every disposal other than an internal transfer is
+ * valued, while `costBasis` additionally requires complete FIFO coverage with known basis.
+ * `gainLoss` requires both. `value` requires every non-fee leg valuation. A missing field must
+ * not be interpreted as zero. Use `taxTreatment` to decide whether a complete gain or loss is
+ * taxable; these amounts are accounting totals, not taxable-only totals.
+ *
+ * `currency` is `null` when no fiat currency is known and `"mixed"` when known amounts use
+ * more than one currency. `pending` means normalized accounting legs or calculated amounts are
+ * not available yet, `partial` means at least one calculation is available but one or more
+ * required facts are missing or mixed, and `complete` means all applicable totals are complete
+ * in one currency.
+ */
 export interface AccountingTransactionTotals {
   readonly value: string | null
   readonly fees: string | null
@@ -207,6 +224,7 @@ export interface AccountingTransactionOnchainContext {
   readonly toAddress: string | null
   readonly functionName: string | null
   readonly failed: boolean
+  /** Fee amount in whole units of `feeAssetSymbol`, converted from chain base units. */
   readonly feeAmount: string | null
   readonly feeAssetSymbol: string | null
   readonly feeFiatValue: AccountingTransactionFiatValue | null
