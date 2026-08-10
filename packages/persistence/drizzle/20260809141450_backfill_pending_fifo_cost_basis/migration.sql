@@ -4,7 +4,7 @@ WITH RECURSIVE ranked_transfer_matches AS (
 		transfer_match.fifo_lot_id,
 		row_number() OVER (
 			PARTITION BY transfer_match.disposal_leg_id
-			ORDER BY source_lot.acquired_at, source_lot.created_at
+			ORDER BY source_lot.acquired_at, source_lot.created_at, source_lot.id
 		) - 1 AS source_leg_sequence
 	FROM disposal_matches transfer_match
 	INNER JOIN fifo_lots source_lot

@@ -3519,37 +3519,82 @@ describe("TransferReconciliationServiceLive", () => {
         const acquisitionLegs = yield* db
           .insert(schema.transactionLegs)
           .values(
-            [0, 1].map((position) => ({
+            [0, 1, 2].map((position) => ({
               sourceId: ONCHAIN_SOURCE_ID,
               externalId: `exact-custody-opening-leg-${position}`,
               timestamp: new Date("2025-04-01T10:00:00.000Z"),
               principalId: TEST_PRINCIPAL_ID,
               assetId: TEST_BTC_ASSET_ID,
-              amount: "0.10000000",
+              amount: position === 2 ? "0.10000000" : "0.05000000",
               kind: "acquisition" as const,
               provenance: "deterministic" as const,
-              fiatAmount: "1000.00",
-              fiatCurrency: "EUR",
+              fiatAmount: position === 0 ? null : position === 1 ? "500.00" : "1000.00",
+              fiatCurrency: position === 1 ? "USD" : "EUR",
             }))
           )
           .returning({ id: schema.transactionLegs.id })
-        const lots = yield* db
-          .insert(schema.fifoLots)
-          .values(
-            acquisitionLegs.map((leg, position) => ({
-              principalId: TEST_PRINCIPAL_ID,
-              sourceId: ONCHAIN_SOURCE_ID,
-              assetId: TEST_BTC_ASSET_ID,
-              acquiredAt: new Date(`2025-04-0${position + 1}T10:00:00.000Z`),
-              originalAmount: "0.10000000",
-              remainingAmount: "0",
-              costBasisPerToken: "10000.000000000000000000",
-              costBasisCurrency: "EUR",
-              sourceLegId: leg.id,
-              sourceLegSequence: 0,
-            }))
-          )
-          .returning({ id: schema.fifoLots.id })
+        const pendingTieLeg = acquisitionLegs[0]
+        const knownTieLeg = acquisitionLegs[1]
+        const unrelatedLeg = acquisitionLegs[2]
+
+        if (
+          pendingTieLeg === undefined ||
+          knownTieLeg === undefined ||
+          unrelatedLeg === undefined
+        ) {
+          return yield* Effect.dieMessage("Failed to create exact custody acquisition legs")
+        }
+
+        const tiedAt = new Date("2025-04-01T10:00:00.000Z")
+        const pendingTieLotId = "00000000-0000-0000-0000-000000000752"
+        const knownTieLotId = "00000000-0000-0000-0000-000000000751"
+        const unrelatedLotId = "00000000-0000-0000-0000-000000000753"
+        yield* db.insert(schema.fifoLots).values([
+          {
+            id: pendingTieLotId,
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: tiedAt,
+            originalAmount: "0.05000000",
+            remainingAmount: "0",
+            costBasisPerToken: "0",
+            costBasisCurrency: "EUR",
+            costBasisStatus: "pending_review",
+            sourceLegId: pendingTieLeg.id,
+            sourceLegSequence: 0,
+            createdAt: tiedAt,
+          },
+          {
+            id: knownTieLotId,
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: tiedAt,
+            originalAmount: "0.05000000",
+            remainingAmount: "0",
+            costBasisPerToken: "10000.000000000000000000",
+            costBasisCurrency: "USD",
+            costBasisStatus: "known",
+            sourceLegId: knownTieLeg.id,
+            sourceLegSequence: 0,
+            createdAt: tiedAt,
+          },
+          {
+            id: unrelatedLotId,
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-02T10:00:00.000Z"),
+            originalAmount: "0.10000000",
+            remainingAmount: "0",
+            costBasisPerToken: "10000.000000000000000000",
+            costBasisCurrency: "EUR",
+            costBasisStatus: "known",
+            sourceLegId: unrelatedLeg.id,
+            sourceLegSequence: 0,
+          },
+        ])
         const movements = yield* db
           .insert(schema.inventoryMovements)
           .values(
@@ -3573,13 +3618,34 @@ describe("TransferReconciliationServiceLive", () => {
             providerTransferId: schema.inventoryMovements.providerTransferId,
           })
 
-        yield* db.insert(schema.inventoryMovementAllocations).values(
-          movements.map((movement, position) => ({
-            inventoryMovementId: movement.id,
-            fifoLotId: lots[position]?.id ?? "",
-            matchedAmount: "0.10000000",
-          }))
+        const exactMovement = movements.find(
+          (movement) => movement.providerTransferId === exactProviderTransfer.id
         )
+        const unrelatedMovement = movements.find(
+          (movement) => movement.providerTransferId === unrelatedProviderTransfer.id
+        )
+
+        if (exactMovement === undefined || unrelatedMovement === undefined) {
+          return yield* Effect.dieMessage("Failed to create exact custody movements")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values([
+          {
+            inventoryMovementId: exactMovement.id,
+            fifoLotId: pendingTieLotId,
+            matchedAmount: "0.05000000",
+          },
+          {
+            inventoryMovementId: exactMovement.id,
+            fifoLotId: knownTieLotId,
+            matchedAmount: "0.05000000",
+          },
+          {
+            inventoryMovementId: unrelatedMovement.id,
+            fifoLotId: unrelatedLotId,
+            matchedAmount: "0.10000000",
+          },
+        ])
         const [inboundMovement] = yield* db
           .insert(schema.inventoryMovements)
           .values({
@@ -3661,10 +3727,19 @@ describe("TransferReconciliationServiceLive", () => {
         const movements = yield* db.select().from(schema.inventoryMovements)
         const allocations = yield* db.select().from(schema.inventoryMovementAllocations)
         const inboundLots = yield* db
+          .select({
+            sourceLegSequence: schema.fifoLots.sourceLegSequence,
+            costBasisCurrency: schema.fifoLots.costBasisCurrency,
+            costBasisStatus: schema.fifoLots.costBasisStatus,
+          })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceId, TEST_SOURCE_ID))
+          .orderBy(asc(schema.fifoLots.sourceLegSequence))
+        const providerInboundLots = yield* db
           .select()
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.sourceProviderTransferId, fixtureIds.inboundProviderTransferId))
-        return { movements, allocations, inboundLots }
+        return { movements, allocations, inboundLots, providerInboundLots }
       })
     )
 
@@ -3683,6 +3758,18 @@ describe("TransferReconciliationServiceLive", () => {
       expect.objectContaining({ reconciliationStatus: "unmatched", taxTreatment: "pending_review" })
     )
     expect(state.allocations).toHaveLength(1)
-    expect(state.inboundLots).toHaveLength(0)
+    expect(state.providerInboundLots).toHaveLength(0)
+    expect(state.inboundLots).toEqual([
+      {
+        sourceLegSequence: 0,
+        costBasisCurrency: "USD",
+        costBasisStatus: "known",
+      },
+      {
+        sourceLegSequence: 1,
+        costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+      },
+    ])
   })
 })

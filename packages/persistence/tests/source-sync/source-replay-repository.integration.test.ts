@@ -470,7 +470,7 @@ describe("SourceReplayRepositoryLive", () => {
   )
 
   it.each(["provider", "canonical"] as const)(
-    "allows $s replay when reconciliation can refresh copied FIFO state",
+    "blocks $s replay while reconciliation owns copied FIFO state in another source",
     async (replaySide) => {
       const dependentSourceId = "00000000-0000-0000-0000-000000000292"
       const originTransactionId = "00000000-0000-0000-0000-000000000293"
@@ -609,6 +609,7 @@ describe("SourceReplayRepositoryLive", () => {
       )
 
       const replaySourceId = replaySide === "provider" ? TEST_SOURCE_ID : dependentSourceId
+      const dependentReplaySourceId = replaySide === "provider" ? dependentSourceId : TEST_SOURCE_ID
       const replayResult = await runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
           repository.resetSourceDerivedState({ sourceId: replaySourceId })
@@ -616,21 +617,32 @@ describe("SourceReplayRepositoryLive", () => {
       )
 
       expect(replayResult).toMatchObject({
-        _tag: "Right",
+        _tag: "Left",
+        left: {
+          _tag: "SourceReplayDependencyError",
+          sourceId: replaySourceId,
+          dependentSourceIds: [dependentReplaySourceId],
+          affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+        },
       })
 
-      const transactions = await runPg(
+      const state = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db.select().from(schema.transactions)
+          const transactions = yield* db.select().from(schema.transactions)
+          const legs = yield* db.select().from(schema.transactionLegs)
+          const lots = yield* db.select().from(schema.fifoLots)
+          const reconciliations = yield* db.select().from(schema.transferReconciliations)
+          return { transactions, legs, lots, reconciliations }
         })
       )
-      expect(transactions.map((transaction) => transaction.id)).not.toContain(
-        replaySide === "provider" ? originTransactionId : destinationTransactionId
+      expect(state.transactions.map((transaction) => transaction.id)).toEqual(
+        expect.arrayContaining([originTransactionId, destinationTransactionId])
       )
-      expect(transactions.map((transaction) => transaction.id)).toContain(
-        replaySide === "provider" ? destinationTransactionId : originTransactionId
-      )
+      expect(state.legs).toHaveLength(2)
+      expect(state.lots).toHaveLength(1)
+      expect(state.lots[0]?.remainingAmount).toContain("0.50000000")
+      expect(state.reconciliations).toHaveLength(1)
     }
   )
 })

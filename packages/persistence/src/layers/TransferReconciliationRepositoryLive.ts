@@ -568,7 +568,11 @@ const make = Effect.gen(function* () {
                   eq(schema.fifoLots.id, schema.disposalMatches.fifoLotId)
                 )
                 .where(eq(schema.disposalMatches.disposalLegId, disposalLegId))
-                .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                .orderBy(
+                  asc(schema.fifoLots.acquiredAt),
+                  asc(schema.fifoLots.createdAt),
+                  asc(schema.fifoLots.id)
+                )
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadInternalTransferDisposalMatches"
@@ -755,7 +759,11 @@ const make = Effect.gen(function* () {
                     lte(schema.transactionLegs.timestamp, maxAcquiredAt)
                   )
                 )
-                .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                .orderBy(
+                  asc(schema.fifoLots.acquiredAt),
+                  asc(schema.fifoLots.createdAt),
+                  asc(schema.fifoLots.id)
+                )
                 .pipe(
                   wrapSyncEngineSqlError(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.loadOpenLots"
@@ -815,7 +823,11 @@ const make = Effect.gen(function* () {
                             custodyProviderTransferId
                           )
                         )
-                        .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                        .orderBy(
+                          asc(schema.fifoLots.acquiredAt),
+                          asc(schema.fifoLots.createdAt),
+                          asc(schema.fifoLots.id)
+                        )
                         .pipe(
                           wrapSyncEngineSqlError(
                             "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.loadCustodyAllocations"
@@ -859,7 +871,9 @@ const make = Effect.gen(function* () {
                   let costBasisComplete = true
 
                   for (const match of existingMatches) {
-                    if (match.costBasisStatus !== "known") costBasisComplete = false
+                    if (match.costBasisStatus !== "known") {
+                      costBasisComplete = false
+                    }
                     const costBasis = yield* decodeBigDecimal({
                       value: yield* formatDecimal({
                         value: match.costBasis,
@@ -872,17 +886,19 @@ const make = Effect.gen(function* () {
 
                     totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
 
-                    if (fiatCurrency === null) {
-                      fiatCurrency = match.costBasisCurrency
-                    } else if (fiatCurrency !== match.costBasisCurrency) {
-                      return yield* Effect.fail(
-                        new SyncEngineStorageError({
-                          operation:
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCurrency",
-                          cause:
-                            "Internal transfer disposal matches use multiple cost basis currencies",
-                        })
-                      )
+                    if (match.costBasisStatus === "known") {
+                      if (fiatCurrency === null) {
+                        fiatCurrency = match.costBasisCurrency
+                      } else if (fiatCurrency !== match.costBasisCurrency) {
+                        return yield* Effect.fail(
+                          new SyncEngineStorageError({
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCurrency",
+                            cause:
+                              "Internal transfer disposal matches use multiple cost basis currencies",
+                          })
+                        )
+                      }
                     }
                   }
 
@@ -916,7 +932,9 @@ const make = Effect.gen(function* () {
                   const allocations: Array<(typeof existingMatches)[number]> = []
 
                   for (const allocation of custodyAllocations) {
-                    if (allocation.costBasisStatus !== "known") costBasisComplete = false
+                    if (allocation.costBasisStatus !== "known") {
+                      costBasisComplete = false
+                    }
                     const matchedAmount = yield* decodeBigDecimal({
                       value: yield* formatDecimal({
                         value: allocation.matchedAmount,
@@ -940,16 +958,19 @@ const make = Effect.gen(function* () {
                       { scale: 8 }
                     )
 
-                    if (fiatCurrency === null) {
-                      fiatCurrency = allocation.costBasisCurrency
-                    } else if (fiatCurrency !== allocation.costBasisCurrency) {
-                      return yield* Effect.fail(
-                        new SyncEngineStorageError({
-                          operation:
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyCurrency",
-                          cause: "Custody movement allocations use multiple cost basis currencies",
-                        })
-                      )
+                    if (allocation.costBasisStatus === "known") {
+                      if (fiatCurrency === null) {
+                        fiatCurrency = allocation.costBasisCurrency
+                      } else if (fiatCurrency !== allocation.costBasisCurrency) {
+                        return yield* Effect.fail(
+                          new SyncEngineStorageError({
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyCurrency",
+                            cause:
+                              "Custody movement allocations use multiple cost basis currencies",
+                          })
+                        )
+                      }
                     }
 
                     allocations.push({
@@ -1040,7 +1061,9 @@ const make = Effect.gen(function* () {
                   if (!BigDecimal.greaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
                     break
                   }
-                  if (lot.costBasisStatus !== "known") costBasisComplete = false
+                  if (lot.costBasisStatus !== "known") {
+                    costBasisComplete = false
+                  }
 
                   const lotRemaining = yield* decodeBigDecimal({
                     value: yield* formatDecimal({
@@ -1069,16 +1092,18 @@ const make = Effect.gen(function* () {
                     { scale: 8 }
                   )
 
-                  if (fiatCurrency === null) {
-                    fiatCurrency = lot.costBasisCurrency
-                  } else if (fiatCurrency !== lot.costBasisCurrency) {
-                    return yield* Effect.fail(
-                      new SyncEngineStorageError({
-                        operation:
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.newCurrency",
-                        cause: "Internal transfer source lots use multiple cost basis currencies",
-                      })
-                    )
+                  if (lot.costBasisStatus === "known") {
+                    if (fiatCurrency === null) {
+                      fiatCurrency = lot.costBasisCurrency
+                    } else if (fiatCurrency !== lot.costBasisCurrency) {
+                      return yield* Effect.fail(
+                        new SyncEngineStorageError({
+                          operation:
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.newCurrency",
+                          cause: "Internal transfer source lots use multiple cost basis currencies",
+                        })
+                      )
+                    }
                   }
 
                   allocations.push({
@@ -2499,7 +2524,11 @@ const make = Effect.gen(function* () {
                             sql`${schema.fifoLots.sourceLegId} is not null`
                           )
                         )
-                        .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+                        .orderBy(
+                          asc(schema.fifoLots.acquiredAt),
+                          asc(schema.fifoLots.createdAt),
+                          asc(schema.fifoLots.id)
+                        )
                         .pipe(
                           wrapSyncEngineSqlError(
                             "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildReviewedDestinationFifoEffects.loadPreflightLots"

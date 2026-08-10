@@ -59,7 +59,7 @@ describe("FIFO cost basis status backfill", () => {
     const pendingDownstreamDestinationLotId = "00000000-0000-0000-0000-000000000715"
     const providerPendingSourceLotId = "00000000-0000-0000-0000-000000000716"
     const providerPendingDestinationLotId = "00000000-0000-0000-0000-000000000717"
-    const knownTwinSourceLotId = "00000000-0000-0000-0000-000000000718"
+    const knownTwinSourceLotId = "00000000-0000-0000-0000-000000000700"
     const knownTwinDestinationLotId = "00000000-0000-0000-0000-000000000719"
     const providerTransactionId = "00000000-0000-0000-0000-000000000731"
     const providerTransferId = "00000000-0000-0000-0000-000000000732"
@@ -337,7 +337,7 @@ describe("FIFO cost basis status backfill", () => {
             costBasisCurrency: "EUR",
             costBasisStatus: "known",
             sourceLegId: pendingDestinationLegId,
-            sourceLegSequence: 0,
+            sourceLegSequence: 1,
           },
           {
             id: knownTwinSourceLotId,
@@ -351,7 +351,7 @@ describe("FIFO cost basis status backfill", () => {
             costBasisCurrency: "EUR",
             costBasisStatus: "known",
             sourceLegId: knownTwinSourceLegId,
-            createdAt: new Date("2024-01-01T00:00:01.000Z"),
+            createdAt: new Date("2024-01-01T00:00:00.000Z"),
           },
           {
             id: knownTwinDestinationLotId,
@@ -365,7 +365,7 @@ describe("FIFO cost basis status backfill", () => {
             costBasisCurrency: "EUR",
             costBasisStatus: "known",
             sourceLegId: pendingDestinationLegId,
-            sourceLegSequence: 1,
+            sourceLegSequence: 0,
           },
           {
             id: knownSourceLotId,
@@ -485,6 +485,9 @@ describe("FIFO cost basis status backfill", () => {
         import.meta.url
       ),
       "utf8"
+    )
+    expect(migrationSql).toContain(
+      "ORDER BY source_lot.acquired_at, source_lot.created_at, source_lot.id"
     )
     await context.runPg(runSqlUnsafe({ statement: migrationSql }))
     await context.runPg(runSqlUnsafe({ statement: migrationSql }))

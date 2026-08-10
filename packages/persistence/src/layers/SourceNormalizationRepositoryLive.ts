@@ -972,7 +972,11 @@ const make = Effect.gen(function* () {
             lte(schema.transactionLegs.timestamp, maxAcquiredAt)
           )
         )
-        .orderBy(asc(schema.fifoLots.acquiredAt), asc(schema.fifoLots.createdAt))
+        .orderBy(
+          asc(schema.fifoLots.acquiredAt),
+          asc(schema.fifoLots.createdAt),
+          asc(schema.fifoLots.id)
+        )
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.loadOpenFifoLots"))
 
       return yield* Effect.forEach(rows, (row) =>
