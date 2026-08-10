@@ -6,7 +6,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
-import { routeStrategies, translatedPathnames } from "#/lib/i18n"
+import { localeStrategy, routeStrategies, translatedPathnames } from "#/lib/i18n"
 
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
@@ -21,7 +21,7 @@ const config = defineConfig({
       outdir: "./src/paraglide",
       outputStructure: "message-modules",
       cookieName: "PARAGLIDE_LOCALE",
-      strategy: ["url", "baseLocale"],
+      strategy: localeStrategy,
       routeStrategies,
       urlPatterns: translatedPathnames,
     }),
