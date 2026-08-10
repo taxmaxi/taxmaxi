@@ -15,6 +15,8 @@ export const ASSET_CATALOG_LIST_ID = "asset-catalog-list"
 export const ASSET_CATALOG_SEARCH_ID = "asset-catalog-search"
 export const INITIAL_VISIBLE_ITEM_LIMIT = 80
 
+const assetCatalogCollator = new Intl.Collator("en", { numeric: true, sensitivity: "base" })
+
 export function matchesPendingAsset(asset: TaxMaxiPendingAsset, query: string): boolean {
   return matchesAssetCatalogQuery({
     query,
@@ -34,6 +36,14 @@ export function getPendingAssetName(asset: TaxMaxiPendingAsset): string {
 
 export function getCatalogItemName(item: CatalogItem): string {
   return item.kind === "pending" ? getPendingAssetName(item.asset) : item.asset.name
+}
+
+export function compareCatalogItems(left: CatalogItem, right: CatalogItem): number {
+  return (
+    assetCatalogCollator.compare(left.asset.symbol, right.asset.symbol) ||
+    assetCatalogCollator.compare(getCatalogItemName(left), getCatalogItemName(right)) ||
+    assetCatalogCollator.compare(getCatalogItemKey(left), getCatalogItemKey(right))
+  )
 }
 
 export function getCatalogItemKey(item: CatalogItem | undefined): string {

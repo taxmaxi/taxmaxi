@@ -1,6 +1,7 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react"
 
 import {
+  compareCatalogItems,
   matchesPendingAsset,
   type CatalogItem,
   type CatalogScope,
@@ -37,10 +38,12 @@ function useAssetCatalogController({
 
   const approvedItems = useMemo<ReadonlyArray<CatalogItem>>(
     () =>
-      filterTaxMaxiAssets({ assets: feeds.approved.items, query }).map((asset) => ({
-        kind: "approved" as const,
-        asset,
-      })),
+      filterTaxMaxiAssets({ assets: feeds.approved.items, query })
+        .map((asset) => ({
+          kind: "approved" as const,
+          asset,
+        }))
+        .sort(compareCatalogItems),
     [feeds.approved.items, query]
   )
 
@@ -48,7 +51,8 @@ function useAssetCatalogController({
     () =>
       feeds.pending.items
         .filter((asset) => matchesPendingAsset(asset, query))
-        .map((asset) => ({ kind: "pending" as const, asset })),
+        .map((asset) => ({ kind: "pending" as const, asset }))
+        .sort(compareCatalogItems),
     [feeds.pending.items, query]
   )
 

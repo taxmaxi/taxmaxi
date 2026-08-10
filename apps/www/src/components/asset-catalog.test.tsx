@@ -307,6 +307,41 @@ describe("AssetCatalog", () => {
     expect(screen.getByRole("option", { name: /A81/ })).toBeTruthy()
   })
 
+  it("orders loaded pending and approved assets by symbol and name", () => {
+    render(
+      <AssetCatalog
+        assets={[
+          makeAsset({ id: "approved-z", name: "Zulu", symbol: "ZZZ" }),
+          makeAsset({ id: "approved-b", name: "Beta", symbol: "AAA" }),
+          makeAsset({ id: "approved-a", name: "Alpha", symbol: "AAA" }),
+        ]}
+        onClose={vi.fn()}
+        pendingAssets={[
+          makePendingAsset({
+            id: "pending-z",
+            name: "Zulu pending",
+            provider: "provider",
+            symbol: "ZZZ",
+          }),
+          makePendingAsset({
+            id: "pending-a",
+            name: "Alpha pending",
+            provider: "provider",
+            symbol: "AAA",
+          }),
+        ]}
+      />
+    )
+
+    expect(screen.getAllByRole("option").map((option) => option.id)).toEqual([
+      "asset-catalog-option-pending-pending-a",
+      "asset-catalog-option-pending-pending-z",
+      "asset-catalog-option-approved-approved-a",
+      "asset-catalog-option-approved-approved-b",
+      "asset-catalog-option-approved-approved-z",
+    ])
+  })
+
   it("requests the next approved and pending pages from the All scope", () => {
     const onLoadMoreApproved = vi.fn()
     const onLoadMorePending = vi.fn()
