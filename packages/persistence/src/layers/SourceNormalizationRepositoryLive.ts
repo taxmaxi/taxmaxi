@@ -1564,6 +1564,7 @@ const make = Effect.gen(function* () {
               observedContractAddress: null,
               observedMintAddress: null,
               observedDecimals: null,
+              metadata: sql`coalesce(${schema.providerTransfers.metadata}, '{}'::jsonb) || '{"evidenceOnly": true, "stale": true}'::jsonb`,
               updatedAt: nowDate(),
             })
             .where(eq(schema.providerTransfers.id, id))

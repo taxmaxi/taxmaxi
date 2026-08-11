@@ -317,6 +317,144 @@ describe("TransferReconciliationServiceLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
+  it("keeps split evidence-only transfers out of inventory and reconciliation", async () => {
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(seedApprovedProviderAsset({}))
+
+    const persisted = await runSourceNormalization(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "split-native-evidence",
+            externalGroupId: "split-native-evidence",
+            timestamp,
+            transactionType: "internal_transfer",
+            providerTransactionType: "transfer",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: "Split native transfer evidence",
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "helius-solana" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "dex",
+            cexAccountId: null,
+            externalAccountId: "owned-address",
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "helius-solana" },
+          },
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: "split-native-evidence:accounting",
+              externalGroupId: "split-native-evidence",
+              providerAssetId: providerAssetRowId,
+              timestamp,
+              direction: "outbound",
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: "owned-address",
+              toAddress: "counterparty",
+              networkName: "bitcoin",
+              networkHash: "split-native-evidence-hash",
+              observedBlockchainId: null,
+              observedRepresentationType: null,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: null,
+              amount: "0.75",
+              metadata: { accountingOnly: true, evidenceOnly: false },
+            },
+            ...[
+              { suffix: "a", amount: "0.5" },
+              { suffix: "b", amount: "0.25" },
+            ].map(({ suffix, amount }) => ({
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: `split-native-evidence:${suffix}`,
+              externalGroupId: "split-native-evidence",
+              providerAssetId: providerAssetRowId,
+              timestamp,
+              direction: "outbound" as const,
+              fromAccountRef: null,
+              toAccountRef: null,
+              fromAddress: "owned-address",
+              toAddress: `counterparty-${suffix}`,
+              networkName: "bitcoin",
+              networkHash: "split-native-evidence-hash",
+              observedBlockchainId: fixture.bitcoinBlockchainId,
+              observedRepresentationType: "native" as const,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: 8,
+              amount,
+              metadata: { accountingOnly: false, evidenceOnly: true },
+            })),
+          ],
+          feeTransfers: [],
+          legs: [],
+          transactionReview: null,
+          resolvedTransactionType: {
+            providerTransactionType: "transfer",
+            transactionType: "internal_transfer",
+            inventoryEffect: "internal_transfer",
+            taxTreatment: "non_taxable_by_default",
+            resolutionStrategy: "amount_sign",
+            pairedRecordRequired: true,
+            mappingStatus: "approved",
+          },
+        })
+      )
+    )
+
+    const reconciliationCandidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.listProviderTransfersForReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const inventoryMovements = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            providerTransferId: schema.inventoryMovements.providerTransferId,
+            amount: schema.inventoryMovements.amount,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.transactionId, persisted.transaction.id))
+      })
+    )
+    const accountingTransfer = persisted.providerTransfers.find(
+      (transfer) => transfer.externalId === "split-native-evidence:accounting"
+    )
+
+    expect(persisted.providerTransfers).toHaveLength(3)
+    expect(accountingTransfer).toBeDefined()
+    expect(inventoryMovements).toEqual([
+      {
+        providerTransferId: accountingTransfer?.id,
+        amount: expect.stringMatching(/^0\.75(?:0+)?$/),
+      },
+    ])
+    expect(reconciliationCandidates.map((candidate) => candidate.providerTransferId)).toEqual([
+      accountingTransfer?.id,
+    ])
+  })
+
   it("links a Coinbase withdrawal to a deterministic owned onchain receipt", async () => {
     const walletAddress = "bc1qownedwalletdeterministic00000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")

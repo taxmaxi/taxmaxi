@@ -706,6 +706,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             observedContractAddress: null,
             observedMintAddress: null,
             observedDecimals: null,
+            metadata: expect.objectContaining({ evidenceOnly: true, stale: true }),
           })
         )
       )
