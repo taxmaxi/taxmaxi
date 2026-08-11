@@ -492,7 +492,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       )
     ).rejects.toThrow()
 
-    const retryResult = await runRepository(
+    const partialRetryResult = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
         repository.persistNormalizedArtifacts({
           ...normalizedArtifacts,
@@ -501,7 +501,52 @@ describe("SourceNormalizationRepositoryLive", () => {
               ? {
                   ...transfer,
                   observedDecimals: null,
-                  metadata: { provider: "retry-without-exact-decimal-evidence" },
+                  amount: "2",
+                  metadata: {
+                    provider: "retry-without-exact-decimal-evidence",
+                    rawUnits: "2",
+                  },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const partiallyRetriedUnknownType = partialRetryResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-unknown-type"
+    )
+
+    expect(partiallyRetriedUnknownType).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: "UnknownMint11111111111111111111111111111111",
+      observedDecimals: 5,
+      amount: expect.stringMatching(/^2(?:\.0+)?$/),
+      metadata: {
+        provider: "retry-without-exact-decimal-evidence",
+        rawUnits: "2",
+      },
+    })
+
+    const retryResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-unknown-type"
+              ? {
+                  ...transfer,
+                  observedBlockchainId: null,
+                  observedRepresentationType: null,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: null,
+                  amount: "3",
+                  metadata: {
+                    provider: "retry-without-observed-representation",
+                    rawUnits: "3",
+                  },
                 }
               : transfer
           ),
@@ -513,9 +558,158 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     expect(retriedUnknownType).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: "UnknownMint11111111111111111111111111111111",
       observedDecimals: 5,
-      metadata: { provider: "test-onchain-adapter" },
+      amount: expect.stringMatching(/^3(?:\.0+)?$/),
+      metadata: {
+        provider: "retry-without-observed-representation",
+        rawUnits: "3",
+      },
     })
+
+    const correctedResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-token"
+              ? {
+                  ...transfer,
+                  observedContractAddress: null,
+                  observedMintAddress: "CorrectedMint1111111111111111111111111111111",
+                  observedDecimals: 9,
+                  amount: "3",
+                  metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const correctedToken = correctedResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-token"
+    )
+
+    expect(correctedToken).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: "token",
+      observedContractAddress: null,
+      observedMintAddress: "CorrectedMint1111111111111111111111111111111",
+      observedDecimals: 9,
+      amount: expect.stringMatching(/^3(?:\.0+)?$/),
+      metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
+    })
+
+    const nativeCorrectionResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-token"
+              ? {
+                  ...transfer,
+                  observedRepresentationType: "native" as const,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: 18,
+                  amount: "4",
+                  metadata: {
+                    provider: "corrected-native-observation",
+                    rawUnits: "4000000000000000000",
+                  },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const correctedNative = nativeCorrectionResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-token"
+    )
+
+    expect(correctedNative).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: "native",
+      observedContractAddress: null,
+      observedMintAddress: null,
+      observedDecimals: 18,
+      amount: expect.stringMatching(/^4(?:\.0+)?$/),
+      metadata: {
+        provider: "corrected-native-observation",
+        rawUnits: "4000000000000000000",
+      },
+    })
+
+    const accountingOnlyResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-nft"
+              ? {
+                  ...transfer,
+                  observedBlockchainId: null,
+                  observedRepresentationType: null,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: null,
+                  metadata: { provider: "test-onchain-adapter", accountingOnly: true },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    expect(
+      accountingOnlyResult.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-nft"
+      )
+    ).toMatchObject({
+      observedBlockchainId: null,
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: null,
+      observedDecimals: null,
+      metadata: { provider: "test-onchain-adapter", accountingOnly: true },
+    })
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: [],
+        })
+      )
+    )
+
+    const staleProviderTransfers = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
+      })
+    )
+
+    expect(staleProviderTransfers).toHaveLength(4)
+    expect(staleProviderTransfers).toEqual(
+      expect.arrayContaining(
+        providerTransfers.map((transfer) =>
+          expect.objectContaining({
+            externalId: transfer.externalId,
+            observedBlockchainId: null,
+            observedRepresentationType: null,
+            observedContractAddress: null,
+            observedMintAddress: null,
+            observedDecimals: null,
+          })
+        )
+      )
+    )
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {

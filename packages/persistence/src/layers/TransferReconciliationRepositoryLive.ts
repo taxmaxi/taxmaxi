@@ -102,7 +102,8 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.sources.principalId, principalId),
-            eq(schema.providerTransfers.sourceId, sourceId)
+            eq(schema.providerTransfers.sourceId, sourceId),
+            sql`${schema.providerTransfers.metadata}->>'evidenceOnly' is distinct from 'true'`
           )
         )
         .orderBy(asc(schema.providerTransfers.timestamp))

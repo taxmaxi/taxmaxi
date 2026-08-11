@@ -117,6 +117,8 @@ const DasMetadataSchema = Schema.Struct({
   token_standard: Schema.optional(Schema.String),
 })
 
+const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
+
 const DasAssetSchema = Schema.Struct({
   id: Schema.String,
   interface: Schema.optional(Schema.String),
@@ -138,7 +140,7 @@ const DasAssetSchema = Schema.Struct({
     Schema.NullOr(
       Schema.Struct({
         symbol: Schema.optional(Schema.String),
-        decimals: Schema.optional(Schema.Number),
+        decimals: Schema.optional(SolanaTokenDecimalsSchema),
         token_program: Schema.optional(Schema.String),
       })
     )
@@ -395,7 +397,9 @@ const hasHeliusDasPayload = (providerAsset: ProviderAssetRecord): boolean => {
   return decoded.right.source === "helius_das_get_asset_batch"
 }
 
-const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): boolean => {
+const representationTypeFromProviderAsset = (
+  providerAsset: ProviderAssetRecord
+): "token" | "nft" | null => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
   if (
@@ -403,17 +407,25 @@ const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): bool
     decoded.right.source !== "helius_das_get_asset_batch" ||
     decoded.right.asset === undefined
   ) {
-    return false
+    return null
   }
 
-  return representationTypeFromDasAsset(decoded.right.asset) !== null
+  return representationTypeFromDasAsset(decoded.right.asset)
 }
+
+const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): boolean =>
+  representationTypeFromProviderAsset(providerAsset) !== null
 
 const assetKindFromProviderAsset = (
   providerAsset: ProviderAssetRecord
 ): HeliusSolanaResolvedAsset["assetKind"] => {
   if (providerAsset.providerType === "native") {
     return "native"
+  }
+
+  const observedRepresentationType = representationTypeFromProviderAsset(providerAsset)
+  if (observedRepresentationType !== null) {
+    return observedRepresentationType
   }
 
   return storedNftHint(providerAsset) ? "nft" : "token"
@@ -807,10 +819,11 @@ const make = Effect.gen(function* () {
         providerAsset,
         mapping,
       })
+      const assetKind = assetKindFromProviderAsset(providerAsset)
 
       return {
         kind: resolvedKindFromMapping(mapping),
-        assetKind: assetKindFromProviderAsset(providerAsset),
+        assetKind,
         representationTypeObserved:
           reference.kind === "native" ||
           hasObservedRepresentationType(providerAsset) ||
@@ -823,7 +836,7 @@ const make = Effect.gen(function* () {
         name: providerAsset.name,
         decimals: providerAsset.exponent,
         tokenProgram: storedTokenProgram(providerAsset),
-        nftHint: storedNftHint(providerAsset),
+        nftHint: assetKind === "nft",
         mappingStatus: mapping.mappingStatus,
         mappingKind: mapping.mappingKind,
         canonicalAssetId: mapping.canonicalAssetId,
@@ -857,7 +870,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<boolean, SyncEngineStorageError> =>
     Effect.gen(function* () {
       if (hasHeliusDasPayload(providerAsset)) {
-        return false
+        return !hasObservedRepresentationType(providerAsset)
       }
 
       const mapping = yield* loadProviderAssetMapping({
