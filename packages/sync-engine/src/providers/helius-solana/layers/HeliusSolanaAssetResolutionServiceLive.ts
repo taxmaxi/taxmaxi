@@ -914,7 +914,11 @@ const make = Effect.gen(function* () {
 
       const dasAsset = dasAssets.get(reference.mintAddress)
       if (dasAsset !== undefined) {
-        return yield* upsertAndReloadProviderAssetRecord(providerAssetEntryFromDasAsset(dasAsset))
+        const refreshedEntry = providerAssetEntryFromDasAsset(dasAsset)
+        return yield* upsertAndReloadProviderAssetRecord({
+          ...refreshedEntry,
+          exponent: refreshedEntry.exponent ?? existing?.exponent ?? null,
+        })
       }
 
       if (existing !== null) {

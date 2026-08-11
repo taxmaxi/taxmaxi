@@ -656,6 +656,66 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
+  it("preserves observed decimals when a type refresh omits them", async () => {
+    const sparseResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          {
+            id: UNKNOWN_MINT,
+            content: {
+              metadata: {
+                name: "Sparse asset with decimals",
+                symbol: "SPARSE",
+              },
+            },
+            token_info: {
+              symbol: "SPARSE",
+              decimals: 5,
+            },
+          },
+        ])
+    )
+
+    expect(sparseResult).toMatchObject({
+      representationTypeObserved: false,
+      decimals: 5,
+    })
+
+    const refreshedResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          {
+            id: UNKNOWN_MINT,
+            interface: "V1_PRINT",
+            content: {
+              metadata: {
+                name: "Identified NFT without decimals",
+                symbol: "NFT",
+              },
+            },
+          },
+        ])
+    )
+
+    expect(refreshedResult).toMatchObject({
+      assetKind: "nft",
+      representationTypeObserved: true,
+      decimals: 5,
+    })
+  })
+
   it.each(["V1_PRINT", "MplCoreAsset"])(
     "recognizes the explicit %s DAS NFT interface",
     async (interfaceName) => {

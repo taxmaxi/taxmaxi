@@ -454,6 +454,65 @@ describe("SourceNormalizationRepositoryLive", () => {
       ])
     )
 
+    const observedNativeTransfer = result.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-native"
+    )
+    expect(observedNativeTransfer).toBeDefined()
+    if (observedNativeTransfer === undefined) {
+      return
+    }
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [canonicalTransfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            externalId: "canonical-observed-native",
+            externalGroupId: "group-observed-representations",
+            addressId: null,
+            blockchainId: null,
+            txHash: null,
+            timestamp: occurredAt,
+            type: "cex",
+            fromAddress: "external-address",
+            toAddress: "owned-address",
+            fromAccountRef: null,
+            toAccountRef: null,
+            fromPartyType: null,
+            fromPartyResourcePath: null,
+            toPartyType: null,
+            toPartyResourcePath: null,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: null,
+            amount: "1",
+            tokenId: null,
+            notes: null,
+            metadata: { provider: "test-onchain-adapter" },
+          })
+          .returning({ id: schema.transfers.id })
+
+        if (canonicalTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical transfer fixture")
+        }
+
+        yield* db.insert(schema.transferReconciliations).values({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId: observedNativeTransfer.id,
+          canonicalTransferId: canonicalTransfer.id,
+          canonicalTransactionId: result.transaction.id,
+          status: "auto_applied",
+          matchReason: "test_stale_observation",
+          confidence: "1",
+          deterministic: true,
+          reviewMetadata: null,
+        })
+      })
+    )
+
     await expect(
       runPg(
         Effect.gen(function* () {
@@ -676,6 +735,74 @@ describe("SourceNormalizationRepositoryLive", () => {
       metadata: { provider: "test-onchain-adapter", accountingOnly: true },
     })
 
+    const persistWithoutObservedTransfers = () =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            ...normalizedArtifacts,
+            providerTransfers: [],
+          })
+        )
+      )
+
+    await expect(persistWithoutObservedTransfers()).rejects.toThrow(
+      "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
+    )
+
+    const stateAfterRejectedRemoval = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const activeReconciliations = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
+        const preservedTransfers = yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
+
+        return { activeReconciliations, preservedTransfers }
+      })
+    )
+
+    expect(stateAfterRejectedRemoval.activeReconciliations).toEqual([
+      expect.objectContaining({
+        providerTransferId: observedNativeTransfer.id,
+        status: "auto_applied",
+      }),
+    ])
+    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(4)
+    expect(stateAfterRejectedRemoval.preservedTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          externalId: "observed-native",
+          observedRepresentationType: "native",
+          observedDecimals: 18,
+        }),
+      ])
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.transferReconciliations)
+          .set({ status: "approved" })
+          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
+      })
+    )
+    await expect(persistWithoutObservedTransfers()).rejects.toThrow(
+      "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
+      })
+    )
     await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
         repository.persistNormalizedArtifacts({

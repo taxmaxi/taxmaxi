@@ -42,6 +42,7 @@ import {
   HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL,
   HeliusSolanaCursorDecodeError,
   HeliusSolanaNormalizationDecodeError,
+  HeliusSolanaNormalizationEvidenceError,
   HeliusSolanaNormalizationNotImplementedError,
   HeliusSolanaNormalizationReferenceError,
   HeliusSolanaPayloadDecodeError,
@@ -252,6 +253,17 @@ type HeliusSolanaParsedTokenTransfer = Schema.Schema.Type<
   typeof HeliusSolanaParsedTokenTransferSchema
 >
 type HeliusSolanaWalletTransfer = Schema.Schema.Type<typeof HeliusSolanaWalletTransferSchema>
+
+type HeliusSolanaWalletTransferEvidence =
+  | {
+      readonly kind: "complete"
+      readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+    }
+  | {
+      readonly kind: "partial"
+      readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+      readonly error: HeliusSolanaPayloadDecodeError
+    }
 
 interface SolanaBalanceMovement {
   readonly asset: HeliusSolanaResolvedAsset
@@ -818,7 +830,7 @@ const buildProviderTransferDraft = ({
   observedRepresentationType:
     accountingOnly ||
     !observedRepresentationIdentityKnown ||
-    movement.asset.representationTypeObserved === false
+    movement.asset.representationTypeObserved !== true
       ? null
       : movement.asset.assetKind,
   observedContractAddress: null,
@@ -1111,7 +1123,7 @@ const make = ({
         cursor: string | null,
         pagesRemaining: number,
         foundOnEarlierPage: boolean
-      ): Effect.Effect<ReadonlyArray<HeliusSolanaWalletTransfer>, HeliusSolanaPayloadDecodeError> =>
+      ): Effect.Effect<HeliusSolanaWalletTransferEvidence, HeliusSolanaPayloadDecodeError> =>
         heliusSyncClient
           .fetchTransfersForAddress({
             walletAddress,
@@ -1134,36 +1146,74 @@ const make = ({
             ),
             Effect.flatMap((page) => {
               const matches = page.data.filter((transfer) => transfer.signature === signature)
-              const canFetchNextPage =
-                page.pagination.hasMore &&
-                pagesRemaining > 1 &&
-                page.pagination.nextCursor !== null &&
-                page.pagination.nextCursor !== undefined
-              if (!canFetchNextPage || (foundOnEarlierPage && matches.length === 0)) {
-                return Effect.succeed(matches)
+              if (foundOnEarlierPage && matches.length === 0) {
+                return Effect.succeed({
+                  kind: "complete",
+                  transfers: matches,
+                } satisfies HeliusSolanaWalletTransferEvidence)
+              }
+
+              if (!page.pagination.hasMore) {
+                return Effect.succeed({
+                  kind: "complete",
+                  transfers: matches,
+                } satisfies HeliusSolanaWalletTransferEvidence)
+              }
+
+              const nextCursor = page.pagination.nextCursor
+              if (nextCursor === null || nextCursor === undefined || pagesRemaining <= 1) {
+                return Effect.succeed({
+                  kind: "partial",
+                  transfers: matches,
+                  error: toPayloadDecodeError(
+                    nextCursor === null || nextCursor === undefined
+                      ? "Helius Solana wallet transfer evidence pagination had no continuation cursor."
+                      : "Helius Solana wallet transfer evidence exceeded the pagination search limit.",
+                    {
+                      pagesRemaining,
+                      hasMore: page.pagination.hasMore,
+                      nextCursor: nextCursor ?? null,
+                    }
+                  ),
+                } satisfies HeliusSolanaWalletTransferEvidence)
               }
 
               return fetchPage(
-                page.pagination.nextCursor,
+                nextCursor,
                 pagesRemaining - 1,
                 foundOnEarlierPage || matches.length > 0
-              ).pipe(Effect.map((nextMatches) => [...matches, ...nextMatches]))
+              ).pipe(
+                Effect.map(
+                  (nextEvidence): HeliusSolanaWalletTransferEvidence => ({
+                    ...nextEvidence,
+                    transfers: [...matches, ...nextEvidence.transfers],
+                  })
+                ),
+                Effect.catchAll((error) =>
+                  matches.length === 0
+                    ? Effect.fail(error)
+                    : Effect.logInfo(
+                        {
+                          provider: HELIUS_SOLANA_PROVIDER_KEY,
+                          signature,
+                          walletAddress,
+                          retainedMatchCount: matches.length,
+                          error,
+                        },
+                        "helius-solana:partial-transfer-evidence-retained"
+                      ).pipe(
+                        Effect.as({
+                          kind: "partial",
+                          transfers: matches,
+                          error,
+                        } satisfies HeliusSolanaWalletTransferEvidence)
+                      )
+                )
+              )
             })
           )
 
-      return fetchPage(null, 10, false).pipe(
-        Effect.catchAll((error) =>
-          Effect.logInfo(
-            {
-              provider: HELIUS_SOLANA_PROVIDER_KEY,
-              signature,
-              walletAddress,
-              error,
-            },
-            "helius-solana:transfer-evidence-unavailable"
-          ).pipe(Effect.as<ReadonlyArray<HeliusSolanaWalletTransfer>>([]))
-        )
-      )
+      return fetchPage(null, 10, false)
     }
 
     const buildSolMovements = ({
@@ -1307,18 +1357,9 @@ const make = ({
           matchedWrappedSolRows.add(matchingRow)
         }
       }
-      const candidateNativeTransfers = sentinelTransfers.filter(
+      const candidateTransfersBeforeBalanceEvidence = sentinelTransfers.filter(
         (transfer) => !matchedWrappedSolRows.has(transfer)
       )
-      if (nativeMovement === undefined) {
-        return {
-          nativeMovements,
-          splTransfers: transfers.filter(
-            (transfer) => !candidateNativeTransfers.includes(transfer)
-          ),
-          ambiguousTransfers: candidateNativeTransfers,
-        }
-      }
 
       const signedRawAmount = (transfer: HeliusSolanaWalletTransfer): bigint | null => {
         if (!/^\d+$/.test(transfer.amountRaw)) {
@@ -1329,12 +1370,15 @@ const make = ({
         return transfer.direction === "in" ? amount : -amount
       }
 
-      const targetNativeRawAmount =
-        BigInt(nativeMovement.rawUnits) * (nativeMovement.direction === "inbound" ? 1n : -1n)
-
-      const findUniqueNativeSubset = (
-        candidateTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
-      ): ReadonlyArray<HeliusSolanaWalletTransfer> | null => {
+      const findUniqueTransferSubset = ({
+        candidateTransfers,
+        targetRawAmount,
+        expectedDecimals,
+      }: {
+        readonly candidateTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+        readonly targetRawAmount: bigint
+        readonly expectedDecimals: number | null
+      }): ReadonlyArray<HeliusSolanaWalletTransfer> | null => {
         if (candidateTransfers.length > 20) {
           return null
         }
@@ -1342,7 +1386,7 @@ const make = ({
         const signedAmounts: Array<bigint> = []
         for (const transfer of candidateTransfers) {
           const amount = signedRawAmount(transfer)
-          if (amount === null || transfer.decimals !== nativeAsset.decimals) {
+          if (amount === null || transfer.decimals !== expectedDecimals) {
             return null
           }
 
@@ -1390,14 +1434,14 @@ const make = ({
           const bounds = remainingBounds[index]
           if (
             bounds === undefined ||
-            targetNativeRawAmount < total + bounds.minimum ||
-            targetNativeRawAmount > total + bounds.maximum
+            targetRawAmount < total + bounds.minimum ||
+            targetRawAmount > total + bounds.maximum
           ) {
             return
           }
 
           if (index === signedAmounts.length) {
-            if (total === targetNativeRawAmount) {
+            if (total === targetRawAmount) {
               if (searchState.uniqueSelection === null) {
                 searchState.uniqueSelection = [...selectedIndexes]
               } else {
@@ -1438,7 +1482,69 @@ const make = ({
           .filter((row) => row !== undefined)
       }
 
-      const nativeWalletTransfers = findUniqueNativeSubset(candidateNativeTransfers)
+      const preWrappedBalances = (payload.meta?.preTokenBalances ?? []).filter(
+        (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
+      )
+      const postWrappedBalances = (payload.meta?.postTokenBalances ?? []).filter(
+        (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
+      )
+      const wrappedBalanceKey = (balance: HeliusSolanaTokenBalance) =>
+        `${balance.accountIndex}:${balance.mint}`
+      const preWrappedByKey = new Map(
+        preWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
+      )
+      const postWrappedByKey = new Map(
+        postWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
+      )
+      const wrappedBalanceKeys = new Set([...preWrappedByKey.keys(), ...postWrappedByKey.keys()])
+
+      for (const key of wrappedBalanceKeys) {
+        const pre = preWrappedByKey.get(key)
+        const post = postWrappedByKey.get(key)
+        const balance = post ?? pre
+        const owner = post?.owner ?? pre?.owner ?? null
+        if (balance === undefined || owner !== walletAddress) {
+          continue
+        }
+
+        const delta = subtractBigIntStrings(
+          post?.uiTokenAmount.amount ?? "0",
+          pre?.uiTokenAmount.amount ?? "0"
+        )
+        if (delta === 0n) {
+          continue
+        }
+
+        const matchingRows = findUniqueTransferSubset({
+          candidateTransfers: candidateTransfersBeforeBalanceEvidence.filter(
+            (transfer) => !matchedWrappedSolRows.has(transfer)
+          ),
+          targetRawAmount: delta,
+          expectedDecimals: balance.uiTokenAmount.decimals,
+        })
+        matchingRows?.forEach((row) => matchedWrappedSolRows.add(row))
+      }
+
+      const candidateNativeTransfers = sentinelTransfers.filter(
+        (transfer) => !matchedWrappedSolRows.has(transfer)
+      )
+      if (nativeMovement === undefined) {
+        return {
+          nativeMovements,
+          splTransfers: transfers.filter(
+            (transfer) => !candidateNativeTransfers.includes(transfer)
+          ),
+          ambiguousTransfers: candidateNativeTransfers,
+        }
+      }
+
+      const targetNativeRawAmount =
+        BigInt(nativeMovement.rawUnits) * (nativeMovement.direction === "inbound" ? 1n : -1n)
+      const nativeWalletTransfers = findUniqueTransferSubset({
+        candidateTransfers: candidateNativeTransfers,
+        targetRawAmount: targetNativeRawAmount,
+        expectedDecimals: nativeAsset.decimals,
+      })
 
       if (nativeWalletTransfers === null) {
         return {
@@ -2371,10 +2477,30 @@ const make = ({
 
           const signature = yield* requirePayloadSignature(payload)
 
-          const walletTransferEvidence = yield* fetchWalletTransferEvidence({
+          const walletTransferEvidenceResult = yield* fetchWalletTransferEvidence({
             walletAddress,
             signature,
-          })
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new HeliusSolanaNormalizationEvidenceError({
+                  message: "Failed to load complete Solana wallet transfer evidence.",
+                  cause,
+                })
+            )
+          )
+          if (walletTransferEvidenceResult.kind === "partial") {
+            return yield* Effect.fail(
+              new HeliusSolanaNormalizationEvidenceError({
+                message: "Solana wallet transfer evidence paging was incomplete.",
+                cause: {
+                  retainedTransfers: walletTransferEvidenceResult.transfers,
+                  error: walletTransferEvidenceResult.error,
+                },
+              })
+            )
+          }
+          const walletTransferEvidence = walletTransferEvidenceResult.transfers
 
           const timestamp = timestampFromPayload({
             payload,

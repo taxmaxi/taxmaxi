@@ -453,6 +453,64 @@ describe("TransferReconciliationServiceLive", () => {
     expect(reconciliationCandidates.map((candidate) => candidate.providerTransferId)).toEqual([
       accountingTransfer?.id,
     ])
+
+    const evidenceTransfer = persisted.providerTransfers.find(
+      (transfer) => transfer.externalId === "split-native-evidence:a"
+    )
+    expect(evidenceTransfer).toBeDefined()
+    if (evidenceTransfer === undefined) {
+      return
+    }
+
+    const walletAddress = "bc1qownedevidenceonly0000000000000000000000"
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "evidence-only-receipt",
+        txHash: "split-native-evidence-hash",
+        timestamp,
+        amount: "0.5",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const reconciliationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: evidenceTransfer.id,
+            canonicalTransferId: receipt.transferId,
+            canonicalTransactionId: receipt.transactionId,
+            status: "auto_applied",
+            matchReason: "test_evidence_only_filter",
+            confidence: "1",
+            deterministic: true,
+            reviewMetadata: null,
+          })
+          .returning({ id: schema.transferReconciliations.id })
+
+        if (reconciliation === undefined) {
+          return yield* Effect.dieMessage("Failed to create evidence-only reconciliation")
+        }
+
+        return reconciliation.id
+      })
+    )
+
+    const canonicalization = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId,
+        })
+      )
+    )
+
+    expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
   })
 
   it("links a Coinbase withdrawal to a deterministic owned onchain receipt", async () => {

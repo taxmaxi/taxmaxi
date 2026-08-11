@@ -1544,8 +1544,15 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const providerTransfers = yield* executor
-        .select({ id: schema.providerTransfers.id })
+        .select({
+          id: schema.providerTransfers.id,
+          reconciliationStatus: schema.transferReconciliations.status,
+        })
         .from(schema.providerTransfers)
+        .leftJoin(
+          schema.transferReconciliations,
+          eq(schema.transferReconciliations.providerTransferId, schema.providerTransfers.id)
+        )
         .where(eq(schema.providerTransfers.transactionId, transactionId))
         .pipe(
           wrapSyncEngineSqlError(
@@ -1555,24 +1562,41 @@ const make = Effect.gen(function* () {
 
       yield* Effect.forEach(
         providerTransfers.filter(({ id }) => !currentProviderTransferIds.has(id)),
-        ({ id }) =>
-          executor
-            .update(schema.providerTransfers)
-            .set({
-              observedBlockchainId: null,
-              observedRepresentationType: null,
-              observedContractAddress: null,
-              observedMintAddress: null,
-              observedDecimals: null,
-              metadata: sql`coalesce(${schema.providerTransfers.metadata}, '{}'::jsonb) || '{"evidenceOnly": true, "stale": true}'::jsonb`,
-              updatedAt: nowDate(),
-            })
-            .where(eq(schema.providerTransfers.id, id))
-            .pipe(
-              wrapSyncEngineSqlError(
-                "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.clearTransfer"
+        ({ id, reconciliationStatus }) =>
+          Effect.gen(function* () {
+            if (reconciliationStatus === "auto_applied" || reconciliationStatus === "approved") {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation",
+                  cause: {
+                    providerTransferId: id,
+                    reconciliationStatus,
+                    message:
+                      "Cannot remove observed provider transfer evidence while its reconciliation is active.",
+                  },
+                })
               )
-            )
+            }
+
+            yield* executor
+              .update(schema.providerTransfers)
+              .set({
+                observedBlockchainId: null,
+                observedRepresentationType: null,
+                observedContractAddress: null,
+                observedMintAddress: null,
+                observedDecimals: null,
+                metadata: sql`coalesce(${schema.providerTransfers.metadata}, '{}'::jsonb) || '{"evidenceOnly": true, "stale": true}'::jsonb`,
+                updatedAt: nowDate(),
+              })
+              .where(eq(schema.providerTransfers.id, id))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.clearTransfer"
+                )
+              )
+          })
       )
     })
 

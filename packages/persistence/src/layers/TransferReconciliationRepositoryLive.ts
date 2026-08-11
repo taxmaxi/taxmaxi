@@ -301,7 +301,8 @@ const make = Effect.gen(function* () {
                       eq(schema.transferReconciliations.status, "approved")
                     ),
                     sql`${schema.transferReconciliations.canonicalTransferId} is not null`,
-                    sql`${schema.transferReconciliations.canonicalTransactionId} is not null`
+                    sql`${schema.transferReconciliations.canonicalTransactionId} is not null`,
+                    sql`${schema.providerTransfers.metadata}->>'evidenceOnly' is distinct from 'true'`
                   )
                 )
                 .orderBy(asc(schema.providerTransfers.timestamp))
