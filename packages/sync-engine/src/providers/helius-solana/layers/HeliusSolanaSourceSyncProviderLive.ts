@@ -87,13 +87,6 @@ const SOLANA_TOKEN_PROGRAM_IDS = new Set([
 const SOLANA_TOKEN_PROGRAM_NAMES = new Set(["spl-token", "spl-token-2022"])
 const MAX_NATIVE_SUBSET_SEARCH_STATES = 4_096
 
-const HeliusSolanaCursorPayloadSchema = Schema.Struct({
-  paginationToken: Schema.NullOr(Schema.String),
-  resumeBoundaryActive: Schema.optional(Schema.Boolean),
-  resumeCheckpointExternalId: Schema.optional(Schema.NullOr(Schema.String)),
-  resumeHighWatermarkIso: Schema.optional(Schema.NullOr(Schema.String)),
-})
-
 const HeliusSolanaTransactionsPageSchema = Schema.Struct({
   data: Schema.Array(Schema.Unknown),
   paginationToken: Schema.NullOr(Schema.String),
@@ -134,6 +127,11 @@ const HeliusSolanaCloseAccountParsedInstructionSchema = Schema.Struct({
 })
 
 const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
+const SolanaRawTokenAmountSchema = Schema.String.pipe(
+  Schema.filter((amount) => /^(0|[1-9]\d*)$/.test(amount), {
+    message: () => "Expected canonical unsigned token raw units.",
+  })
+)
 
 const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   accountIndex: Schema.Number,
@@ -141,7 +139,7 @@ const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   owner: Schema.optional(Schema.NullOr(Schema.String)),
   programId: Schema.optional(Schema.NullOr(Schema.String)),
   uiTokenAmount: Schema.Struct({
-    amount: Schema.String,
+    amount: SolanaRawTokenAmountSchema,
     decimals: SolanaTokenDecimalsSchema,
     uiAmountString: Schema.optional(Schema.NullOr(Schema.String)),
   }),
@@ -183,7 +181,7 @@ const HeliusSolanaWalletTransferSchema = Schema.Struct({
   mint: Schema.String,
   symbol: Schema.NullOr(Schema.String),
   amount: Schema.Union(Schema.Number, Schema.NumberFromString),
-  amountRaw: Schema.String,
+  amountRaw: SolanaRawTokenAmountSchema,
   decimals: SolanaTokenDecimalsSchema,
 })
 
@@ -193,6 +191,16 @@ const HeliusSolanaWalletTransfersPageSchema = Schema.Struct({
     hasMore: Schema.Boolean,
     nextCursor: Schema.optional(Schema.NullOr(Schema.String)),
   }),
+})
+
+const HeliusSolanaCursorPayloadSchema = Schema.Struct({
+  paginationToken: Schema.NullOr(Schema.String),
+  resumeBoundaryActive: Schema.optional(Schema.Boolean),
+  resumeCheckpointExternalId: Schema.optional(Schema.NullOr(Schema.String)),
+  resumeHighWatermarkIso: Schema.optional(Schema.NullOr(Schema.String)),
+  walletTransferCursor: Schema.optional(Schema.NullOr(Schema.String)),
+  walletTransferExhausted: Schema.optional(Schema.Boolean),
+  pendingWalletTransfers: Schema.optional(Schema.Array(HeliusSolanaWalletTransferSchema)),
 })
 
 const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
@@ -223,11 +231,27 @@ const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
   tokenTransfers: Schema.optional(Schema.Array(HeliusSolanaParsedTokenTransferSchema)),
 })
 
+const HeliusSolanaCachedRawRecordPayloadSchema = Schema.TaggedStruct(
+  "HeliusSolanaCachedRawRecordPayload",
+  {
+    fullTransaction: Schema.Unknown,
+    walletTransferEvidence: Schema.Array(HeliusSolanaWalletTransferSchema),
+  }
+)
+
+const HeliusSolanaNormalizationPayloadSchema = Schema.Union(
+  HeliusSolanaCachedRawRecordPayloadSchema,
+  HeliusSolanaFullTransactionPayloadSchema
+)
+
 interface HeliusSolanaCursorPayload {
   readonly paginationToken: string | null
   readonly resumeBoundaryActive: boolean
   readonly resumeCheckpointExternalId: string | null
   readonly resumeHighWatermark: Date | null
+  readonly walletTransferCursor: string | null
+  readonly walletTransferExhausted: boolean
+  readonly pendingWalletTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
 }
 
 interface HeliusSolanaEncodedCursorPayload {
@@ -235,6 +259,9 @@ interface HeliusSolanaEncodedCursorPayload {
   readonly resumeBoundaryActive?: boolean
   readonly resumeCheckpointExternalId?: string | null
   readonly resumeHighWatermarkIso?: string | null
+  readonly walletTransferCursor?: string | null
+  readonly walletTransferExhausted?: boolean
+  readonly pendingWalletTransfers?: ReadonlyArray<HeliusSolanaWalletTransfer>
 }
 
 interface DecodedHeliusSolanaTransactionEntry {
@@ -253,6 +280,11 @@ type HeliusSolanaParsedTokenTransfer = Schema.Schema.Type<
   typeof HeliusSolanaParsedTokenTransferSchema
 >
 type HeliusSolanaWalletTransfer = Schema.Schema.Type<typeof HeliusSolanaWalletTransferSchema>
+
+interface HeliusSolanaDecodedNormalizationPayload {
+  readonly fullTransaction: HeliusSolanaFullTransactionPayload
+  readonly walletTransferEvidence: ReadonlyArray<HeliusSolanaWalletTransfer> | null
+}
 
 type HeliusSolanaWalletTransferEvidence =
   | {
@@ -297,6 +329,9 @@ const decodeUnknownFullTransactionEntry = Schema.decodeUnknown(
 const decodeUnknownFullTransactionPayload = Schema.decodeUnknown(
   HeliusSolanaFullTransactionPayloadSchema
 )
+const decodeUnknownNormalizationPayload = Schema.decodeUnknown(
+  HeliusSolanaNormalizationPayloadSchema
+)
 const decodeUnknownWalletTransfersPage = Schema.decodeUnknown(HeliusSolanaWalletTransfersPageSchema)
 const decodeCloseAccountParsedInstruction = Schema.decodeUnknownOption(
   HeliusSolanaCloseAccountParsedInstructionSchema
@@ -321,6 +356,9 @@ const decodeCursorPayload = (
       resumeBoundaryActive: false,
       resumeCheckpointExternalId: null,
       resumeHighWatermark: null,
+      walletTransferCursor: null,
+      walletTransferExhausted: false,
+      pendingWalletTransfers: [],
     })
   }
 
@@ -352,6 +390,9 @@ const decodeCursorPayload = (
       resumeBoundaryActive: decoded.resumeBoundaryActive ?? false,
       resumeCheckpointExternalId: decoded.resumeCheckpointExternalId ?? null,
       resumeHighWatermark,
+      walletTransferCursor: decoded.walletTransferCursor ?? null,
+      walletTransferExhausted: decoded.walletTransferExhausted ?? false,
+      pendingWalletTransfers: decoded.pendingWalletTransfers ?? [],
     }
   })
 }
@@ -360,7 +401,10 @@ const encodeCursorPayload = (payload: HeliusSolanaCursorPayload): unknown => {
   const encoded: HeliusSolanaEncodedCursorPayload =
     payload.resumeBoundaryActive ||
     payload.resumeCheckpointExternalId !== null ||
-    payload.resumeHighWatermark !== null
+    payload.resumeHighWatermark !== null ||
+    payload.walletTransferCursor !== null ||
+    payload.walletTransferExhausted ||
+    payload.pendingWalletTransfers.length > 0
       ? {
           paginationToken: payload.paginationToken,
           resumeBoundaryActive: payload.resumeBoundaryActive,
@@ -369,6 +413,9 @@ const encodeCursorPayload = (payload: HeliusSolanaCursorPayload): unknown => {
             payload.resumeHighWatermark === null
               ? null
               : Timestamp.fromDate(payload.resumeHighWatermark).toISOString(),
+          walletTransferCursor: payload.walletTransferCursor,
+          walletTransferExhausted: payload.walletTransferExhausted,
+          pendingWalletTransfers: payload.pendingWalletTransfers,
         }
       : {
           paginationToken: payload.paginationToken,
@@ -464,6 +511,9 @@ const inactiveCursorPayload = (paginationToken: string | null): HeliusSolanaCurs
   resumeBoundaryActive: false,
   resumeCheckpointExternalId: null,
   resumeHighWatermark: null,
+  walletTransferCursor: null,
+  walletTransferExhausted: false,
+  pendingWalletTransfers: [],
 })
 
 const makeNextCursorPayload = ({
@@ -472,12 +522,18 @@ const makeNextCursorPayload = ({
   reachedBoundary,
   resumeHighWatermark,
   resumeCheckpointExternalId,
+  walletTransferCursor,
+  walletTransferExhausted,
+  pendingWalletTransfers,
 }: {
   readonly paginationToken: string | null
   readonly isIncrementalBoundaryScan: boolean
   readonly reachedBoundary: boolean
   readonly resumeHighWatermark: Date | null
   readonly resumeCheckpointExternalId: string | null
+  readonly walletTransferCursor: string | null
+  readonly walletTransferExhausted: boolean
+  readonly pendingWalletTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
 }): HeliusSolanaCursorPayload => {
   if (reachedBoundary || paginationToken === null) {
     return inactiveCursorPayload(null)
@@ -489,10 +545,21 @@ const makeNextCursorPayload = ({
       resumeBoundaryActive: true,
       resumeCheckpointExternalId,
       resumeHighWatermark,
+      walletTransferCursor,
+      walletTransferExhausted,
+      pendingWalletTransfers,
     }
   }
 
-  return inactiveCursorPayload(paginationToken)
+  return {
+    paginationToken,
+    resumeBoundaryActive: false,
+    resumeCheckpointExternalId: null,
+    resumeHighWatermark: null,
+    walletTransferCursor,
+    walletTransferExhausted,
+    pendingWalletTransfers,
+  }
 }
 
 const scanIncrementalBoundary = ({
@@ -941,6 +1008,137 @@ const make = ({
     const assetRepository = yield* AssetRepository
     const assetResolutionService = yield* HeliusSolanaAssetResolutionService
 
+    const cacheWalletTransferEvidenceForRawBatch = ({
+      walletAddress,
+      records,
+      cursor,
+    }: {
+      readonly walletAddress: string
+      readonly records: ReadonlyArray<ProviderRawRecord>
+      readonly cursor: HeliusSolanaCursorPayload
+    }) =>
+      Effect.gen(function* () {
+        if (records.length === 0) {
+          return {
+            records,
+            walletTransferCursor: cursor.walletTransferCursor,
+            walletTransferExhausted: cursor.walletTransferExhausted,
+            pendingWalletTransfers: cursor.pendingWalletTransfers,
+          }
+        }
+
+        const signatures = new Set(records.map((record) => record.externalRecordId))
+        const oldestOccurredAt = records.reduce(
+          (oldest, record) => Math.min(oldest, Math.floor(record.occurredAt.getTime() / 1_000)),
+          Number.POSITIVE_INFINITY
+        )
+        const availableTransfers = [...cursor.pendingWalletTransfers]
+        let nextCursor = cursor.walletTransferCursor
+        let exhausted = cursor.walletTransferExhausted
+        const visitedCursors = new Set(nextCursor === null ? [] : [nextCursor])
+        let lastPageMatchedCurrentBatch = availableTransfers.some((transfer) =>
+          signatures.has(transfer.signature)
+        )
+        const hasCrossedBatchBoundary = () =>
+          availableTransfers.some((transfer) => transfer.timestamp < oldestOccurredAt)
+
+        while (!exhausted && (!hasCrossedBatchBoundary() || lastPageMatchedCurrentBatch)) {
+          const page = yield* heliusSyncClient
+            .fetchTransfersForAddress({
+              walletAddress,
+              limit: 100,
+              cursor: nextCursor,
+            })
+            .pipe(
+              Effect.mapError(toProviderFailureError),
+              Effect.flatMap((payload) =>
+                decodeUnknownWalletTransfersPage(payload).pipe(
+                  Effect.mapError((cause) =>
+                    toProviderFailureError(
+                      toPayloadDecodeError(
+                        `Invalid Helius Solana wallet transfers page: ${cause.message}`,
+                        cause
+                      )
+                    )
+                  )
+                )
+              )
+            )
+
+          lastPageMatchedCurrentBatch = page.data.some((transfer) =>
+            signatures.has(transfer.signature)
+          )
+          availableTransfers.push(...page.data)
+
+          if (!page.pagination.hasMore) {
+            exhausted = true
+            nextCursor = null
+            continue
+          }
+
+          const continuationCursor = page.pagination.nextCursor
+          if (continuationCursor === null || continuationCursor === undefined) {
+            return yield* Effect.fail(
+              toProviderFailureError(
+                toPayloadDecodeError(
+                  "Helius Solana wallet transfer evidence pagination had no continuation cursor."
+                )
+              )
+            )
+          }
+          if (visitedCursors.has(continuationCursor)) {
+            return yield* Effect.fail(
+              toProviderFailureError(
+                toPayloadDecodeError(
+                  "Helius Solana wallet transfer evidence pagination repeated a cursor."
+                )
+              )
+            )
+          }
+
+          visitedCursors.add(continuationCursor)
+          nextCursor = continuationCursor
+        }
+
+        const transfersBySignature = new Map<string, Array<HeliusSolanaWalletTransfer>>()
+        for (const transfer of availableTransfers) {
+          if (!signatures.has(transfer.signature)) {
+            continue
+          }
+
+          const current = transfersBySignature.get(transfer.signature) ?? []
+          current.push(transfer)
+          transfersBySignature.set(transfer.signature, current)
+        }
+
+        const cachedRecords = records.map((record) =>
+          ProviderRawRecord.make({
+            recordType: record.recordType,
+            providerKey: record.providerKey,
+            externalRecordId: record.externalRecordId,
+            externalAccountId: record.externalAccountId,
+            externalParentId: record.externalParentId,
+            occurredAt: record.occurredAt,
+            payload: {
+              _tag: "HeliusSolanaCachedRawRecordPayload",
+              fullTransaction: record.payload,
+              walletTransferEvidence: transfersBySignature.get(record.externalRecordId) ?? [],
+            },
+          })
+        )
+        const pendingWalletTransfers = availableTransfers.filter(
+          (transfer) =>
+            !signatures.has(transfer.signature) && transfer.timestamp <= oldestOccurredAt
+        )
+
+        return {
+          records: cachedRecords,
+          walletTransferCursor: nextCursor,
+          walletTransferExhausted: exhausted,
+          pendingWalletTransfers,
+        }
+      })
+
     const fetchHeliusRawBatch = ({
       sourceId,
       walletAddress,
@@ -1011,12 +1209,20 @@ const make = ({
               reachedBoundary: false,
             }
         const filteredRecords = boundaryScan.records
+        const cachedBatch = yield* cacheWalletTransferEvidenceForRawBatch({
+          walletAddress,
+          records: filteredRecords,
+          cursor,
+        })
         const nextCursor = makeNextCursorPayload({
           paginationToken: decodedPage.paginationToken,
           isIncrementalBoundaryScan,
           reachedBoundary: boundaryScan.reachedBoundary,
           resumeHighWatermark: activeResumeHighWatermark,
           resumeCheckpointExternalId: activeResumeCheckpointExternalId,
+          walletTransferCursor: cachedBatch.walletTransferCursor,
+          walletTransferExhausted: cachedBatch.walletTransferExhausted,
+          pendingWalletTransfers: cachedBatch.pendingWalletTransfers,
         })
 
         yield* Effect.logInfo(
@@ -1027,16 +1233,16 @@ const make = ({
             hasPaginationToken: cursor.paginationToken !== null,
             resumeBoundaryActive: isIncrementalBoundaryScan,
             reachedResumeBoundary: boundaryScan.reachedBoundary,
-            recordCount: filteredRecords.length,
+            recordCount: cachedBatch.records.length,
             retryable: false,
           },
           "helius-solana:raw-batch"
         )
 
         return FetchProviderRawBatchResult.make({
-          records: filteredRecords,
+          records: cachedBatch.records,
           cursorPayload: encodeCursorPayload(nextCursor),
-          highWatermark: maxOccurredAt(filteredRecords),
+          highWatermark: maxOccurredAt(cachedBatch.records),
           done: boundaryScan.reachedBoundary || decodedPage.paginationToken === null,
         })
       })
@@ -1102,27 +1308,82 @@ const make = ({
       mintAddress: null,
     })
 
-    const decodeNormalizationPayload = (payload: unknown) =>
-      decodeUnknownFullTransactionPayload(payload).pipe(
+    const decodeNormalizationPayload = (
+      payload: unknown
+    ): Effect.Effect<
+      HeliusSolanaDecodedNormalizationPayload,
+      HeliusSolanaNormalizationDecodeError
+    > =>
+      decodeUnknownNormalizationPayload(payload).pipe(
         Effect.mapError((cause) =>
           toNormalizationDecodeError(
             `Invalid Helius Solana full transaction payload: ${cause.message}`,
             cause
           )
-        )
+        ),
+        Effect.flatMap((decoded) =>
+          "_tag" in decoded
+            ? decodeUnknownFullTransactionPayload(decoded.fullTransaction).pipe(
+                Effect.mapError((cause) =>
+                  toNormalizationDecodeError(
+                    `Invalid cached Helius Solana full transaction payload: ${cause.message}`,
+                    cause
+                  )
+                ),
+                Effect.map(
+                  (fullTransaction): HeliusSolanaDecodedNormalizationPayload => ({
+                    fullTransaction,
+                    walletTransferEvidence: decoded.walletTransferEvidence,
+                  })
+                )
+              )
+            : Effect.succeed({
+                fullTransaction: decoded,
+                walletTransferEvidence: null,
+              } satisfies HeliusSolanaDecodedNormalizationPayload)
+        ),
+        Effect.flatMap((decoded) => {
+          const decimalsByBalance = new Map<string, number>()
+          const balances = [
+            ...(decoded.fullTransaction.meta?.preTokenBalances ?? []),
+            ...(decoded.fullTransaction.meta?.postTokenBalances ?? []),
+          ]
+
+          for (const balance of balances) {
+            const key = `${balance.accountIndex}:${balance.mint}`
+            const priorDecimals = decimalsByBalance.get(key)
+            if (priorDecimals !== undefined && priorDecimals !== balance.uiTokenAmount.decimals) {
+              return Effect.fail(
+                toNormalizationDecodeError(
+                  "Conflicting Solana token decimals were observed for the same balance.",
+                  {
+                    accountIndex: balance.accountIndex,
+                    mint: balance.mint,
+                    priorDecimals,
+                    observedDecimals: balance.uiTokenAmount.decimals,
+                  }
+                )
+              )
+            }
+            decimalsByBalance.set(key, balance.uiTokenAmount.decimals)
+          }
+
+          return Effect.succeed(decoded)
+        })
       )
 
     const fetchWalletTransferEvidence = ({
       walletAddress,
       signature,
+      transactionTimestampSeconds,
     }: {
       readonly walletAddress: string
       readonly signature: string
+      readonly transactionTimestampSeconds: number
     }) => {
+      const visitedCursors = new Set<string>()
       const fetchPage = (
-        cursor: string | null,
-        pagesRemaining: number,
-        foundOnEarlierPage: boolean
+        cursor: string | null
       ): Effect.Effect<HeliusSolanaWalletTransferEvidence, HeliusSolanaPayloadDecodeError> =>
         heliusSyncClient
           .fetchTransfersForAddress({
@@ -1146,7 +1407,10 @@ const make = ({
             ),
             Effect.flatMap((page) => {
               const matches = page.data.filter((transfer) => transfer.signature === signature)
-              if (foundOnEarlierPage && matches.length === 0) {
+              const crossedTransactionTime = page.data.some(
+                (transfer) => transfer.timestamp < transactionTimestampSeconds
+              )
+              if (crossedTransactionTime) {
                 return Effect.succeed({
                   kind: "complete",
                   transfers: matches,
@@ -1161,28 +1425,32 @@ const make = ({
               }
 
               const nextCursor = page.pagination.nextCursor
-              if (nextCursor === null || nextCursor === undefined || pagesRemaining <= 1) {
+              if (nextCursor === null || nextCursor === undefined) {
                 return Effect.succeed({
                   kind: "partial",
                   transfers: matches,
                   error: toPayloadDecodeError(
-                    nextCursor === null || nextCursor === undefined
-                      ? "Helius Solana wallet transfer evidence pagination had no continuation cursor."
-                      : "Helius Solana wallet transfer evidence exceeded the pagination search limit.",
+                    "Helius Solana wallet transfer evidence pagination had no continuation cursor.",
                     {
-                      pagesRemaining,
                       hasMore: page.pagination.hasMore,
                       nextCursor: nextCursor ?? null,
                     }
                   ),
                 } satisfies HeliusSolanaWalletTransferEvidence)
               }
+              if (visitedCursors.has(nextCursor)) {
+                return Effect.succeed({
+                  kind: "partial",
+                  transfers: matches,
+                  error: toPayloadDecodeError(
+                    "Helius Solana wallet transfer evidence pagination repeated a cursor.",
+                    { nextCursor }
+                  ),
+                } satisfies HeliusSolanaWalletTransferEvidence)
+              }
+              visitedCursors.add(nextCursor)
 
-              return fetchPage(
-                nextCursor,
-                pagesRemaining - 1,
-                foundOnEarlierPage || matches.length > 0
-              ).pipe(
+              return fetchPage(nextCursor).pipe(
                 Effect.map(
                   (nextEvidence): HeliusSolanaWalletTransferEvidence => ({
                     ...nextEvidence,
@@ -1213,7 +1481,7 @@ const make = ({
             })
           )
 
-      return fetchPage(null, 10, false)
+      return fetchPage(null)
     }
 
     const buildSolMovements = ({
@@ -1575,7 +1843,7 @@ const make = ({
             direction,
             fromAddress: direction === "inbound" ? transfer.counterparty : walletAddress,
             toAddress: direction === "inbound" ? walletAddress : transfer.counterparty,
-            role: "principal",
+            role: nativeMovement.role,
             position: 0,
             evidenceKind: "transfer_row",
             supplementalTransferRow: transfer,
@@ -2473,22 +2741,37 @@ const make = ({
             sourceRecordExternalAccountId: sourceRecord.externalAccountId,
           })
 
-          const payload = yield* decodeNormalizationPayload(sourceRecord.payload)
+          const normalizationPayload = yield* decodeNormalizationPayload(sourceRecord.payload)
+          const payload = normalizationPayload.fullTransaction
 
           const signature = yield* requirePayloadSignature(payload)
 
-          const walletTransferEvidenceResult = yield* fetchWalletTransferEvidence({
-            walletAddress,
-            signature,
-          }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new HeliusSolanaNormalizationEvidenceError({
-                  message: "Failed to load complete Solana wallet transfer evidence.",
-                  cause,
-                })
-            )
-          )
+          const timestamp = timestampFromPayload({
+            payload,
+            fallback: sourceRecord.occurredAt,
+          })
+
+          const walletTransferEvidenceResult =
+            normalizationPayload.walletTransferEvidence === null
+              ? yield* fetchWalletTransferEvidence({
+                  walletAddress,
+                  signature,
+                  transactionTimestampSeconds: Math.floor(timestamp.getTime() / 1_000),
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new HeliusSolanaNormalizationEvidenceError({
+                        message: "Failed to load complete Solana wallet transfer evidence.",
+                        cause,
+                      })
+                  )
+                )
+              : ({
+                  kind: "complete",
+                  transfers: normalizationPayload.walletTransferEvidence.filter(
+                    (transfer) => transfer.signature === signature
+                  ),
+                } satisfies HeliusSolanaWalletTransferEvidence)
           if (walletTransferEvidenceResult.kind === "partial") {
             return yield* Effect.fail(
               new HeliusSolanaNormalizationEvidenceError({
@@ -2501,11 +2784,6 @@ const make = ({
             )
           }
           const walletTransferEvidence = walletTransferEvidenceResult.transfers
-
-          const timestamp = timestampFromPayload({
-            payload,
-            fallback: sourceRecord.occurredAt,
-          })
 
           const providerTransactionType = toProviderTransactionType(payload)
 

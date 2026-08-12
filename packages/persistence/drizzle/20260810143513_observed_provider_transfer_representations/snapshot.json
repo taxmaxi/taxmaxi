@@ -1446,7 +1446,7 @@
       "table": "disposal_matches"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -1732,7 +1732,7 @@
       "table": "fifo_lots"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -1745,7 +1745,7 @@
       "table": "fifo_lots"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -1992,7 +1992,7 @@
       "table": "inventory_movement_allocations"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -2200,7 +2200,7 @@
       "table": "inventory_movements"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -5307,7 +5307,7 @@
       "table": "provider_transfers"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -6334,7 +6334,7 @@
       "table": "transaction_legs"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
@@ -7933,7 +7933,7 @@
       "table": "transfers"
     },
     {
-      "type": "numeric(100,30)",
+      "type": "numeric(355,255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,

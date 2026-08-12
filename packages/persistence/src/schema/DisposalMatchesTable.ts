@@ -20,7 +20,7 @@ export const disposalMatches = pgTable(
       .references(() => fifoLots.id, { onDelete: "cascade" }),
 
     // How much from this lot was used
-    matchedAmount: numeric("matched_amount", { precision: 100, scale: 30 }).notNull(),
+    matchedAmount: numeric("matched_amount", { precision: 355, scale: 255 }).notNull(),
 
     // Cost basis of the matched amount (from the lot)
     costBasis: numeric("cost_basis", { precision: 36, scale: 8 }).notNull(),

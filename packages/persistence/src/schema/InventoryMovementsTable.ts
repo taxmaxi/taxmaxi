@@ -78,7 +78,7 @@ export const inventoryMovements = pgTable(
     taxTreatment: inventoryMovementTaxTreatmentEnum("tax_treatment").notNull(),
     reconciliationStatus:
       inventoryMovementReconciliationStatusEnum("reconciliation_status").notNull(),
-    amount: numeric("amount", { precision: 100, scale: 30 }).notNull(),
+    amount: numeric("amount", { precision: 355, scale: 255 }).notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
@@ -116,7 +116,7 @@ export const inventoryMovementAllocations = pgTable(
     fifoLotId: uuid("fifo_lot_id")
       .notNull()
       .references(() => fifoLots.id, { onDelete: "cascade" }),
-    matchedAmount: numeric("matched_amount", { precision: 100, scale: 30 }).notNull(),
+    matchedAmount: numeric("matched_amount", { precision: 355, scale: 255 }).notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [

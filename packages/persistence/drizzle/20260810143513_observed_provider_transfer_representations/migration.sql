@@ -3,6 +3,14 @@ ALTER TABLE "provider_transfers" ADD COLUMN "observed_representation_type" "asse
 ALTER TABLE "provider_transfers" ADD COLUMN "observed_contract_address" text;--> statement-breakpoint
 ALTER TABLE "provider_transfers" ADD COLUMN "observed_mint_address" text;--> statement-breakpoint
 ALTER TABLE "provider_transfers" ADD COLUMN "observed_decimals" integer;--> statement-breakpoint
+ALTER TABLE "provider_transfers" ALTER COLUMN "amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "transfers" ALTER COLUMN "amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "transaction_legs" ALTER COLUMN "amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "inventory_movements" ALTER COLUMN "amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "inventory_movement_allocations" ALTER COLUMN "matched_amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "fifo_lots" ALTER COLUMN "original_amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "fifo_lots" ALTER COLUMN "remaining_amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
+ALTER TABLE "disposal_matches" ALTER COLUMN "matched_amount" SET DATA TYPE numeric(355,255);--> statement-breakpoint
 ALTER TABLE "provider_transfers" ADD CONSTRAINT "provider_transfers_observed_blockchain_id_blockchains_id_fkey" FOREIGN KEY ("observed_blockchain_id") REFERENCES "blockchains"("id");--> statement-breakpoint
 ALTER TABLE "provider_transfers" ADD CONSTRAINT "provider_transfers_observed_representation_complete" CHECK (coalesce((
         "observed_representation_type" is null

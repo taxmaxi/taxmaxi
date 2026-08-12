@@ -85,7 +85,7 @@ export const transfers = pgTable(
       .notNull()
       .references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id"),
-    amount: numeric("amount", { precision: 100, scale: 30 }).notNull(), // Provider-native decimal amount.
+    amount: numeric("amount", { precision: 355, scale: 255 }).notNull(), // Provider-native decimal amount.
     tokenId: text("token_id"), // Optional NFT/inscription-like identifier.
 
     notes: text("notes"), // Could be useful for user overrides

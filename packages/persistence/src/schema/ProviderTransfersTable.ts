@@ -66,7 +66,7 @@ export const providerTransfers = pgTable(
     observedMintAddress: text("observed_mint_address"),
     observedDecimals: integer("observed_decimals"),
 
-    amount: numeric("amount", { precision: 100, scale: 30 }).notNull(),
+    amount: numeric("amount", { precision: 355, scale: 255 }).notNull(),
     metadata: jsonb("metadata"),
 
     createdAt: timestamp("created_at").notNull().defaultNow(),

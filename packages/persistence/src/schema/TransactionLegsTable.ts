@@ -87,7 +87,7 @@ export const transactionLegs = pgTable(
       .notNull()
       .references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id"),
-    amount: numeric("amount", { precision: 100, scale: 30 }).notNull(), // Exact asset quantity in canonical asset units.
+    amount: numeric("amount", { precision: 355, scale: 255 }).notNull(), // Exact asset quantity in canonical asset units.
 
     // Accounting classification
     kind: legKindEnum("kind").notNull(),

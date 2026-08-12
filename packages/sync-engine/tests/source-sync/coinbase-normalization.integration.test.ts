@@ -1,6 +1,8 @@
 import { and, eq, inArray } from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
@@ -35,6 +37,17 @@ const TestPgClientLive = context.TestPgClientLive
 const recreateTestDatabase = context.recreateTestDatabase
 const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000541"
 const DOT_ASSET_ID = "00000000-0000-0000-0000-000000000542"
+
+const expectDecimalAmount = (actual: string, expected: string) => {
+  const actualDecimal = BigDecimal.fromString(actual)
+  const expectedDecimal = BigDecimal.fromString(expected)
+
+  expect(Option.isSome(actualDecimal)).toBe(true)
+  expect(Option.isSome(expectedDecimal)).toBe(true)
+  if (Option.isSome(actualDecimal) && Option.isSome(expectedDecimal)) {
+    expect(BigDecimal.equals(actualDecimal.value, expectedDecimal.value)).toBe(true)
+  }
+}
 
 const makeCoinbaseRecord = ({
   externalRecordId,
@@ -1558,15 +1571,12 @@ describe("coinbase normalization persistence", () => {
           false
         )
 
-        expect(firstRun.fifoLots).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId: ownedOnchainSourceId,
-              originalAmount: "0.100000000000000000000000000000",
-              remainingAmount: "0.100000000000000000000000000000",
-            }),
-          ])
-        )
+        const movedLot = firstRun.fifoLots.find((lot) => lot.sourceId === ownedOnchainSourceId)
+        expect(movedLot).toBeDefined()
+        if (movedLot !== undefined) {
+          expectDecimalAmount(movedLot.originalAmount, "0.1")
+          expectDecimalAmount(movedLot.remainingAmount, "0.1")
+        }
 
         const taxAfterSync = yield* calculateTax()
         expect(taxAfterSync.taxableGains).toBe(2000)
@@ -1980,10 +1990,13 @@ describe("coinbase normalization persistence", () => {
           "fee",
           "income",
         ])
-        expect(counts.fifoLots.map((row) => String(row.remainingAmount)).sort()).toEqual([
-          "0.020123619236000000000000000000",
-          "0.499900000000000000000000000000",
-        ])
+        const remainingAmounts = counts.fifoLots.map((row) => String(row.remainingAmount)).sort()
+        expect(remainingAmounts).toHaveLength(2)
+        const [firstRemainingAmount, secondRemainingAmount] = remainingAmounts
+        if (firstRemainingAmount !== undefined && secondRemainingAmount !== undefined) {
+          expectDecimalAmount(firstRemainingAmount, "0.020123619236")
+          expectDecimalAmount(secondRemainingAmount, "0.4999")
+        }
         expect(counts.disposalMatches.map((row) => String(row.gainLoss)).sort()).toEqual([
           "2000.00000000",
         ])

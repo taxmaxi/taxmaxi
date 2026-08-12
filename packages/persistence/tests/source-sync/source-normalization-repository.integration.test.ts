@@ -325,6 +325,7 @@ describe("SourceNormalizationRepositoryLive", () => {
 
   it("persists exact observed provider transfer representations", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const smallestU8DecimalAmount = `0.${"0".repeat(254)}1`
     const sharedTransfer = {
       sourceId: TEST_SOURCE_ID,
       sourceRawRecordId: TEST_RAW_RECORD_ID,
@@ -371,6 +372,14 @@ describe("SourceNormalizationRepositoryLive", () => {
         observedRepresentationType: null,
         observedMintAddress: "UnknownMint11111111111111111111111111111111",
         observedDecimals: 5,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-max-decimals",
+        observedRepresentationType: "token" as const,
+        observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
+        observedDecimals: 255,
+        amount: smallestU8DecimalAmount,
       },
     ]
 
@@ -450,6 +459,13 @@ describe("SourceNormalizationRepositoryLive", () => {
           observedContractAddress: null,
           observedMintAddress: "UnknownMint11111111111111111111111111111111",
           observedDecimals: 5,
+        }),
+        expect.objectContaining({
+          externalId: "observed-max-decimals",
+          observedRepresentationType: "token",
+          observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
+          observedDecimals: 255,
+          amount: smallestU8DecimalAmount,
         }),
       ])
     )
@@ -771,7 +787,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         status: "auto_applied",
       }),
     ])
-    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(4)
+    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(5)
     expect(stateAfterRejectedRemoval.preservedTransfers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -822,7 +838,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(staleProviderTransfers).toHaveLength(4)
+    expect(staleProviderTransfers).toHaveLength(5)
     expect(staleProviderTransfers).toEqual(
       expect.arrayContaining(
         providerTransfers.map((transfer) =>
