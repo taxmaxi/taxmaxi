@@ -25,7 +25,11 @@ const internalError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 
 const checkoutError = (message: string) => {
-  if (message.includes("active subscription") || message.includes("No Stripe customer")) {
+  if (
+    message.includes("already has a subscription") ||
+    message.includes("active annual subscription") ||
+    message.includes("No Stripe customer")
+  ) {
     return new BillingBadRequestError({ message })
   }
   return internalError("Billing is temporarily unavailable.")

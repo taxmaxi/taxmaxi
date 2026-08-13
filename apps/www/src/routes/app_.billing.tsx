@@ -1,7 +1,7 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import { ArrowLeft, CreditCard, Plus } from "lucide-react"
 import { useState } from "react"
-import type { BillingCatalog, BillingStatus } from "taxmaxi"
+import { isTaxMaxiUnauthorizedError, type BillingCatalog, type BillingStatus } from "taxmaxi"
 
 import { AppHeader } from "#/components/app-header"
 import { PageShell } from "#/components/page-shell"
@@ -14,17 +14,26 @@ import {
   CardHeader,
   CardTitle,
 } from "#/components/ui/card"
-import { getAuthStatus } from "#/server-functions/auth"
+import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 
-export const Route = createFileRoute("/app/billing")({
+export const Route = createFileRoute("/app_/billing")({
   beforeLoad: async () => {
     const { isAuthenticated } = await getAuthStatus()
     if (!isAuthenticated) throw redirect({ to: "/login" })
   },
   loader: async ({ context }) => {
-    const client = context.taxmaxi()
-    const [catalog, status] = await Promise.all([client.billing.catalog(), client.billing.status()])
-    return { catalog, status }
+    try {
+      const client = context.taxmaxi()
+      const [catalog, status] = await Promise.all([
+        client.billing.catalog(),
+        client.billing.status(),
+      ])
+      return { catalog, status }
+    } catch (error) {
+      if (!isTaxMaxiUnauthorizedError(error)) throw error
+      await clearAuthSessionCookie()
+      throw redirect({ to: "/login" })
+    }
   },
   component: BillingPage,
 })
@@ -32,9 +41,14 @@ export const Route = createFileRoute("/app/billing")({
 function BillingPage() {
   const { catalog, status } = Route.useLoaderData()
   const { taxmaxi } = Route.useRouteContext()
+  const navigate = Route.useNavigate()
   const [pendingAction, setPendingAction] = useState<"annual" | "portal" | "topUp" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const subscribed =
+    status.subscriptionStatus !== null &&
+    status.subscriptionStatus !== "canceled" &&
+    status.subscriptionStatus !== "incomplete_expired"
+  const topUpEligible =
     status.subscriptionStatus === "active" || status.subscriptionStatus === "trialing"
 
   const redirectToStripe = async (action: "annual" | "portal" | "topUp") => {
@@ -50,6 +64,11 @@ function BillingPage() {
             : await billing.createPortalSession()
       window.location.assign(response.url)
     } catch (cause) {
+      if (isTaxMaxiUnauthorizedError(cause)) {
+        await clearAuthSessionCookie()
+        await navigate({ to: "/login", replace: true })
+        return
+      }
       setError(cause instanceof Error ? cause.message : "Billing is temporarily unavailable.")
       setPendingAction(null)
     }
@@ -107,10 +126,10 @@ function BillingPage() {
             />
             <TopUpCard
               catalog={catalog}
-              disabled={!subscribed || pendingAction !== null}
+              disabled={!topUpEligible || pendingAction !== null}
               onAction={() => void redirectToStripe("topUp")}
               pending={pendingAction === "topUp"}
-              subscribed={subscribed}
+              subscribed={topUpEligible}
             />
           </div>
         </section>
@@ -135,6 +154,7 @@ function AnnualBillingCard({
   readonly subscribed: boolean
 }) {
   const price = catalog.prices.find((item) => item.lookupKey === "taxmaxi_annual_10k_eur")
+  const displayedPrice = price === undefined ? null : formatCatalogPrice(price)
   return (
     <Card>
       <CardHeader>
@@ -143,8 +163,10 @@ function AnnualBillingCard({
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <p className="text-4xl font-semibold tabular-nums">
-          {formatEuro(price?.amount ?? 15_900)}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">/ year, incl. VAT</span>
+          {displayedPrice ?? "Price unavailable"}
+          <span className="ml-2 text-sm font-normal text-muted-foreground">
+            / year, {taxLabel(price?.taxBehavior)}
+          </span>
         </p>
         <div className="rounded-xl border p-4">
           <p className="text-sm text-muted-foreground">Available credits</p>
@@ -154,9 +176,15 @@ function AnnualBillingCard({
         </div>
       </CardContent>
       <CardFooter>
-        <Button disabled={disabled} onClick={onAction}>
+        <Button disabled={disabled || (!subscribed && displayedPrice === null)} onClick={onAction}>
           <CreditCard data-icon="inline-start" />
-          {pending ? "Opening Stripe…" : subscribed ? "Manage subscription" : "Subscribe for €159"}
+          {pending
+            ? "Opening Stripe…"
+            : subscribed
+              ? "Manage subscription"
+              : displayedPrice === null
+                ? "Price unavailable"
+                : `Subscribe for ${displayedPrice}`}
         </Button>
       </CardFooter>
     </Card>
@@ -177,6 +205,7 @@ function TopUpCard({
   readonly subscribed: boolean
 }) {
   const price = catalog.prices.find((item) => item.lookupKey === "taxmaxi_topup_1k_eur")
+  const displayedPrice = price === undefined ? null : formatCatalogPrice(price)
   return (
     <Card>
       <CardHeader>
@@ -185,12 +214,14 @@ function TopUpCard({
       </CardHeader>
       <CardContent>
         <p className="text-4xl font-semibold tabular-nums">
-          {formatEuro(price?.amount ?? 2_000)}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">incl. VAT</span>
+          {displayedPrice ?? "Price unavailable"}
+          <span className="ml-2 text-sm font-normal text-muted-foreground">
+            {taxLabel(price?.taxBehavior)}
+          </span>
         </p>
       </CardContent>
       <CardFooter className="flex-col items-start gap-3">
-        <Button disabled={disabled} onClick={onAction} variant="outline">
+        <Button disabled={disabled || displayedPrice === null} onClick={onAction} variant="outline">
           <Plus data-icon="inline-start" />
           {pending ? "Opening Stripe…" : "Buy 1,000 credits"}
         </Button>
@@ -204,10 +235,20 @@ function TopUpCard({
   )
 }
 
-function formatEuro(amount: number): string {
+function formatCatalogPrice(price: { readonly amount: number; readonly currency: string }): string {
   return new Intl.NumberFormat("de-DE", {
     style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(amount / 100)
+    currency: price.currency.toUpperCase(),
+  }).format(price.amount / 100)
+}
+
+function taxLabel(taxBehavior: "exclusive" | "inclusive" | "unspecified" | undefined): string {
+  switch (taxBehavior) {
+    case "inclusive":
+      return "tax included"
+    case "exclusive":
+      return "plus applicable tax"
+    default:
+      return "tax shown at checkout"
+  }
 }

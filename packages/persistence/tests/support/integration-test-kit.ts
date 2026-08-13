@@ -317,6 +317,18 @@ export const seedSyncEngineRepositoryFixture = ({
       kind: "user",
       userId,
     })
+    yield* db.insert(schema.billingAccounts).values({
+      userId,
+      stripeCustomerId: `cus_test_${userId}`,
+    })
+    yield* db.insert(schema.creditLedger).values({
+      userId,
+      delta: 100_000,
+      kind: "manual_adjustment",
+      reference: `test:sync-credit:${userId}`,
+      paymentReference: null,
+      expiresAt: null,
+    })
 
     const cexId = yield* db
       .select({ id: schema.cex.id })

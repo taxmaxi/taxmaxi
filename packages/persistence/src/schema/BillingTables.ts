@@ -6,6 +6,7 @@ import {
   integer,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -38,16 +39,23 @@ export const billingAccounts = pgTable(
     userId: uuid("user_id")
       .primaryKey()
       .references(() => users.id, { onDelete: "cascade" }),
-    stripeCustomerId: text("stripe_customer_id").notNull(),
+    stripeCustomerId: text("stripe_customer_id"),
+    stripeCustomerGeneration: integer("stripe_customer_generation").notNull().default(0),
+    annualCheckoutGeneration: integer("annual_checkout_generation").notNull().default(0),
+    annualCheckoutExpiresAt: timestamp("annual_checkout_expires_at"),
+    subscriptionSyncGeneration: integer("subscription_sync_generation").notNull().default(0),
     stripeSubscriptionId: text("stripe_subscription_id"),
     subscriptionStatus: billingSubscriptionStatusEnum("subscription_status"),
     currentPeriodEnd: timestamp("current_period_end"),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+    lastSubscriptionEventCreatedAt: timestamp("last_subscription_event_created_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("billing_accounts_stripe_customer_unique").on(table.stripeCustomerId),
+    uniqueIndex("billing_accounts_stripe_customer_unique")
+      .on(table.stripeCustomerId)
+      .where(sql`${table.stripeCustomerId} is not null`),
     uniqueIndex("billing_accounts_stripe_subscription_unique")
       .on(table.stripeSubscriptionId)
       .where(sql`${table.stripeSubscriptionId} is not null`),
@@ -64,12 +72,14 @@ export const creditLedger = pgTable(
     delta: integer("delta").notNull(),
     kind: creditEntryKindEnum("kind").notNull(),
     reference: text("reference").notNull(),
+    paymentReference: text("payment_reference"),
     expiresAt: timestamp("expires_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex("credit_ledger_reference_unique").on(table.reference),
     index("idx_credit_ledger_user_id").on(table.userId),
+    index("idx_credit_ledger_payment_reference").on(table.paymentReference),
     index("idx_credit_ledger_expires_at").on(table.expiresAt),
     check("credit_ledger_delta_non_zero", sql`${table.delta} <> 0`),
   ]
@@ -81,6 +91,25 @@ export const stripeEvents = pgTable("stripe_events", {
   processedAt: timestamp("processed_at").notNull().defaultNow(),
 })
 
+export const billingPaymentReversals = pgTable(
+  "billing_payment_reversals",
+  {
+    paymentReference: text("payment_reference").notNull(),
+    reversalGroup: text("reversal_group").notNull(),
+    reversedAmount: integer("reversed_amount").notNull(),
+    paymentAmount: integer("payment_amount").notNull(),
+    eventReference: text("event_reference").notNull(),
+    eventCreatedAt: timestamp("event_created_at").notNull(),
+    terminal: boolean("terminal").notNull().default(false),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.paymentReference, table.reversalGroup] }),
+    index("idx_billing_payment_reversals_payment_reference").on(table.paymentReference),
+  ]
+)
+
 export type BillingAccountRow = typeof billingAccounts.$inferSelect
 export type CreditLedgerRow = typeof creditLedger.$inferSelect
 export type StripeEventRow = typeof stripeEvents.$inferSelect
+export type BillingPaymentReversalRow = typeof billingPaymentReversals.$inferSelect

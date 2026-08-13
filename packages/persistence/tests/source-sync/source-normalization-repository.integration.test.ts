@@ -336,6 +336,136 @@ describe("SourceNormalizationRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
+  it("consumes one credit when normalization persists a registered user transaction", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const artifacts = {
+      transaction: {
+        sourceId: TEST_SOURCE_ID,
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+        externalId: "transaction-with-credit",
+        externalGroupId: null,
+        timestamp: occurredAt,
+        transactionType: "buy_fiat",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerResourcePath: null,
+        providerDescription: null,
+        providerCreatedAt: occurredAt,
+        providerUpdatedAt: occurredAt,
+        metadata: null,
+        principalId: TEST_PRINCIPAL_ID,
+      },
+      venueContext: {
+        venueType: "cex" as const,
+        cexAccountId: fixture.cexAccountId,
+        externalAccountId: "coinbase-account-1",
+        externalOrderId: null,
+        externalFillId: null,
+        side: "buy" as const,
+        instrument: "BTC-EUR",
+        fillPrice: "10000.00",
+        commissionAmount: null,
+        commissionCurrency: null,
+        metadata: null,
+      },
+      providerTransfers: [],
+      feeTransfers: [],
+      legs: [],
+      transactionReview: null,
+      resolvedTransactionType: APPROVED_MAPPING,
+    } as const
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository
+          .persistNormalizedArtifacts(artifacts)
+          .pipe(Effect.andThen(repository.persistNormalizedArtifacts(artifacts)))
+      )
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            count: sql<number>`count(*)`,
+            totalDelta: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(Number(usage[0]?.count ?? 0)).toBe(1)
+    expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
+  })
+
+  it("rolls back a registered user transaction when credits are exhausted", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+      })
+    )
+
+    await expect(
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "transaction-without-credit",
+              externalGroupId: null,
+              timestamp: occurredAt,
+              transactionType: "buy_fiat",
+              providerTransactionType: "buy",
+              providerStatus: "completed",
+              providerResourcePath: null,
+              providerDescription: null,
+              providerCreatedAt: occurredAt,
+              providerUpdatedAt: occurredAt,
+              metadata: null,
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "coinbase-account-1",
+              externalOrderId: null,
+              externalFillId: null,
+              side: "buy",
+              instrument: "BTC-EUR",
+              fillPrice: "10000.00",
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: null,
+            },
+            providerTransfers: [],
+            feeTransfers: [],
+            legs: [],
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+    ).rejects.toThrow("Transaction credit balance is exhausted")
+
+    const persistedTransactions = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.externalId, "transaction-without-credit"))
+      })
+    )
+
+    expect(Number(persistedTransactions[0]?.count ?? 0)).toBe(0)
+  })
+
   it("persists exact observed provider transfer representations", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
     const smallestU8DecimalAmount = `0.${"0".repeat(254)}1`

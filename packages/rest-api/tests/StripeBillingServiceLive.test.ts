@@ -1,0 +1,253 @@
+import { AuthUserId } from "@my/core/authentication"
+import {
+  BillingRepository,
+  type BillingAccount,
+  type BillingRepositoryService,
+  type BillingSubscriptionStatus,
+  UserRepository,
+  type UserRepositoryService,
+} from "@my/persistence/services"
+import * as ConfigProvider from "effect/ConfigProvider"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
+import { describe, expect, it } from "vitest"
+
+import {
+  isAnnualInvoiceEligible,
+  isAnnualInvoiceLineEligible,
+  findEligibleAnnualInvoiceLine,
+  isPaidTopUpSessionEligible,
+  resolvePaidFulfillmentUserId,
+  StripeBillingServiceLive,
+  verifiedTopUpCustomer,
+} from "../src/layers/StripeBillingServiceLive.ts"
+import { StripeBillingService } from "../src/services/StripeBillingService.ts"
+
+const TEST_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000192")
+const OTHER_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000193")
+
+const billingAccount = ({
+  userId = TEST_USER_ID,
+  stripeCustomerId,
+  subscriptionStatus = "active",
+}: {
+  readonly userId?: AuthUserId
+  readonly stripeCustomerId: string | null
+  readonly subscriptionStatus?: BillingSubscriptionStatus
+}): BillingAccount => ({
+  userId,
+  stripeCustomerId,
+  stripeCustomerGeneration: 0,
+  stripeSubscriptionId: "sub_test",
+  subscriptionStatus,
+  currentPeriodEnd: null,
+  cancelAtPeriodEnd: false,
+  lastSubscriptionEventCreatedAt: null,
+})
+
+const billingRepositoryStub: BillingRepositoryService = {
+  findByUserId: () => Effect.succeed(Option.none()),
+  findByStripeCustomerId: () => Effect.succeed(Option.none()),
+  saveCustomer: () => Effect.void,
+  saveSubscription: () => Effect.succeed(true),
+  reserveSubscriptionSync: () => Effect.succeed(1),
+  clearCustomer: () => Effect.void,
+  reserveAnnualCheckout: () =>
+    Effect.succeed({ generation: 1, expiresAt: new Date("2026-08-14T11:00:00.000Z") }),
+  grantCredits: () => Effect.succeed(true),
+  reconcilePaymentCreditReversals: () => Effect.succeed(false),
+  setPaymentCreditReversal: () => Effect.succeed(true),
+  consumeTransactionCredit: () => Effect.succeed("exhausted"),
+  availableCredits: () => Effect.succeed(0),
+  hasProcessedEvent: () => Effect.succeed(false),
+  markEventProcessed: () => Effect.void,
+}
+
+const userRepositoryStub: UserRepositoryService = {
+  findById: () => Effect.succeed(Option.none()),
+  findByEmail: () => Effect.succeed(Option.none()),
+  create: () => Effect.dieMessage("unused user repository create"),
+  update: () => Effect.dieMessage("unused user repository update"),
+  delete: () => Effect.dieMessage("unused user repository delete"),
+  findPlatformAdmins: () => Effect.succeed([]),
+  isPlatformAdmin: () => Effect.succeed(false),
+}
+
+const repositoryLayers = Layer.merge(
+  Layer.succeed(BillingRepository, billingRepositoryStub),
+  Layer.succeed(UserRepository, userRepositoryStub)
+)
+
+const loadServiceWithoutStripeConfig = () =>
+  Effect.runPromise(
+    StripeBillingService.pipe(
+      Effect.provide(StripeBillingServiceLive.pipe(Layer.provide(repositoryLayers))),
+      Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))
+    )
+  )
+
+describe("StripeBillingServiceLive", () => {
+  it("grants annual credits only for create or renewal invoices on the annual product", () => {
+    expect(
+      isAnnualInvoiceEligible({
+        billingReason: "subscription_cycle",
+        planLookupKey: "taxmaxi_annual_10k_eur",
+      })
+    ).toBe(true)
+    expect(
+      isAnnualInvoiceEligible({
+        billingReason: "subscription_update",
+        planLookupKey: "taxmaxi_annual_10k_eur",
+      })
+    ).toBe(false)
+    expect(
+      isAnnualInvoiceLineEligible({
+        proration: false,
+        periodStart: 1_700_000_000,
+        periodEnd: 1_731_536_000,
+        interval: "year",
+        productId: "prod_annual",
+        currentProductId: "prod_annual",
+      })
+    ).toBe(true)
+    expect(
+      isAnnualInvoiceLineEligible({
+        proration: true,
+        periodStart: 1_700_000_000,
+        periodEnd: 1_731_536_000,
+        interval: "year",
+        productId: "prod_annual",
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+    expect(
+      isAnnualInvoiceLineEligible({
+        proration: false,
+        periodStart: 1_700_000_000,
+        periodEnd: 1_731_536_000,
+        interval: "year",
+        productId: "prod_other",
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+
+    expect(
+      findEligibleAnnualInvoiceLine([
+        {
+          line: "add-on",
+          proration: false,
+          periodStart: 1_700_000_000,
+          periodEnd: 1_702_678_400,
+          interval: "month",
+          productId: "prod_add_on",
+          currentProductId: "prod_annual",
+        },
+        {
+          line: "annual",
+          proration: false,
+          periodStart: 1_700_000_000,
+          periodEnd: 1_731_536_000,
+          interval: "year",
+          productId: "prod_annual",
+          currentProductId: "prod_annual",
+        },
+      ])
+    ).toBe("annual")
+    expect(
+      isAnnualInvoiceLineEligible({
+        proration: false,
+        periodStart: 1_700_000_000,
+        periodEnd: 1_702_678_400,
+        interval: "month",
+        productId: "prod_annual",
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+  })
+
+  it("accepts delayed top-ups from payment facts without consulting current subscription state", () => {
+    expect(isPaidTopUpSessionEligible({ purchaseKind: "top_up", paymentStatus: "paid" })).toBe(true)
+    expect(isPaidTopUpSessionEligible({ purchaseKind: "top_up", paymentStatus: "unpaid" })).toBe(
+      false
+    )
+    expect(isPaidTopUpSessionEligible({ purchaseKind: "annual", paymentStatus: "paid" })).toBe(
+      false
+    )
+  })
+
+  it("uses signed user metadata for paid fulfillment after the customer mapping changes", async () => {
+    const resolved = await Effect.runPromise(
+      resolvePaidFulfillmentUserId({
+        metadataUserId: TEST_USER_ID,
+        stripeCustomerId: "cus_deleted",
+        findByUserId: (userId) =>
+          Effect.succeed(
+            Option.some(billingAccount({ userId, stripeCustomerId: "cus_replacement" }))
+          ),
+        findByStripeCustomerId: () =>
+          Effect.succeed(
+            Option.some(billingAccount({ userId: OTHER_USER_ID, stripeCustomerId: "cus_deleted" }))
+          ),
+      })
+    )
+    const invalid = await Effect.runPromise(
+      Effect.either(
+        resolvePaidFulfillmentUserId({
+          metadataUserId: OTHER_USER_ID,
+          stripeCustomerId: "cus_deleted",
+          findByUserId: () => Effect.succeed(Option.none()),
+          findByStripeCustomerId: () =>
+            Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_deleted" }))),
+        })
+      )
+    )
+
+    expect(resolved).toBe(TEST_USER_ID)
+    expect(invalid).toMatchObject({
+      _tag: "Left",
+      left: { message: "TaxMaxi billing account not found" },
+    })
+  })
+
+  it("uses the replacement customer for top-up Checkout after deleted-customer recovery", async () => {
+    const requestedCustomers: Array<string> = []
+    const customer = await Effect.runPromise(
+      verifiedTopUpCustomer({
+        account: Option.some(billingAccount({ stripeCustomerId: "cus_deleted" })),
+        userId: TEST_USER_ID,
+        getOrCreateCustomer: () => Effect.succeed("cus_replacement"),
+        findByUserId: () =>
+          Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_replacement" }))),
+      })
+    )
+    requestedCustomers.push(customer)
+
+    expect(requestedCustomers).toEqual(["cus_replacement"])
+    expect(requestedCustomers).not.toContain("cus_deleted")
+  })
+
+  it("starts without Stripe configuration and keeps local billing status available", async () => {
+    const service = await loadServiceWithoutStripeConfig()
+    const status = await Effect.runPromise(service.status(TEST_USER_ID))
+    const catalog = await Effect.runPromise(Effect.either(service.catalog))
+    const webhook = await Effect.runPromise(
+      Effect.either(service.processWebhook({ payload: "{}", signature: "missing" }))
+    )
+
+    expect(status).toEqual({
+      credits: 0,
+      subscriptionStatus: null,
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+    })
+    expect(catalog).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe billing is not configured" },
+    })
+    expect(webhook).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe webhook is not configured" },
+    })
+  })
+})

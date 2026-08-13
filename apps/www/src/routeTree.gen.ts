@@ -26,7 +26,7 @@ import { Route as DemoAiStructuredRouteImport } from './routes/demo/ai-structure
 import { Route as DemoAiImageRouteImport } from './routes/demo/ai-image'
 import { Route as DemoAiChatRouteImport } from './routes/demo/ai-chat'
 import { Route as AssetsAssetIdRouteImport } from './routes/assets/$assetId'
-import { Route as AppBillingRouteImport } from './routes/app.billing'
+import { Route as AppBillingRouteImport } from './routes/app_.billing'
 import { Route as DemoGuitarsIndexRouteImport } from './routes/demo/guitars/index'
 import { Route as DemoGuitarsGuitarIdRouteImport } from './routes/demo/guitars/$guitarId'
 import { Route as DemoFormSimpleRouteImport } from './routes/demo/form.simple'
@@ -123,9 +123,9 @@ const AssetsAssetIdRoute = AssetsAssetIdRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppBillingRoute = AppBillingRouteImport.update({
-  id: '/billing',
-  path: '/billing',
-  getParentRoute: () => AppRoute,
+  id: '/app_/billing',
+  path: '/app/billing',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const DemoGuitarsIndexRoute = DemoGuitarsIndexRouteImport.update({
   id: '/demo/guitars/',
@@ -176,7 +176,7 @@ const DemoApiAiChatRoute = DemoApiAiChatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRouteWithChildren
+  '/app': typeof AppRoute
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
@@ -205,7 +205,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRouteWithChildren
+  '/app': typeof AppRoute
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
@@ -235,14 +235,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRouteWithChildren
+  '/app': typeof AppRoute
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
-  '/app/billing': typeof AppBillingRoute
+  '/app_/billing': typeof AppBillingRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
@@ -331,7 +331,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
-    | '/app/billing'
+    | '/app_/billing'
     | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
@@ -354,13 +354,14 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
-  AppRoute: typeof AppRouteWithChildren
+  AppRoute: typeof AppRoute
   CoinbaseSignInRoute: typeof CoinbaseSignInRoute
   ImprintRoute: typeof ImprintRoute
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
   SignUpRoute: typeof SignUpRoute
   TermsRoute: typeof TermsRoute
+  AppBillingRoute: typeof AppBillingRoute
   AssetsAssetIdRoute: typeof AssetsAssetIdRoute
   DemoAiChatRoute: typeof DemoAiChatRoute
   DemoAiImageRoute: typeof DemoAiImageRoute
@@ -501,12 +502,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AssetsAssetIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/app/billing': {
-      id: '/app/billing'
-      path: '/billing'
+    '/app_/billing': {
+      id: '/app_/billing'
+      path: '/app/billing'
       fullPath: '/app/billing'
       preLoaderRoute: typeof AppBillingRouteImport
-      parentRoute: typeof AppRoute
+      parentRoute: typeof rootRouteImport
     }
     '/demo/guitars/': {
       id: '/demo/guitars/'
@@ -574,26 +575,17 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AppRouteChildren {
-  AppBillingRoute: typeof AppBillingRoute
-}
-
-const AppRouteChildren: AppRouteChildren = {
-  AppBillingRoute: AppBillingRoute,
-}
-
-const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
-  AppRoute: AppRouteWithChildren,
+  AppRoute: AppRoute,
   CoinbaseSignInRoute: CoinbaseSignInRoute,
   ImprintRoute: ImprintRoute,
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
   SignUpRoute: SignUpRoute,
   TermsRoute: TermsRoute,
+  AppBillingRoute: AppBillingRoute,
   AssetsAssetIdRoute: AssetsAssetIdRoute,
   DemoAiChatRoute: DemoAiChatRoute,
   DemoAiImageRoute: DemoAiImageRoute,

@@ -25,11 +25,13 @@ export type CreditEntryKind = "annual_grant" | "top_up" | "transaction_usage" | 
 
 export interface BillingAccount {
   readonly userId: AuthUserId
-  readonly stripeCustomerId: string
+  readonly stripeCustomerId: string | null
+  readonly stripeCustomerGeneration: number
   readonly stripeSubscriptionId: string | null
   readonly subscriptionStatus: BillingSubscriptionStatus | null
   readonly currentPeriodEnd: Date | null
   readonly cancelAtPeriodEnd: boolean
+  readonly lastSubscriptionEventCreatedAt: Date | null
 }
 
 export interface BillingRepositoryService {
@@ -49,14 +51,41 @@ export interface BillingRepositoryService {
     readonly status: BillingSubscriptionStatus
     readonly currentPeriodEnd: Date | null
     readonly cancelAtPeriodEnd: boolean
-  }) => Effect.Effect<void, PersistenceError>
+    readonly eventCreatedAt: Date
+    readonly syncGeneration: number
+  }) => Effect.Effect<boolean, PersistenceError>
+  readonly reserveSubscriptionSync: (
+    stripeCustomerId: string
+  ) => Effect.Effect<number, PersistenceError>
+  readonly clearCustomer: (stripeCustomerId: string) => Effect.Effect<void, PersistenceError>
+  readonly reserveAnnualCheckout: (
+    userId: AuthUserId
+  ) => Effect.Effect<{ readonly generation: number; readonly expiresAt: Date }, PersistenceError>
   readonly grantCredits: (input: {
     readonly userId: AuthUserId
     readonly amount: number
     readonly kind: Exclude<CreditEntryKind, "transaction_usage">
     readonly reference: string
+    readonly paymentReference: string | null
     readonly expiresAt: Date | null
   }) => Effect.Effect<boolean, PersistenceError>
+  readonly reconcilePaymentCreditReversals: (
+    paymentReference: string
+  ) => Effect.Effect<boolean, PersistenceError>
+  readonly setPaymentCreditReversal: (input: {
+    readonly paymentReference: string
+    readonly reversalGroup: string
+    readonly reversedAmount: number
+    readonly paymentAmount: number
+    readonly reference: string
+    readonly eventCreatedAt: Date
+    readonly monotonic: boolean
+    readonly terminal: boolean
+  }) => Effect.Effect<boolean, PersistenceError>
+  readonly consumeTransactionCredit: (input: {
+    readonly userId: AuthUserId
+    readonly transactionId: string
+  }) => Effect.Effect<"consumed" | "duplicate" | "exhausted", PersistenceError>
   readonly availableCredits: (userId: AuthUserId) => Effect.Effect<number, PersistenceError>
   readonly hasProcessedEvent: (eventId: string) => Effect.Effect<boolean, PersistenceError>
   readonly markEventProcessed: (input: {

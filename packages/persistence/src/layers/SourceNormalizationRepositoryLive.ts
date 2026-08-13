@@ -8,7 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -454,6 +454,126 @@ const make = Effect.gen(function* () {
       }
 
       return persisted
+    })
+
+  const consumeTransactionCredit = ({
+    executor,
+    principalId,
+    transactionId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly principalId: string
+    readonly transactionId: string
+  }) =>
+    Effect.gen(function* () {
+      const [principal] = yield* executor
+        .select({ userId: schema.principals.userId })
+        .from(schema.principals)
+        .where(eq(schema.principals.id, principalId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.findPrincipal"
+          )
+        )
+
+      // Anonymous x402 principals keep their payment-based access path. Every
+      // registered user transaction must be backed by a billing credit.
+      if (principal?.userId === null || principal === undefined) return
+
+      const [account] = yield* executor
+        .select({ userId: schema.billingAccounts.userId })
+        .from(schema.billingAccounts)
+        .where(eq(schema.billingAccounts.userId, principal.userId))
+        .limit(1)
+        .for("update")
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.lockAccount"
+          )
+        )
+
+      if (account === undefined) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit",
+            error: "Transaction credit balance is exhausted",
+          })
+        )
+      }
+
+      const reference = `transaction:${transactionId}`
+      const [existing] = yield* executor
+        .select({ id: schema.creditLedger.id })
+        .from(schema.creditLedger)
+        .where(eq(schema.creditLedger.reference, reference))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.findExisting"
+          )
+        )
+      if (existing !== undefined) return
+
+      const now = nowDate()
+      const rows = yield* executor
+        .select({ delta: schema.creditLedger.delta, expiresAt: schema.creditLedger.expiresAt })
+        .from(schema.creditLedger)
+        .where(
+          and(
+            eq(schema.creditLedger.userId, account.userId),
+            or(isNull(schema.creditLedger.expiresAt), gt(schema.creditLedger.expiresAt, now))
+          )
+        )
+        .orderBy(asc(schema.creditLedger.expiresAt))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.loadBalance"
+          )
+        )
+
+      const buckets = new Map<string, { balance: number; expiresAt: Date | null }>()
+      for (const row of rows) {
+        const key = row.expiresAt?.toISOString() ?? "never"
+        const bucket = buckets.get(key) ?? { balance: 0, expiresAt: row.expiresAt }
+        buckets.set(key, { ...bucket, balance: bucket.balance + row.delta })
+      }
+      const totalBalance = [...buckets.values()].reduce(
+        (total, candidate) => total + candidate.balance,
+        0
+      )
+      if (totalBalance <= 0) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit",
+            error: "Transaction credit balance is exhausted",
+          })
+        )
+      }
+
+      const bucket = [...buckets.values()].find((candidate) => candidate.balance > 0)
+      if (bucket === undefined) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit",
+            error: "Transaction credit balance is exhausted",
+          })
+        )
+      }
+
+      yield* executor
+        .insert(schema.creditLedger)
+        .values({
+          userId: account.userId,
+          delta: -1,
+          kind: "transaction_usage",
+          reference,
+          paymentReference: null,
+          expiresAt: bucket.expiresAt,
+        })
+        .pipe(
+          wrapSyncEngineSqlError("sourceNormalizationRepository.consumeTransactionCredit.insert")
+        )
     })
 
   const upsertVenueContext = ({
@@ -2121,6 +2241,11 @@ const make = Effect.gen(function* () {
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,
+          })
+          yield* consumeTransactionCredit({
+            executor: tx,
+            principalId: persistedTransaction.principalId,
+            transactionId: persistedTransaction.id,
           })
           const persistedVenueContext = yield* upsertVenueContext({
             executor: tx,

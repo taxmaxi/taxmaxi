@@ -127,7 +127,7 @@ function RouteComponent() {
       <div className="relative z-10">
         <AppHeader>
           <Button asChild size="sm" variant="outline">
-            <Link preload="intent" to="/app/billing">
+            <Link aria-label="Billing" preload="intent" title="Billing" to="/app/billing">
               <CreditCard data-icon="inline-start" />
               <span className="hidden sm:inline">Billing</span>
             </Link>

@@ -58,7 +58,7 @@ import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationService
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import { BillingApiLive } from "./BillingApiLive.ts"
-import type { StripeBillingService } from "../services/StripeBillingService.ts"
+import { StripeBillingServiceLive } from "./StripeBillingServiceLive.ts"
 import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
 import type { SIWXProofVerifier } from "../services/SIWXProofVerifier.ts"
 import type { AnonSessionService } from "../services/AnonSessionService.ts"
@@ -106,7 +106,7 @@ const CoreApiGroup = Layer.mergeAll(
   PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive,
-  BillingApiLive
+  BillingApiLive.pipe(Layer.provide(StripeBillingServiceLive))
 ).pipe(
   Layer.provide(PrincipalResolutionServiceLive),
   Layer.provide(CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.layer)))
@@ -140,7 +140,6 @@ type TaxMaxiApiLiveContext =
   | TransferReconciliationService
   | UserRepository
   | X402PaymentValidator
-  | StripeBillingService
 
 /**
  * MasterDataApiGroup - Master data API implementations

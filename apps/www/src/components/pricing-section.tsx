@@ -15,9 +15,11 @@ import {
 import { LandingButton } from "#/components/landing-button"
 import { MarketingSection, MarketingSectionHeader } from "#/components/marketing-section"
 import { m } from "#/paraglide/messages"
-import { getLocale } from "#/paraglide/runtime"
+import { getLocale, localizeHref } from "#/paraglide/runtime"
 
 const PROFESSIONAL_CALL_URL = "https://calendar.app.google/PLa3mhnsHc12npbx7"
+
+type CatalogPrice = BillingCatalog["prices"][number]
 
 export const STRIPE_PRICE_LOOKUP_KEYS = {
   individualAnnual: "taxmaxi_annual_10k_eur",
@@ -77,14 +79,14 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
           price={
             individualAnnual === undefined
               ? m["pricing.individual.price"]()
-              : formatEuro(individualAnnual.amount)
+              : formatCatalogPrice(individualAnnual)
           }
-          priceSuffix={m["pricing.individual.priceSuffix"]()}
+          priceSuffix={catalogPriceSuffix(individualAnnual, m["pricing.individual.priceSuffix"]())}
           featured
           footer={
             <>
               <LandingButton asChild className="group w-full" variant="cta">
-                <a href="/sign-up">
+                <a href={localizeHref("/sign-up")}>
                   {m["pricing.individual.cta"]()}
                   <ArrowRight
                     data-icon="inline-end"
@@ -107,9 +109,12 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
           price={
             professionalAnnual === undefined
               ? m["pricing.professional.price"]()
-              : formatEuro(professionalAnnual.amount)
+              : formatCatalogPrice(professionalAnnual)
           }
-          priceSuffix={m["pricing.professional.priceSuffix"]()}
+          priceSuffix={catalogPriceSuffix(
+            professionalAnnual,
+            m["pricing.professional.priceSuffix"]()
+          )}
           footer={
             <>
               <LandingButton asChild className="group w-full" variant="contrast">
@@ -136,9 +141,9 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
           price={
             enterprisePilot === undefined
               ? m["pricing.enterprise.price"]()
-              : formatEuro(enterprisePilot.amount)
+              : formatCatalogPrice(enterprisePilot)
           }
-          priceSuffix={m["pricing.enterprise.priceSuffix"]()}
+          priceSuffix={catalogPriceSuffix(enterprisePilot, m["pricing.enterprise.priceSuffix"]())}
           footer={
             <>
               <LandingButton asChild className="group w-full" variant="contrast">
@@ -172,9 +177,9 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
             price={
               individualTopUp === undefined
                 ? m["pricing.addOns.individual.price"]()
-                : formatEuro(individualTopUp.amount)
+                : formatCatalogPrice(individualTopUp)
             }
-            suffix={m["pricing.addOns.individual.suffix"]()}
+            suffix={catalogPriceSuffix(individualTopUp, m["pricing.addOns.individual.suffix"]())}
           />
           <PricingAddOn
             description={m["pricing.addOns.matter.description"]()}
@@ -183,9 +188,9 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
             price={
               professionalMatter === undefined
                 ? m["pricing.addOns.matter.price"]()
-                : formatEuro(professionalMatter.amount)
+                : formatCatalogPrice(professionalMatter)
             }
-            suffix={m["pricing.addOns.matter.suffix"]()}
+            suffix={catalogPriceSuffix(professionalMatter, m["pricing.addOns.matter.suffix"]())}
           />
           <PricingAddOn
             description={m["pricing.addOns.professional.description"]()}
@@ -194,9 +199,12 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
             price={
               professionalTopUp === undefined
                 ? m["pricing.addOns.professional.price"]()
-                : formatEuro(professionalTopUp.amount)
+                : formatCatalogPrice(professionalTopUp)
             }
-            suffix={m["pricing.addOns.professional.suffix"]()}
+            suffix={catalogPriceSuffix(
+              professionalTopUp,
+              m["pricing.addOns.professional.suffix"]()
+            )}
           />
         </div>
       </div>
@@ -307,12 +315,24 @@ function PricingAddOn({
   )
 }
 
-function formatEuro(amount: number): string {
+function formatCatalogPrice(price: CatalogPrice): string {
   return new Intl.NumberFormat(getLocale(), {
     style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(amount / 100)
+    currency: price.currency.toUpperCase(),
+  }).format(price.amount / 100)
+}
+
+function catalogPriceSuffix(price: CatalogPrice | undefined, fallback: string): string {
+  if (price === undefined) return fallback
+  const isGerman = getLocale() === "de"
+  switch (price.taxBehavior) {
+    case "inclusive":
+      return isGerman ? "Steuern enthalten" : "tax included"
+    case "exclusive":
+      return isGerman ? "zzgl. anwendbarer Steuern" : "plus applicable tax"
+    case "unspecified":
+      return isGerman ? "Steuern werden im Checkout angezeigt" : "tax shown at checkout"
+  }
 }
 
 function PricingFeature({ children }: { children: ReactNode }) {
