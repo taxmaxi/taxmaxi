@@ -78,6 +78,7 @@ type TaxMaxiPublicGroup =
   | "assets"
   | "auth"
   | "authSession"
+  | "billing"
   | "coinbaseCompat"
   | "health"
   | "legalReferences"
@@ -95,6 +96,7 @@ const toTaxMaxiEffectClient = (client: TaxMaxiApiFullClient): TaxMaxiEffectClien
   assets: client.assets,
   auth: client.auth,
   authSession: client.authSession,
+  billing: client.billing,
   coinbaseCompat: client.coinbaseCompat,
   health: client.health,
   legalReferences: client.legalReferences,

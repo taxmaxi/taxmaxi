@@ -22,6 +22,7 @@ import {
   SessionTokenValidatorLive,
   SIWXProofVerifierLive,
   TaxMaxiApiLive,
+  StripeBillingServiceLive,
   X402PaymentValidatorLive,
 } from "@my/rest-api"
 import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueLive.ts"
@@ -46,6 +47,7 @@ const TransferReconciliationRuntimeLive = TransferReconciliationServiceLive.pipe
 
 const ApplicationLive = Layer.mergeAll(
   RepositoriesLive,
+  StripeBillingServiceLive.pipe(Layer.provide(RepositoriesLive)),
   SyncRuntimeLive,
   SyncRunRuntimeLive,
   TransferReconciliationRuntimeLive,

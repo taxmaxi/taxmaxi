@@ -4,11 +4,16 @@ import { ApiSection } from "#/components/api-section"
 import { PricingSection } from "#/components/pricing-section"
 import { Footer } from "#/components/footer"
 import { PageShell } from "#/components/page-shell"
+import type { BillingCatalog } from "taxmaxi"
 
 import { ClosingCTA } from "./closing-cta"
 import { CliSection } from "./cli-section"
 
-export function LandingPage() {
+export function LandingPage({
+  billingCatalog,
+}: {
+  readonly billingCatalog: BillingCatalog | null
+}) {
   return (
     <PageShell
       data-page="landing"
@@ -36,7 +41,7 @@ export function LandingPage() {
           <HeroSection />
           <ApiSection />
           <CliSection />
-          <PricingSection />
+          <PricingSection catalog={billingCatalog} />
           <ClosingCTA />
         </main>
         <Footer />

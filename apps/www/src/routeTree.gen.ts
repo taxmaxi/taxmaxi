@@ -26,6 +26,7 @@ import { Route as DemoAiStructuredRouteImport } from './routes/demo/ai-structure
 import { Route as DemoAiImageRouteImport } from './routes/demo/ai-image'
 import { Route as DemoAiChatRouteImport } from './routes/demo/ai-chat'
 import { Route as AssetsAssetIdRouteImport } from './routes/assets/$assetId'
+import { Route as AppBillingRouteImport } from './routes/app.billing'
 import { Route as DemoGuitarsIndexRouteImport } from './routes/demo/guitars/index'
 import { Route as DemoGuitarsGuitarIdRouteImport } from './routes/demo/guitars/$guitarId'
 import { Route as DemoFormSimpleRouteImport } from './routes/demo/form.simple'
@@ -121,6 +122,11 @@ const AssetsAssetIdRoute = AssetsAssetIdRouteImport.update({
   path: '/assets/$assetId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppBillingRoute = AppBillingRouteImport.update({
+  id: '/billing',
+  path: '/billing',
+  getParentRoute: () => AppRoute,
+} as any)
 const DemoGuitarsIndexRoute = DemoGuitarsIndexRouteImport.update({
   id: '/demo/guitars/',
   path: '/demo/guitars/',
@@ -170,13 +176,14 @@ const DemoApiAiChatRoute = DemoApiAiChatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/billing': typeof AppBillingRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
@@ -198,13 +205,14 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/billing': typeof AppBillingRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
@@ -227,13 +235,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/about': typeof AboutRoute
-  '/app': typeof AppRoute
+  '/app': typeof AppRouteWithChildren
   '/coinbase-sign-in': typeof CoinbaseSignInRoute
   '/imprint': typeof ImprintRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/billing': typeof AppBillingRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
   '/demo/ai-image': typeof DemoAiImageRoute
@@ -264,6 +273,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/billing'
     | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
@@ -292,6 +302,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/billing'
     | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
@@ -320,6 +331,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/billing'
     | '/assets/$assetId'
     | '/demo/ai-chat'
     | '/demo/ai-image'
@@ -342,7 +354,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AboutRoute: typeof AboutRoute
-  AppRoute: typeof AppRoute
+  AppRoute: typeof AppRouteWithChildren
   CoinbaseSignInRoute: typeof CoinbaseSignInRoute
   ImprintRoute: typeof ImprintRoute
   LoginRoute: typeof LoginRoute
@@ -489,6 +501,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AssetsAssetIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/billing': {
+      id: '/app/billing'
+      path: '/billing'
+      fullPath: '/app/billing'
+      preLoaderRoute: typeof AppBillingRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/demo/guitars/': {
       id: '/demo/guitars/'
       path: '/demo/guitars'
@@ -555,10 +574,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppRouteChildren {
+  AppBillingRoute: typeof AppBillingRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppBillingRoute: AppBillingRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AboutRoute: AboutRoute,
-  AppRoute: AppRoute,
+  AppRoute: AppRouteWithChildren,
   CoinbaseSignInRoute: CoinbaseSignInRoute,
   ImprintRoute: ImprintRoute,
   LoginRoute: LoginRoute,

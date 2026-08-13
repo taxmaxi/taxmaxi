@@ -11,6 +11,7 @@ import type { PasswordHasher, AuthService } from "@my/core/authentication"
 import type { LegalReferenceRepository } from "@my/core/legal"
 import type {
   AssetCatalogRepository,
+  BillingRepository,
   PortfolioRepository,
   CexAccountRepository,
   IdentityRepository,
@@ -56,6 +57,8 @@ import { CoinGeckoClientLive } from "./CoinGeckoClientLive.ts"
 import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationServiceLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
+import { BillingApiLive } from "./BillingApiLive.ts"
+import type { StripeBillingService } from "../services/StripeBillingService.ts"
 import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
 import type { SIWXProofVerifier } from "../services/SIWXProofVerifier.ts"
 import type { AnonSessionService } from "../services/AnonSessionService.ts"
@@ -102,7 +105,8 @@ const CoreApiGroup = Layer.mergeAll(
   AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
   PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
-  SyncRunsApiLive
+  SyncRunsApiLive,
+  BillingApiLive
 ).pipe(
   Layer.provide(PrincipalResolutionServiceLive),
   Layer.provide(CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.layer)))
@@ -112,6 +116,7 @@ type TaxMaxiApiLiveContext =
   | AuthService
   | AnonSessionService
   | AssetCatalogRepository
+  | BillingRepository
   | CexAccountRepository
   | IdentityRepository
   | LegalReferenceRepository
@@ -135,6 +140,7 @@ type TaxMaxiApiLiveContext =
   | TransferReconciliationService
   | UserRepository
   | X402PaymentValidator
+  | StripeBillingService
 
 /**
  * MasterDataApiGroup - Master data API implementations
