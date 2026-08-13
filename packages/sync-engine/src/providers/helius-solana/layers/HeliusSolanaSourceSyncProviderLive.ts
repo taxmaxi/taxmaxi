@@ -810,8 +810,7 @@ const buildProviderTransferDraft = ({
   movement,
   externalId,
   canonicalTransferExternalId,
-  evidenceOnly,
-  accountingOnly,
+  processingMode,
   observedRepresentationIdentityKnown,
 }: {
   readonly sourceId: string
@@ -822,8 +821,7 @@ const buildProviderTransferDraft = ({
   readonly movement: SolanaBalanceMovement
   readonly externalId: string
   readonly canonicalTransferExternalId: string | null
-  readonly evidenceOnly: boolean
-  readonly accountingOnly: boolean
+  readonly processingMode: SourceProviderTransferDraft["processingMode"]
   readonly observedRepresentationIdentityKnown: boolean
 }): SourceProviderTransferDraft => ({
   sourceId,
@@ -833,6 +831,7 @@ const buildProviderTransferDraft = ({
   providerAssetId: movement.asset.providerAssetRowId,
   timestamp,
   direction: movement.direction,
+  processingMode,
   fromAccountRef: null,
   toAccountRef: null,
   fromAddress: movement.fromAddress,
@@ -840,25 +839,29 @@ const buildProviderTransferDraft = ({
   networkName: SOLANA_BLOCKCHAIN_NAME,
   networkHash: signature,
   observedBlockchainId:
-    accountingOnly || !observedRepresentationIdentityKnown ? null : blockchainId,
+    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+      ? null
+      : blockchainId,
   observedRepresentationType:
-    accountingOnly ||
+    processingMode === "accounting_only" ||
     !observedRepresentationIdentityKnown ||
     movement.asset.representationTypeObserved !== true
       ? null
       : movement.asset.assetKind,
   observedContractAddress: null,
   observedMintAddress:
-    accountingOnly || !observedRepresentationIdentityKnown ? null : movement.asset.mintAddress,
+    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+      ? null
+      : movement.asset.mintAddress,
   observedDecimals:
-    accountingOnly || !observedRepresentationIdentityKnown ? null : movement.observedDecimals,
+    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+      ? null
+      : movement.observedDecimals,
   amount: movement.amount,
   metadata: {
     provider: HELIUS_SOLANA_PROVIDER_KEY,
     role: movement.role,
     canonicalTransferExternalId,
-    evidenceOnly,
-    accountingOnly,
     evidenceKind: movement.evidenceKind,
     rawUnits: movement.rawUnits,
     mintAddress: movement.asset.mintAddress,
@@ -2763,8 +2766,7 @@ const make = ({
               movement,
               externalId: `${signature}:provider:${movement.role}:${movement.position}`,
               canonicalTransferExternalId: `${signature}:${movement.role}:${movement.position}`,
-              evidenceOnly: false,
-              accountingOnly: !hasObservedMatch,
+              processingMode: hasObservedMatch ? "accounting_and_evidence" : "accounting_only",
               observedRepresentationIdentityKnown: true,
             })
           })
@@ -2784,8 +2786,7 @@ const make = ({
                   movement,
                   externalId: `${signature}:provider:${movement.role}:evidence:${index}`,
                   canonicalTransferExternalId: null,
-                  evidenceOnly: true,
-                  accountingOnly: false,
+                  processingMode: "evidence_only",
                   observedRepresentationIdentityKnown: !ambiguousNativeSolMovementSet.has(movement),
                 }),
               ]

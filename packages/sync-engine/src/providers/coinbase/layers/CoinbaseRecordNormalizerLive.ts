@@ -257,6 +257,7 @@ const buildPrincipalProviderTransfer = ({
     providerAssetId: null,
     timestamp,
     direction,
+    processingMode: "accounting_and_evidence",
     fromAccountRef,
     toAccountRef,
     fromAddress: partyAddress(transaction.from),

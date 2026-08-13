@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "78ab21fd-fbfe-475e-aa5f-e41b6862b517",
+  "id": "8bf02188-9436-4990-bb11-355c0b8cfd71",
   "prevIds": ["7d0ba7a5-be44-4ab5-9956-0031c81df25a"],
   "ddl": [
     {
@@ -152,6 +152,12 @@
     {
       "values": ["inbound", "outbound"],
       "name": "provider_transfer_direction",
+      "entityType": "enums",
+      "schema": "public"
+    },
+    {
+      "values": ["accounting_and_evidence", "accounting_only", "evidence_only", "stale"],
+      "name": "provider_transfer_processing_mode",
       "entityType": "enums",
       "schema": "public"
     },
@@ -5159,6 +5165,19 @@
       "generated": null,
       "identity": null,
       "name": "direction",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "provider_transfers"
+    },
+    {
+      "type": "provider_transfer_processing_mode",
+      "typeSchema": "public",
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "processing_mode",
       "entityType": "columns",
       "schema": "public",
       "table": "provider_transfers"
@@ -13310,6 +13329,13 @@
     {
       "value": "\"observed_decimals\" is null or \"observed_decimals\" >= 0",
       "name": "provider_transfers_observed_decimals_non_negative",
+      "entityType": "checks",
+      "schema": "public",
+      "table": "provider_transfers"
+    },
+    {
+      "value": "\"processing_mode\" not in ('accounting_only', 'stale') or (\n        \"observed_representation_type\" is null\n        and \"observed_blockchain_id\" is null\n        and \"observed_contract_address\" is null\n        and \"observed_mint_address\" is null\n        and \"observed_decimals\" is null\n      )",
+      "name": "provider_transfers_non_observation_has_no_identity",
       "entityType": "checks",
       "schema": "public",
       "table": "provider_transfers"

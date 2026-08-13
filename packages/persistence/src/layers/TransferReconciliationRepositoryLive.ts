@@ -103,7 +103,10 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.sources.principalId, principalId),
             eq(schema.providerTransfers.sourceId, sourceId),
-            sql`${schema.providerTransfers.metadata}->>'evidenceOnly' is distinct from 'true'`
+            inArray(schema.providerTransfers.processingMode, [
+              "accounting_and_evidence",
+              "accounting_only",
+            ])
           )
         )
         .orderBy(asc(schema.providerTransfers.timestamp))
@@ -302,7 +305,10 @@ const make = Effect.gen(function* () {
                     ),
                     sql`${schema.transferReconciliations.canonicalTransferId} is not null`,
                     sql`${schema.transferReconciliations.canonicalTransactionId} is not null`,
-                    sql`${schema.providerTransfers.metadata}->>'evidenceOnly' is distinct from 'true'`
+                    inArray(schema.providerTransfers.processingMode, [
+                      "accounting_and_evidence",
+                      "accounting_only",
+                    ])
                   )
                 )
                 .orderBy(asc(schema.providerTransfers.timestamp))

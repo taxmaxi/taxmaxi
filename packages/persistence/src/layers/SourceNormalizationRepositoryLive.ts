@@ -90,17 +90,14 @@ const hasFailedProviderStatus = (providerStatus: string | null): boolean =>
 
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literal("principal", "fee", "rent")),
-  evidenceOnly: Schema.optional(Schema.Boolean),
-  accountingOnly: Schema.optional(Schema.Boolean),
 })
 
 const decodeProviderTransferMetadata = (metadata: unknown) =>
   Schema.decodeUnknown(ProviderTransferMetadataSchema)(metadata).pipe(
     Effect.map((decoded) => ({
       purpose: decoded.role === "fee" ? ("fee" as const) : ("principal" as const),
-      evidenceOnly: decoded.evidenceOnly ?? false,
     })),
-    Effect.catchAll(() => Effect.succeed({ purpose: "principal" as const, evidenceOnly: false }))
+    Effect.catchAll(() => Effect.succeed({ purpose: "principal" as const }))
   )
 
 const NumericStringSchema = Schema.Union(
@@ -377,6 +374,7 @@ const make = Effect.gen(function* () {
     providerAssetId: schema.providerTransfers.providerAssetId,
     timestamp: schema.providerTransfers.timestamp,
     direction: schema.providerTransfers.direction,
+    processingMode: schema.providerTransfers.processingMode,
     fromAccountRef: schema.providerTransfers.fromAccountRef,
     toAccountRef: schema.providerTransfers.toAccountRef,
     fromAddress: schema.providerTransfers.fromAddress,
@@ -670,7 +668,7 @@ const make = Effect.gen(function* () {
           and excluded.observed_decimals is null
         `
         const incomingTransferIsAccountingOnly = sql`
-          excluded.metadata->>'accountingOnly' = 'true'
+          excluded.processing_mode = 'accounting_only'
         `
         const incomingObservedRepresentationMatchesStoredIdentity = sql`
           excluded.observed_blockchain_id is not null
@@ -701,6 +699,7 @@ const make = Effect.gen(function* () {
               providerAssetId: sql.raw("excluded.provider_asset_id"),
               timestamp: sql.raw("excluded.timestamp"),
               direction: sql.raw("excluded.direction"),
+              processingMode: sql.raw("excluded.processing_mode"),
               fromAccountRef: sql.raw("excluded.from_account_ref"),
               toAccountRef: sql.raw("excluded.to_account_ref"),
               fromAddress: sql.raw("excluded.from_address"),
@@ -1587,7 +1586,7 @@ const make = Effect.gen(function* () {
                 observedContractAddress: null,
                 observedMintAddress: null,
                 observedDecimals: null,
-                metadata: sql`coalesce(${schema.providerTransfers.metadata}, '{}'::jsonb) || '{"evidenceOnly": true, "stale": true}'::jsonb`,
+                processingMode: "stale",
                 updatedAt: nowDate(),
               })
               .where(eq(schema.providerTransfers.id, id))
@@ -1620,15 +1619,17 @@ const make = Effect.gen(function* () {
 
     return Effect.forEach(orderedProviderTransfers, (providerTransfer) =>
       Effect.gen(function* () {
-        const metadata = yield* decodeProviderTransferMetadata(providerTransfer.metadata)
-
-        if (metadata.evidenceOnly) {
+        if (
+          providerTransfer.processingMode === "evidence_only" ||
+          providerTransfer.processingMode === "stale"
+        ) {
           return yield* removeInventoryMovementForProviderTransfer({
             executor,
             providerTransferId: providerTransfer.id,
           })
         }
 
+        const metadata = yield* decodeProviderTransferMetadata(providerTransfer.metadata)
         const purpose = metadata.purpose
 
         if (feesOnly && purpose !== "fee") {

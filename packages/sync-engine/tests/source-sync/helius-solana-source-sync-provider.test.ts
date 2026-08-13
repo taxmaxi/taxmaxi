@@ -1132,7 +1132,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         observedRepresentationType: null,
         observedMintAddress: null,
         observedDecimals: null,
-        metadata: expect.objectContaining({ evidenceOnly: true, accountingOnly: false }),
+        processingMode: "evidence_only",
       }),
     ])
     expect(result.transactionReview?.matchedLayer).toBe("solana_transfer_evidence")
@@ -1241,7 +1241,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedRepresentationType: null,
       observedMintAddress: null,
       observedDecimals: null,
-      metadata: expect.objectContaining({ accountingOnly: true, evidenceOnly: false }),
+      processingMode: "accounting_only",
     })
     expect(result.transaction.metadata).toMatchObject({
       transferEvidenceContradictions: [],
@@ -1365,7 +1365,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           observedBlockchainId: null,
           observedMintAddress: null,
           observedDecimals: null,
-          metadata: expect.objectContaining({ evidenceOnly: true, accountingOnly: false }),
+          processingMode: "evidence_only",
         }),
       ])
     )
@@ -2192,7 +2192,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           observedRepresentationType: "token",
           observedMintAddress: USDC_MINT,
           observedDecimals: 6,
-          metadata: expect.objectContaining({ evidenceOnly: true, accountingOnly: false }),
+          processingMode: "evidence_only",
         }),
         expect.objectContaining({
           direction: "outbound",
@@ -2200,7 +2200,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           observedRepresentationType: "token",
           observedMintAddress: USDC_MINT,
           observedDecimals: 6,
-          metadata: expect.objectContaining({ evidenceOnly: true, accountingOnly: false }),
+          processingMode: "evidence_only",
         }),
         expect.objectContaining({
           direction: "inbound",
@@ -2209,7 +2209,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           observedRepresentationType: null,
           observedMintAddress: null,
           observedDecimals: null,
-          metadata: expect.objectContaining({ evidenceOnly: false, accountingOnly: true }),
+          processingMode: "accounting_only",
         }),
       ])
     )
@@ -2433,7 +2433,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     ).toEqual([
       expect.objectContaining({
         amount: "1",
-        metadata: expect.objectContaining({ accountingOnly: true, evidenceOnly: false }),
+        processingMode: "accounting_only",
       }),
     ])
     expect(result.transaction.metadata).toMatchObject({
@@ -3134,9 +3134,8 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedRepresentationType: "token",
       observedMintAddress: WRAPPED_SOL_MINT,
       observedDecimals: 9,
+      processingMode: "accounting_and_evidence",
       metadata: expect.objectContaining({
-        evidenceOnly: false,
-        accountingOnly: false,
         supplementalTransferRow: expect.objectContaining({
           counterparty: "wrapped-counterparty",
         }),
@@ -3741,14 +3740,14 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         expect.objectContaining({
           amount: "12.5",
           observedDecimals: 6,
-          metadata: expect.objectContaining({ evidenceOnly: false }),
+          processingMode: "accounting_and_evidence",
         }),
         expect.objectContaining({
           amount: "12.5",
           observedRepresentationType: "token",
           observedMintAddress: USDC_MINT,
           observedDecimals: 2,
-          metadata: expect.objectContaining({ evidenceOnly: true }),
+          processingMode: "evidence_only",
         }),
       ])
     )
@@ -3839,10 +3838,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           externalId: "signature-close-account-rent-refund:provider:rent:0",
           observedRepresentationType: "native",
           observedDecimals: 9,
+          processingMode: "accounting_and_evidence",
           metadata: expect.objectContaining({
             role: "rent",
-            evidenceOnly: false,
-            accountingOnly: false,
           }),
         }),
       ])

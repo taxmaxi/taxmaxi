@@ -9,6 +9,7 @@ import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderRefere
 import { PortfolioRepositoryLive } from "../../src/layers/PortfolioRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
+import { TransferReconciliationRepositoryLive } from "../../src/layers/TransferReconciliationRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import { PortfolioRepository } from "../../src/services/PortfolioRepository.ts"
 import {
@@ -23,7 +24,10 @@ import {
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
-import { SourceNormalizationRepository } from "@my/sync-engine/services"
+import {
+  SourceNormalizationRepository,
+  TransferReconciliationRepository,
+} from "@my/sync-engine/services"
 import {
   CoinbaseLegDerivationServiceLive,
   CoinbaseRecordNormalizerLive,
@@ -47,6 +51,11 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
+
+const runTransferReconciliationRepository = <A, E>(
+  effect: Effect.Effect<A, E, TransferReconciliationRepository>
+) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: TransferReconciliationRepositoryLive }))
 
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
   fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
@@ -228,11 +237,13 @@ const persistCoinbaseNormalization = ({
   source,
   sourceRecord,
   skipLegDerivation = false,
+  omitProviderTransfers = false,
   providerTransferRole,
 }: {
   readonly source: SourceSyncSource
   readonly sourceRecord: SourceRawRecord
   readonly skipLegDerivation?: boolean
+  readonly omitProviderTransfers?: boolean
   readonly providerTransferRole?: "principal" | "fee"
 }) =>
   Effect.gen(function* () {
@@ -247,13 +258,15 @@ const persistCoinbaseNormalization = ({
       sourceRecord,
       lookups,
     })
-    const providerTransfers = prepared.providerTransfers.map((providerTransfer) => ({
-      ...providerTransfer,
-      metadata:
-        providerTransferRole === undefined
-          ? providerTransfer.metadata
-          : { role: providerTransferRole },
-    }))
+    const providerTransfers = omitProviderTransfers
+      ? []
+      : prepared.providerTransfers.map((providerTransfer) => ({
+          ...providerTransfer,
+          metadata:
+            providerTransferRole === undefined
+              ? providerTransfer.metadata
+              : { role: providerTransferRole },
+        }))
 
     return yield* sourceNormalizationRepository.persistNormalizedArtifacts(
       prepared.legDerivationStrategy === "derive" && !skipLegDerivation
@@ -333,6 +346,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       providerAssetId: null,
       timestamp: occurredAt,
       direction: "inbound" as const,
+      processingMode: "accounting_and_evidence" as const,
       fromAccountRef: null,
       toAccountRef: null,
       fromAddress: "external-address",
@@ -547,6 +561,30 @@ describe("SourceNormalizationRepositoryLive", () => {
           const db = yield* drizzle
           yield* db
             .update(schema.providerTransfers)
+            .set({ processingMode: "accounting_only" })
+            .where(eq(schema.providerTransfers.externalId, "observed-native"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ processingMode: "stale" })
+            .where(eq(schema.providerTransfers.externalId, "observed-native"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
             .set({
               observedContractAddress: "0x0000000000000000000000000000000000000096",
             })
@@ -731,7 +769,8 @@ describe("SourceNormalizationRepositoryLive", () => {
                   observedContractAddress: null,
                   observedMintAddress: null,
                   observedDecimals: null,
-                  metadata: { provider: "test-onchain-adapter", accountingOnly: true },
+                  processingMode: "accounting_only" as const,
+                  metadata: { provider: "test-onchain-adapter" },
                 }
               : transfer
           ),
@@ -748,7 +787,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       observedContractAddress: null,
       observedMintAddress: null,
       observedDecimals: null,
-      metadata: { provider: "test-onchain-adapter", accountingOnly: true },
+      processingMode: "accounting_only",
+      metadata: { provider: "test-onchain-adapter" },
     })
 
     const persistWithoutObservedTransfers = () =>
@@ -849,7 +889,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             observedContractAddress: null,
             observedMintAddress: null,
             observedDecimals: null,
-            metadata: expect.objectContaining({ evidenceOnly: true, stale: true }),
+            processingMode: "stale",
           })
         )
       )
@@ -2506,7 +2546,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
-  it("removes provider movements and lots that disappear on replay", async () => {
+  it("removes provider movements that disappear on replay and restores them when they return", async () => {
     const rawRecordId = "00000000-0000-0000-0000-000000000713"
     const occurredAt = new Date("2025-04-02T10:00:00.000Z")
     const receivePayload = {
@@ -2519,12 +2559,6 @@ describe("SourceNormalizationRepositoryLive", () => {
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-transfer-disappears",
       from: { address: "bc1qprovidertransfersource", resource: "address" },
     }
-    const buyPayload = {
-      ...receivePayload,
-      type: "buy",
-      from: undefined,
-    }
-
     await runPg(
       seedRawRecord({
         rawRecordId,
@@ -2535,7 +2569,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const normalize = (payload: typeof receivePayload | typeof buyPayload) =>
+    const normalize = ({ omitProviderTransfers = false } = {}) =>
       runCoinbaseNormalization(
         persistCoinbaseNormalization({
           source,
@@ -2543,32 +2577,113 @@ describe("SourceNormalizationRepositoryLive", () => {
             rawRecordId,
             externalRecordId: "raw-provider-transfer-disappears",
             occurredAt,
-            payload,
+            payload: receivePayload,
           }),
-          skipLegDerivation: payload.type === "receive",
+          skipLegDerivation: true,
+          omitProviderTransfers,
         })
       )
 
-    await normalize(receivePayload)
-    await normalize(buyPayload)
+    const initialResult = await normalize()
+    const initialProviderTransfer = initialResult.providerTransfers[0]
+    expect(initialProviderTransfer).toBeDefined()
+    if (initialProviderTransfer === undefined) {
+      return
+    }
 
-    const state = await runPg(
+    await normalize({ omitProviderTransfers: true })
+
+    const removedState = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
         const movements = yield* db.select().from(schema.inventoryMovements)
         const lots = yield* db.select().from(schema.fifoLots)
-        return { movements, lots }
+        return { providerTransfer, movements, lots }
       })
     )
 
-    expect(state.movements).toHaveLength(0)
-    expect(state.lots).toEqual([
+    expect(removedState.providerTransfer).toEqual(
       expect.objectContaining({
-        sourceLegId: expect.any(String),
-        sourceProviderTransferId: null,
+        id: initialProviderTransfer.id,
+        processingMode: "stale",
+      })
+    )
+    expect(removedState.movements).toHaveLength(0)
+    expect(removedState.lots).toHaveLength(0)
+    const staleReconciliationCandidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.listProviderTransfersForReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    expect(
+      staleReconciliationCandidates.some(
+        ({ providerTransferId }) => providerTransferId === initialProviderTransfer.id
+      )
+    ).toBe(false)
+
+    const restoredResult = await normalize()
+    expect(restoredResult.providerTransfers).toEqual([
+      expect.objectContaining({
+        id: initialProviderTransfer.id,
+        processingMode: "accounting_and_evidence",
+      }),
+    ])
+
+    const restoredState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
+        const movements = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.providerTransferId, initialProviderTransfer.id))
+        const lots = yield* db.select().from(schema.fifoLots)
+        return { providerTransfer, movements, lots }
+      })
+    )
+
+    expect(restoredState.providerTransfer).toEqual(
+      expect.objectContaining({
+        id: initialProviderTransfer.id,
+        processingMode: "accounting_and_evidence",
+      })
+    )
+    expect(restoredState.movements).toEqual([
+      expect.objectContaining({
+        providerTransferId: initialProviderTransfer.id,
+        direction: "inbound",
+      }),
+    ])
+    expect(restoredState.lots).toEqual([
+      expect.objectContaining({
+        sourceProviderTransferId: initialProviderTransfer.id,
+        originalAmount: expect.stringContaining("0.25000000"),
         remainingAmount: expect.stringContaining("0.25000000"),
       }),
     ])
+    const restoredReconciliationCandidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.listProviderTransfersForReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    expect(restoredReconciliationCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerTransferId: initialProviderTransfer.id }),
+      ])
+    )
   })
 
   it("does not spend an unreconciled inbound provider lot", async () => {

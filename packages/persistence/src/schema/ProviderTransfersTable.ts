@@ -26,6 +26,17 @@ export const providerTransferDirectionEnum = pgEnum("provider_transfer_direction
 
 export type ProviderTransferDirection = (typeof providerTransferDirectionEnum.enumValues)[number]
 
+/** Controls whether a provider movement participates in accounting and reconciliation. */
+export const providerTransferProcessingModeEnum = pgEnum("provider_transfer_processing_mode", [
+  "accounting_and_evidence",
+  "accounting_only",
+  "evidence_only",
+  "stale",
+])
+
+export type ProviderTransferProcessingMode =
+  (typeof providerTransferProcessingModeEnum.enumValues)[number]
+
 /**
  * Durable provider-side principal movements captured before canonical asset mapping
  * or onchain reconciliation is complete.
@@ -53,6 +64,7 @@ export const providerTransfers = pgTable(
 
     timestamp: timestamp("timestamp").notNull(),
     direction: providerTransferDirectionEnum("direction").notNull(),
+    processingMode: providerTransferProcessingModeEnum("processing_mode").notNull(),
 
     fromAccountRef: text("from_account_ref"),
     toAccountRef: text("to_account_ref"),
@@ -112,6 +124,16 @@ export const providerTransfers = pgTable(
     check(
       "provider_transfers_observed_decimals_non_negative",
       sql`${table.observedDecimals} is null or ${table.observedDecimals} >= 0`
+    ),
+    check(
+      "provider_transfers_non_observation_has_no_identity",
+      sql`${table.processingMode} not in ('accounting_only', 'stale') or (
+        ${table.observedRepresentationType} is null
+        and ${table.observedBlockchainId} is null
+        and ${table.observedContractAddress} is null
+        and ${table.observedMintAddress} is null
+        and ${table.observedDecimals} is null
+      )`
     ),
     uniqueIndex("provider_transfers_source_external_id_unique_idx")
       .on(table.sourceId, table.externalId)
