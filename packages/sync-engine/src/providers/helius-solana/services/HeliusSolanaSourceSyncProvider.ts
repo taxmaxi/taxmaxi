@@ -122,17 +122,6 @@ export class HeliusSolanaNormalizationReferenceError extends Schema.TaggedError<
 ) {}
 
 /**
- * HeliusSolanaNormalizationEvidenceError - Required auxiliary evidence was incomplete or unavailable.
- */
-export class HeliusSolanaNormalizationEvidenceError extends Schema.TaggedError<HeliusSolanaNormalizationEvidenceError>()(
-  "HeliusSolanaNormalizationEvidenceError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  }
-) {}
-
-/**
  * HeliusSolanaCursorDecodeError - Persisted Helius pagination cursor is malformed.
  */
 export class HeliusSolanaCursorDecodeError extends Schema.TaggedError<HeliusSolanaCursorDecodeError>()(
@@ -160,7 +149,6 @@ export class HeliusSolanaPayloadDecodeError extends Schema.TaggedError<HeliusSol
 export type HeliusSolanaRecoverableNormalizationError =
   | HeliusSolanaNormalizationNotImplementedError
   | HeliusSolanaNormalizationDecodeError
-  | HeliusSolanaNormalizationEvidenceError
   | HeliusSolanaNormalizationReferenceError
 
 /**

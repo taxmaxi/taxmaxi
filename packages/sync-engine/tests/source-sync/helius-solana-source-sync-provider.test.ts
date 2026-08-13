@@ -91,7 +91,16 @@ const makeSource = (): SourceSyncSource => ({
   walletAddress: WALLET_ADDRESS,
 })
 
-const makeRawRecord = ({ payload }: { readonly payload: unknown }): SourceRawRecord => ({
+type MakeRawRecordParams =
+  | {
+      readonly fullTransaction: unknown
+      readonly walletTransferEvidence?: ReadonlyArray<unknown>
+    }
+  | {
+      readonly rawRecordPayload: unknown
+    }
+
+const makeRawRecord = (params: MakeRawRecordParams): SourceRawRecord => ({
   id: "raw-solana-1",
   sourceId: "source-solana-1",
   provider: HELIUS_SOLANA_PROVIDER_KEY,
@@ -100,7 +109,13 @@ const makeRawRecord = ({ payload }: { readonly payload: unknown }): SourceRawRec
   externalRecordId: "signature-normalized",
   externalParentId: null,
   occurredAt: new Date("2025-01-01T00:00:00.000Z"),
-  payload,
+  payload:
+    "rawRecordPayload" in params
+      ? params.rawRecordPayload
+      : {
+          fullTransaction: params.fullTransaction,
+          walletTransferEvidence: params.walletTransferEvidence ?? [],
+        },
   importedAt: new Date("2025-01-01T00:00:00.000Z"),
   normalizedAt: null,
   normalizationError: null,
@@ -386,7 +401,6 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       true
     )
     expect(firstPage.records[1]?.payload).toMatchObject({
-      _tag: "HeliusSolanaCachedRawRecordPayload",
       fullTransaction: {
         meta: { err: { InstructionError: [1, "Custom"] } },
       },
@@ -400,7 +414,15 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(firstPage.highWatermark?.toISOString()).toBe("2025-01-01T00:01:00.000Z")
 
     expect(secondPage.records.map((record) => record.externalRecordId)).toEqual(["signature-3"])
-    expect(secondPage.cursorPayload).toEqual({ paginationToken: null })
+    expect(secondPage.cursorPayload).toEqual({
+      paginationToken: null,
+      resumeBoundaryActive: false,
+      resumeCheckpointExternalId: null,
+      resumeHighWatermarkIso: null,
+      walletTransferCursor: null,
+      walletTransferExhausted: false,
+      pendingWalletTransfers: [],
+    })
     expect(secondPage.done).toBe(true)
   })
 
@@ -426,12 +448,12 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         const firstPrepared = yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload: firstRawRecord.payload }),
+          sourceRecord: makeRawRecord({ rawRecordPayload: firstRawRecord.payload }),
           lookups,
         })
         const secondPrepared = yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload: secondRawRecord.payload }),
+          sourceRecord: makeRawRecord({ rawRecordPayload: secondRawRecord.payload }),
           lookups,
         })
 
@@ -515,13 +537,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
     expect(walletTransferCursors).toEqual([null, "wallet-page-2", "wallet-page-3"])
     expect(result.firstRawRecord.payload).toMatchObject({
-      _tag: "HeliusSolanaCachedRawRecordPayload",
       walletTransferEvidence: [
         expect.objectContaining({ signature, amountRaw: "1000000", decimals: 6 }),
       ],
     })
     expect(result.secondRawRecord.payload).toMatchObject({
-      _tag: "HeliusSolanaCachedRawRecordPayload",
       walletTransferEvidence: [
         expect.objectContaining({ signature: olderSignature, amountRaw: "2000000", decimals: 6 }),
       ],
@@ -699,7 +719,15 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(secondPage.records.map((record) => record.externalRecordId)).toEqual([
       "signature-newer-3",
     ])
-    expect(secondPage.cursorPayload).toEqual({ paginationToken: null })
+    expect(secondPage.cursorPayload).toEqual({
+      paginationToken: null,
+      resumeBoundaryActive: false,
+      resumeCheckpointExternalId: null,
+      resumeHighWatermarkIso: null,
+      walletTransferCursor: null,
+      walletTransferExhausted: false,
+      pendingWalletTransfers: [],
+    })
     expect(secondPage.done).toBe(true)
   })
 
@@ -713,6 +741,28 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         )
       ).pipe(Effect.either),
       () => Effect.dieMessage("Helius client should not be called for malformed cursors")
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "SourceSyncCursorDecodeError",
+        providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+      })
+      expect(result.left.message).toContain("Invalid persisted Helius Solana cursor payload")
+    }
+  })
+
+  it("rejects incomplete persisted cursor payloads", async () => {
+    const result = await runProvider(
+      Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
+        provider.fetchRawBatch(
+          makeFetchParams({
+            cursorPayload: { paginationToken: null },
+          })
+        )
+      ).pipe(Effect.either),
+      () => Effect.dieMessage("Helius client should not be called for incomplete cursors")
     )
 
     expect(result._tag).toBe("Left")
@@ -900,7 +950,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -934,6 +984,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("does not treat a native SOL wallet row sentinel as wrapped SOL", async () => {
     const signature = "signature-native-sol-wallet-row"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "counterparty-address",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.5,
+        amountRaw: "500000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 123,
       transactionIndex: 4,
@@ -965,7 +1028,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -1014,6 +1077,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("keeps SOL sentinel rows unknown when native balance evidence is absent", async () => {
     const signature = "signature-sol-sentinel-without-native-balance"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "counterparty-address",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.5,
+        amountRaw: "500000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 123,
       transactionIndex: 4,
@@ -1042,28 +1118,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () =>
-        Effect.succeed({
-          data: [
-            {
-              signature,
-              timestamp: 1_735_689_600,
-              direction: "out" as const,
-              counterparty: "counterparty-address",
-              mint: WRAPPED_SOL_MINT,
-              symbol: "SOL",
-              amount: 0.5,
-              amountRaw: "500000000",
-              decimals: 9,
-            },
-          ],
-          pagination: { hasMore: false, nextCursor: null },
-        })
+      () => Effect.dieMessage("Helius client should not be called during normalization")
     )
 
     expect(result.providerTransfers).toEqual([
@@ -1081,6 +1140,30 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("preserves separate native SOL wallet rows that explain one balance delta", async () => {
     const signature = "signature-multiple-native-sol-wallet-rows"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "counterparty-a",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.5,
+        amountRaw: "500000000",
+        decimals: 9,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "counterparty-b",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.25,
+        amountRaw: "250000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 123,
       transactionIndex: 4,
@@ -1113,42 +1196,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () =>
-        Effect.succeed({
-          data: [
-            {
-              signature,
-              timestamp: 1_735_689_600,
-              direction: "out",
-              counterparty: "counterparty-a",
-              mint: WRAPPED_SOL_MINT,
-              symbol: "SOL",
-              amount: 0.5,
-              amountRaw: "500000000",
-              decimals: 9,
-            },
-            {
-              signature,
-              timestamp: 1_735_689_600,
-              direction: "out",
-              counterparty: "counterparty-b",
-              mint: WRAPPED_SOL_MINT,
-              symbol: "SOL",
-              amount: 0.25,
-              amountRaw: "250000000",
-              decimals: 9,
-            },
-          ],
-          pagination: {
-            hasMore: false,
-            nextCursor: null,
-          },
-        })
+      () => Effect.dieMessage("Helius client should not be called during normalization")
     )
 
     const principalProviderTransfers = result.providerTransfers.filter(
@@ -1229,6 +1281,17 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       source: "SYSTEM_PROGRAM",
       description: "Transfer SOL twenty times",
     }
+    const walletTransferEvidence = amounts.map((amount, index) => ({
+      signature,
+      timestamp: 1_735_689_600,
+      direction: "out",
+      counterparty: `counterparty-${index}`,
+      mint: WRAPPED_SOL_MINT,
+      symbol: "SOL",
+      amount: amount / 1_000_000_000,
+      amountRaw: String(amount),
+      decimals: 9,
+    }))
 
     const result = await runProvider(
       Effect.gen(function* () {
@@ -1236,26 +1299,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () =>
-        Effect.succeed({
-          data: amounts.map((amount, index) => ({
-            signature,
-            timestamp: 1_735_689_600,
-            direction: "out" as const,
-            counterparty: `counterparty-${index}`,
-            mint: WRAPPED_SOL_MINT,
-            symbol: "SOL",
-            amount: amount / 1_000_000_000,
-            amountRaw: String(amount),
-            decimals: 9,
-          })),
-          pagination: { hasMore: false, nextCursor: null },
-        })
+      () => Effect.dieMessage("Helius client should not be called during normalization")
     )
 
     const observedPrincipalTransfers = result.providerTransfers.filter(
@@ -1285,32 +1333,24 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         postBalances: [startingLamports - 998 - feeLamports, ...amounts],
       },
     }
+    const ambiguousWalletTransferEvidence = walletTransferEvidence.map((transfer) => ({
+      ...transfer,
+      signature: ambiguousSignature,
+    }))
     const ambiguousResult = await runProvider(
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload: ambiguousPayload }),
+          sourceRecord: makeRawRecord({
+            fullTransaction: ambiguousPayload,
+            walletTransferEvidence: ambiguousWalletTransferEvidence,
+          }),
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () =>
-        Effect.succeed({
-          data: amounts.map((amount, index) => ({
-            signature: ambiguousSignature,
-            timestamp: 1_735_689_600,
-            direction: "out" as const,
-            counterparty: `counterparty-${index}`,
-            mint: WRAPPED_SOL_MINT,
-            symbol: "SOL",
-            amount: amount / 1_000_000_000,
-            amountRaw: String(amount),
-            decimals: 9,
-          })),
-          pagination: { hasMore: false, nextCursor: null },
-        })
+      () => Effect.dieMessage("Helius client should not be called during normalization")
     )
     const ambiguousEvidenceTransfers = ambiguousResult.providerTransfers.filter(
       (transfer) =>
@@ -1334,6 +1374,30 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("preserves bidirectional native SOL rows that explain the net balance delta", async () => {
     const signature = "signature-bidirectional-native-sol-wallet-rows"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "outbound-counterparty",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 1,
+        amountRaw: "1000000000",
+        decimals: 9,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "inbound-counterparty",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.5,
+        amountRaw: "500000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 123,
       transactionIndex: 4,
@@ -1366,39 +1430,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () =>
-        Effect.succeed({
-          data: [
-            {
-              signature,
-              timestamp: 1_735_689_600,
-              direction: "out",
-              counterparty: "outbound-counterparty",
-              mint: WRAPPED_SOL_MINT,
-              symbol: "SOL",
-              amount: 1,
-              amountRaw: "1000000000",
-              decimals: 9,
-            },
-            {
-              signature,
-              timestamp: 1_735_689_600,
-              direction: "in",
-              counterparty: "inbound-counterparty",
-              mint: WRAPPED_SOL_MINT,
-              symbol: "SOL",
-              amount: 0.5,
-              amountRaw: "500000000",
-              decimals: 9,
-            },
-          ],
-          pagination: { hasMore: false, nextCursor: null },
-        })
+      () => Effect.dieMessage("Helius client should not be called during normalization")
     )
 
     const principalProviderTransfers = result.providerTransfers.filter(
@@ -1460,7 +1496,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -1507,7 +1543,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -1550,7 +1586,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -1595,7 +1631,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -1611,6 +1647,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   })
 
   it("prefers parsed SPL token transfer evidence when present", async () => {
+    const walletTransferEvidence = [
+      {
+        signature: "signature-spl-normalized",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 12.5,
+        amountRaw: "12500000",
+        decimals: 6,
+      },
+    ]
     const payload = {
       slot: 125,
       transactionIndex: 1,
@@ -1649,7 +1698,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -1766,7 +1815,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -1797,6 +1846,30 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   })
 
   it("enriches reordered parsed SPL movements with exact wallet-row decimals", async () => {
+    const walletTransferEvidence = [
+      {
+        signature: "signature-reordered-transfer-row-evidence",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-unknown",
+        mint: UNKNOWN_MINT,
+        symbol: null,
+        amount: 1.23456,
+        amountRaw: "123456",
+        decimals: 5,
+      },
+      {
+        signature: "signature-reordered-transfer-row-evidence",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-usdc",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 2.5,
+        amountRaw: "2500000",
+        decimals: 6,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -1842,7 +1915,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -1906,6 +1979,30 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("matches reordered duplicate parsed movements by counterparty", async () => {
     const signature = "signature-reordered-duplicate-transfer-evidence"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-b",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 1.5,
+        amountRaw: "1500000",
+        decimals: 6,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-a",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 1.5,
+        amountRaw: "1500000",
+        decimals: 6,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -1951,7 +2048,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -2076,7 +2173,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -2122,6 +2219,41 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("preserves same-account SPL transfers when their sum matches the balance delta", async () => {
     const signature = "signature-same-account-multiple-spl-transfers"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-b",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 0.5,
+        amountRaw: "500000",
+        decimals: 6,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-a",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 1,
+        amountRaw: "1000000",
+        decimals: 6,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-c",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 0.5,
+        amountRaw: "500000",
+        decimals: 6,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -2202,7 +2334,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -2371,7 +2503,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -2395,88 +2527,20 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     ).toHaveLength(1)
   })
 
-  it("retains partial transfer evidence without returning an incomplete normalization", async () => {
-    const signature = "signature-transfer-evidence-partial-page"
-    const payload = {
-      slot: 126,
-      transactionIndex: 2,
-      transaction: {
-        signatures: [signature],
-        message: {
-          accountKeys: [
-            { pubkey: WALLET_ADDRESS, signer: true },
-            { pubkey: "counterparty-address", signer: false },
-          ],
-          instructions: [],
-        },
-      },
-      meta: {
-        err: null,
-        fee: 0,
-        preBalances: [2_000_000_000, 0],
-        postBalances: [2_000_000_000, 0],
-      },
-      blockTime: 1_735_689_600,
-    }
-
-    const result = await runProvider(
-      Effect.gen(function* () {
-        const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider.prepareNormalization({
-          source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
-          lookups,
-        })
-      }).pipe(Effect.either),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      ({ cursor }) =>
-        cursor === null
-          ? Effect.succeed({
-              data: [
-                {
-                  signature,
-                  timestamp: 1_735_689_600,
-                  direction: "in" as const,
-                  counterparty: "counterparty-address",
-                  mint: USDC_MINT,
-                  symbol: "USDC",
-                  amount: 1.25,
-                  amountRaw: "1250000",
-                  decimals: 6,
-                },
-              ],
-              pagination: { hasMore: true, nextCursor: "failing-page" },
-            })
-          : Effect.fail(
-              new HeliusSolanaProviderError({
-                message: "Later transfer page failed",
-                statusCode: 503,
-                retryable: true,
-              })
-            )
-    )
-
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
-        _tag: "HeliusSolanaNormalizationEvidenceError",
-        message: "Solana wallet transfer evidence paging was incomplete.",
-        cause: {
-          retainedTransfers: [
-            expect.objectContaining({
-              signature,
-              counterparty: "counterparty-address",
-              amountRaw: "1250000",
-              decimals: 6,
-            }),
-          ],
-        },
-      })
-    }
-  })
-
   it("prefers exact wallet-row decimals over stale catalog decimals for parsed transfers", async () => {
+    const walletTransferEvidence = [
+      {
+        signature: "signature-stale-catalog-decimals",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: STALE_DECIMALS_MINT,
+        symbol: "STALE",
+        amount: 1.23456,
+        amountRaw: "123456",
+        decimals: 5,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -2515,7 +2579,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -2562,322 +2626,20 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     })
   })
 
-  it.each(["first page", "later page before any match"] as const)(
-    "rejects an incomplete normalization when transfer evidence fails on the %s",
-    async (failurePoint) => {
-      const signature = "signature-transfer-evidence-unavailable"
-      const payload = {
-        slot: 126,
-        transactionIndex: 2,
-        transaction: {
-          signatures: [signature],
-          message: {
-            accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
-            instructions: [],
-          },
-        },
-        meta: {
-          err: null,
-          fee: 0,
-          preBalances: [2_000_000_000],
-          postBalances: [2_000_000_000],
-        },
-        blockTime: 1_735_689_600,
-      }
-
-      const result = await runProvider(
-        Effect.gen(function* () {
-          const provider = yield* HeliusSolanaSourceSyncProvider
-          const lookups = yield* provider.loadNormalizationLookups()
-          return yield* provider.prepareNormalization({
-            source: makeSource(),
-            sourceRecord: makeRawRecord({ payload }),
-            lookups,
-          })
-        }).pipe(Effect.either),
-        () => Effect.dieMessage("Helius client should not be called during normalization"),
-        ({ cursor }) =>
-          failurePoint === "later page before any match" && cursor === null
-            ? Effect.succeed({
-                data: [],
-                pagination: { hasMore: true, nextCursor: "failing-page" },
-              })
-            : Effect.fail(
-                new HeliusSolanaProviderError({
-                  message: "Transfer evidence request failed",
-                  statusCode: 503,
-                  retryable: true,
-                })
-              )
-      )
-
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
-          _tag: "HeliusSolanaNormalizationEvidenceError",
-        })
-        expect(result.left.message).toBe("Failed to load complete Solana wallet transfer evidence.")
-      }
-    }
-  )
-
-  it.each(["missing", "repeated"] as const)(
-    "rejects incomplete transfer evidence pagination with a %s cursor",
-    async (cursorFailure) => {
-      const signature = `signature-transfer-evidence-${cursorFailure}-cursor`
-      const payload = {
-        slot: 126,
-        transactionIndex: 2,
-        transaction: {
-          signatures: [signature],
-          message: {
-            accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
-            instructions: [],
-          },
-        },
-        meta: {
-          err: null,
-          fee: 0,
-          preBalances: [2_000_000_000],
-          postBalances: [2_000_000_000],
-        },
-        blockTime: 1_735_689_600,
-      }
-
-      const result = await runProvider(
-        Effect.gen(function* () {
-          const provider = yield* HeliusSolanaSourceSyncProvider
-          const lookups = yield* provider.loadNormalizationLookups()
-          return yield* provider.prepareNormalization({
-            source: makeSource(),
-            sourceRecord: makeRawRecord({ payload }),
-            lookups,
-          })
-        }).pipe(Effect.either),
-        () => Effect.dieMessage("Helius client should not be called during normalization"),
-        () =>
-          Effect.succeed({
-            data: [],
-            pagination: {
-              hasMore: true,
-              nextCursor: cursorFailure === "missing" ? null : "repeated-cursor",
-            },
-          })
-      )
-
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
-          _tag: "HeliusSolanaNormalizationEvidenceError",
-          message: "Solana wallet transfer evidence paging was incomplete.",
-          cause: {
-            error: {
-              message:
-                cursorFailure === "missing"
-                  ? "Helius Solana wallet transfer evidence pagination had no continuation cursor."
-                  : "Helius Solana wallet transfer evidence pagination repeated a cursor.",
-            },
-          },
-        })
-      }
-    }
-  )
-
-  it("finds historical transfer evidence beyond ten wallet pages", async () => {
-    const signature = "signature-transfer-evidence-historical"
-    const payload = {
-      slot: 126,
-      transactionIndex: 2,
-      transaction: {
-        signatures: [signature],
-        message: {
-          accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
-          instructions: [],
-        },
-      },
-      meta: {
-        err: null,
-        fee: 0,
-        preBalances: [2_000_000_000],
-        postBalances: [2_000_000_000],
-      },
-      blockTime: 1_735_689_600,
-    }
-    let pageCount = 0
-
-    const result = await runProvider(
-      Effect.gen(function* () {
-        const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider.prepareNormalization({
-          source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
-          lookups,
-        })
-      }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () => {
-        pageCount += 1
-        return Effect.succeed({
-          data:
-            pageCount === 11
-              ? [
-                  {
-                    signature,
-                    timestamp: 1_735_689_600,
-                    direction: "in" as const,
-                    counterparty: "historical-counterparty",
-                    mint: USDC_MINT,
-                    symbol: "USDC",
-                    amount: 1,
-                    amountRaw: "1000000",
-                    decimals: 6,
-                  },
-                ]
-              : [],
-          pagination: {
-            hasMore: pageCount < 11,
-            nextCursor: pageCount < 11 ? `cursor-${pageCount}` : null,
-          },
-        })
-      }
-    )
-
-    expect(pageCount).toBe(11)
-    expect(result.providerTransfers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          observedMintAddress: USDC_MINT,
-          observedDecimals: 6,
-        }),
-      ])
-    )
-  })
-
-  it("stops a legacy wallet evidence lookup after crossing the transaction time", async () => {
-    const signature = "signature-legacy-without-wallet-transfer"
-    const payload = {
-      slot: 126,
-      transactionIndex: 2,
-      transaction: {
-        signatures: [signature],
-        message: {
-          accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
-          instructions: [],
-        },
-      },
-      meta: {
-        err: null,
-        fee: 0,
-        preBalances: [2_000_000_000],
-        postBalances: [2_000_000_000],
-      },
-      blockTime: 1_735_689_600,
-    }
-    let pageCount = 0
-
-    const result = await runProvider(
-      Effect.gen(function* () {
-        const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider.prepareNormalization({
-          source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
-          lookups,
-        })
-      }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () => {
-        pageCount += 1
-        return Effect.succeed({
-          data: [
-            {
-              signature: "older-unrelated-signature",
-              timestamp: 1_735_689_599,
-              direction: "in" as const,
-              counterparty: "older-counterparty",
-              mint: USDC_MINT,
-              symbol: "USDC",
-              amount: 1,
-              amountRaw: "1000000",
-              decimals: 6,
-            },
-          ],
-          pagination: { hasMore: true, nextCursor: "unneeded-older-page" },
-        })
-      }
-    )
-
-    expect(pageCount).toBe(1)
-    expect(result.providerTransfers).toEqual([])
-  })
-
-  it("collects legacy signature rows split by a same-time page", async () => {
-    const signature = "signature-legacy-split-wallet-transfer"
-    const timestamp = 1_735_689_600
-    const payload = {
-      slot: 126,
-      transactionIndex: 2,
-      transaction: {
-        signatures: [signature],
-        message: {
-          accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
-          instructions: [],
-        },
-      },
-      meta: {
-        err: null,
-        fee: 0,
-        preBalances: [2_000_000_000],
-        postBalances: [2_000_000_000],
-      },
-      blockTime: timestamp,
-    }
-    let pageCount = 0
-
-    const result = await runProvider(
-      Effect.gen(function* () {
-        const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider.prepareNormalization({
-          source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
-          lookups,
-        })
-      }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () => {
-        pageCount += 1
-        const transfer = {
-          timestamp,
-          direction: "in" as const,
-          counterparty: `counterparty-${pageCount}`,
-          mint: USDC_MINT,
-          symbol: "USDC",
-          amount: 1,
-          amountRaw: "1000000",
-          decimals: 6,
-        }
-        return Effect.succeed({
-          data:
-            pageCount === 2
-              ? [{ ...transfer, signature: "same-time-unrelated-signature" }]
-              : [{ ...transfer, signature }],
-          pagination: {
-            hasMore: pageCount < 3,
-            nextCursor: pageCount < 3 ? `split-page-${pageCount + 1}` : null,
-          },
-        })
-      }
-    )
-
-    expect(pageCount).toBe(3)
-    expect(
-      result.providerTransfers.filter((transfer) => transfer.observedMintAddress === USDC_MINT)
-    ).toHaveLength(2)
-  })
-
   it("uses wallet transfer rows as SPL evidence when full transaction SPL evidence is absent", async () => {
+    const walletTransferEvidence = [
+      {
+        signature: "signature-transfer-row-normalized",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 12.5,
+        amountRaw: "12500000",
+        decimals: 6,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -2908,7 +2670,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -2947,6 +2709,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   })
 
   it("uses wallet transfer row raw units for exact display amounts", async () => {
+    const walletTransferEvidence = [
+      {
+        signature: "signature-transfer-row-raw-amount",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 1.2345678901234567,
+        amountRaw: "1234567890123456789",
+        decimals: 18,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -2977,7 +2752,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -3063,7 +2838,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -3098,6 +2873,41 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("keeps native and wrapped SOL facts separate in one outbound transaction", async () => {
     const signature = "signature-native-and-wrapped-sol"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "native-counterparty",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.5,
+        amountRaw: "500000000",
+        decimals: 9,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "wrapped-counterparty-a",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.1,
+        amountRaw: "100000000",
+        decimals: 9,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "wrapped-counterparty-b",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.15,
+        amountRaw: "150000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -3143,7 +2953,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -3232,6 +3042,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("uses a wrapped SOL balance delta to classify matching wallet rows", async () => {
     const signature = "signature-wrapped-sol-row-from-balance"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "wrapped-counterparty",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.25,
+        amountRaw: "250000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 2,
@@ -3277,7 +3100,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -3325,6 +3148,30 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
 
   it("keeps an explicit zero-net wrapped SOL round trip as token evidence", async () => {
     const signature = "signature-zero-net-wrapped-sol"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "out",
+        counterparty: "counterparty-a",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.25,
+        amountRaw: "250000000",
+        decimals: 9,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-b",
+        mint: WRAPPED_SOL_MINT,
+        symbol: "SOL",
+        amount: 0.25,
+        amountRaw: "250000000",
+        decimals: 9,
+      },
+    ]
     const payload = {
       slot: 126,
       transactionIndex: 3,
@@ -3385,7 +3232,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -3491,7 +3338,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -3549,7 +3396,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -3629,7 +3476,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -3705,7 +3552,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -3779,7 +3626,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -3798,6 +3645,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   })
 
   it("marks contradictory transfer-row evidence for review without overriding full transaction evidence", async () => {
+    const walletTransferEvidence = [
+      {
+        signature: "signature-contradictory-transfer-row",
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 12.5,
+        amountRaw: "1250",
+        decimals: 2,
+      },
+    ]
     const payload = {
       slot: 128,
       transactionIndex: 4,
@@ -3843,7 +3703,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -3940,7 +3800,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -4050,7 +3910,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
           lookups,
         })
       }),
@@ -4107,7 +3967,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           return yield* provider
             .prepareNormalization({
               source: makeSource(),
-              sourceRecord: makeRawRecord({ payload }),
+              sourceRecord: makeRawRecord({ fullTransaction: payload }),
               lookups,
             })
             .pipe(Effect.either)
@@ -4123,7 +3983,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   )
 
   it.each(["not-an-integer", "-1", "+1", "00"])(
-    "returns a typed evidence failure for noncanonical wallet raw units %s",
+    "returns a typed decode failure for noncanonical wallet raw units %s",
     async (amountRaw) => {
       const signature = "signature-invalid-wallet-raw-units"
       const payload = {
@@ -4152,96 +4012,35 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           return yield* provider
             .prepareNormalization({
               source: makeSource(),
-              sourceRecord: makeRawRecord({ payload }),
+              sourceRecord: makeRawRecord({
+                fullTransaction: payload,
+                walletTransferEvidence: [
+                  {
+                    signature,
+                    timestamp: 1_735_689_600,
+                    direction: "in",
+                    counterparty: "counterparty-address",
+                    mint: USDC_MINT,
+                    symbol: "USDC",
+                    amount: 1,
+                    amountRaw,
+                    decimals: 6,
+                  },
+                ],
+              }),
               lookups,
             })
             .pipe(Effect.either)
         }),
-        () => Effect.dieMessage("Helius client should not be called during normalization"),
-        () =>
-          Effect.succeed({
-            data: [
-              {
-                signature,
-                timestamp: 1_735_689_600,
-                direction: "in" as const,
-                counterparty: "counterparty-address",
-                mint: USDC_MINT,
-                symbol: "USDC",
-                amount: 1,
-                amountRaw,
-                decimals: 6,
-              },
-            ],
-            pagination: { hasMore: false, nextCursor: null },
-          })
+        () => Effect.dieMessage("Helius client should not be called during normalization")
       )
 
       expect(result._tag).toBe("Left")
       if (result._tag === "Left") {
-        expect(result.left._tag).toBe("HeliusSolanaNormalizationEvidenceError")
+        expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
       }
     }
   )
-
-  it("returns a typed decode failure for noncanonical cached wallet raw units", async () => {
-    const signature = "signature-invalid-cached-wallet-raw-units"
-    const fullTransaction = {
-      slot: 130,
-      transactionIndex: 1,
-      transaction: {
-        signatures: [signature],
-        message: {
-          accountKeys: [{ pubkey: WALLET_ADDRESS, signer: true }],
-          instructions: [],
-        },
-      },
-      meta: {
-        err: null,
-        fee: 0,
-        preBalances: [2_000_000_000],
-        postBalances: [2_000_000_000],
-      },
-      blockTime: 1_735_689_600,
-    }
-    const payload = {
-      _tag: "HeliusSolanaCachedRawRecordPayload",
-      fullTransaction,
-      walletTransferEvidence: [
-        {
-          signature,
-          timestamp: 1_735_689_600,
-          direction: "in",
-          counterparty: "counterparty-address",
-          mint: USDC_MINT,
-          symbol: "USDC",
-          amount: 1,
-          amountRaw: "00",
-          decimals: 6,
-        },
-      ],
-    }
-
-    const result = await runProvider(
-      Effect.gen(function* () {
-        const provider = yield* HeliusSolanaSourceSyncProvider
-        const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider
-          .prepareNormalization({
-            source: makeSource(),
-            sourceRecord: makeRawRecord({ payload }),
-            lookups,
-          })
-          .pipe(Effect.either)
-      }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
-    )
-
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
-    }
-  })
 
   it("rejects conflicting pre and post token decimals", async () => {
     const payload = {
@@ -4289,7 +4088,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         return yield* provider
           .prepareNormalization({
             source: makeSource(),
-            sourceRecord: makeRawRecord({ payload }),
+            sourceRecord: makeRawRecord({ fullTransaction: payload }),
             lookups,
           })
           .pipe(Effect.either)
@@ -4309,6 +4108,19 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
   it("preserves the accepted Solana decimals ceiling exactly", async () => {
     const signature = "signature-max-token-decimals"
     const expectedAmount = `0.${"0".repeat(254)}1`
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 1e-255,
+        amountRaw: "1",
+        decimals: 255,
+      },
+    ]
     const payload = {
       slot: 130,
       transactionIndex: 1,
@@ -4334,7 +4146,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const lookups = yield* provider.loadNormalizationLookups()
         return yield* provider.prepareNormalization({
           source: makeSource(),
-          sourceRecord: makeRawRecord({ payload }),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
           lookups,
         })
       }),
@@ -4377,11 +4189,39 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         return yield* provider
           .prepareNormalization({
             source: makeSource(),
-            sourceRecord: makeRawRecord({ payload: { malformed: true } }),
+            sourceRecord: makeRawRecord({ fullTransaction: { malformed: true } }),
             lookups,
           })
           .pipe(Effect.either)
       }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
+    }
+  })
+
+  it("rejects the old plain full-transaction raw record shape", async () => {
+    const fullTransaction = makeHeliusTransaction({
+      signature: "signature-old-raw-shape",
+      blockTime: 1_735_689_600,
+      meta: { err: null },
+    })
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider
+          .prepareNormalization({
+            source: makeSource(),
+            sourceRecord: makeRawRecord({ rawRecordPayload: fullTransaction }),
+            lookups,
+          })
+          .pipe(Effect.either)
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization"),
       () => Effect.dieMessage("Helius client should not be called during normalization")
     )
 

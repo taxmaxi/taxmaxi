@@ -42,7 +42,6 @@ import {
   HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL,
   HeliusSolanaCursorDecodeError,
   HeliusSolanaNormalizationDecodeError,
-  HeliusSolanaNormalizationEvidenceError,
   HeliusSolanaNormalizationNotImplementedError,
   HeliusSolanaNormalizationReferenceError,
   HeliusSolanaPayloadDecodeError,
@@ -195,12 +194,12 @@ const HeliusSolanaWalletTransfersPageSchema = Schema.Struct({
 
 const HeliusSolanaCursorPayloadSchema = Schema.Struct({
   paginationToken: Schema.NullOr(Schema.String),
-  resumeBoundaryActive: Schema.optional(Schema.Boolean),
-  resumeCheckpointExternalId: Schema.optional(Schema.NullOr(Schema.String)),
-  resumeHighWatermarkIso: Schema.optional(Schema.NullOr(Schema.String)),
-  walletTransferCursor: Schema.optional(Schema.NullOr(Schema.String)),
-  walletTransferExhausted: Schema.optional(Schema.Boolean),
-  pendingWalletTransfers: Schema.optional(Schema.Array(HeliusSolanaWalletTransferSchema)),
+  resumeBoundaryActive: Schema.Boolean,
+  resumeCheckpointExternalId: Schema.NullOr(Schema.String),
+  resumeHighWatermarkIso: Schema.NullOr(Schema.String),
+  walletTransferCursor: Schema.NullOr(Schema.String),
+  walletTransferExhausted: Schema.Boolean,
+  pendingWalletTransfers: Schema.Array(HeliusSolanaWalletTransferSchema),
 })
 
 const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
@@ -231,18 +230,10 @@ const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
   tokenTransfers: Schema.optional(Schema.Array(HeliusSolanaParsedTokenTransferSchema)),
 })
 
-const HeliusSolanaCachedRawRecordPayloadSchema = Schema.TaggedStruct(
-  "HeliusSolanaCachedRawRecordPayload",
-  {
-    fullTransaction: Schema.Unknown,
-    walletTransferEvidence: Schema.Array(HeliusSolanaWalletTransferSchema),
-  }
-)
-
-const HeliusSolanaNormalizationPayloadSchema = Schema.Union(
-  HeliusSolanaCachedRawRecordPayloadSchema,
-  HeliusSolanaFullTransactionPayloadSchema
-)
+const HeliusSolanaRawRecordPayloadSchema = Schema.Struct({
+  fullTransaction: HeliusSolanaFullTransactionPayloadSchema,
+  walletTransferEvidence: Schema.Array(HeliusSolanaWalletTransferSchema),
+})
 
 interface HeliusSolanaCursorPayload {
   readonly paginationToken: string | null
@@ -252,16 +243,6 @@ interface HeliusSolanaCursorPayload {
   readonly walletTransferCursor: string | null
   readonly walletTransferExhausted: boolean
   readonly pendingWalletTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
-}
-
-interface HeliusSolanaEncodedCursorPayload {
-  readonly paginationToken: string | null
-  readonly resumeBoundaryActive?: boolean
-  readonly resumeCheckpointExternalId?: string | null
-  readonly resumeHighWatermarkIso?: string | null
-  readonly walletTransferCursor?: string | null
-  readonly walletTransferExhausted?: boolean
-  readonly pendingWalletTransfers?: ReadonlyArray<HeliusSolanaWalletTransfer>
 }
 
 interface DecodedHeliusSolanaTransactionEntry {
@@ -280,22 +261,7 @@ type HeliusSolanaParsedTokenTransfer = Schema.Schema.Type<
   typeof HeliusSolanaParsedTokenTransferSchema
 >
 type HeliusSolanaWalletTransfer = Schema.Schema.Type<typeof HeliusSolanaWalletTransferSchema>
-
-interface HeliusSolanaDecodedNormalizationPayload {
-  readonly fullTransaction: HeliusSolanaFullTransactionPayload
-  readonly walletTransferEvidence: ReadonlyArray<HeliusSolanaWalletTransfer> | null
-}
-
-type HeliusSolanaWalletTransferEvidence =
-  | {
-      readonly kind: "complete"
-      readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
-    }
-  | {
-      readonly kind: "partial"
-      readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
-      readonly error: HeliusSolanaPayloadDecodeError
-    }
+type HeliusSolanaRawRecordPayload = Schema.Schema.Type<typeof HeliusSolanaRawRecordPayloadSchema>
 
 interface SolanaBalanceMovement {
   readonly asset: HeliusSolanaResolvedAsset
@@ -326,12 +292,7 @@ const decodeUnknownTransactionsPage = Schema.decodeUnknown(HeliusSolanaTransacti
 const decodeUnknownFullTransactionEntry = Schema.decodeUnknown(
   HeliusSolanaFullTransactionEntrySchema
 )
-const decodeUnknownFullTransactionPayload = Schema.decodeUnknown(
-  HeliusSolanaFullTransactionPayloadSchema
-)
-const decodeUnknownNormalizationPayload = Schema.decodeUnknown(
-  HeliusSolanaNormalizationPayloadSchema
-)
+const decodeUnknownRawRecordPayload = Schema.decodeUnknown(HeliusSolanaRawRecordPayloadSchema)
 const decodeUnknownWalletTransfersPage = Schema.decodeUnknown(HeliusSolanaWalletTransfersPageSchema)
 const decodeCloseAccountParsedInstruction = Schema.decodeUnknownOption(
   HeliusSolanaCloseAccountParsedInstructionSchema
@@ -371,7 +332,7 @@ const decodeCursorPayload = (
         )
       )
     )
-    const resumeHighWatermarkIso = decoded.resumeHighWatermarkIso ?? null
+    const resumeHighWatermarkIso = decoded.resumeHighWatermarkIso
     const resumeHighWatermark =
       resumeHighWatermarkIso === null
         ? null
@@ -387,42 +348,28 @@ const decodeCursorPayload = (
 
     return {
       paginationToken: decoded.paginationToken,
-      resumeBoundaryActive: decoded.resumeBoundaryActive ?? false,
-      resumeCheckpointExternalId: decoded.resumeCheckpointExternalId ?? null,
+      resumeBoundaryActive: decoded.resumeBoundaryActive,
+      resumeCheckpointExternalId: decoded.resumeCheckpointExternalId,
       resumeHighWatermark,
-      walletTransferCursor: decoded.walletTransferCursor ?? null,
-      walletTransferExhausted: decoded.walletTransferExhausted ?? false,
-      pendingWalletTransfers: decoded.pendingWalletTransfers ?? [],
+      walletTransferCursor: decoded.walletTransferCursor,
+      walletTransferExhausted: decoded.walletTransferExhausted,
+      pendingWalletTransfers: decoded.pendingWalletTransfers,
     }
   })
 }
 
-const encodeCursorPayload = (payload: HeliusSolanaCursorPayload): unknown => {
-  const encoded: HeliusSolanaEncodedCursorPayload =
-    payload.resumeBoundaryActive ||
-    payload.resumeCheckpointExternalId !== null ||
-    payload.resumeHighWatermark !== null ||
-    payload.walletTransferCursor !== null ||
-    payload.walletTransferExhausted ||
-    payload.pendingWalletTransfers.length > 0
-      ? {
-          paginationToken: payload.paginationToken,
-          resumeBoundaryActive: payload.resumeBoundaryActive,
-          resumeCheckpointExternalId: payload.resumeCheckpointExternalId,
-          resumeHighWatermarkIso:
-            payload.resumeHighWatermark === null
-              ? null
-              : Timestamp.fromDate(payload.resumeHighWatermark).toISOString(),
-          walletTransferCursor: payload.walletTransferCursor,
-          walletTransferExhausted: payload.walletTransferExhausted,
-          pendingWalletTransfers: payload.pendingWalletTransfers,
-        }
-      : {
-          paginationToken: payload.paginationToken,
-        }
-
-  return encoded
-}
+const encodeCursorPayload = (payload: HeliusSolanaCursorPayload): unknown => ({
+  paginationToken: payload.paginationToken,
+  resumeBoundaryActive: payload.resumeBoundaryActive,
+  resumeCheckpointExternalId: payload.resumeCheckpointExternalId,
+  resumeHighWatermarkIso:
+    payload.resumeHighWatermark === null
+      ? null
+      : Timestamp.fromDate(payload.resumeHighWatermark).toISOString(),
+  walletTransferCursor: payload.walletTransferCursor,
+  walletTransferExhausted: payload.walletTransferExhausted,
+  pendingWalletTransfers: payload.pendingWalletTransfers,
+})
 
 const decodeTransactionsPage = (
   payload: unknown
@@ -1120,7 +1067,6 @@ const make = ({
             externalParentId: record.externalParentId,
             occurredAt: record.occurredAt,
             payload: {
-              _tag: "HeliusSolanaCachedRawRecordPayload",
               fullTransaction: record.payload,
               walletTransferEvidence: transfersBySignature.get(record.externalRecordId) ?? [],
             },
@@ -1310,37 +1256,13 @@ const make = ({
 
     const decodeNormalizationPayload = (
       payload: unknown
-    ): Effect.Effect<
-      HeliusSolanaDecodedNormalizationPayload,
-      HeliusSolanaNormalizationDecodeError
-    > =>
-      decodeUnknownNormalizationPayload(payload).pipe(
+    ): Effect.Effect<HeliusSolanaRawRecordPayload, HeliusSolanaNormalizationDecodeError> =>
+      decodeUnknownRawRecordPayload(payload).pipe(
         Effect.mapError((cause) =>
           toNormalizationDecodeError(
-            `Invalid Helius Solana full transaction payload: ${cause.message}`,
+            `Invalid Helius Solana raw record payload: ${cause.message}`,
             cause
           )
-        ),
-        Effect.flatMap((decoded) =>
-          "_tag" in decoded
-            ? decodeUnknownFullTransactionPayload(decoded.fullTransaction).pipe(
-                Effect.mapError((cause) =>
-                  toNormalizationDecodeError(
-                    `Invalid cached Helius Solana full transaction payload: ${cause.message}`,
-                    cause
-                  )
-                ),
-                Effect.map(
-                  (fullTransaction): HeliusSolanaDecodedNormalizationPayload => ({
-                    fullTransaction,
-                    walletTransferEvidence: decoded.walletTransferEvidence,
-                  })
-                )
-              )
-            : Effect.succeed({
-                fullTransaction: decoded,
-                walletTransferEvidence: null,
-              } satisfies HeliusSolanaDecodedNormalizationPayload)
         ),
         Effect.flatMap((decoded) => {
           const decimalsByBalance = new Map<string, number>()
@@ -1371,118 +1293,6 @@ const make = ({
           return Effect.succeed(decoded)
         })
       )
-
-    const fetchWalletTransferEvidence = ({
-      walletAddress,
-      signature,
-      transactionTimestampSeconds,
-    }: {
-      readonly walletAddress: string
-      readonly signature: string
-      readonly transactionTimestampSeconds: number
-    }) => {
-      const visitedCursors = new Set<string>()
-      const fetchPage = (
-        cursor: string | null
-      ): Effect.Effect<HeliusSolanaWalletTransferEvidence, HeliusSolanaPayloadDecodeError> =>
-        heliusSyncClient
-          .fetchTransfersForAddress({
-            walletAddress,
-            limit: 100,
-            cursor,
-          })
-          .pipe(
-            Effect.mapError((cause) =>
-              toPayloadDecodeError("Helius Solana wallet transfer evidence is unavailable", cause)
-            ),
-            Effect.flatMap((payload) =>
-              decodeUnknownWalletTransfersPage(payload).pipe(
-                Effect.mapError((cause) =>
-                  toPayloadDecodeError(
-                    `Invalid Helius Solana wallet transfers page: ${cause.message}`,
-                    cause
-                  )
-                )
-              )
-            ),
-            Effect.flatMap((page) => {
-              const matches = page.data.filter((transfer) => transfer.signature === signature)
-              const crossedTransactionTime = page.data.some(
-                (transfer) => transfer.timestamp < transactionTimestampSeconds
-              )
-              if (crossedTransactionTime) {
-                return Effect.succeed({
-                  kind: "complete",
-                  transfers: matches,
-                } satisfies HeliusSolanaWalletTransferEvidence)
-              }
-
-              if (!page.pagination.hasMore) {
-                return Effect.succeed({
-                  kind: "complete",
-                  transfers: matches,
-                } satisfies HeliusSolanaWalletTransferEvidence)
-              }
-
-              const nextCursor = page.pagination.nextCursor
-              if (nextCursor === null || nextCursor === undefined) {
-                return Effect.succeed({
-                  kind: "partial",
-                  transfers: matches,
-                  error: toPayloadDecodeError(
-                    "Helius Solana wallet transfer evidence pagination had no continuation cursor.",
-                    {
-                      hasMore: page.pagination.hasMore,
-                      nextCursor: nextCursor ?? null,
-                    }
-                  ),
-                } satisfies HeliusSolanaWalletTransferEvidence)
-              }
-              if (visitedCursors.has(nextCursor)) {
-                return Effect.succeed({
-                  kind: "partial",
-                  transfers: matches,
-                  error: toPayloadDecodeError(
-                    "Helius Solana wallet transfer evidence pagination repeated a cursor.",
-                    { nextCursor }
-                  ),
-                } satisfies HeliusSolanaWalletTransferEvidence)
-              }
-              visitedCursors.add(nextCursor)
-
-              return fetchPage(nextCursor).pipe(
-                Effect.map(
-                  (nextEvidence): HeliusSolanaWalletTransferEvidence => ({
-                    ...nextEvidence,
-                    transfers: [...matches, ...nextEvidence.transfers],
-                  })
-                ),
-                Effect.catchAll((error) =>
-                  matches.length === 0
-                    ? Effect.fail(error)
-                    : Effect.logInfo(
-                        {
-                          provider: HELIUS_SOLANA_PROVIDER_KEY,
-                          signature,
-                          walletAddress,
-                          retainedMatchCount: matches.length,
-                          error,
-                        },
-                        "helius-solana:partial-transfer-evidence-retained"
-                      ).pipe(
-                        Effect.as({
-                          kind: "partial",
-                          transfers: matches,
-                          error,
-                        } satisfies HeliusSolanaWalletTransferEvidence)
-                      )
-                )
-              )
-            })
-          )
-
-      return fetchPage(null)
-    }
 
     const buildSolMovements = ({
       payload,
@@ -2750,40 +2560,9 @@ const make = ({
             payload,
             fallback: sourceRecord.occurredAt,
           })
-
-          const walletTransferEvidenceResult =
-            normalizationPayload.walletTransferEvidence === null
-              ? yield* fetchWalletTransferEvidence({
-                  walletAddress,
-                  signature,
-                  transactionTimestampSeconds: Math.floor(timestamp.getTime() / 1_000),
-                }).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new HeliusSolanaNormalizationEvidenceError({
-                        message: "Failed to load complete Solana wallet transfer evidence.",
-                        cause,
-                      })
-                  )
-                )
-              : ({
-                  kind: "complete",
-                  transfers: normalizationPayload.walletTransferEvidence.filter(
-                    (transfer) => transfer.signature === signature
-                  ),
-                } satisfies HeliusSolanaWalletTransferEvidence)
-          if (walletTransferEvidenceResult.kind === "partial") {
-            return yield* Effect.fail(
-              new HeliusSolanaNormalizationEvidenceError({
-                message: "Solana wallet transfer evidence paging was incomplete.",
-                cause: {
-                  retainedTransfers: walletTransferEvidenceResult.transfers,
-                  error: walletTransferEvidenceResult.error,
-                },
-              })
-            )
-          }
-          const walletTransferEvidence = walletTransferEvidenceResult.transfers
+          const walletTransferEvidence = normalizationPayload.walletTransferEvidence.filter(
+            (transfer) => transfer.signature === signature
+          )
 
           const providerTransactionType = toProviderTransactionType(payload)
 
