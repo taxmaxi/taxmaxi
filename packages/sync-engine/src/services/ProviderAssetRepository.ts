@@ -96,6 +96,15 @@ export interface ProviderAssetReviewRecord {
   readonly mapping: ProviderAssetReviewMapping | null
 }
 
+/** Exact on-chain identity observed on a movement using one provider asset. */
+export interface ProviderAssetObservedRepresentationRecord {
+  readonly blockchainName: string
+  readonly representationType: "native" | "token" | "nft" | null
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
+}
+
 /**
  * ProviderAssetRepositoryShape - Provider asset persistence and lookup operations.
  */
@@ -171,6 +180,14 @@ export interface ProviderAssetRepositoryShape {
     } | null
     readonly limit: number
   }) => Effect.Effect<ReadonlyArray<ProviderAssetReviewRecord>, SyncEngineStorageError>
+
+  /** List exact on-chain identities observed on movements for one provider asset. */
+  readonly listProviderAssetObservedRepresentations: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<
+    ReadonlyArray<ProviderAssetObservedRepresentationRecord>,
+    SyncEngineStorageError
+  >
 
   /**
    * Load the current mapping for one provider asset.

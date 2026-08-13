@@ -10,7 +10,12 @@ import {
   type AssetCatalogAssetRecord,
   type PendingAssetCatalogRecord,
 } from "@my/persistence/services"
-import { ProviderAssetRepository, type ProviderAssetReviewRecord } from "@my/sync-engine/services"
+import {
+  ProviderAssetRepository,
+  TransferReconciliationRepository,
+  type ProviderAssetReviewRecord,
+  type UnresolvedTransferReconciliationRecord,
+} from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -28,6 +33,8 @@ import {
   PendingAssetResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
+  UnresolvedTransferReconciliationListResponse,
+  UnresolvedTransferReconciliationRow,
 } from "../definitions/AssetsApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
@@ -48,8 +55,16 @@ const ProviderAssetCursorPayload = Schema.Struct({
   providerAssetRowId: Schema.UUID,
 })
 
+const TransferReconciliationCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  reconciliationId: Schema.UUID,
+})
+
 const EncodedAssetCursorPayload = Schema.parseJson(AssetCursorPayload)
 const EncodedProviderAssetCursorPayload = Schema.parseJson(ProviderAssetCursorPayload)
+const EncodedTransferReconciliationCursorPayload = Schema.parseJson(
+  TransferReconciliationCursorPayload
+)
 
 const encodeCursor = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
@@ -77,6 +92,11 @@ const decodeProviderAssetCursor = (cursor: string | undefined) =>
     ? Effect.succeed(null)
     : decodeCursor(cursor, EncodedProviderAssetCursorPayload)
 
+const decodeTransferReconciliationCursor = (cursor: string | undefined) =>
+  cursor === undefined
+    ? Effect.succeed(null)
+    : decodeCursor(cursor, EncodedTransferReconciliationCursorPayload)
+
 const assetCursorFor = (asset: AssetCatalogAssetRecord): string =>
   encodeCursor({
     version: 2,
@@ -87,6 +107,12 @@ const providerAssetCursorFor = (providerAssetRowId: string): string =>
   encodeCursor({
     version: 2,
     providerAssetRowId,
+  })
+
+const transferReconciliationCursorFor = (reconciliationId: string): string =>
+  encodeCursor({
+    version: 1,
+    reconciliationId,
   })
 
 const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
@@ -118,6 +144,14 @@ const toPendingAssetResponse = (row: PendingAssetCatalogRecord) =>
     providerType: row.providerType,
   })
 
+const toUnresolvedTransferReconciliationRow = (row: UnresolvedTransferReconciliationRecord) =>
+  UnresolvedTransferReconciliationRow.make({
+    ...row,
+    providerTimestamp: row.providerTimestamp.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  })
+
 const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
   AssetCatalogAssetResponse.make({
     id: row.id,
@@ -135,6 +169,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
   Effect.gen(function* () {
     const assetCatalogRepository = yield* AssetCatalogRepository
     const providerAssetRepository = yield* ProviderAssetRepository
+    const transferReconciliationRepository = yield* TransferReconciliationRepository
     const assetCanonicalizationService = yield* AssetCanonicalizationService
 
     return handlers
@@ -224,6 +259,37 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
                   ? providerAssetCursorFor(lastProviderAsset.providerAsset.id)
+                  : null,
+              hasMore,
+            },
+          })
+        })
+      )
+      .handle("listUnresolvedTransferReconciliations", ({ urlParams }) =>
+        Effect.gen(function* () {
+          const limit = urlParams.limit ?? defaultLimit
+          const cursor = yield* decodeTransferReconciliationCursor(urlParams.cursor)
+          const reconciliations = yield* transferReconciliationRepository
+            .listUnresolvedTransferReconciliations({
+              status: urlParams.status ?? null,
+              cursorId: cursor?.reconciliationId ?? null,
+              limit: limit + 1,
+            })
+            .pipe(
+              Effect.mapError(() =>
+                toInternalServerError("Failed to list unresolved transfer reconciliations.")
+              )
+            )
+          const visibleReconciliations = reconciliations.slice(0, limit)
+          const lastReconciliation = visibleReconciliations.at(-1)
+          const hasMore = reconciliations.length > limit
+
+          return UnresolvedTransferReconciliationListResponse.make({
+            reconciliations: visibleReconciliations.map(toUnresolvedTransferReconciliationRow),
+            page: {
+              nextCursor:
+                hasMore && lastReconciliation !== undefined
+                  ? transferReconciliationCursorFor(lastReconciliation.id)
                   : null,
               hasMore,
             },

@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -376,6 +376,44 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews"))
     })
 
+  const listProviderAssetObservedRepresentations: ProviderAssetRepositoryShape["listProviderAssetObservedRepresentations"] =
+    ({ providerAssetRowId }) =>
+      db
+        .selectDistinct({
+          blockchainName: schema.blockchains.name,
+          representationType: sql<
+            "native" | "token" | "nft" | null
+          >`${schema.providerTransfers.observedRepresentationType}`,
+          contractAddress: schema.providerTransfers.observedContractAddress,
+          mintAddress: schema.providerTransfers.observedMintAddress,
+          decimals: schema.providerTransfers.observedDecimals,
+        })
+        .from(schema.providerTransfers)
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.blockchains.id, schema.providerTransfers.observedBlockchainId)
+        )
+        .where(
+          and(
+            eq(schema.providerTransfers.providerAssetId, providerAssetRowId),
+            or(
+              sql`${schema.providerTransfers.observedRepresentationType} is not null`,
+              sql`${schema.providerTransfers.observedMintAddress} is not null`,
+              sql`${schema.providerTransfers.observedContractAddress} is not null`
+            )
+          )
+        )
+        .orderBy(
+          asc(schema.blockchains.name),
+          asc(schema.providerTransfers.observedRepresentationType),
+          asc(schema.providerTransfers.observedContractAddress),
+          asc(schema.providerTransfers.observedMintAddress),
+          asc(schema.providerTransfers.observedDecimals)
+        )
+        .pipe(
+          wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetObservedRepresentations")
+        )
+
   const findProviderAssetMapping: ProviderAssetRepositoryShape["findProviderAssetMapping"] = ({
     providerAssetRowId,
   }) =>
@@ -406,6 +444,7 @@ const make = Effect.gen(function* () {
     findProviderAssetByCurrencyCode,
     findProviderAssetReviewById,
     listProviderAssetReviews,
+    listProviderAssetObservedRepresentations,
     findProviderAssetMapping,
   } satisfies ProviderAssetRepositoryShape)
 })
