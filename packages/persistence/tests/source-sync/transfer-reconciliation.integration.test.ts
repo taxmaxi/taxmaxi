@@ -687,7 +687,14 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            providerTransferId: schema.transferReconciliations.providerTransferId,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -774,7 +781,12 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -845,7 +857,11 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -899,7 +915,12 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -977,7 +998,11 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -1043,7 +1068,11 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -1113,7 +1142,11 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -1167,7 +1200,11 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -1241,7 +1278,11 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         return yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
       })
@@ -1298,11 +1339,22 @@ describe("TransferReconciliationServiceLive", () => {
       Effect.gen(function* () {
         const db = yield* drizzle
         const [reconciliation] = yield* db
-          .select()
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
           .from(schema.transferReconciliations)
           .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
         const [mapping] = yield* db
-          .select()
+          .select({
+            mappingStatus: schema.providerAssetMappings.mappingStatus,
+            canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+            sourceNotes: schema.providerAssetMappings.sourceNotes,
+          })
           .from(schema.providerAssetMappings)
           .where(eq(schema.providerAssetMappings.providerAssetRowId, observed.providerAssetRowId))
         const inventoryMovements = yield* db
