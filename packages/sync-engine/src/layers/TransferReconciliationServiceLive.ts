@@ -142,6 +142,68 @@ const filterExactAmountCandidates = ({
       )
   )
 
+const filterKnownAssetCandidates = ({
+  providerTransfer,
+  candidates,
+}: {
+  readonly providerTransfer: ProviderTransferReconciliationCandidate
+  readonly candidates: ReadonlyArray<OnchainTransferReconciliationCandidate>
+}): ReadonlyArray<OnchainTransferReconciliationCandidate> => {
+  if (providerTransfer.canonicalAssetId === null) {
+    return candidates
+  }
+
+  return candidates.filter((candidate) => {
+    if (candidate.providerAssetMappingStatus !== "approved" || candidate.assetId === null) {
+      return true
+    }
+
+    if (candidate.assetId !== providerTransfer.canonicalAssetId) {
+      return false
+    }
+
+    return (
+      providerTransfer.assetRepresentationId === null ||
+      candidate.assetRepresentationId === providerTransfer.assetRepresentationId
+    )
+  })
+}
+
+const isLegacyAutoApplyCandidate = ({
+  providerTransfer,
+  candidate,
+  walletAddress,
+  timestampStart,
+  timestampEnd,
+}: {
+  readonly providerTransfer: ProviderTransferReconciliationCandidate
+  readonly candidate: OnchainTransferReconciliationCandidate
+  readonly walletAddress: string | null
+  readonly timestampStart: Date
+  readonly timestampEnd: Date
+}): boolean => {
+  if (
+    candidate.transferId === null ||
+    walletAddress === null ||
+    candidate.ownedAddress !== walletAddress ||
+    candidate.timestamp < timestampStart ||
+    candidate.timestamp > timestampEnd
+  ) {
+    return false
+  }
+
+  if (providerTransfer.networkHash !== null && candidate.txHash !== providerTransfer.networkHash) {
+    return false
+  }
+
+  const receivingAddress =
+    providerTransfer.direction === "outbound" ? candidate.toAddress : candidate.fromAddress
+
+  return candidate.addressType === "evm"
+    ? receivingAddress?.toLowerCase() === walletAddress.toLowerCase()
+    : receivingAddress === walletAddress
+}
+
 const summarizeOutcome = ({
   status,
   current,
@@ -248,7 +310,32 @@ const make = Effect.gen(function* () {
         return "pending"
       }
 
-      if (exactAmountCandidates.length > 1) {
+      const compatibleCandidates = filterKnownAssetCandidates({
+        providerTransfer,
+        candidates: exactAmountCandidates,
+      })
+
+      if (compatibleCandidates.length === 0) {
+        yield* transferReconciliationRepository.upsertTransferReconciliation({
+          principalId: providerTransfer.principalId,
+          providerTransferId: providerTransfer.providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: null,
+          status: "needs_review",
+          matchReason: "known_asset_candidate_conflict",
+          confidence: "1.0000",
+          deterministic: false,
+          reviewMetadata: {
+            providerCanonicalAssetId: providerTransfer.canonicalAssetId,
+            providerAssetRepresentationId: providerTransfer.assetRepresentationId,
+            ...buildCandidateMetadata({ candidates: exactAmountCandidates }),
+          },
+        })
+
+        return "needs_review"
+      }
+
+      if (compatibleCandidates.length > 1) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
@@ -259,14 +346,14 @@ const make = Effect.gen(function* () {
           confidence: "0.5000",
           deterministic: false,
           reviewMetadata: buildCandidateMetadata({
-            candidates: exactAmountCandidates,
+            candidates: compatibleCandidates,
           }),
         })
 
         return "needs_review"
       }
 
-      const matchedCandidate = exactAmountCandidates[0]
+      const matchedCandidate = compatibleCandidates[0]
 
       if (matchedCandidate === undefined) {
         return yield* Effect.fail(
@@ -397,24 +484,34 @@ const make = Effect.gen(function* () {
           return "pending"
         }
 
+        const legacyAutoApplyCandidate = isLegacyAutoApplyCandidate({
+          providerTransfer,
+          candidate: matchedCandidate,
+          walletAddress,
+          timestampStart,
+          timestampEnd,
+        })
+
         yield* transferReconciliationRepository.upsertTransferReconciliation({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: matchedCandidate.transferId,
           canonicalTransactionId: matchedCandidate.transactionId,
-          status: "auto_applied",
-          matchReason: "deterministic_wallet_receipt_match",
+          status: legacyAutoApplyCandidate ? "auto_applied" : "pending",
+          matchReason: legacyAutoApplyCandidate
+            ? "deterministic_wallet_receipt_match"
+            : "fifo_application_deferred",
           confidence: "1.0000",
           deterministic: true,
           reviewMetadata: {
             matchedTransferId: matchedCandidate.transferId,
             matchedTransactionId: matchedCandidate.transactionId,
-            candidateCount: exactAmountCandidates.length,
+            candidateCount: compatibleCandidates.length,
             representationId: matchedCandidate.assetRepresentationId,
           },
         })
 
-        return "auto_applied"
+        return legacyAutoApplyCandidate ? "auto_applied" : "pending"
       }
 
       const hasObservedIdentity =

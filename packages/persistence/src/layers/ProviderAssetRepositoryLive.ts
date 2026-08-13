@@ -199,6 +199,35 @@ const make = Effect.gen(function* () {
         return insertedRows.length
       })
 
+  const approveProviderAssetMappingIfPending: ProviderAssetRepositoryShape["approveProviderAssetMappingIfPending"] =
+    ({ mapping }) => {
+      const now = nowDate()
+
+      return db
+        .update(schema.providerAssetMappings)
+        .set({
+          mappingKind: mapping.mappingKind,
+          canonicalAssetId: mapping.canonicalAssetId,
+          assetRepresentationId: mapping.assetRepresentationId,
+          canonicalFiatCurrency: mapping.canonicalFiatCurrency,
+          mappingStatus: mapping.mappingStatus,
+          reviewerNotes: mapping.reviewerNotes,
+          sourceNotes: mapping.sourceNotes,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(schema.providerAssetMappings.providerAssetRowId, mapping.providerAssetRowId),
+            eq(schema.providerAssetMappings.mappingStatus, "pending_review")
+          )
+        )
+        .returning({ id: schema.providerAssetMappings.providerAssetRowId })
+        .pipe(
+          Effect.map((rows) => rows.length === 1),
+          wrapSyncEngineSqlError("providerAssetRepository.approveProviderAssetMappingIfPending")
+        )
+    }
+
   const findProviderAssetByProviderAssetId: ProviderAssetRepositoryShape["findProviderAssetByProviderAssetId"] =
     ({ providerKey, providerAssetId }) =>
       Effect.gen(function* () {
@@ -439,6 +468,7 @@ const make = Effect.gen(function* () {
     upsertProviderAssets,
     upsertProviderAssetMappings,
     seedProviderAssetMappingsIfMissing,
+    approveProviderAssetMappingIfPending,
     findProviderAssetByProviderAssetId,
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,

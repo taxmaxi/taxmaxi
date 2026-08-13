@@ -222,7 +222,7 @@ const make = Effect.gen(function* () {
           ? sql`true`
           : sql`
               case
-                when ${schema.addresses.type} = 'evm'
+                when ${schema.addresses.type} in ('evm', 'bitcoin')
                   then lower(${schema.transfers.txHash}) = lower(${networkHash})
                 else ${schema.transfers.txHash} = ${networkHash}
               end
@@ -232,7 +232,7 @@ const make = Effect.gen(function* () {
           ? sql`true`
           : sql`
               case
-                when ${schema.addresses.type} = 'evm'
+                when ${schema.addresses.type} in ('evm', 'bitcoin')
                   then lower(${onchainProviderTransferTable.networkHash}) = lower(${networkHash})
                 else ${onchainProviderTransferTable.networkHash} = ${networkHash}
               end
@@ -259,6 +259,8 @@ const make = Effect.gen(function* () {
           transactionId: schema.transactionOnchainContext.transactionId,
           sourceId: schema.transfers.sourceId,
           addressId: schema.addresses.id,
+          ownedAddress: schema.addresses.address,
+          addressType: schema.addresses.type,
           blockchainId: schema.transfers.blockchainId,
           blockchainName: schema.blockchains.name,
           txHash: schema.transfers.txHash,
@@ -318,6 +320,8 @@ const make = Effect.gen(function* () {
           transactionId: onchainProviderTransferTable.transactionId,
           sourceId: onchainProviderTransferTable.sourceId,
           addressId: schema.addresses.id,
+          ownedAddress: schema.addresses.address,
+          addressType: schema.addresses.type,
           blockchainId: onchainProviderTransferTable.observedBlockchainId,
           blockchainName: schema.blockchains.name,
           txHash: onchainProviderTransferTable.networkHash,
@@ -373,25 +377,16 @@ const make = Effect.gen(function* () {
             sql`not exists (
               select 1
               from ${schema.transfers}
-              inner join ${schema.assetRepresentations}
-                on ${schema.assetRepresentations.id} = ${schema.transfers.assetRepresentationId}
               where ${schema.transfers.sourceId} = ${onchainProviderTransferTable.sourceId}
                 and ${schema.transfers.sourceRawRecordId} is not distinct from ${onchainProviderTransferTable.sourceRawRecordId}
+                and ${schema.transfers.externalId} is not distinct from coalesce(
+                  ${onchainProviderTransferTable.metadata}->>'canonicalTransferExternalId',
+                  ${onchainProviderTransferTable.externalId}
+                )
                 and ${schema.transfers.txHash} is not distinct from ${onchainProviderTransferTable.networkHash}
                 and ${schema.transfers.fromAddress} is not distinct from ${onchainProviderTransferTable.fromAddress}
                 and ${schema.transfers.toAddress} is not distinct from ${onchainProviderTransferTable.toAddress}
                 and ${schema.transfers.amount} = ${onchainProviderTransferTable.amount}
-                and ${schema.assetRepresentations.blockchainId} = ${onchainProviderTransferTable.observedBlockchainId}
-                and (
-                  ${onchainProviderTransferTable.observedRepresentationType} is null
-                  or ${schema.assetRepresentations.type} = ${onchainProviderTransferTable.observedRepresentationType}
-                )
-                and lower(${schema.assetRepresentations.contractAddress}) is not distinct from lower(${onchainProviderTransferTable.observedContractAddress})
-                and ${schema.assetRepresentations.mintAddress} is not distinct from ${onchainProviderTransferTable.observedMintAddress}
-                and (
-                  ${onchainProviderTransferTable.observedDecimals} is null
-                  or ${schema.assetRepresentations.decimals} = ${onchainProviderTransferTable.observedDecimals}
-                )
             )`
           )
         )

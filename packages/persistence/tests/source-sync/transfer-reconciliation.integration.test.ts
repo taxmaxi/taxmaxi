@@ -111,7 +111,7 @@ const seedOwnedOnchainSource = ({
   providerKey = "bitcoin",
 }: {
   readonly walletAddress: string
-  readonly addressType?: "bitcoin" | "evm"
+  readonly addressType?: "bitcoin" | "evm" | "solana"
   readonly providerKey?: string
 }) =>
   Effect.gen(function* () {
@@ -233,7 +233,7 @@ const seedOnchainReceipt = ({
   readonly walletAddress: string
   readonly blockchainId: string
   readonly assetId?: string
-  readonly assetRepresentationId?: string
+  readonly assetRepresentationId?: string | null
   readonly transferType?: "utxo" | "erc20"
 }) =>
   Effect.gen(function* () {
@@ -326,6 +326,8 @@ const seedOnchainReceipt = ({
 
 const seedObservedOnchainReceipt = ({
   externalId,
+  transactionExternalId = `${externalId}:transaction`,
+  canonicalTransferExternalId = null,
   txHash,
   timestamp,
   amount,
@@ -334,6 +336,8 @@ const seedObservedOnchainReceipt = ({
   role = "principal",
 }: {
   readonly externalId: string
+  readonly transactionExternalId?: string
+  readonly canonicalTransferExternalId?: string | null
   readonly txHash: string
   readonly timestamp: Date
   readonly amount: string
@@ -369,7 +373,7 @@ const seedObservedOnchainReceipt = ({
       .values({
         sourceId: ONCHAIN_SOURCE_ID,
         sourceRawRecordId: null,
-        externalId: `${externalId}:transaction`,
+        externalId: transactionExternalId,
         externalGroupId: externalId,
         timestamp,
         transactionType: null,
@@ -412,7 +416,7 @@ const seedObservedOnchainReceipt = ({
         observedMintAddress: null,
         observedDecimals: 8,
         amount,
-        metadata: { provider: "bitcoin", role },
+        metadata: { provider: "bitcoin", role, canonicalTransferExternalId },
       })
       .returning({ id: schema.providerTransfers.id })
 
@@ -778,8 +782,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "auto_applied",
-      matchReason: "deterministic_wallet_receipt_match",
+      status: "pending",
+      matchReason: "fifo_application_deferred",
       deterministic: true,
     })
     expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
@@ -825,6 +829,274 @@ describe("TransferReconciliationServiceLive", () => {
         assetId: TEST_EUR_ASSET_ID,
         assetRepresentationId: TEST_EUR_REPRESENTATION_ID,
         transferType: "erc20",
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toMatchObject({
+      canonicalTransferId: receipt.transferId,
+      status: "pending",
+      matchReason: "fifo_application_deferred",
+    })
+  })
+
+  it("compares Bitcoin transaction ids without case sensitivity without applying FIFO", async () => {
+    const walletAddress = "bc1qownedwalletbtchash000000000000000000000"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-hash-case" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-btc-hash-case",
+        timestamp,
+        amount: "0.125",
+        toAddress: walletAddress,
+        networkHash: "ABCDEF1234567890",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-btc-hash-case",
+        txHash: "abcdef1234567890",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.125",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toMatchObject({
+      canonicalTransferId: receipt.transferId,
+      status: "pending",
+      matchReason: "fifo_application_deferred",
+      deterministic: true,
+    })
+  })
+
+  it("keeps Solana signatures case-sensitive", async () => {
+    const walletAddress = "SoOwnedWalletSignature111111111111111111111111"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const solanaBlockchainId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (blockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        return blockchain.id
+      })
+    )
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "sol-provider-signature-case" })
+    )
+    await runPg(
+      seedOwnedOnchainSource({
+        walletAddress,
+        addressType: "solana",
+        providerKey: "helius-solana",
+      })
+    )
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-sol-signature-case",
+        timestamp,
+        amount: "1.25",
+        toAddress: walletAddress,
+        networkHash: "SolanaSignatureABC",
+        networkName: "solana",
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-sol-signature-case",
+        txHash: "solanasignatureabc",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "1.25",
+        walletAddress,
+        blockchainId: solanaBlockchainId,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toMatchObject({
+      canonicalTransferId: null,
+      status: "pending",
+      matchReason: "no_candidate_onchain_receipt",
+    })
+  })
+
+  it("filters known incompatible assets before deciding candidate ambiguity", async () => {
+    const walletAddress = "bc1qownedwalletknownasset000000000000000000"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-known-asset" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-known-asset",
+        timestamp,
+        amount: "0.5",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const matchingReceipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-known-asset",
+        txHash: "btc-known-asset",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.5",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-other-asset",
+        txHash: "btc-other-asset",
+        timestamp: new Date("2025-04-10T10:06:00.000Z"),
+        amount: "0.5",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        assetId: TEST_EUR_ASSET_ID,
+        assetRepresentationId: null,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toMatchObject({
+      canonicalTransferId: matchingReceipt.transferId,
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
+    })
+  })
+
+  it("prefers a legacy canonical transfer over its observed evidence row", async () => {
+    const walletAddress = "bc1qownedwalletdedup0000000000000000000000"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({
+        providerAssetId: "btc-provider-dedup",
+        assetRepresentationId: null,
+      })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-dedup",
+        timestamp,
+        amount: "0.75",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-shared-dedup",
+        txHash: "btc-shared-dedup",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.75",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        assetRepresentationId: null,
+      })
+    )
+    await runPg(
+      seedObservedOnchainReceipt({
+        externalId: "onchain-shared-dedup:provider:principal:0",
+        transactionExternalId: "onchain-shared-dedup:observed-transaction",
+        canonicalTransferExternalId: "onchain-shared-dedup",
+        txHash: "btc-shared-dedup",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.75",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
       })
     )
 

@@ -125,6 +125,14 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**
+   * Replace a pending mapping only if it is still pending. A concurrent admin
+   * decision wins and is never overwritten.
+   */
+  readonly approveProviderAssetMappingIfPending: (params: {
+    readonly mapping: ProviderAssetMappingDraft
+  }) => Effect.Effect<boolean, SyncEngineStorageError>
+
+  /**
    * Seed provider asset mappings keyed by providerAssetRowId only when no row
    * exists yet. Existing mappings are never updated, preserving admin-reviewed
    * rows. Returns the number of newly inserted rows.

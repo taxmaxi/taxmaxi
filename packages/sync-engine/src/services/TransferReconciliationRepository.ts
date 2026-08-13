@@ -49,6 +49,8 @@ export interface OnchainTransferReconciliationCandidate {
   readonly transactionId: string
   readonly sourceId: string
   readonly addressId: string
+  readonly ownedAddress: string
+  readonly addressType: "evm" | "solana" | "bitcoin"
   readonly blockchainId: string | null
   readonly blockchainName: string | null
   readonly txHash: string | null

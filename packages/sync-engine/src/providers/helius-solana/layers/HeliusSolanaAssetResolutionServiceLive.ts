@@ -777,8 +777,8 @@ const make = Effect.gen(function* () {
               mappings: [exactMapping.value],
             })
           } else if (existingMapping.mappingStatus === "pending_review") {
-            yield* providerAssetRepository.upsertProviderAssetMappings({
-              mappings: [exactMapping.value],
+            yield* providerAssetRepository.approveProviderAssetMappingIfPending({
+              mapping: exactMapping.value,
             })
           }
         } else {
@@ -899,13 +899,23 @@ const make = Effect.gen(function* () {
         providerAsset,
         mapping,
       })
-      const assetKind = assetKindFromProviderAsset(providerAsset)
+      const mappedRepresentation =
+        mapping.mappingStatus === "approved" && mapping.assetRepresentationId !== null
+          ? yield* assetRepository.findRepresentationById({
+              assetRepresentationId: mapping.assetRepresentationId,
+            })
+          : Option.none()
+      const assetKind = Option.match(mappedRepresentation, {
+        onNone: () => assetKindFromProviderAsset(providerAsset),
+        onSome: (representation) => representation.representationType,
+      })
 
       return {
         kind: resolvedKindFromMapping(mapping),
         assetKind,
         representationTypeObserved:
           reference.kind === "native" ||
+          Option.isSome(mappedRepresentation) ||
           hasObservedRepresentationType(providerAsset) ||
           defaultMappingForReference(reference) !== null,
         mintAddress: reference.mintAddress,
