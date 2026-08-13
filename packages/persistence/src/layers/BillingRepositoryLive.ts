@@ -141,6 +141,34 @@ const make = Effect.gen(function* () {
       return account?.generation ?? 0
     }).pipe(wrapSqlError("billing.reserveSubscriptionSync"))
 
+  const clearSubscription: BillingRepositoryService["clearSubscription"] = (input) =>
+    db
+      .update(billingAccounts)
+      .set({
+        stripeSubscriptionId: null,
+        subscriptionStatus: null,
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        lastSubscriptionEventCreatedAt: input.eventCreatedAt,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(billingAccounts.stripeCustomerId, input.stripeCustomerId),
+          eq(billingAccounts.stripeSubscriptionId, input.stripeSubscriptionId),
+          eq(billingAccounts.subscriptionSyncGeneration, input.syncGeneration),
+          or(
+            isNull(billingAccounts.lastSubscriptionEventCreatedAt),
+            lte(billingAccounts.lastSubscriptionEventCreatedAt, input.eventCreatedAt)
+          )
+        )
+      )
+      .returning({ userId: billingAccounts.userId })
+      .pipe(
+        Effect.map((updated) => updated.length === 1),
+        wrapSqlError("billing.clearSubscription")
+      )
+
   const clearCustomer: BillingRepositoryService["clearCustomer"] = (stripeCustomerId) =>
     db
       .update(billingAccounts)
@@ -476,6 +504,7 @@ const make = Effect.gen(function* () {
     findByStripeCustomerId,
     saveCustomer,
     saveSubscription,
+    clearSubscription,
     reserveSubscriptionSync,
     clearCustomer,
     reserveAnnualCheckout,

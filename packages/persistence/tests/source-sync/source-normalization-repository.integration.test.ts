@@ -336,7 +336,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
-  it("consumes one credit when normalization persists a registered user transaction", async () => {
+  it("consumes one credit for a registered user transaction across source replay", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
     const artifacts = {
       transaction: {
@@ -377,9 +377,20 @@ describe("SourceNormalizationRepositoryLive", () => {
 
     await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository
-          .persistNormalizedArtifacts(artifacts)
-          .pipe(Effect.andThen(repository.persistNormalizedArtifacts(artifacts)))
+        repository.persistNormalizedArtifacts(artifacts)
+      )
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.externalId, "transaction-with-credit"))
+      })
+    )
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts(artifacts)
       )
     )
 

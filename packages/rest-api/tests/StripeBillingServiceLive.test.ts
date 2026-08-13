@@ -14,11 +14,20 @@ import * as Option from "effect/Option"
 import { describe, expect, it } from "vitest"
 
 import {
+  buildAnnualCheckoutParams,
+  buildTopUpCheckoutParams,
+  completeInvoiceLines,
+  currentExistingAnnualSubscription,
+  hasExistingTaxMaxiAnnualSubscription,
   isAnnualInvoiceEligible,
   isAnnualInvoiceLineEligible,
   findEligibleAnnualInvoiceLine,
   isPaidTopUpSessionEligible,
+  isTaxMaxiAnnualSubscription,
+  loadAllStripeItems,
   resolvePaidFulfillmentUserId,
+  shouldReconcileAnnualSubscription,
+  subscriptionIdToClearAfterConfirmation,
   StripeBillingServiceLive,
   verifiedTopUpCustomer,
 } from "../src/layers/StripeBillingServiceLive.ts"
@@ -51,6 +60,7 @@ const billingRepositoryStub: BillingRepositoryService = {
   findByStripeCustomerId: () => Effect.succeed(Option.none()),
   saveCustomer: () => Effect.void,
   saveSubscription: () => Effect.succeed(true),
+  clearSubscription: () => Effect.succeed(true),
   reserveSubscriptionSync: () => Effect.succeed(1),
   clearCustomer: () => Effect.void,
   reserveAnnualCheckout: () =>
@@ -88,6 +98,235 @@ const loadServiceWithoutStripeConfig = () =>
   )
 
 describe("StripeBillingServiceLive", () => {
+  it("scopes annual billing state to the TaxMaxi annual plan", () => {
+    const subscription = ({
+      lookupKey,
+      product,
+      metadata = {},
+    }: {
+      readonly lookupKey: string | null
+      readonly product: string
+      readonly metadata?: Readonly<Record<string, string>>
+    }) => ({
+      metadata,
+      items: { data: [{ price: { lookup_key: lookupKey, product } }] },
+    })
+
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({
+          lookupKey: null,
+          product: "prod_archived",
+          metadata: {
+            plan_lookup_key: "taxmaxi_annual_10k_eur",
+            plan_product_id: "prod_archived",
+          },
+        }),
+      })
+    ).toBe(true)
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({ lookupKey: null, product: "prod_annual" }),
+        currentProductId: "prod_annual",
+      })
+    ).toBe(true)
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({ lookupKey: "professional_annual", product: "prod_other" }),
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({
+          lookupKey: null,
+          product: "prod_professional",
+          metadata: {
+            plan_lookup_key: "taxmaxi_annual_10k_eur",
+            plan_product_id: "prod_original_annual",
+          },
+        }),
+      })
+    ).toBe(false)
+  })
+
+  it("loads every invoice line when Stripe embeds only the first page", async () => {
+    let loadCount = 0
+    const lines = await Effect.runPromise(
+      completeInvoiceLines({
+        embeddedLines: ["add-on"],
+        hasMore: true,
+        loadAll: () =>
+          Effect.sync(() => {
+            loadCount += 1
+            return ["add-on", "annual"]
+          }),
+      })
+    )
+
+    expect(lines).toEqual(["add-on", "annual"])
+    expect(loadCount).toBe(1)
+  })
+
+  it("ignores stale local state and unrelated Stripe plans for annual Checkout", () => {
+    const unrelatedSubscription = {
+      status: "active",
+      metadata: { plan_lookup_key: "taxmaxi_professional_annual" },
+      items: {
+        data: [{ price: { lookup_key: "taxmaxi_professional_annual", product: "prod_pro" } }],
+      },
+    }
+
+    expect(
+      hasExistingTaxMaxiAnnualSubscription({
+        subscriptions: [unrelatedSubscription],
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+    expect(
+      hasExistingTaxMaxiAnnualSubscription({
+        subscriptions: [
+          {
+            status: "past_due",
+            metadata: {
+              plan_lookup_key: "taxmaxi_annual_10k_eur",
+              plan_product_id: "prod_archived_annual",
+            },
+            items: {
+              data: [{ price: { lookup_key: null, product: "prod_archived_annual" } }],
+            },
+          },
+        ],
+        currentProductId: "prod_annual",
+      })
+    ).toBe(true)
+  })
+
+  it("auto-pages Stripe subscriptions before checking annual Checkout eligibility", async () => {
+    const firstPage = ["unrelated"]
+    let receivedLimit = 0
+    const allSubscriptions = await loadAllStripeItems({
+      page: {
+        autoPagingToArray: ({ limit }) => {
+          receivedLimit = limit
+          return Promise.resolve([...firstPage, "annual"])
+        },
+      },
+    })
+
+    expect(allSubscriptions).toEqual(["unrelated", "annual"])
+    expect(receivedLimit).toBe(10_000)
+  })
+
+  it("prefers an active annual replacement over a deleted annual subscription", () => {
+    const annualSubscription = (id: string, status: string) => ({
+      id,
+      status,
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_annual",
+      },
+      items: { data: [{ price: { lookup_key: null, product: "prod_annual" } }] },
+    })
+
+    expect(
+      currentExistingAnnualSubscription([
+        annualSubscription("sub_deleted", "canceled"),
+        annualSubscription("sub_replacement", "active"),
+      ])
+    ).toMatchObject({ id: "sub_replacement", status: "active" })
+  })
+
+  it("reconciles current annual and tracked off-plan subscription events only", () => {
+    const subscription = ({
+      id,
+      lookupKey,
+      product,
+    }: {
+      readonly id: string
+      readonly lookupKey: string | null
+      readonly product: string
+    }) => ({
+      id,
+      metadata: {},
+      items: { data: [{ price: { lookup_key: lookupKey, product } }] },
+    })
+
+    expect(
+      shouldReconcileAnnualSubscription({
+        subscription: subscription({
+          id: "sub_annual",
+          lookupKey: "taxmaxi_annual_10k_eur",
+          product: "prod_annual",
+        }),
+        trackedSubscriptionId: null,
+      })
+    ).toBe(true)
+    expect(
+      shouldReconcileAnnualSubscription({
+        subscription: subscription({
+          id: "sub_tracked",
+          lookupKey: "professional_annual",
+          product: "prod_professional",
+        }),
+        trackedSubscriptionId: "sub_tracked",
+      })
+    ).toBe(true)
+    expect(
+      shouldReconcileAnnualSubscription({
+        subscription: subscription({
+          id: "sub_unrelated",
+          lookupKey: "professional_annual",
+          product: "prod_professional",
+        }),
+        trackedSubscriptionId: "sub_annual",
+      })
+    ).toBe(false)
+  })
+
+  it("clears the replacement subscription when confirmation finds no annual plan", () => {
+    expect(
+      subscriptionIdToClearAfterConfirmation({
+        currentSubscriptionId: "sub_replacement",
+        confirmedSubscriptionId: null,
+      })
+    ).toBe("sub_replacement")
+    expect(
+      subscriptionIdToClearAfterConfirmation({
+        currentSubscriptionId: "sub_replacement",
+        confirmedSubscriptionId: "sub_confirmed",
+      })
+    ).toBeNull()
+  })
+
+  it("enables Stripe Tax in annual and top-up Checkout payloads", () => {
+    const price = { id: "price_annual", product: "prod_annual" }
+    const annual = buildAnnualCheckoutParams({
+      customer: "cus_test",
+      price,
+      userId: TEST_USER_ID,
+      frontendUrl: "https://taxmaxi.test",
+      expiresAt: new Date("2026-08-15T12:00:00.000Z"),
+    })
+    const topUp = buildTopUpCheckoutParams({
+      customer: "cus_test",
+      price: { id: "price_top_up", product: "prod_top_up" },
+      userId: TEST_USER_ID,
+      frontendUrl: "https://taxmaxi.test",
+    })
+
+    expect(annual).toMatchObject({
+      mode: "subscription",
+      automatic_tax: { enabled: true },
+      tax_id_collection: { enabled: true },
+    })
+    expect(topUp).toMatchObject({
+      mode: "payment",
+      automatic_tax: { enabled: true },
+      tax_id_collection: { enabled: true },
+    })
+  })
+
   it("grants annual credits only for create or renewal invoices on the annual product", () => {
     expect(
       isAnnualInvoiceEligible({

@@ -36,6 +36,7 @@ import {
   type SourceVenueContextDraft,
   type SourceNormalizationRepositoryShape,
   SyncEngineStorageError,
+  TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
 } from "@my/sync-engine/services"
 import {
   nowDate,
@@ -458,12 +459,16 @@ const make = Effect.gen(function* () {
 
   const consumeTransactionCredit = ({
     executor,
+    externalId,
     principalId,
-    transactionId,
+    sourceId,
+    sourceRawRecordId,
   }: {
     readonly executor: SourceNormalizationExecutor
+    readonly externalId: string | null
     readonly principalId: string
-    readonly transactionId: string
+    readonly sourceId: string
+    readonly sourceRawRecordId: string | null
   }) =>
     Effect.gen(function* () {
       const [principal] = yield* executor
@@ -496,13 +501,27 @@ const make = Effect.gen(function* () {
       if (account === undefined) {
         return yield* Effect.fail(
           toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit",
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
             error: "Transaction credit balance is exhausted",
           })
         )
       }
 
-      const reference = `transaction:${transactionId}`
+      const transactionIdentity =
+        externalId === null
+          ? sourceRawRecordId === null
+            ? null
+            : `raw:${sourceRawRecordId}`
+          : `external:${externalId}`
+      if (transactionIdentity === null) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
+            error: "Transaction is missing a stable source identity",
+          })
+        )
+      }
+      const reference = `transaction:${sourceId}:${transactionIdentity}`
       const [existing] = yield* executor
         .select({ id: schema.creditLedger.id })
         .from(schema.creditLedger)
@@ -545,7 +564,7 @@ const make = Effect.gen(function* () {
       if (totalBalance <= 0) {
         return yield* Effect.fail(
           toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit",
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
             error: "Transaction credit balance is exhausted",
           })
         )
@@ -555,7 +574,7 @@ const make = Effect.gen(function* () {
       if (bucket === undefined) {
         return yield* Effect.fail(
           toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit",
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
             error: "Transaction credit balance is exhausted",
           })
         )
@@ -2244,8 +2263,10 @@ const make = Effect.gen(function* () {
           })
           yield* consumeTransactionCredit({
             executor: tx,
+            externalId: persistedTransaction.externalId,
             principalId: persistedTransaction.principalId,
-            transactionId: persistedTransaction.id,
+            sourceId: persistedTransaction.sourceId,
+            sourceRawRecordId: persistedTransaction.sourceRawRecordId,
           })
           const persistedVenueContext = yield* upsertVenueContext({
             executor: tx,

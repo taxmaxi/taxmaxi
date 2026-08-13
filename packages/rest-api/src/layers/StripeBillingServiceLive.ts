@@ -32,6 +32,70 @@ const ANNUAL_CREDITS = 10_000
 const TOP_UP_CREDITS = 1_000
 const INTEGRATION_IDENTIFIER = "taxmaxi_direct_q7m4w2kp"
 
+export const STRIPE_CHECKOUT_TAX_OPTIONS = {
+  automatic_tax: { enabled: true },
+  tax_id_collection: { enabled: true },
+}
+
+export const buildAnnualCheckoutParams = ({
+  customer,
+  price,
+  userId,
+  frontendUrl,
+  expiresAt,
+}: {
+  readonly customer: string
+  readonly price: Pick<Stripe.Price, "id" | "product">
+  readonly userId: AuthUserId
+  readonly frontendUrl: string
+  readonly expiresAt: Date
+}): Stripe.Checkout.SessionCreateParams => ({
+  mode: "subscription",
+  customer,
+  line_items: [{ price: price.id, quantity: 1 }],
+  billing_address_collection: "required",
+  ...STRIPE_CHECKOUT_TAX_OPTIONS,
+  customer_update: { address: "auto", name: "auto" },
+  success_url: `${frontendUrl}/app/billing?checkout=success`,
+  cancel_url: `${frontendUrl}/#pricing`,
+  expires_at: Math.floor(expiresAt.getTime() / 1_000),
+  integration_identifier: INTEGRATION_IDENTIFIER,
+  metadata: { purchase_kind: "annual", taxmaxi_user_id: userId },
+  subscription_data: {
+    metadata: {
+      taxmaxi_user_id: userId,
+      plan_lookup_key: TAXMAXI_ANNUAL_LOOKUP_KEY,
+      plan_product_id: productId(price.product),
+    },
+  },
+})
+
+export const buildTopUpCheckoutParams = ({
+  customer,
+  price,
+  userId,
+  frontendUrl,
+}: {
+  readonly customer: string
+  readonly price: Pick<Stripe.Price, "id" | "product">
+  readonly userId: AuthUserId
+  readonly frontendUrl: string
+}): Stripe.Checkout.SessionCreateParams => ({
+  mode: "payment",
+  customer,
+  line_items: [{ price: price.id, quantity: 1 }],
+  billing_address_collection: "required",
+  ...STRIPE_CHECKOUT_TAX_OPTIONS,
+  customer_update: { address: "auto", name: "auto" },
+  success_url: `${frontendUrl}/app/billing?top_up=success`,
+  cancel_url: `${frontendUrl}/app/billing`,
+  integration_identifier: INTEGRATION_IDENTIFIER,
+  metadata: { purchase_kind: "top_up", taxmaxi_user_id: userId },
+  payment_intent_data: {
+    metadata: { purchase_kind: "top_up", taxmaxi_user_id: userId },
+  },
+})
+
 const stripeError = (message: string) => new StripeBillingError({ message })
 
 const customerId = (
@@ -70,6 +134,100 @@ const isTopUpEligibleSubscription = (status: string | null): boolean =>
 
 const isExistingSubscription = (status: string | null): boolean =>
   status !== null && status !== "canceled" && status !== "incomplete_expired"
+
+export const isTaxMaxiAnnualSubscription = ({
+  subscription,
+  currentProductId,
+}: {
+  readonly subscription: {
+    readonly metadata: Readonly<Record<string, string>>
+    readonly items: {
+      readonly data: ReadonlyArray<{
+        readonly price: {
+          readonly lookup_key: string | null
+          readonly product: string | Stripe.Product | Stripe.DeletedProduct
+        }
+      }>
+    }
+  }
+  readonly currentProductId?: string
+}): boolean =>
+  subscription.items.data.some(
+    (item) =>
+      item.price.lookup_key === TAXMAXI_ANNUAL_LOOKUP_KEY ||
+      (subscription.metadata.plan_lookup_key === TAXMAXI_ANNUAL_LOOKUP_KEY &&
+        subscription.metadata.plan_product_id !== undefined &&
+        productId(item.price.product) === subscription.metadata.plan_product_id) ||
+      (currentProductId !== undefined && productId(item.price.product) === currentProductId)
+  )
+
+export const hasExistingTaxMaxiAnnualSubscription = ({
+  subscriptions,
+  currentProductId,
+}: {
+  readonly subscriptions: ReadonlyArray<
+    Parameters<typeof isTaxMaxiAnnualSubscription>[0]["subscription"] & {
+      readonly status: string
+    }
+  >
+  readonly currentProductId: string
+}): boolean =>
+  subscriptions.some(
+    (subscription) =>
+      isTaxMaxiAnnualSubscription({ subscription, currentProductId }) &&
+      isExistingSubscription(subscription.status)
+  )
+
+export const loadAllStripeItems = <Item>({
+  page,
+}: {
+  readonly page: {
+    readonly autoPagingToArray: (options: { readonly limit: number }) => Promise<Array<Item>>
+  }
+}): Promise<Array<Item>> => page.autoPagingToArray({ limit: 10_000 })
+
+export const currentExistingAnnualSubscription = <
+  Subscription extends {
+    readonly status: string
+  },
+>(
+  subscriptions: ReadonlyArray<
+    Subscription & Parameters<typeof isTaxMaxiAnnualSubscription>[0]["subscription"]
+  >
+): Subscription | undefined =>
+  subscriptions.find(
+    (subscription) =>
+      isTaxMaxiAnnualSubscription({ subscription }) && isExistingSubscription(subscription.status)
+  )
+
+export const shouldReconcileAnnualSubscription = ({
+  subscription,
+  trackedSubscriptionId,
+}: {
+  readonly subscription: Parameters<typeof isTaxMaxiAnnualSubscription>[0]["subscription"] & {
+    readonly id: string
+  }
+  readonly trackedSubscriptionId: string | null
+}): boolean =>
+  isTaxMaxiAnnualSubscription({ subscription }) || subscription.id === trackedSubscriptionId
+
+export const subscriptionIdToClearAfterConfirmation = ({
+  currentSubscriptionId,
+  confirmedSubscriptionId,
+}: {
+  readonly currentSubscriptionId: string | null
+  readonly confirmedSubscriptionId: string | null
+}): string | null => (confirmedSubscriptionId === null ? currentSubscriptionId : null)
+
+export const completeInvoiceLines = <Line, E>({
+  embeddedLines,
+  hasMore,
+  loadAll,
+}: {
+  readonly embeddedLines: ReadonlyArray<Line>
+  readonly hasMore: boolean
+  readonly loadAll: () => Effect.Effect<ReadonlyArray<Line>, E>
+}): Effect.Effect<ReadonlyArray<Line>, E> => (hasMore ? loadAll() : Effect.succeed(embeddedLines))
 
 export const isAnnualInvoiceEligible = ({
   billingReason,
@@ -367,22 +525,24 @@ const make = Effect.gen(function* () {
 
   const createAnnualCheckout: StripeBillingServiceShape["createAnnualCheckout"] = (userId) =>
     Effect.gen(function* () {
-      const account = yield* billingRepository
-        .findByUserId(userId)
-        .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
-      if (Option.isSome(account) && isExistingSubscription(account.value.subscriptionStatus)) {
-        return yield* Effect.fail(stripeError("This account already has a subscription"))
-      }
-
       const [customer, price] = yield* Effect.all(
         [getOrCreateCustomer(userId), findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)],
         { concurrency: "unbounded" }
       )
       const subscriptions = yield* stripePromise(
         "Could not verify existing Stripe subscriptions",
-        (client) => client.subscriptions.list({ customer, status: "all", limit: 100 })
+        (client) =>
+          loadAllStripeItems({
+            page: client.subscriptions.list({ customer, status: "all", limit: 100 }),
+          })
       )
-      if (subscriptions.data.some((subscription) => isExistingSubscription(subscription.status))) {
+      const currentAnnualProductId = productId(price.product)
+      if (
+        hasExistingTaxMaxiAnnualSubscription({
+          subscriptions,
+          currentProductId: currentAnnualProductId,
+        })
+      ) {
         return yield* Effect.fail(stripeError("This account already has a subscription"))
       }
       const checkoutReservation = yield* billingRepository
@@ -390,26 +550,13 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(() => stripeError("Could not reserve annual Checkout")))
       const session = yield* stripePromise("Could not create annual Checkout", (client) =>
         client.checkout.sessions.create(
-          {
-            mode: "subscription",
+          buildAnnualCheckoutParams({
             customer,
-            line_items: [{ price: price.id, quantity: 1 }],
-            billing_address_collection: "required",
-            tax_id_collection: { enabled: true },
-            customer_update: { address: "auto", name: "auto" },
-            success_url: `${frontendUrl}/app/billing?checkout=success`,
-            cancel_url: `${frontendUrl}/#pricing`,
-            expires_at: Math.floor(checkoutReservation.expiresAt.getTime() / 1_000),
-            integration_identifier: INTEGRATION_IDENTIFIER,
-            metadata: { purchase_kind: "annual", taxmaxi_user_id: userId },
-            subscription_data: {
-              metadata: {
-                taxmaxi_user_id: userId,
-                plan_lookup_key: TAXMAXI_ANNUAL_LOOKUP_KEY,
-                plan_product_id: productId(price.product),
-              },
-            },
-          },
+            price,
+            userId,
+            frontendUrl,
+            expiresAt: checkoutReservation.expiresAt,
+          }),
           {
             idempotencyKey: `taxmaxi-annual-checkout-${userId}-${customer}-${checkoutReservation.generation}`,
           }
@@ -437,21 +584,14 @@ const make = Effect.gen(function* () {
       })
       const price = yield* findPrice(TAXMAXI_TOP_UP_LOOKUP_KEY)
       const session = yield* stripePromise("Could not create top-up Checkout", (client) =>
-        client.checkout.sessions.create({
-          mode: "payment",
-          customer: stripeCustomerId,
-          line_items: [{ price: price.id, quantity: 1 }],
-          billing_address_collection: "required",
-          tax_id_collection: { enabled: true },
-          customer_update: { address: "auto", name: "auto" },
-          success_url: `${frontendUrl}/app/billing?top_up=success`,
-          cancel_url: `${frontendUrl}/app/billing`,
-          integration_identifier: INTEGRATION_IDENTIFIER,
-          metadata: { purchase_kind: "top_up", taxmaxi_user_id: userId },
-          payment_intent_data: {
-            metadata: { purchase_kind: "top_up", taxmaxi_user_id: userId },
-          },
-        })
+        client.checkout.sessions.create(
+          buildTopUpCheckoutParams({
+            customer: stripeCustomerId,
+            price,
+            userId,
+            frontendUrl,
+          })
+        )
       )
       if (session.url === null) {
         return yield* Effect.fail(stripeError("Stripe did not return a Checkout URL"))
@@ -487,6 +627,8 @@ const make = Effect.gen(function* () {
     readonly syncGeneration: number
   }) =>
     Effect.gen(function* () {
+      if (!isTaxMaxiAnnualSubscription({ subscription })) return
+
       const customer = customerId(subscription.customer)
       if (customer === null) return
       const mappedStatus = yield* toBillingSubscriptionStatus(subscription.status)
@@ -503,25 +645,57 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(() => stripeError("Could not save subscription state")))
     })
 
-  const syncDeletedSubscription = ({
-    subscription,
+  const loadCurrentAnnualSubscription = (customer: string) =>
+    stripePromise("Could not load current customer subscriptions", (client) =>
+      loadAllStripeItems({
+        page: client.subscriptions.list({ customer, status: "all", limit: 100 }),
+      })
+    ).pipe(Effect.map(currentExistingAnnualSubscription))
+
+  const reconcileTrackedAnnualSubscription = ({
+    customer,
+    trackedSubscriptionId,
     eventCreatedAt,
     syncGeneration,
   }: {
-    readonly subscription: Stripe.Subscription
+    readonly customer: string
+    readonly trackedSubscriptionId: string
     readonly eventCreatedAt: Date
     readonly syncGeneration: number
   }) =>
     Effect.gen(function* () {
-      const customer = customerId(subscription.customer)
-      if (customer === null) return
-      const account = yield* billingRepository
-        .findByStripeCustomerId(customer)
-        .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
-      if (Option.isNone(account) || account.value.stripeSubscriptionId !== subscription.id) {
-        return
+      const current = yield* loadCurrentAnnualSubscription(customer)
+      if (current === undefined) {
+        yield* billingRepository
+          .clearSubscription({
+            stripeCustomerId: customer,
+            stripeSubscriptionId: trackedSubscriptionId,
+            eventCreatedAt,
+            syncGeneration,
+          })
+          .pipe(Effect.mapError(() => stripeError("Could not clear annual subscription state")))
+      } else {
+        yield* syncSubscription({ subscription: current, eventCreatedAt, syncGeneration })
       }
-      yield* syncSubscription({ subscription, eventCreatedAt, syncGeneration })
+
+      const confirmed = yield* loadCurrentAnnualSubscription(customer)
+      if (confirmed !== undefined) {
+        yield* syncSubscription({ subscription: confirmed, eventCreatedAt, syncGeneration })
+      }
+      const subscriptionIdToClear = subscriptionIdToClearAfterConfirmation({
+        currentSubscriptionId: current?.id ?? null,
+        confirmedSubscriptionId: confirmed?.id ?? null,
+      })
+      if (subscriptionIdToClear !== null) {
+        yield* billingRepository
+          .clearSubscription({
+            stripeCustomerId: customer,
+            stripeSubscriptionId: subscriptionIdToClear,
+            eventCreatedAt,
+            syncGeneration,
+          })
+          .pipe(Effect.mapError(() => stripeError("Could not clear annual subscription state")))
+      }
     })
 
   const paidInvoicePaymentReference = (invoiceId: string) =>
@@ -554,7 +728,17 @@ const make = Effect.gen(function* () {
       const customer = customerId(invoice.customer)
       if (id === null || customer === null) return
 
-      const candidateLines = invoice.lines.data.filter((line) => {
+      const invoiceLines = yield* completeInvoiceLines({
+        embeddedLines: invoice.lines.data,
+        hasMore: invoice.lines.has_more,
+        loadAll: () =>
+          stripePromise("Could not load complete invoice lines", (client) =>
+            client.invoices
+              .listLineItems(invoice.id, { limit: 100 })
+              .autoPagingToArray({ limit: 10_000 })
+          ),
+      })
+      const candidateLines = invoiceLines.filter((line) => {
         const subscriptionItem = line.parent?.subscription_item_details
         return subscriptionItem !== null && subscriptionItem !== undefined
       })
@@ -743,33 +927,71 @@ const make = Effect.gen(function* () {
         case "customer.subscription.resumed": {
           const customer = customerId(event.data.object.customer)
           if (customer === null) break
-          const syncGeneration = yield* billingRepository
-            .reserveSubscriptionSync(customer)
-            .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
           const subscription = yield* stripePromise(
             "Could not load current subscription state",
             (client) => client.subscriptions.retrieve(event.data.object.id)
           )
+          const account = yield* billingRepository
+            .findByStripeCustomerId(customer)
+            .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
+          const trackedSubscriptionId = Option.isSome(account)
+            ? account.value.stripeSubscriptionId
+            : null
+          if (!shouldReconcileAnnualSubscription({ subscription, trackedSubscriptionId })) break
+          if (!isTaxMaxiAnnualSubscription({ subscription })) {
+            const syncGeneration = yield* billingRepository
+              .reserveSubscriptionSync(customer)
+              .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
+            yield* reconcileTrackedAnnualSubscription({
+              customer,
+              trackedSubscriptionId: subscription.id,
+              eventCreatedAt,
+              syncGeneration,
+            })
+            break
+          }
+          const syncGeneration = yield* billingRepository
+            .reserveSubscriptionSync(customer)
+            .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
           yield* syncSubscription({ subscription, eventCreatedAt, syncGeneration })
           const confirmedSubscription = yield* stripePromise(
             "Could not confirm current subscription state",
             (client) => client.subscriptions.retrieve(event.data.object.id)
           )
-          yield* syncSubscription({
-            subscription: confirmedSubscription,
-            eventCreatedAt,
-            syncGeneration,
-          })
+          if (isTaxMaxiAnnualSubscription({ subscription: confirmedSubscription })) {
+            yield* syncSubscription({
+              subscription: confirmedSubscription,
+              eventCreatedAt,
+              syncGeneration,
+            })
+          } else {
+            yield* reconcileTrackedAnnualSubscription({
+              customer,
+              trackedSubscriptionId: subscription.id,
+              eventCreatedAt,
+              syncGeneration,
+            })
+          }
           break
         }
         case "customer.subscription.deleted": {
           const customer = customerId(event.data.object.customer)
           if (customer === null) break
+          const account = yield* billingRepository
+            .findByStripeCustomerId(customer)
+            .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
+          if (
+            Option.isNone(account) ||
+            account.value.stripeSubscriptionId !== event.data.object.id
+          ) {
+            break
+          }
           const syncGeneration = yield* billingRepository
             .reserveSubscriptionSync(customer)
             .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
-          yield* syncDeletedSubscription({
-            subscription: event.data.object,
+          yield* reconcileTrackedAnnualSubscription({
+            customer,
+            trackedSubscriptionId: event.data.object.id,
             eventCreatedAt,
             syncGeneration,
           })

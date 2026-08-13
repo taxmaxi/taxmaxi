@@ -478,4 +478,48 @@ describe("BillingRepositoryLive", () => {
     expect(result.acceptedOlder).toBe(false)
     expect(result.account.subscriptionStatus).toBe("paused")
   })
+
+  it("clears a tracked subscription only under the winning sync generation", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_moved_off_annual",
+          status: "active",
+          currentPeriodEnd: new Date("2027-08-13T12:00:00.000Z"),
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: new Date("2026-08-13T12:00:00.000Z"),
+          syncGeneration: 0,
+        })
+        const staleGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
+        const winningGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
+        const input = {
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_moved_off_annual",
+          eventCreatedAt: new Date("2026-08-13T12:00:01.000Z"),
+        } as const
+        const rejected = yield* repository.clearSubscription({
+          ...input,
+          syncGeneration: staleGeneration,
+        })
+        const cleared = yield* repository.clearSubscription({
+          ...input,
+          syncGeneration: winningGeneration,
+        })
+        const account = Option.getOrThrow(yield* repository.findByUserId(TEST_USER_ID))
+
+        return { rejected, cleared, account }
+      })
+    )
+
+    expect(result.rejected).toBe(false)
+    expect(result.cleared).toBe(true)
+    expect(result.account).toMatchObject({
+      stripeSubscriptionId: null,
+      subscriptionStatus: null,
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+    })
+  })
 })

@@ -54,6 +54,12 @@ export interface BillingRepositoryService {
     readonly eventCreatedAt: Date
     readonly syncGeneration: number
   }) => Effect.Effect<boolean, PersistenceError>
+  readonly clearSubscription: (input: {
+    readonly stripeCustomerId: string
+    readonly stripeSubscriptionId: string
+    readonly eventCreatedAt: Date
+    readonly syncGeneration: number
+  }) => Effect.Effect<boolean, PersistenceError>
   readonly reserveSubscriptionSync: (
     stripeCustomerId: string
   ) => Effect.Effect<number, PersistenceError>
