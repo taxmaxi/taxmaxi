@@ -9,6 +9,7 @@ import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderRefere
 import { PortfolioRepositoryLive } from "../../src/layers/PortfolioRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
+import { TransferReconciliationRepositoryLive } from "../../src/layers/TransferReconciliationRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import { PortfolioRepository } from "../../src/services/PortfolioRepository.ts"
 import {
@@ -23,7 +24,10 @@ import {
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
-import { SourceNormalizationRepository } from "@my/sync-engine/services"
+import {
+  SourceNormalizationRepository,
+  TransferReconciliationRepository,
+} from "@my/sync-engine/services"
 import {
   CoinbaseLegDerivationServiceLive,
   CoinbaseRecordNormalizerLive,
@@ -47,6 +51,11 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
+
+const runTransferReconciliationRepository = <A, E>(
+  effect: Effect.Effect<A, E, TransferReconciliationRepository>
+) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: TransferReconciliationRepositoryLive }))
 
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
   fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
@@ -228,11 +237,13 @@ const persistCoinbaseNormalization = ({
   source,
   sourceRecord,
   skipLegDerivation = false,
+  omitProviderTransfers = false,
   providerTransferRole,
 }: {
   readonly source: SourceSyncSource
   readonly sourceRecord: SourceRawRecord
   readonly skipLegDerivation?: boolean
+  readonly omitProviderTransfers?: boolean
   readonly providerTransferRole?: "principal" | "fee"
 }) =>
   Effect.gen(function* () {
@@ -247,13 +258,15 @@ const persistCoinbaseNormalization = ({
       sourceRecord,
       lookups,
     })
-    const providerTransfers = prepared.providerTransfers.map((providerTransfer) => ({
-      ...providerTransfer,
-      metadata:
-        providerTransferRole === undefined
-          ? providerTransfer.metadata
-          : { role: providerTransferRole },
-    }))
+    const providerTransfers = omitProviderTransfers
+      ? []
+      : prepared.providerTransfers.map((providerTransfer) => ({
+          ...providerTransfer,
+          metadata:
+            providerTransferRole === undefined
+              ? providerTransfer.metadata
+              : { role: providerTransferRole },
+        }))
 
     return yield* sourceNormalizationRepository.persistNormalizedArtifacts(
       prepared.legDerivationStrategy === "derive" && !skipLegDerivation
@@ -321,6 +334,566 @@ describe("SourceNormalizationRepositoryLive", () => {
 
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
+  })
+
+  it("persists exact observed provider transfer representations", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const smallestU8DecimalAmount = `0.${"0".repeat(254)}1`
+    const sharedTransfer = {
+      sourceId: TEST_SOURCE_ID,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+      externalGroupId: "group-observed-representations",
+      providerAssetId: null,
+      timestamp: occurredAt,
+      direction: "inbound" as const,
+      processingMode: "accounting_and_evidence" as const,
+      fromAccountRef: null,
+      toAccountRef: null,
+      fromAddress: "external-address",
+      toAddress: "owned-address",
+      networkName: "base",
+      networkHash: "hash-observed-representations",
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedContractAddress: null,
+      observedMintAddress: null,
+      amount: "1",
+      metadata: { provider: "test-onchain-adapter" },
+    }
+    const providerTransfers = [
+      {
+        ...sharedTransfer,
+        externalId: "observed-native",
+        observedRepresentationType: "native" as const,
+        observedDecimals: 18,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-token",
+        observedRepresentationType: "token" as const,
+        observedContractAddress: "0x0000000000000000000000000000000000000096",
+        observedDecimals: 6,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-nft",
+        observedRepresentationType: "nft" as const,
+        observedMintAddress: "NftMint111111111111111111111111111111111111",
+        observedDecimals: 0,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-unknown-type",
+        observedRepresentationType: null,
+        observedMintAddress: "UnknownMint11111111111111111111111111111111",
+        observedDecimals: 5,
+      },
+      {
+        ...sharedTransfer,
+        externalId: "observed-max-decimals",
+        observedRepresentationType: "token" as const,
+        observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
+        observedDecimals: 255,
+        amount: smallestU8DecimalAmount,
+      },
+    ]
+
+    const normalizedArtifacts = {
+      transaction: {
+        sourceId: TEST_SOURCE_ID,
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+        externalId: "tx-observed-representations",
+        externalGroupId: "group-observed-representations",
+        timestamp: occurredAt,
+        transactionType: "buy_fiat",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerResourcePath: null,
+        providerDescription: null,
+        providerCreatedAt: occurredAt,
+        providerUpdatedAt: occurredAt,
+        metadata: { provider: "test-onchain-adapter" },
+        principalId: TEST_PRINCIPAL_ID,
+      },
+      venueContext: {
+        venueType: "dex",
+        cexAccountId: null,
+        externalAccountId: "owned-address",
+        externalOrderId: null,
+        externalFillId: null,
+        side: null,
+        instrument: null,
+        fillPrice: null,
+        commissionAmount: null,
+        commissionCurrency: null,
+        metadata: { provider: "test-onchain-adapter" },
+      },
+      providerTransfers,
+      feeTransfers: [],
+      legs: [],
+      transactionReview: null,
+      resolvedTransactionType: APPROVED_MAPPING,
+    } as const
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts(normalizedArtifacts)
+      )
+    )
+
+    expect(result.providerTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          externalId: "observed-native",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "native",
+          observedContractAddress: null,
+          observedMintAddress: null,
+          observedDecimals: 18,
+        }),
+        expect.objectContaining({
+          externalId: "observed-token",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "token",
+          observedContractAddress: "0x0000000000000000000000000000000000000096",
+          observedMintAddress: null,
+          observedDecimals: 6,
+        }),
+        expect.objectContaining({
+          externalId: "observed-nft",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: "nft",
+          observedContractAddress: null,
+          observedMintAddress: "NftMint111111111111111111111111111111111111",
+          observedDecimals: 0,
+        }),
+        expect.objectContaining({
+          externalId: "observed-unknown-type",
+          observedBlockchainId: fixture.baseBlockchainId,
+          observedRepresentationType: null,
+          observedContractAddress: null,
+          observedMintAddress: "UnknownMint11111111111111111111111111111111",
+          observedDecimals: 5,
+        }),
+        expect.objectContaining({
+          externalId: "observed-max-decimals",
+          observedRepresentationType: "token",
+          observedMintAddress: "MaxDecimalsMint111111111111111111111111111111",
+          observedDecimals: 255,
+          amount: smallestU8DecimalAmount,
+        }),
+      ])
+    )
+
+    const observedNativeTransfer = result.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-native"
+    )
+    expect(observedNativeTransfer).toBeDefined()
+    if (observedNativeTransfer === undefined) {
+      return
+    }
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [canonicalTransfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            externalId: "canonical-observed-native",
+            externalGroupId: "group-observed-representations",
+            addressId: null,
+            blockchainId: null,
+            txHash: null,
+            timestamp: occurredAt,
+            type: "cex",
+            fromAddress: "external-address",
+            toAddress: "owned-address",
+            fromAccountRef: null,
+            toAccountRef: null,
+            fromPartyType: null,
+            fromPartyResourcePath: null,
+            toPartyType: null,
+            toPartyResourcePath: null,
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: null,
+            amount: "1",
+            tokenId: null,
+            notes: null,
+            metadata: { provider: "test-onchain-adapter" },
+          })
+          .returning({ id: schema.transfers.id })
+
+        if (canonicalTransfer === undefined) {
+          return yield* Effect.dieMessage("Failed to create canonical transfer fixture")
+        }
+
+        yield* db.insert(schema.transferReconciliations).values({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId: observedNativeTransfer.id,
+          canonicalTransferId: canonicalTransfer.id,
+          canonicalTransactionId: result.transaction.id,
+          status: "auto_applied",
+          matchReason: "test_stale_observation",
+          confidence: "1",
+          deterministic: true,
+          reviewMetadata: null,
+        })
+      })
+    )
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ observedMintAddress: null })
+            .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ processingMode: "accounting_only" })
+            .where(eq(schema.providerTransfers.externalId, "observed-native"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ processingMode: "stale" })
+            .where(eq(schema.providerTransfers.externalId, "observed-native"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({
+              observedContractAddress: "0x0000000000000000000000000000000000000096",
+            })
+            .where(eq(schema.providerTransfers.externalId, "observed-unknown-type"))
+        })
+      )
+    ).rejects.toThrow()
+
+    await expect(
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerTransfers)
+            .set({ observedDecimals: -1 })
+            .where(eq(schema.providerTransfers.externalId, "observed-native"))
+        })
+      )
+    ).rejects.toThrow()
+
+    const partialRetryResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-unknown-type"
+              ? {
+                  ...transfer,
+                  observedDecimals: null,
+                  amount: "2",
+                  metadata: {
+                    provider: "retry-without-exact-decimal-evidence",
+                    rawUnits: "2",
+                  },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const partiallyRetriedUnknownType = partialRetryResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-unknown-type"
+    )
+
+    expect(partiallyRetriedUnknownType).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: "UnknownMint11111111111111111111111111111111",
+      observedDecimals: 5,
+      amount: expect.stringMatching(/^2(?:\.0+)?$/),
+      metadata: {
+        provider: "retry-without-exact-decimal-evidence",
+        rawUnits: "2",
+      },
+    })
+
+    const retryResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-unknown-type"
+              ? {
+                  ...transfer,
+                  observedBlockchainId: null,
+                  observedRepresentationType: null,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: null,
+                  amount: "3",
+                  metadata: {
+                    provider: "retry-without-observed-representation",
+                    rawUnits: "3",
+                  },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const retriedUnknownType = retryResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-unknown-type"
+    )
+
+    expect(retriedUnknownType).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: "UnknownMint11111111111111111111111111111111",
+      observedDecimals: 5,
+      amount: expect.stringMatching(/^3(?:\.0+)?$/),
+      metadata: {
+        provider: "retry-without-observed-representation",
+        rawUnits: "3",
+      },
+    })
+
+    const correctedResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-token"
+              ? {
+                  ...transfer,
+                  observedContractAddress: null,
+                  observedMintAddress: "CorrectedMint1111111111111111111111111111111",
+                  observedDecimals: 9,
+                  amount: "3",
+                  metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const correctedToken = correctedResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-token"
+    )
+
+    expect(correctedToken).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: "token",
+      observedContractAddress: null,
+      observedMintAddress: "CorrectedMint1111111111111111111111111111111",
+      observedDecimals: 9,
+      amount: expect.stringMatching(/^3(?:\.0+)?$/),
+      metadata: { provider: "corrected-mint-observation", rawUnits: "3000000000" },
+    })
+
+    const nativeCorrectionResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-token"
+              ? {
+                  ...transfer,
+                  observedRepresentationType: "native" as const,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: 18,
+                  amount: "4",
+                  metadata: {
+                    provider: "corrected-native-observation",
+                    rawUnits: "4000000000000000000",
+                  },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    const correctedNative = nativeCorrectionResult.providerTransfers.find(
+      (transfer) => transfer.externalId === "observed-token"
+    )
+
+    expect(correctedNative).toMatchObject({
+      observedBlockchainId: fixture.baseBlockchainId,
+      observedRepresentationType: "native",
+      observedContractAddress: null,
+      observedMintAddress: null,
+      observedDecimals: 18,
+      amount: expect.stringMatching(/^4(?:\.0+)?$/),
+      metadata: {
+        provider: "corrected-native-observation",
+        rawUnits: "4000000000000000000",
+      },
+    })
+
+    const accountingOnlyResult = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: providerTransfers.map((transfer) =>
+            transfer.externalId === "observed-nft"
+              ? {
+                  ...transfer,
+                  observedBlockchainId: null,
+                  observedRepresentationType: null,
+                  observedContractAddress: null,
+                  observedMintAddress: null,
+                  observedDecimals: null,
+                  processingMode: "accounting_only" as const,
+                  metadata: { provider: "test-onchain-adapter" },
+                }
+              : transfer
+          ),
+        })
+      )
+    )
+    expect(
+      accountingOnlyResult.providerTransfers.find(
+        (transfer) => transfer.externalId === "observed-nft"
+      )
+    ).toMatchObject({
+      observedBlockchainId: null,
+      observedRepresentationType: null,
+      observedContractAddress: null,
+      observedMintAddress: null,
+      observedDecimals: null,
+      processingMode: "accounting_only",
+      metadata: { provider: "test-onchain-adapter" },
+    })
+
+    const persistWithoutObservedTransfers = () =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            ...normalizedArtifacts,
+            providerTransfers: [],
+          })
+        )
+      )
+
+    await expect(persistWithoutObservedTransfers()).rejects.toThrow(
+      "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
+    )
+
+    const stateAfterRejectedRemoval = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const activeReconciliations = yield* db
+          .select()
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
+        const preservedTransfers = yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
+
+        return { activeReconciliations, preservedTransfers }
+      })
+    )
+
+    expect(stateAfterRejectedRemoval.activeReconciliations).toEqual([
+      expect.objectContaining({
+        providerTransferId: observedNativeTransfer.id,
+        status: "auto_applied",
+      }),
+    ])
+    expect(stateAfterRejectedRemoval.preservedTransfers).toHaveLength(5)
+    expect(stateAfterRejectedRemoval.preservedTransfers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          externalId: "observed-native",
+          observedRepresentationType: "native",
+          observedDecimals: 18,
+        }),
+      ])
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.transferReconciliations)
+          .set({ status: "approved" })
+          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
+      })
+    )
+    await expect(persistWithoutObservedTransfers()).rejects.toThrow(
+      "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation"
+    )
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, observedNativeTransfer.id))
+      })
+    )
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          ...normalizedArtifacts,
+          providerTransfers: [],
+        })
+      )
+    )
+
+    const staleProviderTransfers = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.externalGroupId, "group-observed-representations"))
+      })
+    )
+
+    expect(staleProviderTransfers).toHaveLength(5)
+    expect(staleProviderTransfers).toEqual(
+      expect.arrayContaining(
+        providerTransfers.map((transfer) =>
+          expect.objectContaining({
+            externalId: transfer.externalId,
+            observedBlockchainId: null,
+            observedRepresentationType: null,
+            observedContractAddress: null,
+            observedMintAddress: null,
+            observedDecimals: null,
+            processingMode: "stale",
+          })
+        )
+      )
+    )
   })
 
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
@@ -634,6 +1207,97 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.reviews).toHaveLength(1)
     expect(String(counts.lot?.remainingAmount)).toContain("0.6")
     expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
+  })
+
+  it("stores cost basis for the smallest supported acquisition quantity", async () => {
+    const amount = `0.${"0".repeat(254)}1`
+    const expectedCostBasisPerToken = `1${"0".repeat(255)}.000000000000000000`
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "tx-smallest-supported-acquisition",
+            externalGroupId: "group-smallest-supported-acquisition",
+            timestamp,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "test" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "test-account",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "buy",
+            instrument: "BTC-EUR",
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "test" },
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "leg-smallest-supported-acquisition",
+              txHash: null,
+              timestamp,
+              addressId: null,
+              assetId: TEST_BTC_ASSET_ID,
+              amount,
+              kind: "acquisition",
+              provenance: "deterministic",
+              derivationRule: "test_smallest_quantity",
+              metadata: { provider: "test" },
+              transactionId: null,
+              sourceTransferId: null,
+              fiatAmount: "1",
+              fiatCurrency: "EUR",
+              feeForTransactionId: null,
+            },
+          ],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+    const leg = result.legs[0]
+    expect(leg).toBeDefined()
+    if (leg === undefined) {
+      return
+    }
+
+    const fifoLots = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, leg.id))
+      })
+    )
+
+    expect(fifoLots).toEqual([
+      expect.objectContaining({
+        originalAmount: amount,
+        remainingAmount: amount,
+        costBasisPerToken: expectedCostBasisPerToken,
+      }),
+    ])
   })
 
   it("marks disposals with missing FIFO inventory for review instead of failing", async () => {
@@ -1973,7 +2637,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     ])
   })
 
-  it("removes provider movements and lots that disappear on replay", async () => {
+  it("removes provider movements that disappear on replay and restores them when they return", async () => {
     const rawRecordId = "00000000-0000-0000-0000-000000000713"
     const occurredAt = new Date("2025-04-02T10:00:00.000Z")
     const receivePayload = {
@@ -1986,12 +2650,6 @@ describe("SourceNormalizationRepositoryLive", () => {
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-provider-transfer-disappears",
       from: { address: "bc1qprovidertransfersource", resource: "address" },
     }
-    const buyPayload = {
-      ...receivePayload,
-      type: "buy",
-      from: undefined,
-    }
-
     await runPg(
       seedRawRecord({
         rawRecordId,
@@ -2002,7 +2660,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     const source = buildCoinbaseSource({ cexAccountId: fixture.cexAccountId })
-    const normalize = (payload: typeof receivePayload | typeof buyPayload) =>
+    const normalize = ({ omitProviderTransfers = false } = {}) =>
       runCoinbaseNormalization(
         persistCoinbaseNormalization({
           source,
@@ -2010,32 +2668,113 @@ describe("SourceNormalizationRepositoryLive", () => {
             rawRecordId,
             externalRecordId: "raw-provider-transfer-disappears",
             occurredAt,
-            payload,
+            payload: receivePayload,
           }),
-          skipLegDerivation: payload.type === "receive",
+          skipLegDerivation: true,
+          omitProviderTransfers,
         })
       )
 
-    await normalize(receivePayload)
-    await normalize(buyPayload)
+    const initialResult = await normalize()
+    const initialProviderTransfer = initialResult.providerTransfers[0]
+    expect(initialProviderTransfer).toBeDefined()
+    if (initialProviderTransfer === undefined) {
+      return
+    }
 
-    const state = await runPg(
+    await normalize({ omitProviderTransfers: true })
+
+    const removedState = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
         const movements = yield* db.select().from(schema.inventoryMovements)
         const lots = yield* db.select().from(schema.fifoLots)
-        return { movements, lots }
+        return { providerTransfer, movements, lots }
       })
     )
 
-    expect(state.movements).toHaveLength(0)
-    expect(state.lots).toEqual([
+    expect(removedState.providerTransfer).toEqual(
       expect.objectContaining({
-        sourceLegId: expect.any(String),
-        sourceProviderTransferId: null,
+        id: initialProviderTransfer.id,
+        processingMode: "stale",
+      })
+    )
+    expect(removedState.movements).toHaveLength(0)
+    expect(removedState.lots).toHaveLength(0)
+    const staleReconciliationCandidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.listProviderTransfersForReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    expect(
+      staleReconciliationCandidates.some(
+        ({ providerTransferId }) => providerTransferId === initialProviderTransfer.id
+      )
+    ).toBe(false)
+
+    const restoredResult = await normalize()
+    expect(restoredResult.providerTransfers).toEqual([
+      expect.objectContaining({
+        id: initialProviderTransfer.id,
+        processingMode: "accounting_and_evidence",
+      }),
+    ])
+
+    const restoredState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select()
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, initialProviderTransfer.id))
+        const movements = yield* db
+          .select()
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.providerTransferId, initialProviderTransfer.id))
+        const lots = yield* db.select().from(schema.fifoLots)
+        return { providerTransfer, movements, lots }
+      })
+    )
+
+    expect(restoredState.providerTransfer).toEqual(
+      expect.objectContaining({
+        id: initialProviderTransfer.id,
+        processingMode: "accounting_and_evidence",
+      })
+    )
+    expect(restoredState.movements).toEqual([
+      expect.objectContaining({
+        providerTransferId: initialProviderTransfer.id,
+        direction: "inbound",
+      }),
+    ])
+    expect(restoredState.lots).toEqual([
+      expect.objectContaining({
+        sourceProviderTransferId: initialProviderTransfer.id,
+        originalAmount: expect.stringContaining("0.25000000"),
         remainingAmount: expect.stringContaining("0.25000000"),
       }),
     ])
+    const restoredReconciliationCandidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.listProviderTransfersForReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    expect(restoredReconciliationCandidates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ providerTransferId: initialProviderTransfer.id }),
+      ])
+    )
   })
 
   it("does not spend an unreconciled inbound provider lot", async () => {

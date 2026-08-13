@@ -102,7 +102,11 @@ const make = Effect.gen(function* () {
         .where(
           and(
             eq(schema.sources.principalId, principalId),
-            eq(schema.providerTransfers.sourceId, sourceId)
+            eq(schema.providerTransfers.sourceId, sourceId),
+            inArray(schema.providerTransfers.processingMode, [
+              "accounting_and_evidence",
+              "accounting_only",
+            ])
           )
         )
         .orderBy(asc(schema.providerTransfers.timestamp))
@@ -300,7 +304,11 @@ const make = Effect.gen(function* () {
                       eq(schema.transferReconciliations.status, "approved")
                     ),
                     sql`${schema.transferReconciliations.canonicalTransferId} is not null`,
-                    sql`${schema.transferReconciliations.canonicalTransactionId} is not null`
+                    sql`${schema.transferReconciliations.canonicalTransactionId} is not null`,
+                    inArray(schema.providerTransfers.processingMode, [
+                      "accounting_and_evidence",
+                      "accounting_only",
+                    ])
                   )
                 )
                 .orderBy(asc(schema.providerTransfers.timestamp))

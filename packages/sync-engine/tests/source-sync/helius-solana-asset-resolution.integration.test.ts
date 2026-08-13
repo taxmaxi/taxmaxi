@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
@@ -472,6 +472,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     expect(result).toMatchObject({
       kind: "review_required",
       assetKind: "token",
+      representationTypeObserved: true,
       mintAddress: UNKNOWN_MINT,
       decimals: 5,
       tokenProgram: TOKEN_2022_PROGRAM,
@@ -493,6 +494,320 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       source: "helius_das_get_asset_batch",
       tokenProgram: TOKEN_2022_PROGRAM,
       nftHint: false,
+    })
+  })
+
+  it("recovers observed type evidence from cached DAS payloads without a derived marker", async () => {
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Cached Token",
+            decimals: 5,
+          }),
+        ])
+    )
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({
+            rawProviderPayload: sql`${schema.providerAssets.rawProviderPayload} - 'representationTypeObserved'`,
+          })
+          .where(eq(schema.providerAssets.providerAssetId, UNKNOWN_MINT))
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.dieMessage("Cached DAS metadata should not be refetched")
+    )
+
+    expect(result).toMatchObject({
+      assetKind: "token",
+      representationTypeObserved: true,
+      mintAddress: UNKNOWN_MINT,
+    })
+  })
+
+  it("marks token-versus-NFT type as unknown when the DAS record is missing", async () => {
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      assetKind: "token",
+      representationTypeObserved: false,
+      mintAddress: UNKNOWN_MINT,
+      decimals: null,
+      mappingStatus: "pending_review",
+    })
+  })
+
+  it("refreshes sparse DAS records until token-versus-NFT type is observed", async () => {
+    const sparseResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          {
+            id: UNKNOWN_MINT,
+            content: {
+              metadata: {
+                name: "Name That Looks Like An NFT",
+                symbol: "NFT",
+              },
+            },
+            token_info: {
+              symbol: "NFT",
+            },
+          },
+        ])
+    )
+
+    expect(sparseResult).toMatchObject({
+      kind: "review_required",
+      assetKind: "token",
+      representationTypeObserved: false,
+      mintAddress: UNKNOWN_MINT,
+      decimals: null,
+      mappingStatus: "pending_review",
+    })
+
+    const refreshedResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Now Identified NFT",
+            decimals: 0,
+            interfaceName: "V1_PRINT",
+          }),
+        ])
+    )
+
+    expect(refreshedResult).toMatchObject({
+      kind: "review_required",
+      assetKind: "nft",
+      representationTypeObserved: true,
+      mintAddress: UNKNOWN_MINT,
+      decimals: 0,
+      mappingStatus: "pending_review",
+    })
+  })
+
+  it("recognizes an explicit non-fungible DAS token standard", async () => {
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Programmable NFT",
+            decimals: 0,
+            interfaceName: "ProgrammableNonFungible",
+          }),
+        ])
+    )
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      assetKind: "nft",
+      representationTypeObserved: true,
+      mintAddress: UNKNOWN_MINT,
+      decimals: 0,
+      mappingStatus: "pending_review",
+    })
+  })
+
+  it("preserves observed decimals when a type refresh omits them", async () => {
+    const sparseResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          {
+            id: UNKNOWN_MINT,
+            content: {
+              metadata: {
+                name: "Sparse asset with decimals",
+                symbol: "SPARSE",
+              },
+            },
+            token_info: {
+              symbol: "SPARSE",
+              decimals: 5,
+            },
+          },
+        ])
+    )
+
+    expect(sparseResult).toMatchObject({
+      representationTypeObserved: false,
+      decimals: 5,
+    })
+
+    const refreshedResult = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          {
+            id: UNKNOWN_MINT,
+            interface: "V1_PRINT",
+            content: {
+              metadata: {
+                name: "Identified NFT without decimals",
+                symbol: "NFT",
+              },
+            },
+          },
+        ])
+    )
+
+    expect(refreshedResult).toMatchObject({
+      assetKind: "nft",
+      representationTypeObserved: true,
+      decimals: 5,
+    })
+  })
+
+  it.each(["V1_PRINT", "MplCoreAsset"])(
+    "recognizes the explicit %s DAS NFT interface",
+    async (interfaceName) => {
+      const result = await runAssetService(
+        Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+          service.resolveAsset({
+            kind: "spl",
+            mintAddress: UNKNOWN_MINT,
+          })
+        ),
+        () =>
+          Effect.succeed([
+            {
+              id: UNKNOWN_MINT,
+              interface: interfaceName,
+              content: {
+                metadata: {
+                  name: "Explicit NFT Interface",
+                },
+              },
+              token_info: {
+                decimals: 0,
+                token_program: TOKEN_PROGRAM,
+              },
+              compression: {
+                compressed: false,
+              },
+            },
+          ])
+      )
+
+      expect(result).toMatchObject({
+        kind: "review_required",
+        assetKind: "nft",
+        representationTypeObserved: true,
+        mintAddress: UNKNOWN_MINT,
+        decimals: 0,
+      })
+    }
+  )
+
+  it("derives the asset kind from cached DAS evidence instead of stale stored fields", async () => {
+    const cachedDasAsset = makeDasAsset({
+      mintAddress: UNKNOWN_MINT,
+      name: "Cached Explicit NFT",
+      decimals: 0,
+      interfaceName: "V1_PRINT",
+    })
+
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.succeed([cachedDasAsset])
+    )
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({
+            providerType: "spl-token",
+            rawProviderPayload: {
+              source: "helius_das_get_asset_batch",
+              tokenProgram: TOKEN_PROGRAM,
+              nftHint: false,
+              asset: cachedDasAsset,
+            },
+          })
+          .where(eq(schema.providerAssets.providerAssetId, UNKNOWN_MINT))
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.dieMessage("Complete cached DAS metadata should not be refetched")
+    )
+
+    expect(result).toMatchObject({
+      assetKind: "nft",
+      representationTypeObserved: true,
+      mintAddress: UNKNOWN_MINT,
+      nftHint: true,
     })
   })
 

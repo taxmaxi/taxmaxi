@@ -161,6 +161,7 @@ export type {
   ProviderTransfer,
   ProviderTransferDirection,
   ProviderTransferInsert,
+  ProviderTransferProcessingMode,
 } from "./ProviderTransfersTable.ts"
 export type {
   ProviderTransactionTypeCatalogInsert,

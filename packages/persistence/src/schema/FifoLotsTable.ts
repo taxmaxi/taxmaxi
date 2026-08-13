@@ -41,11 +41,11 @@ export const fifoLots = pgTable(
 
     // Acquisition details
     acquiredAt: timestamp("acquired_at").notNull(),
-    originalAmount: numeric("original_amount", { precision: 100, scale: 30 }).notNull(),
-    remainingAmount: numeric("remaining_amount", { precision: 100, scale: 30 }).notNull(),
+    originalAmount: numeric("original_amount", { precision: 355, scale: 255 }).notNull(),
+    remainingAmount: numeric("remaining_amount", { precision: 355, scale: 255 }).notNull(),
 
     // Cost basis information
-    costBasisPerToken: numeric("cost_basis_per_token", { precision: 36, scale: 18 }).notNull(),
+    costBasisPerToken: numeric("cost_basis_per_token", { precision: 355, scale: 18 }).notNull(),
     costBasisCurrency: text("cost_basis_currency").notNull(),
     costBasisStatus: fifoLotCostBasisStatusEnum("cost_basis_status").notNull().default("known"),
 

@@ -84,13 +84,7 @@ const SOLANA_TOKEN_PROGRAM_IDS = new Set([
   "TokenzQdBNbLqP5VEhdkAS6EPFvcsdN5kh5qMJ2AKU9FK",
 ])
 const SOLANA_TOKEN_PROGRAM_NAMES = new Set(["spl-token", "spl-token-2022"])
-
-const HeliusSolanaCursorPayloadSchema = Schema.Struct({
-  paginationToken: Schema.NullOr(Schema.String),
-  resumeBoundaryActive: Schema.optional(Schema.Boolean),
-  resumeCheckpointExternalId: Schema.optional(Schema.NullOr(Schema.String)),
-  resumeHighWatermarkIso: Schema.optional(Schema.NullOr(Schema.String)),
-})
+const MAX_NATIVE_SUBSET_SEARCH_STATES = 4_096
 
 const HeliusSolanaTransactionsPageSchema = Schema.Struct({
   data: Schema.Array(Schema.Unknown),
@@ -131,14 +125,21 @@ const HeliusSolanaCloseAccountParsedInstructionSchema = Schema.Struct({
   type: Schema.Literal("closeAccount"),
 })
 
+const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
+const SolanaRawTokenAmountSchema = Schema.String.pipe(
+  Schema.filter((amount) => /^(0|[1-9]\d*)$/.test(amount), {
+    message: () => "Expected canonical unsigned token raw units.",
+  })
+)
+
 const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   accountIndex: Schema.Number,
   mint: Schema.String,
   owner: Schema.optional(Schema.NullOr(Schema.String)),
   programId: Schema.optional(Schema.NullOr(Schema.String)),
   uiTokenAmount: Schema.Struct({
-    amount: Schema.String,
-    decimals: Schema.Number,
+    amount: SolanaRawTokenAmountSchema,
+    decimals: SolanaTokenDecimalsSchema,
     uiAmountString: Schema.optional(Schema.NullOr(Schema.String)),
   }),
 })
@@ -179,8 +180,8 @@ const HeliusSolanaWalletTransferSchema = Schema.Struct({
   mint: Schema.String,
   symbol: Schema.NullOr(Schema.String),
   amount: Schema.Union(Schema.Number, Schema.NumberFromString),
-  amountRaw: Schema.String,
-  decimals: Schema.Number,
+  amountRaw: SolanaRawTokenAmountSchema,
+  decimals: SolanaTokenDecimalsSchema,
 })
 
 const HeliusSolanaWalletTransfersPageSchema = Schema.Struct({
@@ -189,6 +190,16 @@ const HeliusSolanaWalletTransfersPageSchema = Schema.Struct({
     hasMore: Schema.Boolean,
     nextCursor: Schema.optional(Schema.NullOr(Schema.String)),
   }),
+})
+
+const HeliusSolanaCursorPayloadSchema = Schema.Struct({
+  paginationToken: Schema.NullOr(Schema.String),
+  resumeBoundaryActive: Schema.Boolean,
+  resumeCheckpointExternalId: Schema.NullOr(Schema.String),
+  resumeHighWatermarkIso: Schema.NullOr(Schema.String),
+  walletTransferCursor: Schema.NullOr(Schema.String),
+  walletTransferExhausted: Schema.Boolean,
+  pendingWalletTransfers: Schema.Array(HeliusSolanaWalletTransferSchema),
 })
 
 const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
@@ -219,18 +230,19 @@ const HeliusSolanaFullTransactionPayloadSchema = Schema.Struct({
   tokenTransfers: Schema.optional(Schema.Array(HeliusSolanaParsedTokenTransferSchema)),
 })
 
+const HeliusSolanaRawRecordPayloadSchema = Schema.Struct({
+  fullTransaction: HeliusSolanaFullTransactionPayloadSchema,
+  walletTransferEvidence: Schema.Array(HeliusSolanaWalletTransferSchema),
+})
+
 interface HeliusSolanaCursorPayload {
   readonly paginationToken: string | null
   readonly resumeBoundaryActive: boolean
   readonly resumeCheckpointExternalId: string | null
   readonly resumeHighWatermark: Date | null
-}
-
-interface HeliusSolanaEncodedCursorPayload {
-  readonly paginationToken: string | null
-  readonly resumeBoundaryActive?: boolean
-  readonly resumeCheckpointExternalId?: string | null
-  readonly resumeHighWatermarkIso?: string | null
+  readonly walletTransferCursor: string | null
+  readonly walletTransferExhausted: boolean
+  readonly pendingWalletTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
 }
 
 interface DecodedHeliusSolanaTransactionEntry {
@@ -249,11 +261,14 @@ type HeliusSolanaParsedTokenTransfer = Schema.Schema.Type<
   typeof HeliusSolanaParsedTokenTransferSchema
 >
 type HeliusSolanaWalletTransfer = Schema.Schema.Type<typeof HeliusSolanaWalletTransferSchema>
+type HeliusSolanaRawRecordPayload = Schema.Schema.Type<typeof HeliusSolanaRawRecordPayloadSchema>
 
 interface SolanaBalanceMovement {
   readonly asset: HeliusSolanaResolvedAsset
   readonly amount: string
   readonly rawUnits: string
+  readonly observedDecimals: number | null
+  readonly matchCounterparty: string | null
   readonly direction: "inbound" | "outbound"
   readonly fromAddress: string
   readonly toAddress: string
@@ -277,9 +292,7 @@ const decodeUnknownTransactionsPage = Schema.decodeUnknown(HeliusSolanaTransacti
 const decodeUnknownFullTransactionEntry = Schema.decodeUnknown(
   HeliusSolanaFullTransactionEntrySchema
 )
-const decodeUnknownFullTransactionPayload = Schema.decodeUnknown(
-  HeliusSolanaFullTransactionPayloadSchema
-)
+const decodeUnknownRawRecordPayload = Schema.decodeUnknown(HeliusSolanaRawRecordPayloadSchema)
 const decodeUnknownWalletTransfersPage = Schema.decodeUnknown(HeliusSolanaWalletTransfersPageSchema)
 const decodeCloseAccountParsedInstruction = Schema.decodeUnknownOption(
   HeliusSolanaCloseAccountParsedInstructionSchema
@@ -304,6 +317,9 @@ const decodeCursorPayload = (
       resumeBoundaryActive: false,
       resumeCheckpointExternalId: null,
       resumeHighWatermark: null,
+      walletTransferCursor: null,
+      walletTransferExhausted: false,
+      pendingWalletTransfers: [],
     })
   }
 
@@ -316,7 +332,7 @@ const decodeCursorPayload = (
         )
       )
     )
-    const resumeHighWatermarkIso = decoded.resumeHighWatermarkIso ?? null
+    const resumeHighWatermarkIso = decoded.resumeHighWatermarkIso
     const resumeHighWatermark =
       resumeHighWatermarkIso === null
         ? null
@@ -332,33 +348,28 @@ const decodeCursorPayload = (
 
     return {
       paginationToken: decoded.paginationToken,
-      resumeBoundaryActive: decoded.resumeBoundaryActive ?? false,
-      resumeCheckpointExternalId: decoded.resumeCheckpointExternalId ?? null,
+      resumeBoundaryActive: decoded.resumeBoundaryActive,
+      resumeCheckpointExternalId: decoded.resumeCheckpointExternalId,
       resumeHighWatermark,
+      walletTransferCursor: decoded.walletTransferCursor,
+      walletTransferExhausted: decoded.walletTransferExhausted,
+      pendingWalletTransfers: decoded.pendingWalletTransfers,
     }
   })
 }
 
-const encodeCursorPayload = (payload: HeliusSolanaCursorPayload): unknown => {
-  const encoded: HeliusSolanaEncodedCursorPayload =
-    payload.resumeBoundaryActive ||
-    payload.resumeCheckpointExternalId !== null ||
-    payload.resumeHighWatermark !== null
-      ? {
-          paginationToken: payload.paginationToken,
-          resumeBoundaryActive: payload.resumeBoundaryActive,
-          resumeCheckpointExternalId: payload.resumeCheckpointExternalId,
-          resumeHighWatermarkIso:
-            payload.resumeHighWatermark === null
-              ? null
-              : Timestamp.fromDate(payload.resumeHighWatermark).toISOString(),
-        }
-      : {
-          paginationToken: payload.paginationToken,
-        }
-
-  return encoded
-}
+const encodeCursorPayload = (payload: HeliusSolanaCursorPayload): unknown => ({
+  paginationToken: payload.paginationToken,
+  resumeBoundaryActive: payload.resumeBoundaryActive,
+  resumeCheckpointExternalId: payload.resumeCheckpointExternalId,
+  resumeHighWatermarkIso:
+    payload.resumeHighWatermark === null
+      ? null
+      : Timestamp.fromDate(payload.resumeHighWatermark).toISOString(),
+  walletTransferCursor: payload.walletTransferCursor,
+  walletTransferExhausted: payload.walletTransferExhausted,
+  pendingWalletTransfers: payload.pendingWalletTransfers,
+})
 
 const decodeTransactionsPage = (
   payload: unknown
@@ -447,6 +458,9 @@ const inactiveCursorPayload = (paginationToken: string | null): HeliusSolanaCurs
   resumeBoundaryActive: false,
   resumeCheckpointExternalId: null,
   resumeHighWatermark: null,
+  walletTransferCursor: null,
+  walletTransferExhausted: false,
+  pendingWalletTransfers: [],
 })
 
 const makeNextCursorPayload = ({
@@ -455,12 +469,18 @@ const makeNextCursorPayload = ({
   reachedBoundary,
   resumeHighWatermark,
   resumeCheckpointExternalId,
+  walletTransferCursor,
+  walletTransferExhausted,
+  pendingWalletTransfers,
 }: {
   readonly paginationToken: string | null
   readonly isIncrementalBoundaryScan: boolean
   readonly reachedBoundary: boolean
   readonly resumeHighWatermark: Date | null
   readonly resumeCheckpointExternalId: string | null
+  readonly walletTransferCursor: string | null
+  readonly walletTransferExhausted: boolean
+  readonly pendingWalletTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
 }): HeliusSolanaCursorPayload => {
   if (reachedBoundary || paginationToken === null) {
     return inactiveCursorPayload(null)
@@ -472,10 +492,21 @@ const makeNextCursorPayload = ({
       resumeBoundaryActive: true,
       resumeCheckpointExternalId,
       resumeHighWatermark,
+      walletTransferCursor,
+      walletTransferExhausted,
+      pendingWalletTransfers,
     }
   }
 
-  return inactiveCursorPayload(paginationToken)
+  return {
+    paginationToken,
+    resumeBoundaryActive: false,
+    resumeCheckpointExternalId: null,
+    resumeHighWatermark: null,
+    walletTransferCursor,
+    walletTransferExhausted,
+    pendingWalletTransfers,
+  }
 }
 
 const scanIncrementalBoundary = ({
@@ -591,46 +622,287 @@ const rawTokenAmountToDecimal = ({
   return fractional === "" ? `${sign}${whole}` : `${sign}${whole}.${fractional}`
 }
 
-const decimalToRawTokenAmount = ({
-  amount,
-  decimals,
-}: {
-  readonly amount: string
-  readonly decimals: number
-}): string =>
-  Option.match(BigDecimal.fromString(amount), {
-    onNone: () => amount,
-    onSome: (decimal) => BigDecimal.scale(decimal, decimals).value.toString(),
-  })
-
 const isDecimalZero = (amount: string): boolean =>
   Option.match(BigDecimal.fromString(amount), {
     onNone: () => false,
     onSome: BigDecimal.isZero,
   })
 
-const parsedTokenAmountToMovementAmount = ({
+const decimalAmountToExactRawUnits = ({
   amount,
   decimals,
 }: {
   readonly amount: string
-  readonly decimals: number | null
-}) => {
-  if (decimals === null) {
-    return {
-      amount,
-      rawUnits: amount,
-    }
-  }
+  readonly decimals: number
+}): string | null =>
+  Option.match(BigDecimal.fromString(amount), {
+    onNone: () => null,
+    onSome: (decimal) => {
+      const rawUnits = BigDecimal.scale(decimal, decimals).value.toString()
+      const roundTripAmount = rawTokenAmountToDecimal({ amount: rawUnits, decimals })
+      return movementAmountStringsEqual(amount, roundTripAmount) ? rawUnits : null
+    },
+  })
 
-  const rawUnits = decimalToRawTokenAmount({ amount, decimals })
-  return {
-    amount: rawTokenAmountToDecimal({ amount: rawUnits, decimals }),
-    rawUnits,
-  }
+const movementAmountStringsEqual = (left: string, right: string): boolean => {
+  const leftAmount = BigDecimal.fromString(left)
+  const rightAmount = BigDecimal.fromString(right)
+  return (
+    Option.isSome(leftAmount) &&
+    Option.isSome(rightAmount) &&
+    BigDecimal.equals(leftAmount.value, rightAmount.value)
+  )
 }
 
 const subtractBigIntStrings = (left: string, right: string): bigint => BigInt(left) - BigInt(right)
+
+const signedWalletTransferRawAmount = (transfer: HeliusSolanaWalletTransfer): bigint | null => {
+  if (!/^\d+$/.test(transfer.amountRaw)) {
+    return null
+  }
+
+  const amount = BigInt(transfer.amountRaw)
+  return transfer.direction === "in" ? amount : -amount
+}
+
+const findUniqueWalletTransferSubset = ({
+  candidateTransfers,
+  targetRawAmount,
+  expectedDecimals,
+}: {
+  readonly candidateTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly targetRawAmount: bigint
+  readonly expectedDecimals: number | null
+}): ReadonlyArray<HeliusSolanaWalletTransfer> | null => {
+  if (candidateTransfers.length > 20) {
+    return null
+  }
+
+  const signedAmounts: Array<bigint> = []
+  for (const transfer of candidateTransfers) {
+    const amount = signedWalletTransferRawAmount(transfer)
+    if (amount === null || transfer.decimals !== expectedDecimals) {
+      return null
+    }
+
+    signedAmounts.push(amount)
+  }
+
+  const remainingBounds: Array<{ readonly minimum: bigint; readonly maximum: bigint }> = [
+    { minimum: 0n, maximum: 0n },
+  ]
+  for (let index = signedAmounts.length - 1; index >= 0; index -= 1) {
+    const amount = signedAmounts[index]
+    const nextBounds = remainingBounds[0]
+    if (amount === undefined || nextBounds === undefined) {
+      return null
+    }
+
+    remainingBounds.unshift({
+      minimum: nextBounds.minimum + (amount < 0n ? amount : 0n),
+      maximum: nextBounds.maximum + (amount > 0n ? amount : 0n),
+    })
+  }
+
+  let visitedStates = 0
+  const searchState: {
+    limitReached: boolean
+    uniqueSelection: ReadonlyArray<number> | null
+    multipleSelectionsFound: boolean
+  } = {
+    limitReached: false,
+    uniqueSelection: null,
+    multipleSelectionsFound: false,
+  }
+  const selectedIndexes: Array<number> = []
+
+  const visit = (index: number, total: bigint): void => {
+    if (searchState.limitReached || searchState.multipleSelectionsFound) {
+      return
+    }
+    if (visitedStates >= MAX_NATIVE_SUBSET_SEARCH_STATES) {
+      searchState.limitReached = true
+      return
+    }
+    visitedStates += 1
+
+    const bounds = remainingBounds[index]
+    if (
+      bounds === undefined ||
+      targetRawAmount < total + bounds.minimum ||
+      targetRawAmount > total + bounds.maximum
+    ) {
+      return
+    }
+
+    if (index === signedAmounts.length) {
+      if (total === targetRawAmount) {
+        if (searchState.uniqueSelection === null) {
+          searchState.uniqueSelection = [...selectedIndexes]
+        } else {
+          searchState.multipleSelectionsFound = true
+        }
+      }
+      return
+    }
+
+    visit(index + 1, total)
+
+    const amount = signedAmounts[index]
+    if (amount === undefined || searchState.limitReached || searchState.multipleSelectionsFound) {
+      return
+    }
+    selectedIndexes.push(index)
+    visit(index + 1, total + amount)
+    selectedIndexes.pop()
+  }
+
+  visit(0, 0n)
+
+  const uniqueSelection = searchState.uniqueSelection
+  if (searchState.limitReached || searchState.multipleSelectionsFound || uniqueSelection === null) {
+    return null
+  }
+
+  return uniqueSelection
+    .map((index) => candidateTransfers[index])
+    .filter((row) => row !== undefined)
+}
+
+const matchExplicitWrappedSolRows = ({
+  transfers,
+  payload,
+  walletAddress,
+}: {
+  readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletAddress: string
+}): Set<HeliusSolanaWalletTransfer> => {
+  const matchedRows = new Set<HeliusSolanaWalletTransfer>()
+  const explicitWrappedSolTransfers = (payload.tokenTransfers ?? []).filter(
+    (transfer) => transfer.mint === SOLANA_WRAPPED_NATIVE_MINT
+  )
+
+  for (const parsedTransfer of explicitWrappedSolTransfers) {
+    const tokenAmount = parsedTransfer.tokenAmount
+    const fromAddress = parsedTransfer.fromUserAccount ?? parsedTransfer.fromTokenAccount ?? null
+    const toAddress = parsedTransfer.toUserAccount ?? parsedTransfer.toTokenAccount ?? null
+    const direction =
+      toAddress === walletAddress ? "in" : fromAddress === walletAddress ? "out" : null
+    const counterparty =
+      direction === "in"
+        ? (parsedTransfer.fromUserAccount ?? null)
+        : direction === "out"
+          ? (parsedTransfer.toUserAccount ?? null)
+          : null
+    if (tokenAmount === undefined || direction === null) {
+      continue
+    }
+
+    const matchingRow = transfers.find(
+      (row) =>
+        !matchedRows.has(row) &&
+        row.direction === direction &&
+        /^\d+$/.test(row.amountRaw) &&
+        (counterparty === null || row.counterparty === counterparty) &&
+        movementAmountStringsEqual(
+          rawTokenAmountToDecimal({ amount: row.amountRaw, decimals: row.decimals }),
+          tokenAmount
+        )
+    )
+    if (matchingRow !== undefined) {
+      matchedRows.add(matchingRow)
+    }
+  }
+
+  return matchedRows
+}
+
+const matchWrappedSolBalanceRows = ({
+  transfers,
+  payload,
+  walletAddress,
+  matchedRows,
+}: {
+  readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletAddress: string
+  readonly matchedRows: Set<HeliusSolanaWalletTransfer>
+}): void => {
+  const preWrappedBalances = (payload.meta?.preTokenBalances ?? []).filter(
+    (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
+  )
+  const postWrappedBalances = (payload.meta?.postTokenBalances ?? []).filter(
+    (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
+  )
+  const wrappedBalanceKey = (balance: HeliusSolanaTokenBalance) =>
+    `${balance.accountIndex}:${balance.mint}`
+  const preWrappedByKey = new Map(
+    preWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
+  )
+  const postWrappedByKey = new Map(
+    postWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
+  )
+  const wrappedBalanceKeys = new Set([...preWrappedByKey.keys(), ...postWrappedByKey.keys()])
+
+  for (const key of wrappedBalanceKeys) {
+    const pre = preWrappedByKey.get(key)
+    const post = postWrappedByKey.get(key)
+    const balance = post ?? pre
+    const owner = post?.owner ?? pre?.owner ?? null
+    if (balance === undefined || owner !== walletAddress) {
+      continue
+    }
+
+    const delta = subtractBigIntStrings(
+      post?.uiTokenAmount.amount ?? "0",
+      pre?.uiTokenAmount.amount ?? "0"
+    )
+    if (delta === 0n) {
+      continue
+    }
+
+    const matchingRows = findUniqueWalletTransferSubset({
+      candidateTransfers: transfers.filter((transfer) => !matchedRows.has(transfer)),
+      targetRawAmount: delta,
+      expectedDecimals: balance.uiTokenAmount.decimals,
+    })
+    matchingRows?.forEach((row) => matchedRows.add(row))
+  }
+}
+
+const buildRefinedNativeMovements = ({
+  transfers,
+  nativeMovement,
+  nativeAsset,
+  walletAddress,
+}: {
+  readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly nativeMovement: SolanaBalanceMovement
+  readonly nativeAsset: HeliusSolanaResolvedAsset
+  readonly walletAddress: string
+}): ReadonlyArray<SolanaBalanceMovement> =>
+  transfers.map((transfer) => {
+    const direction = transfer.direction === "in" ? "inbound" : "outbound"
+
+    return {
+      asset: nativeAsset,
+      amount: rawTokenAmountToDecimal({
+        amount: transfer.amountRaw,
+        decimals: transfer.decimals,
+      }),
+      rawUnits: transfer.amountRaw,
+      observedDecimals: transfer.decimals,
+      matchCounterparty: transfer.counterparty,
+      direction,
+      fromAddress: direction === "inbound" ? transfer.counterparty : walletAddress,
+      toAddress: direction === "inbound" ? walletAddress : transfer.counterparty,
+      role: nativeMovement.role,
+      position: 0,
+      evidenceKind: "transfer_row",
+      supplementalTransferRow: transfer,
+    }
+  })
 
 const stableMapping = (transactionType: string | null): ResolvedProviderTransactionTypeMapping => ({
   providerTransactionType: transactionType ?? "unknown",
@@ -780,34 +1052,64 @@ const buildTransferDraft = ({
 const buildProviderTransferDraft = ({
   sourceId,
   sourceRawRecordId,
+  blockchainId,
   signature,
   timestamp,
   movement,
+  externalId,
+  canonicalTransferExternalId,
+  processingMode,
+  observedRepresentationIdentityKnown,
 }: {
   readonly sourceId: string
   readonly sourceRawRecordId: string
+  readonly blockchainId: string
   readonly signature: string
   readonly timestamp: Date
   readonly movement: SolanaBalanceMovement
+  readonly externalId: string
+  readonly canonicalTransferExternalId: string | null
+  readonly processingMode: SourceProviderTransferDraft["processingMode"]
+  readonly observedRepresentationIdentityKnown: boolean
 }): SourceProviderTransferDraft => ({
   sourceId,
   sourceRawRecordId,
-  externalId: `${signature}:provider:${movement.role}:${movement.position}`,
+  externalId,
   externalGroupId: signature,
   providerAssetId: movement.asset.providerAssetRowId,
   timestamp,
   direction: movement.direction,
+  processingMode,
   fromAccountRef: null,
   toAccountRef: null,
   fromAddress: movement.fromAddress,
   toAddress: movement.toAddress,
   networkName: SOLANA_BLOCKCHAIN_NAME,
   networkHash: signature,
+  observedBlockchainId:
+    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+      ? null
+      : blockchainId,
+  observedRepresentationType:
+    processingMode === "accounting_only" ||
+    !observedRepresentationIdentityKnown ||
+    movement.asset.representationTypeObserved !== true
+      ? null
+      : movement.asset.assetKind,
+  observedContractAddress: null,
+  observedMintAddress:
+    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+      ? null
+      : movement.asset.mintAddress,
+  observedDecimals:
+    processingMode === "accounting_only" || !observedRepresentationIdentityKnown
+      ? null
+      : movement.observedDecimals,
   amount: movement.amount,
   metadata: {
     provider: HELIUS_SOLANA_PROVIDER_KEY,
     role: movement.role,
-    canonicalTransferExternalId: `${signature}:${movement.role}:${movement.position}`,
+    canonicalTransferExternalId,
     evidenceKind: movement.evidenceKind,
     rawUnits: movement.rawUnits,
     mintAddress: movement.asset.mintAddress,
@@ -904,6 +1206,136 @@ const make = ({
     const assetRepository = yield* AssetRepository
     const assetResolutionService = yield* HeliusSolanaAssetResolutionService
 
+    const cacheWalletTransferEvidenceForRawBatch = ({
+      walletAddress,
+      records,
+      cursor,
+    }: {
+      readonly walletAddress: string
+      readonly records: ReadonlyArray<ProviderRawRecord>
+      readonly cursor: HeliusSolanaCursorPayload
+    }) =>
+      Effect.gen(function* () {
+        if (records.length === 0) {
+          return {
+            records,
+            walletTransferCursor: cursor.walletTransferCursor,
+            walletTransferExhausted: cursor.walletTransferExhausted,
+            pendingWalletTransfers: cursor.pendingWalletTransfers,
+          }
+        }
+
+        const signatures = new Set(records.map((record) => record.externalRecordId))
+        const oldestOccurredAt = records.reduce(
+          (oldest, record) => Math.min(oldest, Math.floor(record.occurredAt.getTime() / 1_000)),
+          Number.POSITIVE_INFINITY
+        )
+        const availableTransfers = [...cursor.pendingWalletTransfers]
+        let nextCursor = cursor.walletTransferCursor
+        let exhausted = cursor.walletTransferExhausted
+        const visitedCursors = new Set(nextCursor === null ? [] : [nextCursor])
+        let lastPageMatchedCurrentBatch = availableTransfers.some((transfer) =>
+          signatures.has(transfer.signature)
+        )
+        const hasCrossedBatchBoundary = () =>
+          availableTransfers.some((transfer) => transfer.timestamp < oldestOccurredAt)
+
+        while (!exhausted && (!hasCrossedBatchBoundary() || lastPageMatchedCurrentBatch)) {
+          const page = yield* heliusSyncClient
+            .fetchTransfersForAddress({
+              walletAddress,
+              limit: 100,
+              cursor: nextCursor,
+            })
+            .pipe(
+              Effect.mapError(toProviderFailureError),
+              Effect.flatMap((payload) =>
+                decodeUnknownWalletTransfersPage(payload).pipe(
+                  Effect.mapError((cause) =>
+                    toProviderFailureError(
+                      toPayloadDecodeError(
+                        `Invalid Helius Solana wallet transfers page: ${cause.message}`,
+                        cause
+                      )
+                    )
+                  )
+                )
+              )
+            )
+
+          lastPageMatchedCurrentBatch = page.data.some((transfer) =>
+            signatures.has(transfer.signature)
+          )
+          availableTransfers.push(...page.data)
+
+          if (!page.pagination.hasMore) {
+            exhausted = true
+            nextCursor = null
+            continue
+          }
+
+          const continuationCursor = page.pagination.nextCursor
+          if (continuationCursor === null || continuationCursor === undefined) {
+            return yield* Effect.fail(
+              toProviderFailureError(
+                toPayloadDecodeError(
+                  "Helius Solana wallet transfer evidence pagination had no continuation cursor."
+                )
+              )
+            )
+          }
+          if (visitedCursors.has(continuationCursor)) {
+            return yield* Effect.fail(
+              toProviderFailureError(
+                toPayloadDecodeError(
+                  "Helius Solana wallet transfer evidence pagination repeated a cursor."
+                )
+              )
+            )
+          }
+
+          visitedCursors.add(continuationCursor)
+          nextCursor = continuationCursor
+        }
+
+        const transfersBySignature = new Map<string, Array<HeliusSolanaWalletTransfer>>()
+        for (const transfer of availableTransfers) {
+          if (!signatures.has(transfer.signature)) {
+            continue
+          }
+
+          const current = transfersBySignature.get(transfer.signature) ?? []
+          current.push(transfer)
+          transfersBySignature.set(transfer.signature, current)
+        }
+
+        const cachedRecords = records.map((record) =>
+          ProviderRawRecord.make({
+            recordType: record.recordType,
+            providerKey: record.providerKey,
+            externalRecordId: record.externalRecordId,
+            externalAccountId: record.externalAccountId,
+            externalParentId: record.externalParentId,
+            occurredAt: record.occurredAt,
+            payload: {
+              fullTransaction: record.payload,
+              walletTransferEvidence: transfersBySignature.get(record.externalRecordId) ?? [],
+            },
+          })
+        )
+        const pendingWalletTransfers = availableTransfers.filter(
+          (transfer) =>
+            !signatures.has(transfer.signature) && transfer.timestamp <= oldestOccurredAt
+        )
+
+        return {
+          records: cachedRecords,
+          walletTransferCursor: nextCursor,
+          walletTransferExhausted: exhausted,
+          pendingWalletTransfers,
+        }
+      })
+
     const fetchHeliusRawBatch = ({
       sourceId,
       walletAddress,
@@ -974,12 +1406,20 @@ const make = ({
               reachedBoundary: false,
             }
         const filteredRecords = boundaryScan.records
+        const cachedBatch = yield* cacheWalletTransferEvidenceForRawBatch({
+          walletAddress,
+          records: filteredRecords,
+          cursor,
+        })
         const nextCursor = makeNextCursorPayload({
           paginationToken: decodedPage.paginationToken,
           isIncrementalBoundaryScan,
           reachedBoundary: boundaryScan.reachedBoundary,
           resumeHighWatermark: activeResumeHighWatermark,
           resumeCheckpointExternalId: activeResumeCheckpointExternalId,
+          walletTransferCursor: cachedBatch.walletTransferCursor,
+          walletTransferExhausted: cachedBatch.walletTransferExhausted,
+          pendingWalletTransfers: cachedBatch.pendingWalletTransfers,
         })
 
         yield* Effect.logInfo(
@@ -990,16 +1430,16 @@ const make = ({
             hasPaginationToken: cursor.paginationToken !== null,
             resumeBoundaryActive: isIncrementalBoundaryScan,
             reachedResumeBoundary: boundaryScan.reachedBoundary,
-            recordCount: filteredRecords.length,
+            recordCount: cachedBatch.records.length,
             retryable: false,
           },
           "helius-solana:raw-batch"
         )
 
         return FetchProviderRawBatchResult.make({
-          records: filteredRecords,
+          records: cachedBatch.records,
           cursorPayload: encodeCursorPayload(nextCursor),
-          highWatermark: maxOccurredAt(filteredRecords),
+          highWatermark: maxOccurredAt(cachedBatch.records),
           done: boundaryScan.reachedBoundary || decodedPage.paginationToken === null,
         })
       })
@@ -1065,77 +1505,45 @@ const make = ({
       mintAddress: null,
     })
 
-    const decodeNormalizationPayload = (payload: unknown) =>
-      decodeUnknownFullTransactionPayload(payload).pipe(
+    const decodeNormalizationPayload = (
+      payload: unknown
+    ): Effect.Effect<HeliusSolanaRawRecordPayload, HeliusSolanaNormalizationDecodeError> =>
+      decodeUnknownRawRecordPayload(payload).pipe(
         Effect.mapError((cause) =>
           toNormalizationDecodeError(
-            `Invalid Helius Solana full transaction payload: ${cause.message}`,
+            `Invalid Helius Solana raw record payload: ${cause.message}`,
             cause
           )
-        )
-      )
+        ),
+        Effect.flatMap((decoded) => {
+          const decimalsByBalance = new Map<string, number>()
+          const balances = [
+            ...(decoded.fullTransaction.meta?.preTokenBalances ?? []),
+            ...(decoded.fullTransaction.meta?.postTokenBalances ?? []),
+          ]
 
-    const fetchWalletTransferEvidence = ({
-      walletAddress,
-      signature,
-    }: {
-      readonly walletAddress: string
-      readonly signature: string
-    }) => {
-      const fetchPage = (
-        cursor: string | null,
-        pagesRemaining: number
-      ): Effect.Effect<ReadonlyArray<HeliusSolanaWalletTransfer>, HeliusSolanaPayloadDecodeError> =>
-        heliusSyncClient
-          .fetchTransfersForAddress({
-            walletAddress,
-            limit: 100,
-            cursor,
-          })
-          .pipe(
-            Effect.mapError((cause) =>
-              toPayloadDecodeError("Helius Solana wallet transfer evidence is unavailable", cause)
-            ),
-            Effect.flatMap((payload) =>
-              decodeUnknownWalletTransfersPage(payload).pipe(
-                Effect.mapError((cause) =>
-                  toPayloadDecodeError(
-                    `Invalid Helius Solana wallet transfers page: ${cause.message}`,
-                    cause
-                  )
+          for (const balance of balances) {
+            const key = `${balance.accountIndex}:${balance.mint}`
+            const priorDecimals = decimalsByBalance.get(key)
+            if (priorDecimals !== undefined && priorDecimals !== balance.uiTokenAmount.decimals) {
+              return Effect.fail(
+                toNormalizationDecodeError(
+                  "Conflicting Solana token decimals were observed for the same balance.",
+                  {
+                    accountIndex: balance.accountIndex,
+                    mint: balance.mint,
+                    priorDecimals,
+                    observedDecimals: balance.uiTokenAmount.decimals,
+                  }
                 )
               )
-            ),
-            Effect.flatMap((page) => {
-              const matches = page.data.filter((transfer) => transfer.signature === signature)
-              if (
-                matches.length > 0 ||
-                !page.pagination.hasMore ||
-                pagesRemaining <= 1 ||
-                page.pagination.nextCursor === null ||
-                page.pagination.nextCursor === undefined
-              ) {
-                return Effect.succeed(matches)
-              }
+            }
+            decimalsByBalance.set(key, balance.uiTokenAmount.decimals)
+          }
 
-              return fetchPage(page.pagination.nextCursor, pagesRemaining - 1)
-            })
-          )
-
-      return fetchPage(null, 10).pipe(
-        Effect.catchAll((error) =>
-          Effect.logInfo(
-            {
-              provider: HELIUS_SOLANA_PROVIDER_KEY,
-              signature,
-              walletAddress,
-              error,
-            },
-            "helius-solana:transfer-evidence-unavailable"
-          ).pipe(Effect.as<ReadonlyArray<HeliusSolanaWalletTransfer>>([]))
-        )
+          return Effect.succeed(decoded)
+        })
       )
-    }
 
     const buildSolMovements = ({
       payload,
@@ -1179,6 +1587,8 @@ const make = ({
                 asset: nativeAsset,
                 amount: lamportsToSol(principalDelta < 0n ? -principalDelta : principalDelta),
                 rawUnits: String(principalDelta < 0n ? -principalDelta : principalDelta),
+                observedDecimals: nativeAsset.decimals,
+                matchCounterparty: null,
                 direction: principalDelta > 0n ? "inbound" : "outbound",
                 fromAddress: principalDelta > 0n ? counterparty : walletAddress,
                 toAddress: principalDelta > 0n ? walletAddress : counterparty,
@@ -1200,6 +1610,8 @@ const make = ({
           asset: nativeAsset,
           amount: lamportsToSol(fee),
           rawUnits: String(fee),
+          observedDecimals: nativeAsset.decimals,
+          matchCounterparty: null,
           direction: "outbound",
           fromAddress: walletAddress,
           toAddress: "solana:fee",
@@ -1209,6 +1621,101 @@ const make = ({
           supplementalTransferRow: null,
         },
       ]
+    }
+
+    const refineNativeSolEvidence = ({
+      transfers,
+      nativeMovements,
+      nativeAsset,
+      walletAddress,
+      payload,
+    }: {
+      readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+      readonly nativeMovements: ReadonlyArray<SolanaBalanceMovement>
+      readonly nativeAsset: HeliusSolanaResolvedAsset
+      readonly walletAddress: string
+      readonly payload: HeliusSolanaFullTransactionPayload
+    }): {
+      readonly nativeMovements: ReadonlyArray<SolanaBalanceMovement>
+      readonly splTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+      readonly ambiguousTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+    } => {
+      const nativeMovement = nativeMovements.find(
+        (movement) => movement.role !== "fee" && movement.asset.assetKind === "native"
+      )
+      const sentinelTransfers = transfers.filter(
+        (transfer) => transfer.mint === SOLANA_WRAPPED_NATIVE_MINT
+      )
+      if (sentinelTransfers.length === 0) {
+        return { nativeMovements, splTransfers: transfers, ambiguousTransfers: [] }
+      }
+
+      const matchedWrappedSolRows = matchExplicitWrappedSolRows({
+        transfers: sentinelTransfers,
+        payload,
+        walletAddress,
+      })
+      const candidateTransfersBeforeBalanceEvidence = sentinelTransfers.filter(
+        (transfer) => !matchedWrappedSolRows.has(transfer)
+      )
+      matchWrappedSolBalanceRows({
+        transfers: candidateTransfersBeforeBalanceEvidence,
+        payload,
+        walletAddress,
+        matchedRows: matchedWrappedSolRows,
+      })
+
+      const candidateNativeTransfers = sentinelTransfers.filter(
+        (transfer) => !matchedWrappedSolRows.has(transfer)
+      )
+      if (nativeMovement === undefined) {
+        return {
+          nativeMovements,
+          splTransfers: transfers.filter(
+            (transfer) => !candidateNativeTransfers.includes(transfer)
+          ),
+          ambiguousTransfers: candidateNativeTransfers,
+        }
+      }
+
+      const targetNativeRawAmount =
+        BigInt(nativeMovement.rawUnits) * (nativeMovement.direction === "inbound" ? 1n : -1n)
+      const nativeWalletTransfers = findUniqueWalletTransferSubset({
+        candidateTransfers: candidateNativeTransfers,
+        targetRawAmount: targetNativeRawAmount,
+        expectedDecimals: nativeAsset.decimals,
+      })
+
+      if (nativeWalletTransfers === null) {
+        return {
+          nativeMovements,
+          splTransfers: transfers.filter(
+            (transfer) =>
+              !candidateNativeTransfers.includes(transfer) || matchedWrappedSolRows.has(transfer)
+          ),
+          ambiguousTransfers: candidateNativeTransfers,
+        }
+      }
+
+      const splTransfers = transfers.filter((transfer) => !nativeWalletTransfers.includes(transfer))
+
+      const refinedNativeMovements = buildRefinedNativeMovements({
+        transfers: nativeWalletTransfers,
+        nativeMovement,
+        nativeAsset,
+        walletAddress,
+      })
+      const remainingNativeMovements = nativeMovements.filter(
+        (movement) => movement !== nativeMovement
+      )
+
+      return {
+        nativeMovements: [...refinedNativeMovements, ...remainingNativeMovements].map(
+          (movement, position) => ({ ...movement, position })
+        ),
+        splTransfers,
+        ambiguousTransfers: [],
+      }
     }
 
     const balanceKey = (balance: HeliusSolanaTokenBalance): string =>
@@ -1278,6 +1785,8 @@ const make = ({
               decimals: balance.uiTokenAmount.decimals,
             }),
             rawUnits: String(absoluteDelta),
+            observedDecimals: balance.uiTokenAmount.decimals,
+            matchCounterparty: null,
             direction,
             fromAddress: direction === "inbound" ? counterparty : walletAddress,
             toAddress: direction === "inbound" ? walletAddress : counterparty,
@@ -1324,16 +1833,16 @@ const make = ({
         if (direction === null) {
           return []
         }
-        const movementAmount = parsedTokenAmountToMovementAmount({
-          amount: tokenAmount,
-          decimals: asset.decimals,
-        })
-
         return [
           {
             asset,
-            amount: movementAmount.amount,
-            rawUnits: movementAmount.rawUnits,
+            amount: tokenAmount,
+            rawUnits: tokenAmount,
+            observedDecimals: null,
+            matchCounterparty:
+              direction === "inbound"
+                ? (transfer.fromUserAccount ?? null)
+                : (transfer.toUserAccount ?? null),
             direction,
             fromAddress: fromAddress ?? "solana:unknown_sender",
             toAddress: toAddress ?? "solana:unknown_recipient",
@@ -1377,6 +1886,8 @@ const make = ({
             asset,
             amount,
             rawUnits: transfer.amountRaw,
+            observedDecimals: transfer.decimals,
+            matchCounterparty: transfer.counterparty,
             direction,
             fromAddress: direction === "inbound" ? transfer.counterparty : walletAddress,
             toAddress: direction === "inbound" ? walletAddress : transfer.counterparty,
@@ -1388,12 +1899,48 @@ const make = ({
         ]
       })
 
-    const movementComparisonKey = (movement: SolanaBalanceMovement): string =>
-      [
-        movement.asset.mintAddress ?? SOLANA_WRAPPED_NATIVE_MINT,
-        movement.direction,
-        movement.rawUnits,
-      ].join(":")
+    const movementAmountsEqual = (
+      left: SolanaBalanceMovement,
+      right: SolanaBalanceMovement
+    ): boolean => {
+      if (left.evidenceKind === "parsed_transfer" && right.evidenceKind === "transfer_row") {
+        const leftAmount = BigDecimal.fromString(left.amount)
+        const rightAmount = BigDecimal.fromString(right.amount)
+
+        return (
+          Option.isSome(leftAmount) &&
+          Option.isSome(rightAmount) &&
+          BigDecimal.equals(leftAmount.value, rightAmount.value)
+        )
+      }
+
+      if (left.observedDecimals !== null && right.observedDecimals !== null) {
+        return left.observedDecimals === right.observedDecimals && left.rawUnits === right.rawUnits
+      }
+
+      const leftAmount = BigDecimal.fromString(left.amount)
+      const rightAmount = BigDecimal.fromString(right.amount)
+
+      return (
+        Option.isSome(leftAmount) &&
+        Option.isSome(rightAmount) &&
+        BigDecimal.equals(leftAmount.value, rightAmount.value)
+      )
+    }
+
+    const movementsMatch = (
+      authoritativeMovement: SolanaBalanceMovement,
+      transferRowMovement: SolanaBalanceMovement
+    ): boolean =>
+      authoritativeMovement.asset.mintAddress === transferRowMovement.asset.mintAddress &&
+      authoritativeMovement.direction === transferRowMovement.direction &&
+      (authoritativeMovement.matchCounterparty === null ||
+        transferRowMovement.matchCounterparty === null ||
+        authoritativeMovement.matchCounterparty === transferRowMovement.matchCounterparty) &&
+      (authoritativeMovement.observedDecimals === null ||
+        (authoritativeMovement.observedDecimals === transferRowMovement.observedDecimals &&
+          authoritativeMovement.rawUnits === transferRowMovement.rawUnits)) &&
+      movementAmountsEqual(authoritativeMovement, transferRowMovement)
 
     const findTransferRowContradictions = ({
       transferRows,
@@ -1402,50 +1949,138 @@ const make = ({
       readonly transferRows: ReadonlyArray<SolanaBalanceMovement>
       readonly authoritativeMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<MovementContradiction> => {
-      const authoritativeKeys = new Set(authoritativeMovements.map(movementComparisonKey))
-      return transferRows
-        .filter((movement) => !authoritativeKeys.has(movementComparisonKey(movement)))
-        .map((movement) => ({
-          reason: "Helius transfer-row evidence contradicts full transaction movement evidence.",
-          evidence: {
-            mintAddress: movement.asset.mintAddress,
-            direction: movement.direction,
-            amount: movement.amount,
-            rawUnits: movement.rawUnits,
-            evidenceKind: movement.evidenceKind,
+      const unmatchedAuthoritativeMovements = [...authoritativeMovements]
+
+      return transferRows.flatMap((movement) => {
+        const matchIndex = unmatchedAuthoritativeMovements.findIndex((candidate) =>
+          movementsMatch(candidate, movement)
+        )
+
+        if (matchIndex !== -1) {
+          unmatchedAuthoritativeMovements.splice(matchIndex, 1)
+          return []
+        }
+
+        return [
+          {
+            reason: "Helius transfer-row evidence contradicts full transaction movement evidence.",
+            evidence: {
+              mintAddress: movement.asset.mintAddress,
+              direction: movement.direction,
+              amount: movement.amount,
+              rawUnits: movement.rawUnits,
+              evidenceKind: movement.evidenceKind,
+            },
           },
-        }))
+        ]
+      })
     }
 
-    const joinTransferRowEvidenceByPosition = ({
+    const joinTransferRowEvidence = ({
       authoritativeMovements,
       transferRowMovements,
     }: {
       readonly authoritativeMovements: ReadonlyArray<SolanaBalanceMovement>
       readonly transferRowMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<SolanaBalanceMovement> => {
-      const transferRowsByPosition = new Map(
-        transferRowMovements.map((movement) => [movement.position, movement])
-      )
+      const unmatchedTransferRows = [...transferRowMovements]
 
       return authoritativeMovements.map((movement) => {
-        const transferRowMovement = transferRowsByPosition.get(movement.position)
+        const matchingIndexes = unmatchedTransferRows.flatMap((candidate, index) =>
+          movementsMatch(movement, candidate) ? [index] : []
+        )
+        const positionMatchIndex = matchingIndexes.find(
+          (index) => unmatchedTransferRows[index]?.position === movement.position
+        )
+        const matchIndex =
+          movement.matchCounterparty === null
+            ? matchingIndexes.length === 1
+              ? (matchingIndexes[0] ?? -1)
+              : -1
+            : (positionMatchIndex ?? matchingIndexes[0] ?? -1)
+        const [transferRowMovement] =
+          matchIndex === -1 ? [] : unmatchedTransferRows.splice(matchIndex, 1)
         const supplementalTransferRow = transferRowMovement?.supplementalTransferRow ?? null
 
         if (
           supplementalTransferRow === null ||
           movement.evidenceKind === "transfer_row" ||
-          transferRowMovement === undefined ||
-          movementComparisonKey(movement) !== movementComparisonKey(transferRowMovement)
+          transferRowMovement === undefined
         ) {
           return movement
         }
 
+        const preferTransferRowAmountEvidence = movement.evidenceKind === "parsed_transfer"
+        const preferTransferRowEndpointEvidence = movement.matchCounterparty === null
+
         return {
           ...movement,
+          matchCounterparty: preferTransferRowEndpointEvidence
+            ? transferRowMovement.matchCounterparty
+            : movement.matchCounterparty,
+          fromAddress: preferTransferRowEndpointEvidence
+            ? transferRowMovement.fromAddress
+            : movement.fromAddress,
+          toAddress: preferTransferRowEndpointEvidence
+            ? transferRowMovement.toAddress
+            : movement.toAddress,
+          rawUnits:
+            preferTransferRowAmountEvidence || movement.observedDecimals === null
+              ? transferRowMovement.rawUnits
+              : movement.rawUnits,
+          observedDecimals: preferTransferRowAmountEvidence
+            ? transferRowMovement.observedDecimals
+            : (movement.observedDecimals ?? transferRowMovement.observedDecimals),
           supplementalTransferRow,
         }
       })
+    }
+
+    const findSupplementalSplEvidenceMovements = ({
+      observedMovements,
+      parsedMovements,
+      transferRowMovements,
+    }: {
+      readonly observedMovements: ReadonlyArray<SolanaBalanceMovement>
+      readonly parsedMovements: ReadonlyArray<SolanaBalanceMovement>
+      readonly transferRowMovements: ReadonlyArray<SolanaBalanceMovement>
+    }): ReadonlyArray<SolanaBalanceMovement> => {
+      const unrepresentedParsedMovements = parsedMovements.filter(
+        (movement) =>
+          !observedMovements.some(
+            (candidate) =>
+              candidate.evidenceKind === "parsed_transfer" &&
+              candidate.asset.mintAddress === movement.asset.mintAddress &&
+              candidate.direction === movement.direction &&
+              candidate.fromAddress === movement.fromAddress &&
+              candidate.toAddress === movement.toAddress &&
+              movementAmountsEqual(candidate, movement)
+          )
+      )
+      const transferRowsMissingFromObservedMovements = transferRowMovements.filter(
+        (movement) =>
+          !observedMovements.some(
+            (candidate) =>
+              candidate === movement ||
+              (movement.supplementalTransferRow !== null &&
+                candidate.supplementalTransferRow === movement.supplementalTransferRow)
+          )
+      )
+      const joinedParsedMovements = joinTransferRowEvidence({
+        authoritativeMovements: unrepresentedParsedMovements,
+        transferRowMovements: transferRowsMissingFromObservedMovements,
+      })
+      const unrepresentedTransferRows = transferRowsMissingFromObservedMovements.filter(
+        (movement) =>
+          !joinedParsedMovements.some(
+            (candidate) =>
+              candidate === movement ||
+              (movement.supplementalTransferRow !== null &&
+                candidate.supplementalTransferRow === movement.supplementalTransferRow)
+          )
+      )
+
+      return [...joinedParsedMovements, ...unrepresentedTransferRows]
     }
 
     const buildActivityFacts = ({
@@ -1570,6 +2205,25 @@ const make = ({
       readonly transferRowSplMovements: ReadonlyArray<SolanaBalanceMovement>
     }): ReadonlyArray<SolanaBalanceMovement> => {
       if (tokenBalanceSplMovements.length > 0) {
+        const parsedWithObservedDecimals = enrichParsedMovementsWithBalanceDecimals({
+          parsedMovements: parsedSplMovements,
+          balanceMovements: tokenBalanceSplMovements,
+        })
+        if (
+          parsedWithObservedDecimals !== null &&
+          (movementTotalsEqual(parsedWithObservedDecimals, tokenBalanceSplMovements) ||
+            movementNetRawTotalsEqual(parsedWithObservedDecimals, tokenBalanceSplMovements))
+        ) {
+          return parsedWithObservedDecimals
+        }
+
+        if (
+          movementTotalsEqual(transferRowSplMovements, tokenBalanceSplMovements) &&
+          movementRawTotalsEqual(transferRowSplMovements, tokenBalanceSplMovements)
+        ) {
+          return transferRowSplMovements
+        }
+
         return tokenBalanceSplMovements
       }
 
@@ -1580,7 +2234,7 @@ const make = ({
       return transferRowSplMovements
     }
 
-    const findContradictionsForEvidence = ({
+    const chooseCanonicalSplMovements = ({
       parsedSplMovements,
       tokenBalanceSplMovements,
       transferRowSplMovements,
@@ -1588,22 +2242,176 @@ const make = ({
       readonly parsedSplMovements: ReadonlyArray<SolanaBalanceMovement>
       readonly tokenBalanceSplMovements: ReadonlyArray<SolanaBalanceMovement>
       readonly transferRowSplMovements: ReadonlyArray<SolanaBalanceMovement>
-    }): ReadonlyArray<MovementContradiction> => {
+    }): ReadonlyArray<SolanaBalanceMovement> => {
       if (tokenBalanceSplMovements.length > 0) {
-        return findTransferRowContradictions({
-          transferRows: transferRowSplMovements,
-          authoritativeMovements: tokenBalanceSplMovements,
-        })
+        return tokenBalanceSplMovements
       }
 
       if (parsedSplMovements.length > 0) {
-        return findTransferRowContradictions({
-          transferRows: transferRowSplMovements,
-          authoritativeMovements: parsedSplMovements,
-        })
+        return parsedSplMovements
       }
 
-      return []
+      return transferRowSplMovements
+    }
+
+    function enrichParsedMovementsWithBalanceDecimals({
+      parsedMovements,
+      balanceMovements,
+    }: {
+      readonly parsedMovements: ReadonlyArray<SolanaBalanceMovement>
+      readonly balanceMovements: ReadonlyArray<SolanaBalanceMovement>
+    }): ReadonlyArray<SolanaBalanceMovement> | null {
+      if (parsedMovements.length === 0) {
+        return null
+      }
+
+      const decimalsByMovement = new Map<string, number | null>()
+      for (const movement of balanceMovements) {
+        if (movement.observedDecimals === null) {
+          return null
+        }
+
+        const key = movement.asset.mintAddress ?? "native"
+        const existing = decimalsByMovement.get(key)
+        if (existing !== undefined && existing !== movement.observedDecimals) {
+          decimalsByMovement.set(key, null)
+        } else if (existing === undefined) {
+          decimalsByMovement.set(key, movement.observedDecimals)
+        }
+      }
+
+      const enriched: Array<SolanaBalanceMovement> = []
+      for (const movement of parsedMovements) {
+        const key = movement.asset.mintAddress ?? "native"
+        const decimals = decimalsByMovement.get(key)
+        if (decimals === undefined || decimals === null) {
+          return null
+        }
+
+        const rawUnits = decimalAmountToExactRawUnits({ amount: movement.amount, decimals })
+        if (rawUnits === null) {
+          return null
+        }
+
+        enriched.push({ ...movement, rawUnits, observedDecimals: decimals })
+      }
+
+      return enriched
+    }
+
+    function movementRawTotalsEqual(
+      left: ReadonlyArray<SolanaBalanceMovement>,
+      right: ReadonlyArray<SolanaBalanceMovement>
+    ): boolean {
+      const totals = (movements: ReadonlyArray<SolanaBalanceMovement>) => {
+        const result = new Map<string, bigint>()
+
+        for (const movement of movements) {
+          if (movement.observedDecimals === null || !/^\d+$/.test(movement.rawUnits)) {
+            return null
+          }
+
+          const key = `${movement.asset.mintAddress ?? "native"}:${movement.direction}:${movement.observedDecimals}`
+          result.set(key, (result.get(key) ?? 0n) + BigInt(movement.rawUnits))
+        }
+
+        return result
+      }
+
+      const leftTotals = totals(left)
+      const rightTotals = totals(right)
+      if (leftTotals === null || rightTotals === null || leftTotals.size !== rightTotals.size) {
+        return false
+      }
+
+      return Array.from(leftTotals).every(([key, amount]) => rightTotals.get(key) === amount)
+    }
+
+    function movementNetRawTotalsEqual(
+      left: ReadonlyArray<SolanaBalanceMovement>,
+      right: ReadonlyArray<SolanaBalanceMovement>
+    ): boolean {
+      const totals = (movements: ReadonlyArray<SolanaBalanceMovement>) => {
+        const result = new Map<string, bigint>()
+
+        for (const movement of movements) {
+          if (movement.observedDecimals === null || !/^\d+$/.test(movement.rawUnits)) {
+            return null
+          }
+
+          const key = `${movement.asset.mintAddress ?? "native"}:${movement.observedDecimals}`
+          const amount = BigInt(movement.rawUnits)
+          const signedAmount = movement.direction === "inbound" ? amount : -amount
+          result.set(key, (result.get(key) ?? 0n) + signedAmount)
+        }
+
+        return result
+      }
+
+      const leftTotals = totals(left)
+      const rightTotals = totals(right)
+      if (leftTotals === null || rightTotals === null || leftTotals.size !== rightTotals.size) {
+        return false
+      }
+
+      return Array.from(leftTotals).every(([key, amount]) => rightTotals.get(key) === amount)
+    }
+
+    function movementTotalsEqual(
+      left: ReadonlyArray<SolanaBalanceMovement>,
+      right: ReadonlyArray<SolanaBalanceMovement>
+    ): boolean {
+      if (left.length === 0 || right.length === 0) {
+        return false
+      }
+
+      const totals = (movements: ReadonlyArray<SolanaBalanceMovement>) => {
+        const result = new Map<string, BigDecimal.BigDecimal>()
+
+        for (const movement of movements) {
+          const amount = BigDecimal.fromString(movement.amount)
+          if (Option.isNone(amount)) {
+            return null
+          }
+
+          const key = `${movement.asset.mintAddress ?? "native"}:${movement.direction}`
+          const existing = result.get(key)
+          result.set(
+            key,
+            existing === undefined ? amount.value : BigDecimal.sum(existing, amount.value)
+          )
+        }
+
+        return result
+      }
+
+      const leftTotals = totals(left)
+      const rightTotals = totals(right)
+      if (leftTotals === null || rightTotals === null || leftTotals.size !== rightTotals.size) {
+        return false
+      }
+
+      return Array.from(leftTotals).every(([key, amount]) => {
+        const rightAmount = rightTotals.get(key)
+        return rightAmount !== undefined && BigDecimal.equals(amount, rightAmount)
+      })
+    }
+
+    const findContradictionsForEvidence = ({
+      authoritativeSplMovements,
+      transferRowSplMovements,
+    }: {
+      readonly authoritativeSplMovements: ReadonlyArray<SolanaBalanceMovement>
+      readonly transferRowSplMovements: ReadonlyArray<SolanaBalanceMovement>
+    }): ReadonlyArray<MovementContradiction> => {
+      if (authoritativeSplMovements === transferRowSplMovements) {
+        return []
+      }
+
+      return findTransferRowContradictions({
+        transferRows: transferRowSplMovements,
+        authoritativeMovements: authoritativeSplMovements,
+      })
     }
 
     const buildNormalizationReview = ({
@@ -1802,19 +2610,18 @@ const make = ({
             sourceRecordExternalAccountId: sourceRecord.externalAccountId,
           })
 
-          const payload = yield* decodeNormalizationPayload(sourceRecord.payload)
+          const normalizationPayload = yield* decodeNormalizationPayload(sourceRecord.payload)
+          const payload = normalizationPayload.fullTransaction
 
           const signature = yield* requirePayloadSignature(payload)
-
-          const walletTransferEvidence = yield* fetchWalletTransferEvidence({
-            walletAddress,
-            signature,
-          })
 
           const timestamp = timestampFromPayload({
             payload,
             fallback: sourceRecord.occurredAt,
           })
+          const walletTransferEvidence = normalizationPayload.walletTransferEvidence.filter(
+            (transfer) => transfer.signature === signature
+          )
 
           const providerTransactionType = toProviderTransactionType(payload)
 
@@ -1828,7 +2635,28 @@ const make = ({
             )
           )
 
-          const tokenMints = collectSplTokenMints({ payload, walletTransferEvidence })
+          const rawSolMovements = buildSolMovements({
+            payload,
+            nativeAsset,
+            walletAddress,
+          })
+
+          const {
+            nativeMovements: solMovements,
+            splTransfers: splWalletTransferEvidence,
+            ambiguousTransfers: ambiguousNativeSolTransfers,
+          } = refineNativeSolEvidence({
+            transfers: walletTransferEvidence,
+            nativeMovements: rawSolMovements,
+            nativeAsset,
+            walletAddress,
+            payload,
+          })
+
+          const tokenMints = collectSplTokenMints({
+            payload,
+            walletTransferEvidence: [...splWalletTransferEvidence, ...ambiguousNativeSolTransfers],
+          })
 
           const resolvedTokens = yield* assetResolutionService
             .resolveAssets({
@@ -1849,31 +2677,39 @@ const make = ({
 
           const assetsByMint = mapAssetsByMint(tokenMints, resolvedTokens)
 
-          const solMovements = buildSolMovements({
-            payload,
-            nativeAsset,
-            walletAddress,
-          })
-
           const parsedSplMovements = buildParsedSplMovements({
             transfers: payload.tokenTransfers ?? [],
             walletAddress,
             assetsByMint,
-            offset: solMovements.length,
+            offset: rawSolMovements.length,
           })
 
           const transferRowSplMovements = buildTransferRowSplMovements({
-            transfers: walletTransferEvidence,
+            transfers: splWalletTransferEvidence,
             walletAddress,
             assetsByMint,
-            offset: solMovements.length,
+            offset: rawSolMovements.length,
           })
+          const ambiguousNativeSolMovements = buildTransferRowSplMovements({
+            transfers: ambiguousNativeSolTransfers,
+            walletAddress,
+            assetsByMint,
+            offset: rawSolMovements.length + transferRowSplMovements.length,
+          }).map(
+            (movement): SolanaBalanceMovement => ({
+              ...movement,
+              asset: {
+                ...movement.asset,
+                representationTypeObserved: false,
+              },
+            })
+          )
 
           const tokenBalanceSplMovements = buildSplMovements({
             payload,
             walletAddress,
             assetsByMint,
-            offset: solMovements.length,
+            offset: rawSolMovements.length,
           })
 
           const splMovements = chooseAuthoritativeSplMovements({
@@ -1885,20 +2721,59 @@ const make = ({
           const joinedSplMovements =
             splMovements === transferRowSplMovements
               ? splMovements
-              : joinTransferRowEvidenceByPosition({
+              : joinTransferRowEvidence({
                   authoritativeMovements: splMovements,
                   transferRowMovements: transferRowSplMovements,
                 })
+          const supplementalSplEvidenceMovements = findSupplementalSplEvidenceMovements({
+            observedMovements: joinedSplMovements,
+            parsedMovements: parsedSplMovements,
+            transferRowMovements: transferRowSplMovements,
+          })
 
-          const contradictions = findContradictionsForEvidence({
+          const canonicalSplMovements = chooseCanonicalSplMovements({
             parsedSplMovements,
             tokenBalanceSplMovements,
             transferRowSplMovements,
           })
+          const joinedCanonicalSplMovements =
+            canonicalSplMovements === transferRowSplMovements
+              ? canonicalSplMovements
+              : joinTransferRowEvidence({
+                  authoritativeMovements: canonicalSplMovements,
+                  transferRowMovements: transferRowSplMovements,
+                })
 
-          const movements = [...solMovements, ...joinedSplMovements]
+          const contradictions = [
+            ...findContradictionsForEvidence({
+              authoritativeSplMovements: splMovements,
+              transferRowSplMovements,
+            }),
+            ...ambiguousNativeSolTransfers.map(
+              (transfer): MovementContradiction => ({
+                reason:
+                  "Wallet transfer row could not be classified exactly as native SOL or wrapped SOL.",
+                evidence: transfer,
+              })
+            ),
+          ]
 
-          const canonicalTransfers = movements.flatMap((movement) => {
+          const movements = [
+            ...solMovements,
+            ...joinedSplMovements.map((movement, index) => ({
+              ...movement,
+              position: solMovements.length + index,
+            })),
+          ]
+          const canonicalMovements = [...rawSolMovements, ...joinedCanonicalSplMovements]
+          const ambiguousNativeSolMovementSet = new Set(ambiguousNativeSolMovements)
+          const providerObservationMovements = [
+            ...movements,
+            ...supplementalSplEvidenceMovements,
+            ...ambiguousNativeSolMovements,
+          ]
+
+          const canonicalTransfers = canonicalMovements.flatMap((movement) => {
             const draft = buildTransferDraft({
               source,
               sourceRecord,
@@ -1910,15 +2785,70 @@ const make = ({
             return draft === null ? [] : [draft]
           })
 
-          const providerTransfers = movements.map((movement) =>
-            buildProviderTransferDraft({
+          const movementsMatch = (
+            candidate: SolanaBalanceMovement,
+            movement: SolanaBalanceMovement
+          ): boolean =>
+            candidate.role === movement.role &&
+            candidate.direction === movement.direction &&
+            candidate.asset.providerAssetRowId === movement.asset.providerAssetRowId &&
+            candidate.fromAddress === movement.fromAddress &&
+            candidate.toAddress === movement.toAddress &&
+            movementAmountsEqual(candidate, movement)
+
+          const matchedObservedMovementIndexes = new Set<number>()
+          const matchedCanonicalMovementIndexes = new Set<number>()
+          canonicalMovements.forEach((canonicalMovement, canonicalIndex) => {
+            const observedIndex = providerObservationMovements.findIndex(
+              (movement, index) =>
+                !matchedObservedMovementIndexes.has(index) &&
+                movementsMatch(canonicalMovement, movement)
+            )
+            if (observedIndex !== -1) {
+              matchedObservedMovementIndexes.add(observedIndex)
+              matchedCanonicalMovementIndexes.add(canonicalIndex)
+            }
+          })
+
+          const canonicalProviderTransfers = canonicalMovements.map((movement, index) => {
+            const hasObservedMatch = matchedCanonicalMovementIndexes.has(index)
+
+            return buildProviderTransferDraft({
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,
+              blockchainId,
               signature,
               timestamp,
               movement,
+              externalId: `${signature}:provider:${movement.role}:${movement.position}`,
+              canonicalTransferExternalId: `${signature}:${movement.role}:${movement.position}`,
+              processingMode: hasObservedMatch ? "accounting_and_evidence" : "accounting_only",
+              observedRepresentationIdentityKnown: true,
             })
+          })
+          const evidenceProviderTransfers = providerObservationMovements.flatMap(
+            (movement, index) => {
+              if (matchedObservedMovementIndexes.has(index)) {
+                return []
+              }
+
+              return [
+                buildProviderTransferDraft({
+                  sourceId: source.id,
+                  sourceRawRecordId: sourceRecord.id,
+                  blockchainId,
+                  signature,
+                  timestamp,
+                  movement,
+                  externalId: `${signature}:provider:${movement.role}:evidence:${index}`,
+                  canonicalTransferExternalId: null,
+                  processingMode: "evidence_only",
+                  observedRepresentationIdentityKnown: !ambiguousNativeSolMovementSet.has(movement),
+                }),
+              ]
+            }
           )
+          const providerTransfers = [...canonicalProviderTransfers, ...evidenceProviderTransfers]
 
           const resolvedTransactionType = stableMapping(
             providerTransactionType === "failed" ? "gas_fee" : null

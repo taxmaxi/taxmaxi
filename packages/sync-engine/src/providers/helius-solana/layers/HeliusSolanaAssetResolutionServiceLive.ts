@@ -117,6 +117,8 @@ const DasMetadataSchema = Schema.Struct({
   token_standard: Schema.optional(Schema.String),
 })
 
+const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
+
 const DasAssetSchema = Schema.Struct({
   id: Schema.String,
   interface: Schema.optional(Schema.String),
@@ -138,7 +140,7 @@ const DasAssetSchema = Schema.Struct({
     Schema.NullOr(
       Schema.Struct({
         symbol: Schema.optional(Schema.String),
-        decimals: Schema.optional(Schema.Number),
+        decimals: Schema.optional(SolanaTokenDecimalsSchema),
         token_program: Schema.optional(Schema.String),
       })
     )
@@ -154,6 +156,7 @@ const decodeStoredProviderPayload = Schema.decodeUnknownEither(
     source: Schema.optional(Schema.String),
     tokenProgram: Schema.optional(Schema.NullOr(Schema.String)),
     nftHint: Schema.optional(Schema.Boolean),
+    asset: Schema.optional(DasAssetSchema),
   })
 )
 
@@ -228,6 +231,11 @@ const providerAssetCatalogEntryForDefault = (
 const tokenStandardFromDasAsset = (asset: DasAsset): string | null =>
   asset.content?.metadata?.token_standard ?? null
 
+const normalizedDasTypeEvidence = (value: string | null | undefined): string =>
+  value?.toLowerCase().replaceAll(/[^a-z0-9]/g, "") ?? ""
+
+const EXPLICIT_DAS_NFT_INTERFACES = new Set(["v1print", "mplcoreasset", "mplcorecollection"])
+
 const dasAssetName = (asset: DasAsset): string | null =>
   normalizeText(asset.content?.metadata?.name)
 
@@ -237,16 +245,27 @@ const dasAssetSymbol = (asset: DasAsset): string | null =>
 const fallbackCurrencyCode = (mintAddress: string): string =>
   `SOLANA_MINT_${mintAddress.slice(0, 8).toUpperCase()}`
 
-const isNftDasAsset = (asset: DasAsset): boolean => {
-  const interfaceName = asset.interface?.toLowerCase() ?? ""
-  const tokenStandard = tokenStandardFromDasAsset(asset)?.toLowerCase() ?? ""
-
-  return (
-    interfaceName.includes("nft") ||
-    tokenStandard.includes("nft") ||
-    asset.compression?.compressed === true
+const representationTypeFromDasAsset = (asset: DasAsset): "token" | "nft" | null => {
+  const typeEvidence = [asset.interface, tokenStandardFromDasAsset(asset)].map(
+    normalizedDasTypeEvidence
   )
+
+  if (
+    asset.compression?.compressed === true ||
+    typeEvidence.some(
+      (value) =>
+        value.includes("nft") ||
+        value.includes("nonfungible") ||
+        EXPLICIT_DAS_NFT_INTERFACES.has(value)
+    )
+  ) {
+    return "nft"
+  }
+
+  return typeEvidence.some((value) => value.includes("fungible")) ? "token" : null
 }
+
+const isNftDasAsset = (asset: DasAsset): boolean => representationTypeFromDasAsset(asset) === "nft"
 
 const providerTypeFromDasAsset = (asset: DasAsset): DecodedDasAsset["providerType"] => {
   if (isNftDasAsset(asset)) {
@@ -273,7 +292,8 @@ const decodeDasAsset = (
     }
 
     const tokenProgram = normalizeText(asset.token_info?.token_program)
-    const nftHint = isNftDasAsset(asset)
+    const representationType = representationTypeFromDasAsset(asset)
+    const nftHint = representationType === "nft"
     const providerType = providerTypeFromDasAsset(asset)
 
     return {
@@ -377,11 +397,35 @@ const hasHeliusDasPayload = (providerAsset: ProviderAssetRecord): boolean => {
   return decoded.right.source === "helius_das_get_asset_batch"
 }
 
+const representationTypeFromProviderAsset = (
+  providerAsset: ProviderAssetRecord
+): "token" | "nft" | null => {
+  const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
+
+  if (
+    Either.isLeft(decoded) ||
+    decoded.right.source !== "helius_das_get_asset_batch" ||
+    decoded.right.asset === undefined
+  ) {
+    return null
+  }
+
+  return representationTypeFromDasAsset(decoded.right.asset)
+}
+
+const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): boolean =>
+  representationTypeFromProviderAsset(providerAsset) !== null
+
 const assetKindFromProviderAsset = (
   providerAsset: ProviderAssetRecord
 ): HeliusSolanaResolvedAsset["assetKind"] => {
   if (providerAsset.providerType === "native") {
     return "native"
+  }
+
+  const observedRepresentationType = representationTypeFromProviderAsset(providerAsset)
+  if (observedRepresentationType !== null) {
+    return observedRepresentationType
   }
 
   return storedNftHint(providerAsset) ? "nft" : "token"
@@ -775,10 +819,15 @@ const make = Effect.gen(function* () {
         providerAsset,
         mapping,
       })
+      const assetKind = assetKindFromProviderAsset(providerAsset)
 
       return {
         kind: resolvedKindFromMapping(mapping),
-        assetKind: assetKindFromProviderAsset(providerAsset),
+        assetKind,
+        representationTypeObserved:
+          reference.kind === "native" ||
+          hasObservedRepresentationType(providerAsset) ||
+          defaultMappingForReference(reference) !== null,
         mintAddress: reference.mintAddress,
         providerAssetRowId: providerAsset.id,
         providerAssetId: providerAsset.providerAssetId,
@@ -787,7 +836,7 @@ const make = Effect.gen(function* () {
         name: providerAsset.name,
         decimals: providerAsset.exponent,
         tokenProgram: storedTokenProgram(providerAsset),
-        nftHint: storedNftHint(providerAsset),
+        nftHint: assetKind === "nft",
         mappingStatus: mapping.mappingStatus,
         mappingKind: mapping.mappingKind,
         canonicalAssetId: mapping.canonicalAssetId,
@@ -821,7 +870,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<boolean, SyncEngineStorageError> =>
     Effect.gen(function* () {
       if (hasHeliusDasPayload(providerAsset)) {
-        return false
+        return !hasObservedRepresentationType(providerAsset)
       }
 
       const mapping = yield* loadProviderAssetMapping({
@@ -865,7 +914,11 @@ const make = Effect.gen(function* () {
 
       const dasAsset = dasAssets.get(reference.mintAddress)
       if (dasAsset !== undefined) {
-        return yield* upsertAndReloadProviderAssetRecord(providerAssetEntryFromDasAsset(dasAsset))
+        const refreshedEntry = providerAssetEntryFromDasAsset(dasAsset)
+        return yield* upsertAndReloadProviderAssetRecord({
+          ...refreshedEntry,
+          exponent: refreshedEntry.exponent ?? existing?.exponent ?? null,
+        })
       }
 
       if (existing !== null) {

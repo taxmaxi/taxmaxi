@@ -92,10 +92,12 @@ const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literal("principal", "fee", "rent")),
 })
 
-const decodeProviderTransferPurpose = (metadata: unknown) =>
+const decodeProviderTransferMetadata = (metadata: unknown) =>
   Schema.decodeUnknown(ProviderTransferMetadataSchema)(metadata).pipe(
-    Effect.map((decoded) => (decoded.role === "fee" ? ("fee" as const) : ("principal" as const))),
-    Effect.catchAll(() => Effect.succeed("principal" as const))
+    Effect.map((decoded) => ({
+      purpose: decoded.role === "fee" ? ("fee" as const) : ("principal" as const),
+    })),
+    Effect.catchAll(() => Effect.succeed({ purpose: "principal" as const }))
   )
 
 const NumericStringSchema = Schema.Union(
@@ -372,12 +374,18 @@ const make = Effect.gen(function* () {
     providerAssetId: schema.providerTransfers.providerAssetId,
     timestamp: schema.providerTransfers.timestamp,
     direction: schema.providerTransfers.direction,
+    processingMode: schema.providerTransfers.processingMode,
     fromAccountRef: schema.providerTransfers.fromAccountRef,
     toAccountRef: schema.providerTransfers.toAccountRef,
     fromAddress: schema.providerTransfers.fromAddress,
     toAddress: schema.providerTransfers.toAddress,
     networkName: schema.providerTransfers.networkName,
     networkHash: schema.providerTransfers.networkHash,
+    observedBlockchainId: schema.providerTransfers.observedBlockchainId,
+    observedRepresentationType: schema.providerTransfers.observedRepresentationType,
+    observedContractAddress: schema.providerTransfers.observedContractAddress,
+    observedMintAddress: schema.providerTransfers.observedMintAddress,
+    observedDecimals: schema.providerTransfers.observedDecimals,
     amount: schema.providerTransfers.amount,
     metadata: schema.providerTransfers.metadata,
   } as const
@@ -652,6 +660,27 @@ const make = Effect.gen(function* () {
     Effect.forEach(providerTransfers, (providerTransfer) =>
       Effect.gen(function* () {
         const now = nowDate()
+        const incomingObservedRepresentationIsAbsent = sql`
+          excluded.observed_blockchain_id is null
+          and excluded.observed_representation_type is null
+          and excluded.observed_contract_address is null
+          and excluded.observed_mint_address is null
+          and excluded.observed_decimals is null
+        `
+        const incomingTransferIsAccountingOnly = sql`
+          excluded.processing_mode = 'accounting_only'
+        `
+        const incomingObservedRepresentationMatchesStoredIdentity = sql`
+          excluded.observed_blockchain_id is not null
+          and excluded.observed_blockchain_id = ${schema.providerTransfers.observedBlockchainId}
+          and excluded.observed_contract_address is not distinct from ${schema.providerTransfers.observedContractAddress}
+          and excluded.observed_mint_address is not distinct from ${schema.providerTransfers.observedMintAddress}
+          and (
+            excluded.observed_representation_type is null
+            or ${schema.providerTransfers.observedRepresentationType} is null
+            or excluded.observed_representation_type = ${schema.providerTransfers.observedRepresentationType}
+          )
+        `
         const [persisted] = yield* executor
           .insert(schema.providerTransfers)
           .values({
@@ -670,14 +699,64 @@ const make = Effect.gen(function* () {
               providerAssetId: sql.raw("excluded.provider_asset_id"),
               timestamp: sql.raw("excluded.timestamp"),
               direction: sql.raw("excluded.direction"),
+              processingMode: sql.raw("excluded.processing_mode"),
               fromAccountRef: sql.raw("excluded.from_account_ref"),
               toAccountRef: sql.raw("excluded.to_account_ref"),
               fromAddress: sql.raw("excluded.from_address"),
               toAddress: sql.raw("excluded.to_address"),
               networkName: sql.raw("excluded.network_name"),
               networkHash: sql.raw("excluded.network_hash"),
+              observedBlockchainId: sql`case
+                when ${incomingTransferIsAccountingOnly} then null
+                when ${incomingObservedRepresentationIsAbsent}
+                then ${schema.providerTransfers.observedBlockchainId}
+                else excluded.observed_blockchain_id
+              end`,
+              observedRepresentationType: sql`case
+                when ${incomingTransferIsAccountingOnly} then null
+                when ${incomingObservedRepresentationIsAbsent} or (
+                  ${incomingObservedRepresentationMatchesStoredIdentity}
+                  and excluded.observed_representation_type is null
+                )
+                then ${schema.providerTransfers.observedRepresentationType}
+                else excluded.observed_representation_type
+              end`,
+              observedContractAddress: sql`case
+                when ${incomingTransferIsAccountingOnly} then null
+                when ${incomingObservedRepresentationIsAbsent}
+                then ${schema.providerTransfers.observedContractAddress}
+                else excluded.observed_contract_address
+              end`,
+              observedMintAddress: sql`case
+                when ${incomingTransferIsAccountingOnly} then null
+                when ${incomingObservedRepresentationIsAbsent}
+                then ${schema.providerTransfers.observedMintAddress}
+                else excluded.observed_mint_address
+              end`,
+              observedDecimals: sql`case
+                when ${incomingTransferIsAccountingOnly} then null
+                when ${incomingObservedRepresentationIsAbsent} or (
+                  ${incomingObservedRepresentationMatchesStoredIdentity}
+                  and excluded.observed_decimals is null
+                )
+                then ${schema.providerTransfers.observedDecimals}
+                else excluded.observed_decimals
+              end`,
               amount: sql.raw("excluded.amount"),
-              metadata: sql.raw("excluded.metadata"),
+              metadata: sql`case
+                when (
+                  not (${incomingTransferIsAccountingOnly})
+                  and (
+                    ${incomingObservedRepresentationIsAbsent}
+                    or ${incomingObservedRepresentationMatchesStoredIdentity}
+                  )
+                )
+                  and excluded.observed_decimals is null
+                  and ${schema.providerTransfers.observedDecimals} is not null
+                  and excluded.amount = ${schema.providerTransfers.amount}
+                then ${schema.providerTransfers.metadata}
+                else excluded.metadata
+              end`,
               updatedAt: now,
             },
           })
@@ -1453,6 +1532,73 @@ const make = Effect.gen(function* () {
       )
     })
 
+  const clearStaleObservedProviderTransferRepresentations = ({
+    executor,
+    transactionId,
+    currentProviderTransferIds,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly transactionId: string
+    readonly currentProviderTransferIds: ReadonlySet<string>
+  }) =>
+    Effect.gen(function* () {
+      const providerTransfers = yield* executor
+        .select({
+          id: schema.providerTransfers.id,
+          reconciliationStatus: schema.transferReconciliations.status,
+        })
+        .from(schema.providerTransfers)
+        .leftJoin(
+          schema.transferReconciliations,
+          eq(schema.transferReconciliations.providerTransferId, schema.providerTransfers.id)
+        )
+        .where(eq(schema.providerTransfers.transactionId, transactionId))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.selectTransfers"
+          )
+        )
+
+      yield* Effect.forEach(
+        providerTransfers.filter(({ id }) => !currentProviderTransferIds.has(id)),
+        ({ id, reconciliationStatus }) =>
+          Effect.gen(function* () {
+            if (reconciliationStatus === "auto_applied" || reconciliationStatus === "approved") {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation",
+                  cause: {
+                    providerTransferId: id,
+                    reconciliationStatus,
+                    message:
+                      "Cannot remove observed provider transfer evidence while its reconciliation is active.",
+                  },
+                })
+              )
+            }
+
+            yield* executor
+              .update(schema.providerTransfers)
+              .set({
+                observedBlockchainId: null,
+                observedRepresentationType: null,
+                observedContractAddress: null,
+                observedMintAddress: null,
+                observedDecimals: null,
+                processingMode: "stale",
+                updatedAt: nowDate(),
+              })
+              .where(eq(schema.providerTransfers.id, id))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.clearTransfer"
+                )
+              )
+          })
+      )
+    })
+
   const allocateProviderInventoryMovements = ({
     executor,
     transaction,
@@ -1473,7 +1619,18 @@ const make = Effect.gen(function* () {
 
     return Effect.forEach(orderedProviderTransfers, (providerTransfer) =>
       Effect.gen(function* () {
-        const purpose = yield* decodeProviderTransferPurpose(providerTransfer.metadata)
+        if (
+          providerTransfer.processingMode === "evidence_only" ||
+          providerTransfer.processingMode === "stale"
+        ) {
+          return yield* removeInventoryMovementForProviderTransfer({
+            executor,
+            providerTransferId: providerTransfer.id,
+          })
+        }
+
+        const metadata = yield* decodeProviderTransferMetadata(providerTransfer.metadata)
+        const purpose = metadata.purpose
 
         if (feesOnly && purpose !== "fee") {
           return yield* removeInventoryMovementForProviderTransfer({
@@ -2003,6 +2160,9 @@ const make = Effect.gen(function* () {
           const hasCompletedStatus = hasCompletedProviderStatus(params.transaction.providerStatus)
           const hasFailedStatus = hasFailedProviderStatus(params.transaction.providerStatus)
           const materializesProviderMovements = hasCompletedStatus || hasFailedStatus
+          const currentProviderTransferIds = new Set(
+            persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
+          )
 
           if (materializesProviderMovements) {
             yield* resetInventoryMovementAllocationsForTransaction({
@@ -2012,9 +2172,7 @@ const make = Effect.gen(function* () {
             yield* removeStaleProviderInventoryMovements({
               executor: tx,
               transactionId: persistedTransaction.id,
-              currentProviderTransferIds: new Set(
-                persistedProviderTransfers.map((providerTransfer) => providerTransfer.id)
-              ),
+              currentProviderTransferIds,
             })
           } else {
             yield* removeInventoryMovementsForTransaction({
@@ -2022,6 +2180,12 @@ const make = Effect.gen(function* () {
               transactionId: persistedTransaction.id,
             })
           }
+
+          yield* clearStaleObservedProviderTransferRepresentations({
+            executor: tx,
+            transactionId: persistedTransaction.id,
+            currentProviderTransferIds,
+          })
 
           const transactionReview = yield* feedFifoLegs({
             executor: tx,

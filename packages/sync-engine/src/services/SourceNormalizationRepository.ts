@@ -43,6 +43,16 @@ export type SourceLegProvenance = "deterministic" | "rule" | "ai" | "manual"
 export type SourceProviderTransferDirection = "inbound" | "outbound"
 
 /**
+ * SourceProviderTransferProcessingMode - How a provider movement participates in
+ * accounting and observed-transfer reconciliation.
+ */
+export type SourceProviderTransferProcessingMode =
+  | "accounting_and_evidence"
+  | "accounting_only"
+  | "evidence_only"
+  | "stale"
+
+/**
  * ReviewStatus - Canonical review lifecycle values used when persisting transaction reviews.
  */
 export type ReviewStatus = "auto_applied" | "needs_review" | "approved" | "changed"
@@ -150,12 +160,18 @@ export interface SourceProviderTransferDraft {
   readonly providerAssetId: string | null
   readonly timestamp: Date
   readonly direction: SourceProviderTransferDirection
+  readonly processingMode: SourceProviderTransferProcessingMode
   readonly fromAccountRef: string | null
   readonly toAccountRef: string | null
   readonly fromAddress: string | null
   readonly toAddress: string | null
   readonly networkName: string | null
   readonly networkHash: string | null
+  readonly observedBlockchainId?: string | null
+  readonly observedRepresentationType?: "native" | "token" | "nft" | null
+  readonly observedContractAddress?: string | null
+  readonly observedMintAddress?: string | null
+  readonly observedDecimals?: number | null
   readonly amount: string
   readonly metadata: unknown
 }
@@ -257,12 +273,18 @@ export interface PersistedSourceProviderTransfer {
   readonly providerAssetId: string | null
   readonly timestamp: Date
   readonly direction: SourceProviderTransferDirection
+  readonly processingMode: SourceProviderTransferProcessingMode
   readonly fromAccountRef: string | null
   readonly toAccountRef: string | null
   readonly fromAddress: string | null
   readonly toAddress: string | null
   readonly networkName: string | null
   readonly networkHash: string | null
+  readonly observedBlockchainId: string | null
+  readonly observedRepresentationType: "native" | "token" | "nft" | null
+  readonly observedContractAddress: string | null
+  readonly observedMintAddress: string | null
+  readonly observedDecimals: number | null
   readonly amount: string
   readonly metadata: unknown
 }

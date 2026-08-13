@@ -56,6 +56,8 @@ export interface HeliusSolanaAssetReference {
 export interface HeliusSolanaResolvedAsset {
   readonly kind: "canonical" | "review_required"
   readonly assetKind: "native" | "token" | "nft"
+  /** True only when token-versus-NFT type is backed by exact metadata evidence. */
+  readonly representationTypeObserved?: boolean
   readonly mintAddress: string | null
   readonly providerAssetRowId: string
   readonly providerAssetId: string | null
