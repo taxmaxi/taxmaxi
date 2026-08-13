@@ -201,6 +201,13 @@ const seedCoinbaseSource = () =>
       email: "coinbase-pr05@taxmaxi.test",
       name: "Coinbase PR-05 Replay User",
     })
+    yield* db.insert(schema.billingAccounts).values({ userId })
+    yield* db.insert(schema.creditLedger).values({
+      userId,
+      delta: 100_000,
+      kind: "manual_adjustment",
+      reference: "test:coinbase-reference-replay-credits",
+    })
     yield* db.insert(schema.principals).values({
       id: principalId,
       kind: "user",

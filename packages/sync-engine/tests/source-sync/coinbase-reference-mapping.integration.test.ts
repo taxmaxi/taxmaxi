@@ -306,6 +306,13 @@ const seedCoinbaseSource = () =>
       email: "coinbase-pr05-mapping@taxmaxi.test",
       name: "Coinbase PR-05 Mapping User",
     })
+    yield* db.insert(schema.billingAccounts).values({ userId })
+    yield* db.insert(schema.creditLedger).values({
+      userId,
+      delta: 100_000,
+      kind: "manual_adjustment",
+      reference: "test:coinbase-reference-mapping-credits",
+    })
     yield* db.insert(schema.principals).values({
       id: principalId,
       kind: "user",
