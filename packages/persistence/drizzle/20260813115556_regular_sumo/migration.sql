@@ -8,6 +8,7 @@ ALTER TABLE "provider_transfers" ADD COLUMN "observed_decimals" integer;--> stat
 ALTER TABLE "disposal_matches" ALTER COLUMN "matched_amount" SET DATA TYPE numeric(355,255) USING "matched_amount"::numeric(355,255);--> statement-breakpoint
 ALTER TABLE "fifo_lots" ALTER COLUMN "original_amount" SET DATA TYPE numeric(355,255) USING "original_amount"::numeric(355,255);--> statement-breakpoint
 ALTER TABLE "fifo_lots" ALTER COLUMN "remaining_amount" SET DATA TYPE numeric(355,255) USING "remaining_amount"::numeric(355,255);--> statement-breakpoint
+ALTER TABLE "fifo_lots" ALTER COLUMN "cost_basis_per_token" SET DATA TYPE numeric(355,18) USING "cost_basis_per_token"::numeric(355,18);--> statement-breakpoint
 ALTER TABLE "inventory_movement_allocations" ALTER COLUMN "matched_amount" SET DATA TYPE numeric(355,255) USING "matched_amount"::numeric(355,255);--> statement-breakpoint
 ALTER TABLE "inventory_movements" ALTER COLUMN "amount" SET DATA TYPE numeric(355,255) USING "amount"::numeric(355,255);--> statement-breakpoint
 ALTER TABLE "provider_transfers" ALTER COLUMN "amount" SET DATA TYPE numeric(355,255) USING "amount"::numeric(355,255);--> statement-breakpoint

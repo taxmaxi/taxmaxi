@@ -3349,6 +3349,94 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
   })
 
+  it("uses unique transfer evidence to replace a guessed token-balance counterparty", async () => {
+    const signature = "signature-token-balance-exact-counterparty"
+    const tokenProgramAddress = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+    const exactCounterparty = "exact-counterparty-address"
+    const payload = {
+      slot: 127,
+      transactionIndex: 4,
+      transaction: {
+        signatures: [signature],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: tokenProgramAddress, signer: false },
+            { pubkey: exactCounterparty, signer: false },
+            { pubkey: "wallet-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0, 0],
+        postBalances: [1_999_995_000, 0, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 3,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 3,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in" as const,
+        counterparty: exactCounterparty,
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 12.5,
+        amountRaw: "12500000",
+        decimals: 6,
+      },
+    ]
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
+          lookups,
+        })
+      }),
+      () => Effect.dieMessage("Helius client should not be called during normalization")
+    )
+
+    const usdcProviderTransfers = result.providerTransfers.filter(
+      (transfer) => transfer.providerAssetId === `provider-asset-${USDC_MINT}`
+    )
+    expect(usdcProviderTransfers).toEqual([
+      expect.objectContaining({
+        direction: "inbound",
+        fromAddress: exactCounterparty,
+        toAddress: WALLET_ADDRESS,
+        processingMode: "accounting_and_evidence",
+        observedMintAddress: USDC_MINT,
+        observedDecimals: 6,
+        metadata: expect.objectContaining({
+          supplementalTransferRow: expect.objectContaining({ counterparty: exactCounterparty }),
+        }),
+      }),
+    ])
+  })
+
   it("preserves an unknown SPL type while recording its exact mint and decimals", async () => {
     const payload = {
       slot: 128,

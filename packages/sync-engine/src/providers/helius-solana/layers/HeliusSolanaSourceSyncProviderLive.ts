@@ -656,6 +656,254 @@ const movementAmountStringsEqual = (left: string, right: string): boolean => {
 
 const subtractBigIntStrings = (left: string, right: string): bigint => BigInt(left) - BigInt(right)
 
+const signedWalletTransferRawAmount = (transfer: HeliusSolanaWalletTransfer): bigint | null => {
+  if (!/^\d+$/.test(transfer.amountRaw)) {
+    return null
+  }
+
+  const amount = BigInt(transfer.amountRaw)
+  return transfer.direction === "in" ? amount : -amount
+}
+
+const findUniqueWalletTransferSubset = ({
+  candidateTransfers,
+  targetRawAmount,
+  expectedDecimals,
+}: {
+  readonly candidateTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly targetRawAmount: bigint
+  readonly expectedDecimals: number | null
+}): ReadonlyArray<HeliusSolanaWalletTransfer> | null => {
+  if (candidateTransfers.length > 20) {
+    return null
+  }
+
+  const signedAmounts: Array<bigint> = []
+  for (const transfer of candidateTransfers) {
+    const amount = signedWalletTransferRawAmount(transfer)
+    if (amount === null || transfer.decimals !== expectedDecimals) {
+      return null
+    }
+
+    signedAmounts.push(amount)
+  }
+
+  const remainingBounds: Array<{ readonly minimum: bigint; readonly maximum: bigint }> = [
+    { minimum: 0n, maximum: 0n },
+  ]
+  for (let index = signedAmounts.length - 1; index >= 0; index -= 1) {
+    const amount = signedAmounts[index]
+    const nextBounds = remainingBounds[0]
+    if (amount === undefined || nextBounds === undefined) {
+      return null
+    }
+
+    remainingBounds.unshift({
+      minimum: nextBounds.minimum + (amount < 0n ? amount : 0n),
+      maximum: nextBounds.maximum + (amount > 0n ? amount : 0n),
+    })
+  }
+
+  let visitedStates = 0
+  const searchState: {
+    limitReached: boolean
+    uniqueSelection: ReadonlyArray<number> | null
+    multipleSelectionsFound: boolean
+  } = {
+    limitReached: false,
+    uniqueSelection: null,
+    multipleSelectionsFound: false,
+  }
+  const selectedIndexes: Array<number> = []
+
+  const visit = (index: number, total: bigint): void => {
+    if (searchState.limitReached || searchState.multipleSelectionsFound) {
+      return
+    }
+    if (visitedStates >= MAX_NATIVE_SUBSET_SEARCH_STATES) {
+      searchState.limitReached = true
+      return
+    }
+    visitedStates += 1
+
+    const bounds = remainingBounds[index]
+    if (
+      bounds === undefined ||
+      targetRawAmount < total + bounds.minimum ||
+      targetRawAmount > total + bounds.maximum
+    ) {
+      return
+    }
+
+    if (index === signedAmounts.length) {
+      if (total === targetRawAmount) {
+        if (searchState.uniqueSelection === null) {
+          searchState.uniqueSelection = [...selectedIndexes]
+        } else {
+          searchState.multipleSelectionsFound = true
+        }
+      }
+      return
+    }
+
+    visit(index + 1, total)
+
+    const amount = signedAmounts[index]
+    if (amount === undefined || searchState.limitReached || searchState.multipleSelectionsFound) {
+      return
+    }
+    selectedIndexes.push(index)
+    visit(index + 1, total + amount)
+    selectedIndexes.pop()
+  }
+
+  visit(0, 0n)
+
+  const uniqueSelection = searchState.uniqueSelection
+  if (searchState.limitReached || searchState.multipleSelectionsFound || uniqueSelection === null) {
+    return null
+  }
+
+  return uniqueSelection
+    .map((index) => candidateTransfers[index])
+    .filter((row) => row !== undefined)
+}
+
+const matchExplicitWrappedSolRows = ({
+  transfers,
+  payload,
+  walletAddress,
+}: {
+  readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletAddress: string
+}): Set<HeliusSolanaWalletTransfer> => {
+  const matchedRows = new Set<HeliusSolanaWalletTransfer>()
+  const explicitWrappedSolTransfers = (payload.tokenTransfers ?? []).filter(
+    (transfer) => transfer.mint === SOLANA_WRAPPED_NATIVE_MINT
+  )
+
+  for (const parsedTransfer of explicitWrappedSolTransfers) {
+    const tokenAmount = parsedTransfer.tokenAmount
+    const fromAddress = parsedTransfer.fromUserAccount ?? parsedTransfer.fromTokenAccount ?? null
+    const toAddress = parsedTransfer.toUserAccount ?? parsedTransfer.toTokenAccount ?? null
+    const direction =
+      toAddress === walletAddress ? "in" : fromAddress === walletAddress ? "out" : null
+    const counterparty =
+      direction === "in"
+        ? (parsedTransfer.fromUserAccount ?? null)
+        : direction === "out"
+          ? (parsedTransfer.toUserAccount ?? null)
+          : null
+    if (tokenAmount === undefined || direction === null) {
+      continue
+    }
+
+    const matchingRow = transfers.find(
+      (row) =>
+        !matchedRows.has(row) &&
+        row.direction === direction &&
+        /^\d+$/.test(row.amountRaw) &&
+        (counterparty === null || row.counterparty === counterparty) &&
+        movementAmountStringsEqual(
+          rawTokenAmountToDecimal({ amount: row.amountRaw, decimals: row.decimals }),
+          tokenAmount
+        )
+    )
+    if (matchingRow !== undefined) {
+      matchedRows.add(matchingRow)
+    }
+  }
+
+  return matchedRows
+}
+
+const matchWrappedSolBalanceRows = ({
+  transfers,
+  payload,
+  walletAddress,
+  matchedRows,
+}: {
+  readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletAddress: string
+  readonly matchedRows: Set<HeliusSolanaWalletTransfer>
+}): void => {
+  const preWrappedBalances = (payload.meta?.preTokenBalances ?? []).filter(
+    (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
+  )
+  const postWrappedBalances = (payload.meta?.postTokenBalances ?? []).filter(
+    (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
+  )
+  const wrappedBalanceKey = (balance: HeliusSolanaTokenBalance) =>
+    `${balance.accountIndex}:${balance.mint}`
+  const preWrappedByKey = new Map(
+    preWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
+  )
+  const postWrappedByKey = new Map(
+    postWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
+  )
+  const wrappedBalanceKeys = new Set([...preWrappedByKey.keys(), ...postWrappedByKey.keys()])
+
+  for (const key of wrappedBalanceKeys) {
+    const pre = preWrappedByKey.get(key)
+    const post = postWrappedByKey.get(key)
+    const balance = post ?? pre
+    const owner = post?.owner ?? pre?.owner ?? null
+    if (balance === undefined || owner !== walletAddress) {
+      continue
+    }
+
+    const delta = subtractBigIntStrings(
+      post?.uiTokenAmount.amount ?? "0",
+      pre?.uiTokenAmount.amount ?? "0"
+    )
+    if (delta === 0n) {
+      continue
+    }
+
+    const matchingRows = findUniqueWalletTransferSubset({
+      candidateTransfers: transfers.filter((transfer) => !matchedRows.has(transfer)),
+      targetRawAmount: delta,
+      expectedDecimals: balance.uiTokenAmount.decimals,
+    })
+    matchingRows?.forEach((row) => matchedRows.add(row))
+  }
+}
+
+const buildRefinedNativeMovements = ({
+  transfers,
+  nativeMovement,
+  nativeAsset,
+  walletAddress,
+}: {
+  readonly transfers: ReadonlyArray<HeliusSolanaWalletTransfer>
+  readonly nativeMovement: SolanaBalanceMovement
+  readonly nativeAsset: HeliusSolanaResolvedAsset
+  readonly walletAddress: string
+}): ReadonlyArray<SolanaBalanceMovement> =>
+  transfers.map((transfer) => {
+    const direction = transfer.direction === "in" ? "inbound" : "outbound"
+
+    return {
+      asset: nativeAsset,
+      amount: rawTokenAmountToDecimal({
+        amount: transfer.amountRaw,
+        decimals: transfer.decimals,
+      }),
+      rawUnits: transfer.amountRaw,
+      observedDecimals: transfer.decimals,
+      matchCounterparty: transfer.counterparty,
+      direction,
+      fromAddress: direction === "inbound" ? transfer.counterparty : walletAddress,
+      toAddress: direction === "inbound" ? walletAddress : transfer.counterparty,
+      role: nativeMovement.role,
+      position: 0,
+      evidenceKind: "transfer_row",
+      supplementalTransferRow: transfer,
+    }
+  })
+
 const stableMapping = (transactionType: string | null): ResolvedProviderTransactionTypeMapping => ({
   providerTransactionType: transactionType ?? "unknown",
   transactionType,
@@ -1402,209 +1650,20 @@ const make = ({
         return { nativeMovements, splTransfers: transfers, ambiguousTransfers: [] }
       }
 
-      const explicitWrappedSolTransfers = (payload.tokenTransfers ?? []).filter(
-        (transfer) => transfer.mint === SOLANA_WRAPPED_NATIVE_MINT
-      )
-      const matchedWrappedSolRows = new Set<HeliusSolanaWalletTransfer>()
-      for (const parsedTransfer of explicitWrappedSolTransfers) {
-        const tokenAmount = parsedTransfer.tokenAmount
-        const fromAddress =
-          parsedTransfer.fromUserAccount ?? parsedTransfer.fromTokenAccount ?? null
-        const toAddress = parsedTransfer.toUserAccount ?? parsedTransfer.toTokenAccount ?? null
-        const direction =
-          toAddress === walletAddress ? "in" : fromAddress === walletAddress ? "out" : null
-        const counterparty =
-          direction === "in"
-            ? (parsedTransfer.fromUserAccount ?? null)
-            : direction === "out"
-              ? (parsedTransfer.toUserAccount ?? null)
-              : null
-        if (tokenAmount === undefined || direction === null) {
-          continue
-        }
-
-        const matchingRow = sentinelTransfers.find(
-          (row) =>
-            !matchedWrappedSolRows.has(row) &&
-            row.direction === direction &&
-            /^\d+$/.test(row.amountRaw) &&
-            (counterparty === null || row.counterparty === counterparty) &&
-            movementAmountStringsEqual(
-              rawTokenAmountToDecimal({ amount: row.amountRaw, decimals: row.decimals }),
-              tokenAmount
-            )
-        )
-        if (matchingRow !== undefined) {
-          matchedWrappedSolRows.add(matchingRow)
-        }
-      }
+      const matchedWrappedSolRows = matchExplicitWrappedSolRows({
+        transfers: sentinelTransfers,
+        payload,
+        walletAddress,
+      })
       const candidateTransfersBeforeBalanceEvidence = sentinelTransfers.filter(
         (transfer) => !matchedWrappedSolRows.has(transfer)
       )
-
-      const signedRawAmount = (transfer: HeliusSolanaWalletTransfer): bigint | null => {
-        if (!/^\d+$/.test(transfer.amountRaw)) {
-          return null
-        }
-
-        const amount = BigInt(transfer.amountRaw)
-        return transfer.direction === "in" ? amount : -amount
-      }
-
-      const findUniqueTransferSubset = ({
-        candidateTransfers,
-        targetRawAmount,
-        expectedDecimals,
-      }: {
-        readonly candidateTransfers: ReadonlyArray<HeliusSolanaWalletTransfer>
-        readonly targetRawAmount: bigint
-        readonly expectedDecimals: number | null
-      }): ReadonlyArray<HeliusSolanaWalletTransfer> | null => {
-        if (candidateTransfers.length > 20) {
-          return null
-        }
-
-        const signedAmounts: Array<bigint> = []
-        for (const transfer of candidateTransfers) {
-          const amount = signedRawAmount(transfer)
-          if (amount === null || transfer.decimals !== expectedDecimals) {
-            return null
-          }
-
-          signedAmounts.push(amount)
-        }
-
-        const remainingBounds: Array<{ readonly minimum: bigint; readonly maximum: bigint }> = [
-          { minimum: 0n, maximum: 0n },
-        ]
-        for (let index = signedAmounts.length - 1; index >= 0; index -= 1) {
-          const amount = signedAmounts[index]
-          const nextBounds = remainingBounds[0]
-          if (amount === undefined || nextBounds === undefined) {
-            return null
-          }
-
-          remainingBounds.unshift({
-            minimum: nextBounds.minimum + (amount < 0n ? amount : 0n),
-            maximum: nextBounds.maximum + (amount > 0n ? amount : 0n),
-          })
-        }
-
-        let visitedStates = 0
-        const searchState: {
-          limitReached: boolean
-          uniqueSelection: ReadonlyArray<number> | null
-          multipleSelectionsFound: boolean
-        } = {
-          limitReached: false,
-          uniqueSelection: null,
-          multipleSelectionsFound: false,
-        }
-        const selectedIndexes: Array<number> = []
-
-        const visit = (index: number, total: bigint): void => {
-          if (searchState.limitReached || searchState.multipleSelectionsFound) {
-            return
-          }
-          if (visitedStates >= MAX_NATIVE_SUBSET_SEARCH_STATES) {
-            searchState.limitReached = true
-            return
-          }
-          visitedStates += 1
-
-          const bounds = remainingBounds[index]
-          if (
-            bounds === undefined ||
-            targetRawAmount < total + bounds.minimum ||
-            targetRawAmount > total + bounds.maximum
-          ) {
-            return
-          }
-
-          if (index === signedAmounts.length) {
-            if (total === targetRawAmount) {
-              if (searchState.uniqueSelection === null) {
-                searchState.uniqueSelection = [...selectedIndexes]
-              } else {
-                searchState.multipleSelectionsFound = true
-              }
-            }
-            return
-          }
-
-          visit(index + 1, total)
-
-          const amount = signedAmounts[index]
-          if (
-            amount === undefined ||
-            searchState.limitReached ||
-            searchState.multipleSelectionsFound
-          ) {
-            return
-          }
-          selectedIndexes.push(index)
-          visit(index + 1, total + amount)
-          selectedIndexes.pop()
-        }
-
-        visit(0, 0n)
-
-        const uniqueSelection = searchState.uniqueSelection
-        if (
-          searchState.limitReached ||
-          searchState.multipleSelectionsFound ||
-          uniqueSelection === null
-        ) {
-          return null
-        }
-
-        return uniqueSelection
-          .map((index) => candidateTransfers[index])
-          .filter((row) => row !== undefined)
-      }
-
-      const preWrappedBalances = (payload.meta?.preTokenBalances ?? []).filter(
-        (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
-      )
-      const postWrappedBalances = (payload.meta?.postTokenBalances ?? []).filter(
-        (balance) => balance.mint === SOLANA_WRAPPED_NATIVE_MINT
-      )
-      const wrappedBalanceKey = (balance: HeliusSolanaTokenBalance) =>
-        `${balance.accountIndex}:${balance.mint}`
-      const preWrappedByKey = new Map(
-        preWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
-      )
-      const postWrappedByKey = new Map(
-        postWrappedBalances.map((balance) => [wrappedBalanceKey(balance), balance])
-      )
-      const wrappedBalanceKeys = new Set([...preWrappedByKey.keys(), ...postWrappedByKey.keys()])
-
-      for (const key of wrappedBalanceKeys) {
-        const pre = preWrappedByKey.get(key)
-        const post = postWrappedByKey.get(key)
-        const balance = post ?? pre
-        const owner = post?.owner ?? pre?.owner ?? null
-        if (balance === undefined || owner !== walletAddress) {
-          continue
-        }
-
-        const delta = subtractBigIntStrings(
-          post?.uiTokenAmount.amount ?? "0",
-          pre?.uiTokenAmount.amount ?? "0"
-        )
-        if (delta === 0n) {
-          continue
-        }
-
-        const matchingRows = findUniqueTransferSubset({
-          candidateTransfers: candidateTransfersBeforeBalanceEvidence.filter(
-            (transfer) => !matchedWrappedSolRows.has(transfer)
-          ),
-          targetRawAmount: delta,
-          expectedDecimals: balance.uiTokenAmount.decimals,
-        })
-        matchingRows?.forEach((row) => matchedWrappedSolRows.add(row))
-      }
+      matchWrappedSolBalanceRows({
+        transfers: candidateTransfersBeforeBalanceEvidence,
+        payload,
+        walletAddress,
+        matchedRows: matchedWrappedSolRows,
+      })
 
       const candidateNativeTransfers = sentinelTransfers.filter(
         (transfer) => !matchedWrappedSolRows.has(transfer)
@@ -1621,7 +1680,7 @@ const make = ({
 
       const targetNativeRawAmount =
         BigInt(nativeMovement.rawUnits) * (nativeMovement.direction === "inbound" ? 1n : -1n)
-      const nativeWalletTransfers = findUniqueTransferSubset({
+      const nativeWalletTransfers = findUniqueWalletTransferSubset({
         candidateTransfers: candidateNativeTransfers,
         targetRawAmount: targetNativeRawAmount,
         expectedDecimals: nativeAsset.decimals,
@@ -1640,29 +1699,12 @@ const make = ({
 
       const splTransfers = transfers.filter((transfer) => !nativeWalletTransfers.includes(transfer))
 
-      const refinedNativeMovements = nativeWalletTransfers.map(
-        (transfer): SolanaBalanceMovement => {
-          const direction = transfer.direction === "in" ? "inbound" : "outbound"
-
-          return {
-            asset: nativeAsset,
-            amount: rawTokenAmountToDecimal({
-              amount: transfer.amountRaw,
-              decimals: transfer.decimals,
-            }),
-            rawUnits: transfer.amountRaw,
-            observedDecimals: transfer.decimals,
-            matchCounterparty: transfer.counterparty,
-            direction,
-            fromAddress: direction === "inbound" ? transfer.counterparty : walletAddress,
-            toAddress: direction === "inbound" ? walletAddress : transfer.counterparty,
-            role: nativeMovement.role,
-            position: 0,
-            evidenceKind: "transfer_row",
-            supplementalTransferRow: transfer,
-          }
-        }
-      )
+      const refinedNativeMovements = buildRefinedNativeMovements({
+        transfers: nativeWalletTransfers,
+        nativeMovement,
+        nativeAsset,
+        walletAddress,
+      })
       const remainingNativeMovements = nativeMovements.filter(
         (movement) => movement !== nativeMovement
       )
@@ -1944,14 +1986,18 @@ const make = ({
       const unmatchedTransferRows = [...transferRowMovements]
 
       return authoritativeMovements.map((movement) => {
-        const positionMatchIndex = unmatchedTransferRows.findIndex(
-          (candidate) =>
-            candidate.position === movement.position && movementsMatch(movement, candidate)
+        const matchingIndexes = unmatchedTransferRows.flatMap((candidate, index) =>
+          movementsMatch(movement, candidate) ? [index] : []
+        )
+        const positionMatchIndex = matchingIndexes.find(
+          (index) => unmatchedTransferRows[index]?.position === movement.position
         )
         const matchIndex =
-          positionMatchIndex === -1
-            ? unmatchedTransferRows.findIndex((candidate) => movementsMatch(movement, candidate))
-            : positionMatchIndex
+          movement.matchCounterparty === null
+            ? matchingIndexes.length === 1
+              ? (matchingIndexes[0] ?? -1)
+              : -1
+            : (positionMatchIndex ?? matchingIndexes[0] ?? -1)
         const [transferRowMovement] =
           matchIndex === -1 ? [] : unmatchedTransferRows.splice(matchIndex, 1)
         const supplementalTransferRow = transferRowMovement?.supplementalTransferRow ?? null
@@ -1965,9 +2011,19 @@ const make = ({
         }
 
         const preferTransferRowAmountEvidence = movement.evidenceKind === "parsed_transfer"
+        const preferTransferRowEndpointEvidence = movement.matchCounterparty === null
 
         return {
           ...movement,
+          matchCounterparty: preferTransferRowEndpointEvidence
+            ? transferRowMovement.matchCounterparty
+            : movement.matchCounterparty,
+          fromAddress: preferTransferRowEndpointEvidence
+            ? transferRowMovement.fromAddress
+            : movement.fromAddress,
+          toAddress: preferTransferRowEndpointEvidence
+            ? transferRowMovement.toAddress
+            : movement.toAddress,
           rawUnits:
             preferTransferRowAmountEvidence || movement.observedDecimals === null
               ? transferRowMovement.rawUnits

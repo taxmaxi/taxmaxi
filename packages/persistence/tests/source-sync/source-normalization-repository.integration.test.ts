@@ -1209,6 +1209,97 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(counts.lot?.assetRepresentationId).toBe(TEST_BTC_REPRESENTATION_ID)
   })
 
+  it("stores cost basis for the smallest supported acquisition quantity", async () => {
+    const amount = `0.${"0".repeat(254)}1`
+    const expectedCostBasisPerToken = `1${"0".repeat(255)}.000000000000000000`
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "tx-smallest-supported-acquisition",
+            externalGroupId: "group-smallest-supported-acquisition",
+            timestamp,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "test" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "test-account",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "buy",
+            instrument: "BTC-EUR",
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "test" },
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "leg-smallest-supported-acquisition",
+              txHash: null,
+              timestamp,
+              addressId: null,
+              assetId: TEST_BTC_ASSET_ID,
+              amount,
+              kind: "acquisition",
+              provenance: "deterministic",
+              derivationRule: "test_smallest_quantity",
+              metadata: { provider: "test" },
+              transactionId: null,
+              sourceTransferId: null,
+              fiatAmount: "1",
+              fiatCurrency: "EUR",
+              feeForTransactionId: null,
+            },
+          ],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+    const leg = result.legs[0]
+    expect(leg).toBeDefined()
+    if (leg === undefined) {
+      return
+    }
+
+    const fifoLots = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, leg.id))
+      })
+    )
+
+    expect(fifoLots).toEqual([
+      expect.objectContaining({
+        originalAmount: amount,
+        remainingAmount: amount,
+        costBasisPerToken: expectedCostBasisPerToken,
+      }),
+    ])
+  })
+
   it("marks disposals with missing FIFO inventory for review instead of failing", async () => {
     await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>

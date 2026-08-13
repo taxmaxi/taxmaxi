@@ -45,7 +45,7 @@ export const fifoLots = pgTable(
     remainingAmount: numeric("remaining_amount", { precision: 355, scale: 255 }).notNull(),
 
     // Cost basis information
-    costBasisPerToken: numeric("cost_basis_per_token", { precision: 36, scale: 18 }).notNull(),
+    costBasisPerToken: numeric("cost_basis_per_token", { precision: 355, scale: 18 }).notNull(),
     costBasisCurrency: text("cost_basis_currency").notNull(),
     costBasisStatus: fifoLotCostBasisStatusEnum("cost_basis_status").notNull().default("known"),
 

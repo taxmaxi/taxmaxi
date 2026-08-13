@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "8bf02188-9436-4990-bb11-355c0b8cfd71",
+  "id": "7135ee39-d6d7-4a8b-b426-861fc1e826fb",
   "prevIds": ["7d0ba7a5-be44-4ab5-9956-0031c81df25a"],
   "ddl": [
     {
@@ -1764,7 +1764,7 @@
       "table": "fifo_lots"
     },
     {
-      "type": "numeric(36,18)",
+      "type": "numeric(355,18)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
