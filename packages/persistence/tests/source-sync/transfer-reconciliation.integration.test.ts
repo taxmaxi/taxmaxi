@@ -647,7 +647,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
   })
 
-  it("links a Coinbase withdrawal to a deterministic owned onchain receipt", async () => {
+  it("defers FIFO application for a deterministic owned onchain receipt", async () => {
     const walletAddress = "bc1qownedwalletdeterministic00000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
 
@@ -703,7 +703,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(summary).toEqual(
       expect.objectContaining({
         evaluatedProviderTransfers: 1,
-        autoApplied: 1,
+        pending: 1,
       })
     )
     expect(reconciliation).toEqual(
@@ -711,8 +711,8 @@ describe("TransferReconciliationServiceLive", () => {
         providerTransferId,
         canonicalTransferId: receipt.transferId,
         canonicalTransactionId: receipt.transactionId,
-        status: "auto_applied",
-        matchReason: "deterministic_wallet_receipt_match",
+        status: "pending",
+        matchReason: "fifo_application_deferred",
         deterministic: true,
       })
     )
@@ -1080,12 +1080,12 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: matchingReceipt.transferId,
-      status: "auto_applied",
-      matchReason: "deterministic_wallet_receipt_match",
+      status: "pending",
+      matchReason: "fifo_application_deferred",
     })
   })
 
-  it("prefers a legacy canonical transfer over its observed evidence row", async () => {
+  it("prefers a canonical transfer over its observed evidence row", async () => {
     const walletAddress = "bc1qownedwalletdedup0000000000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
@@ -1154,8 +1154,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "auto_applied",
-      matchReason: "deterministic_wallet_receipt_match",
+      status: "pending",
+      matchReason: "fifo_application_deferred",
     })
   })
 
@@ -1526,7 +1526,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(reconciliations[0]).toEqual(
       expect.objectContaining({
         providerTransferId,
-        status: "auto_applied",
+        status: "pending",
         deterministic: true,
       })
     )

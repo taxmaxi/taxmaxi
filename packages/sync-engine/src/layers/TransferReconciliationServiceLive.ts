@@ -169,41 +169,6 @@ const filterKnownAssetCandidates = ({
   })
 }
 
-const isLegacyAutoApplyCandidate = ({
-  providerTransfer,
-  candidate,
-  walletAddress,
-  timestampStart,
-  timestampEnd,
-}: {
-  readonly providerTransfer: ProviderTransferReconciliationCandidate
-  readonly candidate: OnchainTransferReconciliationCandidate
-  readonly walletAddress: string | null
-  readonly timestampStart: Date
-  readonly timestampEnd: Date
-}): boolean => {
-  if (
-    candidate.transferId === null ||
-    walletAddress === null ||
-    candidate.ownedAddress !== walletAddress ||
-    candidate.timestamp < timestampStart ||
-    candidate.timestamp > timestampEnd
-  ) {
-    return false
-  }
-
-  if (providerTransfer.networkHash !== null && candidate.txHash !== providerTransfer.networkHash) {
-    return false
-  }
-
-  const receivingAddress =
-    providerTransfer.direction === "outbound" ? candidate.toAddress : candidate.fromAddress
-
-  return candidate.addressType === "evm"
-    ? receivingAddress?.toLowerCase() === walletAddress.toLowerCase()
-    : receivingAddress === walletAddress
-}
-
 const summarizeOutcome = ({
   status,
   current,
@@ -484,23 +449,13 @@ const make = Effect.gen(function* () {
           return "pending"
         }
 
-        const legacyAutoApplyCandidate = isLegacyAutoApplyCandidate({
-          providerTransfer,
-          candidate: matchedCandidate,
-          walletAddress,
-          timestampStart,
-          timestampEnd,
-        })
-
         yield* transferReconciliationRepository.upsertTransferReconciliation({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: matchedCandidate.transferId,
           canonicalTransactionId: matchedCandidate.transactionId,
-          status: legacyAutoApplyCandidate ? "auto_applied" : "pending",
-          matchReason: legacyAutoApplyCandidate
-            ? "deterministic_wallet_receipt_match"
-            : "fifo_application_deferred",
+          status: "pending",
+          matchReason: "fifo_application_deferred",
           confidence: "1.0000",
           deterministic: true,
           reviewMetadata: {
@@ -511,7 +466,7 @@ const make = Effect.gen(function* () {
           },
         })
 
-        return legacyAutoApplyCandidate ? "auto_applied" : "pending"
+        return "pending"
       }
 
       const hasObservedIdentity =
