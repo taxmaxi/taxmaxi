@@ -725,6 +725,27 @@ const StripeSubscriptionWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   customer: StripeReferenceSchema,
 })
+const StripeDeletedSubscriptionWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  customer: StripeReferenceSchema,
+  status: Schema.String,
+  cancel_at_period_end: Schema.Boolean,
+  metadata: StripeMetadataSchema,
+  items: Schema.Struct({
+    data: Schema.Array(
+      Schema.Struct({
+        current_period_end: Schema.Number,
+        price: Schema.Struct({
+          lookup_key: Schema.NullOr(Schema.String),
+          product: StripeReferenceSchema,
+          recurring: Schema.NullOr(
+            Schema.Struct({ interval: Schema.String, interval_count: Schema.Number })
+          ),
+        }),
+      })
+    ),
+  }),
+})
 const StripeCheckoutWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   customer: NullableStripeReferenceSchema,
@@ -819,8 +840,11 @@ export const validateStripeWebhookEvent = (input: unknown) =>
         case "customer.subscription.updated":
         case "customer.subscription.paused":
         case "customer.subscription.resumed":
-        case "customer.subscription.deleted":
           return Schema.decodeUnknown(StripeSubscriptionWebhookObjectSchema)(event.data.object)
+        case "customer.subscription.deleted":
+          return Schema.decodeUnknown(StripeDeletedSubscriptionWebhookObjectSchema)(
+            event.data.object
+          )
         case "customer.deleted":
         case "charge.dispute.created":
         case "charge.dispute.closed":
@@ -932,13 +956,20 @@ const make = Effect.gen(function* () {
       })
     )
 
-  const findPrice = (lookupKey: string) =>
+  const findPrice = (lookupKey: string): Effect.Effect<Stripe.Price, StripeBillingError> =>
     findActivePrice(lookupKey).pipe(
-      Effect.flatMap((price) =>
-        price === undefined
-          ? Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
-          : Effect.succeed(price)
-      )
+      Effect.flatMap((price) => {
+        if (price === undefined) {
+          return Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
+        }
+        if (price.unit_amount === null) {
+          return Effect.fail(stripeError("Stripe Checkout prices must have a fixed unit amount"))
+        }
+        if (!isSupportedCatalogCurrency(price.currency)) {
+          return Effect.fail(stripeError("Stripe Checkout prices must use EUR"))
+        }
+        return Effect.succeed<Stripe.Price>(price)
+      })
     )
 
   const findCurrentAnnualProductId = findActivePrice(TAXMAXI_ANNUAL_LOOKUP_KEY).pipe(
@@ -1544,7 +1575,7 @@ const make = Effect.gen(function* () {
                     client.refunds.retrieve(refundReference)
                   )
                 : refundReference
-            if (creditNoteRefund === null) return
+            if (creditNoteRefund === null || creditNoteRefund.status !== "succeeded") return
             const refundCharge = creditNoteRefund.charge
             const paymentReference =
               paymentIntentId(creditNoteRefund.payment_intent) ??

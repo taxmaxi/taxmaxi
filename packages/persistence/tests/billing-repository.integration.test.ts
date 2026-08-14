@@ -387,7 +387,7 @@ describe("BillingRepositoryLive", () => {
           monotonic: true,
           terminal: false,
         })
-        yield* repository.grantCredits({
+        const granted = yield* repository.grantCredits({
           userId: TEST_USER_ID,
           amount: 1_000,
           kind: "top_up",
@@ -395,19 +395,65 @@ describe("BillingRepositoryLive", () => {
           paymentReference: "pi_out_of_order",
           expiresAt: null,
         })
-        const reconciledAfterGrant =
-          yield* repository.reconcilePaymentCreditReversals("pi_out_of_order")
         const available = yield* repository.availableCredits(TEST_USER_ID)
 
-        return { reconciledBeforeGrant, reconciledAfterGrant, available }
+        return { reconciledBeforeGrant, granted, available }
       })
     )
 
     expect(result).toEqual({
       reconciledBeforeGrant: false,
-      reconciledAfterGrant: true,
+      granted: true,
       available: 500,
     })
+  })
+
+  it("serializes concurrent grants and reversals for the same payment", async () => {
+    const paymentReferences = Array.from(
+      { length: 10 },
+      (_, index) => `pi_concurrent_grant_reversal_${index}`
+    )
+
+    await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* Effect.forEach(
+          paymentReferences,
+          (paymentReference) =>
+            Effect.all(
+              [
+                repository.grantCredits({
+                  userId: TEST_USER_ID,
+                  amount: 1_000,
+                  kind: "top_up",
+                  reference: `checkout:${paymentReference}`,
+                  paymentReference,
+                  expiresAt: null,
+                }),
+                repository.setPaymentCreditReversal({
+                  paymentReference,
+                  reversalGroup: `stripe:refund:${paymentReference}`,
+                  reversedAmount: 500,
+                  paymentAmount: 1_000,
+                  reference: `stripe:refund:${paymentReference}:concurrent`,
+                  eventCreatedAt: REVERSAL_EVENT_AT,
+                  monotonic: true,
+                  terminal: true,
+                }),
+              ],
+              { concurrency: "unbounded" }
+            ),
+          { concurrency: "unbounded", discard: true }
+        )
+      })
+    )
+
+    const available = await runRepository(
+      Effect.flatMap(BillingRepository, (repository) => repository.availableCredits(TEST_USER_ID))
+    )
+
+    expect(available).toBe(5_000)
   })
 
   it("recalculates refund debt across split annual payments", async () => {

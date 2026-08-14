@@ -367,10 +367,20 @@ export type PersistNormalizedSourceArtifactsParams<E> =
   | PersistNormalizedSourceArtifactsWithLegsParams
   | PersistNormalizedSourceArtifactsWithDerivationParams<E>
 
+/** Stable transaction identity used to reserve replay credits before destructive reset work. */
+export type ReplayTransactionCreditReservation = Pick<
+  SourceTransactionDraft,
+  "externalId" | "principalId" | "sourceId" | "sourceRawRecordId"
+>
+
 /**
  * SourceNormalizationRepositoryShape - Atomic canonical write surface for normalized source artifacts.
  */
 export interface SourceNormalizationRepositoryShape {
+  /** Reserve every missing transaction credit atomically before a source replay resets state. */
+  readonly reserveReplayTransactionCredits: (params: {
+    readonly transactions: ReadonlyArray<ReplayTransactionCreditReservation>
+  }) => Effect.Effect<void, SyncEngineStorageError>
   /**
    * Persist normalized canonical artifacts for one raw row, including review rows and FIFO side effects.
    */

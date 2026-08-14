@@ -283,331 +283,392 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSqlError("billing.reserveAnnualCheckout"))
 
-  const grantCredits: BillingRepositoryService["grantCredits"] = (input) =>
-    Effect.gen(function* () {
-      const inserted = yield* db
-        .insert(creditLedger)
-        .values({
-          userId: input.userId,
-          delta: input.amount,
-          kind: input.kind,
-          reference: input.reference,
-          paymentReference: input.paymentReference,
-          paymentAmount: input.paymentAmount ?? null,
-          stripeInvoiceId: input.stripeInvoiceId ?? null,
-          expiresAt: input.expiresAt,
-        })
-        .onConflictDoUpdate({
-          target: creditLedger.reference,
-          set: {
-            paymentReference: sql`coalesce(${creditLedger.paymentReference}, excluded.payment_reference)`,
-            paymentAmount: sql`coalesce(${creditLedger.paymentAmount}, excluded.payment_amount)`,
-            stripeInvoiceId: sql`coalesce(${creditLedger.stripeInvoiceId}, excluded.stripe_invoice_id)`,
-          },
-        })
-        .returning({ id: creditLedger.id })
+  const lockPaymentReference = ({
+    executor,
+    paymentReference,
+  }: {
+    readonly executor: Pick<typeof db, "execute">
+    readonly paymentReference: string
+  }) =>
+    executor
+      .execute(sql`select pg_advisory_xact_lock(hashtext(${paymentReference}))`)
+      .pipe(Effect.asVoid)
 
-      return inserted.length === 1
-    }).pipe(wrapSqlError("billing.grantCredits"))
+  const grantCredits: BillingRepositoryService["grantCredits"] = (input) =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          if (input.paymentReference !== null) {
+            yield* lockPaymentReference({
+              executor: tx,
+              paymentReference: input.paymentReference,
+            })
+          }
+
+          yield* tx
+            .select({ userId: billingAccounts.userId })
+            .from(billingAccounts)
+            .where(eq(billingAccounts.userId, input.userId))
+            .for("update")
+
+          const inserted = yield* tx
+            .insert(creditLedger)
+            .values({
+              userId: input.userId,
+              delta: input.amount,
+              kind: input.kind,
+              reference: input.reference,
+              paymentReference: input.paymentReference,
+              paymentAmount: input.paymentAmount ?? null,
+              stripeInvoiceId: input.stripeInvoiceId ?? null,
+              expiresAt: input.expiresAt,
+            })
+            .onConflictDoUpdate({
+              target: creditLedger.reference,
+              set: {
+                paymentReference: sql`coalesce(${creditLedger.paymentReference}, excluded.payment_reference)`,
+                paymentAmount: sql`coalesce(${creditLedger.paymentAmount}, excluded.payment_amount)`,
+                stripeInvoiceId: sql`coalesce(${creditLedger.stripeInvoiceId}, excluded.stripe_invoice_id)`,
+              },
+            })
+            .returning({ id: creditLedger.id })
+
+          if (input.paymentReference !== null) {
+            yield* reconcilePaymentCreditReversalsWith({
+              executor: tx,
+              paymentReference: input.paymentReference,
+            })
+          }
+
+          return inserted.length === 1
+        })
+      )
+      .pipe(wrapSqlError("billing.grantCredits"))
+
+  const reconcilePaymentCreditReversalsWith = ({
+    executor,
+    paymentReference,
+  }: {
+    readonly executor: Pick<typeof db, "insert" | "select">
+    readonly paymentReference: string
+  }) =>
+    Effect.gen(function* () {
+      const matchingGrants = yield* executor
+        .select({
+          userId: creditLedger.userId,
+          expiresAt: creditLedger.expiresAt,
+        })
+        .from(creditLedger)
+        .where(
+          and(
+            eq(creditLedger.paymentReference, paymentReference),
+            or(eq(creditLedger.kind, "annual_grant"), eq(creditLedger.kind, "top_up"))
+          )
+        )
+
+      if (matchingGrants.length === 0) return false
+
+      const buckets = [
+        ...new Map(
+          matchingGrants.map((grant) => [
+            `${grant.userId}:${grant.expiresAt?.toISOString() ?? "never"}`,
+            grant,
+          ])
+        ).values(),
+      ]
+      const userIds = [...new Set(buckets.map((bucket) => bucket.userId))].sort()
+
+      yield* executor
+        .select({ userId: billingAccounts.userId })
+        .from(billingAccounts)
+        .where(inArray(billingAccounts.userId, userIds))
+        .orderBy(asc(billingAccounts.userId))
+        .for("update")
+
+      const insertedByBucket = yield* Effect.forEach(buckets, (bucket) =>
+        Effect.gen(function* () {
+          const bucketGrantRows = yield* executor
+            .select({
+              paymentReference: creditLedger.paymentReference,
+              amount: creditLedger.delta,
+              paymentAmount: creditLedger.paymentAmount,
+              stripeInvoiceId: creditLedger.stripeInvoiceId,
+            })
+            .from(creditLedger)
+            .where(
+              and(
+                eq(creditLedger.userId, bucket.userId),
+                bucket.expiresAt === null
+                  ? isNull(creditLedger.expiresAt)
+                  : eq(creditLedger.expiresAt, bucket.expiresAt),
+                or(eq(creditLedger.kind, "annual_grant"), eq(creditLedger.kind, "top_up"))
+              )
+            )
+            .orderBy(asc(creditLedger.paymentReference))
+          const grantsWithPayment = [
+            ...bucketGrantRows.reduce((grouped, bucketGrant) => {
+              if (bucketGrant.paymentReference === null) return grouped
+              const key = [
+                bucketGrant.paymentReference,
+                bucketGrant.stripeInvoiceId ?? "",
+                bucketGrant.paymentAmount?.toString() ?? "",
+              ].join(":")
+              const current = grouped.get(key)
+              grouped.set(key, {
+                paymentReference: bucketGrant.paymentReference,
+                paymentAmount: bucketGrant.paymentAmount,
+                stripeInvoiceId: bucketGrant.stripeInvoiceId,
+                amount: (current?.amount ?? 0) + bucketGrant.amount,
+              })
+              return grouped
+            }, new Map<string, { paymentReference: string; paymentAmount: number | null; stripeInvoiceId: string | null; amount: number }>()),
+          ].map(([, grant]) => grant)
+          const paymentReferences = grantsWithPayment.map(
+            (bucketGrant) => bucketGrant.paymentReference
+          )
+          if (paymentReferences.length === 0) return false
+
+          const reversals = yield* executor
+            .select({
+              paymentReference: billingPaymentReversals.paymentReference,
+              reversalGroup: billingPaymentReversals.reversalGroup,
+              lossReference: billingPaymentReversals.lossReference,
+              reversedAmount: billingPaymentReversals.reversedAmount,
+              paymentAmount: billingPaymentReversals.paymentAmount,
+              eventReference: billingPaymentReversals.eventReference,
+              stripeInvoiceId: billingPaymentReversals.stripeInvoiceId,
+            })
+            .from(billingPaymentReversals)
+            .where(inArray(billingPaymentReversals.paymentReference, paymentReferences))
+          const [baseBucket] = yield* executor
+            .select({ total: sql<number>`coalesce(sum(${creditLedger.delta}), 0)` })
+            .from(creditLedger)
+            .where(
+              and(
+                eq(creditLedger.userId, bucket.userId),
+                bucket.expiresAt === null
+                  ? isNull(creditLedger.expiresAt)
+                  : eq(creditLedger.expiresAt, bucket.expiresAt),
+                sql`${creditLedger.kind} <> 'manual_adjustment'`
+              )
+            )
+          const adjustments = yield* executor
+            .select({
+              reference: creditLedger.reference,
+              paymentReference: creditLedger.paymentReference,
+              delta: creditLedger.delta,
+              expiresAt: creditLedger.expiresAt,
+            })
+            .from(creditLedger)
+            .where(
+              and(
+                inArray(creditLedger.paymentReference, paymentReferences),
+                eq(creditLedger.kind, "manual_adjustment")
+              )
+            )
+          const baseBucketTotal = Number(baseBucket?.total ?? 0)
+          const grantVersion = grantsWithPayment
+            .map(
+              (bucketGrant) =>
+                `${bucketGrant.paymentReference}:${bucketGrant.stripeInvoiceId ?? "all"}:${bucketGrant.paymentAmount ?? "unknown"}:${bucketGrant.amount}`
+            )
+            .sort()
+            .join("|")
+          const reversalVersion = reversals
+            .map(
+              (reversal) =>
+                `${reversal.paymentReference}:${reversal.reversalGroup}:${reversal.lossReference}:${reversal.stripeInvoiceId ?? "all"}:${reversal.reversedAmount}:${reversal.eventReference}`
+            )
+            .sort()
+            .join("|")
+          const bucketVersion = `${baseBucketTotal}:${grantVersion}:${reversalVersion}`
+          const bucketReference = bucket.expiresAt?.getTime().toString() ?? "never"
+          let remainingExpiringCredits =
+            bucket.expiresAt === null ? 0 : Math.max(baseBucketTotal, 0)
+          const desiredAdjustments = grantsWithPayment.flatMap((bucketGrant) => {
+            const paymentReversals = reversals.filter(
+              (reversal) => reversal.paymentReference === bucketGrant.paymentReference
+            )
+            const reversalLosses = [
+              ...paymentReversals.reduce((losses, reversal) => {
+                const loss = losses.get(reversal.lossReference) ?? []
+                loss.push(reversal)
+                losses.set(reversal.lossReference, loss)
+                return losses
+              }, new Map<string, Array<(typeof paymentReversals)[number]>>()),
+            ].map(([, loss]) => loss)
+            const targetReversal = Math.min(
+              bucketGrant.amount,
+              BigDecimal.unsafeToNumber(
+                BigDecimal.ceil(
+                  BigDecimal.sumAll(
+                    reversalLosses.map((loss) => {
+                      const scoped = loss.filter((reversal) => reversal.stripeInvoiceId !== null)
+                      const scopedAmount = scoped.reduce(
+                        (amount, reversal) => amount + reversal.reversedAmount,
+                        0
+                      )
+                      const matchingScopedAmount = scoped
+                        .filter(
+                          (reversal) => reversal.stripeInvoiceId === bucketGrant.stripeInvoiceId
+                        )
+                        .reduce((amount, reversal) => amount + reversal.reversedAmount, 0)
+                      const paymentWide = loss.find((reversal) => reversal.stripeInvoiceId === null)
+                      const paymentWideRemainder = Math.max(
+                        (paymentWide?.reversedAmount ?? 0) - scopedAmount,
+                        0
+                      )
+                      const grantPaymentAmount =
+                        bucketGrant.paymentAmount ?? paymentWide?.paymentAmount ?? 0
+                      const unscopedPaymentAmount = Math.max(
+                        (paymentWide?.paymentAmount ?? 0) - scopedAmount,
+                        0
+                      )
+                      const unscopedGrantAmount = Math.max(
+                        grantPaymentAmount - matchingScopedAmount,
+                        0
+                      )
+
+                      return BigDecimal.sum(
+                        proportionalCredits({
+                          credits: bucketGrant.amount,
+                          numerators: [matchingScopedAmount],
+                          denominators: [grantPaymentAmount],
+                        }),
+                        proportionalCredits({
+                          credits: bucketGrant.amount,
+                          numerators: [unscopedGrantAmount, paymentWideRemainder],
+                          denominators: [grantPaymentAmount, unscopedPaymentAmount],
+                        })
+                      )
+                    })
+                  )
+                )
+              )
+            )
+            const expiringReversal = Math.min(targetReversal, remainingExpiringCredits)
+            remainingExpiringCredits -= expiringReversal
+            const permanentDebt = targetReversal - expiringReversal
+            const allocationReference = bucketGrant.stripeInvoiceId ?? "payment"
+            const adjustmentPrefix = `stripe:payment-reversal:${bucketGrant.paymentReference}:${allocationReference}:${bucketReference}:`
+            const grantAdjustments = adjustments.filter(
+              (adjustment) =>
+                adjustment.paymentReference === bucketGrant.paymentReference &&
+                adjustment.reference.startsWith(adjustmentPrefix)
+            )
+            const currentPermanentAdjustment = grantAdjustments
+              .filter((adjustment) => adjustment.expiresAt === null)
+              .reduce((total, adjustment) => total + adjustment.delta, 0)
+            const currentExpiringAdjustment = grantAdjustments
+              .filter((adjustment) => adjustment.expiresAt !== null)
+              .reduce((total, adjustment) => total + adjustment.delta, 0)
+
+            return [
+              {
+                paymentReference: bucketGrant.paymentReference,
+                allocationReference,
+                delta: -permanentDebt - currentPermanentAdjustment,
+                expiresAt: null,
+                suffix: "permanent",
+              },
+              {
+                paymentReference: bucketGrant.paymentReference,
+                allocationReference,
+                delta: -expiringReversal - currentExpiringAdjustment,
+                expiresAt: bucket.expiresAt,
+                suffix: "expiring",
+              },
+            ].filter((adjustment) => adjustment.delta !== 0)
+          })
+          if (desiredAdjustments.length === 0) return false
+
+          const inserted = yield* Effect.forEach(desiredAdjustments, (adjustment) =>
+            executor
+              .insert(creditLedger)
+              .values({
+                userId: bucket.userId,
+                delta: adjustment.delta,
+                kind: "manual_adjustment",
+                reference: `stripe:payment-reversal:${adjustment.paymentReference}:${adjustment.allocationReference}:${bucketReference}:${bucketVersion}:${adjustment.suffix}`,
+                paymentReference: adjustment.paymentReference,
+                expiresAt: adjustment.expiresAt,
+              })
+              .onConflictDoNothing({ target: creditLedger.reference })
+              .returning({ id: creditLedger.id })
+          )
+
+          return inserted.some((rows) => rows.length === 1)
+        })
+      )
+
+      return insertedByBucket.some(Boolean)
+    })
 
   const reconcilePaymentCreditReversals: BillingRepositoryService["reconcilePaymentCreditReversals"] =
     (paymentReference) =>
       db
         .transaction((tx) =>
-          Effect.gen(function* () {
-            const matchingGrants = yield* tx
-              .select({
-                userId: creditLedger.userId,
-                expiresAt: creditLedger.expiresAt,
-              })
-              .from(creditLedger)
-              .where(
-                and(
-                  eq(creditLedger.paymentReference, paymentReference),
-                  or(eq(creditLedger.kind, "annual_grant"), eq(creditLedger.kind, "top_up"))
-                )
-              )
-
-            if (matchingGrants.length === 0) return false
-
-            const buckets = [
-              ...new Map(
-                matchingGrants.map((grant) => [
-                  `${grant.userId}:${grant.expiresAt?.toISOString() ?? "never"}`,
-                  grant,
-                ])
-              ).values(),
-            ]
-            const userIds = [...new Set(buckets.map((bucket) => bucket.userId))].sort()
-
-            yield* tx
-              .select({ userId: billingAccounts.userId })
-              .from(billingAccounts)
-              .where(inArray(billingAccounts.userId, userIds))
-              .orderBy(asc(billingAccounts.userId))
-              .for("update")
-
-            const insertedByBucket = yield* Effect.forEach(buckets, (bucket) =>
-              Effect.gen(function* () {
-                const bucketGrantRows = yield* tx
-                  .select({
-                    paymentReference: creditLedger.paymentReference,
-                    amount: creditLedger.delta,
-                    paymentAmount: creditLedger.paymentAmount,
-                    stripeInvoiceId: creditLedger.stripeInvoiceId,
-                  })
-                  .from(creditLedger)
-                  .where(
-                    and(
-                      eq(creditLedger.userId, bucket.userId),
-                      bucket.expiresAt === null
-                        ? isNull(creditLedger.expiresAt)
-                        : eq(creditLedger.expiresAt, bucket.expiresAt),
-                      or(eq(creditLedger.kind, "annual_grant"), eq(creditLedger.kind, "top_up"))
-                    )
-                  )
-                  .orderBy(asc(creditLedger.paymentReference))
-                const grantsWithPayment = [
-                  ...bucketGrantRows.reduce((grouped, bucketGrant) => {
-                    if (bucketGrant.paymentReference === null) return grouped
-                    const key = [
-                      bucketGrant.paymentReference,
-                      bucketGrant.stripeInvoiceId ?? "",
-                      bucketGrant.paymentAmount?.toString() ?? "",
-                    ].join(":")
-                    const current = grouped.get(key)
-                    grouped.set(key, {
-                      paymentReference: bucketGrant.paymentReference,
-                      paymentAmount: bucketGrant.paymentAmount,
-                      stripeInvoiceId: bucketGrant.stripeInvoiceId,
-                      amount: (current?.amount ?? 0) + bucketGrant.amount,
-                    })
-                    return grouped
-                  }, new Map<string, { paymentReference: string; paymentAmount: number | null; stripeInvoiceId: string | null; amount: number }>()),
-                ].map(([, grant]) => grant)
-                const paymentReferences = grantsWithPayment.map(
-                  (bucketGrant) => bucketGrant.paymentReference
-                )
-                if (paymentReferences.length === 0) return false
-
-                const reversals = yield* tx
-                  .select({
-                    paymentReference: billingPaymentReversals.paymentReference,
-                    reversalGroup: billingPaymentReversals.reversalGroup,
-                    lossReference: billingPaymentReversals.lossReference,
-                    reversedAmount: billingPaymentReversals.reversedAmount,
-                    paymentAmount: billingPaymentReversals.paymentAmount,
-                    eventReference: billingPaymentReversals.eventReference,
-                    stripeInvoiceId: billingPaymentReversals.stripeInvoiceId,
-                  })
-                  .from(billingPaymentReversals)
-                  .where(inArray(billingPaymentReversals.paymentReference, paymentReferences))
-                const [baseBucket] = yield* tx
-                  .select({ total: sql<number>`coalesce(sum(${creditLedger.delta}), 0)` })
-                  .from(creditLedger)
-                  .where(
-                    and(
-                      eq(creditLedger.userId, bucket.userId),
-                      bucket.expiresAt === null
-                        ? isNull(creditLedger.expiresAt)
-                        : eq(creditLedger.expiresAt, bucket.expiresAt),
-                      sql`${creditLedger.kind} <> 'manual_adjustment'`
-                    )
-                  )
-                const adjustments = yield* tx
-                  .select({
-                    reference: creditLedger.reference,
-                    paymentReference: creditLedger.paymentReference,
-                    delta: creditLedger.delta,
-                    expiresAt: creditLedger.expiresAt,
-                  })
-                  .from(creditLedger)
-                  .where(
-                    and(
-                      inArray(creditLedger.paymentReference, paymentReferences),
-                      eq(creditLedger.kind, "manual_adjustment")
-                    )
-                  )
-                const baseBucketTotal = Number(baseBucket?.total ?? 0)
-                const grantVersion = grantsWithPayment
-                  .map(
-                    (bucketGrant) =>
-                      `${bucketGrant.paymentReference}:${bucketGrant.stripeInvoiceId ?? "all"}:${bucketGrant.paymentAmount ?? "unknown"}:${bucketGrant.amount}`
-                  )
-                  .sort()
-                  .join("|")
-                const reversalVersion = reversals
-                  .map(
-                    (reversal) =>
-                      `${reversal.paymentReference}:${reversal.reversalGroup}:${reversal.lossReference}:${reversal.stripeInvoiceId ?? "all"}:${reversal.reversedAmount}:${reversal.eventReference}`
-                  )
-                  .sort()
-                  .join("|")
-                const bucketVersion = `${baseBucketTotal}:${grantVersion}:${reversalVersion}`
-                const bucketReference = bucket.expiresAt?.getTime().toString() ?? "never"
-                let remainingExpiringCredits =
-                  bucket.expiresAt === null ? 0 : Math.max(baseBucketTotal, 0)
-                const desiredAdjustments = grantsWithPayment.flatMap((bucketGrant) => {
-                  const paymentReversals = reversals.filter(
-                    (reversal) => reversal.paymentReference === bucketGrant.paymentReference
-                  )
-                  const reversalLosses = [
-                    ...paymentReversals.reduce((losses, reversal) => {
-                      const loss = losses.get(reversal.lossReference) ?? []
-                      loss.push(reversal)
-                      losses.set(reversal.lossReference, loss)
-                      return losses
-                    }, new Map<string, Array<(typeof paymentReversals)[number]>>()),
-                  ].map(([, loss]) => loss)
-                  const targetReversal = Math.min(
-                    bucketGrant.amount,
-                    BigDecimal.unsafeToNumber(
-                      BigDecimal.ceil(
-                        BigDecimal.sumAll(
-                          reversalLosses.map((loss) => {
-                            const scoped = loss.filter(
-                              (reversal) => reversal.stripeInvoiceId !== null
-                            )
-                            const scopedAmount = scoped.reduce(
-                              (amount, reversal) => amount + reversal.reversedAmount,
-                              0
-                            )
-                            const matchingScopedAmount = scoped
-                              .filter(
-                                (reversal) =>
-                                  reversal.stripeInvoiceId === bucketGrant.stripeInvoiceId
-                              )
-                              .reduce((amount, reversal) => amount + reversal.reversedAmount, 0)
-                            const paymentWide = loss.find(
-                              (reversal) => reversal.stripeInvoiceId === null
-                            )
-                            const paymentWideRemainder = Math.max(
-                              (paymentWide?.reversedAmount ?? 0) - scopedAmount,
-                              0
-                            )
-                            const grantPaymentAmount =
-                              bucketGrant.paymentAmount ?? paymentWide?.paymentAmount ?? 0
-                            const unscopedPaymentAmount = Math.max(
-                              (paymentWide?.paymentAmount ?? 0) - scopedAmount,
-                              0
-                            )
-                            const unscopedGrantAmount = Math.max(
-                              grantPaymentAmount - matchingScopedAmount,
-                              0
-                            )
-
-                            return BigDecimal.sum(
-                              proportionalCredits({
-                                credits: bucketGrant.amount,
-                                numerators: [matchingScopedAmount],
-                                denominators: [grantPaymentAmount],
-                              }),
-                              proportionalCredits({
-                                credits: bucketGrant.amount,
-                                numerators: [unscopedGrantAmount, paymentWideRemainder],
-                                denominators: [grantPaymentAmount, unscopedPaymentAmount],
-                              })
-                            )
-                          })
-                        )
-                      )
-                    )
-                  )
-                  const expiringReversal = Math.min(targetReversal, remainingExpiringCredits)
-                  remainingExpiringCredits -= expiringReversal
-                  const permanentDebt = targetReversal - expiringReversal
-                  const allocationReference = bucketGrant.stripeInvoiceId ?? "payment"
-                  const adjustmentPrefix = `stripe:payment-reversal:${bucketGrant.paymentReference}:${allocationReference}:${bucketReference}:`
-                  const grantAdjustments = adjustments.filter(
-                    (adjustment) =>
-                      adjustment.paymentReference === bucketGrant.paymentReference &&
-                      adjustment.reference.startsWith(adjustmentPrefix)
-                  )
-                  const currentPermanentAdjustment = grantAdjustments
-                    .filter((adjustment) => adjustment.expiresAt === null)
-                    .reduce((total, adjustment) => total + adjustment.delta, 0)
-                  const currentExpiringAdjustment = grantAdjustments
-                    .filter((adjustment) => adjustment.expiresAt !== null)
-                    .reduce((total, adjustment) => total + adjustment.delta, 0)
-
-                  return [
-                    {
-                      paymentReference: bucketGrant.paymentReference,
-                      allocationReference,
-                      delta: -permanentDebt - currentPermanentAdjustment,
-                      expiresAt: null,
-                      suffix: "permanent",
-                    },
-                    {
-                      paymentReference: bucketGrant.paymentReference,
-                      allocationReference,
-                      delta: -expiringReversal - currentExpiringAdjustment,
-                      expiresAt: bucket.expiresAt,
-                      suffix: "expiring",
-                    },
-                  ].filter((adjustment) => adjustment.delta !== 0)
-                })
-                if (desiredAdjustments.length === 0) return false
-
-                const inserted = yield* Effect.forEach(desiredAdjustments, (adjustment) =>
-                  tx
-                    .insert(creditLedger)
-                    .values({
-                      userId: bucket.userId,
-                      delta: adjustment.delta,
-                      kind: "manual_adjustment",
-                      reference: `stripe:payment-reversal:${adjustment.paymentReference}:${adjustment.allocationReference}:${bucketReference}:${bucketVersion}:${adjustment.suffix}`,
-                      paymentReference: adjustment.paymentReference,
-                      expiresAt: adjustment.expiresAt,
-                    })
-                    .onConflictDoNothing({ target: creditLedger.reference })
-                    .returning({ id: creditLedger.id })
-                )
-
-                return inserted.some((rows) => rows.length === 1)
-              })
-            )
-
-            return insertedByBucket.some(Boolean)
-          })
+          lockPaymentReference({ executor: tx, paymentReference }).pipe(
+            Effect.andThen(reconcilePaymentCreditReversalsWith({ executor: tx, paymentReference }))
+          )
         )
         .pipe(wrapSqlError("billing.reconcilePaymentCreditReversals"))
 
   const setPaymentCreditReversal: BillingRepositoryService["setPaymentCreditReversal"] = (input) =>
     db
-      .insert(billingPaymentReversals)
-      .values({
-        paymentReference: input.paymentReference,
-        reversalGroup: input.reversalGroup,
-        lossReference: input.lossReference ?? input.reversalGroup,
-        reversedAmount: input.reversedAmount,
-        paymentAmount: input.paymentAmount,
-        eventReference: input.reference,
-        eventCreatedAt: input.eventCreatedAt,
-        stripeInvoiceId: input.stripeInvoiceId ?? null,
-        terminal: input.terminal,
-        updatedAt: new Date(),
-      })
-      .onConflictDoUpdate({
-        target: [billingPaymentReversals.paymentReference, billingPaymentReversals.reversalGroup],
-        set: {
-          reversedAmount: input.monotonic
-            ? sql`greatest(${billingPaymentReversals.reversedAmount}, excluded.reversed_amount)`
-            : input.reversedAmount,
-          paymentAmount: input.paymentAmount,
-          lossReference: input.lossReference ?? input.reversalGroup,
-          eventReference: input.reference,
-          eventCreatedAt: input.eventCreatedAt,
-          stripeInvoiceId: input.stripeInvoiceId ?? null,
-          terminal: input.terminal,
-          updatedAt: new Date(),
-        },
-        setWhere: sql`${billingPaymentReversals.terminal} = false and ${billingPaymentReversals.eventCreatedAt} <= ${input.eventCreatedAt}`,
-      })
-      .pipe(
-        Effect.andThen(reconcilePaymentCreditReversals(input.paymentReference)),
-        wrapSqlError("billing.setPaymentCreditReversal")
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          yield* lockPaymentReference({
+            executor: tx,
+            paymentReference: input.paymentReference,
+          })
+
+          yield* reconcilePaymentCreditReversalsWith({
+            executor: tx,
+            paymentReference: input.paymentReference,
+          })
+
+          yield* tx
+            .insert(billingPaymentReversals)
+            .values({
+              paymentReference: input.paymentReference,
+              reversalGroup: input.reversalGroup,
+              lossReference: input.lossReference ?? input.reversalGroup,
+              reversedAmount: input.reversedAmount,
+              paymentAmount: input.paymentAmount,
+              eventReference: input.reference,
+              eventCreatedAt: input.eventCreatedAt,
+              stripeInvoiceId: input.stripeInvoiceId ?? null,
+              terminal: input.terminal,
+              updatedAt: new Date(),
+            })
+            .onConflictDoUpdate({
+              target: [
+                billingPaymentReversals.paymentReference,
+                billingPaymentReversals.reversalGroup,
+              ],
+              set: {
+                reversedAmount: input.monotonic
+                  ? sql`greatest(${billingPaymentReversals.reversedAmount}, excluded.reversed_amount)`
+                  : input.reversedAmount,
+                paymentAmount: input.paymentAmount,
+                lossReference: input.lossReference ?? input.reversalGroup,
+                eventReference: input.reference,
+                eventCreatedAt: input.eventCreatedAt,
+                stripeInvoiceId: input.stripeInvoiceId ?? null,
+                terminal: input.terminal,
+                updatedAt: new Date(),
+              },
+              setWhere: sql`${billingPaymentReversals.terminal} = false and ${billingPaymentReversals.eventCreatedAt} <= ${input.eventCreatedAt}`,
+            })
+
+          return yield* reconcilePaymentCreditReversalsWith({
+            executor: tx,
+            paymentReference: input.paymentReference,
+          })
+        })
       )
+      .pipe(wrapSqlError("billing.setPaymentCreditReversal"))
 
   const consumeTransactionCredit: BillingRepositoryService["consumeTransactionCredit"] = (input) =>
     db

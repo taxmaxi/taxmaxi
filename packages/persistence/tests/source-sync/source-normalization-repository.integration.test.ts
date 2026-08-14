@@ -336,6 +336,64 @@ describe("SourceNormalizationRepositoryLive", () => {
     await Effect.runPromise(context.destroyTestDatabase())
   })
 
+  it("reserves replay credits atomically before derived state can be reset", async () => {
+    const secondRawRecordId = "00000000-0000-0000-0000-000000000484"
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 1,
+          kind: "manual_adjustment",
+          reference: "test:single-replay-credit",
+          paymentReference: null,
+          expiresAt: null,
+        })
+        yield* seedRawRecord({
+          rawRecordId: secondRawRecordId,
+          externalRecordId: "raw-replay-credit-second",
+          occurredAt: new Date("2025-01-02T10:00:00.000Z"),
+        })
+      })
+    )
+
+    await expect(
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.reserveReplayTransactionCredits({
+            transactions: [
+              {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: TEST_RAW_RECORD_ID,
+                externalId: "replay-credit-first",
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              {
+                sourceId: TEST_SOURCE_ID,
+                sourceRawRecordId: secondRawRecordId,
+                externalId: "replay-credit-second",
+                principalId: TEST_PRINCIPAL_ID,
+              },
+            ],
+          })
+        )
+      )
+    ).rejects.toThrow("Transaction credit balance is exhausted")
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ count: sql<number>`count(*)` })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(Number(usage[0]?.count ?? 0)).toBe(0)
+  })
+
   it("consumes one credit for a registered user transaction across source replay", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
     const artifacts = {

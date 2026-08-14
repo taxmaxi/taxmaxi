@@ -2439,7 +2439,31 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSyncEngineStorageError("sourceNormalizationRepository.persistNormalizedArtifacts"))
 
+  const reserveReplayTransactionCredits: SourceNormalizationRepositoryShape["reserveReplayTransactionCredits"] =
+    ({ transactions }) =>
+      db
+        .transaction((tx) =>
+          Effect.forEach(
+            transactions,
+            (transaction) =>
+              consumeTransactionCredit({
+                executor: tx,
+                externalId: transaction.externalId,
+                principalId: transaction.principalId,
+                sourceId: transaction.sourceId,
+                sourceRawRecordId: transaction.sourceRawRecordId,
+              }),
+            { concurrency: 1, discard: true }
+          )
+        )
+        .pipe(
+          wrapSyncEngineStorageError(
+            "sourceNormalizationRepository.reserveReplayTransactionCredits"
+          )
+        )
+
   return SourceNormalizationRepository.of({
+    reserveReplayTransactionCredits,
     persistNormalizedArtifacts,
   } satisfies SourceNormalizationRepositoryShape)
 })

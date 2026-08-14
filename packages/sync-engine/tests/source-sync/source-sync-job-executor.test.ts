@@ -22,6 +22,7 @@ import {
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
   SourceSyncStateRepository,
+  SyncEngineStorageError,
   TransferReconciliationService,
   type SourceSyncExecutionState,
   type SourceSyncJobMode,
@@ -91,6 +92,7 @@ const makeExecutorLayer = ({
   replayRawRecords = [],
   replayCandidates = [],
   failNormalizeOnce = false,
+  failReplayCreditReservation = false,
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -102,6 +104,7 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
+  readonly failReplayCreditReservation?: boolean
   readonly events: Array<string>
 }) => {
   const syncSource = {
@@ -372,6 +375,15 @@ const makeExecutorLayer = ({
   })
 
   const SourceNormalizationRepositoryTestLive = Layer.succeed(SourceNormalizationRepository, {
+    reserveReplayTransactionCredits: () =>
+      failReplayCreditReservation
+        ? Effect.fail(
+            new SyncEngineStorageError({
+              operation: "sourceNormalizationRepository.consumeTransactionCredit.exhausted",
+              cause: "Transaction credit balance is exhausted",
+            })
+          )
+        : Effect.void,
     persistNormalizedArtifacts: () =>
       Effect.dieMessage("persistNormalizedArtifacts should not be called"),
   })
@@ -582,6 +594,29 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("mark-raw-normalized")
     expect(events).toContain("clear-replay-failure-metadata")
     expect(events).toContain("complete:1:1")
+  })
+
+  it("does not reset replay state when transaction credits cannot be reserved", async () => {
+    const events: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [replayRawRecord],
+            failReplayCreditReservation: true,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("failed")
+    expect(events).not.toContain("reset-derived-state")
+    expect(events).not.toContain("mark-raw-normalized")
   })
 
   it("records retry metadata and returns a retryable error before the final attempt", async () => {

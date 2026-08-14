@@ -84,6 +84,7 @@ export interface BillingRepositoryService {
     { readonly generation: number; readonly expiresAt: Date; readonly priceId: string },
     PersistenceError
   >
+  /** Grant credits and reconcile any known payment loss before the balance becomes visible. */
   readonly grantCredits: (input: {
     readonly userId: AuthUserId
     readonly amount: number
@@ -97,6 +98,7 @@ export interface BillingRepositoryService {
   readonly reconcilePaymentCreditReversals: (
     paymentReference: string
   ) => Effect.Effect<boolean, PersistenceError>
+  /** Record payment loss and reconcile affected credit balances in the same transaction. */
   readonly setPaymentCreditReversal: (input: {
     readonly paymentReference: string
     readonly reversalGroup: string

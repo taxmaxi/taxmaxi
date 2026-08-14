@@ -848,10 +848,29 @@ describe("StripeBillingServiceLive", () => {
         })
       )
     )
+    const invalidDeletedSubscription = await Effect.runPromise(
+      Effect.either(
+        validateStripeWebhookEvent({
+          id: "evt_invalid_deleted_subscription",
+          created: 1_700_000_000,
+          type: "customer.subscription.deleted",
+          data: {
+            object: {
+              id: "sub_invalid_deleted",
+              customer: "cus_invalid_deleted",
+            },
+          },
+        })
+      )
+    )
 
     expect(valid).toMatchObject({ _tag: "Right" })
     expect(unrelatedInvoice).toMatchObject({ _tag: "Right" })
     expect(invalid).toMatchObject({
+      _tag: "Left",
+      left: { message: "Invalid Stripe webhook event payload" },
+    })
+    expect(invalidDeletedSubscription).toMatchObject({
       _tag: "Left",
       left: { message: "Invalid Stripe webhook event payload" },
     })
@@ -1603,6 +1622,8 @@ describe("StripeBillingServiceLive", () => {
         lookup_key: "taxmaxi_topup_1k_eur",
         product: "prod_top_up",
         recurring: null,
+        unit_amount: 2_000,
+        currency: "eur",
       },
     ]
     stripeMockState.subscription = {
@@ -1641,6 +1662,72 @@ describe("StripeBillingServiceLive", () => {
     })
   })
 
+  it("rejects unsupported direct Checkout prices before creating a session", async () => {
+    stripeMockState.checkoutParams = []
+    stripeMockState.prices = [
+      {
+        id: "price_top_up_tiered",
+        lookup_key: "taxmaxi_topup_1k_eur",
+        product: "prod_top_up",
+        recurring: null,
+        unit_amount: null,
+        currency: "eur",
+      },
+    ]
+    stripeMockState.subscription = {
+      id: "sub_active_annual",
+      customer: "cus_test",
+      status: "active",
+      metadata: { plan_lookup_key: "taxmaxi_annual_10k_eur" },
+      items: {
+        data: [
+          {
+            price: {
+              lookup_key: "taxmaxi_annual_10k_eur",
+              product: "prod_annual",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+    })
+
+    const tieredTopUp = await Effect.runPromise(
+      Effect.either(service.createTopUpCheckout(TEST_USER_ID))
+    )
+
+    stripeMockState.prices = [
+      {
+        id: "price_annual_usd",
+        lookup_key: "taxmaxi_annual_10k_eur",
+        product: "prod_annual",
+        recurring: { interval: "year", interval_count: 1 },
+        unit_amount: 15_900,
+        currency: "usd",
+      },
+    ]
+    stripeMockState.listedSubscriptions = []
+    const nonEurAnnual = await Effect.runPromise(
+      Effect.either(service.createAnnualCheckout(TEST_USER_ID))
+    )
+    stripeMockState.listedSubscriptions = null
+
+    expect(tieredTopUp).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe Checkout prices must have a fixed unit amount" },
+    })
+    expect(nonEurAnnual).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe Checkout prices must use EUR" },
+    })
+    expect(stripeMockState.checkoutParams).toEqual([])
+  })
+
   it("blocks duplicate annual Checkout for a partially tagged archived subscription", async () => {
     stripeMockState.checkoutParams = []
     stripeMockState.prices = [
@@ -1649,6 +1736,8 @@ describe("StripeBillingServiceLive", () => {
         lookup_key: "taxmaxi_annual_10k_eur",
         product: "prod_replacement_annual",
         recurring: { interval: "year", interval_count: 1 },
+        unit_amount: 15_900,
+        currency: "eur",
       },
     ]
     stripeMockState.subscription = {
@@ -1975,6 +2064,7 @@ describe("StripeBillingServiceLive", () => {
       amount: 10_000,
       charge: "ch_annual",
       payment_intent: "pi_annual",
+      status: "succeeded",
     }
     stripeMockState.event = {
       id: "evt_credit_note_created",
@@ -2007,6 +2097,80 @@ describe("StripeBillingServiceLive", () => {
       stripeInvoiceId: "in_annual",
       terminal: true,
     })
+  })
+
+  it("waits for a credit-note refund to succeed before reversing credits", async () => {
+    stripeMockState.retrievedRefund = {
+      id: "re_credit_note_pending",
+      amount: 1_000,
+      charge: "ch_credit_note_pending",
+      payment_intent: "pi_credit_note_pending",
+      status: "pending",
+    }
+    stripeMockState.charge = {
+      id: "ch_credit_note_pending",
+      amount: 2_000,
+      payment_intent: "pi_credit_note_pending",
+    }
+    stripeMockState.event = {
+      id: "evt_credit_note_pending",
+      created: 1_700_000_000,
+      type: "credit_note.created",
+      data: {
+        object: {
+          id: "cn_pending_refund",
+          currency: "eur",
+          invoice: "in_pending_refund",
+          status: "issued",
+          refunds: [
+            {
+              amount_refunded: 1_000,
+              payment_record_refund: null,
+              refund: "re_credit_note_pending",
+              type: "refund",
+            },
+          ],
+        },
+      },
+    }
+    const reversals: Array<Parameters<BillingRepositoryService["setPaymentCreditReversal"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      setPaymentCreditReversal: (input) =>
+        Effect.sync(() => {
+          reversals.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+    expect(reversals).toEqual([])
+
+    stripeMockState.event = {
+      id: "evt_credit_note_refund_succeeded",
+      created: 1_700_000_100,
+      type: "refund.updated",
+      data: {
+        object: {
+          id: "re_credit_note_pending",
+          amount: 1_000,
+          charge: "ch_credit_note_pending",
+          payment_intent: "pi_credit_note_pending",
+          status: "succeeded",
+        },
+      },
+    }
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(reversals).toEqual([
+      expect.objectContaining({
+        paymentReference: "pi_credit_note_pending",
+        reversalGroup: "stripe:refund:re_credit_note_pending:payment",
+        lossReference: "stripe:refund:re_credit_note_pending",
+        reversedAmount: 1_000,
+        terminal: true,
+      }),
+    ])
   })
 
   it("reverses credits when a pending refund later succeeds", async () => {

@@ -31,6 +31,8 @@ import {
   type SourceSyncSource,
   type SourceProviderModuleShape,
   type SourceProviderModuleError,
+  SourceProviderRecoverableNormalizationError,
+  type SourceProviderNormalizationDecision,
   type SourceProviderRawRecordNormalizer,
   SourceProviderRegistry,
   SourceSyncJobExecutionConflictError,
@@ -78,6 +80,18 @@ interface ClassificationResult {
   readonly execution: SourceSyncExecutionState
   readonly failedRawRecordIds: ReadonlySet<string>
 }
+
+type PreparedReplayRecord =
+  | {
+      readonly state: "ready"
+      readonly rawRecord: SourceRawRecord
+      readonly decision: SourceProviderNormalizationDecision
+    }
+  | {
+      readonly state: "failed"
+      readonly rawRecord: SourceRawRecord
+      readonly error: SourceProviderRecoverableNormalizationError
+    }
 
 type SourceSyncExecutionError =
   | UnsupportedProviderError
@@ -215,6 +229,47 @@ const make = Effect.gen(function* () {
       } satisfies NormalizationSummary)
     )
 
+  const persistNormalizationDecision = ({
+    rawRecord,
+    decision,
+  }: {
+    readonly rawRecord: SourceRawRecord
+    readonly decision: SourceProviderNormalizationDecision
+  }): Effect.Effect<
+    NormalizationSummary,
+    SourceProviderRecoverableNormalizationError | SyncEngineStorageError
+  > =>
+    Effect.gen(function* () {
+      if (decision.kind === "skipped") {
+        yield* sourceRawRecordRepository.markRawRecordNormalized({
+          rawRecordId: rawRecord.id,
+        })
+
+        return {
+          normalizedRecords: 1,
+          failedRecords: 0,
+          failedRawRecordIds: [],
+        } satisfies NormalizationSummary
+      }
+
+      yield* sourceNormalizationRepository.persistNormalizedArtifacts({
+        transaction: decision.transaction,
+        venueContext: decision.venueContext,
+        onchainContext: decision.onchainContext,
+        providerTransfers: decision.providerTransfers,
+        feeTransfers: decision.feeTransfers,
+        transactionReview: decision.transactionReview,
+        resolvedTransactionType: decision.resolvedTransactionType,
+        deriveLegs: decision.deriveLegs,
+      })
+
+      return {
+        normalizedRecords: 1,
+        failedRecords: 0,
+        failedRawRecordIds: [],
+      } satisfies NormalizationSummary
+    })
+
   const normalizeRawRecord = ({
     source,
     rawRecord,
@@ -233,48 +288,13 @@ const make = Effect.gen(function* () {
         } satisfies NormalizationSummary
       }
 
-      const normalization = yield* normalizeRecord({ source, sourceRecord: rawRecord })
-
-      if (normalization.kind === "skipped") {
-        yield* sourceRawRecordRepository.markRawRecordNormalized({
-          rawRecordId: rawRecord.id,
-        })
-
-        return {
-          normalizedRecords: 1,
-          failedRecords: 0,
-          failedRawRecordIds: [],
-        } satisfies NormalizationSummary
-      }
-
-      yield* sourceNormalizationRepository.persistNormalizedArtifacts({
-        transaction: normalization.transaction,
-        venueContext: normalization.venueContext,
-        onchainContext: normalization.onchainContext,
-        providerTransfers: normalization.providerTransfers,
-        feeTransfers: normalization.feeTransfers,
-        transactionReview: normalization.transactionReview,
-        resolvedTransactionType: normalization.resolvedTransactionType,
-        deriveLegs: normalization.deriveLegs,
-      })
-
-      return {
-        normalizedRecords: 1,
-        failedRecords: 0,
-        failedRawRecordIds: [],
-      } satisfies NormalizationSummary
+      const decision = yield* normalizeRecord({ source, sourceRecord: rawRecord })
+      return yield* persistNormalizationDecision({ rawRecord, decision })
     }).pipe(
       Effect.catchAll((error) =>
         error._tag === "SyncEngineStorageError"
           ? Effect.fail(error)
           : markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
-      ),
-      Effect.mapError(
-        (error) =>
-          new SyncEngineStorageError({
-            operation: "sourceSyncJobExecutor.normalizeRawRecord",
-            cause: error,
-          })
       )
     )
 
@@ -300,12 +320,54 @@ const make = Effect.gen(function* () {
         )
     )
 
+  const normalizePreparedReplayBatch = ({
+    rawRecords,
+    preparedRecords,
+  }: {
+    readonly rawRecords: ReadonlyArray<SourceRawRecord>
+    readonly preparedRecords: ReadonlyMap<string, PreparedReplayRecord>
+  }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
+    Effect.reduce(
+      rawRecords,
+      { normalizedRecords: 0, failedRecords: 0, failedRawRecordIds: [] } as NormalizationSummary,
+      (state, rawRecord) => {
+        const prepared = preparedRecords.get(rawRecord.id)
+        const normalization =
+          prepared === undefined
+            ? Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "sourceSyncJobExecutor.normalizePreparedReplayBatch",
+                  cause: `Missing prepared replay record ${rawRecord.id}`,
+                })
+              )
+            : prepared.state === "failed"
+              ? markRecoverableNormalizationFailure({
+                  rawRecordId: rawRecord.id,
+                  error: prepared.error,
+                })
+              : persistNormalizationDecision({ rawRecord, decision: prepared.decision }).pipe(
+                  Effect.catchTag("SourceProviderRecoverableNormalizationError", (error) =>
+                    markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
+                  )
+                )
+
+        return normalization.pipe(
+          Effect.map((summary) => ({
+            normalizedRecords: state.normalizedRecords + summary.normalizedRecords,
+            failedRecords: state.failedRecords + summary.failedRecords,
+            failedRawRecordIds: [...state.failedRawRecordIds, ...summary.failedRawRecordIds],
+          }))
+        )
+      }
+    )
+
   const classifyRawRecords = ({
     source,
     jobId,
     workerId,
     provider,
     normalizeRecord,
+    preparedReplayRecords,
     rawRecordIds,
     baseExecution,
   }: {
@@ -314,6 +376,7 @@ const make = Effect.gen(function* () {
     readonly workerId: string
     readonly provider: string
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
+    readonly preparedReplayRecords?: ReadonlyMap<string, PreparedReplayRecord>
     readonly rawRecordIds: ReadonlyArray<string>
     readonly baseExecution: SourceSyncExecutionState
   }): Effect.Effect<ClassificationResult, SyncEngineStorageError> =>
@@ -355,11 +418,14 @@ const make = Effect.gen(function* () {
                   kind: "client",
                 })
               )
-            const normalization = yield* normalizeRawBatch({
-              source,
-              rawRecords,
-              normalizeRecord,
-            }).pipe(
+            const normalization = yield* (
+              preparedReplayRecords === undefined
+                ? normalizeRawBatch({ source, rawRecords, normalizeRecord })
+                : normalizePreparedReplayBatch({
+                    rawRecords,
+                    preparedRecords: preparedReplayRecords,
+                  })
+            ).pipe(
               sourceSyncSpan({
                 name: "source-sync.normalize-raw-batch",
                 attributes: {
@@ -769,14 +835,6 @@ const make = Effect.gen(function* () {
 
       yield* Effect.logInfo({ sourceId: source.id, jobId, provider }, "source-replay:start")
 
-      yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
-        sourceSyncSpan({
-          name: "source-replay.reset-derived-state",
-          attributes: { sourceId: source.id, jobId, provider },
-          kind: "client",
-        })
-      )
-      yield* heartbeatSourceSyncJob({ jobId, workerId })
       const rawRecords = yield* sourceRawRecordRepository
         .listAllRawRowsForReplay({ sourceId: source.id })
         .pipe(
@@ -786,12 +844,44 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
+      const preparedReplayRecords = yield* Effect.forEach(
+        rawRecords,
+        (rawRecord): Effect.Effect<PreparedReplayRecord, SyncEngineStorageError> =>
+          normalizeRecord({ source, sourceRecord: rawRecord }).pipe(
+            Effect.map(
+              (decision): PreparedReplayRecord => ({ state: "ready", rawRecord, decision })
+            ),
+            Effect.catchTag("SourceProviderRecoverableNormalizationError", (error) =>
+              Effect.succeed({ state: "failed", rawRecord, error } as const)
+            )
+          ),
+        { concurrency: 1 }
+      )
+      yield* sourceNormalizationRepository.reserveReplayTransactionCredits({
+        transactions: preparedReplayRecords.flatMap((prepared) =>
+          prepared.state === "ready" && prepared.decision.kind === "prepared"
+            ? [prepared.decision.transaction]
+            : []
+        ),
+      })
+
+      yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
+        sourceSyncSpan({
+          name: "source-replay.reset-derived-state",
+          attributes: { sourceId: source.id, jobId, provider },
+          kind: "client",
+        })
+      )
+      yield* heartbeatSourceSyncJob({ jobId, workerId })
       const classification = yield* classifyRawRecords({
         source,
         jobId,
         workerId,
         provider,
         normalizeRecord,
+        preparedReplayRecords: new Map(
+          preparedReplayRecords.map((prepared) => [prepared.rawRecord.id, prepared])
+        ),
         rawRecordIds: rawRecords.map((rawRecord) => rawRecord.id),
         baseExecution: {
           ...initialExecution,

@@ -103,4 +103,11 @@ describe("public pricing catalog loader", () => {
     await expect(loadPublicBillingCatalog(loadCatalog)).resolves.toBeNull()
     expect(loadCatalog).toHaveBeenCalledOnce()
   })
+
+  it("uses fallback pricing when the SDK catalog does not settle in time", async () => {
+    const loadCatalog = vi.fn(() => new Promise<BillingCatalog>(() => undefined))
+
+    await expect(loadPublicBillingCatalog(loadCatalog, 0)).resolves.toBeNull()
+    expect(loadCatalog).toHaveBeenCalledOnce()
+  })
 })
