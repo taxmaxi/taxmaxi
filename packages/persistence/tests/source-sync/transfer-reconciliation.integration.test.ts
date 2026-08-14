@@ -1528,6 +1528,106 @@ describe("TransferReconciliationServiceLive", () => {
     })
   })
 
+  it("defers an approved observed representation until its canonical transfer exists", async () => {
+    const walletAddress = "bc1qownedwalletapprovedobservation000000000000"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-approved-observation" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-approved-observation",
+        timestamp,
+        amount: "0.25",
+        toAddress: walletAddress,
+        networkHash: "btc-approved-observation-hash",
+      })
+    )
+    const observed = await runPg(
+      seedObservedOnchainReceipt({
+        externalId: "observed-approved-representation",
+        txHash: "btc-approved-observation-hash",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.25",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: observed.providerAssetRowId,
+          mappingKind: "asset",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          canonicalFiatCurrency: null,
+          mappingStatus: "approved",
+          reviewerNotes: null,
+          sourceNotes: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+      })
+    )
+
+    const summary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const canonicalization = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const inventoryMovements = yield* db
+          .select({ id: schema.inventoryMovements.id })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
+
+        return { reconciliation, inventoryMovements }
+      })
+    )
+
+    expect(summary).toEqual(
+      expect.objectContaining({
+        evaluatedProviderTransfers: 1,
+        pending: 1,
+      })
+    )
+    expect(state.reconciliation).toMatchObject({
+      canonicalTransferId: null,
+      canonicalTransactionId: observed.transactionId,
+      status: "pending",
+      matchReason: "destination_source_replay_pending",
+      deterministic: false,
+    })
+    expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
+    expect(state.inventoryMovements).toEqual([])
+  })
+
   it("records first-seen representation evidence without moving inventory", async () => {
     const walletAddress = "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
