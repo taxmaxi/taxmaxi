@@ -362,6 +362,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       runRepository(
         Effect.flatMap(SourceNormalizationRepository, (repository) =>
           repository.reserveReplayTransactionCredits({
+            reservationId: "replay-credit-atomicity",
             transactions: [
               {
                 sourceId: TEST_SOURCE_ID,
@@ -413,6 +414,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     const references = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
         repository.reserveReplayTransactionCredits({
+          reservationId: "replay-credit-compensation",
           transactions: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -426,12 +428,18 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     expect(references).toEqual([
-      `transaction:${TEST_SOURCE_ID}:external:replay-credit-compensation`,
+      {
+        reference: `transaction:${TEST_SOURCE_ID}:external:replay-credit-compensation`,
+        sourceRawRecordId: TEST_RAW_RECORD_ID,
+      },
     ])
 
     await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
-        repository.releaseReplayTransactionCredits({ references })
+        repository.releaseReplayTransactionCredits({
+          reservationId: "replay-credit-compensation",
+          references: references.map(({ reference }) => reference),
+        })
       )
     )
 
@@ -447,6 +455,209 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(ledger).toEqual([
       { kind: "manual_adjustment", reference: "test:replay-credit-compensation" },
     ])
+  })
+
+  it("lets a successor adopt a replay reservation before stale cleanup runs", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const transaction = {
+      sourceId: TEST_SOURCE_ID,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+      externalId: "replay-credit-adoption",
+      externalGroupId: null,
+      timestamp: occurredAt,
+      transactionType: "buy_fiat",
+      providerTransactionType: "buy",
+      providerStatus: "completed",
+      providerResourcePath: null,
+      providerDescription: null,
+      providerCreatedAt: occurredAt,
+      providerUpdatedAt: occurredAt,
+      metadata: null,
+      principalId: TEST_PRINCIPAL_ID,
+    } as const
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 1,
+          kind: "manual_adjustment",
+          reference: "test:replay-credit-adoption",
+          paymentReference: null,
+          expiresAt: null,
+        })
+      })
+    )
+
+    const first = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-owner-old",
+          transactions: [transaction],
+        })
+      )
+    )
+    const adopted = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-owner-successor",
+          transactions: [transaction],
+        })
+      )
+    )
+    const stalePersistence = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository
+          .persistNormalizedArtifacts({
+            replayReservationId: "replay-owner-old",
+            transaction,
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "coinbase-account-1",
+              externalOrderId: null,
+              externalFillId: null,
+              side: "buy",
+              instrument: "BTC-EUR",
+              fillPrice: "10000.00",
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: null,
+            },
+            providerTransfers: [],
+            feeTransfers: [],
+            legs: [],
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+          .pipe(Effect.either)
+      )
+    )
+    await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* SourceNormalizationRepository
+        yield* repository.releaseReplayTransactionCredits({
+          reservationId: "replay-owner-old",
+          references: first.map(({ reference }) => reference),
+        })
+        yield* repository.persistNormalizedArtifacts({
+          replayReservationId: "replay-owner-successor",
+          transaction,
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "coinbase-account-1",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "buy",
+            instrument: "BTC-EUR",
+            fillPrice: "10000.00",
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+        yield* repository.releaseReplayTransactionCredits({
+          reservationId: "replay-owner-successor",
+          references: first.map(({ reference }) => reference),
+        })
+      })
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            reference: schema.creditLedger.reference,
+            replayReservationId: schema.creditLedger.replayReservationId,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(stalePersistence._tag).toBe("Left")
+    expect(adopted).toEqual(first)
+    expect(usage).toEqual([
+      {
+        reference: `transaction:${TEST_SOURCE_ID}:external:replay-credit-adoption`,
+        replayReservationId: null,
+      },
+    ])
+  })
+
+  it("releases an adopted replay reservation when the successor fails", async () => {
+    const transaction = {
+      sourceId: TEST_SOURCE_ID,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+      externalId: "replay-credit-adoption-failure",
+      principalId: TEST_PRINCIPAL_ID,
+    }
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 1,
+          kind: "manual_adjustment",
+          reference: "test:replay-credit-adoption-failure",
+          paymentReference: null,
+          expiresAt: null,
+        })
+      })
+    )
+
+    const first = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-owner-old",
+          transactions: [transaction],
+        })
+      )
+    )
+    const adopted = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-owner-successor",
+          transactions: [transaction],
+        })
+      )
+    )
+
+    await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* SourceNormalizationRepository
+        yield* repository.releaseReplayTransactionCredits({
+          reservationId: "replay-owner-old",
+          references: first.map(({ reference }) => reference),
+        })
+        yield* repository.releaseReplayTransactionCredits({
+          reservationId: "replay-owner-successor",
+          references: adopted.map(({ reference }) => reference),
+        })
+      })
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ reference: schema.creditLedger.reference })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(adopted).toEqual(first)
+    expect(usage).toEqual([])
   })
 
   it("consumes one credit for a registered user transaction across source replay", async () => {
@@ -529,6 +740,211 @@ describe("SourceNormalizationRepositoryLive", () => {
 
     expect(Number(usage[0]?.count ?? 0)).toBe(1)
     expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
+  })
+
+  it("keeps a raw-record credit when replay later discovers external ids", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const artifacts = (externalId: string | null) =>
+      ({
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId: TEST_RAW_RECORD_ID,
+          externalId,
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId: fixture.cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy",
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        feeTransfers: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      }) as const
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts(artifacts(null))
+      )
+    )
+    const firstReservation = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-discovers-external-a",
+          transactions: [artifacts("discovered-external-a").transaction],
+        })
+      )
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+      })
+    )
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts(artifacts("discovered-external-a"))
+      )
+    )
+    const secondReservation = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-discovers-external-b",
+          transactions: [artifacts("discovered-external-b").transaction],
+        })
+      )
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ reference: schema.creditLedger.reference })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(firstReservation).toEqual([])
+    expect(secondReservation).toEqual([])
+    expect(usage).toEqual([
+      { reference: `transaction:${TEST_SOURCE_ID}:raw:${TEST_RAW_RECORD_ID}` },
+    ])
+  })
+
+  it("migrates a corrected external credit identity and still deduplicates another raw row", async () => {
+    const secondRawRecordId = "00000000-0000-0000-0000-000000000485"
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const artifacts = ({
+      externalId,
+      sourceRawRecordId,
+    }: {
+      readonly externalId: string
+      readonly sourceRawRecordId: string
+    }) =>
+      ({
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId,
+          externalId,
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId: fixture.cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy",
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        feeTransfers: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      }) as const
+    const original = artifacts({
+      externalId: "external-before-correction",
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+    })
+    const corrected = artifacts({
+      externalId: "external-after-correction",
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+    })
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts(original)
+      )
+    )
+    const correctionReservation = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          reservationId: "replay-corrects-external",
+          transactions: [corrected.transaction],
+        })
+      )
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+        yield* seedRawRecord({
+          rawRecordId: secondRawRecordId,
+          externalRecordId: "raw-corrected-duplicate",
+          occurredAt,
+        })
+      })
+    )
+    await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* SourceNormalizationRepository
+        yield* repository.persistNormalizedArtifacts(corrected)
+        yield* repository.persistNormalizedArtifacts(
+          artifacts({
+            externalId: "external-after-correction",
+            sourceRawRecordId: secondRawRecordId,
+          })
+        )
+      })
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ delta: schema.creditLedger.delta, reference: schema.creditLedger.reference })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(correctionReservation).toEqual([])
+    expect(usage).toEqual([
+      {
+        delta: -1,
+        reference: `transaction:${TEST_SOURCE_ID}:external:external-after-correction`,
+      },
+    ])
   })
 
   it("allows only one concurrent transaction when one credit remains across sources", async () => {

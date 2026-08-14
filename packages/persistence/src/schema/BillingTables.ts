@@ -76,6 +76,7 @@ export const creditLedger = pgTable(
     paymentReference: text("payment_reference"),
     paymentAmount: integer("payment_amount"),
     stripeInvoiceId: text("stripe_invoice_id"),
+    replayReservationId: text("replay_reservation_id"),
     expiresAt: timestamp("expires_at"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },

@@ -1,0 +1,1 @@
+ALTER TABLE "credit_ledger" ADD COLUMN "replay_reservation_id" text;

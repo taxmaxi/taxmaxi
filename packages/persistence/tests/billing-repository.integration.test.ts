@@ -294,6 +294,79 @@ describe("BillingRepositoryLive", () => {
     expect(available).toBe(999)
   })
 
+  it.each([
+    {
+      firstExpiresAt: null,
+      name: "inside one expiry bucket",
+      secondExpiresAt: null,
+    },
+    {
+      firstExpiresAt: new Date("2027-08-14T00:00:00.000Z"),
+      name: "across expiry buckets",
+      secondExpiresAt: null,
+    },
+  ])("rounds a shared-payment reversal once $name", async ({ firstExpiresAt, secondExpiresAt }) => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 10_000,
+          kind: "annual_grant",
+          reference: `invoice:rounding:second:${firstExpiresAt === null ? "same" : "split"}`,
+          paymentReference: "pi_shared_rounding",
+          paymentAmount: 20_000,
+          stripeInvoiceId: "in_rounding_second",
+          expiresAt: secondExpiresAt,
+        })
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 10_000,
+          kind: "annual_grant",
+          reference: `invoice:rounding:first:${firstExpiresAt === null ? "same" : "split"}`,
+          paymentReference: "pi_shared_rounding",
+          paymentAmount: 20_000,
+          stripeInvoiceId: "in_rounding_first",
+          expiresAt: firstExpiresAt,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_shared_rounding",
+          reversalGroup: "stripe:refund:re_shared_rounding:payment",
+          lossReference: "stripe:refund:re_shared_rounding",
+          reversedAmount: 1,
+          paymentAmount: 20_000,
+          reference: "stripe:refund:re_shared_rounding:payment",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          stripeInvoiceId: null,
+          monotonic: true,
+          terminal: true,
+        })
+        yield* repository.reconcilePaymentCreditReversals("pi_shared_rounding")
+        const available = yield* repository.availableCredits(TEST_USER_ID)
+        return { available }
+      })
+    )
+    const adjustments = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ delta: schema.creditLedger.delta, reference: schema.creditLedger.reference })
+          .from(schema.creditLedger)
+          .where(
+            and(
+              eq(schema.creditLedger.kind, "manual_adjustment"),
+              eq(schema.creditLedger.paymentReference, "pi_shared_rounding")
+            )
+          )
+      })
+    )
+
+    expect(result.available).toBe(19_999)
+    expect(adjustments.reduce((total, adjustment) => total + adjustment.delta, 0)).toBe(-1)
+    expect(adjustments.some(({ reference }) => reference.includes("in_rounding_first"))).toBe(true)
+  })
+
   it("moves a shared-payment refund from payment-wide to its credited invoice", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
@@ -736,6 +809,56 @@ describe("BillingRepositoryLive", () => {
 
     expect(reservations.afterLookupChange).toEqual(reservations.first)
     expect(reservations.afterLookupChange.priceId).toBe("price_original")
+  })
+
+  it("clears only the current failed annual Checkout reservation", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        const first = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_first",
+        })
+        yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.billingAccounts)
+                .set({ annualCheckoutExpiresAt: new Date("2020-01-01T00:00:00.000Z") })
+                .where(eq(schema.billingAccounts.userId, TEST_USER_ID))
+            })
+          )
+        )
+        const second = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_second",
+        })
+        const clearedOld = yield* repository.clearAnnualCheckoutReservation({
+          userId: TEST_USER_ID,
+          generation: first.generation,
+        })
+        const afterOldClear = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_third",
+        })
+        const clearedCurrent = yield* repository.clearAnnualCheckoutReservation({
+          userId: TEST_USER_ID,
+          generation: second.generation,
+        })
+        const afterCurrentClear = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_third",
+        })
+        return { second, clearedOld, afterOldClear, clearedCurrent, afterCurrentClear }
+      })
+    )
+
+    expect(result.clearedOld).toBe(false)
+    expect(result.afterOldClear).toEqual(result.second)
+    expect(result.clearedCurrent).toBe(true)
+    expect(result.afterCurrentClear.generation).toBe(result.second.generation + 1)
+    expect(result.afterCurrentClear.priceId).toBe("price_third")
   })
 
   it("invalidates the Checkout reservation that produced a terminal subscription", async () => {

@@ -14,6 +14,7 @@ import * as Option from "effect/Option"
 import { describe, expect, it, vi } from "vitest"
 
 interface StripeMockState {
+  checkoutFailure: "connection" | "invalid_request" | null
   checkoutParams: Array<unknown>
   charge: unknown
   dispute: unknown
@@ -33,6 +34,7 @@ interface StripeMockState {
 }
 
 const stripeMockState = vi.hoisted<StripeMockState>(() => ({
+  checkoutFailure: null,
   checkoutParams: [],
   charge: null,
   dispute: null,
@@ -48,67 +50,92 @@ const stripeMockState = vi.hoisted<StripeMockState>(() => ({
   subscription: null,
 }))
 
-vi.mock("stripe", () => ({
-  default: class StripeMock {
-    readonly charges = {
-      retrieve: () => Promise.resolve(stripeMockState.charge),
-    }
-    readonly checkout = {
-      sessions: {
-        create: (params: unknown) => {
-          stripeMockState.checkoutParams.push(params)
-          return Promise.resolve({ url: "https://checkout.stripe.test/session" })
+vi.mock("stripe", () => {
+  class StripeMockInvalidRequestError extends Error {}
+  class StripeMockConnectionError extends Error {}
+  class StripeMockApiError extends Error {}
+  class StripeMockAuthenticationError extends Error {}
+  class StripeMockPermissionError extends Error {}
+  class StripeMockCardError extends Error {}
+
+  return {
+    default: class StripeMock {
+      static readonly errors = {
+        StripeAPIError: StripeMockApiError,
+        StripeAuthenticationError: StripeMockAuthenticationError,
+        StripeCardError: StripeMockCardError,
+        StripeConnectionError: StripeMockConnectionError,
+        StripeInvalidRequestError: StripeMockInvalidRequestError,
+        StripePermissionError: StripeMockPermissionError,
+      }
+      readonly charges = {
+        retrieve: () => Promise.resolve(stripeMockState.charge),
+      }
+      readonly checkout = {
+        sessions: {
+          create: (params: unknown) => {
+            stripeMockState.checkoutParams.push(params)
+            if (stripeMockState.checkoutFailure === "invalid_request") {
+              return Promise.reject(new StripeMockInvalidRequestError("Price is inactive"))
+            }
+            if (stripeMockState.checkoutFailure === "connection") {
+              return Promise.reject(new StripeMockConnectionError("Connection timed out"))
+            }
+            return Promise.resolve({ url: "https://checkout.stripe.test/session" })
+          },
         },
-      },
-    }
-    readonly customers = {
-      retrieve: () => Promise.resolve({ deleted: false }),
-    }
-    readonly disputes = {
-      retrieve: () => Promise.resolve(stripeMockState.dispute),
-    }
-    readonly prices = {
-      list: ({ lookup_keys: lookupKeys }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) =>
-        Promise.resolve({
-          data:
-            lookupKeys === undefined
-              ? stripeMockState.prices
-              : stripeMockState.prices.filter(
-                  (price) =>
-                    price.lookup_key !== undefined && lookupKeys.includes(price.lookup_key ?? "")
-                ),
+      }
+      readonly customers = {
+        retrieve: () => Promise.resolve({ deleted: false }),
+      }
+      readonly disputes = {
+        retrieve: () => Promise.resolve(stripeMockState.dispute),
+      }
+      readonly prices = {
+        list: ({
+          lookup_keys: lookupKeys,
+        }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) =>
+          Promise.resolve({
+            data:
+              lookupKeys === undefined
+                ? stripeMockState.prices
+                : stripeMockState.prices.filter(
+                    (price) =>
+                      price.lookup_key !== undefined && lookupKeys.includes(price.lookup_key ?? "")
+                  ),
+          }),
+        retrieve: (priceId: string) => Promise.resolve(stripeMockState.retrievedPrices[priceId]),
+      }
+      readonly subscriptions = {
+        list: () => ({
+          autoPagingToArray: () =>
+            Promise.resolve(stripeMockState.listedSubscriptions ?? [stripeMockState.subscription]),
         }),
-      retrieve: (priceId: string) => Promise.resolve(stripeMockState.retrievedPrices[priceId]),
-    }
-    readonly subscriptions = {
-      list: () => ({
-        autoPagingToArray: () =>
-          Promise.resolve(stripeMockState.listedSubscriptions ?? [stripeMockState.subscription]),
-      }),
-      retrieve: () => Promise.resolve(stripeMockState.subscription),
-    }
-    readonly invoicePayments = {
-      list: () => ({
-        autoPagingToArray: () => Promise.resolve(stripeMockState.invoicePayments),
-      }),
-    }
-    readonly paymentRecords = {
-      retrieve: () => Promise.resolve(stripeMockState.paymentRecord),
-    }
-    readonly refunds = {
-      list: () => ({
-        autoPagingToArray: ({ limit }: { readonly limit: number }) => {
-          stripeMockState.refundPagingLimit = limit
-          return Promise.resolve(stripeMockState.refunds)
-        },
-      }),
-      retrieve: () => Promise.resolve(stripeMockState.retrievedRefund),
-    }
-    readonly webhooks = {
-      constructEventAsync: () => Promise.resolve(stripeMockState.event),
-    }
-  },
-}))
+        retrieve: () => Promise.resolve(stripeMockState.subscription),
+      }
+      readonly invoicePayments = {
+        list: () => ({
+          autoPagingToArray: () => Promise.resolve(stripeMockState.invoicePayments),
+        }),
+      }
+      readonly paymentRecords = {
+        retrieve: () => Promise.resolve(stripeMockState.paymentRecord),
+      }
+      readonly refunds = {
+        list: () => ({
+          autoPagingToArray: ({ limit }: { readonly limit: number }) => {
+            stripeMockState.refundPagingLimit = limit
+            return Promise.resolve(stripeMockState.refunds)
+          },
+        }),
+        retrieve: () => Promise.resolve(stripeMockState.retrievedRefund),
+      }
+      readonly webhooks = {
+        constructEventAsync: () => Promise.resolve(stripeMockState.event),
+      }
+    },
+  }
+})
 
 import {
   allocateCreditNoteReversalAcrossPayments,
@@ -185,6 +212,7 @@ const billingRepositoryStub: BillingRepositoryService = {
       expiresAt: new Date("2026-08-14T11:00:00.000Z"),
       priceId: "price_annual",
     }),
+  clearAnnualCheckoutReservation: () => Effect.succeed(true),
   grantCredits: () => Effect.succeed(true),
   reconcilePaymentCreditReversals: () => Effect.succeed(false),
   setPaymentCreditReversal: () => Effect.succeed(true),
@@ -1676,6 +1704,109 @@ describe("StripeBillingServiceLive", () => {
       customer: "cus_test",
       line_items: [{ price: "price_top_up", quantity: 1 }],
     })
+  })
+
+  it("clears a definitive failed annual Checkout reservation before retrying", async () => {
+    const currentPrice = {
+      id: "price_current_annual",
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_annual",
+      recurring: { interval: "year", interval_count: 1 },
+      unit_amount: 15_900,
+      currency: "eur",
+    }
+    const archivedPrice = {
+      ...currentPrice,
+      id: "price_archived_annual_checkout",
+      lookup_key: null,
+    }
+    stripeMockState.checkoutFailure = "invalid_request"
+    stripeMockState.checkoutParams = []
+    stripeMockState.prices = [currentPrice]
+    stripeMockState.retrievedPrices = { [archivedPrice.id]: archivedPrice }
+    stripeMockState.listedSubscriptions = []
+    let reservationGeneration = 1
+    const cleared: Array<number> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      reserveAnnualCheckout: ({ priceId }) =>
+        Effect.succeed({
+          generation: reservationGeneration,
+          expiresAt: new Date("2026-08-14T20:00:00.000Z"),
+          priceId: reservationGeneration === 1 ? archivedPrice.id : priceId,
+        }),
+      clearAnnualCheckoutReservation: ({ generation }) =>
+        Effect.sync(() => {
+          cleared.push(generation)
+          if (generation !== reservationGeneration) return false
+          reservationGeneration += 1
+          return true
+        }),
+    })
+
+    const first = await Effect.runPromise(Effect.either(service.createAnnualCheckout(TEST_USER_ID)))
+    stripeMockState.checkoutFailure = null
+    const retryUrl = await Effect.runPromise(service.createAnnualCheckout(TEST_USER_ID))
+    stripeMockState.listedSubscriptions = null
+
+    expect(first).toMatchObject({
+      _tag: "Left",
+      left: { message: "Could not create annual Checkout: Price is inactive" },
+    })
+    expect(cleared).toEqual([1])
+    expect(retryUrl).toBe("https://checkout.stripe.test/session")
+    expect(stripeMockState.checkoutParams).toHaveLength(2)
+    expect(stripeMockState.checkoutParams[1]).toMatchObject({
+      line_items: [{ price: currentPrice.id, quantity: 1 }],
+      metadata: { annual_checkout_generation: "2" },
+    })
+  })
+
+  it("keeps an annual Checkout reservation after an ambiguous connection failure", async () => {
+    stripeMockState.checkoutFailure = "connection"
+    stripeMockState.checkoutParams = []
+    stripeMockState.prices = [
+      {
+        id: "price_annual_connection",
+        lookup_key: "taxmaxi_annual_10k_eur",
+        product: "prod_annual",
+        recurring: { interval: "year", interval_count: 1 },
+        unit_amount: 15_900,
+        currency: "eur",
+      },
+    ]
+    stripeMockState.listedSubscriptions = []
+    const cleared: Array<number> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      reserveAnnualCheckout: ({ priceId }) =>
+        Effect.succeed({
+          generation: 1,
+          expiresAt: new Date("2026-08-14T20:00:00.000Z"),
+          priceId,
+        }),
+      clearAnnualCheckoutReservation: ({ generation }) =>
+        Effect.sync(() => {
+          cleared.push(generation)
+          return true
+        }),
+    })
+
+    const result = await Effect.runPromise(
+      Effect.either(service.createAnnualCheckout(TEST_USER_ID))
+    )
+    stripeMockState.checkoutFailure = null
+    stripeMockState.listedSubscriptions = null
+
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { message: "Could not create annual Checkout: Connection timed out" },
+    })
+    expect(cleared).toEqual([])
   })
 
   it("rejects unsupported direct Checkout prices before creating a session", async () => {

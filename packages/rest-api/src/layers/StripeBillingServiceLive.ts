@@ -162,6 +162,12 @@ export const createReservedAnnualCheckoutSession = <
     })
   })
 
+export const isDefinitiveAnnualCheckoutCreationFailure = (cause: unknown): boolean =>
+  cause instanceof Stripe.errors.StripeInvalidRequestError ||
+  cause instanceof Stripe.errors.StripeAuthenticationError ||
+  cause instanceof Stripe.errors.StripePermissionError ||
+  cause instanceof Stripe.errors.StripeCardError
+
 export const buildTopUpCheckoutParams = ({
   customer,
   price,
@@ -1166,8 +1172,36 @@ const make = Effect.gen(function* () {
             client.prices.retrieve(priceId)
           ),
         createSession: ({ params, idempotencyKey }) =>
-          stripePromise("Could not create annual Checkout", (client) =>
-            client.checkout.sessions.create(params, { idempotencyKey })
+          stripeClient.pipe(
+            Effect.flatMap((client) =>
+              Effect.tryPromise({
+                try: () => client.checkout.sessions.create(params, { idempotencyKey }),
+                catch: (cause) => ({
+                  cause,
+                  error: stripeError(
+                    cause instanceof Error
+                      ? `Could not create annual Checkout: ${cause.message}`
+                      : "Could not create annual Checkout: Stripe request failed"
+                  ),
+                }),
+              }).pipe(
+                Effect.catchAll(({ cause, error }) =>
+                  isDefinitiveAnnualCheckoutCreationFailure(cause)
+                    ? billingRepository
+                        .clearAnnualCheckoutReservation({
+                          userId,
+                          generation: checkoutReservation.generation,
+                        })
+                        .pipe(
+                          Effect.mapError(() =>
+                            stripeError("Could not clear failed annual Checkout reservation")
+                          ),
+                          Effect.zipRight(Effect.fail(error))
+                        )
+                    : Effect.fail(error)
+                )
+              )
+            )
           ),
       })
       if (session.url === null) {

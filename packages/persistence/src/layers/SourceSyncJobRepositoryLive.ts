@@ -547,6 +547,15 @@ const make = Effect.gen(function* () {
             })
           }
 
+          yield* tx
+            .delete(schema.creditLedger)
+            .where(eq(schema.creditLedger.replayReservationId, jobId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceSyncJobRepository.recoverStaleActiveJob.releaseReplayCredits"
+              )
+            )
+
           yield* materializeFollowUpJob({
             executor: tx,
             jobId: job.id,

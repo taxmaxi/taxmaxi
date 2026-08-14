@@ -84,6 +84,11 @@ export interface BillingRepositoryService {
     { readonly generation: number; readonly expiresAt: Date; readonly priceId: string },
     PersistenceError
   >
+  /** Clear a failed Checkout reservation only while its generation is still current. */
+  readonly clearAnnualCheckoutReservation: (input: {
+    readonly userId: AuthUserId
+    readonly generation: number
+  }) => Effect.Effect<boolean, PersistenceError>
   /** Grant credits and reconcile any known payment loss before the balance becomes visible. */
   readonly grantCredits: (input: {
     readonly userId: AuthUserId

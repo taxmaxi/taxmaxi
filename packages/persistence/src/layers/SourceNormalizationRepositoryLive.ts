@@ -460,13 +460,17 @@ const make = Effect.gen(function* () {
   const consumeTransactionCredit = ({
     executor,
     externalId,
+    mode,
     principalId,
+    replayReservationId,
     sourceId,
     sourceRawRecordId,
   }: {
     readonly executor: SourceNormalizationExecutor
     readonly externalId: string | null
+    readonly mode: "persist" | "reserve"
     readonly principalId: string
+    readonly replayReservationId: string | null
     readonly sourceId: string
     readonly sourceRawRecordId: string | null
   }) =>
@@ -538,13 +542,11 @@ const make = Effect.gen(function* () {
         )
       }
 
-      const transactionIdentity =
-        externalId === null
-          ? sourceRawRecordId === null
-            ? null
-            : `raw:${sourceRawRecordId}`
-          : `external:${externalId}`
-      if (transactionIdentity === null) {
+      const rawReference =
+        sourceRawRecordId === null ? null : `transaction:${sourceId}:raw:${sourceRawRecordId}`
+      const externalReference =
+        externalId === null ? null : `transaction:${sourceId}:external:${externalId}`
+      if (rawReference === null && externalReference === null) {
         return yield* Effect.fail(
           toSyncEngineStorageError({
             operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
@@ -552,18 +554,176 @@ const make = Effect.gen(function* () {
           })
         )
       }
-      const reference = `transaction:${sourceId}:${transactionIdentity}`
-      const [existing] = yield* executor
-        .select({ id: schema.creditLedger.id })
+
+      const [previousForRawRecord] =
+        sourceRawRecordId === null
+          ? []
+          : yield* executor
+              .select({ externalId: schema.transactions.externalId })
+              .from(schema.transactions)
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, sourceId),
+                  eq(schema.transactions.sourceRawRecordId, sourceRawRecordId)
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.consumeTransactionCredit.findPreviousByRawRecord"
+                )
+              )
+      const [previousForExternalId] =
+        externalId === null
+          ? []
+          : yield* executor
+              .select({ sourceRawRecordId: schema.transactions.sourceRawRecordId })
+              .from(schema.transactions)
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, sourceId),
+                  eq(schema.transactions.externalId, externalId)
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.consumeTransactionCredit.findPreviousByExternalId"
+                )
+              )
+      const previousExternalReference =
+        previousForRawRecord?.externalId === null || previousForRawRecord?.externalId === undefined
+          ? null
+          : `transaction:${sourceId}:external:${previousForRawRecord.externalId}`
+      const previousRawReference =
+        previousForExternalId?.sourceRawRecordId === null ||
+        previousForExternalId?.sourceRawRecordId === undefined
+          ? null
+          : `transaction:${sourceId}:raw:${previousForExternalId.sourceRawRecordId}`
+      const candidateReferences = [
+        rawReference,
+        externalReference,
+        previousExternalReference,
+        previousRawReference,
+      ].filter((reference): reference is string => reference !== null)
+      const existingEntries = yield* executor
+        .select({
+          id: schema.creditLedger.id,
+          reference: schema.creditLedger.reference,
+          replayReservationId: schema.creditLedger.replayReservationId,
+        })
         .from(schema.creditLedger)
-        .where(eq(schema.creditLedger.reference, reference))
-        .limit(1)
+        .where(inArray(schema.creditLedger.reference, [...new Set(candidateReferences)]))
+        .for("update")
         .pipe(
           wrapSyncEngineSqlError(
             "sourceNormalizationRepository.consumeTransactionCredit.findExisting"
           )
         )
-      if (existing !== undefined) return null
+      const existingByReference = new Map(
+        existingEntries.map((entry) => [entry.reference, entry] as const)
+      )
+      const existingRaw = rawReference === null ? undefined : existingByReference.get(rawReference)
+      const existingExternal =
+        externalReference === null ? undefined : existingByReference.get(externalReference)
+      const existingForSameExternalRaw =
+        previousRawReference === null ? undefined : existingByReference.get(previousRawReference)
+      const existingForPreviousExternal =
+        previousExternalReference === null
+          ? undefined
+          : existingByReference.get(previousExternalReference)
+      const existing =
+        existingRaw ?? existingExternal ?? existingForSameExternalRaw ?? existingForPreviousExternal
+      if (existing !== undefined) {
+        if (
+          mode === "persist" &&
+          existing.replayReservationId !== null &&
+          existing.replayReservationId !== replayReservationId
+        ) {
+          return yield* Effect.fail(
+            toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
+              error: "Replay transaction credit reservation ownership changed",
+            })
+          )
+        }
+        const migratedReference =
+          existing === existingForPreviousExternal &&
+          existingRaw === undefined &&
+          existingExternal === undefined &&
+          existingForSameExternalRaw === undefined
+            ? (externalReference ?? rawReference ?? existing.reference)
+            : existing.reference
+        const nextReplayReservationId =
+          mode === "persist"
+            ? existing.replayReservationId === replayReservationId
+              ? null
+              : existing.replayReservationId
+            : replayReservationId === null
+              ? existing.replayReservationId
+              : existing.replayReservationId === null
+                ? null
+                : replayReservationId
+        if (
+          migratedReference !== existing.reference ||
+          nextReplayReservationId !== existing.replayReservationId
+        ) {
+          const [updated] = yield* executor
+            .update(schema.creditLedger)
+            .set({
+              reference: migratedReference,
+              replayReservationId: nextReplayReservationId,
+            })
+            .where(
+              existing.replayReservationId === null
+                ? eq(schema.creditLedger.id, existing.id)
+                : and(
+                    eq(schema.creditLedger.id, existing.id),
+                    eq(schema.creditLedger.replayReservationId, existing.replayReservationId)
+                  )
+            )
+            .returning({ id: schema.creditLedger.id })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.consumeTransactionCredit.updateExisting"
+              )
+            )
+          if (updated === undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
+                error: "Replay transaction credit reservation ownership changed",
+              })
+            )
+          }
+        }
+        return mode === "reserve" &&
+          replayReservationId !== null &&
+          nextReplayReservationId === replayReservationId
+          ? migratedReference
+          : null
+      }
+
+      if (mode === "persist" && replayReservationId !== null) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.missingReservation",
+            error: "Replay transaction credit reservation no longer exists",
+          })
+        )
+      }
+
+      const reference = externalReference ?? rawReference
+      if (reference === null) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
+            error: "Transaction is missing a stable source identity",
+          })
+        )
+      }
 
       const now = nowDate()
       const rows = yield* executor
@@ -619,6 +779,7 @@ const make = Effect.gen(function* () {
           kind: "transaction_usage",
           reference,
           paymentReference: null,
+          replayReservationId,
           expiresAt: bucket.expiresAt,
         })
         .pipe(
@@ -2297,7 +2458,9 @@ const make = Effect.gen(function* () {
           yield* consumeTransactionCredit({
             executor: tx,
             externalId: persistedTransaction.externalId,
+            mode: "persist",
             principalId: persistedTransaction.principalId,
+            replayReservationId: params.replayReservationId ?? null,
             sourceId: persistedTransaction.sourceId,
             sourceRawRecordId: persistedTransaction.sourceRawRecordId,
           })
@@ -2442,7 +2605,7 @@ const make = Effect.gen(function* () {
       .pipe(wrapSyncEngineStorageError("sourceNormalizationRepository.persistNormalizedArtifacts"))
 
   const reserveReplayTransactionCredits: SourceNormalizationRepositoryShape["reserveReplayTransactionCredits"] =
-    ({ transactions }) =>
+    ({ reservationId, transactions }) =>
       db
         .transaction((tx) =>
           Effect.forEach(
@@ -2451,14 +2614,25 @@ const make = Effect.gen(function* () {
               consumeTransactionCredit({
                 executor: tx,
                 externalId: transaction.externalId,
+                mode: "reserve",
                 principalId: transaction.principalId,
+                replayReservationId: reservationId,
                 sourceId: transaction.sourceId,
                 sourceRawRecordId: transaction.sourceRawRecordId,
               }),
             { concurrency: 1 }
           ).pipe(
             Effect.map((references) =>
-              references.filter((reference): reference is string => reference !== null)
+              references.flatMap((reference, index) =>
+                reference === null
+                  ? []
+                  : [
+                      {
+                        reference,
+                        sourceRawRecordId: transactions[index]?.sourceRawRecordId ?? null,
+                      },
+                    ]
+              )
             )
           )
         )
@@ -2469,7 +2643,7 @@ const make = Effect.gen(function* () {
         )
 
   const releaseReplayTransactionCredits: SourceNormalizationRepositoryShape["releaseReplayTransactionCredits"] =
-    ({ references }) =>
+    ({ references, reservationId }) =>
       references.length === 0
         ? Effect.void
         : db
@@ -2477,6 +2651,7 @@ const make = Effect.gen(function* () {
             .where(
               and(
                 eq(schema.creditLedger.kind, "transaction_usage"),
+                eq(schema.creditLedger.replayReservationId, reservationId),
                 inArray(schema.creditLedger.reference, references)
               )
             )

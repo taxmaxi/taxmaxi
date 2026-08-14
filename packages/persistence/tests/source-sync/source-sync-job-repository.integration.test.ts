@@ -7,6 +7,7 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
@@ -622,6 +623,76 @@ describe("SourceSyncJobRepositoryLive", () => {
       heartbeatAt: freshHeartbeatAt,
       workerId: "worker-1",
     })
+  })
+
+  it("releases replay credits owned by a recovered stale job", async () => {
+    const staleBefore = new Date("2025-01-02T00:10:00.000Z")
+    const staleAt = new Date("2025-01-02T00:00:00.000Z")
+    const created = await createJob({ mode: "replay" })
+
+    await claimJob({ jobId: created.id, workerId: "worker-1" })
+    await updateProcessingJobStaleTimestamps({
+      jobId: created.id,
+      heartbeatAt: staleAt,
+      updatedAt: staleAt,
+    })
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.creditLedger).values([
+          {
+            userId: TEST_USER_ID,
+            delta: -1,
+            kind: "transaction_usage",
+            reference: "test:stale-replay-owned",
+            paymentReference: null,
+            replayReservationId: created.id,
+            expiresAt: null,
+          },
+          {
+            userId: TEST_USER_ID,
+            delta: -1,
+            kind: "transaction_usage",
+            reference: "test:stale-replay-adopted",
+            paymentReference: null,
+            replayReservationId: "successor-job",
+            expiresAt: null,
+          },
+        ])
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recoverStaleActiveJob({
+          sourceId: TEST_SOURCE_ID,
+          jobId: created.id,
+          staleBefore,
+          message: "Recovered stale replay job.",
+          completedAt: new Date("2025-01-02T00:30:00.000Z"),
+        })
+      )
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            reference: schema.creditLedger.reference,
+            replayReservationId: schema.creditLedger.replayReservationId,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(usage).toEqual([
+      {
+        reference: "test:stale-replay-adopted",
+        replayReservationId: "successor-job",
+      },
+    ])
   })
 
   it("lists repairable active jobs by queue metadata and stale execution predicates", async () => {
