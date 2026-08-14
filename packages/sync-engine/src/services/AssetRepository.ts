@@ -15,6 +15,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 export interface SyncEngineAsset {
   readonly id: string
   readonly symbol: string
+  readonly type: "fungible" | "nft"
 }
 
 /** Network representation resolved from exact chain reference data. */

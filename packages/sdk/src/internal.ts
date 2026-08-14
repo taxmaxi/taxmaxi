@@ -28,6 +28,7 @@ export type {
   InternalAssetsEffectResource,
   InternalAssetsPromiseResource,
   ProviderAssetReview,
+  ProviderAssetApprovalInput,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
   UnresolvedTransferReconciliation,

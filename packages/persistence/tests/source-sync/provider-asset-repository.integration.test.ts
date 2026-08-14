@@ -8,6 +8,8 @@ import { schema } from "../../src/schema/index.ts"
 import {
   TEST_BTC_ASSET_ID,
   TEST_EUR_REPRESENTATION_ID,
+  TEST_PRINCIPAL_ID,
+  TEST_SOURCE_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -253,6 +255,141 @@ describe("ProviderAssetRepositoryLive", () => {
         mappingStatus: "rejected",
         canonicalAssetId: null,
       })
+    })
+
+    it("approves once and requests one replay under concurrent same-target retries", async () => {
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId: "btc-approval-replay",
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { source: "test" },
+              },
+            ],
+          })
+          const result = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId: "btc-approval-replay",
+          })
+          if (Option.isNone(result)) {
+            return yield* Effect.dieMessage("Expected approval provider asset")
+          }
+
+          yield* repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: result.value.id,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: "Pending transfer evidence",
+              },
+            ],
+          })
+
+          return result.value
+        })
+      )
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const timestamp = new Date("2025-04-20T12:00:00.000Z")
+          const [transaction] = yield* db
+            .insert(schema.transactions)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              externalId: "approval-replay-transaction",
+              timestamp,
+              providerTransactionType: "send",
+              providerStatus: "completed",
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.transactions.id })
+          if (transaction === undefined) {
+            return yield* Effect.dieMessage("Expected approval replay transaction")
+          }
+
+          yield* db.insert(schema.providerTransfers).values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: transaction.id,
+            externalId: "approval-replay-transfer",
+            providerAssetId: providerAsset.id,
+            timestamp,
+            direction: "outbound",
+            processingMode: "accounting_and_evidence",
+            fromAccountRef: "coinbase-account-1",
+            toAddress: "bc1qapprovalreplay000000000000000000000000",
+            amount: "0.25",
+            metadata: { role: "principal" },
+          })
+        })
+      )
+
+      const approve = () =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.approveProviderAssetMappingAndRequestReplay({
+              mapping: {
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Approved",
+                sourceNotes: "Approved from transfer evidence",
+              },
+              expectedObservedRepresentations: [],
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            })
+          )
+        )
+
+      const results = await Promise.all([approve(), approve()])
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({
+              status: schema.providerAssetMappings.mappingStatus,
+              canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
+          const jobs = yield* db
+            .select({
+              mode: schema.processingJobs.mode,
+              status: schema.processingJobs.status,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+
+          return { jobs, mapping }
+        })
+      )
+
+      expect(
+        results
+          .map(({ mappingChanged }) => mappingChanged)
+          .sort((left, right) => Number(left) - Number(right))
+      ).toEqual([false, true])
+      expect(state.mapping).toEqual({
+        status: "approved",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+      })
+      expect(state.jobs).toEqual([{ mode: "replay", status: "pending" }])
     })
 
     it("falls back to provider-scoped natural-key lookup when provider asset id is absent", async () => {

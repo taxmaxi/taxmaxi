@@ -4,6 +4,7 @@ import type {
   AssetCanonicalizationRequest,
   AssetCanonicalizationResponse,
   PendingAssetListResponse,
+  ProviderAssetApprovalRequest,
   ProviderAssetReviewListResponse,
   UnresolvedTransferReconciliationListResponse,
 } from "@my/rest-api/contracts"
@@ -75,6 +76,9 @@ export type AssetCanonicalizationInput = {
   readonly id: string
 } & AssetCanonicalizationRequest
 export type AssetCanonicalization = AssetCanonicalizationResponse
+export type ProviderAssetApprovalInput = {
+  readonly id: string
+} & ProviderAssetApprovalRequest
 
 export type AssetCatalogListInput = {
   readonly query?: string | null
@@ -140,6 +144,9 @@ export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Effect.Effect<AssetCanonicalization, unknown, never>
+  readonly approveProviderAsset: (
+    input: ProviderAssetApprovalInput
+  ) => Effect.Effect<ProviderAssetReview, unknown, never>
   readonly listUnresolvedTransferReconciliations: (
     input?: UnresolvedTransferReconciliationListInput
   ) => Effect.Effect<UnresolvedTransferReconciliationList, unknown, never>
@@ -152,6 +159,7 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Promise<AssetCanonicalization>
+  readonly approveProviderAsset: (input: ProviderAssetApprovalInput) => Promise<ProviderAssetReview>
   readonly listUnresolvedTransferReconciliations: (
     input?: UnresolvedTransferReconciliationListInput,
     options?: AssetRequestOptions
@@ -284,6 +292,17 @@ export const makeInternalAssetsEffectResource = (
         },
       })
     ),
+  approveProviderAsset: ({ id, canonicalAssetId, assetRepresentationId, reviewerNotes }) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.approveProviderAsset({
+        path: { id },
+        payload: {
+          canonicalAssetId,
+          assetRepresentationId,
+          reviewerNotes,
+        },
+      })
+    ),
 })
 
 export const makeAssetsPromiseResource = (
@@ -304,4 +323,5 @@ export const makeInternalAssetsPromiseResource = (
   listUnresolvedTransferReconciliations: (input, options) =>
     run(effect.listUnresolvedTransferReconciliations(input), options),
   canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
+  approveProviderAsset: (input) => run(effect.approveProviderAsset(input)),
 })

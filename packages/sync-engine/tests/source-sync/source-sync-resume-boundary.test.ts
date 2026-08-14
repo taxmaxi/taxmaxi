@@ -131,6 +131,8 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
             approveProviderAssetMappingIfPending: () =>
               Effect.dieMessage("approveProviderAssetMappingIfPending should not be called"),
+            approveProviderAssetMappingAndRequestReplay: () =>
+              Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
             findProviderAssetByProviderAssetId: () =>
               Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
             findProviderAssetByNaturalKey: () =>

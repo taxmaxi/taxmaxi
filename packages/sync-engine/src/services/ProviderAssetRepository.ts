@@ -63,6 +63,11 @@ export interface ProviderAssetMappingDraft {
   readonly sourceNotes: string | null
 }
 
+/** Result of an idempotent provider-asset approval. */
+export interface ProviderAssetApprovalResult {
+  readonly mappingChanged: boolean
+}
+
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
  */
@@ -131,6 +136,16 @@ export interface ProviderAssetRepositoryShape {
   readonly approveProviderAssetMappingIfPending: (params: {
     readonly mapping: ProviderAssetMappingDraft
   }) => Effect.Effect<boolean, SyncEngineStorageError>
+
+  /**
+   * Approve a reviewed asset mapping and atomically request replay for every
+   * source that uses it. Retrying the same target is a successful no-op.
+   */
+  readonly approveProviderAssetMappingAndRequestReplay: (params: {
+    readonly mapping: ProviderAssetMappingDraft
+    readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
 
   /**
    * Seed provider asset mappings keyed by providerAssetRowId only when no row

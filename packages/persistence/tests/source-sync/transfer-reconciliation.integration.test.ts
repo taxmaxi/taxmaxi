@@ -677,7 +677,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
   })
 
-  it("defers FIFO application for a deterministic owned onchain receipt", async () => {
+  it("approves FIFO application for a deterministic owned onchain receipt", async () => {
     const walletAddress = "bc1qownedwalletdeterministic00000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
 
@@ -733,7 +733,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(summary).toEqual(
       expect.objectContaining({
         evaluatedProviderTransfers: 1,
-        pending: 1,
+        autoApplied: 1,
       })
     )
     expect(reconciliation).toEqual(
@@ -741,11 +741,189 @@ describe("TransferReconciliationServiceLive", () => {
         providerTransferId,
         canonicalTransferId: receipt.transferId,
         canonicalTransactionId: receipt.transactionId,
-        status: "pending",
-        matchReason: "fifo_application_deferred",
+        status: "auto_applied",
+        matchReason: "deterministic_wallet_receipt_match",
         deterministic: true,
       })
     )
+  })
+
+  it("rolls back reconciliation-owned FIFO effects when a later receipt makes the match ambiguous", async () => {
+    const walletAddress = "bc1qownedwalletlateambiguity0000000000000000"
+    const timestamp = new Date("2025-04-11T10:30:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-late-ambiguity" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-late-ambiguity",
+        timestamp,
+        amount: "0.25000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-late-ambiguity-1",
+        txHash: "btc-late-ambiguity-hash-1",
+        timestamp: new Date("2025-04-11T10:35:00.000Z"),
+        amount: "0.25000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const openingInventory = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, providerTransferId))
+          .limit(1)
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-opening-leg",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "50000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (providerTransfer === undefined || openingLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create late ambiguity inventory")
+        }
+
+        const [openingLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "1.00000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: openingLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [movement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.25000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (openingLot === undefined || movement === undefined) {
+          return yield* Effect.dieMessage("Failed to create late ambiguity lot and movement")
+        }
+
+        return { openingLotId: openingLot.id, movementId: movement.id }
+      })
+    )
+    const reconcile = () =>
+      runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+
+    expect((await reconcile()).autoApplied).toBe(1)
+    expect(
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+    ).toEqual({ canonicalizedPairs: 1 })
+
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-late-ambiguity-2",
+        txHash: "btc-late-ambiguity-hash-2",
+        timestamp: new Date("2025-04-11T10:38:00.000Z"),
+        amount: "0.25000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    expect((await reconcile()).needsReview).toBe(1)
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        const [openingLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, openingInventory.openingLotId))
+        const [movement] = yield* db
+          .select({
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, openingInventory.movementId))
+
+        return { reconciliation, internalLegs, openingLot, movement }
+      })
+    )
+
+    expect(state.reconciliation).toEqual({
+      status: "needs_review",
+      canonicalTransferId: null,
+      matchReason: "multiple_candidate_onchain_receipts",
+    })
+    expect(state.internalLegs).toHaveLength(0)
+    expect(state.openingLot?.remainingAmount).toContain("1.00000000")
+    expect(state.movement).toEqual({
+      taxTreatment: "pending_review",
+      reconciliationStatus: "unmatched",
+    })
   })
 
   it("uses an exact hash despite provider address and timestamp drift", async () => {
@@ -824,9 +1002,9 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
-      deterministic: true,
+      status: "needs_review",
+      matchReason: "insufficient_fifo_inventory",
+      deterministic: false,
     })
     expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
   })
@@ -899,8 +1077,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
     })
   })
 
@@ -958,8 +1136,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
       deterministic: true,
     })
   })
@@ -1110,8 +1288,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: matchingReceipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
     })
   })
 
@@ -1184,7 +1362,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(state.inventoryMovements).toEqual([])
   })
 
-  it("prefers a canonical transfer over its observed evidence row", async () => {
+  it("requires exact representation identity on a preferred canonical candidate", async () => {
     const walletAddress = "bc1qownedwalletdedup0000000000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
@@ -1204,7 +1382,7 @@ describe("TransferReconciliationServiceLive", () => {
         networkHash: null,
       })
     )
-    const receipt = await runPg(
+    await runPg(
       seedOnchainReceipt({
         externalId: "onchain-shared-dedup",
         txHash: "btc-shared-dedup",
@@ -1252,9 +1430,9 @@ describe("TransferReconciliationServiceLive", () => {
     )
 
     expect(reconciliation).toMatchObject({
-      canonicalTransferId: receipt.transferId,
+      canonicalTransferId: null,
       status: "pending",
-      matchReason: "fifo_application_deferred",
+      matchReason: "destination_representation_observation_missing",
     })
   })
 
@@ -1320,8 +1498,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
     })
   })
 
@@ -1995,7 +2173,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(reconciliations[0]).toEqual(
       expect.objectContaining({
         providerTransferId,
-        status: "pending",
+        status: "auto_applied",
         deterministic: true,
       })
     )
@@ -4462,7 +4640,7 @@ describe("TransferReconciliationServiceLive", () => {
       ])
     )
     expect(state.reviewedReview).toBeUndefined()
-    expect(state.downstreamOriginLeg).toBeDefined()
+    expect(state.downstreamOriginLeg).toBeUndefined()
     expect(state.downstreamMatches).toHaveLength(0)
     expect(state.downstreamLots).toHaveLength(0)
     expect(state.downstreamMovement).toEqual({
@@ -4473,7 +4651,7 @@ describe("TransferReconciliationServiceLive", () => {
       matchedLayer: "transfer_reconciliation,fifo_inventory",
       needsReview: true,
     })
-    expect(state.finalOriginLeg).toBeDefined()
+    expect(state.finalOriginLeg).toBeUndefined()
     expect(state.finalMatches).toHaveLength(0)
     expect(state.finalLots).toHaveLength(0)
     expect(state.finalMovement).toEqual({
@@ -4619,20 +4797,20 @@ describe("TransferReconciliationServiceLive", () => {
             )
           )
 
-        if (originLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to load partial inventory origin leg")
-        }
+        const matches =
+          originLeg === undefined
+            ? []
+            : yield* db
+                .select({ id: schema.disposalMatches.id })
+                .from(schema.disposalMatches)
+                .where(eq(schema.disposalMatches.disposalLegId, originLeg.id))
 
-        const matches = yield* db
-          .select({ id: schema.disposalMatches.id })
-          .from(schema.disposalMatches)
-          .where(eq(schema.disposalMatches.disposalLegId, originLeg.id))
-
-        return { matches, sourceLot }
+        return { matches, originLeg, sourceLot }
       })
     )
 
     expect(state.sourceLot?.remainingAmount).toContain("0.05000000")
+    expect(state.originLeg).toBeUndefined()
     expect(state.matches).toHaveLength(0)
   })
 

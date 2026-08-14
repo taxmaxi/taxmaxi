@@ -31,7 +31,7 @@ const make = Effect.gen(function* () {
   const findAssetById: AssetRepositoryShape["findAssetById"] = ({ assetId }) =>
     Effect.gen(function* () {
       const [asset] = yield* db
-        .select({ id: schema.assets.id, symbol: schema.assets.symbol })
+        .select({ id: schema.assets.id, symbol: schema.assets.symbol, type: schema.assets.type })
         .from(schema.assets)
         .where(eq(schema.assets.id, assetId))
         .limit(1)
@@ -45,7 +45,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const [asset] = yield* db
-        .select({ id: schema.assets.id, symbol: schema.assets.symbol })
+        .select({ id: schema.assets.id, symbol: schema.assets.symbol, type: schema.assets.type })
         .from(schema.assets)
         .where(eq(schema.assets.coingeckoCoinId, coingeckoCoinId))
         .limit(1)

@@ -325,5 +325,29 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
+      .handle("approveProviderAsset", ({ path, payload }) =>
+        assetCanonicalizationService
+          .approveProviderAssetMapping({
+            providerAssetRowId: path.id,
+            canonicalAssetId: payload.canonicalAssetId,
+            assetRepresentationId: payload.assetRepresentationId,
+            reviewerNotes: payload.reviewerNotes ?? null,
+          })
+          .pipe(
+            Effect.map(toProviderAssetReviewRow),
+            Effect.mapError((error) => {
+              switch (error._tag) {
+                case "AssetCanonicalizationBadRequestError":
+                  return new AssetBadRequestError({ message: error.message })
+                case "AssetCanonicalizationProviderError":
+                  return toInternalServerError(error.message)
+                case "AssetCanonicalizationNotFoundError":
+                  return new AssetNotFoundError({ message: error.message })
+                case "AssetCanonicalizationInternalError":
+                  return toInternalServerError(error.message)
+              }
+            })
+          )
+      )
   })
 )

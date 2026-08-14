@@ -371,7 +371,8 @@ const make = Effect.gen(function* () {
 
       if (
         matchedCandidate.providerAssetMappingStatus === "approved" &&
-        matchedCandidate.assetId !== null
+        matchedCandidate.assetId !== null &&
+        matchedCandidate.assetRepresentationId !== null
       ) {
         if (matchedCandidate.assetId !== providerTransfer.canonicalAssetId) {
           yield* transferReconciliationRepository.upsertTransferReconciliation({
@@ -414,25 +415,6 @@ const make = Effect.gen(function* () {
           return "needs_review"
         }
 
-        if (
-          matchedCandidate.transferId === null &&
-          matchedCandidate.assetRepresentationId === null
-        ) {
-          yield* transferReconciliationRepository.upsertTransferReconciliation({
-            principalId: providerTransfer.principalId,
-            providerTransferId: providerTransfer.providerTransferId,
-            canonicalTransferId: null,
-            canonicalTransactionId: matchedCandidate.transactionId,
-            status: "needs_review",
-            matchReason: "approved_destination_representation_missing",
-            confidence: "0.7500",
-            deterministic: false,
-            reviewMetadata: candidateMetadata,
-          })
-
-          return "needs_review"
-        }
-
         if (matchedCandidate.transferId === null) {
           yield* transferReconciliationRepository.upsertTransferReconciliation({
             principalId: providerTransfer.principalId,
@@ -454,19 +436,19 @@ const make = Effect.gen(function* () {
           providerTransferId: providerTransfer.providerTransferId,
           canonicalTransferId: matchedCandidate.transferId,
           canonicalTransactionId: matchedCandidate.transactionId,
-          status: "pending",
-          matchReason: "fifo_application_deferred",
+          status: "auto_applied",
+          matchReason: "deterministic_wallet_receipt_match",
           confidence: "1.0000",
           deterministic: true,
           reviewMetadata: {
             matchedTransferId: matchedCandidate.transferId,
             matchedTransactionId: matchedCandidate.transactionId,
-            candidateCount: compatibleCandidates.length,
+            candidateCount: exactAmountCandidates.length,
             representationId: matchedCandidate.assetRepresentationId,
           },
         })
 
-        return "pending"
+        return "auto_applied"
       }
 
       const hasObservedIdentity =

@@ -10,7 +10,10 @@ import {
   type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
   type EconomicAssetDraft,
+  type ProviderAssetObservedRepresentationRecord,
   type ProviderAssetRecord,
+  type ProviderAssetReviewRecord,
+  type SyncEngineAssetRepresentation,
 } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -32,6 +35,21 @@ import {
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
+const MANUAL_SOURCE_NOTES = "Approved by an admin with an existing canonical asset."
+
+const appendSourceNote = ({
+  existing,
+  note,
+}: {
+  readonly existing: string | null | undefined
+  readonly note: string
+}) => {
+  if (existing === null || existing === undefined || existing.trim() === "") {
+    return note
+  }
+
+  return existing.includes(note) ? existing : `${existing}\n${note}`
+}
 
 const CoinGeckoAssetPlatform = Schema.Struct({
   id: Schema.String,
@@ -45,6 +63,12 @@ export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 
 const normalize = (value: string) => value.trim().toLowerCase()
+const MissingHeliusDasPayload = Schema.Struct({
+  source: Schema.Literal("helius_das_get_asset_batch_missing"),
+})
+
+const hasMissingHeliusDasMetadata = (providerAsset: ProviderAssetRecord): boolean =>
+  Schema.is(MissingHeliusDasPayload)(providerAsset.rawProviderPayload)
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
@@ -237,13 +261,149 @@ const isNativeOnchainObservation = (providerAsset: ProviderAssetRecord): boolean
 export const representationIdForProviderObservation = ({
   providerAsset,
   representationId,
+  observedRepresentations = [],
 }: {
   readonly providerAsset: ProviderAssetRecord
   readonly representationId: string
+  readonly observedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
 }): string | null =>
-  isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null
+  observedRepresentations.length > 0 ||
+  isNativeOnchainObservation(providerAsset) ||
+  observedProviderTokenId(providerAsset) !== null
     ? representationId
     : null
+
+interface RepresentationIdentity {
+  readonly blockchainName: string
+  readonly representationType: "native" | "token" | "nft"
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number
+}
+
+const matchesObservedRepresentation = ({
+  representation,
+  observed,
+}: {
+  readonly representation: RepresentationIdentity
+  readonly observed: ProviderAssetObservedRepresentationRecord
+}) =>
+  normalize(representation.blockchainName) === normalize(observed.blockchainName) &&
+  (observed.representationType === null ||
+    representation.representationType === observed.representationType) &&
+  (observed.contractAddress === null
+    ? representation.contractAddress === null
+    : representation.contractAddress !== null &&
+      normalize(representation.contractAddress) === normalize(observed.contractAddress)) &&
+  representation.mintAddress === observed.mintAddress &&
+  (observed.decimals === null || representation.decimals === observed.decimals)
+
+const validateManualRepresentationSelection = ({
+  providerAsset,
+  assetRepresentationId,
+  observedRepresentations,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly assetRepresentationId: string | null
+  readonly observedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+  const observedRepresentationId = representationIdForProviderObservation({
+    providerAsset,
+    representationId: assetRepresentationId ?? "",
+    observedRepresentations,
+  })
+
+  if (observedRepresentationId === null && assetRepresentationId !== null) {
+    return Effect.fail(
+      makeBadRequest("Provider assets without an observed chain cannot select a representation.")
+    )
+  }
+
+  if (observedRepresentationId !== null && assetRepresentationId === null) {
+    return Effect.fail(
+      makeBadRequest("Observed on-chain provider assets require an asset representation.")
+    )
+  }
+
+  return Effect.void
+}
+
+const validateDurableObservationAvailability = ({
+  providerAsset,
+  observedRepresentations,
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly observedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> =>
+  (isNativeOnchainObservation(providerAsset) || observedProviderTokenId(providerAsset) !== null) &&
+  observedRepresentations.length === 0
+    ? Effect.fail(
+        makeBadRequest(
+          "Observed on-chain identity is temporarily unavailable; finish source replay before approval."
+        )
+      )
+    : Effect.void
+
+export const validateManualRepresentationIdentity = ({
+  providerAsset,
+  representation,
+  observedRepresentations = [],
+}: {
+  readonly providerAsset: ProviderAssetRecord
+  readonly representation: RepresentationIdentity
+  readonly observedRepresentations?: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+  if (
+    observedRepresentations.length > 0 &&
+    !observedRepresentations.every((observed) =>
+      matchesObservedRepresentation({ representation, observed })
+    )
+  ) {
+    return Effect.fail(
+      makeBadRequest("Selected representation does not match the observed on-chain identity.")
+    )
+  }
+
+  if (isNativeOnchainObservation(providerAsset)) {
+    return normalize(representation.blockchainName) === "solana" &&
+      representation.representationType === "native"
+      ? Effect.void
+      : Effect.fail(
+          makeBadRequest("Selected representation does not match the observed Solana native asset.")
+        )
+  }
+
+  const observedTokenId = observedProviderTokenId(providerAsset)
+  if (observedTokenId === null) {
+    return Effect.void
+  }
+
+  const providerType =
+    providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
+  const expectedType = providerType === "nft" ? "nft" : "token"
+  return normalize(representation.blockchainName) === "solana" &&
+    (hasMissingHeliusDasMetadata(providerAsset) ||
+      representation.representationType === expectedType) &&
+    representation.mintAddress === observedTokenId &&
+    (providerAsset.exponent === null || representation.decimals === providerAsset.exponent)
+    ? Effect.void
+    : Effect.fail(
+        makeBadRequest("Selected representation does not match the observed Solana mint.")
+      )
+}
+
+export const validateEconomicAssetType = ({
+  assetType,
+  representation,
+}: {
+  readonly assetType: "fungible" | "nft"
+  readonly representation: SyncEngineAssetRepresentation
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> =>
+  (representation.representationType === "nft") === (assetType === "nft")
+    ? Effect.void
+    : Effect.fail(
+        makeBadRequest("Asset representation type does not match the selected economic asset type.")
+      )
 
 const validateProviderTokenIdentity = ({
   contractAddress,
@@ -414,6 +574,189 @@ const make = Effect.gen(function* () {
   const mapCoinGeckoError = (error: { readonly message: string }) =>
     new AssetCanonicalizationProviderError({ message: error.message })
 
+  const loadProviderAssetReview = ({
+    providerAssetRowId,
+  }: {
+    readonly providerAssetRowId: string
+  }) =>
+    providerAssetRepository.findProviderAssetReviewById({ providerAssetRowId }).pipe(
+      Effect.mapError(
+        () =>
+          new AssetCanonicalizationInternalError({
+            message: "Failed to load provider asset review row.",
+          })
+      ),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new AssetCanonicalizationNotFoundError({ message: "Provider asset not found." })
+            ),
+          onSome: Effect.succeed,
+        })
+      )
+    )
+
+  const loadObservedRepresentations = ({
+    providerAssetRowId,
+  }: {
+    readonly providerAssetRowId: string
+  }) =>
+    providerAssetRepository.listProviderAssetObservedRepresentations({ providerAssetRowId }).pipe(
+      Effect.mapError(
+        () =>
+          new AssetCanonicalizationInternalError({
+            message: "Failed to load observed provider asset representations.",
+          })
+      )
+    )
+
+  const validateApprovableProviderAsset = (
+    providerAssetReview: ProviderAssetReviewRecord
+  ): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
+    const mappingStatus = providerAssetReview.mapping?.mappingStatus
+    if (mappingStatus !== "pending_review" && mappingStatus !== "approved") {
+      return Effect.fail(
+        makeBadRequest("Provider asset mapping cannot be approved from its current state.")
+      )
+    }
+
+    return providerAssetReview.providerAsset.providerType?.trim().toLowerCase() === "fiat"
+      ? Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
+      : Effect.void
+  }
+
+  const loadApprovedProviderAsset = ({
+    providerAssetRowId,
+  }: {
+    readonly providerAssetRowId: string
+  }) =>
+    providerAssetRepository.findProviderAssetReviewById({ providerAssetRowId }).pipe(
+      Effect.mapError(
+        () =>
+          new AssetCanonicalizationInternalError({
+            message: "Failed to load approved provider asset mapping.",
+          })
+      ),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new AssetCanonicalizationInternalError({
+                message: "Approved provider asset mapping was not available after update.",
+              })
+            ),
+          onSome: Effect.succeed,
+        })
+      )
+    )
+
+  const approveProviderAssetMapping: AssetCanonicalizationServiceShape["approveProviderAssetMapping"] =
+    ({ providerAssetRowId, canonicalAssetId, assetRepresentationId, reviewerNotes }) =>
+      Effect.gen(function* () {
+        const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
+        yield* validateApprovableProviderAsset(providerAssetReview)
+        const existingMapping = providerAssetReview.mapping
+        if (
+          existingMapping?.mappingStatus === "approved" &&
+          (existingMapping.mappingKind !== "asset" ||
+            existingMapping.canonicalAssetId !== canonicalAssetId ||
+            existingMapping.assetRepresentationId !== assetRepresentationId)
+        ) {
+          return yield* Effect.fail(
+            makeBadRequest("Provider asset mapping is already approved for a different target.")
+          )
+        }
+        const observedRepresentations = yield* loadObservedRepresentations({ providerAssetRowId })
+        yield* validateManualRepresentationSelection({
+          providerAsset: providerAssetReview.providerAsset,
+          assetRepresentationId,
+          observedRepresentations,
+        })
+        yield* validateDurableObservationAvailability({
+          providerAsset: providerAssetReview.providerAsset,
+          observedRepresentations,
+        })
+
+        const canonicalAsset = yield* assetRepository
+          .findAssetById({ assetId: canonicalAssetId })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to load the selected canonical asset.",
+                })
+            )
+          )
+        if (Option.isNone(canonicalAsset)) {
+          return yield* Effect.fail(
+            new AssetCanonicalizationNotFoundError({ message: "Canonical asset not found." })
+          )
+        }
+
+        if (assetRepresentationId !== null) {
+          const representation = yield* assetRepository
+            .findRepresentationById({ assetRepresentationId })
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new AssetCanonicalizationInternalError({
+                    message: "Failed to load the selected asset representation.",
+                  })
+              )
+            )
+          if (Option.isNone(representation)) {
+            return yield* Effect.fail(
+              new AssetCanonicalizationNotFoundError({ message: "Asset representation not found." })
+            )
+          }
+          if (representation.value.assetId !== canonicalAssetId) {
+            return yield* Effect.fail(
+              makeBadRequest("Asset representation does not belong to the selected asset.")
+            )
+          }
+
+          yield* validateManualRepresentationIdentity({
+            providerAsset: providerAssetReview.providerAsset,
+            representation: representation.value,
+            observedRepresentations,
+          })
+          yield* validateEconomicAssetType({
+            assetType: canonicalAsset.value.type,
+            representation: representation.value,
+          })
+        }
+
+        yield* providerAssetRepository
+          .approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId,
+              mappingKind: "asset",
+              canonicalAssetId,
+              assetRepresentationId,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes,
+              sourceNotes: appendSourceNote({
+                existing: providerAssetReview.mapping?.sourceNotes,
+                note: MANUAL_SOURCE_NOTES,
+              }),
+            },
+            expectedObservedRepresentations: observedRepresentations,
+            expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+          })
+          .pipe(
+            Effect.mapError(
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to approve provider asset mapping.",
+                })
+            )
+          )
+
+        return yield* loadApprovedProviderAsset({ providerAssetRowId })
+      })
+
   const resolveCoinGeckoDrafts = ({
     providerAsset,
   }: {
@@ -533,33 +876,16 @@ const make = Effect.gen(function* () {
   const canonicalizeProviderAssetFromCoinGecko: AssetCanonicalizationServiceShape["canonicalizeProviderAssetFromCoinGecko"] =
     ({ providerAssetRowId, reviewerNotes }) =>
       Effect.gen(function* () {
-        const providerAssetReview = yield* providerAssetRepository
-          .findProviderAssetReviewById({ providerAssetRowId })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to load provider asset review row.",
-                })
-            )
-          )
-
-        if (Option.isNone(providerAssetReview)) {
-          return yield* Effect.fail(
-            new AssetCanonicalizationNotFoundError({ message: "Provider asset not found." })
-          )
-        }
-
-        if (providerAssetReview.value.mapping?.mappingStatus !== "pending_review") {
-          return yield* Effect.fail(makeBadRequest("Provider asset mapping is not pending review."))
-        }
-
-        if (providerAssetReview.value.providerAsset.providerType?.trim().toLowerCase() === "fiat") {
-          return yield* Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
-        }
+        const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
+        yield* validateApprovableProviderAsset(providerAssetReview)
+        const observedRepresentations = yield* loadObservedRepresentations({ providerAssetRowId })
+        yield* validateDurableObservationAvailability({
+          providerAsset: providerAssetReview.providerAsset,
+          observedRepresentations,
+        })
 
         const resolved = yield* resolveCoinGeckoDrafts({
-          providerAsset: providerAssetReview.value.providerAsset,
+          providerAsset: providerAssetReview.providerAsset,
         })
         const canonicalAsset = yield* assetRepository
           .upsertEconomicAssetRepresentation({
@@ -576,23 +902,43 @@ const make = Effect.gen(function* () {
             )
           )
 
+        const assetRepresentationId = representationIdForProviderObservation({
+          providerAsset: providerAssetReview.providerAsset,
+          representationId: canonicalAsset.representationId,
+          observedRepresentations,
+        })
+        if (assetRepresentationId !== null) {
+          yield* validateManualRepresentationIdentity({
+            providerAsset: providerAssetReview.providerAsset,
+            representation: canonicalAsset,
+            observedRepresentations,
+          })
+          if ((canonicalAsset.representationType === "nft") !== (canonicalAsset.type === "nft")) {
+            return yield* Effect.fail(
+              makeBadRequest(
+                "Asset representation type does not match the selected economic asset type."
+              )
+            )
+          }
+        }
+
         yield* providerAssetRepository
-          .upsertProviderAssetMappings({
-            mappings: [
-              {
-                providerAssetRowId,
-                mappingKind: "asset",
-                canonicalAssetId: canonicalAsset.id,
-                assetRepresentationId: representationIdForProviderObservation({
-                  providerAsset: providerAssetReview.value.providerAsset,
-                  representationId: canonicalAsset.representationId,
-                }),
-                canonicalFiatCurrency: null,
-                mappingStatus: "approved",
-                reviewerNotes,
-                sourceNotes: COINGECKO_SOURCE_NOTES,
-              },
-            ],
+          .approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId,
+              mappingKind: "asset",
+              canonicalAssetId: canonicalAsset.id,
+              assetRepresentationId,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes,
+              sourceNotes: appendSourceNote({
+                existing: providerAssetReview.mapping?.sourceNotes,
+                note: COINGECKO_SOURCE_NOTES,
+              }),
+            },
+            expectedObservedRepresentations: observedRepresentations,
+            expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
           })
           .pipe(
             Effect.mapError(
@@ -603,33 +949,17 @@ const make = Effect.gen(function* () {
             )
           )
 
-        const approvedProviderAsset = yield* providerAssetRepository
-          .findProviderAssetReviewById({ providerAssetRowId })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to load approved provider asset mapping.",
-                })
-            )
-          )
-
-        if (Option.isNone(approvedProviderAsset)) {
-          return yield* Effect.fail(
-            new AssetCanonicalizationInternalError({
-              message: "Approved provider asset mapping was not available after update.",
-            })
-          )
-        }
+        const approvedProviderAsset = yield* loadApprovedProviderAsset({ providerAssetRowId })
 
         return {
-          providerAsset: approvedProviderAsset.value,
+          providerAsset: approvedProviderAsset,
           canonicalAsset,
           evidence: resolved.evidence,
         }
       })
 
   return AssetCanonicalizationService.of({
+    approveProviderAssetMapping,
     canonicalizeProviderAssetFromCoinGecko,
   } satisfies AssetCanonicalizationServiceShape)
 })

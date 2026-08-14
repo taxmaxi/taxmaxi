@@ -510,42 +510,363 @@ const make = Effect.gen(function* () {
       deterministic,
       reviewMetadata,
     }: TransferReconciliationRecordDraft) =>
-      Effect.gen(function* () {
-        const now = nowDate()
-        yield* db
-          .insert(schema.transferReconciliations)
-          .values({
-            principalId,
-            providerTransferId,
-            canonicalTransferId,
-            canonicalTransactionId,
-            status,
-            matchReason,
-            confidence,
-            deterministic,
-            reviewMetadata,
-            createdAt: now,
-            updatedAt: now,
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const providerScopes = yield* tx
+              .select({ sourceId: schema.transactions.sourceId })
+              .from(schema.providerTransfers)
+              .innerJoin(
+                schema.transactions,
+                eq(schema.transactions.id, schema.providerTransfers.transactionId)
+              )
+              .where(eq(schema.providerTransfers.id, providerTransferId))
+              .limit(1)
+            const canonicalScopes = yield* tx
+              .select({ sourceId: schema.transactions.sourceId })
+              .from(schema.transferReconciliations)
+              .innerJoin(
+                schema.transactions,
+                eq(schema.transactions.id, schema.transferReconciliations.canonicalTransactionId)
+              )
+              .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+              .limit(1)
+            const providerScope = providerScopes[0]
+            const canonicalScope = canonicalScopes[0]
+
+            const affectedSourceIds = [
+              ...new Set(
+                [providerScope?.sourceId, canonicalScope?.sourceId].filter(
+                  (sourceId): sourceId is string => sourceId !== null && sourceId !== undefined
+                )
+              ),
+            ].sort()
+
+            if (affectedSourceIds.length > 0) {
+              yield* tx
+                .select({ id: schema.sources.id })
+                .from(schema.sources)
+                .where(inArray(schema.sources.id, affectedSourceIds))
+                .orderBy(asc(schema.sources.id))
+                .for("update")
+            }
+
+            const [existing] = yield* tx
+              .select({
+                status: schema.transferReconciliations.status,
+                canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+                canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+                reviewMetadata: schema.transferReconciliations.reviewMetadata,
+                providerTransactionId: schema.providerTransfers.transactionId,
+                providerDirection: schema.providerTransfers.direction,
+              })
+              .from(schema.transferReconciliations)
+              .innerJoin(
+                schema.providerTransfers,
+                eq(schema.providerTransfers.id, schema.transferReconciliations.providerTransferId)
+              )
+              .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+              .for("update")
+              .limit(1)
+
+            const blockedRollback =
+              existing?.status === "needs_review"
+                ? yield* Schema.decodeUnknown(
+                    Schema.Struct({
+                      rollback: Schema.Struct({
+                        status: Schema.Literal("blocked"),
+                        reason: Schema.Literal("dependent_destination_lot_usage"),
+                        appliedEffectsRetained: Schema.Literal(true),
+                      }),
+                    })
+                  )(existing.reviewMetadata).pipe(Effect.option)
+                : Option.none()
+            const invalidatesAppliedMatch =
+              existing !== undefined &&
+              (existing.status === "auto_applied" || Option.isSome(blockedRollback)) &&
+              (status !== "auto_applied" ||
+                canonicalTransferId !== existing.canonicalTransferId ||
+                canonicalTransactionId !== existing.canonicalTransactionId)
+
+            if (
+              invalidatesAppliedMatch &&
+              existing.canonicalTransferId !== null &&
+              existing.canonicalTransactionId !== null
+            ) {
+              const [existingCanonicalTransfer] = yield* tx
+                .select({ externalId: schema.transfers.externalId })
+                .from(schema.transfers)
+                .where(eq(schema.transfers.id, existing.canonicalTransferId))
+                .limit(1)
+
+              if (existingCanonicalTransfer !== undefined) {
+                const originTransactionId =
+                  existing.providerDirection === "outbound"
+                    ? existing.providerTransactionId
+                    : existing.canonicalTransactionId
+                const destinationTransactionId =
+                  existing.providerDirection === "outbound"
+                    ? existing.canonicalTransactionId
+                    : existing.providerTransactionId
+                const transactionIds = [originTransactionId, destinationTransactionId]
+                const internalLegs = yield* tx
+                  .select({
+                    id: schema.transactionLegs.id,
+                    transactionId: schema.transactionLegs.transactionId,
+                    derivationRule: schema.transactionLegs.derivationRule,
+                  })
+                  .from(schema.transactionLegs)
+                  .where(
+                    and(
+                      inArray(schema.transactionLegs.transactionId, transactionIds),
+                      inArray(schema.transactionLegs.derivationRule, [
+                        "internal_transfer_out",
+                        "internal_transfer_in",
+                      ]),
+                      sql`${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId' = ${providerTransferId}`
+                    )
+                  )
+
+                const disposalLegIds = internalLegs
+                  .filter(({ derivationRule }) => derivationRule === "internal_transfer_out")
+                  .map(({ id }) => id)
+                const acquisitionLegIds = internalLegs
+                  .filter(({ derivationRule }) => derivationRule === "internal_transfer_in")
+                  .map(({ id }) => id)
+                const destinationLots =
+                  acquisitionLegIds.length === 0
+                    ? []
+                    : yield* tx
+                        .select({ id: schema.fifoLots.id })
+                        .from(schema.fifoLots)
+                        .where(inArray(schema.fifoLots.sourceLegId, acquisitionLegIds))
+                const destinationLotIds = destinationLots.map(({ id }) => id)
+                const [dependentDestinationDisposal] =
+                  destinationLotIds.length === 0
+                    ? []
+                    : yield* tx
+                        .select({ id: schema.disposalMatches.id })
+                        .from(schema.disposalMatches)
+                        .where(inArray(schema.disposalMatches.fifoLotId, destinationLotIds))
+                        .limit(1)
+                const [dependentDestinationAllocation] =
+                  destinationLotIds.length === 0
+                    ? []
+                    : yield* tx
+                        .select({ id: schema.inventoryMovementAllocations.id })
+                        .from(schema.inventoryMovementAllocations)
+                        .where(
+                          inArray(schema.inventoryMovementAllocations.fifoLotId, destinationLotIds)
+                        )
+                        .limit(1)
+
+                if (
+                  dependentDestinationDisposal !== undefined ||
+                  dependentDestinationAllocation !== undefined
+                ) {
+                  const metadata = yield* Schema.decodeUnknown(
+                    Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                  )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
+
+                  yield* tx
+                    .update(schema.transferReconciliations)
+                    .set({
+                      canonicalTransferId: existing.canonicalTransferId,
+                      canonicalTransactionId: existing.canonicalTransactionId,
+                      status: "needs_review",
+                      matchReason: "applied_match_replacement_rollback_blocked",
+                      confidence: "0.0000",
+                      deterministic: false,
+                      reviewMetadata: {
+                        ...metadata,
+                        rollback: {
+                          status: "blocked",
+                          reason: "dependent_destination_lot_usage",
+                          appliedEffectsRetained: true,
+                        },
+                      },
+                      updatedAt: nowDate(),
+                    })
+                    .where(
+                      eq(schema.transferReconciliations.providerTransferId, providerTransferId)
+                    )
+                  return
+                }
+
+                const disposalMatches =
+                  disposalLegIds.length === 0
+                    ? []
+                    : yield* tx
+                        .select({
+                          fifoLotId: schema.disposalMatches.fifoLotId,
+                          matchedAmount: schema.disposalMatches.matchedAmount,
+                        })
+                        .from(schema.disposalMatches)
+                        .where(inArray(schema.disposalMatches.disposalLegId, disposalLegIds))
+
+                yield* Effect.forEach(
+                  disposalMatches,
+                  ({ fifoLotId, matchedAmount }) =>
+                    tx
+                      .update(schema.fifoLots)
+                      .set({
+                        remainingAmount: sql`${schema.fifoLots.remainingAmount} + ${matchedAmount}`,
+                        updatedAt: nowDate(),
+                      })
+                      .where(eq(schema.fifoLots.id, fifoLotId)),
+                  { discard: true }
+                )
+
+                if (internalLegs.length > 0) {
+                  yield* tx.delete(schema.transactionLegs).where(
+                    inArray(
+                      schema.transactionLegs.id,
+                      internalLegs.map(({ id }) => id)
+                    )
+                  )
+                }
+
+                const reviews = yield* tx
+                  .select({
+                    transactionId: schema.transactionReviews.transactionId,
+                    reviewStatus: schema.transactionReviews.reviewStatus,
+                    currentTypeKey: schema.transactionReviews.currentTypeKey,
+                    categorizationReason: schema.transactionReviews.categorizationReason,
+                    matchedLayer: schema.transactionReviews.matchedLayer,
+                  })
+                  .from(schema.transactionReviews)
+                  .where(inArray(schema.transactionReviews.transactionId, transactionIds))
+
+                for (const review of reviews) {
+                  const layers = (review.matchedLayer ?? "")
+                    .split(",")
+                    .map((layer) => layer.trim())
+                    .filter((layer) => layer !== "" && layer !== "transfer_reconciliation")
+                  const isReconciliationReview =
+                    review.reviewStatus !== "approved" &&
+                    review.reviewStatus !== "changed" &&
+                    review.currentTypeKey === "internal_transfer"
+
+                  if (!isReconciliationReview) {
+                    continue
+                  }
+
+                  yield* tx
+                    .update(schema.transactions)
+                    .set({ transactionType: null, updatedAt: nowDate() })
+                    .where(eq(schema.transactions.id, review.transactionId))
+
+                  if (layers.length === 0) {
+                    yield* tx
+                      .delete(schema.transactionReviews)
+                      .where(eq(schema.transactionReviews.transactionId, review.transactionId))
+                    continue
+                  }
+
+                  const remainingReasons = (review.categorizationReason ?? "")
+                    .split("\n")
+                    .map((reason) => reason.trim())
+                    .filter((reason) => reason !== "" && reason !== INTERNAL_TRANSFER_REASON)
+
+                  yield* tx
+                    .update(schema.transactionReviews)
+                    .set({
+                      reviewStatus: "needs_review",
+                      originalTypeKey: null,
+                      originalConfidence: null,
+                      currentTypeKey: null,
+                      categorizationReason:
+                        remainingReasons.length === 0 ? null : remainingReasons.join("\n"),
+                      matchedLayer: layers.join(","),
+                      needsReview: true,
+                      reviewedAt: null,
+                      updatedAt: nowDate(),
+                    })
+                    .where(eq(schema.transactionReviews.transactionId, review.transactionId))
+                }
+
+                const matchedProviderTransferIds = [providerTransferId]
+
+                if (existing.providerDirection === "inbound") {
+                  const [custodyMovement] = yield* tx
+                    .select({
+                      providerTransferId: schema.inventoryMovements.providerTransferId,
+                    })
+                    .from(schema.inventoryMovements)
+                    .innerJoin(
+                      schema.providerTransfers,
+                      eq(schema.providerTransfers.id, schema.inventoryMovements.providerTransferId)
+                    )
+                    .where(
+                      and(
+                        eq(schema.inventoryMovements.transactionId, originTransactionId),
+                        sql`${schema.providerTransfers.metadata}->>'canonicalTransferExternalId' = ${existingCanonicalTransfer.externalId}`,
+                        sql`${schema.inventoryMovements.providerTransferId} is not null`
+                      )
+                    )
+                    .limit(1)
+
+                  if (
+                    custodyMovement?.providerTransferId !== null &&
+                    custodyMovement?.providerTransferId !== undefined &&
+                    custodyMovement.providerTransferId !== providerTransferId
+                  ) {
+                    matchedProviderTransferIds.push(custodyMovement.providerTransferId)
+                  }
+                }
+
+                yield* tx
+                  .update(schema.inventoryMovements)
+                  .set({
+                    taxTreatment: "pending_review",
+                    reconciliationStatus: "unmatched",
+                    updatedAt: nowDate(),
+                  })
+                  .where(
+                    inArray(
+                      schema.inventoryMovements.providerTransferId,
+                      matchedProviderTransferIds
+                    )
+                  )
+              }
+            }
+
+            const now = nowDate()
+            yield* tx
+              .insert(schema.transferReconciliations)
+              .values({
+                principalId,
+                providerTransferId,
+                canonicalTransferId,
+                canonicalTransactionId,
+                status,
+                matchReason,
+                confidence,
+                deterministic,
+                reviewMetadata,
+                createdAt: now,
+                updatedAt: now,
+              })
+              .onConflictDoUpdate({
+                target: schema.transferReconciliations.providerTransferId,
+                set: {
+                  principalId: sql.raw("excluded.principal_id"),
+                  canonicalTransferId: sql.raw("excluded.canonical_transfer_id"),
+                  canonicalTransactionId: sql.raw("excluded.canonical_transaction_id"),
+                  status: sql.raw("excluded.status"),
+                  matchReason: sql.raw("excluded.match_reason"),
+                  confidence: sql.raw("excluded.confidence"),
+                  deterministic: sql.raw("excluded.deterministic"),
+                  reviewMetadata: sql.raw("excluded.review_metadata"),
+                  updatedAt: now,
+                },
+                setWhere: sql`${schema.transferReconciliations.status} not in ('approved', 'rejected')`,
+              })
           })
-          .onConflictDoUpdate({
-            target: schema.transferReconciliations.providerTransferId,
-            set: {
-              principalId: sql.raw("excluded.principal_id"),
-              canonicalTransferId: sql.raw("excluded.canonical_transfer_id"),
-              canonicalTransactionId: sql.raw("excluded.canonical_transaction_id"),
-              status: sql.raw("excluded.status"),
-              matchReason: sql.raw("excluded.match_reason"),
-              confidence: sql.raw("excluded.confidence"),
-              deterministic: sql.raw("excluded.deterministic"),
-              reviewMetadata: sql.raw("excluded.review_metadata"),
-              updatedAt: now,
-            },
-            setWhere: sql`${schema.transferReconciliations.status} not in ('approved', 'rejected')`,
-          })
-          .pipe(
-            wrapSyncEngineSqlError("transferReconciliationRepository.upsertTransferReconciliation")
-          )
-      })
+        )
+        .pipe(
+          wrapSyncEngineSqlError("transferReconciliationRepository.upsertTransferReconciliation")
+        )
 
   const applyDeterministicInternalTransferCanonicalization: TransferReconciliationRepositoryShape["applyDeterministicInternalTransferCanonicalization"] =
     ({ principalId, sourceId, reconciliationId }) =>
@@ -558,6 +879,7 @@ const make = Effect.gen(function* () {
               tx
                 .select({
                   reconciliationId: schema.transferReconciliations.id,
+                  reviewMetadata: schema.transferReconciliations.reviewMetadata,
                   providerTransferId: schema.providerTransfers.id,
                   providerTransferSourceId: schema.providerTransfers.sourceId,
                   providerDirection: schema.providerTransfers.direction,
@@ -3246,27 +3568,7 @@ const make = Effect.gen(function* () {
                   assetId: row.assetId,
                   amount,
                   maxAcquiredAt: originTransaction.timestamp,
-                }).pipe(
-                  Effect.catchTag("SyncEngineStorageError", (error) =>
-                    error.operation ===
-                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.remainingAmount"
-                      ? Effect.logWarning(
-                          {
-                            providerTransferId: row.providerTransferId,
-                            canonicalTransferId,
-                            canonicalTransactionId,
-                            originTransactionId: originTransaction.id,
-                            missingAmount: String(error.cause),
-                          },
-                          "Skipping deterministic internal transfer canonicalization because FIFO inventory before the transfer timestamp is insufficient"
-                        ).pipe(Effect.as(null))
-                      : Effect.fail(error)
-                  )
-                )
-
-                if (disposition === null) {
-                  return { applied: false, invalidatedReconciliations: [] }
-                }
+                })
 
                 yield* moveLotsForInternalTransfer({
                   originLegId,
@@ -3335,7 +3637,68 @@ const make = Effect.gen(function* () {
                 continue
               }
 
-              const result = yield* applyPair(queued.row)
+              yield* tx
+                .execute(sql.raw("savepoint transfer_reconciliation_pair"))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.createPairSavepoint"
+                  )
+                )
+              const result = yield* applyPair(queued.row).pipe(
+                Effect.catchTag("SyncEngineStorageError", (error) =>
+                  error.operation ===
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.remainingAmount"
+                    ? Effect.gen(function* () {
+                        yield* tx
+                          .execute(sql.raw("rollback to savepoint transfer_reconciliation_pair"))
+                          .pipe(
+                            wrapSyncEngineSqlError(
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rollbackPairSavepoint"
+                            )
+                          )
+                        const metadata = yield* Schema.decodeUnknown(
+                          Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                        )(queued.row.reviewMetadata).pipe(
+                          Effect.orElseSucceed(() => ({ evidence: queued.row.reviewMetadata }))
+                        )
+                        yield* tx
+                          .update(schema.transferReconciliations)
+                          .set({
+                            status: "needs_review",
+                            matchReason: "insufficient_fifo_inventory",
+                            confidence: "0.0000",
+                            deterministic: false,
+                            reviewMetadata: {
+                              ...metadata,
+                              canonicalization: {
+                                status: "blocked",
+                                reason: "insufficient_fifo_inventory",
+                                missingAmount: String(error.cause),
+                              },
+                            },
+                            updatedAt: nowDate(),
+                          })
+                          .where(eq(schema.transferReconciliations.id, queued.row.reconciliationId))
+                        yield* Effect.logWarning(
+                          {
+                            providerTransferId: queued.row.providerTransferId,
+                            reconciliationId: queued.row.reconciliationId,
+                            missingAmount: String(error.cause),
+                          },
+                          "Rolled back internal transfer canonicalization because FIFO inventory was insufficient"
+                        )
+                        return { applied: false, invalidatedReconciliations: [] }
+                      })
+                    : Effect.fail(error)
+                )
+              )
+              yield* tx
+                .execute(sql.raw("release savepoint transfer_reconciliation_pair"))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.releasePairSavepoint"
+                  )
+                )
               if (queued.countTowardSummary && result.applied) {
                 canonicalizedPairs += 1
               }

@@ -91,6 +91,7 @@ const makeExecutorLayer = ({
   replayRawRecords = [],
   replayCandidates = [],
   failNormalizeOnce = false,
+  principalSources,
   events,
 }: {
   readonly mode: SourceSyncJobMode
@@ -102,6 +103,7 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
+  readonly principalSources?: ReadonlyArray<SourceSyncSource>
   readonly events: Array<string>
 }) => {
   const syncSource = {
@@ -114,7 +116,7 @@ const makeExecutorLayer = ({
   }
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
-    listPrincipalSourceSyncContexts: () => Effect.succeed([syncSource]),
+    listPrincipalSourceSyncContexts: () => Effect.succeed(principalSources ?? [syncSource]),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -377,15 +379,21 @@ const makeExecutorLayer = ({
   })
 
   const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
-    reconcileTransferCandidates: () =>
-      Effect.succeed({
-        evaluatedProviderTransfers: 0,
-        pending: 0,
-        needsReview: 0,
-        autoApplied: 0,
+    reconcileTransferCandidates: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`reconcile-source:${sourceId}`)
+        return {
+          evaluatedProviderTransfers: 0,
+          pending: 0,
+          needsReview: 0,
+          autoApplied: 0,
+        }
       }),
-    applyDeterministicInternalTransferCanonicalization: () =>
-      Effect.succeed({ canonicalizedPairs: 0 }),
+    applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`canonicalize-source:${sourceId}`)
+        return { canonicalizedPairs: 0 }
+      }),
   })
 
   return SourceSyncJobExecutorLive.pipe(
@@ -415,6 +423,39 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("heartbeat:source-sync-inline-executor")
     expect(events).toContain("progress:0:done")
     expect(events).toContain("complete:0:0")
+  })
+
+  it("reconciles every source owned by the principal after a destination sync", async () => {
+    const events: Array<string> = []
+    const destinationSource: SourceSyncSource = {
+      id: "source-2",
+      principalId: source.principalId,
+      providerKey: "helius-solana",
+      cexAccountId: null,
+      addressId: "address-1",
+      walletAddress: "So11111111111111111111111111111111111111112",
+    }
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            principalSources: [source, destinationSource],
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    expect(events).toContain("reconcile-source:source-1")
+    expect(events).toContain("canonicalize-source:source-1")
+    expect(events).toContain("reconcile-source:source-2")
+    expect(events).toContain("canonicalize-source:source-2")
   })
 
   it("runs a non-Coinbase provider module through fetch and normalization hooks", async () => {

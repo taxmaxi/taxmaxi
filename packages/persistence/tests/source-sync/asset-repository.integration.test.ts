@@ -62,6 +62,7 @@ describe("AssetRepositoryLive", () => {
     expect(Option.getOrNull(asset)).toEqual({
       id: TEST_BTC_ASSET_ID,
       symbol: "BTC",
+      type: "fungible",
     })
     expect(Option.isNone(missingAsset)).toBe(true)
     expect(blockchains.some((blockchain) => blockchain.name === "base")).toBe(true)

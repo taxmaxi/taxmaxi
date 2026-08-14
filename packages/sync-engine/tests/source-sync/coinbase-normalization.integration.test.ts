@@ -36,6 +36,7 @@ const context = makeIntegrationTestDatabaseContext({
 const TestPgClientLive = context.TestPgClientLive
 const recreateTestDatabase = context.recreateTestDatabase
 const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000541"
+const BTC_BASE_REPRESENTATION_ID = "00000000-0000-0000-0000-000000000543"
 const DOT_ASSET_ID = "00000000-0000-0000-0000-000000000542"
 
 const expectDecimalAmount = (actual: string, expected: string) => {
@@ -435,6 +436,14 @@ const seedCoinbaseSource = () =>
       type: "fungible",
     })
 
+    yield* db.insert(schema.assetRepresentations).values({
+      id: BTC_BASE_REPRESENTATION_ID,
+      assetId: BTC_ASSET_ID,
+      blockchainId: baseBlockchain.id,
+      type: "native",
+      decimals: 8,
+    })
+
     yield* db.insert(schema.sources).values({
       id: sourceId,
       name: "Coinbase",
@@ -638,6 +647,7 @@ const seedMatchedOnchainReceipt = ({
       toPartyType: "address",
       toPartyResourcePath: null,
       assetId: btcAsset.id,
+      assetRepresentationId: BTC_BASE_REPRESENTATION_ID,
       amount,
       tokenId: null,
       notes: null,
@@ -764,6 +774,7 @@ const seedMatchedOnchainSend = ({
       toPartyType: "exchange",
       toPartyResourcePath: null,
       assetId: btcAsset.id,
+      assetRepresentationId: BTC_BASE_REPRESENTATION_ID,
       amount,
       tokenId: null,
       notes: null,
@@ -1186,7 +1197,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("defers matched Coinbase withdrawal FIFO effects through sync and replay", async () => {
+  it("applies matched Coinbase withdrawal FIFO effects through sync and replay", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* seedMatchedOnchainReceipt({
@@ -1200,8 +1211,8 @@ describe("coinbase normalization persistence", () => {
 
         expect(firstRun.reconciliations).toEqual([
           expect.objectContaining({
-            status: "pending",
-            matchReason: "fifo_application_deferred",
+            status: "auto_applied",
+            matchReason: "deterministic_wallet_receipt_match",
             deterministic: true,
             canonicalTransferId: expect.any(String),
             canonicalTransactionId: expect.any(String),
@@ -1212,14 +1223,14 @@ describe("coinbase normalization persistence", () => {
           firstRun.reviews.some(
             (review) => review.matchedLayer?.includes("transfer_reconciliation") === true
           )
-        ).toBe(false)
+        ).toBe(true)
         expect(firstRun.legs.some((leg) => leg.derivationRule === "internal_transfer_out")).toBe(
-          false
+          true
         )
         expect(firstRun.legs.some((leg) => leg.derivationRule === "internal_transfer_in")).toBe(
-          false
+          true
         )
-        expect(firstRun.fifoLots.some((lot) => lot.sourceId === ownedOnchainSourceId)).toBe(false)
+        expect(firstRun.fifoLots.some((lot) => lot.sourceId === ownedOnchainSourceId)).toBe(true)
 
         const taxAfterSync = yield* calculateTax()
         expect(taxAfterSync.taxableGains).toBe(2000)
@@ -1241,7 +1252,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("defers matched Coinbase receive FIFO effects", async () => {
+  it("rolls back a matched Coinbase receive without origin inventory", async () => {
     activeSyncRecords = makeReceiveSyncRecords({
       walletAddress: "bc1qexamplesource",
       txHash: "tx-receive-hash-1",
@@ -1260,9 +1271,9 @@ describe("coinbase normalization persistence", () => {
 
         expect(state.reconciliations).toEqual([
           expect.objectContaining({
-            status: "pending",
-            matchReason: "fifo_application_deferred",
-            deterministic: true,
+            status: "needs_review",
+            matchReason: "insufficient_fifo_inventory",
+            deterministic: false,
             canonicalTransferId: expect.any(String),
             canonicalTransactionId: expect.any(String),
           }),
