@@ -622,6 +622,45 @@ export const annualPaymentAllocationsFromInvoicePayments = (
     })
   )
 
+export const allocateCreditNoteReversalAcrossPayments = ({
+  reversedAmount,
+  payments,
+}: {
+  readonly reversedAmount: number
+  readonly payments: ReadonlyArray<{
+    readonly paymentReference: string
+    readonly paymentAmount: number
+  }>
+}): ReadonlyArray<{
+  readonly paymentReference: string
+  readonly paymentAmount: number
+  readonly reversedAmount: number
+}> | null => {
+  if (
+    !Number.isInteger(reversedAmount) ||
+    reversedAmount < 0 ||
+    payments.some(({ paymentAmount }) => !Number.isInteger(paymentAmount) || paymentAmount < 0)
+  ) {
+    return null
+  }
+
+  const sortedPayments = [...payments]
+    .filter(({ paymentAmount }) => paymentAmount > 0)
+    .sort((left, right) => left.paymentReference.localeCompare(right.paymentReference))
+  const totalPaymentAmount = sortedPayments.reduce(
+    (total, payment) => total + payment.paymentAmount,
+    0
+  )
+  if (reversedAmount > totalPaymentAmount) return null
+
+  let remainingAmount = reversedAmount
+  return sortedPayments.flatMap((payment) => {
+    const allocatedAmount = Math.min(payment.paymentAmount, remainingAmount)
+    remainingAmount -= allocatedAmount
+    return allocatedAmount === 0 ? [] : [{ ...payment, reversedAmount: allocatedAmount }]
+  })
+}
+
 export const annualInvoiceCreditAllocations = ({
   invoiceId,
   amountDue,
@@ -812,10 +851,11 @@ const StripeCreditNoteWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   currency: Schema.String,
   invoice: StripeReferenceSchema,
+  post_payment_amount: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
   status: Schema.String,
   refunds: Schema.Array(
     Schema.Struct({
-      amount_refunded: Schema.Number,
+      amount_refunded: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
       payment_record_refund: Schema.NullOr(
         Schema.Struct({ payment_record: Schema.String, refund_group: Schema.String })
       ),
@@ -1546,7 +1586,7 @@ const make = Effect.gen(function* () {
       })
     })
 
-  const applyCreditNoteRefunds = ({
+  const applyCreditNoteReversals = ({
     creditNote,
     eventId,
     eventCreatedAt,
@@ -1555,84 +1595,125 @@ const make = Effect.gen(function* () {
     readonly eventId: string
     readonly eventCreatedAt: Date
   }) =>
-    Effect.forEach(
-      creditNote.refunds,
-      (refund) =>
-        Effect.gen(function* () {
-          const paymentRecordRefund = refund.payment_record_refund
-          if (creditNote.status !== "issued" || refund.amount_refunded <= 0) {
-            return
-          }
+    Effect.gen(function* () {
+      if (creditNote.status !== "issued") return
 
-          const invoiceId =
-            typeof creditNote.invoice === "string" ? creditNote.invoice : creditNote.invoice.id
+      const invoiceId =
+        typeof creditNote.invoice === "string" ? creditNote.invoice : creditNote.invoice.id
 
-          if (refund.type === "refund") {
-            const refundReference = refund.refund
-            const creditNoteRefund =
-              typeof refundReference === "string"
-                ? yield* stripePromise("Could not load credited refund", (client) =>
-                    client.refunds.retrieve(refundReference)
-                  )
-                : refundReference
-            if (creditNoteRefund === null || creditNoteRefund.status !== "succeeded") return
-            const refundCharge = creditNoteRefund.charge
-            const paymentReference =
-              paymentIntentId(creditNoteRefund.payment_intent) ??
-              (refundCharge === null
-                ? null
-                : typeof refundCharge === "string"
-                  ? refundCharge
-                  : refundCharge.id)
-            if (paymentReference === null || creditNoteRefund.amount <= 0) return
+      yield* Effect.forEach(
+        creditNote.refunds,
+        (refund) =>
+          Effect.gen(function* () {
+            const paymentRecordRefund = refund.payment_record_refund
+            if (refund.amount_refunded <= 0) return
+
+            if (refund.type === "refund") {
+              const refundReference = refund.refund
+              const creditNoteRefund =
+                typeof refundReference === "string"
+                  ? yield* stripePromise("Could not load credited refund", (client) =>
+                      client.refunds.retrieve(refundReference)
+                    )
+                  : refundReference
+              if (creditNoteRefund === null || creditNoteRefund.status !== "succeeded") return
+              const refundCharge = creditNoteRefund.charge
+              const paymentReference =
+                paymentIntentId(creditNoteRefund.payment_intent) ??
+                (refundCharge === null
+                  ? null
+                  : typeof refundCharge === "string"
+                    ? refundCharge
+                    : refundCharge.id)
+              if (paymentReference === null || creditNoteRefund.amount <= 0) return
+
+              yield* billingRepository
+                .setPaymentCreditReversal({
+                  paymentReference,
+                  reversalGroup: `stripe:credit-note:${creditNote.id}:refund:${creditNoteRefund.id}`,
+                  lossReference: `stripe:refund:${creditNoteRefund.id}`,
+                  reversedAmount: refund.amount_refunded,
+                  paymentAmount: creditNoteRefund.amount,
+                  reference: `stripe:credit-note:${creditNote.id}:${eventId}`,
+                  eventCreatedAt,
+                  stripeInvoiceId: invoiceId,
+                  monotonic: true,
+                  terminal: true,
+                })
+                .pipe(Effect.mapError(() => stripeError("Could not attribute refunded credits")))
+              return
+            }
+
+            if (refund.type !== "payment_record_refund" || paymentRecordRefund === null) return
+
+            const paymentRecord = yield* stripePromise(
+              "Could not load refunded payment record",
+              (client) => client.paymentRecords.retrieve(paymentRecordRefund.payment_record)
+            )
+            if (
+              paymentRecord.amount.value <= 0 ||
+              paymentRecord.amount.currency !== creditNote.currency
+            ) {
+              return yield* Effect.fail(stripeError("Invalid refunded payment record amount"))
+            }
 
             yield* billingRepository
               .setPaymentCreditReversal({
-                paymentReference,
-                reversalGroup: `stripe:credit-note:${creditNote.id}:refund:${creditNoteRefund.id}`,
-                lossReference: `stripe:refund:${creditNoteRefund.id}`,
+                paymentReference: paymentRecord.id,
+                reversalGroup: `stripe:credit-note:${creditNote.id}:payment-record-refund:${paymentRecordRefund.refund_group}`,
+                lossReference: `stripe:payment-record-refund:${paymentRecordRefund.refund_group}`,
                 reversedAmount: refund.amount_refunded,
-                paymentAmount: creditNoteRefund.amount,
+                paymentAmount: paymentRecord.amount.value,
                 reference: `stripe:credit-note:${creditNote.id}:${eventId}`,
                 eventCreatedAt,
                 stripeInvoiceId: invoiceId,
                 monotonic: true,
                 terminal: true,
               })
-              .pipe(Effect.mapError(() => stripeError("Could not attribute refunded credits")))
-            return
-          }
+              .pipe(Effect.mapError(() => stripeError("Could not reverse payment record credits")))
+          }),
+        { discard: true }
+      )
 
-          if (refund.type !== "payment_record_refund" || paymentRecordRefund === null) return
+      const refundedAmount = creditNote.refunds.reduce(
+        (total, refund) => total + refund.amount_refunded,
+        0
+      )
+      const nonRefundAmount = creditNote.post_payment_amount - refundedAmount
+      if (nonRefundAmount < 0) {
+        return yield* Effect.fail(stripeError("Invalid credit note post-payment amount"))
+      }
+      if (nonRefundAmount === 0) return
 
-          const paymentRecord = yield* stripePromise(
-            "Could not load refunded payment record",
-            (client) => client.paymentRecords.retrieve(paymentRecordRefund.payment_record)
-          )
-          if (
-            paymentRecord.amount.value <= 0 ||
-            paymentRecord.amount.currency !== creditNote.currency
-          ) {
-            return yield* Effect.fail(stripeError("Invalid refunded payment record amount"))
-          }
+      const paymentAllocations = yield* paidInvoicePaymentAllocations(invoiceId)
+      const reversalAllocations = allocateCreditNoteReversalAcrossPayments({
+        reversedAmount: nonRefundAmount,
+        payments: paymentAllocations,
+      })
+      if (reversalAllocations === null || reversalAllocations.length === 0) {
+        return yield* Effect.fail(stripeError("Could not attribute non-refund credit note value"))
+      }
 
-          yield* billingRepository
+      yield* Effect.forEach(
+        reversalAllocations,
+        (allocation) =>
+          billingRepository
             .setPaymentCreditReversal({
-              paymentReference: paymentRecord.id,
-              reversalGroup: `stripe:credit-note:${creditNote.id}:payment-record-refund:${paymentRecordRefund.refund_group}`,
-              lossReference: `stripe:payment-record-refund:${paymentRecordRefund.refund_group}`,
-              reversedAmount: refund.amount_refunded,
-              paymentAmount: paymentRecord.amount.value,
+              paymentReference: allocation.paymentReference,
+              reversalGroup: `stripe:credit-note:${creditNote.id}:non-refund:${allocation.paymentReference}`,
+              lossReference: `stripe:credit-note:${creditNote.id}:non-refund`,
+              reversedAmount: allocation.reversedAmount,
+              paymentAmount: allocation.paymentAmount,
               reference: `stripe:credit-note:${creditNote.id}:${eventId}`,
               eventCreatedAt,
               stripeInvoiceId: invoiceId,
               monotonic: true,
               terminal: true,
             })
-            .pipe(Effect.mapError(() => stripeError("Could not reverse payment record credits")))
-        }),
-      { discard: true }
-    )
+            .pipe(Effect.mapError(() => stripeError("Could not reverse credited invoice value"))),
+        { discard: true }
+      )
+    })
 
   const applyChargeRefunds = ({
     charge,
@@ -1861,7 +1942,7 @@ const make = Effect.gen(function* () {
           })
           break
         case "credit_note.created":
-          yield* applyCreditNoteRefunds({
+          yield* applyCreditNoteReversals({
             creditNote: event.data.object,
             eventId: event.id,
             eventCreatedAt,

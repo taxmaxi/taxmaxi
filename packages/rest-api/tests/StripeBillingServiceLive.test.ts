@@ -111,6 +111,7 @@ vi.mock("stripe", () => ({
 }))
 
 import {
+  allocateCreditNoteReversalAcrossPayments,
   allocateAnnualCreditsAcrossPayments,
   annualInvoiceProductIds,
   annualInvoiceCreditAllocations,
@@ -1041,6 +1042,21 @@ describe("StripeBillingServiceLive", () => {
         { paymentReference: "pi_second", amountPaid: 2 },
       ]).reduce((total, payment) => total + payment.credits, 0)
     ).toBe(10_000)
+  })
+
+  it("allocates credit-note reversals deterministically across invoice payments", () => {
+    const payments = [
+      { paymentReference: "pi_second", paymentAmount: 6_000 },
+      { paymentReference: "pi_first", paymentAmount: 4_000 },
+    ]
+
+    expect(allocateCreditNoteReversalAcrossPayments({ reversedAmount: 7_000, payments })).toEqual([
+      { paymentReference: "pi_first", paymentAmount: 4_000, reversedAmount: 4_000 },
+      { paymentReference: "pi_second", paymentAmount: 6_000, reversedAmount: 3_000 },
+    ])
+    expect(
+      allocateCreditNoteReversalAcrossPayments({ reversedAmount: 10_001, payments })
+    ).toBeNull()
   })
 
   it("persists one stable allowance for a zero-due annual invoice across retries", async () => {
@@ -2075,6 +2091,7 @@ describe("StripeBillingServiceLive", () => {
           id: "cn_annual",
           currency: "eur",
           invoice: "in_annual",
+          post_payment_amount: 10_000,
           status: "issued",
           refunds: [
             {
@@ -2121,6 +2138,7 @@ describe("StripeBillingServiceLive", () => {
           id: "cn_pending_refund",
           currency: "eur",
           invoice: "in_pending_refund",
+          post_payment_amount: 1_000,
           status: "issued",
           refunds: [
             {
@@ -2353,6 +2371,7 @@ describe("StripeBillingServiceLive", () => {
           id: "cn_payment_record_refund",
           currency: "eur",
           invoice: "in_payment_record_annual",
+          post_payment_amount: 10_000,
           status: "issued",
           refunds: [
             {
@@ -2384,6 +2403,68 @@ describe("StripeBillingServiceLive", () => {
       stripeInvoiceId: "in_payment_record_annual",
       terminal: true,
     })
+  })
+
+  it("reverses customer-balance and out-of-band credit note value", async () => {
+    stripeMockState.invoicePayments = [
+      {
+        amount_paid: 4_000,
+        payment: { type: "payment_intent", payment_intent: "pi_first" },
+      },
+      {
+        amount_paid: 6_000,
+        payment: { type: "payment_intent", payment_intent: "pi_second" },
+      },
+    ]
+    stripeMockState.event = {
+      id: "evt_non_refund_credit_note",
+      created: 1_700_000_000,
+      type: "credit_note.created",
+      data: {
+        object: {
+          id: "cn_non_refund",
+          currency: "eur",
+          customer_balance_transaction: "cbtxn_credit_note",
+          invoice: "in_non_refund",
+          out_of_band_amount: 2_000,
+          post_payment_amount: 7_000,
+          status: "issued",
+          refunds: [],
+        },
+      },
+    }
+    const reversals: Array<Parameters<BillingRepositoryService["setPaymentCreditReversal"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      setPaymentCreditReversal: (input) =>
+        Effect.sync(() => {
+          reversals.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(reversals).toEqual([
+      expect.objectContaining({
+        paymentReference: "pi_first",
+        reversalGroup: "stripe:credit-note:cn_non_refund:non-refund:pi_first",
+        lossReference: "stripe:credit-note:cn_non_refund:non-refund",
+        reversedAmount: 4_000,
+        paymentAmount: 4_000,
+        stripeInvoiceId: "in_non_refund",
+        terminal: true,
+      }),
+      expect.objectContaining({
+        paymentReference: "pi_second",
+        reversalGroup: "stripe:credit-note:cn_non_refund:non-refund:pi_second",
+        lossReference: "stripe:credit-note:cn_non_refund:non-refund",
+        reversedAmount: 3_000,
+        paymentAmount: 6_000,
+        stripeInvoiceId: "in_non_refund",
+        terminal: true,
+      }),
+    ])
   })
 
   it("starts without Stripe configuration and keeps local billing status available", async () => {

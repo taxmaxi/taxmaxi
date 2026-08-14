@@ -134,8 +134,10 @@ export interface CompleteSourceSyncJobParams {
 export interface RecoverStaleSourceSyncJobParams {
   readonly sourceId: string
   readonly jobId: string
+  /** Heartbeat cutoff that the job must remain older than when recovery is applied. */
   readonly staleBefore: Date
   readonly message: string
+  /** Timestamp recorded when the stale job is marked failed. */
   readonly completedAt: Date
 }
 
