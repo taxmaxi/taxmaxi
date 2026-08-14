@@ -3,6 +3,7 @@
   "name": "taxmaxi",
   "vars": {
     "COOKIE_DOMAIN": ".taxmaxi.com",
+    "PAYLOAD_API_URL": "https://cms.taxmaxi.com",
     "TAXMAXI_API_BASE_URL": "https://api.taxmaxi.com",
   },
   "compatibility_date": "2025-09-02",
