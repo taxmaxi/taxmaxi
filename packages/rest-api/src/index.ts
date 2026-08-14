@@ -1,5 +1,4 @@
 export { TaxMaxiApiLive } from "./layers/TaxMaxiApiLive.ts"
-export { StripeBillingServiceLive } from "./layers/StripeBillingServiceLive.ts"
 export { SessionTokenValidatorLive } from "./layers/AuthApiLive.ts"
 export { invalidSessionCookieCleanup } from "./layers/AuthMiddlewareLive.ts"
 export { AnonSessionServiceLive } from "./layers/AnonSessionServiceLive.ts"
