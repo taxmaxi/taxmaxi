@@ -26,7 +26,10 @@ import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLi
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../../persistence/src/services/index.ts"
-import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
+import {
+  makeIntegrationTestDatabaseContext,
+  seedSyncEngineRepositoryFixture,
+} from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
@@ -370,86 +373,28 @@ const seedCoinbaseSource = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
-    yield* db.insert(schema.users).values({
-      id: userId,
-      email: "coinbase-pr03@taxmaxi.test",
-      name: "Coinbase PR-03 Test User",
-    })
-    yield* db.insert(schema.billingAccounts).values({ userId })
-    yield* db.insert(schema.creditLedger).values({
+    yield* seedSyncEngineRepositoryFixture({
       userId,
-      delta: 100_000,
-      kind: "manual_adjustment",
-      reference: "test:coinbase-normalization-credits",
-    })
-    yield* db.insert(schema.principals).values({
-      id: principalId,
-      kind: "user",
-      userId,
-    })
-
-    const [coinbaseCex] = yield* db
-      .select({ id: schema.cex.id })
-      .from(schema.cex)
-      .where(eq(schema.cex.name, "coinbase"))
-      .limit(1)
-
-    if (coinbaseCex === undefined) {
-      return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
-    }
-
-    const [createdAccount] = yield* db
-      .insert(schema.cexAccount)
-      .values({
-        cexId: coinbaseCex.id,
-        principalId,
-        providerUserId: "coinbase-user-1",
-        providerAccountId: "coinbase-account-1",
-        accessToken: "test-access-token",
-        refreshToken: "test-refresh-token",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-        scopes: "wallet:accounts:read wallet:transactions:read",
-      })
-      .returning({ id: schema.cexAccount.id })
-
-    if (createdAccount === undefined) {
-      return yield* Effect.dieMessage("Failed to create cex account fixture")
-    }
-
-    const [baseBlockchain] = yield* db
-      .select({ id: schema.blockchains.id })
-      .from(schema.blockchains)
-      .where(eq(schema.blockchains.name, "base"))
-      .limit(1)
-
-    if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
-    }
-
-    yield* db.insert(schema.assets).values({
-      id: BTC_ASSET_ID,
-      name: "Bitcoin",
-      symbol: "BTC",
-      coingeckoCoinId: "bitcoin",
-      type: "fungible",
-    })
-
-    yield* db.insert(schema.assets).values({
-      id: DOT_ASSET_ID,
-      name: "Polkadot",
-      symbol: "DOT",
-      coingeckoCoinId: "polkadot",
-      type: "fungible",
-    })
-
-    yield* db.insert(schema.sources).values({
-      id: sourceId,
-      name: "Coinbase",
-      providerKey: "coinbase",
-      sourceableType: "cex",
-      cexAccountId: createdAccount.id,
       principalId,
+      sourceId,
     })
+
+    yield* db.insert(schema.assets).values([
+      {
+        id: BTC_ASSET_ID,
+        name: "Bitcoin",
+        symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
+        type: "fungible",
+      },
+      {
+        id: DOT_ASSET_ID,
+        name: "Polkadot",
+        symbol: "DOT",
+        coingeckoCoinId: "polkadot",
+        type: "fungible",
+      },
+    ])
   }).pipe(Effect.provide(TestPgClientLive))
 
 const runSync = () =>

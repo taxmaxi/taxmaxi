@@ -19,7 +19,10 @@ import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
-import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
+import {
+  makeIntegrationTestDatabaseContext,
+  seedSyncEngineRepositoryFixture,
+} from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
@@ -193,64 +196,10 @@ const TestLayer = SourceSyncLayer.pipe(
 )
 
 const seedCoinbaseSource = () =>
-  Effect.gen(function* () {
-    const db = yield* drizzle
-
-    yield* db.insert(schema.users).values({
-      id: userId,
-      email: "coinbase-pr05@taxmaxi.test",
-      name: "Coinbase PR-05 Replay User",
-    })
-    yield* db.insert(schema.billingAccounts).values({ userId })
-    yield* db.insert(schema.creditLedger).values({
-      userId,
-      delta: 100_000,
-      kind: "manual_adjustment",
-      reference: "test:coinbase-reference-replay-credits",
-    })
-    yield* db.insert(schema.principals).values({
-      id: principalId,
-      kind: "user",
-      userId,
-    })
-
-    const [coinbaseCex] = yield* db
-      .select({ id: schema.cex.id })
-      .from(schema.cex)
-      .where(eq(schema.cex.name, "coinbase"))
-      .limit(1)
-
-    if (coinbaseCex === undefined) {
-      return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
-    }
-
-    const [createdAccount] = yield* db
-      .insert(schema.cexAccount)
-      .values({
-        cexId: coinbaseCex.id,
-        principalId,
-        providerUserId: "coinbase-user-pr05",
-        providerAccountId: "coinbase-account-1",
-        accessToken: "test-access-token",
-        refreshToken: "test-refresh-token",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-        scopes: "wallet:accounts:read wallet:transactions:read",
-      })
-      .returning({ id: schema.cexAccount.id })
-
-    if (createdAccount === undefined) {
-      return yield* Effect.dieMessage("Failed to create cex account fixture")
-    }
-
-    yield* db.insert(schema.sources).values({
-      id: sourceId,
-      name: "Coinbase",
-      providerKey: "coinbase",
-      sourceableType: "cex",
-      cexAccountId: createdAccount.id,
-      principalId,
-    })
-  }).pipe(Effect.provide(TestPgClientLive))
+  seedSyncEngineRepositoryFixture({ userId, principalId, sourceId }).pipe(
+    Effect.asVoid,
+    Effect.provide(TestPgClientLive)
+  )
 
 const insertTaoAsset = () =>
   Effect.gen(function* () {
