@@ -405,6 +405,108 @@ export const allocateAnnualCreditsAcrossPayments = (
   })
 }
 
+export const hasFixedUnitAmount = <Price extends Pick<Stripe.Price, "unit_amount">>(
+  price: Price
+): price is Price & { readonly unit_amount: number } => price.unit_amount !== null
+
+const StripeReferenceSchema = Schema.Union(Schema.String, Schema.Struct({ id: Schema.String }))
+const NullableStripeReferenceSchema = Schema.NullOr(StripeReferenceSchema)
+const StripeMetadataSchema = Schema.Record({ key: Schema.String, value: Schema.String })
+const StripeSubscriptionWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  customer: StripeReferenceSchema,
+})
+const StripeCheckoutWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  customer: NullableStripeReferenceSchema,
+  payment_intent: NullableStripeReferenceSchema,
+  payment_status: Schema.String,
+  metadata: Schema.NullOr(StripeMetadataSchema),
+})
+const StripeInvoiceLineSchema = Schema.Struct({
+  parent: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        subscription_item_details: Schema.optional(
+          Schema.NullOr(Schema.Struct({ proration: Schema.Boolean }))
+        ),
+      })
+    )
+  ),
+  pricing: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        price_details: Schema.optional(
+          Schema.NullOr(Schema.Struct({ price: StripeReferenceSchema }))
+        ),
+      })
+    )
+  ),
+  period: Schema.Struct({ start: Schema.Number, end: Schema.Number }),
+})
+const StripeInvoiceWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  billing_reason: Schema.NullOr(Schema.String),
+  customer: NullableStripeReferenceSchema,
+  parent: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        subscription_details: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              subscription: NullableStripeReferenceSchema,
+              metadata: Schema.optional(Schema.NullOr(StripeMetadataSchema)),
+            })
+          )
+        ),
+      })
+    )
+  ),
+  lines: Schema.Struct({ data: Schema.Array(StripeInvoiceLineSchema), has_more: Schema.Boolean }),
+})
+const StripeChargeWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  amount: Schema.Number,
+  amount_refunded: Schema.Number,
+  payment_intent: NullableStripeReferenceSchema,
+})
+const StripeIdWebhookObjectSchema = Schema.Struct({ id: Schema.String })
+const StripeWebhookEnvelopeSchema = Schema.Struct({
+  id: Schema.String,
+  created: Schema.Number,
+  type: Schema.String,
+  data: Schema.Struct({ object: Schema.Unknown }),
+})
+
+export const validateStripeWebhookEvent = (input: unknown) =>
+  Schema.decodeUnknown(StripeWebhookEnvelopeSchema)(input).pipe(
+    Effect.flatMap((event) => {
+      switch (event.type) {
+        case "customer.subscription.created":
+        case "customer.subscription.updated":
+        case "customer.subscription.paused":
+        case "customer.subscription.resumed":
+        case "customer.subscription.deleted":
+          return Schema.decodeUnknown(StripeSubscriptionWebhookObjectSchema)(event.data.object)
+        case "customer.deleted":
+        case "charge.dispute.created":
+        case "charge.dispute.closed":
+          return Schema.decodeUnknown(StripeIdWebhookObjectSchema)(event.data.object)
+        case "invoice.paid":
+          return Schema.decodeUnknown(StripeInvoiceWebhookObjectSchema)(event.data.object)
+        case "checkout.session.completed":
+        case "checkout.session.async_payment_succeeded":
+          return Schema.decodeUnknown(StripeCheckoutWebhookObjectSchema)(event.data.object)
+        case "charge.refunded":
+          return Schema.decodeUnknown(StripeChargeWebhookObjectSchema)(event.data.object)
+        default:
+          return Effect.void
+      }
+    }),
+    Effect.asVoid,
+    Effect.mapError(() => stripeError("Invalid Stripe webhook event payload"))
+  )
+
 const toBillingSubscriptionStatus = (
   status: Stripe.Subscription.Status
 ): Effect.Effect<BillingSubscriptionStatus, StripeBillingError> => {
@@ -570,11 +672,15 @@ const make = Effect.gen(function* () {
       if (annualPrice !== undefined && !isValidAnnualPrice(annualPrice)) {
         return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
       }
+      const fixedPrices = prices.data.filter(hasFixedUnitAmount)
+      if (fixedPrices.length !== prices.data.length) {
+        return Effect.fail(stripeError("Stripe catalog prices must have a fixed unit amount"))
+      }
       return Effect.succeed(
-        prices.data.map(
+        fixedPrices.map(
           (price): BillingCatalogPrice => ({
             lookupKey: price.lookup_key ?? "",
-            amount: price.unit_amount ?? 0,
+            amount: price.unit_amount,
             currency: price.currency,
             taxBehavior: price.tax_behavior ?? "unspecified",
             recurringInterval: price.recurring?.interval === "year" ? "year" : null,
@@ -1026,6 +1132,7 @@ const make = Effect.gen(function* () {
       const event = yield* stripePromise("Invalid Stripe webhook signature", (client) =>
         client.webhooks.constructEventAsync(input.payload, input.signature, secret)
       )
+      yield* validateStripeWebhookEvent(event)
       const processed = yield* billingRepository
         .hasProcessedEvent(event.id)
         .pipe(Effect.mapError(() => stripeError("Could not check Stripe event")))

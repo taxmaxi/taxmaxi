@@ -21,6 +21,7 @@ import {
   completeInvoiceLines,
   currentExistingAnnualSubscription,
   hasExistingTaxMaxiAnnualSubscription,
+  hasFixedUnitAmount,
   invoicePaymentReference,
   isAnnualInvoiceEligible,
   isAnnualInvoiceLineEligible,
@@ -34,6 +35,7 @@ import {
   subscriptionIdToClearAfterConfirmation,
   StripeBillingServiceLive,
   verifiedTopUpCustomer,
+  validateStripeWebhookEvent,
 } from "../src/layers/StripeBillingServiceLive.ts"
 import { StripeBillingService } from "../src/services/StripeBillingService.ts"
 
@@ -343,6 +345,79 @@ describe("StripeBillingServiceLive", () => {
     expect(oldPrice).toContain("price_old")
     expect(newPrice).toContain("price_new")
     expect(oldPrice).not.toBe(newPrice)
+  })
+
+  it("rejects Stripe catalog prices without a fixed unit amount", () => {
+    expect(hasFixedUnitAmount({ unit_amount: 1_000 })).toBe(true)
+    expect(hasFixedUnitAmount({ unit_amount: null })).toBe(false)
+  })
+
+  it("validates the nested shapes used by accepted Stripe webhook events", async () => {
+    const valid = await Effect.runPromise(
+      Effect.either(
+        validateStripeWebhookEvent({
+          id: "evt_valid",
+          created: 1_700_000_000,
+          type: "checkout.session.completed",
+          data: {
+            object: {
+              id: "cs_valid",
+              customer: "cus_valid",
+              payment_intent: "pi_valid",
+              payment_status: "paid",
+              metadata: { purchase_kind: "top_up", taxmaxi_user_id: TEST_USER_ID },
+            },
+          },
+        })
+      )
+    )
+    const invalid = await Effect.runPromise(
+      Effect.either(
+        validateStripeWebhookEvent({
+          id: "evt_invalid",
+          created: 1_700_000_000,
+          type: "checkout.session.completed",
+          data: {
+            object: {
+              id: "cs_invalid",
+              customer: "cus_invalid",
+              payment_intent: "pi_invalid",
+              metadata: { purchase_kind: "top_up" },
+            },
+          },
+        })
+      )
+    )
+    const unrelatedInvoice = await Effect.runPromise(
+      Effect.either(
+        validateStripeWebhookEvent({
+          id: "evt_unrelated_invoice",
+          created: 1_700_000_000,
+          type: "invoice.paid",
+          data: {
+            object: {
+              id: "in_unrelated",
+              billing_reason: "subscription_cycle",
+              customer: "cus_unrelated",
+              parent: {
+                subscription_details: {
+                  subscription: "sub_unrelated",
+                  metadata: null,
+                },
+              },
+              lines: { data: [], has_more: false },
+            },
+          },
+        })
+      )
+    )
+
+    expect(valid).toMatchObject({ _tag: "Right" })
+    expect(unrelatedInvoice).toMatchObject({ _tag: "Right" })
+    expect(invalid).toMatchObject({
+      _tag: "Left",
+      left: { message: "Invalid Stripe webhook event payload" },
+    })
   })
 
   it("grants annual credits only for create or renewal invoices on the annual product", () => {
