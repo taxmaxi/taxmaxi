@@ -924,7 +924,10 @@ const make = Effect.gen(function* () {
         naturalKey: providerAsset.naturalKey,
         currencyCode: providerAsset.currencyCode,
         name: providerAsset.name,
-        decimals: providerAsset.exponent,
+        decimals: Option.match(mappedRepresentation, {
+          onNone: () => providerAsset.exponent,
+          onSome: (representation) => representation.decimals,
+        }),
         tokenProgram: storedTokenProgram(providerAsset),
         nftHint: assetKind === "nft",
         mappingStatus: mapping.mappingStatus,

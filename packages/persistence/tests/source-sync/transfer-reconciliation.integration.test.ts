@@ -334,6 +334,21 @@ const seedObservedOnchainReceipt = ({
   walletAddress,
   blockchainId,
   role = "principal",
+  observedAsset = {
+    provider: "bitcoin",
+    providerAssetId: "bitcoin:native",
+    naturalKey: "bitcoin:native",
+    currencyCode: "BTC",
+    name: "Bitcoin",
+    exponent: 8,
+    providerType: "native",
+    networkName: "bitcoin",
+    fromAddress: "bc1qexternalorigin0000000000000000000000000",
+    representationType: "native",
+    contractAddress: null,
+    mintAddress: null,
+    decimals: 8,
+  },
 }: {
   readonly externalId: string
   readonly transactionExternalId?: string
@@ -344,19 +359,34 @@ const seedObservedOnchainReceipt = ({
   readonly walletAddress: string
   readonly blockchainId: string
   readonly role?: "principal" | "fee" | "rent"
+  readonly observedAsset?: {
+    readonly provider: string
+    readonly providerAssetId: string
+    readonly naturalKey: string
+    readonly currencyCode: string
+    readonly name: string
+    readonly exponent: number
+    readonly providerType: string
+    readonly networkName: string
+    readonly fromAddress: string
+    readonly representationType: "native" | "token" | "nft"
+    readonly contractAddress: string | null
+    readonly mintAddress: string | null
+    readonly decimals: number
+  }
 }) =>
   Effect.gen(function* () {
     const db = yield* drizzle
     const [providerAsset] = yield* db
       .insert(schema.providerAssets)
       .values({
-        provider: "bitcoin",
-        providerAssetId: "bitcoin:native",
-        naturalKey: "bitcoin:native",
-        currencyCode: "BTC",
-        name: "Bitcoin",
-        exponent: 8,
-        providerType: "native",
+        provider: observedAsset.provider,
+        providerAssetId: observedAsset.providerAssetId,
+        naturalKey: observedAsset.naturalKey,
+        currencyCode: observedAsset.currencyCode,
+        name: observedAsset.name,
+        exponent: observedAsset.exponent,
+        providerType: observedAsset.providerType,
         rawProviderPayload: { source: "test" },
         retrievedAt: timestamp,
         createdAt: timestamp,
@@ -383,7 +413,7 @@ const seedObservedOnchainReceipt = ({
         providerDescription: "Observed onchain receipt fixture",
         providerCreatedAt: timestamp,
         providerUpdatedAt: timestamp,
-        metadata: { provider: "bitcoin" },
+        metadata: { provider: observedAsset.provider },
         principalId: TEST_PRINCIPAL_ID,
       })
       .returning({ id: schema.transactions.id })
@@ -406,17 +436,17 @@ const seedObservedOnchainReceipt = ({
         processingMode: "evidence_only",
         fromAccountRef: null,
         toAccountRef: null,
-        fromAddress: "bc1qexternalorigin0000000000000000000000000",
+        fromAddress: observedAsset.fromAddress,
         toAddress: walletAddress,
-        networkName: "bitcoin",
+        networkName: observedAsset.networkName,
         networkHash: txHash,
         observedBlockchainId: blockchainId,
-        observedRepresentationType: "native",
-        observedContractAddress: null,
-        observedMintAddress: null,
-        observedDecimals: 8,
+        observedRepresentationType: observedAsset.representationType,
+        observedContractAddress: observedAsset.contractAddress,
+        observedMintAddress: observedAsset.mintAddress,
+        observedDecimals: observedAsset.decimals,
         amount,
-        metadata: { provider: "bitcoin", role, canonicalTransferExternalId },
+        metadata: { provider: observedAsset.provider, role, canonicalTransferExternalId },
       })
       .returning({ id: schema.providerTransfers.id })
 
@@ -1085,6 +1115,75 @@ describe("TransferReconciliationServiceLive", () => {
     })
   })
 
+  it("keeps a sole known-asset conflict unresolved without moving inventory", async () => {
+    const walletAddress = "bc1qownedwalletassetconflict00000000000000000"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-asset-conflict" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-asset-conflict",
+        timestamp,
+        amount: "0.5",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-asset-conflict",
+        txHash: "btc-asset-conflict",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.5",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+        assetId: TEST_EUR_ASSET_ID,
+        assetRepresentationId: null,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const inventoryMovements = yield* db
+          .select({ id: schema.inventoryMovements.id })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
+
+        return { reconciliation, inventoryMovements }
+      })
+    )
+
+    expect(state.reconciliation).toMatchObject({
+      canonicalTransferId: null,
+      status: "needs_review",
+      matchReason: "known_asset_candidate_conflict",
+      deterministic: false,
+    })
+    expect(state.inventoryMovements).toEqual([])
+  })
+
   it("prefers a canonical transfer over its observed evidence row", async () => {
     const walletAddress = "bc1qownedwalletdedup0000000000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
@@ -1323,6 +1422,133 @@ describe("TransferReconciliationServiceLive", () => {
         amount: "0.33",
         walletAddress,
         blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            deterministic: schema.transferReconciliations.deterministic,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const [mapping] = yield* db
+          .select({
+            mappingStatus: schema.providerAssetMappings.mappingStatus,
+            canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+            sourceNotes: schema.providerAssetMappings.sourceNotes,
+          })
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, observed.providerAssetRowId))
+        const inventoryMovements = yield* db
+          .select({ id: schema.inventoryMovements.id })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.providerTransferId, providerTransferId))
+
+        return { reconciliation, mapping, inventoryMovements }
+      })
+    )
+
+    expect(state.reconciliation).toMatchObject({
+      canonicalTransferId: null,
+      canonicalTransactionId: observed.transactionId,
+      status: "pending",
+      matchReason: "asset_representation_review_pending",
+      deterministic: false,
+    })
+    expect(state.mapping).toMatchObject({
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+    expect(state.mapping?.sourceNotes).toContain("transfer_reconciliation_evidence:")
+    expect(state.mapping?.sourceNotes).toContain(TEST_BTC_ASSET_ID)
+    expect(state.inventoryMovements).toEqual([])
+  })
+
+  it("records a first-seen Solana mint from a Coinbase transfer as pending evidence", async () => {
+    const walletAddress = "SoOwnedWalletPendingMint1111111111111111111111"
+    const mintAddress = "PendingMint1111111111111111111111111111111111"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const solanaBlockchainId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (blockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        return blockchain.id
+      })
+    )
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({
+        providerAssetId: "btc-provider-pending-solana-mint",
+        assetRepresentationId: null,
+      })
+    )
+    await runPg(
+      seedOwnedOnchainSource({
+        walletAddress,
+        addressType: "solana",
+        providerKey: "helius-solana",
+      })
+    )
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-pending-solana-mint",
+        timestamp,
+        amount: "0.33",
+        toAddress: walletAddress,
+        networkHash: "SolanaPendingMintSignature",
+        networkName: "solana",
+      })
+    )
+    const observed = await runPg(
+      seedObservedOnchainReceipt({
+        externalId: "observed-pending-solana-mint",
+        txHash: "SolanaPendingMintSignature",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.33",
+        walletAddress,
+        blockchainId: solanaBlockchainId,
+        observedAsset: {
+          provider: "helius-solana",
+          providerAssetId: mintAddress,
+          naturalKey: `solana:mint:${mintAddress}`,
+          currencyCode: "UNKNOWN",
+          name: "Unknown Solana token",
+          exponent: 6,
+          providerType: "spl-token",
+          networkName: "solana",
+          fromAddress: "SoExternalOrigin1111111111111111111111111111",
+          representationType: "token",
+          contractAddress: null,
+          mintAddress,
+          decimals: 6,
+        },
       })
     )
 

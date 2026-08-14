@@ -618,6 +618,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       kind: "canonical",
       assetKind: "nft",
       representationTypeObserved: true,
+      decimals: 0,
       mappingStatus: "approved",
       canonicalAssetId: NFT_ASSET_ID,
       assetRepresentationId: NFT_REPRESENTATION_ID,
