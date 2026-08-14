@@ -63,6 +63,7 @@ export interface BillingRepositoryService {
     readonly cancelAtPeriodEnd: boolean
     readonly eventCreatedAt: Date
     readonly syncGeneration: number
+    readonly annualCheckoutGeneration?: number | null
   }) => Effect.Effect<boolean, PersistenceError>
   readonly clearSubscription: (input: {
     readonly stripeCustomerId: string

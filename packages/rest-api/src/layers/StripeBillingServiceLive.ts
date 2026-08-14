@@ -11,6 +11,7 @@ import type {
   BillingRepositoryService,
   BillingSubscriptionStatus,
 } from "@my/persistence/services"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -35,6 +36,14 @@ import {
 const ANNUAL_CREDITS = 10_000
 const TOP_UP_CREDITS = 1_000
 const INTEGRATION_IDENTIFIER = "taxmaxi_direct_q7m4w2kp"
+const CATALOG_LOOKUP_KEYS = [
+  TAXMAXI_ANNUAL_LOOKUP_KEY,
+  TAXMAXI_TOP_UP_LOOKUP_KEY,
+  TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
+  TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
+  TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
+  TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
+] as const
 
 export const STRIPE_CHECKOUT_TAX_OPTIONS = {
   automatic_tax: { enabled: true },
@@ -47,12 +56,14 @@ export const buildAnnualCheckoutParams = ({
   userId,
   frontendUrl,
   expiresAt,
+  generation,
 }: {
   readonly customer: string
   readonly price: Pick<Stripe.Price, "id" | "product">
   readonly userId: AuthUserId
   readonly frontendUrl: string
   readonly expiresAt: Date
+  readonly generation: number
 }): Stripe.Checkout.SessionCreateParams => ({
   mode: "subscription",
   customer,
@@ -64,12 +75,17 @@ export const buildAnnualCheckoutParams = ({
   cancel_url: `${frontendUrl}/app/billing`,
   expires_at: Math.floor(expiresAt.getTime() / 1_000),
   integration_identifier: INTEGRATION_IDENTIFIER,
-  metadata: { purchase_kind: "annual", taxmaxi_user_id: userId },
+  metadata: {
+    purchase_kind: "annual",
+    taxmaxi_user_id: userId,
+    annual_checkout_generation: String(generation),
+  },
   subscription_data: {
     metadata: {
       taxmaxi_user_id: userId,
       plan_lookup_key: TAXMAXI_ANNUAL_LOOKUP_KEY,
       plan_product_id: productId(price.product),
+      annual_checkout_generation: String(generation),
     },
   },
 })
@@ -136,6 +152,7 @@ export const createReservedAnnualCheckoutSession = <
         userId,
         frontendUrl,
         expiresAt: reservation.expiresAt,
+        generation: reservation.generation,
       }),
       idempotencyKey: annualCheckoutIdempotencyKey({
         userId,
@@ -326,7 +343,7 @@ export const isAnnualInvoiceEligible = ({
   (billingReason === "subscription_create" || billingReason === "subscription_cycle") &&
   (planLookupKey === undefined || planLookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY)
 
-export const annualInvoiceProductId = ({
+export const annualInvoiceProductIds = ({
   planLookupKey,
   planProductId,
   currentProductId,
@@ -334,12 +351,15 @@ export const annualInvoiceProductId = ({
   readonly planLookupKey: string | undefined
   readonly planProductId: string | undefined
   readonly currentProductId: string | undefined
-}): string | null | undefined =>
-  planLookupKey === undefined
-    ? (planProductId ?? currentProductId ?? null)
-    : planLookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY
-      ? planProductId
-      : null
+}): ReadonlyArray<string> | null | undefined => {
+  if (planLookupKey !== undefined && planLookupKey !== TAXMAXI_ANNUAL_LOOKUP_KEY) return null
+
+  const productIds = [
+    ...new Set([planProductId, currentProductId].filter((id) => id !== undefined)),
+  ]
+  if (productIds.length > 0) return productIds
+  return planLookupKey === undefined ? null : undefined
+}
 
 export const isAnnualInvoiceLineEligible = ({
   proration,
@@ -348,7 +368,7 @@ export const isAnnualInvoiceLineEligible = ({
   interval,
   intervalCount,
   productId,
-  currentProductId,
+  allowedProductIds,
 }: {
   readonly proration: boolean
   readonly periodStart: number
@@ -356,13 +376,13 @@ export const isAnnualInvoiceLineEligible = ({
   readonly interval: string | undefined
   readonly intervalCount: number | undefined
   readonly productId: string
-  readonly currentProductId: string | undefined
+  readonly allowedProductIds: ReadonlyArray<string> | undefined
 }): boolean =>
   !proration &&
   periodEnd > periodStart &&
   interval === "year" &&
   intervalCount === 1 &&
-  (currentProductId === undefined || productId === currentProductId)
+  (allowedProductIds === undefined || allowedProductIds.includes(productId))
 
 export const isPaidTopUpSessionEligible = ({
   purchaseKind,
@@ -381,12 +401,12 @@ export const findEligibleAnnualInvoiceLine = <Line>(
     readonly interval: string | undefined
     readonly intervalCount: number | undefined
     readonly productId: string
-    readonly currentProductId: string | undefined
+    readonly allowedProductIds: ReadonlyArray<string> | undefined
   }>
 ): Line | undefined => {
   const eligible = candidates.filter(isAnnualInvoiceLineEligible)
   if (eligible.length === 0) return undefined
-  if (eligible[0]?.currentProductId === undefined && eligible.length !== 1) return undefined
+  if (eligible[0]?.allowedProductIds === undefined && eligible.length !== 1) return undefined
   return eligible[0]?.line
 }
 
@@ -464,6 +484,39 @@ export const isValidAnnualPrice = (price: {
 export const isValidTopUpPrice = (price: { readonly recurring: unknown }): boolean =>
   price.recurring === null
 
+export const isCatalogPriceCadenceValid = ({
+  lookupKey,
+  price,
+}: {
+  readonly lookupKey: string | null
+  readonly price: {
+    readonly recurring: { readonly interval: string; readonly interval_count: number } | null
+  }
+}): boolean => {
+  switch (lookupKey) {
+    case TAXMAXI_ANNUAL_LOOKUP_KEY:
+    case TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY:
+    case TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY:
+      return isValidAnnualPrice(price)
+    case TAXMAXI_TOP_UP_LOOKUP_KEY:
+    case TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY:
+    case TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY:
+      return isValidTopUpPrice(price)
+    default:
+      return false
+  }
+}
+
+export const hasCompleteCatalogLookupKeys = (
+  prices: ReadonlyArray<{ readonly lookup_key: string | null }>
+): boolean =>
+  prices.length === CATALOG_LOOKUP_KEYS.length &&
+  CATALOG_LOOKUP_KEYS.every(
+    (lookupKey) => prices.filter((price) => price.lookup_key === lookupKey).length === 1
+  )
+
+export const isSupportedCatalogCurrency = (currency: string): boolean => currency === "eur"
+
 export const chargePaymentReference = (
   charge: Pick<Stripe.Charge, "id" | "payment_intent">
 ): string => paymentIntentId(charge.payment_intent) ?? charge.id
@@ -530,7 +583,20 @@ export const allocateAnnualCreditsAcrossPayments = (
     const credits =
       index === positive.length - 1
         ? ANNUAL_CREDITS - allocated
-        : Math.floor((ANNUAL_CREDITS * payment.amountPaid) / totalPaid)
+        : BigDecimal.unsafeToNumber(
+            BigDecimal.floor(
+              Option.getOrElse(
+                BigDecimal.divide(
+                  BigDecimal.multiply(
+                    BigDecimal.fromNumber(ANNUAL_CREDITS),
+                    BigDecimal.fromNumber(payment.amountPaid)
+                  ),
+                  BigDecimal.fromNumber(totalPaid)
+                ),
+                () => BigDecimal.fromNumber(0)
+              )
+            )
+          )
     allocated += credits
     return {
       paymentReference: payment.paymentReference,
@@ -642,6 +708,19 @@ export const hasFixedUnitAmount = <Price extends Pick<Stripe.Price, "unit_amount
 const StripeReferenceSchema = Schema.Union(Schema.String, Schema.Struct({ id: Schema.String }))
 const NullableStripeReferenceSchema = Schema.NullOr(StripeReferenceSchema)
 const StripeMetadataSchema = Schema.Record({ key: Schema.String, value: Schema.String })
+const AnnualCheckoutMetadataSchema = Schema.Struct({
+  annual_checkout_generation: Schema.optional(
+    Schema.NumberFromString.pipe(Schema.int(), Schema.positive())
+  ),
+})
+
+const annualCheckoutGenerationFromMetadata = (
+  metadata: Readonly<Record<string, string>>
+): number | null => {
+  const decoded = Schema.decodeUnknownOption(AnnualCheckoutMetadataSchema)(metadata)
+  return Option.isSome(decoded) ? (decoded.value.annual_checkout_generation ?? null) : null
+}
+
 const StripeSubscriptionWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   customer: StripeReferenceSchema,
@@ -701,6 +780,13 @@ const StripeChargeWebhookObjectSchema = Schema.Struct({
   amount_refunded: Schema.Number,
   payment_intent: NullableStripeReferenceSchema,
 })
+const StripeRefundWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  amount: Schema.Number,
+  charge: NullableStripeReferenceSchema,
+  payment_intent: NullableStripeReferenceSchema,
+  status: Schema.NullOr(Schema.String),
+})
 const StripeCreditNoteWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   currency: Schema.String,
@@ -746,6 +832,8 @@ export const validateStripeWebhookEvent = (input: unknown) =>
           return Schema.decodeUnknown(StripeCheckoutWebhookObjectSchema)(event.data.object)
         case "charge.refunded":
           return Schema.decodeUnknown(StripeChargeWebhookObjectSchema)(event.data.object)
+        case "refund.updated":
+          return Schema.decodeUnknown(StripeRefundWebhookObjectSchema)(event.data.object)
         case "credit_note.created":
           return Schema.decodeUnknown(StripeCreditNoteWebhookObjectSchema)(event.data.object)
         default:
@@ -915,33 +1003,32 @@ const make = Effect.gen(function* () {
       })
     })
 
-  const catalogLookupKeys = [
-    TAXMAXI_ANNUAL_LOOKUP_KEY,
-    TAXMAXI_TOP_UP_LOOKUP_KEY,
-    TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
-    TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
-    TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
-    TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
-  ] as const
-
   const catalog: StripeBillingServiceShape["catalog"] = stripePromise(
     "Could not load Stripe prices",
-    (client) => client.prices.list({ active: true, lookup_keys: [...catalogLookupKeys], limit: 10 })
+    (client) =>
+      client.prices.list({ active: true, lookup_keys: [...CATALOG_LOOKUP_KEYS], limit: 10 })
   ).pipe(
     Effect.flatMap((prices) => {
-      const annualPrice = prices.data.find(
-        (price) => price.lookup_key === TAXMAXI_ANNUAL_LOOKUP_KEY
-      )
-      if (annualPrice !== undefined && !isValidAnnualPrice(annualPrice)) {
-        return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
-      }
-      const topUpPrice = prices.data.find((price) => price.lookup_key === TAXMAXI_TOP_UP_LOOKUP_KEY)
-      if (topUpPrice !== undefined && !isValidTopUpPrice(topUpPrice)) {
-        return Effect.fail(stripeError("The TaxMaxi top-up Stripe price must be one-time"))
+      if (
+        !prices.data.every((price) =>
+          isCatalogPriceCadenceValid({ lookupKey: price.lookup_key, price })
+        )
+      ) {
+        return Effect.fail(
+          stripeError("Stripe catalog price cadence does not match its lookup key")
+        )
       }
       const fixedPrices = prices.data.filter(hasFixedUnitAmount)
       if (fixedPrices.length !== prices.data.length) {
         return Effect.fail(stripeError("Stripe catalog prices must have a fixed unit amount"))
+      }
+      if (!fixedPrices.every((price) => isSupportedCatalogCurrency(price.currency))) {
+        return Effect.fail(stripeError("Stripe catalog prices must use EUR"))
+      }
+      if (!hasCompleteCatalogLookupKeys(fixedPrices)) {
+        return Effect.fail(
+          stripeError("Stripe catalog must include every supported lookup key exactly once")
+        )
       }
       return Effect.succeed(
         fixedPrices.map(
@@ -1122,6 +1209,7 @@ const make = Effect.gen(function* () {
           cancelAtPeriodEnd: subscription.cancel_at_period_end,
           eventCreatedAt,
           syncGeneration,
+          annualCheckoutGeneration: annualCheckoutGenerationFromMetadata(subscription.metadata),
         })
         .pipe(Effect.mapError(() => stripeError("Could not save subscription state")))
     })
@@ -1227,16 +1315,15 @@ const make = Effect.gen(function* () {
       ) {
         return
       }
+      const currentAnnualPrice = yield* findActivePrice(TAXMAXI_ANNUAL_LOOKUP_KEY)
       const currentProductId =
-        details.metadata?.plan_lookup_key === undefined
-          ? productId((yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)).product)
-          : undefined
-      const expectedAnnualProductId = annualInvoiceProductId({
+        currentAnnualPrice === undefined ? undefined : productId(currentAnnualPrice.product)
+      const allowedAnnualProductIds = annualInvoiceProductIds({
         planLookupKey: details.metadata?.plan_lookup_key,
         planProductId: details.metadata?.plan_product_id,
         currentProductId,
       })
-      if (expectedAnnualProductId === null) return
+      if (allowedAnnualProductIds === null) return
       const id = subscriptionId(details.subscription)
       const customer = customerId(invoice.customer)
       if (id === null || customer === null) return
@@ -1270,7 +1357,7 @@ const make = Effect.gen(function* () {
             interval: price.recurring?.interval,
             intervalCount: price.recurring?.interval_count,
             productId: productId(price.product),
-            currentProductId: expectedAnnualProductId,
+            allowedProductIds: allowedAnnualProductIds,
           }))
         )
       })
@@ -1527,7 +1614,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const refunds = yield* stripePromise("Could not load charge refunds", (client) =>
-        client.refunds.list({ charge: charge.id }).autoPagingToArray({ limit: 100 })
+        loadAllStripeItems({ page: client.refunds.list({ charge: charge.id }) })
       )
       yield* Effect.forEach(
         refunds.filter((refund) => refund.status === "succeeded"),
@@ -1545,6 +1632,38 @@ const make = Effect.gen(function* () {
           }),
         { discard: true }
       )
+    })
+
+  const applyRefundUpdate = ({
+    refund,
+    eventId,
+    eventCreatedAt,
+  }: {
+    readonly refund: Stripe.Refund
+    readonly eventId: string
+    readonly eventCreatedAt: Date
+  }) =>
+    Effect.gen(function* () {
+      const refundCharge = refund.charge
+      if (refund.status !== "succeeded" || refundCharge === null) return
+
+      const charge =
+        typeof refundCharge === "string"
+          ? yield* stripePromise("Could not load refunded charge", (client) =>
+              client.charges.retrieve(refundCharge)
+            )
+          : refundCharge
+      yield* applyChargeReversal({
+        charge,
+        reversedAmount: refund.amount,
+        reversalGroup: `stripe:refund:${refund.id}:payment`,
+        lossReference: `stripe:refund:${refund.id}`,
+        reference: `stripe:refund:${refund.id}:${eventId}`,
+        eventCreatedAt,
+        stripeInvoiceId: null,
+        monotonic: true,
+        terminal: true,
+      })
     })
 
   const processWebhook: StripeBillingServiceShape["processWebhook"] = (input) =>
@@ -1631,6 +1750,14 @@ const make = Effect.gen(function* () {
               syncGeneration,
               currentProductId,
             })
+            if (!isExistingSubscription(confirmedSubscription.status)) {
+              yield* reconcileTrackedAnnualSubscription({
+                customer,
+                trackedSubscriptionId: confirmedSubscription.id,
+                eventCreatedAt,
+                syncGeneration,
+              })
+            }
           } else {
             yield* reconcileTrackedAnnualSubscription({
               customer,
@@ -1647,15 +1774,27 @@ const make = Effect.gen(function* () {
           const account = yield* billingRepository
             .findByStripeCustomerId(customer)
             .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
+          if (Option.isNone(account)) break
+          const currentProductId = yield* findCurrentAnnualProductId
+          const isTrackedSubscription = account.value.stripeSubscriptionId === event.data.object.id
           if (
-            Option.isNone(account) ||
-            account.value.stripeSubscriptionId !== event.data.object.id
+            !isTrackedSubscription &&
+            !isTaxMaxiAnnualSubscription({
+              subscription: event.data.object,
+              currentProductId,
+            })
           ) {
             break
           }
           const syncGeneration = yield* billingRepository
             .reserveSubscriptionSync({ stripeCustomerId: customer, eventCreatedAt })
             .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
+          yield* syncSubscription({
+            subscription: event.data.object,
+            eventCreatedAt,
+            syncGeneration,
+            currentProductId,
+          })
           yield* reconcileTrackedAnnualSubscription({
             customer,
             trackedSubscriptionId: event.data.object.id,
@@ -1679,6 +1818,13 @@ const make = Effect.gen(function* () {
         case "charge.refunded":
           yield* applyChargeRefunds({
             charge: event.data.object,
+            eventId: event.id,
+            eventCreatedAt,
+          })
+          break
+        case "refund.updated":
+          yield* applyRefundUpdate({
+            refund: event.data.object,
             eventId: event.id,
             eventCreatedAt,
           })

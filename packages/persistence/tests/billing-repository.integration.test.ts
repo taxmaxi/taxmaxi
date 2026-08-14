@@ -237,6 +237,63 @@ describe("BillingRepositoryLive", () => {
     })
   })
 
+  it("rounds once after combining separate partial refunds", async () => {
+    const available = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 1_000,
+          kind: "top_up",
+          reference: "checkout:small-refunds",
+          paymentReference: "pi_small_refunds",
+          paymentAmount: 2_000,
+          stripeInvoiceId: "in_small_refunds",
+          expiresAt: null,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_small_refunds",
+          reversalGroup: "stripe:refund:re_small_first:payment",
+          lossReference: "stripe:refund:re_small_first",
+          reversedAmount: 1,
+          paymentAmount: 2_000,
+          reference: "stripe:refund:re_small_first:payment",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          monotonic: true,
+          terminal: true,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_small_refunds",
+          reversalGroup: "stripe:refund:re_small_second:payment",
+          lossReference: "stripe:refund:re_small_second",
+          reversedAmount: 1,
+          paymentAmount: 2_000,
+          reference: "stripe:refund:re_small_second:payment",
+          eventCreatedAt: new Date(REVERSAL_EVENT_AT.getTime() + 1_000),
+          monotonic: true,
+          terminal: true,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_small_refunds",
+          reversalGroup: "stripe:credit-note:cn_small_first:refund:re_small_first",
+          lossReference: "stripe:refund:re_small_first",
+          reversedAmount: 1,
+          paymentAmount: 2_000,
+          reference: "stripe:credit-note:cn_small_first",
+          eventCreatedAt: new Date(REVERSAL_EVENT_AT.getTime() + 2_000),
+          stripeInvoiceId: "in_small_refunds",
+          monotonic: true,
+          terminal: true,
+        })
+
+        return yield* repository.availableCredits(TEST_USER_ID)
+      })
+    )
+
+    expect(available).toBe(999)
+  })
+
   it("moves a shared-payment refund from payment-wide to its credited invoice", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
@@ -635,7 +692,7 @@ describe("BillingRepositoryLive", () => {
     expect(reservations.afterLookupChange.priceId).toBe("price_original")
   })
 
-  it("keeps a new annual Checkout reservation when a terminal subscription event arrives", async () => {
+  it("invalidates the Checkout reservation that produced a terminal subscription", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
         const repository = yield* BillingRepository
@@ -655,6 +712,7 @@ describe("BillingRepositoryLive", () => {
           cancelAtPeriodEnd: false,
           eventCreatedAt: REVERSAL_EVENT_AT,
           syncGeneration,
+          annualCheckoutGeneration: first.generation,
         })
         const second = yield* repository.reserveAnnualCheckout({
           userId: TEST_USER_ID,
@@ -665,7 +723,56 @@ describe("BillingRepositoryLive", () => {
       })
     )
 
-    expect(result.second).toEqual(result.first)
+    expect(result.second.generation).toBe(result.first.generation + 1)
+  })
+
+  it("keeps a newer Checkout reservation when an older terminal subscription arrives", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        const first = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_annual",
+        })
+        yield* Effect.promise(() =>
+          context.runPg(
+            Effect.gen(function* () {
+              const db = yield* drizzle
+              yield* db
+                .update(schema.billingAccounts)
+                .set({ annualCheckoutExpiresAt: new Date("2020-01-01T00:00:00.000Z") })
+                .where(eq(schema.billingAccounts.userId, TEST_USER_ID))
+            })
+          )
+        )
+        const current = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_annual",
+        })
+        const syncGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: REVERSAL_EVENT_AT,
+        })
+        yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_old_terminal",
+          status: "incomplete_expired",
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          syncGeneration,
+          annualCheckoutGeneration: first.generation,
+        })
+        const afterOldEvent = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_annual",
+        })
+
+        return { current, afterOldEvent }
+      })
+    )
+
+    expect(result.afterOldEvent).toEqual(result.current)
   })
 
   it("uses new credits to cover refunded usage before allowing more transactions", async () => {

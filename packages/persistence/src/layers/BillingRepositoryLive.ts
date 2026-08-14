@@ -5,6 +5,7 @@
  */
 
 import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -23,6 +24,36 @@ import {
   type BillingRepositoryService,
 } from "../services/BillingRepository.ts"
 import { drizzle } from "./PgClientLive.ts"
+
+const proportionalCredits = ({
+  credits,
+  numerators,
+  denominators,
+}: {
+  readonly credits: number
+  readonly numerators: ReadonlyArray<number>
+  readonly denominators: ReadonlyArray<number>
+}): BigDecimal.BigDecimal => {
+  if (
+    credits <= 0 ||
+    numerators.some((amount) => amount <= 0) ||
+    denominators.some((amount) => amount <= 0)
+  ) {
+    return BigDecimal.fromNumber(0)
+  }
+
+  const numerator = numerators.reduce(
+    (result, amount) => BigDecimal.multiply(result, BigDecimal.fromNumber(amount)),
+    BigDecimal.fromNumber(credits)
+  )
+  return denominators.reduce(
+    (result, amount) =>
+      Option.getOrElse(BigDecimal.divide(result, BigDecimal.fromNumber(amount)), () =>
+        BigDecimal.fromNumber(0)
+      ),
+    numerator
+  )
+}
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -98,7 +129,7 @@ const make = Effect.gen(function* () {
 
   const saveSubscription: BillingRepositoryService["saveSubscription"] = (input) =>
     Effect.gen(function* () {
-      const isTerminal = input.status === "canceled" || input.status === "incomplete_expired"
+      const annualCheckoutGeneration = input.annualCheckoutGeneration ?? null
       const updated = yield* db
         .update(billingAccounts)
         .set({
@@ -107,7 +138,22 @@ const make = Effect.gen(function* () {
           currentPeriodEnd: input.currentPeriodEnd,
           cancelAtPeriodEnd: input.cancelAtPeriodEnd,
           lastSubscriptionEventCreatedAt: input.eventCreatedAt,
-          ...(isTerminal ? {} : { annualCheckoutExpiresAt: null }),
+          annualCheckoutExpiresAt:
+            annualCheckoutGeneration === null
+              ? sql<Date | null>`${billingAccounts.annualCheckoutExpiresAt}`
+              : sql<Date | null>`case
+                  when ${billingAccounts.annualCheckoutGeneration} = ${annualCheckoutGeneration}
+                  then null
+                  else ${billingAccounts.annualCheckoutExpiresAt}
+                end`,
+          annualCheckoutPriceId:
+            annualCheckoutGeneration === null
+              ? sql<string | null>`${billingAccounts.annualCheckoutPriceId}`
+              : sql<string | null>`case
+                  when ${billingAccounts.annualCheckoutGeneration} = ${annualCheckoutGeneration}
+                  then null
+                  else ${billingAccounts.annualCheckoutPriceId}
+                end`,
           updatedAt: new Date(),
         })
         .where(
@@ -415,51 +461,57 @@ const make = Effect.gen(function* () {
                   ].map(([, loss]) => loss)
                   const targetReversal = Math.min(
                     bucketGrant.amount,
-                    reversalLosses.reduce((total, loss) => {
-                      const scoped = loss.filter((reversal) => reversal.stripeInvoiceId !== null)
-                      const scopedAmount = scoped.reduce(
-                        (amount, reversal) => amount + reversal.reversedAmount,
-                        0
-                      )
-                      const matchingScopedAmount = scoped
-                        .filter(
-                          (reversal) => reversal.stripeInvoiceId === bucketGrant.stripeInvoiceId
+                    BigDecimal.unsafeToNumber(
+                      BigDecimal.ceil(
+                        BigDecimal.sumAll(
+                          reversalLosses.map((loss) => {
+                            const scoped = loss.filter(
+                              (reversal) => reversal.stripeInvoiceId !== null
+                            )
+                            const scopedAmount = scoped.reduce(
+                              (amount, reversal) => amount + reversal.reversedAmount,
+                              0
+                            )
+                            const matchingScopedAmount = scoped
+                              .filter(
+                                (reversal) =>
+                                  reversal.stripeInvoiceId === bucketGrant.stripeInvoiceId
+                              )
+                              .reduce((amount, reversal) => amount + reversal.reversedAmount, 0)
+                            const paymentWide = loss.find(
+                              (reversal) => reversal.stripeInvoiceId === null
+                            )
+                            const paymentWideRemainder = Math.max(
+                              (paymentWide?.reversedAmount ?? 0) - scopedAmount,
+                              0
+                            )
+                            const grantPaymentAmount =
+                              bucketGrant.paymentAmount ?? paymentWide?.paymentAmount ?? 0
+                            const unscopedPaymentAmount = Math.max(
+                              (paymentWide?.paymentAmount ?? 0) - scopedAmount,
+                              0
+                            )
+                            const unscopedGrantAmount = Math.max(
+                              grantPaymentAmount - matchingScopedAmount,
+                              0
+                            )
+
+                            return BigDecimal.sum(
+                              proportionalCredits({
+                                credits: bucketGrant.amount,
+                                numerators: [matchingScopedAmount],
+                                denominators: [grantPaymentAmount],
+                              }),
+                              proportionalCredits({
+                                credits: bucketGrant.amount,
+                                numerators: [unscopedGrantAmount, paymentWideRemainder],
+                                denominators: [grantPaymentAmount, unscopedPaymentAmount],
+                              })
+                            )
+                          })
                         )
-                        .reduce((amount, reversal) => amount + reversal.reversedAmount, 0)
-                      const paymentWide = loss.find((reversal) => reversal.stripeInvoiceId === null)
-                      const paymentWideRemainder = Math.max(
-                        (paymentWide?.reversedAmount ?? 0) - scopedAmount,
-                        0
                       )
-                      const grantPaymentAmount =
-                        bucketGrant.paymentAmount ?? paymentWide?.paymentAmount ?? 0
-                      const scopedCredits =
-                        matchingScopedAmount <= 0 || grantPaymentAmount <= 0
-                          ? 0
-                          : Math.ceil(
-                              (bucketGrant.amount * matchingScopedAmount) / grantPaymentAmount
-                            )
-                      const unscopedPaymentAmount = Math.max(
-                        (paymentWide?.paymentAmount ?? 0) - scopedAmount,
-                        0
-                      )
-                      const unscopedGrantAmount = Math.max(
-                        grantPaymentAmount - matchingScopedAmount,
-                        0
-                      )
-                      const paymentWideCredits =
-                        paymentWide === undefined ||
-                        paymentWideRemainder <= 0 ||
-                        unscopedPaymentAmount <= 0 ||
-                        grantPaymentAmount <= 0
-                          ? 0
-                          : Math.ceil(
-                              bucketGrant.amount *
-                                (unscopedGrantAmount / grantPaymentAmount) *
-                                (paymentWideRemainder / unscopedPaymentAmount)
-                            )
-                      return total + scopedCredits + paymentWideCredits
-                    }, 0)
+                    )
                   )
                   const expiringReversal = Math.min(targetReversal, remainingExpiringCredits)
                   remainingExpiringCredits -= expiringReversal

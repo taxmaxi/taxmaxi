@@ -210,7 +210,7 @@
   "pricing": {
     "eyebrow": "Preise",
     "title": "Für einzelne Steuerpflichtige oder eine ganze Kanzlei.",
-    "description": "Privatpersonen können direkt starten. Steuerberater erhalten einen Mandanten-Workspace. Große Gesellschaften beginnen mit einem klar abgegrenzten Pilotprojekt.",
+    "description": "Privatpersonen können direkt starten. Steuerkanzleien können den Professional-Umfang in einer Design-Partnerschaft erproben. Große Gesellschaften beginnen mit einem klar abgegrenzten Pilotprojekt.",
     "individual": {
       "name": "Privatperson",
       "badge": "Self-Service",
@@ -229,15 +229,15 @@
     "professional": {
       "name": "Professional",
       "badge": "Steuerkanzleien",
-      "description": "Ein gemeinsamer Workspace für Kanzleien mit deutschen Krypto-Steuermandaten.",
+      "description": "Eine Design-Partner-Vorschau für Kanzleien, die Abläufe für deutsche Krypto-Steuermandate erproben.",
       "price": "1.590 €",
       "priceSuffix": "netto pro Jahr, zzgl. MwSt. soweit anwendbar",
       "cta": "Professional-Zugang besprechen",
       "note": "Einführungsangebot als klar abgegrenzte Design-Partnerschaft.",
       "features": {
-        "users": "3 professionelle Nutzer",
-        "matters": "10 Mandate",
-        "transactions": "100.000 gemeinsam nutzbare Transaktionen pro Jahr",
+        "users": "Vorgesehener Startumfang für bis zu 3 professionelle Nutzer",
+        "matters": "Workflow-Entwurf für bis zu 10 Mandate",
+        "transactions": "Angestrebtes Kontingent von 100.000 gemeinsam nutzbaren Transaktionen pro Jahr",
         "support": "API-Zugang, exportierbare Nachweise und E-Mail-Support"
       }
     },
@@ -278,6 +278,7 @@
       }
     },
     "taxNote": "Preise für Privatpersonen enthalten MwSt. Geschäftskundenpreise sind netto und verstehen sich zzgl. MwSt.",
+    "taxNoteLive": "Steuern werden bei jedem Preis oben ausgewiesen und im Checkout bestätigt.",
     "explanation": "Es gibt keine automatischen Mehrkosten. Enthaltenes Kontingent erneuert sich mit dem Jahresvertrag; Erweiterungen werden separat gekauft. Professional- und Enterprise-Zugang bleibt auf die beim Onboarding vereinbarten Produktfunktionen begrenzt."
   },
   "useCases": {

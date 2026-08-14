@@ -1,14 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router"
+import type { BillingCatalog } from "taxmaxi"
 import { LandingPage } from "#/components/landing-page"
 
+export const loadPublicBillingCatalog = async (
+  loadCatalog: () => Promise<BillingCatalog>
+): Promise<BillingCatalog | null> => {
+  try {
+    return await loadCatalog()
+  } catch {
+    return null
+  }
+}
+
 export const Route = createFileRoute("/")({
-  loader: async ({ context }) => {
-    try {
-      return await context.taxmaxi().billing.catalog()
-    } catch {
-      return null
-    }
-  },
+  loader: ({ context }) => loadPublicBillingCatalog(context.taxmaxi().billing.catalog),
   component: RouteComponent,
 })
 

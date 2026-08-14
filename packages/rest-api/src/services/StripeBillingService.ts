@@ -36,6 +36,10 @@ export class StripeBillingError extends Schema.TaggedError<StripeBillingError>()
   { message: Schema.String }
 ) {}
 
+/**
+ * Stripe-backed billing operations for the public price catalog, account status,
+ * annual and top-up Checkout sessions, Customer Portal access, and signed webhook fulfillment.
+ */
 export interface StripeBillingServiceShape {
   readonly catalog: Effect.Effect<ReadonlyArray<BillingCatalogPrice>, StripeBillingError>
   readonly status: (userId: AuthUserId) => Effect.Effect<BillingStatus, StripeBillingError>

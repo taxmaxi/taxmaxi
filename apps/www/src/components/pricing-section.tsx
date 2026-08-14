@@ -210,7 +210,12 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
       </div>
 
       <div className="mx-auto flex max-w-3xl flex-col gap-2 text-center text-sm leading-6 text-[#6b9484]">
-        <p>{m["pricing.taxNote"]()}</p>
+        <p>
+          {catalogTaxNote(catalog, {
+            fallback: m["pricing.taxNote"](),
+            live: m["pricing.taxNoteLive"](),
+          })}
+        </p>
         <p>{m["pricing.explanation"]()}</p>
       </div>
     </MarketingSection>
@@ -347,6 +352,13 @@ export function catalogPriceSuffix(price: CatalogPrice | undefined, fallback: st
     case "unspecified":
       return withTax(isGerman ? "Steuern werden im Checkout angezeigt" : "tax shown at checkout")
   }
+}
+
+export function catalogTaxNote(
+  catalog: BillingCatalog | null,
+  copy: { readonly fallback: string; readonly live: string }
+): string {
+  return catalog === null ? copy.fallback : copy.live
 }
 
 function PricingFeature({ children }: { children: ReactNode }) {

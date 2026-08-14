@@ -1,7 +1,12 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import { ArrowLeft, CreditCard, Plus } from "lucide-react"
 import { useEffect, useState } from "react"
-import { isTaxMaxiUnauthorizedError, type BillingCatalog, type BillingStatus } from "taxmaxi"
+import {
+  isTaxMaxiUnauthorizedError,
+  type BillingCatalog,
+  type BillingPromiseResource,
+  type BillingStatus,
+} from "taxmaxi"
 import { z } from "zod"
 
 import { AppHeader } from "#/components/app-header"
@@ -64,7 +69,12 @@ export const refreshBillingStatusAfterCheckout = async ({
   let latest = initialStatus
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     await wait()
-    latest = await loadStatus()
+    try {
+      latest = await loadStatus()
+    } catch (error) {
+      if (isTaxMaxiUnauthorizedError(error)) throw error
+      continue
+    }
     if (
       (kind === "annual" &&
         (latest.subscriptionStatus === "active" || latest.subscriptionStatus === "trialing") &&
@@ -104,6 +114,39 @@ function BillingPage() {
   const search = Route.useSearch()
   const { taxmaxi } = Route.useRouteContext()
   const navigate = Route.useNavigate()
+  const checkoutReturnKind =
+    search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
+
+  return (
+    <BillingPageContent
+      assignLocation={(url) => window.location.assign(url)}
+      billing={taxmaxi().billing}
+      catalog={catalog}
+      checkoutReturnKind={checkoutReturnKind}
+      onUnauthorized={async () => {
+        await clearAuthSessionCookie()
+        await navigate({ to: "/login", replace: true })
+      }}
+      status={status}
+    />
+  )
+}
+
+export function BillingPageContent({
+  assignLocation,
+  billing,
+  catalog,
+  checkoutReturnKind,
+  onUnauthorized,
+  status,
+}: {
+  readonly assignLocation: (url: string) => void
+  readonly billing: BillingPromiseResource
+  readonly catalog: BillingCatalog | null
+  readonly checkoutReturnKind: CheckoutReturnKind | null
+  readonly onUnauthorized: () => Promise<void>
+  readonly status: BillingStatus
+}) {
   const [liveStatus, setLiveStatus] = useState(status)
   const [pendingAction, setPendingAction] = useState<"annual" | "portal" | "topUp" | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -115,14 +158,12 @@ function BillingPage() {
     liveStatus.subscriptionStatus === "active" || liveStatus.subscriptionStatus === "trialing"
 
   useEffect(() => {
-    const kind =
-      search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
-    if (kind === null) return
+    if (checkoutReturnKind === null) return
     let active = true
     void refreshBillingStatusAfterCheckout({
       initialStatus: status,
-      kind,
-      loadStatus: () => taxmaxi().billing.status(),
+      kind: checkoutReturnKind,
+      loadStatus: billing.status,
       wait: () => new Promise((resolve) => window.setTimeout(resolve, 500)),
     })
       .then((refreshed) => {
@@ -130,30 +171,27 @@ function BillingPage() {
       })
       .catch(async (cause: unknown) => {
         if (!active || !isTaxMaxiUnauthorizedError(cause)) return
-        await clearAuthSessionCookie()
-        await navigate({ to: "/login", replace: true })
+        await onUnauthorized()
       })
     return () => {
       active = false
     }
-  }, [navigate, search.checkout, search.top_up, status, taxmaxi])
+  }, [billing, checkoutReturnKind, onUnauthorized, status])
 
   const redirectToStripe = async (action: "annual" | "portal" | "topUp") => {
     setPendingAction(action)
     setError(null)
     try {
-      const billing = taxmaxi().billing
       const response =
         action === "annual"
           ? await billing.createAnnualCheckout()
           : action === "topUp"
             ? await billing.createTopUpCheckout()
             : await billing.createPortalSession()
-      window.location.assign(response.url)
+      assignLocation(response.url)
     } catch (cause) {
       if (isTaxMaxiUnauthorizedError(cause)) {
-        await clearAuthSessionCookie()
-        await navigate({ to: "/login", replace: true })
+        await onUnauthorized()
         return
       }
       setError(cause instanceof Error ? cause.message : "Billing is temporarily unavailable.")

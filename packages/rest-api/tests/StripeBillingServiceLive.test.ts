@@ -26,7 +26,9 @@ interface StripeMockState {
   }>
   retrievedPrices: Record<string, unknown>
   refunds: Array<unknown>
+  refundPagingLimit: number | null
   retrievedRefund: unknown
+  listedSubscriptions: Array<unknown> | null
   subscription: unknown
 }
 
@@ -40,7 +42,9 @@ const stripeMockState = vi.hoisted<StripeMockState>(() => ({
   prices: [],
   retrievedPrices: {},
   refunds: [],
+  refundPagingLimit: null,
   retrievedRefund: null,
+  listedSubscriptions: null,
   subscription: null,
 }))
 
@@ -78,7 +82,8 @@ vi.mock("stripe", () => ({
     }
     readonly subscriptions = {
       list: () => ({
-        autoPagingToArray: () => Promise.resolve([stripeMockState.subscription]),
+        autoPagingToArray: () =>
+          Promise.resolve(stripeMockState.listedSubscriptions ?? [stripeMockState.subscription]),
       }),
       retrieve: () => Promise.resolve(stripeMockState.subscription),
     }
@@ -91,7 +96,12 @@ vi.mock("stripe", () => ({
       retrieve: () => Promise.resolve(stripeMockState.paymentRecord),
     }
     readonly refunds = {
-      list: () => ({ autoPagingToArray: () => Promise.resolve(stripeMockState.refunds) }),
+      list: () => ({
+        autoPagingToArray: ({ limit }: { readonly limit: number }) => {
+          stripeMockState.refundPagingLimit = limit
+          return Promise.resolve(stripeMockState.refunds)
+        },
+      }),
       retrieve: () => Promise.resolve(stripeMockState.retrievedRefund),
     }
     readonly webhooks = {
@@ -102,7 +112,7 @@ vi.mock("stripe", () => ({
 
 import {
   allocateAnnualCreditsAcrossPayments,
-  annualInvoiceProductId,
+  annualInvoiceProductIds,
   annualInvoiceCreditAllocations,
   annualPaymentAllocationsFromInvoicePayments,
   annualCheckoutIdempotencyKey,
@@ -114,12 +124,15 @@ import {
   currentExistingAnnualSubscription,
   disputeCreditReversal,
   hasExistingTaxMaxiAnnualSubscription,
+  hasCompleteCatalogLookupKeys,
   hasFixedUnitAmount,
   invoicePaymentReference,
+  isCatalogPriceCadenceValid,
   isAnnualInvoiceEligible,
   isAnnualInvoiceLineEligible,
   findEligibleAnnualInvoiceLine,
   isPaidTopUpSessionEligible,
+  isSupportedCatalogCurrency,
   isTaxMaxiAnnualSubscription,
   isValidAnnualPrice,
   isValidTopUpPrice,
@@ -572,6 +585,7 @@ describe("StripeBillingServiceLive", () => {
       userId: TEST_USER_ID,
       frontendUrl: "https://taxmaxi.test",
       expiresAt: new Date("2026-08-15T12:00:00.000Z"),
+      generation: 3,
     })
     const topUp = buildTopUpCheckoutParams({
       customer: "cus_test",
@@ -585,6 +599,9 @@ describe("StripeBillingServiceLive", () => {
       automatic_tax: { enabled: true },
       tax_id_collection: { enabled: true },
       cancel_url: "https://taxmaxi.test/app/billing",
+      subscription_data: {
+        metadata: { annual_checkout_generation: "3" },
+      },
     })
     expect(topUp).toMatchObject({
       mode: "payment",
@@ -675,6 +692,102 @@ describe("StripeBillingServiceLive", () => {
     expect(hasFixedUnitAmount({ unit_amount: null })).toBe(false)
   })
 
+  it("validates the cadence promised by every Stripe catalog lookup key", () => {
+    const yearly = { recurring: { interval: "year", interval_count: 1 } }
+    const monthly = { recurring: { interval: "month", interval_count: 1 } }
+    const multiYear = { recurring: { interval: "year", interval_count: 2 } }
+    const oneTime = { recurring: null }
+
+    for (const lookupKey of [
+      "taxmaxi_annual_10k_eur",
+      "taxmaxi_professional_annual_100k_eur",
+      "taxmaxi_professional_matter_annual_10k_eur",
+    ]) {
+      expect(isCatalogPriceCadenceValid({ lookupKey, price: yearly })).toBe(true)
+      expect(isCatalogPriceCadenceValid({ lookupKey, price: monthly })).toBe(false)
+      expect(isCatalogPriceCadenceValid({ lookupKey, price: multiYear })).toBe(false)
+      expect(isCatalogPriceCadenceValid({ lookupKey, price: oneTime })).toBe(false)
+    }
+
+    for (const lookupKey of [
+      "taxmaxi_topup_1k_eur",
+      "taxmaxi_professional_topup_20k_eur",
+      "taxmaxi_enterprise_pilot_eur",
+    ]) {
+      expect(isCatalogPriceCadenceValid({ lookupKey, price: oneTime })).toBe(true)
+      expect(isCatalogPriceCadenceValid({ lookupKey, price: yearly })).toBe(false)
+    }
+  })
+
+  it("accepts only one complete EUR catalog", () => {
+    const prices = [
+      "taxmaxi_annual_10k_eur",
+      "taxmaxi_topup_1k_eur",
+      "taxmaxi_professional_annual_100k_eur",
+      "taxmaxi_professional_matter_annual_10k_eur",
+      "taxmaxi_professional_topup_20k_eur",
+      "taxmaxi_enterprise_pilot_eur",
+    ].map((lookup_key) => ({ lookup_key }))
+
+    expect(hasCompleteCatalogLookupKeys(prices)).toBe(true)
+    expect(hasCompleteCatalogLookupKeys(prices.slice(1))).toBe(false)
+    expect(
+      hasCompleteCatalogLookupKeys([...prices.slice(1), { lookup_key: "taxmaxi_topup_1k_eur" }])
+    ).toBe(false)
+    expect(isSupportedCatalogCurrency("eur")).toBe(true)
+    expect(isSupportedCatalogCurrency("usd")).toBe(false)
+    expect(isSupportedCatalogCurrency("jpy")).toBe(false)
+  })
+
+  it("rejects a catalog price whose cadence contradicts its lookup key", async () => {
+    stripeMockState.prices = [
+      {
+        id: "price_professional_monthly",
+        lookup_key: "taxmaxi_professional_annual_100k_eur",
+        product: "prod_professional",
+        recurring: { interval: "month", interval_count: 1 },
+        unit_amount: 15_900,
+        currency: "eur",
+        tax_behavior: "exclusive",
+      },
+    ]
+    const service = await loadServiceWithStripe(billingRepositoryStub)
+
+    const result = await Effect.runPromise(Effect.either(service.catalog))
+
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe catalog price cadence does not match its lookup key" },
+    })
+  })
+
+  it("rejects partial and non-EUR Stripe catalogs", async () => {
+    const annualPrice = {
+      id: "price_annual",
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_annual",
+      recurring: { interval: "year", interval_count: 1 },
+      unit_amount: 15_900,
+      currency: "eur",
+      tax_behavior: "inclusive",
+    }
+    stripeMockState.prices = [annualPrice]
+    const service = await loadServiceWithStripe(billingRepositoryStub)
+
+    const partial = await Effect.runPromise(Effect.either(service.catalog))
+    stripeMockState.prices = [{ ...annualPrice, currency: "usd" }]
+    const nonEur = await Effect.runPromise(Effect.either(service.catalog))
+
+    expect(partial).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe catalog must include every supported lookup key exactly once" },
+    })
+    expect(nonEur).toMatchObject({
+      _tag: "Left",
+      left: { message: "Stripe catalog prices must use EUR" },
+    })
+  })
+
   it("validates the nested shapes used by accepted Stripe webhook events", async () => {
     const valid = await Effect.runPromise(
       Effect.either(
@@ -761,26 +874,26 @@ describe("StripeBillingServiceLive", () => {
       })
     ).toBe(true)
     expect(
-      annualInvoiceProductId({
+      annualInvoiceProductIds({
         planLookupKey: undefined,
         planProductId: undefined,
         currentProductId: "prod_annual",
       })
-    ).toBe("prod_annual")
+    ).toEqual(["prod_annual"])
     expect(
-      annualInvoiceProductId({
+      annualInvoiceProductIds({
         planLookupKey: "taxmaxi_professional_annual",
         planProductId: "prod_professional",
         currentProductId: "prod_annual",
       })
     ).toBeNull()
     expect(
-      annualInvoiceProductId({
+      annualInvoiceProductIds({
         planLookupKey: "taxmaxi_annual_10k_eur",
-        planProductId: undefined,
+        planProductId: "prod_original_annual",
         currentProductId: "prod_replacement_annual",
       })
-    ).toBeUndefined()
+    ).toEqual(["prod_original_annual", "prod_replacement_annual"])
     expect(
       isAnnualInvoiceEligible({
         billingReason: "subscription_update",
@@ -795,7 +908,7 @@ describe("StripeBillingServiceLive", () => {
         interval: "year",
         intervalCount: 1,
         productId: "prod_annual",
-        currentProductId: "prod_annual",
+        allowedProductIds: ["prod_annual"],
       })
     ).toBe(true)
     expect(
@@ -806,7 +919,7 @@ describe("StripeBillingServiceLive", () => {
         interval: "year",
         intervalCount: 1,
         productId: "prod_annual",
-        currentProductId: "prod_annual",
+        allowedProductIds: ["prod_annual"],
       })
     ).toBe(false)
     expect(
@@ -817,7 +930,7 @@ describe("StripeBillingServiceLive", () => {
         interval: "year",
         intervalCount: 1,
         productId: "prod_other",
-        currentProductId: "prod_annual",
+        allowedProductIds: ["prod_annual"],
       })
     ).toBe(false)
 
@@ -831,7 +944,7 @@ describe("StripeBillingServiceLive", () => {
           interval: "month",
           intervalCount: 1,
           productId: "prod_add_on",
-          currentProductId: "prod_annual",
+          allowedProductIds: ["prod_annual"],
         },
         {
           line: "annual",
@@ -841,7 +954,7 @@ describe("StripeBillingServiceLive", () => {
           interval: "year",
           intervalCount: 1,
           productId: "prod_annual",
-          currentProductId: "prod_annual",
+          allowedProductIds: ["prod_annual"],
         },
       ])
     ).toBe("annual")
@@ -855,7 +968,7 @@ describe("StripeBillingServiceLive", () => {
           interval: "year",
           intervalCount: 1,
           productId: "prod_first",
-          currentProductId: undefined,
+          allowedProductIds: undefined,
         },
         {
           line: "second-yearly-line",
@@ -865,7 +978,7 @@ describe("StripeBillingServiceLive", () => {
           interval: "year",
           intervalCount: 1,
           productId: "prod_second",
-          currentProductId: undefined,
+          allowedProductIds: undefined,
         },
       ])
     ).toBeUndefined()
@@ -877,7 +990,7 @@ describe("StripeBillingServiceLive", () => {
         interval: "month",
         intervalCount: 1,
         productId: "prod_annual",
-        currentProductId: "prod_annual",
+        allowedProductIds: ["prod_annual"],
       })
     ).toBe(false)
     expect(
@@ -888,7 +1001,7 @@ describe("StripeBillingServiceLive", () => {
         interval: "year",
         intervalCount: 2,
         productId: "prod_annual",
-        currentProductId: "prod_annual",
+        allowedProductIds: ["prod_annual"],
       })
     ).toBe(false)
   })
@@ -1273,6 +1386,156 @@ describe("StripeBillingServiceLive", () => {
     })
   })
 
+  it("invalidates the producing Checkout when deletion arrives before local tracking", async () => {
+    const deletedSubscription = {
+      id: "sub_deleted_before_tracking",
+      customer: "cus_test",
+      status: "canceled",
+      cancel_at_period_end: false,
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_annual",
+        annual_checkout_generation: "7",
+      },
+      items: {
+        data: [
+          {
+            current_period_end: 1_731_536_000,
+            price: {
+              lookup_key: null,
+              product: "prod_annual",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    stripeMockState.prices = []
+    stripeMockState.subscription = deletedSubscription
+    stripeMockState.listedSubscriptions = []
+    stripeMockState.event = {
+      id: "evt_deleted_before_tracking",
+      created: 1_700_000_000,
+      type: "customer.subscription.deleted",
+      data: { object: deletedSubscription },
+    }
+    const saved: Array<Parameters<BillingRepositoryService["saveSubscription"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(
+          Option.some({
+            ...billingAccount({ stripeCustomerId: "cus_test" }),
+            stripeSubscriptionId: null,
+            subscriptionStatus: null,
+          })
+        ),
+      saveSubscription: (input) =>
+        Effect.sync(() => {
+          saved.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+    stripeMockState.listedSubscriptions = null
+
+    expect(saved).toContainEqual(
+      expect.objectContaining({
+        stripeSubscriptionId: deletedSubscription.id,
+        status: "canceled",
+        annualCheckoutGeneration: 7,
+      })
+    )
+  })
+
+  it("restores an active replacement after a late terminal event for an old subscription", async () => {
+    const oldSubscription = {
+      id: "sub_old_terminal",
+      customer: "cus_test",
+      status: "canceled",
+      cancel_at_period_end: false,
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_old",
+        annual_checkout_generation: "4",
+      },
+      items: {
+        data: [
+          {
+            current_period_end: 1_700_000_000,
+            price: {
+              lookup_key: null,
+              product: "prod_old",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    const replacementSubscription = {
+      id: "sub_active_replacement",
+      customer: "cus_test",
+      status: "active",
+      cancel_at_period_end: false,
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_replacement",
+        annual_checkout_generation: "5",
+      },
+      items: {
+        data: [
+          {
+            current_period_end: 1_731_536_000,
+            price: {
+              lookup_key: null,
+              product: "prod_replacement",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    stripeMockState.subscription = oldSubscription
+    stripeMockState.listedSubscriptions = [replacementSubscription]
+    stripeMockState.event = {
+      id: "evt_old_subscription_terminal",
+      created: 1_700_000_000,
+      type: "customer.subscription.updated",
+      data: { object: { id: oldSubscription.id, customer: "cus_test" } },
+    }
+    const saved: Array<Parameters<BillingRepositoryService["saveSubscription"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(
+          Option.some({
+            ...billingAccount({ stripeCustomerId: "cus_test" }),
+            stripeSubscriptionId: replacementSubscription.id,
+          })
+        ),
+      saveSubscription: (input) =>
+        Effect.sync(() => {
+          saved.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+    stripeMockState.listedSubscriptions = null
+
+    expect(saved[0]).toMatchObject({
+      stripeSubscriptionId: oldSubscription.id,
+      status: "canceled",
+      annualCheckoutGeneration: 4,
+    })
+    expect(saved.at(-1)).toMatchObject({
+      stripeSubscriptionId: replacementSubscription.id,
+      status: "active",
+      annualCheckoutGeneration: 5,
+    })
+  })
+
   it("clears a deleted tagged subscription without an active annual catalog price", async () => {
     stripeMockState.prices = []
     stripeMockState.subscription = {
@@ -1301,7 +1564,7 @@ describe("StripeBillingServiceLive", () => {
       id: "evt_archived_subscription_deleted",
       created: 1_700_000_000,
       type: "customer.subscription.deleted",
-      data: { object: { id: "sub_archived_deleted", customer: "cus_test" } },
+      data: { object: stripeMockState.subscription },
     }
     const cleared: Array<Parameters<BillingRepositoryService["clearSubscription"]>[0]> = []
     const service = await loadServiceWithStripe({
@@ -1492,6 +1755,79 @@ describe("StripeBillingServiceLive", () => {
     })
   })
 
+  it("grants a paid renewal after the annual subscription moves to a new product", async () => {
+    const replacementAnnualPrice = {
+      id: "price_replacement_annual",
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_replacement_annual",
+      recurring: { interval: "year", interval_count: 1 },
+      unit_amount: 15_900,
+      currency: "eur",
+      tax_behavior: "inclusive",
+    }
+    stripeMockState.prices = [replacementAnnualPrice]
+    stripeMockState.retrievedPrices = { price_replacement_annual: replacementAnnualPrice }
+    stripeMockState.invoicePayments = [
+      {
+        amount_paid: 15_900,
+        payment: { type: "payment_intent", payment_intent: "pi_migrated_renewal" },
+      },
+    ]
+    stripeMockState.event = {
+      id: "evt_migrated_invoice_paid",
+      created: 1_700_000_000,
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_migrated_renewal",
+          amount_due: 15_900,
+          billing_reason: "subscription_cycle",
+          customer: "cus_test",
+          parent: {
+            subscription_details: {
+              subscription: "sub_migrated_annual",
+              metadata: {
+                plan_lookup_key: "taxmaxi_annual_10k_eur",
+                plan_product_id: "prod_original_annual",
+                taxmaxi_user_id: TEST_USER_ID,
+              },
+            },
+          },
+          lines: {
+            has_more: false,
+            data: [
+              {
+                parent: { subscription_item_details: { proration: false } },
+                pricing: { price_details: { price: "price_replacement_annual" } },
+                period: { start: 1_700_000_000, end: 1_731_536_000 },
+              },
+            ],
+          },
+        },
+      },
+    }
+    const grants: Array<Parameters<BillingRepositoryService["grantCredits"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      grantCredits: (input) =>
+        Effect.sync(() => {
+          grants.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(grants).toHaveLength(1)
+    expect(grants[0]).toMatchObject({
+      amount: 10_000,
+      paymentReference: "pi_migrated_renewal",
+      stripeInvoiceId: "in_migrated_renewal",
+    })
+  })
+
   it("restores credits when a Stripe inquiry closes without a chargeback", async () => {
     stripeMockState.event = {
       id: "evt_inquiry_closed",
@@ -1632,6 +1968,7 @@ describe("StripeBillingServiceLive", () => {
       stripeInvoiceId: null,
       terminal: true,
     })
+    expect(stripeMockState.refundPagingLimit).toBe(10_000)
 
     stripeMockState.retrievedRefund = {
       id: "re_annual",
@@ -1670,6 +2007,110 @@ describe("StripeBillingServiceLive", () => {
       stripeInvoiceId: "in_annual",
       terminal: true,
     })
+  })
+
+  it("reverses credits when a pending refund later succeeds", async () => {
+    stripeMockState.charge = {
+      id: "ch_async_refund",
+      amount: 2_000,
+      payment_intent: "pi_async_refund",
+    }
+    stripeMockState.event = {
+      id: "evt_async_refund_pending",
+      created: 1_700_000_000,
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_async_refund",
+          amount: 2_000,
+          amount_refunded: 1_000,
+          payment_intent: "pi_async_refund",
+        },
+      },
+    }
+    stripeMockState.refunds = [
+      {
+        id: "re_async_refund",
+        amount: 1_000,
+        status: "pending",
+      },
+    ]
+    const reversals: Array<Parameters<BillingRepositoryService["setPaymentCreditReversal"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      setPaymentCreditReversal: (input) =>
+        Effect.sync(() => {
+          reversals.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+    expect(reversals).toEqual([])
+
+    stripeMockState.event = {
+      id: "evt_async_refund_succeeded",
+      created: 1_700_000_100,
+      type: "refund.updated",
+      data: {
+        object: {
+          id: "re_async_refund",
+          amount: 1_000,
+          charge: "ch_async_refund",
+          payment_intent: "pi_async_refund",
+          status: "succeeded",
+        },
+      },
+    }
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(reversals).toEqual([
+      expect.objectContaining({
+        paymentReference: "pi_async_refund",
+        reversalGroup: "stripe:refund:re_async_refund:payment",
+        lossReference: "stripe:refund:re_async_refund",
+        reversedAmount: 1_000,
+        paymentAmount: 2_000,
+        terminal: true,
+      }),
+    ])
+  })
+
+  it("short-circuits duplicate Stripe webhook deliveries", async () => {
+    stripeMockState.event = {
+      id: "evt_already_processed",
+      created: 1_700_000_000,
+      type: "refund.updated",
+      data: {
+        object: {
+          id: "re_already_processed",
+          amount: 1_000,
+          charge: "ch_already_processed",
+          payment_intent: "pi_already_processed",
+          status: "succeeded",
+        },
+      },
+    }
+    let reversalCalls = 0
+    let processedCalls = 0
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      hasProcessedEvent: () => Effect.succeed(true),
+      setPaymentCreditReversal: () =>
+        Effect.sync(() => {
+          reversalCalls += 1
+          return true
+        }),
+      markEventProcessed: () =>
+        Effect.sync(() => {
+          processedCalls += 1
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(reversalCalls).toBe(0)
+    expect(processedCalls).toBe(0)
   })
 
   it("reverses PaymentRecord-funded annual credits from credit note refunds", async () => {

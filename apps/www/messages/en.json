@@ -210,7 +210,7 @@
   "pricing": {
     "eyebrow": "Pricing",
     "title": "For one taxpayer or a whole practice.",
-    "description": "Individuals can start directly. Tax advisers get a client workspace. Large firms begin with a scoped pilot.",
+    "description": "Individuals can start directly. Tax advisers can explore a Professional design-partner scope. Large firms begin with a scoped pilot.",
     "individual": {
       "name": "Individual",
       "badge": "Self-serve",
@@ -229,15 +229,15 @@
     "professional": {
       "name": "Professional",
       "badge": "Tax advisers",
-      "description": "A shared workspace for tax practices managing German crypto-tax client work.",
+      "description": "A design-partner preview for tax practices evaluating German crypto-tax client workflows.",
       "price": "€1,590",
       "priceSuffix": "net per year, plus VAT where applicable",
       "cta": "Discuss professional access",
       "note": "Launch offer for a bounded design-partner engagement.",
       "features": {
-        "users": "3 professional users",
-        "matters": "10 client matters",
-        "transactions": "100,000 shared transactions per year",
+        "users": "Proposed launch scope for up to 3 professional users",
+        "matters": "Workflow design for up to 10 client matters",
+        "transactions": "Target capacity of 100,000 shared transactions per year",
         "support": "API access, exportable evidence, and email support"
       }
     },
@@ -278,6 +278,7 @@
       }
     },
     "taxNote": "Individual prices include VAT. Business prices are net and exclude VAT.",
+    "taxNoteLive": "Taxes are shown for each price above and confirmed at checkout.",
     "explanation": "There are no automatic overage charges. Included capacity renews with the annual contract; add-ons are purchased separately. Professional and Enterprise access stays scoped to the product capabilities agreed during onboarding."
   },
   "useCases": {
