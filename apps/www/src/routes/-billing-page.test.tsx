@@ -21,14 +21,14 @@ const catalog: BillingCatalog = {
   prices: [
     {
       lookupKey: "taxmaxi_annual_10k_eur",
-      amount: 15_900,
+      amountMinor: 15_900,
       currency: "eur",
       taxBehavior: "inclusive",
       recurringInterval: "year",
     },
     {
       lookupKey: "taxmaxi_topup_1k_eur",
-      amount: 2_000,
+      amountMinor: 2_000,
       currency: "eur",
       taxBehavior: "inclusive",
       recurringInterval: null,

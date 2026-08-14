@@ -9,6 +9,7 @@
  * @module SourceSyncJobExecutorLive
  */
 
+import * as Arr from "effect/Array"
 import * as Config from "effect/Config"
 import * as Either from "effect/Either"
 import * as Effect from "effect/Effect"
@@ -115,6 +116,13 @@ const SOURCE_SYNC_PAGE_SIZE_CONFIG = Config.integer("SOURCE_SYNC_PAGE_SIZE").pip
   Config.orElse(() => Config.succeed(DEFAULT_SYNC_PAGE_SIZE))
 )
 
+const SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG = Config.integer(
+  "SOURCE_SYNC_HEARTBEAT_INTERVAL_MS"
+).pipe(
+  Config.map((configuredInterval) => (configuredInterval > 0 ? configuredInterval : 10_000)),
+  Config.orElse(() => Config.succeed(10_000))
+)
+
 const errorMessage = (error: unknown): string => {
   if (typeof error === "string" && error.trim() !== "") {
     return error
@@ -151,6 +159,7 @@ const make = Effect.gen(function* () {
   const sourceReplayRepository = yield* SourceReplayRepository
   const transferReconciliationService = yield* TransferReconciliationService
   const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
+  const heartbeatIntervalMs = yield* SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG
 
   const loadSource = ({
     principalId,
@@ -191,6 +200,24 @@ const make = Effect.gen(function* () {
           cause,
         })
       })
+    )
+
+  const withActiveJobHeartbeat = <A, E, R>({
+    effect,
+    jobId,
+    workerId,
+  }: {
+    readonly effect: Effect.Effect<A, E, R>
+    readonly jobId: string
+    readonly workerId: string
+  }): Effect.Effect<A, E | SyncEngineStorageError, R> =>
+    effect.pipe(
+      Effect.raceFirst(
+        heartbeatSourceSyncJob({ jobId, workerId }).pipe(
+          Effect.delay(heartbeatIntervalMs),
+          Effect.forever
+        )
+      )
     )
 
   const resolveProviderModule = ({
@@ -844,35 +871,65 @@ const make = Effect.gen(function* () {
             kind: "client",
           })
         )
-      const preparedReplayRecords = yield* Effect.forEach(
-        rawRecords,
-        (rawRecord): Effect.Effect<PreparedReplayRecord, SyncEngineStorageError> =>
-          normalizeRecord({ source, sourceRecord: rawRecord }).pipe(
-            Effect.map(
-              (decision): PreparedReplayRecord => ({ state: "ready", rawRecord, decision })
-            ),
-            Effect.catchTag("SourceProviderRecoverableNormalizationError", (error) =>
-              Effect.succeed({ state: "failed", rawRecord, error } as const)
-            )
-          ),
+      const preparedReplayRecordBatches = yield* Effect.forEach(
+        Arr.chunksOf(rawRecords, pageSize),
+        (rawRecordBatch) =>
+          Effect.forEach(
+            rawRecordBatch,
+            (rawRecord): Effect.Effect<PreparedReplayRecord, SyncEngineStorageError> =>
+              normalizeRecord({ source, sourceRecord: rawRecord }).pipe(
+                Effect.map(
+                  (decision): PreparedReplayRecord => ({ state: "ready", rawRecord, decision })
+                ),
+                Effect.catchTag("SourceProviderRecoverableNormalizationError", (error) =>
+                  Effect.succeed({ state: "failed", rawRecord, error } as const)
+                )
+              ),
+            { concurrency: 1 }
+          ).pipe(Effect.tap(() => heartbeatSourceSyncJob({ jobId, workerId }))),
         { concurrency: 1 }
       )
-      yield* sourceNormalizationRepository.reserveReplayTransactionCredits({
-        transactions: preparedReplayRecords.flatMap((prepared) =>
-          prepared.state === "ready" && prepared.decision.kind === "prepared"
-            ? [prepared.decision.transaction]
-            : []
-        ),
+      const preparedReplayRecords = preparedReplayRecordBatches.flat()
+
+      yield* heartbeatSourceSyncJob({ jobId, workerId })
+      const reservedCreditReferences = yield* withActiveJobHeartbeat({
+        effect: sourceNormalizationRepository.reserveReplayTransactionCredits({
+          transactions: preparedReplayRecords.flatMap((prepared) =>
+            prepared.state === "ready" && prepared.decision.kind === "prepared"
+              ? [prepared.decision.transaction]
+              : []
+          ),
+        }),
+        jobId,
+        workerId,
       })
 
-      yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
-        sourceSyncSpan({
-          name: "source-replay.reset-derived-state",
-          attributes: { sourceId: source.id, jobId, provider },
-          kind: "client",
+      yield* Effect.gen(function* () {
+        yield* heartbeatSourceSyncJob({ jobId, workerId })
+        yield* withActiveJobHeartbeat({
+          effect: sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
+            sourceSyncSpan({
+              name: "source-replay.reset-derived-state",
+              attributes: { sourceId: source.id, jobId, provider },
+              kind: "client",
+            })
+          ),
+          jobId,
+          workerId,
         })
+        yield* heartbeatSourceSyncJob({ jobId, workerId })
+      }).pipe(
+        Effect.catchAllCause((cause) =>
+          heartbeatSourceSyncJob({ jobId, workerId }).pipe(
+            Effect.zipRight(
+              sourceNormalizationRepository.releaseReplayTransactionCredits({
+                references: reservedCreditReferences,
+              })
+            ),
+            Effect.zipRight(Effect.failCause(cause))
+          )
+        )
       )
-      yield* heartbeatSourceSyncJob({ jobId, workerId })
       const classification = yield* classifyRawRecords({
         source,
         jobId,

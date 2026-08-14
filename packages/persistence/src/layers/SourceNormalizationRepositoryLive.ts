@@ -8,7 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -484,7 +484,7 @@ const make = Effect.gen(function* () {
 
       // Anonymous x402 principals keep their payment-based access path. Every
       // registered user transaction must be backed by a billing credit.
-      if (principal?.userId === null || principal === undefined) return
+      if (principal?.userId === null || principal === undefined) return null
 
       if (sourceRawRecordId !== null) {
         const [paidRawRecord] = yield* executor
@@ -514,7 +514,7 @@ const make = Effect.gen(function* () {
 
         // The x402 payment covered raw records retained when the source was claimed.
         // Records imported after the claim still use the registered user's credits.
-        if (paidRawRecord !== undefined) return
+        if (paidRawRecord !== undefined) return null
       }
 
       const [account] = yield* executor
@@ -563,7 +563,7 @@ const make = Effect.gen(function* () {
             "sourceNormalizationRepository.consumeTransactionCredit.findExisting"
           )
         )
-      if (existing !== undefined) return
+      if (existing !== undefined) return null
 
       const now = nowDate()
       const rows = yield* executor
@@ -624,6 +624,8 @@ const make = Effect.gen(function* () {
         .pipe(
           wrapSyncEngineSqlError("sourceNormalizationRepository.consumeTransactionCredit.insert")
         )
+
+      return reference
     })
 
   const upsertVenueContext = ({
@@ -2453,7 +2455,11 @@ const make = Effect.gen(function* () {
                 sourceId: transaction.sourceId,
                 sourceRawRecordId: transaction.sourceRawRecordId,
               }),
-            { concurrency: 1, discard: true }
+            { concurrency: 1 }
+          ).pipe(
+            Effect.map((references) =>
+              references.filter((reference): reference is string => reference !== null)
+            )
           )
         )
         .pipe(
@@ -2462,8 +2468,27 @@ const make = Effect.gen(function* () {
           )
         )
 
+  const releaseReplayTransactionCredits: SourceNormalizationRepositoryShape["releaseReplayTransactionCredits"] =
+    ({ references }) =>
+      references.length === 0
+        ? Effect.void
+        : db
+            .delete(schema.creditLedger)
+            .where(
+              and(
+                eq(schema.creditLedger.kind, "transaction_usage"),
+                inArray(schema.creditLedger.reference, references)
+              )
+            )
+            .pipe(
+              wrapSyncEngineStorageError(
+                "sourceNormalizationRepository.releaseReplayTransactionCredits"
+              )
+            )
+
   return SourceNormalizationRepository.of({
     reserveReplayTransactionCredits,
+    releaseReplayTransactionCredits,
     persistNormalizedArtifacts,
   } satisfies SourceNormalizationRepositoryShape)
 })

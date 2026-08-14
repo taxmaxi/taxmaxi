@@ -134,6 +134,7 @@ export interface CompleteSourceSyncJobParams {
 export interface RecoverStaleSourceSyncJobParams {
   readonly sourceId: string
   readonly jobId: string
+  readonly staleBefore: Date
   readonly message: string
   readonly completedAt: Date
 }

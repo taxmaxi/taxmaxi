@@ -19,7 +19,7 @@ describe("billing review fixes", () => {
       catalogPriceSuffix(
         {
           lookupKey: "taxmaxi_annual_10k_eur",
-          amount: 15_950,
+          amountMinor: 15_950,
           currency: "eur",
           taxBehavior: "exclusive",
           recurringInterval: "year",
@@ -36,7 +36,7 @@ describe("billing review fixes", () => {
           prices: [
             {
               lookupKey: "taxmaxi_annual_10k_eur",
-              amount: 15_950,
+              amountMinor: 15_950,
               currency: "eur",
               taxBehavior: "exclusive",
               recurringInterval: "year",

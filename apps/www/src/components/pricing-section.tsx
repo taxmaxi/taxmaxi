@@ -324,7 +324,7 @@ function formatCatalogPrice(price: CatalogPrice): string {
   return new Intl.NumberFormat(getLocale(), {
     style: "currency",
     currency: price.currency.toUpperCase(),
-  }).format(price.amount / 100)
+  }).format(price.amountMinor / 100)
 }
 
 export function catalogPriceSuffix(price: CatalogPrice | undefined, fallback: string): string {

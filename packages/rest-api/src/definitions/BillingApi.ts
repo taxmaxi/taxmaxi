@@ -14,7 +14,10 @@ export class BillingCatalogPriceResponse extends Schema.Class<BillingCatalogPric
   "BillingCatalogPriceResponse"
 )({
   lookupKey: Schema.String,
-  amount: Schema.Int,
+  amountMinor: Schema.Int.annotations({
+    title: "Amount Minor",
+    description: "Price in the currency's minor unit, such as cents for EUR.",
+  }),
   currency: Schema.String,
   taxBehavior: Schema.Literal("inclusive", "exclusive", "unspecified"),
   recurringInterval: Schema.NullOr(Schema.Literal("year")),

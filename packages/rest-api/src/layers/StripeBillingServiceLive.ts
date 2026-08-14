@@ -1065,7 +1065,7 @@ const make = Effect.gen(function* () {
         fixedPrices.map(
           (price): BillingCatalogPrice => ({
             lookupKey: price.lookup_key ?? "",
-            amount: price.unit_amount,
+            amountMinor: price.unit_amount,
             currency: price.currency,
             taxBehavior: price.tax_behavior ?? "unspecified",
             recurringInterval: price.recurring?.interval === "year" ? "year" : null,

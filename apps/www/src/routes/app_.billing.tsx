@@ -367,11 +367,14 @@ function TopUpCard({
   )
 }
 
-function formatCatalogPrice(price: { readonly amount: number; readonly currency: string }): string {
+function formatCatalogPrice(price: {
+  readonly amountMinor: number
+  readonly currency: string
+}): string {
   return new Intl.NumberFormat("de-DE", {
     style: "currency",
     currency: price.currency.toUpperCase(),
-  }).format(price.amount / 100)
+  }).format(price.amountMinor / 100)
 }
 
 function taxLabel(taxBehavior: "exclusive" | "inclusive" | "unspecified" | undefined): string {

@@ -311,7 +311,7 @@ describe("BillingApiLive", () => {
         expect(yield* catalog.json).toEqual({
           prices: catalogPrices().map((price) => ({
             lookupKey: price.lookup_key,
-            amount: price.unit_amount,
+            amountMinor: price.unit_amount,
             currency: price.currency,
             taxBehavior: price.tax_behavior,
             recurringInterval: price.recurring?.interval === "year" ? "year" : null,

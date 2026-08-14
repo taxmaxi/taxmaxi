@@ -35,7 +35,7 @@ const billingCatalogResponse = {
   prices: [
     {
       lookupKey: "taxmaxi_annual_10k_eur",
-      amount: 15_900,
+      amountMinor: 15_900,
       currency: "eur",
       taxBehavior: "inclusive",
       recurringInterval: "year",

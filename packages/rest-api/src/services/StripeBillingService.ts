@@ -18,7 +18,8 @@ export const TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY = "taxmaxi_enterprise_pilot_eur
 
 export interface BillingCatalogPrice {
   readonly lookupKey: string
-  readonly amount: number
+  /** Price in the currency's minor unit, such as cents for EUR. */
+  readonly amountMinor: number
   readonly currency: string
   readonly taxBehavior: "inclusive" | "exclusive" | "unspecified"
   readonly recurringInterval: "year" | null

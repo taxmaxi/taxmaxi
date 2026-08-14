@@ -394,6 +394,61 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(Number(usage[0]?.count ?? 0)).toBe(0)
   })
 
+  it("releases only the credits inserted by a failed replay reservation", async () => {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 1,
+          kind: "manual_adjustment",
+          reference: "test:replay-credit-compensation",
+          paymentReference: null,
+          expiresAt: null,
+        })
+      })
+    )
+
+    const references = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.reserveReplayTransactionCredits({
+          transactions: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "replay-credit-compensation",
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ],
+        })
+      )
+    )
+
+    expect(references).toEqual([
+      `transaction:${TEST_SOURCE_ID}:external:replay-credit-compensation`,
+    ])
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.releaseReplayTransactionCredits({ references })
+      )
+    )
+
+    const ledger = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ kind: schema.creditLedger.kind, reference: schema.creditLedger.reference })
+          .from(schema.creditLedger)
+      })
+    )
+
+    expect(ledger).toEqual([
+      { kind: "manual_adjustment", reference: "test:replay-credit-compensation" },
+    ])
+  })
+
   it("consumes one credit for a registered user transaction across source replay", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
     const artifacts = {

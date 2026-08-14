@@ -35,6 +35,10 @@ const checkoutError = (message: string) => {
   return internalError("Billing is temporarily unavailable.")
 }
 
+/**
+ * Implements the billing HTTP group using `StripeBillingService` for catalog,
+ * Checkout, Customer Portal, account status, and webhook operations.
+ */
 export const BillingApiLive = HttpApiBuilder.group(TaxMaxiApi, "billing", (handlers) =>
   Effect.gen(function* () {
     const billing = yield* StripeBillingService

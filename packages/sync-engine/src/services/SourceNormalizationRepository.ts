@@ -380,6 +380,10 @@ export interface SourceNormalizationRepositoryShape {
   /** Reserve every missing transaction credit atomically before a source replay resets state. */
   readonly reserveReplayTransactionCredits: (params: {
     readonly transactions: ReadonlyArray<ReplayTransactionCreditReservation>
+  }) => Effect.Effect<ReadonlyArray<string>, SyncEngineStorageError>
+  /** Release the credits inserted by a replay reservation when its reset does not complete. */
+  readonly releaseReplayTransactionCredits: (params: {
+    readonly references: ReadonlyArray<string>
   }) => Effect.Effect<void, SyncEngineStorageError>
   /**
    * Persist normalized canonical artifacts for one raw row, including review rows and FIFO side effects.
