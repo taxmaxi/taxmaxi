@@ -1258,17 +1258,151 @@ describe("TransferReconciliationServiceLive", () => {
     })
   })
 
-  it("keeps non-EVM address comparisons case-sensitive", async () => {
-    const walletAddress = "bc1qCaseSensitiveWallet000000000000000000000"
+  it("compares uniformly cased Bitcoin Bech32 addresses without case sensitivity", async () => {
+    const walletAddress = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
-      seedApprovedProviderAsset({ providerAssetId: "btc-provider-case-sensitive" })
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-bech32-case" })
     )
     await runPg(seedOwnedOnchainSource({ walletAddress }))
     const providerTransferId = await runPg(
       seedProviderTransfer({
         providerAssetRowId,
-        externalId: "provider-transfer-case-sensitive",
+        externalId: "provider-transfer-bech32-case",
+        timestamp,
+        amount: "0.25",
+        toAddress: walletAddress.toUpperCase(),
+        networkHash: null,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-bech32-case",
+        txHash: "btc-bech32-case",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.25",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.transfers)
+          .set({ toAddress: walletAddress.toUpperCase() })
+          .where(eq(schema.transfers.id, receipt.transferId))
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toMatchObject({
+      canonicalTransferId: receipt.transferId,
+      status: "pending",
+      matchReason: "fifo_application_deferred",
+    })
+  })
+
+  it("keeps Bitcoin Base58 address comparisons case-sensitive", async () => {
+    const walletAddress = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-base58-case" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-base58-case",
+        timestamp,
+        amount: "0.25",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-base58-case",
+        txHash: "btc-base58-case",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.25",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.transfers)
+          .set({ toAddress: walletAddress.toLowerCase() })
+          .where(eq(schema.transfers.id, receipt.transferId))
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toMatchObject({
+      canonicalTransferId: null,
+      status: "pending",
+      matchReason: "no_candidate_onchain_receipt",
+    })
+  })
+
+  it("keeps mixed-case Bitcoin Bech32 addresses case-sensitive", async () => {
+    const walletAddress = "bc1qW508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-bech32-mixed-case" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-bech32-mixed-case",
         timestamp,
         amount: "0.25",
         toAddress: walletAddress.toLowerCase(),
@@ -1277,8 +1411,8 @@ describe("TransferReconciliationServiceLive", () => {
     )
     await runPg(
       seedOnchainReceipt({
-        externalId: "onchain-receipt-case-sensitive",
-        txHash: "btc-case-sensitive",
+        externalId: "onchain-receipt-bech32-mixed-case",
+        txHash: "btc-bech32-mixed-case",
         timestamp: new Date("2025-04-10T10:05:00.000Z"),
         amount: "0.25",
         walletAddress,
@@ -1395,7 +1529,7 @@ describe("TransferReconciliationServiceLive", () => {
   })
 
   it("records first-seen representation evidence without moving inventory", async () => {
-    const walletAddress = "bc1qownedwalletpendingrep00000000000000000000"
+    const walletAddress = "bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
       seedApprovedProviderAsset({
@@ -1410,8 +1544,8 @@ describe("TransferReconciliationServiceLive", () => {
         externalId: "provider-transfer-pending-representation",
         timestamp,
         amount: "0.33",
-        toAddress: walletAddress,
-        networkHash: "btc-pending-representation",
+        toAddress: walletAddress.toUpperCase(),
+        networkHash: null,
       })
     )
     const observed = await runPg(
@@ -1422,6 +1556,15 @@ describe("TransferReconciliationServiceLive", () => {
         amount: "0.33",
         walletAddress,
         blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerTransfers)
+          .set({ toAddress: walletAddress.toUpperCase() })
+          .where(eq(schema.providerTransfers.id, observed.providerTransferId))
       })
     )
 

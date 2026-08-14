@@ -5,7 +5,21 @@
  * @module TransferReconciliationRepositoryLive
  */
 
-import { aliasedTable, and, asc, count, eq, gt, gte, inArray, lte, ne, or, sql } from "drizzle-orm"
+import {
+  aliasedTable,
+  and,
+  asc,
+  count,
+  eq,
+  gt,
+  gte,
+  inArray,
+  lte,
+  ne,
+  or,
+  sql,
+  type SQLWrapper,
+} from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -25,6 +39,31 @@ import {
 import { drizzle } from "./PgClientLive.ts"
 import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
+
+const isUniformCaseBitcoinBech32Address = (address: SQLWrapper) => sql`
+  (${address} = lower(${address}) or ${address} = upper(${address}))
+  and lower(${address}) ~ '^(bc1|tb1|bcrt1)[023456789acdefghjklmnpqrstuvwxyz]+$'
+`
+
+const chainAddressEquals = ({
+  addressType,
+  left,
+  right,
+}: {
+  readonly addressType: SQLWrapper
+  readonly left: SQLWrapper
+  readonly right: SQLWrapper
+}) => sql`
+  case
+    when ${addressType} = 'evm'
+      then lower(${left}) = lower(${right})
+    when ${addressType} = 'bitcoin'
+      and (${isUniformCaseBitcoinBech32Address(left)})
+      and (${isUniformCaseBitcoinBech32Address(right)})
+      then lower(${left}) = lower(${right})
+    else ${left} = ${right}
+  end
+`
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -196,27 +235,21 @@ const make = Effect.gen(function* () {
       const ownedSourceAddressCondition =
         networkHash !== null || walletAddress === null
           ? sql`true`
-          : sql`
-              case
-                when ${schema.addresses.type} = 'evm'
-                  then lower(${schema.addresses.address}) = lower(${walletAddress})
-                else ${schema.addresses.address} = ${walletAddress}
-              end
-            `
-      const canonicalOwnershipCondition = sql`
-        case
-          when ${schema.addresses.type} = 'evm'
-            then lower(${canonicalOwnershipColumn}) = lower(${schema.addresses.address})
-          else ${canonicalOwnershipColumn} = ${schema.addresses.address}
-        end
-      `
-      const observedOwnershipCondition = sql`
-        case
-          when ${schema.addresses.type} = 'evm'
-            then lower(${observedOwnershipColumn}) = lower(${schema.addresses.address})
-          else ${observedOwnershipColumn} = ${schema.addresses.address}
-        end
-      `
+          : chainAddressEquals({
+              addressType: schema.addresses.type,
+              left: schema.addresses.address,
+              right: sql`${walletAddress}`,
+            })
+      const canonicalOwnershipCondition = chainAddressEquals({
+        addressType: schema.addresses.type,
+        left: canonicalOwnershipColumn,
+        right: schema.addresses.address,
+      })
+      const observedOwnershipCondition = chainAddressEquals({
+        addressType: schema.addresses.type,
+        left: observedOwnershipColumn,
+        right: schema.addresses.address,
+      })
       const canonicalHashCondition =
         networkHash === null
           ? sql`true`
