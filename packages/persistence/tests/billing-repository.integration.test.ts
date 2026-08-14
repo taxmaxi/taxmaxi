@@ -40,6 +40,30 @@ const seedBillingAccount = () =>
     })
   )
 
+const seedTransactionUsage = ({
+  references,
+  expiresAt,
+}: {
+  readonly references: ReadonlyArray<string>
+  readonly expiresAt: Date | null
+}) =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+
+      yield* db.insert(schema.creditLedger).values(
+        references.map((reference) => ({
+          userId: TEST_USER_ID,
+          delta: -1,
+          kind: "transaction_usage" as const,
+          reference,
+          paymentReference: null,
+          expiresAt,
+        }))
+      )
+    })
+  )
+
 describe("BillingRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
@@ -48,64 +72,6 @@ describe("BillingRepositoryLive", () => {
 
   afterAll(async () => {
     await Effect.runPromise(context.destroyTestDatabase())
-  })
-
-  it("consumes one credit per transaction and treats retries as duplicates", async () => {
-    const expiringAt = new Date(Date.now() + 60 * 60 * 1000)
-
-    const result = await runRepository(
-      Effect.gen(function* () {
-        const repository = yield* BillingRepository
-
-        yield* repository.grantCredits({
-          userId: TEST_USER_ID,
-          amount: 1,
-          kind: "annual_grant",
-          reference: "invoice:annual-period",
-          paymentReference: "pi_annual",
-          expiresAt: expiringAt,
-        })
-        yield* repository.grantCredits({
-          userId: TEST_USER_ID,
-          amount: 1,
-          kind: "top_up",
-          reference: "checkout:top-up",
-          paymentReference: "pi_top_up",
-          expiresAt: null,
-        })
-
-        return yield* Effect.all({
-          first: repository.consumeTransactionCredit({
-            userId: TEST_USER_ID,
-            transactionId: "transaction-1",
-          }),
-          second: repository.consumeTransactionCredit({
-            userId: TEST_USER_ID,
-            transactionId: "transaction-2",
-          }),
-        }).pipe(
-          Effect.andThen(
-            Effect.all({
-              duplicate: repository.consumeTransactionCredit({
-                userId: TEST_USER_ID,
-                transactionId: "transaction-1",
-              }),
-              exhausted: repository.consumeTransactionCredit({
-                userId: TEST_USER_ID,
-                transactionId: "transaction-3",
-              }),
-              available: repository.availableCredits(TEST_USER_ID),
-            })
-          )
-        )
-      })
-    )
-
-    expect(result).toEqual({
-      duplicate: "duplicate",
-      exhausted: "exhausted",
-      available: 0,
-    })
   })
 
   it("keeps one zero-due annual allowance across webhook retries", async () => {
@@ -551,10 +517,12 @@ describe("BillingRepositoryLive", () => {
           paymentReference: "pi_split_second",
           expiresAt,
         })
-        yield* Effect.forEach([1, 2, 3, 4, 5], (transactionId) =>
-          repository.consumeTransactionCredit({
-            userId: TEST_USER_ID,
-            transactionId: `split-payment-usage-${transactionId}`,
+        yield* Effect.promise(() =>
+          seedTransactionUsage({
+            references: [1, 2, 3, 4, 5].map(
+              (transactionId) => `split-payment-usage-${transactionId}`
+            ),
+            expiresAt,
           })
         )
         yield* repository.setPaymentCreditReversal({
@@ -653,10 +621,12 @@ describe("BillingRepositoryLive", () => {
           paymentReference: "pi_bucket_refunded",
           expiresAt,
         })
-        yield* Effect.forEach([1, 2, 3, 4, 5, 6, 7, 8, 9], (transactionId) =>
-          repository.consumeTransactionCredit({
-            userId: TEST_USER_ID,
-            transactionId: `bucket-state-usage-${transactionId}`,
+        yield* Effect.promise(() =>
+          seedTransactionUsage({
+            references: [1, 2, 3, 4, 5, 6, 7, 8, 9].map(
+              (transactionId) => `bucket-state-usage-${transactionId}`
+            ),
+            expiresAt,
           })
         )
         yield* repository.setPaymentCreditReversal({
@@ -944,8 +914,9 @@ describe("BillingRepositoryLive", () => {
     expect(result.afterOldEvent).toEqual(result.current)
   })
 
-  it("uses new credits to cover refunded usage before allowing more transactions", async () => {
-    const result = await runRepository(
+  it("uses new credits to cover refunded usage debt", async () => {
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000)
+    const available = await runRepository(
       Effect.gen(function* () {
         const repository = yield* BillingRepository
 
@@ -955,13 +926,13 @@ describe("BillingRepositoryLive", () => {
           kind: "annual_grant",
           reference: "invoice:refunded-after-usage",
           paymentReference: "pi_refunded_after_usage",
-          expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+          expiresAt,
         })
-        yield* Effect.forEach(
-          Array.from({ length: 9 }, (_, index) => `used-${index}`),
-          (transactionId) =>
-            repository.consumeTransactionCredit({ userId: TEST_USER_ID, transactionId }),
-          { concurrency: 1 }
+        yield* Effect.promise(() =>
+          seedTransactionUsage({
+            references: Array.from({ length: 9 }, (_, index) => `used-${index}`),
+            expiresAt,
+          })
         )
         yield* repository.setPaymentCreditReversal({
           paymentReference: "pi_refunded_after_usage",
@@ -982,21 +953,11 @@ describe("BillingRepositoryLive", () => {
           expiresAt: null,
         })
 
-        const coveredDebt = yield* repository.consumeTransactionCredit({
-          userId: TEST_USER_ID,
-          transactionId: "covered-debt",
-        })
-        const exhausted = yield* repository.consumeTransactionCredit({
-          userId: TEST_USER_ID,
-          transactionId: "still-positive-bucket",
-        })
-        const available = yield* repository.availableCredits(TEST_USER_ID)
-
-        return { coveredDebt, exhausted, available }
+        return yield* repository.availableCredits(TEST_USER_ID)
       })
     )
 
-    expect(result).toEqual({ coveredDebt: "consumed", exhausted: "exhausted", available: 0 })
+    expect(available).toBe(1)
   })
 
   it("does not let an older subscription event overwrite newer state", async () => {

@@ -104,6 +104,7 @@ const makeExecutorLayer = ({
   failReplayCreditReservation = false,
   failReplayPersistenceRawRecordId,
   failReplayPersistenceStorageRawRecordId,
+  replayCreditReference,
   failReplayReset = false,
   holdReplayCreditReservation = false,
   holdReplayReset = false,
@@ -125,6 +126,7 @@ const makeExecutorLayer = ({
   readonly failReplayCreditReservation?: boolean
   readonly failReplayPersistenceRawRecordId?: string
   readonly failReplayPersistenceStorageRawRecordId?: string
+  readonly replayCreditReference?: (sourceRawRecordId: string) => string
   readonly failReplayReset?: boolean
   readonly holdReplayCreditReservation?: boolean
   readonly holdReplayReset?: boolean
@@ -135,6 +137,9 @@ const makeExecutorLayer = ({
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
+  const reservedReplayReferences = new Set<string>()
+  const toReplayCreditReference =
+    replayCreditReference ?? ((sourceRawRecordId: string) => `reserved-credit:${sourceRawRecordId}`)
   const syncSource = {
     ...source,
     providerKey: sourceProviderKey,
@@ -492,20 +497,30 @@ const makeExecutorLayer = ({
             })
           )
         }
-        return transactions.flatMap(({ sourceRawRecordId }) =>
+        const reservations = transactions.flatMap(({ sourceRawRecordId }) =>
           sourceRawRecordId === null
             ? []
             : [
                 {
-                  reference: `reserved-credit:${sourceRawRecordId}`,
+                  reference: toReplayCreditReference(sourceRawRecordId),
                   sourceRawRecordId,
                 },
               ]
         )
+        for (const reservation of reservations) {
+          reservedReplayReferences.add(reservation.reference)
+        }
+        return reservations
       }),
     releaseReplayTransactionCredits: ({ references, reservationId }) =>
       Effect.sync(() => {
-        events.push(`release-replay-credits:${reservationId}:${references.join(",")}`)
+        events.push(`cleanup-replay-credits:${reservationId}:${references.join(",")}`)
+        const releasedReferences = references.filter((reference) =>
+          reservedReplayReferences.delete(reference)
+        )
+        if (releasedReferences.length > 0) {
+          events.push(`release-replay-credits:${reservationId}:${releasedReferences.join(",")}`)
+        }
       }),
     persistNormalizedArtifacts: (params) =>
       Effect.gen(function* () {
@@ -542,6 +557,11 @@ const makeExecutorLayer = ({
             providerTransfers: [],
             feeTransfers: [],
           })
+        }
+        if (params.transaction.sourceRawRecordId !== null) {
+          reservedReplayReferences.delete(
+            toReplayCreditReference(params.transaction.sourceRawRecordId)
+          )
         }
         return {
           transaction,
@@ -948,6 +968,35 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("failed:1")
   })
 
+  it("defers cleanup of a shared replay credit until every referencing row is processed", async () => {
+    const events: Array<string> = []
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "replay",
+            replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
+            prepareReplayTransactions: true,
+            failReplayPersistenceRawRecordId: "raw-1",
+            replayCreditReference: () => "reserved-credit:shared",
+            events,
+          })
+        )
+      )
+    )
+
+    const siblingPersistenceIndex = events.indexOf("persist-normalized:raw-2")
+    const sharedCleanupIndex = events.indexOf("cleanup-replay-credits:job-1:reserved-credit:shared")
+
+    expect(result.status).toBe("completed")
+    expect(siblingPersistenceIndex).toBeGreaterThan(-1)
+    expect(sharedCleanupIndex).toBeGreaterThan(siblingPersistenceIndex)
+    expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:shared")
+  })
+
   it("releases all still-owned replay credits when persistence fails", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
@@ -970,9 +1019,8 @@ describe("SourceSyncJobExecutor", () => {
     expect(result.status).toBe("failed")
     expect(events).toContain("persist-normalized:raw-1")
     expect(events).toContain("persist-normalized:raw-2")
-    expect(events).toContain(
-      "release-replay-credits:job-1:reserved-credit:raw-1,reserved-credit:raw-2"
-    )
+    expect(events).toContain("release-replay-credits:job-1:reserved-credit:raw-2")
+    expect(events).not.toContain("release-replay-credits:job-1:reserved-credit:raw-1")
     expect(events).not.toContain("mark-raw-failed:Replay persistence failed")
   })
 

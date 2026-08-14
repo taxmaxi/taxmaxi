@@ -116,10 +116,6 @@ export interface BillingRepositoryService {
     readonly monotonic: boolean
     readonly terminal: boolean
   }) => Effect.Effect<boolean, PersistenceError>
-  readonly consumeTransactionCredit: (input: {
-    readonly userId: AuthUserId
-    readonly transactionId: string
-  }) => Effect.Effect<"consumed" | "duplicate" | "exhausted", PersistenceError>
   readonly availableCredits: (userId: AuthUserId) => Effect.Effect<number, PersistenceError>
   readonly hasProcessedEvent: (eventId: string) => Effect.Effect<boolean, PersistenceError>
   readonly markEventProcessed: (input: {

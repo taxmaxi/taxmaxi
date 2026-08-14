@@ -783,65 +783,6 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSqlError("billing.setPaymentCreditReversal"))
 
-  const consumeTransactionCredit: BillingRepositoryService["consumeTransactionCredit"] = (input) =>
-    db
-      .transaction((tx) =>
-        Effect.gen(function* () {
-          const [account] = yield* tx
-            .select({ userId: billingAccounts.userId })
-            .from(billingAccounts)
-            .where(eq(billingAccounts.userId, input.userId))
-            .for("update")
-          if (account === undefined) return "exhausted" as const
-
-          const reference = `transaction:${input.transactionId}`
-          const [existing] = yield* tx
-            .select({ id: creditLedger.id })
-            .from(creditLedger)
-            .where(eq(creditLedger.reference, reference))
-            .limit(1)
-          if (existing !== undefined) return "duplicate" as const
-
-          const now = new Date()
-          const rows = yield* tx
-            .select({ delta: creditLedger.delta, expiresAt: creditLedger.expiresAt })
-            .from(creditLedger)
-            .where(
-              and(
-                eq(creditLedger.userId, input.userId),
-                or(isNull(creditLedger.expiresAt), gt(creditLedger.expiresAt, now))
-              )
-            )
-            .orderBy(asc(creditLedger.expiresAt))
-
-          const buckets = new Map<string, { balance: number; expiresAt: Date | null }>()
-          for (const row of rows) {
-            const key = row.expiresAt?.toISOString() ?? "never"
-            const bucket = buckets.get(key) ?? { balance: 0, expiresAt: row.expiresAt }
-            buckets.set(key, { ...bucket, balance: bucket.balance + row.delta })
-          }
-          const totalBalance = [...buckets.values()].reduce(
-            (total, candidate) => total + candidate.balance,
-            0
-          )
-          if (totalBalance <= 0) return "exhausted" as const
-
-          const bucket = [...buckets.values()].find((candidate) => candidate.balance > 0)
-          if (bucket === undefined) return "exhausted" as const
-
-          yield* tx.insert(creditLedger).values({
-            userId: input.userId,
-            delta: -1,
-            kind: "transaction_usage",
-            reference,
-            paymentReference: null,
-            expiresAt: bucket.expiresAt,
-          })
-          return "consumed" as const
-        })
-      )
-      .pipe(wrapSqlError("billing.consumeTransactionCredit"))
-
   const availableCredits: BillingRepositoryService["availableCredits"] = (userId) =>
     Effect.gen(function* () {
       const [row] = yield* db
@@ -890,7 +831,6 @@ const make = Effect.gen(function* () {
     grantCredits,
     reconcilePaymentCreditReversals,
     setPaymentCreditReversal,
-    consumeTransactionCredit,
     availableCredits,
     hasProcessedEvent,
     markEventProcessed,

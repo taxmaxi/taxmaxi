@@ -358,12 +358,10 @@ const make = Effect.gen(function* () {
     rawRecords,
     preparedRecords,
     replayReservationId,
-    reservedCreditReferences,
   }: {
     readonly rawRecords: ReadonlyArray<SourceRawRecord>
     readonly preparedRecords: ReadonlyMap<string, PreparedReplayRecord>
     readonly replayReservationId: string
-    readonly reservedCreditReferences: ReadonlyMap<string, string>
   }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
     Effect.reduce(
       rawRecords,
@@ -389,18 +387,9 @@ const make = Effect.gen(function* () {
                   replayReservationId,
                 }).pipe(
                   Effect.catchTag("SourceProviderRecoverableNormalizationError", (error) =>
-                    Effect.gen(function* () {
-                      const reservedReference = reservedCreditReferences.get(rawRecord.id)
-                      if (reservedReference !== undefined) {
-                        yield* sourceNormalizationRepository.releaseReplayTransactionCredits({
-                          reservationId: replayReservationId,
-                          references: [reservedReference],
-                        })
-                      }
-                      return yield* markRecoverableNormalizationFailure({
-                        rawRecordId: rawRecord.id,
-                        error,
-                      })
+                    markRecoverableNormalizationFailure({
+                      rawRecordId: rawRecord.id,
+                      error,
                     })
                   )
                 )
@@ -423,7 +412,6 @@ const make = Effect.gen(function* () {
     normalizeRecord,
     preparedReplayRecords,
     replayReservationId,
-    reservedCreditReferences,
     rawRecordIds,
     baseExecution,
   }: {
@@ -434,7 +422,6 @@ const make = Effect.gen(function* () {
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
     readonly preparedReplayRecords?: ReadonlyMap<string, PreparedReplayRecord>
     readonly replayReservationId?: string
-    readonly reservedCreditReferences?: ReadonlyMap<string, string>
     readonly rawRecordIds: ReadonlyArray<string>
     readonly baseExecution: SourceSyncExecutionState
   }): Effect.Effect<ClassificationResult, SyncEngineStorageError> =>
@@ -479,18 +466,17 @@ const make = Effect.gen(function* () {
             const normalization = yield* (
               preparedReplayRecords === undefined
                 ? normalizeRawBatch({ source, rawRecords, normalizeRecord })
-                : replayReservationId === undefined || reservedCreditReferences === undefined
+                : replayReservationId === undefined
                   ? Effect.fail(
                       new SyncEngineStorageError({
                         operation: "sourceSyncJobExecutor.normalizePreparedReplayBatch",
-                        cause: "Prepared replay is missing its credit reservation context",
+                        cause: "Prepared replay is missing its credit reservation id",
                       })
                     )
                   : normalizePreparedReplayBatch({
                       rawRecords,
                       preparedRecords: preparedReplayRecords,
                       replayReservationId,
-                      reservedCreditReferences,
                     })
             ).pipe(
               sourceSyncSpan({
@@ -944,6 +930,9 @@ const make = Effect.gen(function* () {
         jobId,
         workerId,
       })
+      const reservedReferences = [
+        ...new Set(reservedCreditReferences.map(({ reference }) => reference)),
+      ]
 
       return yield* Effect.gen(function* () {
         yield* heartbeatSourceSyncJob({ jobId, workerId })
@@ -969,16 +958,16 @@ const make = Effect.gen(function* () {
             preparedReplayRecords.map((prepared) => [prepared.rawRecord.id, prepared])
           ),
           replayReservationId: jobId,
-          reservedCreditReferences: new Map(
-            reservedCreditReferences.flatMap(({ reference, sourceRawRecordId }) =>
-              sourceRawRecordId === null ? [] : [[sourceRawRecordId, reference] as const]
-            )
-          ),
           rawRecordIds: rawRecords.map((rawRecord) => rawRecord.id),
           baseExecution: {
             ...initialExecution,
             importedRecords: rawRecords.length,
           },
+        })
+
+        yield* sourceNormalizationRepository.releaseReplayTransactionCredits({
+          reservationId: jobId,
+          references: reservedReferences,
         })
 
         yield* sourceSyncStateRepository.clearReplayFailureMetadata({ sourceId: source.id })
@@ -1062,7 +1051,7 @@ const make = Effect.gen(function* () {
           sourceNormalizationRepository
             .releaseReplayTransactionCredits({
               reservationId: jobId,
-              references: reservedCreditReferences.map(({ reference }) => reference),
+              references: reservedReferences,
             })
             .pipe(Effect.zipRight(Effect.failCause(cause)))
         )
