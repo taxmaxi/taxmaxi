@@ -237,6 +237,84 @@ describe("BillingRepositoryLive", () => {
     })
   })
 
+  it("moves a shared-payment refund from payment-wide to its credited invoice", async () => {
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 100,
+          kind: "annual_grant",
+          reference: "invoice:shared:first",
+          paymentReference: "pi_shared_invoices",
+          paymentAmount: 100,
+          stripeInvoiceId: "in_first",
+          expiresAt: null,
+        })
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 300,
+          kind: "annual_grant",
+          reference: "invoice:shared:second",
+          paymentReference: "pi_shared_invoices",
+          paymentAmount: 100,
+          stripeInvoiceId: "in_second",
+          expiresAt: null,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_shared_invoices",
+          reversalGroup: "stripe:refund:re_shared:payment",
+          lossReference: "stripe:refund:re_shared",
+          reversedAmount: 150,
+          paymentAmount: 200,
+          reference: "stripe:refund:re_shared:generic",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          stripeInvoiceId: null,
+          monotonic: true,
+          terminal: false,
+        })
+        const paymentWide = yield* repository.availableCredits(TEST_USER_ID)
+
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_shared_invoices",
+          reversalGroup: "stripe:credit-note:cn_first:refund:re_shared",
+          lossReference: "stripe:refund:re_shared",
+          reversedAmount: 100,
+          paymentAmount: 100,
+          reference: "stripe:credit-note:cn_first",
+          eventCreatedAt: new Date(REVERSAL_EVENT_AT.getTime() + 1_000),
+          stripeInvoiceId: "in_first",
+          monotonic: true,
+          terminal: true,
+        })
+        const invoiceScoped = yield* repository.availableCredits(TEST_USER_ID)
+
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_shared_invoices",
+          reversalGroup: "stripe:refund:re_shared:payment",
+          lossReference: "stripe:refund:re_shared",
+          reversedAmount: 150,
+          paymentAmount: 200,
+          reference: "stripe:refund:re_shared:late",
+          eventCreatedAt: new Date(REVERSAL_EVENT_AT.getTime() + 2_000),
+          stripeInvoiceId: null,
+          monotonic: true,
+          terminal: false,
+        })
+        const afterLateGeneric = yield* repository.availableCredits(TEST_USER_ID)
+
+        return { paymentWide, invoiceScoped, afterLateGeneric }
+      })
+    )
+
+    expect(result).toEqual({
+      paymentWide: 100,
+      invoiceScoped: 150,
+      afterLateGeneric: 150,
+    })
+  })
+
   it("applies a reversal that arrives before its payment grant", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
@@ -565,7 +643,10 @@ describe("BillingRepositoryLive", () => {
           userId: TEST_USER_ID,
           priceId: "price_annual",
         })
-        const syncGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
+        const syncGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: REVERSAL_EVENT_AT,
+        })
         yield* repository.saveSubscription({
           stripeCustomerId: STRIPE_CUSTOMER_ID,
           stripeSubscriptionId: "sub_terminal",
@@ -682,13 +763,132 @@ describe("BillingRepositoryLive", () => {
     })
   })
 
+  it("accepts a newer subscription event after a delayed older event reserves later", async () => {
+    const baselineEventAt = new Date("2026-08-13T12:00:02.000Z")
+    const currentEventAt = new Date("2026-08-13T12:00:03.000Z")
+    const delayedEventAt = new Date("2026-08-13T12:00:01.000Z")
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_ordered",
+          status: "paused",
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: baselineEventAt,
+          syncGeneration: 0,
+        })
+        const currentGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: currentEventAt,
+        })
+        const delayedGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: delayedEventAt,
+        })
+        const acceptedDelayed = yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_ordered",
+          status: "past_due",
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: delayedEventAt,
+          syncGeneration: delayedGeneration,
+        })
+        const acceptedCurrent = yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_ordered",
+          status: "active",
+          currentPeriodEnd: new Date("2027-08-13T12:00:03.000Z"),
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: currentEventAt,
+          syncGeneration: currentGeneration,
+        })
+        const account = Option.getOrThrow(yield* repository.findByUserId(TEST_USER_ID))
+
+        return { acceptedDelayed, acceptedCurrent, account }
+      })
+    )
+
+    expect(result.acceptedDelayed).toBe(false)
+    expect(result.acceptedCurrent).toBe(true)
+    expect(result.account).toMatchObject({
+      stripeSubscriptionId: "sub_ordered",
+      subscriptionStatus: "active",
+      lastSubscriptionEventCreatedAt: currentEventAt,
+    })
+  })
+
+  it("accepts a newer subscription clear after a delayed older event reserves later", async () => {
+    const baselineEventAt = new Date("2026-08-13T12:00:02.000Z")
+    const currentEventAt = new Date("2026-08-13T12:00:03.000Z")
+    const delayedEventAt = new Date("2026-08-13T12:00:01.000Z")
+
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_deleted",
+          status: "active",
+          currentPeriodEnd: new Date("2027-08-13T12:00:02.000Z"),
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: baselineEventAt,
+          syncGeneration: 0,
+        })
+        const currentGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: currentEventAt,
+        })
+        const delayedGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: delayedEventAt,
+        })
+        const acceptedDelayed = yield* repository.saveSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_deleted",
+          status: "past_due",
+          currentPeriodEnd: null,
+          cancelAtPeriodEnd: false,
+          eventCreatedAt: delayedEventAt,
+          syncGeneration: delayedGeneration,
+        })
+        const acceptedCurrent = yield* repository.clearSubscription({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          stripeSubscriptionId: "sub_deleted",
+          eventCreatedAt: currentEventAt,
+          syncGeneration: currentGeneration,
+        })
+        const account = Option.getOrThrow(yield* repository.findByUserId(TEST_USER_ID))
+
+        return { acceptedDelayed, acceptedCurrent, account }
+      })
+    )
+
+    expect(result.acceptedDelayed).toBe(false)
+    expect(result.acceptedCurrent).toBe(true)
+    expect(result.account).toMatchObject({
+      stripeSubscriptionId: null,
+      subscriptionStatus: null,
+      lastSubscriptionEventCreatedAt: currentEventAt,
+    })
+  })
+
   it("rejects a late subscription fetch after a newer sync reservation", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
         const repository = yield* BillingRepository
-        const olderGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
-        const newerGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
         const eventCreatedAt = new Date("2026-08-13T12:00:00.000Z")
+        const olderGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt,
+        })
+        const newerGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt,
+        })
         const acceptedNewer = yield* repository.saveSubscription({
           stripeCustomerId: STRIPE_CUSTOMER_ID,
           stripeSubscriptionId: "sub_same_second",
@@ -731,13 +931,19 @@ describe("BillingRepositoryLive", () => {
           eventCreatedAt: new Date("2026-08-13T12:00:00.000Z"),
           syncGeneration: 0,
         })
-        const staleGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
-        const winningGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
         const input = {
           stripeCustomerId: STRIPE_CUSTOMER_ID,
           stripeSubscriptionId: "sub_moved_off_annual",
           eventCreatedAt: new Date("2026-08-13T12:00:01.000Z"),
         } as const
+        const staleGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: input.eventCreatedAt,
+        })
+        const winningGeneration = yield* repository.reserveSubscriptionSync({
+          stripeCustomerId: STRIPE_CUSTOMER_ID,
+          eventCreatedAt: input.eventCreatedAt,
+        })
         const rejected = yield* repository.clearSubscription({
           ...input,
           syncGeneration: staleGeneration,

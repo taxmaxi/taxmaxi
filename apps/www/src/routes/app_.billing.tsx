@@ -24,6 +24,30 @@ const billingSearchSchema = z.object({
 
 type CheckoutReturnKind = "annual" | "topUp"
 
+export const loadBillingPageData = async ({
+  loadCatalog,
+  loadStatus,
+}: {
+  readonly loadCatalog: () => Promise<BillingCatalog>
+  readonly loadStatus: () => Promise<BillingStatus>
+}): Promise<{ readonly catalog: BillingCatalog | null; readonly status: BillingStatus }> => {
+  const catalogPromise = loadCatalog().catch((error: unknown) => {
+    if (isTaxMaxiUnauthorizedError(error)) throw error
+    return null
+  })
+  const statusPromise = loadStatus()
+  const [catalog, status] = await Promise.all([catalogPromise, statusPromise])
+  return { catalog, status }
+}
+
+export const isTopUpActionDisabled = ({
+  hasCatalogPrice,
+  pendingAction,
+}: {
+  readonly hasCatalogPrice: boolean
+  readonly pendingAction: boolean
+}): boolean => !hasCatalogPrice || pendingAction
+
 export const refreshBillingStatusAfterCheckout = async ({
   initialStatus,
   kind,
@@ -62,11 +86,10 @@ export const Route = createFileRoute("/app_/billing")({
   loader: async ({ context }) => {
     try {
       const client = context.taxmaxi()
-      const [catalog, status] = await Promise.all([
-        client.billing.catalog(),
-        client.billing.status(),
-      ])
-      return { catalog, status }
+      return await loadBillingPageData({
+        loadCatalog: client.billing.catalog,
+        loadStatus: client.billing.status,
+      })
     } catch (error) {
       if (!isTaxMaxiUnauthorizedError(error)) throw error
       await clearAuthSessionCookie()
@@ -190,7 +213,7 @@ function BillingPage() {
             />
             <TopUpCard
               catalog={catalog}
-              disabled={!topUpEligible || pendingAction !== null}
+              disabled={pendingAction !== null}
               onAction={() => void redirectToStripe("topUp")}
               pending={pendingAction === "topUp"}
               subscribed={topUpEligible}
@@ -210,14 +233,14 @@ function AnnualBillingCard({
   status,
   subscribed,
 }: {
-  readonly catalog: BillingCatalog
+  readonly catalog: BillingCatalog | null
   readonly disabled: boolean
   readonly onAction: () => void
   readonly pending: boolean
   readonly status: BillingStatus
   readonly subscribed: boolean
 }) {
-  const price = catalog.prices.find((item) => item.lookupKey === "taxmaxi_annual_10k_eur")
+  const price = catalog?.prices.find((item) => item.lookupKey === "taxmaxi_annual_10k_eur")
   const displayedPrice = price === undefined ? null : formatCatalogPrice(price)
   return (
     <Card>
@@ -262,13 +285,13 @@ function TopUpCard({
   pending,
   subscribed,
 }: {
-  readonly catalog: BillingCatalog
+  readonly catalog: BillingCatalog | null
   readonly disabled: boolean
   readonly onAction: () => void
   readonly pending: boolean
   readonly subscribed: boolean
 }) {
-  const price = catalog.prices.find((item) => item.lookupKey === "taxmaxi_topup_1k_eur")
+  const price = catalog?.prices.find((item) => item.lookupKey === "taxmaxi_topup_1k_eur")
   const displayedPrice = price === undefined ? null : formatCatalogPrice(price)
   return (
     <Card>
@@ -285,13 +308,20 @@ function TopUpCard({
         </p>
       </CardContent>
       <CardFooter className="flex-col items-start gap-3">
-        <Button disabled={disabled || displayedPrice === null} onClick={onAction} variant="outline">
+        <Button
+          disabled={isTopUpActionDisabled({
+            hasCatalogPrice: displayedPrice !== null,
+            pendingAction: disabled,
+          })}
+          onClick={onAction}
+          variant="outline"
+        >
           <Plus data-icon="inline-start" />
           {pending ? "Opening Stripe…" : "Buy 1,000 credits"}
         </Button>
         {subscribed ? null : (
           <p className="text-xs text-muted-foreground">
-            An active annual subscription is required.
+            Stripe verifies an active annual subscription when you continue.
           </p>
         )}
       </CardFooter>

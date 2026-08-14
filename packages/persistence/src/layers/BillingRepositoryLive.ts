@@ -125,17 +125,24 @@ const make = Effect.gen(function* () {
       return updated.length === 1
     }).pipe(wrapSqlError("billing.saveSubscription"))
 
-  const reserveSubscriptionSync: BillingRepositoryService["reserveSubscriptionSync"] = (
-    stripeCustomerId
-  ) =>
+  const reserveSubscriptionSync: BillingRepositoryService["reserveSubscriptionSync"] = (input) =>
     Effect.gen(function* () {
       const [account] = yield* db
         .update(billingAccounts)
         .set({
           subscriptionSyncGeneration: sql`${billingAccounts.subscriptionSyncGeneration} + 1`,
+          lastSubscriptionEventCreatedAt: input.eventCreatedAt,
           updatedAt: new Date(),
         })
-        .where(eq(billingAccounts.stripeCustomerId, stripeCustomerId))
+        .where(
+          and(
+            eq(billingAccounts.stripeCustomerId, input.stripeCustomerId),
+            or(
+              isNull(billingAccounts.lastSubscriptionEventCreatedAt),
+              lte(billingAccounts.lastSubscriptionEventCreatedAt, input.eventCreatedAt)
+            )
+          )
+        )
         .returning({ generation: billingAccounts.subscriptionSyncGeneration })
 
       return account?.generation ?? 0
@@ -240,12 +247,16 @@ const make = Effect.gen(function* () {
           kind: input.kind,
           reference: input.reference,
           paymentReference: input.paymentReference,
+          paymentAmount: input.paymentAmount ?? null,
+          stripeInvoiceId: input.stripeInvoiceId ?? null,
           expiresAt: input.expiresAt,
         })
         .onConflictDoUpdate({
           target: creditLedger.reference,
           set: {
             paymentReference: sql`coalesce(${creditLedger.paymentReference}, excluded.payment_reference)`,
+            paymentAmount: sql`coalesce(${creditLedger.paymentAmount}, excluded.payment_amount)`,
+            stripeInvoiceId: sql`coalesce(${creditLedger.stripeInvoiceId}, excluded.stripe_invoice_id)`,
           },
         })
         .returning({ id: creditLedger.id })
@@ -296,6 +307,8 @@ const make = Effect.gen(function* () {
                   .select({
                     paymentReference: creditLedger.paymentReference,
                     amount: creditLedger.delta,
+                    paymentAmount: creditLedger.paymentAmount,
+                    stripeInvoiceId: creditLedger.stripeInvoiceId,
                   })
                   .from(creditLedger)
                   .where(
@@ -311,16 +324,21 @@ const make = Effect.gen(function* () {
                 const grantsWithPayment = [
                   ...bucketGrantRows.reduce((grouped, bucketGrant) => {
                     if (bucketGrant.paymentReference === null) return grouped
-                    grouped.set(
+                    const key = [
                       bucketGrant.paymentReference,
-                      (grouped.get(bucketGrant.paymentReference) ?? 0) + bucketGrant.amount
-                    )
+                      bucketGrant.stripeInvoiceId ?? "",
+                      bucketGrant.paymentAmount?.toString() ?? "",
+                    ].join(":")
+                    const current = grouped.get(key)
+                    grouped.set(key, {
+                      paymentReference: bucketGrant.paymentReference,
+                      paymentAmount: bucketGrant.paymentAmount,
+                      stripeInvoiceId: bucketGrant.stripeInvoiceId,
+                      amount: (current?.amount ?? 0) + bucketGrant.amount,
+                    })
                     return grouped
-                  }, new Map<string, number>()),
-                ].map(([bucketPaymentReference, amount]) => ({
-                  paymentReference: bucketPaymentReference,
-                  amount,
-                }))
+                  }, new Map<string, { paymentReference: string; paymentAmount: number | null; stripeInvoiceId: string | null; amount: number }>()),
+                ].map(([, grant]) => grant)
                 const paymentReferences = grantsWithPayment.map(
                   (bucketGrant) => bucketGrant.paymentReference
                 )
@@ -330,9 +348,11 @@ const make = Effect.gen(function* () {
                   .select({
                     paymentReference: billingPaymentReversals.paymentReference,
                     reversalGroup: billingPaymentReversals.reversalGroup,
+                    lossReference: billingPaymentReversals.lossReference,
                     reversedAmount: billingPaymentReversals.reversedAmount,
                     paymentAmount: billingPaymentReversals.paymentAmount,
                     eventReference: billingPaymentReversals.eventReference,
+                    stripeInvoiceId: billingPaymentReversals.stripeInvoiceId,
                   })
                   .from(billingPaymentReversals)
                   .where(inArray(billingPaymentReversals.paymentReference, paymentReferences))
@@ -364,13 +384,16 @@ const make = Effect.gen(function* () {
                   )
                 const baseBucketTotal = Number(baseBucket?.total ?? 0)
                 const grantVersion = grantsWithPayment
-                  .map((bucketGrant) => `${bucketGrant.paymentReference}:${bucketGrant.amount}`)
+                  .map(
+                    (bucketGrant) =>
+                      `${bucketGrant.paymentReference}:${bucketGrant.stripeInvoiceId ?? "all"}:${bucketGrant.paymentAmount ?? "unknown"}:${bucketGrant.amount}`
+                  )
                   .sort()
                   .join("|")
                 const reversalVersion = reversals
                   .map(
                     (reversal) =>
-                      `${reversal.paymentReference}:${reversal.reversalGroup}:${reversal.reversedAmount}:${reversal.eventReference}`
+                      `${reversal.paymentReference}:${reversal.reversalGroup}:${reversal.lossReference}:${reversal.stripeInvoiceId ?? "all"}:${reversal.reversedAmount}:${reversal.eventReference}`
                   )
                   .sort()
                   .join("|")
@@ -379,30 +402,70 @@ const make = Effect.gen(function* () {
                 let remainingExpiringCredits =
                   bucket.expiresAt === null ? 0 : Math.max(baseBucketTotal, 0)
                 const desiredAdjustments = grantsWithPayment.flatMap((bucketGrant) => {
-                  const grantReversals = reversals.filter(
+                  const paymentReversals = reversals.filter(
                     (reversal) => reversal.paymentReference === bucketGrant.paymentReference
                   )
+                  const reversalLosses = [
+                    ...paymentReversals.reduce((losses, reversal) => {
+                      const loss = losses.get(reversal.lossReference) ?? []
+                      loss.push(reversal)
+                      losses.set(reversal.lossReference, loss)
+                      return losses
+                    }, new Map<string, Array<(typeof paymentReversals)[number]>>()),
+                  ].map(([, loss]) => loss)
                   const targetReversal = Math.min(
                     bucketGrant.amount,
-                    grantReversals.reduce(
-                      (total, reversal) =>
-                        total +
-                        Math.max(
-                          reversal.paymentAmount <= 0
-                            ? bucketGrant.amount
-                            : Math.ceil(
-                                (bucketGrant.amount * reversal.reversedAmount) /
-                                  reversal.paymentAmount
-                              ),
-                          0
-                        ),
-                      0
-                    )
+                    reversalLosses.reduce((total, loss) => {
+                      const scoped = loss.filter((reversal) => reversal.stripeInvoiceId !== null)
+                      const scopedAmount = scoped.reduce(
+                        (amount, reversal) => amount + reversal.reversedAmount,
+                        0
+                      )
+                      const matchingScopedAmount = scoped
+                        .filter(
+                          (reversal) => reversal.stripeInvoiceId === bucketGrant.stripeInvoiceId
+                        )
+                        .reduce((amount, reversal) => amount + reversal.reversedAmount, 0)
+                      const paymentWide = loss.find((reversal) => reversal.stripeInvoiceId === null)
+                      const paymentWideRemainder = Math.max(
+                        (paymentWide?.reversedAmount ?? 0) - scopedAmount,
+                        0
+                      )
+                      const grantPaymentAmount =
+                        bucketGrant.paymentAmount ?? paymentWide?.paymentAmount ?? 0
+                      const scopedCredits =
+                        matchingScopedAmount <= 0 || grantPaymentAmount <= 0
+                          ? 0
+                          : Math.ceil(
+                              (bucketGrant.amount * matchingScopedAmount) / grantPaymentAmount
+                            )
+                      const unscopedPaymentAmount = Math.max(
+                        (paymentWide?.paymentAmount ?? 0) - scopedAmount,
+                        0
+                      )
+                      const unscopedGrantAmount = Math.max(
+                        grantPaymentAmount - matchingScopedAmount,
+                        0
+                      )
+                      const paymentWideCredits =
+                        paymentWide === undefined ||
+                        paymentWideRemainder <= 0 ||
+                        unscopedPaymentAmount <= 0 ||
+                        grantPaymentAmount <= 0
+                          ? 0
+                          : Math.ceil(
+                              bucketGrant.amount *
+                                (unscopedGrantAmount / grantPaymentAmount) *
+                                (paymentWideRemainder / unscopedPaymentAmount)
+                            )
+                      return total + scopedCredits + paymentWideCredits
+                    }, 0)
                   )
                   const expiringReversal = Math.min(targetReversal, remainingExpiringCredits)
                   remainingExpiringCredits -= expiringReversal
                   const permanentDebt = targetReversal - expiringReversal
-                  const adjustmentPrefix = `stripe:payment-reversal:${bucketGrant.paymentReference}:${bucketReference}:`
+                  const allocationReference = bucketGrant.stripeInvoiceId ?? "payment"
+                  const adjustmentPrefix = `stripe:payment-reversal:${bucketGrant.paymentReference}:${allocationReference}:${bucketReference}:`
                   const grantAdjustments = adjustments.filter(
                     (adjustment) =>
                       adjustment.paymentReference === bucketGrant.paymentReference &&
@@ -418,12 +481,14 @@ const make = Effect.gen(function* () {
                   return [
                     {
                       paymentReference: bucketGrant.paymentReference,
+                      allocationReference,
                       delta: -permanentDebt - currentPermanentAdjustment,
                       expiresAt: null,
                       suffix: "permanent",
                     },
                     {
                       paymentReference: bucketGrant.paymentReference,
+                      allocationReference,
                       delta: -expiringReversal - currentExpiringAdjustment,
                       expiresAt: bucket.expiresAt,
                       suffix: "expiring",
@@ -439,7 +504,7 @@ const make = Effect.gen(function* () {
                       userId: bucket.userId,
                       delta: adjustment.delta,
                       kind: "manual_adjustment",
-                      reference: `stripe:payment-reversal:${adjustment.paymentReference}:${bucketReference}:${bucketVersion}:${adjustment.suffix}`,
+                      reference: `stripe:payment-reversal:${adjustment.paymentReference}:${adjustment.allocationReference}:${bucketReference}:${bucketVersion}:${adjustment.suffix}`,
                       paymentReference: adjustment.paymentReference,
                       expiresAt: adjustment.expiresAt,
                     })
@@ -462,10 +527,12 @@ const make = Effect.gen(function* () {
       .values({
         paymentReference: input.paymentReference,
         reversalGroup: input.reversalGroup,
+        lossReference: input.lossReference ?? input.reversalGroup,
         reversedAmount: input.reversedAmount,
         paymentAmount: input.paymentAmount,
         eventReference: input.reference,
         eventCreatedAt: input.eventCreatedAt,
+        stripeInvoiceId: input.stripeInvoiceId ?? null,
         terminal: input.terminal,
         updatedAt: new Date(),
       })
@@ -476,8 +543,10 @@ const make = Effect.gen(function* () {
             ? sql`greatest(${billingPaymentReversals.reversedAmount}, excluded.reversed_amount)`
             : input.reversedAmount,
           paymentAmount: input.paymentAmount,
+          lossReference: input.lossReference ?? input.reversalGroup,
           eventReference: input.reference,
           eventCreatedAt: input.eventCreatedAt,
+          stripeInvoiceId: input.stripeInvoiceId ?? null,
           terminal: input.terminal,
           updatedAt: new Date(),
         },

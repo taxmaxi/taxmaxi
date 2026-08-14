@@ -14,25 +14,66 @@ import * as Option from "effect/Option"
 import { describe, expect, it, vi } from "vitest"
 
 interface StripeMockState {
+  checkoutParams: Array<unknown>
+  charge: unknown
+  dispute: unknown
   event: unknown
   invoicePayments: Array<unknown>
-  prices: Array<unknown>
+  paymentRecord: unknown
+  prices: Array<{
+    readonly lookup_key?: string | null
+    readonly [key: string]: unknown
+  }>
   retrievedPrices: Record<string, unknown>
+  refunds: Array<unknown>
+  retrievedRefund: unknown
   subscription: unknown
 }
 
 const stripeMockState = vi.hoisted<StripeMockState>(() => ({
+  checkoutParams: [],
+  charge: null,
+  dispute: null,
   event: null,
   invoicePayments: [],
+  paymentRecord: null,
   prices: [],
   retrievedPrices: {},
+  refunds: [],
+  retrievedRefund: null,
   subscription: null,
 }))
 
 vi.mock("stripe", () => ({
   default: class StripeMock {
+    readonly charges = {
+      retrieve: () => Promise.resolve(stripeMockState.charge),
+    }
+    readonly checkout = {
+      sessions: {
+        create: (params: unknown) => {
+          stripeMockState.checkoutParams.push(params)
+          return Promise.resolve({ url: "https://checkout.stripe.test/session" })
+        },
+      },
+    }
+    readonly customers = {
+      retrieve: () => Promise.resolve({ deleted: false }),
+    }
+    readonly disputes = {
+      retrieve: () => Promise.resolve(stripeMockState.dispute),
+    }
     readonly prices = {
-      list: () => Promise.resolve({ data: stripeMockState.prices }),
+      list: ({ lookup_keys: lookupKeys }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) =>
+        Promise.resolve({
+          data:
+            lookupKeys === undefined
+              ? stripeMockState.prices
+              : stripeMockState.prices.filter(
+                  (price) =>
+                    price.lookup_key !== undefined && lookupKeys.includes(price.lookup_key ?? "")
+                ),
+        }),
       retrieve: (priceId: string) => Promise.resolve(stripeMockState.retrievedPrices[priceId]),
     }
     readonly subscriptions = {
@@ -45,6 +86,13 @@ vi.mock("stripe", () => ({
       list: () => ({
         autoPagingToArray: () => Promise.resolve(stripeMockState.invoicePayments),
       }),
+    }
+    readonly paymentRecords = {
+      retrieve: () => Promise.resolve(stripeMockState.paymentRecord),
+    }
+    readonly refunds = {
+      list: () => ({ autoPagingToArray: () => Promise.resolve(stripeMockState.refunds) }),
+      retrieve: () => Promise.resolve(stripeMockState.retrievedRefund),
     }
     readonly webhooks = {
       constructEventAsync: () => Promise.resolve(stripeMockState.event),
@@ -64,6 +112,7 @@ import {
   completeInvoiceLines,
   createReservedAnnualCheckoutSession,
   currentExistingAnnualSubscription,
+  disputeCreditReversal,
   hasExistingTaxMaxiAnnualSubscription,
   hasFixedUnitAmount,
   invoicePaymentReference,
@@ -216,6 +265,15 @@ describe("StripeBillingServiceLive", () => {
             plan_lookup_key: "taxmaxi_annual_10k_eur",
             plan_product_id: "prod_archived",
           },
+        }),
+      })
+    ).toBe(true)
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({
+          lookupKey: null,
+          product: "prod_partially_tagged_archived",
+          metadata: { plan_lookup_key: "taxmaxi_annual_10k_eur" },
         }),
       })
     ).toBe(true)
@@ -526,6 +584,7 @@ describe("StripeBillingServiceLive", () => {
       mode: "subscription",
       automatic_tax: { enabled: true },
       tax_id_collection: { enabled: true },
+      cancel_url: "https://taxmaxi.test/app/billing",
     })
     expect(topUp).toMatchObject({
       mode: "payment",
@@ -716,6 +775,13 @@ describe("StripeBillingServiceLive", () => {
       })
     ).toBeNull()
     expect(
+      annualInvoiceProductId({
+        planLookupKey: "taxmaxi_annual_10k_eur",
+        planProductId: undefined,
+        currentProductId: "prod_replacement_annual",
+      })
+    ).toBeUndefined()
+    expect(
       isAnnualInvoiceEligible({
         billingReason: "subscription_update",
         planLookupKey: "taxmaxi_annual_10k_eur",
@@ -780,6 +846,30 @@ describe("StripeBillingServiceLive", () => {
       ])
     ).toBe("annual")
     expect(
+      findEligibleAnnualInvoiceLine([
+        {
+          line: "first-yearly-line",
+          proration: false,
+          periodStart: 1_700_000_000,
+          periodEnd: 1_731_536_000,
+          interval: "year",
+          intervalCount: 1,
+          productId: "prod_first",
+          currentProductId: undefined,
+        },
+        {
+          line: "second-yearly-line",
+          proration: false,
+          periodStart: 1_700_000_000,
+          periodEnd: 1_731_536_000,
+          interval: "year",
+          intervalCount: 1,
+          productId: "prod_second",
+          currentProductId: undefined,
+        },
+      ])
+    ).toBeUndefined()
+    expect(
       isAnnualInvoiceLineEligible({
         proration: false,
         periodStart: 1_700_000_000,
@@ -810,8 +900,8 @@ describe("StripeBillingServiceLive", () => {
         { paymentReference: "pi_second", amountPaid: 6_000 },
       ])
     ).toEqual([
-      { paymentReference: "pi_first", credits: 4_000 },
-      { paymentReference: "pi_second", credits: 6_000 },
+      { paymentReference: "pi_first", paymentAmount: 4_000, credits: 4_000 },
+      { paymentReference: "pi_second", paymentAmount: 6_000, credits: 6_000 },
     ])
     expect(
       allocateAnnualCreditsAcrossPayments([
@@ -832,6 +922,8 @@ describe("StripeBillingServiceLive", () => {
     expect(allocations).toEqual([
       {
         paymentReference: null,
+        paymentAmount: null,
+        stripeInvoiceId: "in_zero_due",
         referenceSuffix: "invoice:in_zero_due",
         credits: 10_000,
       },
@@ -942,6 +1034,29 @@ describe("StripeBillingServiceLive", () => {
     expect(chargePaymentReference({ id: "ch_annual", payment_intent: "pi_annual" })).toBe(
       grants[0]?.paymentReference
     )
+  })
+
+  it("maps only payment-loss dispute states to a credit reversal", () => {
+    expect(disputeCreditReversal({ status: "warning_closed", amount: 15_900 })).toEqual({
+      reversedAmount: 0,
+      terminal: true,
+    })
+    expect(disputeCreditReversal({ status: "won", amount: 15_900 })).toEqual({
+      reversedAmount: 0,
+      terminal: true,
+    })
+    expect(disputeCreditReversal({ status: "prevented", amount: 15_900 })).toEqual({
+      reversedAmount: 0,
+      terminal: true,
+    })
+    expect(disputeCreditReversal({ status: "lost", amount: 15_900 })).toEqual({
+      reversedAmount: 15_900,
+      terminal: true,
+    })
+    expect(disputeCreditReversal({ status: "needs_response", amount: 15_900 })).toEqual({
+      reversedAmount: 15_900,
+      terminal: false,
+    })
   })
 
   it("requires top-up prices to be one-time", () => {
@@ -1110,6 +1225,311 @@ describe("StripeBillingServiceLive", () => {
     })
   })
 
+  it("syncs a tagged archived subscription without an active annual catalog price", async () => {
+    const archivedAnnualPrice = {
+      id: "price_archived_annual",
+      lookup_key: null,
+      product: "prod_archived_annual",
+      recurring: { interval: "year", interval_count: 1 },
+    }
+    stripeMockState.prices = []
+    stripeMockState.subscription = {
+      id: "sub_archived_annual",
+      customer: "cus_test",
+      status: "past_due",
+      cancel_at_period_end: false,
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_archived_annual",
+      },
+      items: {
+        data: [{ current_period_end: 1_731_536_000, price: archivedAnnualPrice }],
+      },
+    }
+    stripeMockState.event = {
+      id: "evt_archived_subscription_updated",
+      created: 1_700_000_000,
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_archived_annual", customer: "cus_test" } },
+    }
+    const saved: Array<Parameters<BillingRepositoryService["saveSubscription"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      saveSubscription: (input) =>
+        Effect.sync(() => {
+          saved.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(saved).toHaveLength(2)
+    expect(saved[0]).toMatchObject({
+      stripeSubscriptionId: "sub_archived_annual",
+      status: "past_due",
+    })
+  })
+
+  it("clears a deleted tagged subscription without an active annual catalog price", async () => {
+    stripeMockState.prices = []
+    stripeMockState.subscription = {
+      id: "sub_archived_deleted",
+      customer: "cus_test",
+      status: "canceled",
+      cancel_at_period_end: false,
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_archived_annual",
+      },
+      items: {
+        data: [
+          {
+            current_period_end: 1_731_536_000,
+            price: {
+              lookup_key: null,
+              product: "prod_archived_annual",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    stripeMockState.event = {
+      id: "evt_archived_subscription_deleted",
+      created: 1_700_000_000,
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_archived_deleted", customer: "cus_test" } },
+    }
+    const cleared: Array<Parameters<BillingRepositoryService["clearSubscription"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(
+          Option.some({
+            ...billingAccount({ stripeCustomerId: "cus_test" }),
+            stripeSubscriptionId: "sub_archived_deleted",
+          })
+        ),
+      clearSubscription: (input) =>
+        Effect.sync(() => {
+          cleared.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(cleared).toEqual([
+      {
+        stripeCustomerId: "cus_test",
+        stripeSubscriptionId: "sub_archived_deleted",
+        eventCreatedAt: new Date("2023-11-14T22:13:20.000Z"),
+        syncGeneration: 1,
+      },
+    ])
+  })
+
+  it("allows an active tagged archived subscription to buy a top-up", async () => {
+    stripeMockState.checkoutParams = []
+    stripeMockState.prices = [
+      {
+        id: "price_top_up",
+        lookup_key: "taxmaxi_topup_1k_eur",
+        product: "prod_top_up",
+        recurring: null,
+      },
+    ]
+    stripeMockState.subscription = {
+      id: "sub_archived_annual",
+      customer: "cus_test",
+      status: "active",
+      metadata: {
+        plan_lookup_key: "taxmaxi_annual_10k_eur",
+        plan_product_id: "prod_archived_annual",
+      },
+      items: {
+        data: [
+          {
+            price: {
+              lookup_key: null,
+              product: "prod_archived_annual",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+    })
+
+    const checkoutUrl = await Effect.runPromise(service.createTopUpCheckout(TEST_USER_ID))
+
+    expect(checkoutUrl).toBe("https://checkout.stripe.test/session")
+    expect(stripeMockState.checkoutParams[0]).toMatchObject({
+      mode: "payment",
+      customer: "cus_test",
+      line_items: [{ price: "price_top_up", quantity: 1 }],
+    })
+  })
+
+  it("blocks duplicate annual Checkout for a partially tagged archived subscription", async () => {
+    stripeMockState.checkoutParams = []
+    stripeMockState.prices = [
+      {
+        id: "price_replacement_annual",
+        lookup_key: "taxmaxi_annual_10k_eur",
+        product: "prod_replacement_annual",
+        recurring: { interval: "year", interval_count: 1 },
+      },
+    ]
+    stripeMockState.subscription = {
+      id: "sub_partially_tagged_archived",
+      customer: "cus_test",
+      status: "active",
+      metadata: { plan_lookup_key: "taxmaxi_annual_10k_eur" },
+      items: {
+        data: [
+          {
+            price: {
+              lookup_key: null,
+              product: "prod_archived_annual",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
+    }
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+    })
+
+    const result = await Effect.runPromise(
+      Effect.either(service.createAnnualCheckout(TEST_USER_ID))
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { message: "This account already has a subscription" },
+    })
+    expect(stripeMockState.checkoutParams).toEqual([])
+  })
+
+  it("grants a paid renewal from tagged archived subscription facts", async () => {
+    const archivedAnnualPrice = {
+      id: "price_archived_annual",
+      lookup_key: null,
+      product: "prod_archived_annual",
+      recurring: { interval: "year", interval_count: 1 },
+    }
+    stripeMockState.prices = []
+    stripeMockState.retrievedPrices = { price_archived_annual: archivedAnnualPrice }
+    stripeMockState.invoicePayments = [
+      {
+        amount_paid: 15_900,
+        payment: { type: "payment_intent", payment_intent: "pi_archived_renewal" },
+      },
+    ]
+    stripeMockState.event = {
+      id: "evt_archived_invoice_paid",
+      created: 1_700_000_000,
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_archived_renewal",
+          amount_due: 15_900,
+          billing_reason: "subscription_cycle",
+          customer: "cus_test",
+          parent: {
+            subscription_details: {
+              subscription: "sub_archived_annual",
+              metadata: {
+                plan_lookup_key: "taxmaxi_annual_10k_eur",
+                taxmaxi_user_id: TEST_USER_ID,
+              },
+            },
+          },
+          lines: {
+            has_more: false,
+            data: [
+              {
+                parent: { subscription_item_details: { proration: false } },
+                pricing: { price_details: { price: "price_archived_annual" } },
+                period: { start: 1_700_000_000, end: 1_731_536_000 },
+              },
+            ],
+          },
+        },
+      },
+    }
+    const grants: Array<Parameters<BillingRepositoryService["grantCredits"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      grantCredits: (input) =>
+        Effect.sync(() => {
+          grants.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(grants).toHaveLength(1)
+    expect(grants[0]).toMatchObject({
+      userId: TEST_USER_ID,
+      amount: 10_000,
+      paymentReference: "pi_archived_renewal",
+      reference: "stripe:annual:sub_archived_annual:1700000000:1731536000:pi_archived_renewal",
+    })
+  })
+
+  it("restores credits when a Stripe inquiry closes without a chargeback", async () => {
+    stripeMockState.event = {
+      id: "evt_inquiry_closed",
+      created: 1_700_000_000,
+      type: "charge.dispute.closed",
+      data: { object: { id: "dp_inquiry" } },
+    }
+    stripeMockState.dispute = {
+      id: "dp_inquiry",
+      amount: 15_900,
+      status: "warning_closed",
+      charge: "ch_inquiry",
+    }
+    stripeMockState.charge = {
+      id: "ch_inquiry",
+      amount: 15_900,
+      payment_intent: "pi_inquiry",
+    }
+    const reversals: Array<Parameters<BillingRepositoryService["setPaymentCreditReversal"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      setPaymentCreditReversal: (input) =>
+        Effect.sync(() => {
+          reversals.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(reversals).toHaveLength(1)
+    expect(reversals[0]).toMatchObject({
+      paymentReference: "pi_inquiry",
+      reversedAmount: 0,
+      terminal: true,
+    })
+  })
+
   it("keeps annual grant and refund references aligned through the webhook service path", async () => {
     const annualPrice = {
       id: "price_annual",
@@ -1189,16 +1609,175 @@ describe("StripeBillingServiceLive", () => {
         },
       },
     }
+    stripeMockState.refunds = [
+      {
+        id: "re_annual",
+        amount: 10_000,
+        status: "succeeded",
+      },
+    ]
     await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
 
     expect(grants[0]).toMatchObject({
       amount: 10_000,
       paymentReference: "pi_annual",
+      paymentAmount: 10_000,
+      stripeInvoiceId: "in_annual",
       reference: "stripe:annual:sub_legacy_same_product:1700000000:1731536000:pi_annual",
     })
     expect(reversals[0]).toMatchObject({
       paymentReference: "pi_annual",
-      reversalGroup: "stripe:refund:ch_annual",
+      reversalGroup: "stripe:refund:re_annual:payment",
+      lossReference: "stripe:refund:re_annual",
+      stripeInvoiceId: null,
+      terminal: true,
+    })
+
+    stripeMockState.retrievedRefund = {
+      id: "re_annual",
+      amount: 10_000,
+      charge: "ch_annual",
+      payment_intent: "pi_annual",
+    }
+    stripeMockState.event = {
+      id: "evt_credit_note_created",
+      created: 1_700_000_200,
+      type: "credit_note.created",
+      data: {
+        object: {
+          id: "cn_annual",
+          currency: "eur",
+          invoice: "in_annual",
+          status: "issued",
+          refunds: [
+            {
+              amount_refunded: 10_000,
+              payment_record_refund: null,
+              refund: "re_annual",
+              type: "refund",
+            },
+          ],
+        },
+      },
+    }
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(reversals[1]).toMatchObject({
+      paymentReference: "pi_annual",
+      reversalGroup: "stripe:credit-note:cn_annual:refund:re_annual",
+      lossReference: "stripe:refund:re_annual",
+      reversedAmount: 10_000,
+      stripeInvoiceId: "in_annual",
+      terminal: true,
+    })
+  })
+
+  it("reverses PaymentRecord-funded annual credits from credit note refunds", async () => {
+    const annualPrice = {
+      id: "price_annual",
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_annual",
+      recurring: { interval: "year", interval_count: 1 },
+    }
+    stripeMockState.prices = [annualPrice]
+    stripeMockState.retrievedPrices = { price_annual: annualPrice }
+    stripeMockState.invoicePayments = [
+      {
+        amount_paid: 10_000,
+        payment: { type: "payment_record", payment_record: "pr_annual" },
+      },
+    ]
+    stripeMockState.event = {
+      id: "evt_payment_record_invoice_paid",
+      created: 1_700_000_000,
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_payment_record_annual",
+          amount_due: 10_000,
+          billing_reason: "subscription_cycle",
+          customer: "cus_test",
+          parent: {
+            subscription_details: {
+              subscription: "sub_payment_record_annual",
+              metadata: null,
+            },
+          },
+          lines: {
+            has_more: false,
+            data: [
+              {
+                parent: { subscription_item_details: { proration: false } },
+                pricing: { price_details: { price: "price_annual" } },
+                period: { start: 1_700_000_000, end: 1_731_536_000 },
+              },
+            ],
+          },
+        },
+      },
+    }
+    const grants: Array<Parameters<BillingRepositoryService["grantCredits"]>[0]> = []
+    const reversals: Array<Parameters<BillingRepositoryService["setPaymentCreditReversal"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      grantCredits: (input) =>
+        Effect.sync(() => {
+          grants.push(input)
+          return true
+        }),
+      setPaymentCreditReversal: (input) =>
+        Effect.sync(() => {
+          reversals.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+    stripeMockState.paymentRecord = {
+      id: "pr_annual",
+      amount: { currency: "eur", value: 10_000 },
+    }
+    stripeMockState.event = {
+      id: "evt_payment_record_refunded",
+      created: 1_700_000_100,
+      type: "credit_note.created",
+      data: {
+        object: {
+          id: "cn_payment_record_refund",
+          currency: "eur",
+          invoice: "in_payment_record_annual",
+          status: "issued",
+          refunds: [
+            {
+              amount_refunded: 10_000,
+              payment_record_refund: {
+                payment_record: "pr_annual",
+                refund_group: "prr_annual",
+              },
+              type: "payment_record_refund",
+            },
+          ],
+        },
+      },
+    }
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(grants[0]).toMatchObject({
+      amount: 10_000,
+      paymentReference: "pr_annual",
+      paymentAmount: 10_000,
+      stripeInvoiceId: "in_payment_record_annual",
+    })
+    expect(reversals[0]).toMatchObject({
+      paymentReference: "pr_annual",
+      reversalGroup: "stripe:credit-note:cn_payment_record_refund:payment-record-refund:prr_annual",
+      lossReference: "stripe:payment-record-refund:prr_annual",
+      reversedAmount: 10_000,
+      paymentAmount: 10_000,
+      stripeInvoiceId: "in_payment_record_annual",
+      terminal: true,
     })
   })
 

@@ -2,7 +2,11 @@ import type { BillingStatus } from "taxmaxi"
 import { describe, expect, it } from "vitest"
 
 import { catalogPriceSuffix } from "#/components/pricing-section"
-import { refreshBillingStatusAfterCheckout } from "./app_.billing"
+import {
+  isTopUpActionDisabled,
+  loadBillingPageData,
+  refreshBillingStatusAfterCheckout,
+} from "./app_.billing"
 
 const status = (
   credits: number,
@@ -43,5 +47,20 @@ describe("billing review fixes", () => {
 
     expect(annual).toMatchObject({ credits: 10_000, subscriptionStatus: "active" })
     expect(topUp).toMatchObject({ credits: 11_000, subscriptionStatus: "active" })
+  })
+
+  it("keeps local billing status available when catalog loading fails", async () => {
+    const result = await loadBillingPageData({
+      loadCatalog: () => Promise.reject(new Error("Stripe catalog unavailable")),
+      loadStatus: () => Promise.resolve(status(4_200, "active")),
+    })
+
+    expect(result).toEqual({ catalog: null, status: status(4_200, "active") })
+  })
+
+  it("lets the server verify top-up eligibility when local status is stale", () => {
+    expect(isTopUpActionDisabled({ hasCatalogPrice: true, pendingAction: false })).toBe(false)
+    expect(isTopUpActionDisabled({ hasCatalogPrice: false, pendingAction: false })).toBe(true)
+    expect(isTopUpActionDisabled({ hasCatalogPrice: true, pendingAction: true })).toBe(true)
   })
 })

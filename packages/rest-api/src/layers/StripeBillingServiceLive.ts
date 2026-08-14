@@ -61,7 +61,7 @@ export const buildAnnualCheckoutParams = ({
   ...STRIPE_CHECKOUT_TAX_OPTIONS,
   customer_update: { address: "auto", name: "auto" },
   success_url: `${frontendUrl}/app/billing?checkout=success`,
-  cancel_url: `${frontendUrl}/#pricing`,
+  cancel_url: `${frontendUrl}/app/billing`,
   expires_at: Math.floor(expiresAt.getTime() / 1_000),
   integration_identifier: INTEGRATION_IDENTIFIER,
   metadata: { purchase_kind: "annual", taxmaxi_user_id: userId },
@@ -238,8 +238,8 @@ export const isTaxMaxiAnnualSubscription = ({
       isValidAnnualPrice(item.price) &&
       (item.price.lookup_key === TAXMAXI_ANNUAL_LOOKUP_KEY ||
         (subscription.metadata.plan_lookup_key === TAXMAXI_ANNUAL_LOOKUP_KEY &&
-          subscription.metadata.plan_product_id !== undefined &&
-          productId(item.price.product) === subscription.metadata.plan_product_id) ||
+          (subscription.metadata.plan_product_id === undefined ||
+            productId(item.price.product) === subscription.metadata.plan_product_id)) ||
         (currentProductId !== undefined && productId(item.price.product) === currentProductId))
   )
 
@@ -293,7 +293,7 @@ export const shouldReconcileAnnualSubscription = ({
     readonly id: string
   }
   readonly trackedSubscriptionId: string | null
-  readonly currentProductId?: string
+  readonly currentProductId?: string | undefined
 }): boolean =>
   isTaxMaxiAnnualSubscription({ subscription, currentProductId }) ||
   subscription.id === trackedSubscriptionId
@@ -333,12 +333,12 @@ export const annualInvoiceProductId = ({
 }: {
   readonly planLookupKey: string | undefined
   readonly planProductId: string | undefined
-  readonly currentProductId: string
-}): string | null =>
+  readonly currentProductId: string | undefined
+}): string | null | undefined =>
   planLookupKey === undefined
-    ? currentProductId
+    ? (planProductId ?? currentProductId ?? null)
     : planLookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY
-      ? (planProductId ?? currentProductId)
+      ? planProductId
       : null
 
 export const isAnnualInvoiceLineEligible = ({
@@ -356,13 +356,13 @@ export const isAnnualInvoiceLineEligible = ({
   readonly interval: string | undefined
   readonly intervalCount: number | undefined
   readonly productId: string
-  readonly currentProductId: string
+  readonly currentProductId: string | undefined
 }): boolean =>
   !proration &&
   periodEnd > periodStart &&
   interval === "year" &&
   intervalCount === 1 &&
-  productId === currentProductId
+  (currentProductId === undefined || productId === currentProductId)
 
 export const isPaidTopUpSessionEligible = ({
   purchaseKind,
@@ -381,9 +381,14 @@ export const findEligibleAnnualInvoiceLine = <Line>(
     readonly interval: string | undefined
     readonly intervalCount: number | undefined
     readonly productId: string
-    readonly currentProductId: string
+    readonly currentProductId: string | undefined
   }>
-): Line | undefined => candidates.find((candidate) => isAnnualInvoiceLineEligible(candidate))?.line
+): Line | undefined => {
+  const eligible = candidates.filter(isAnnualInvoiceLineEligible)
+  if (eligible.length === 0) return undefined
+  if (eligible[0]?.currentProductId === undefined && eligible.length !== 1) return undefined
+  return eligible[0]?.line
+}
 
 export const resolvePaidFulfillmentUserId = ({
   metadataUserId,
@@ -463,6 +468,20 @@ export const chargePaymentReference = (
   charge: Pick<Stripe.Charge, "id" | "payment_intent">
 ): string => paymentIntentId(charge.payment_intent) ?? charge.id
 
+export const disputeCreditReversal = ({
+  status,
+  amount,
+}: {
+  readonly status: Stripe.Dispute.Status
+  readonly amount: number
+}): { readonly reversedAmount: number; readonly terminal: boolean } => {
+  const paymentKept = status === "won" || status === "warning_closed" || status === "prevented"
+  return {
+    reversedAmount: paymentKept ? 0 : amount,
+    terminal: paymentKept || status === "lost",
+  }
+}
+
 type InvoicePaymentReferenceInput = {
   readonly payment: {
     readonly type: Stripe.InvoicePayment.Payment.Type
@@ -497,7 +516,11 @@ export const invoicePaymentReference = (payment: InvoicePaymentReferenceInput): 
 
 export const allocateAnnualCreditsAcrossPayments = (
   payments: ReadonlyArray<{ readonly paymentReference: string; readonly amountPaid: number }>
-): ReadonlyArray<{ readonly paymentReference: string; readonly credits: number }> => {
+): ReadonlyArray<{
+  readonly paymentReference: string
+  readonly paymentAmount: number
+  readonly credits: number
+}> => {
   const positive = payments.filter((payment) => payment.amountPaid > 0)
   const totalPaid = positive.reduce((total, payment) => total + payment.amountPaid, 0)
   if (totalPaid === 0) return []
@@ -509,13 +532,21 @@ export const allocateAnnualCreditsAcrossPayments = (
         ? ANNUAL_CREDITS - allocated
         : Math.floor((ANNUAL_CREDITS * payment.amountPaid) / totalPaid)
     allocated += credits
-    return { paymentReference: payment.paymentReference, credits }
+    return {
+      paymentReference: payment.paymentReference,
+      paymentAmount: payment.amountPaid,
+      credits,
+    }
   })
 }
 
 export const annualPaymentAllocationsFromInvoicePayments = (
   payments: ReadonlyArray<InvoicePaymentReferenceInput & { readonly amount_paid: number | null }>
-): ReadonlyArray<{ readonly paymentReference: string; readonly credits: number }> =>
+): ReadonlyArray<{
+  readonly paymentReference: string
+  readonly paymentAmount: number
+  readonly credits: number
+}> =>
   allocateAnnualCreditsAcrossPayments(
     payments.flatMap((payment) => {
       const reference = invoicePaymentReference(payment)
@@ -534,21 +565,33 @@ export const annualInvoiceCreditAllocations = ({
   readonly amountDue: number
   readonly paymentAllocations: ReadonlyArray<{
     readonly paymentReference: string
+    readonly paymentAmount: number
     readonly credits: number
   }>
 }): ReadonlyArray<{
   readonly paymentReference: string | null
+  readonly paymentAmount: number | null
+  readonly stripeInvoiceId: string | null
   readonly referenceSuffix: string
   readonly credits: number
 }> => {
   if (paymentAllocations.length > 0) {
     return paymentAllocations.map((allocation) => ({
       ...allocation,
+      stripeInvoiceId: invoiceId,
       referenceSuffix: allocation.paymentReference,
     }))
   }
   return amountDue === 0
-    ? [{ paymentReference: null, referenceSuffix: `invoice:${invoiceId}`, credits: ANNUAL_CREDITS }]
+    ? [
+        {
+          paymentReference: null,
+          paymentAmount: null,
+          stripeInvoiceId: invoiceId,
+          referenceSuffix: `invoice:${invoiceId}`,
+          credits: ANNUAL_CREDITS,
+        },
+      ]
     : []
 }
 
@@ -573,7 +616,7 @@ export const persistAnnualCreditAllocations = <E>({
 }): Effect.Effect<void, E> =>
   Effect.forEach(
     allocations.filter(({ credits }) => credits > 0),
-    ({ paymentReference, referenceSuffix, credits }) =>
+    ({ paymentReference, paymentAmount, stripeInvoiceId, referenceSuffix, credits }) =>
       Effect.gen(function* () {
         yield* grantCredits({
           userId,
@@ -581,6 +624,8 @@ export const persistAnnualCreditAllocations = <E>({
           kind: "annual_grant",
           reference: `stripe:annual:${subscriptionId}:${periodStart}:${periodEnd}:${referenceSuffix}`,
           paymentReference,
+          paymentAmount,
+          stripeInvoiceId,
           expiresAt: new Date(periodEnd * 1_000),
         })
         if (paymentReference !== null) {
@@ -656,6 +701,22 @@ const StripeChargeWebhookObjectSchema = Schema.Struct({
   amount_refunded: Schema.Number,
   payment_intent: NullableStripeReferenceSchema,
 })
+const StripeCreditNoteWebhookObjectSchema = Schema.Struct({
+  id: Schema.String,
+  currency: Schema.String,
+  invoice: StripeReferenceSchema,
+  status: Schema.String,
+  refunds: Schema.Array(
+    Schema.Struct({
+      amount_refunded: Schema.Number,
+      payment_record_refund: Schema.NullOr(
+        Schema.Struct({ payment_record: Schema.String, refund_group: Schema.String })
+      ),
+      refund: Schema.optional(NullableStripeReferenceSchema),
+      type: Schema.NullOr(Schema.String),
+    })
+  ),
+})
 const StripeIdWebhookObjectSchema = Schema.Struct({ id: Schema.String })
 const StripeWebhookEnvelopeSchema = Schema.Struct({
   id: Schema.String,
@@ -685,6 +746,8 @@ export const validateStripeWebhookEvent = (input: unknown) =>
           return Schema.decodeUnknown(StripeCheckoutWebhookObjectSchema)(event.data.object)
         case "charge.refunded":
           return Schema.decodeUnknown(StripeChargeWebhookObjectSchema)(event.data.object)
+        case "credit_note.created":
+          return Schema.decodeUnknown(StripeCreditNoteWebhookObjectSchema)(event.data.object)
         default:
           return Effect.void
       }
@@ -764,15 +827,13 @@ const make = Effect.gen(function* () {
     return value === "" ? Option.none<string>() : Option.some(value)
   })
 
-  const findPrice = (lookupKey: string) =>
+  const findActivePrice = (lookupKey: string) =>
     stripePromise("Could not load Stripe price", (client) =>
       client.prices.list({ active: true, lookup_keys: [lookupKey], limit: 1 })
     ).pipe(
       Effect.flatMap((prices) => {
         const price = prices.data[0]
-        if (price === undefined) {
-          return Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
-        }
+        if (price === undefined) return Effect.succeed(undefined)
         if (lookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY && !isValidAnnualPrice(price)) {
           return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
         }
@@ -782,6 +843,19 @@ const make = Effect.gen(function* () {
         return Effect.succeed(price)
       })
     )
+
+  const findPrice = (lookupKey: string) =>
+    findActivePrice(lookupKey).pipe(
+      Effect.flatMap((price) =>
+        price === undefined
+          ? Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
+          : Effect.succeed(price)
+      )
+    )
+
+  const findCurrentAnnualProductId = findActivePrice(TAXMAXI_ANNUAL_LOOKUP_KEY).pipe(
+    Effect.map((price) => (price === undefined ? undefined : productId(price.product)))
+  )
 
   const createCustomer = ({
     userId,
@@ -959,7 +1033,6 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(() => stripeError("Could not refresh billing account"))),
         hasCurrentAnnualSubscription: (customerId) =>
           Effect.gen(function* () {
-            const annualPrice = yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)
             const subscriptions = yield* stripePromise(
               "Could not verify current annual subscription",
               (client) =>
@@ -971,11 +1044,19 @@ const make = Effect.gen(function* () {
                   }),
                 })
             )
+            const taggedSubscriptionIsEligible = subscriptions.some(
+              (subscription) =>
+                isTaxMaxiAnnualSubscription({ subscription }) &&
+                isTopUpEligibleSubscription(subscription.status)
+            )
+            if (taggedSubscriptionIsEligible) return true
+
+            const currentProductId = yield* findCurrentAnnualProductId
             return subscriptions.some(
               (subscription) =>
                 isTaxMaxiAnnualSubscription({
                   subscription,
-                  currentProductId: productId(annualPrice.product),
+                  currentProductId,
                 }) && isTopUpEligibleSubscription(subscription.status)
             )
           }),
@@ -1024,7 +1105,7 @@ const make = Effect.gen(function* () {
     readonly subscription: Stripe.Subscription
     readonly eventCreatedAt: Date
     readonly syncGeneration: number
-    readonly currentProductId: string
+    readonly currentProductId: string | undefined
   }) =>
     Effect.gen(function* () {
       if (!isTaxMaxiAnnualSubscription({ subscription, currentProductId })) return
@@ -1045,38 +1126,40 @@ const make = Effect.gen(function* () {
         .pipe(Effect.mapError(() => stripeError("Could not save subscription state")))
     })
 
-  const loadCurrentAnnualSubscription = ({
-    customer,
-    currentProductId,
-  }: {
-    readonly customer: string
-    readonly currentProductId: string
-  }) =>
-    stripePromise("Could not load current customer subscriptions", (client) =>
-      loadAllStripeItems({
-        page: client.subscriptions.list({ customer, status: "all", limit: 100 }),
-      })
-    ).pipe(
-      Effect.map((subscriptions) =>
-        currentExistingAnnualSubscription(subscriptions, currentProductId)
+  const loadCurrentAnnualSubscription = (customer: string) =>
+    Effect.gen(function* () {
+      const subscriptions = yield* stripePromise(
+        "Could not load current customer subscriptions",
+        (client) =>
+          loadAllStripeItems({
+            page: client.subscriptions.list({ customer, status: "all", limit: 100 }),
+          })
       )
-    )
+      const taggedSubscription = currentExistingAnnualSubscription(subscriptions)
+      if (taggedSubscription !== undefined) {
+        return { subscription: taggedSubscription, currentProductId: undefined }
+      }
+
+      const currentProductId = yield* findCurrentAnnualProductId
+      const legacySubscription = currentExistingAnnualSubscription(subscriptions, currentProductId)
+      return legacySubscription === undefined
+        ? undefined
+        : { subscription: legacySubscription, currentProductId }
+    })
 
   const reconcileTrackedAnnualSubscription = ({
     customer,
     trackedSubscriptionId,
     eventCreatedAt,
     syncGeneration,
-    currentProductId,
   }: {
     readonly customer: string
     readonly trackedSubscriptionId: string
     readonly eventCreatedAt: Date
     readonly syncGeneration: number
-    readonly currentProductId: string
   }) =>
     Effect.gen(function* () {
-      const current = yield* loadCurrentAnnualSubscription({ customer, currentProductId })
+      const current = yield* loadCurrentAnnualSubscription(customer)
       if (current === undefined) {
         yield* billingRepository
           .clearSubscription({
@@ -1088,25 +1171,25 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(() => stripeError("Could not clear annual subscription state")))
       } else {
         yield* syncSubscription({
-          subscription: current,
+          subscription: current.subscription,
           eventCreatedAt,
           syncGeneration,
-          currentProductId,
+          currentProductId: current.currentProductId,
         })
       }
 
-      const confirmed = yield* loadCurrentAnnualSubscription({ customer, currentProductId })
+      const confirmed = yield* loadCurrentAnnualSubscription(customer)
       if (confirmed !== undefined) {
         yield* syncSubscription({
-          subscription: confirmed,
+          subscription: confirmed.subscription,
           eventCreatedAt,
           syncGeneration,
-          currentProductId,
+          currentProductId: confirmed.currentProductId,
         })
       }
       const subscriptionIdToClear = subscriptionIdToClearAfterConfirmation({
-        currentSubscriptionId: current?.id ?? null,
-        confirmedSubscriptionId: confirmed?.id ?? null,
+        currentSubscriptionId: current?.subscription.id ?? null,
+        confirmedSubscriptionId: confirmed?.subscription.id ?? null,
       })
       if (subscriptionIdToClear !== null) {
         yield* billingRepository
@@ -1144,11 +1227,14 @@ const make = Effect.gen(function* () {
       ) {
         return
       }
-      const currentAnnualPrice = yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)
+      const currentProductId =
+        details.metadata?.plan_lookup_key === undefined
+          ? productId((yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)).product)
+          : undefined
       const expectedAnnualProductId = annualInvoiceProductId({
         planLookupKey: details.metadata?.plan_lookup_key,
         planProductId: details.metadata?.plan_product_id,
-        currentProductId: productId(currentAnnualPrice.product),
+        currentProductId,
       })
       if (expectedAnnualProductId === null) return
       const id = subscriptionId(details.subscription)
@@ -1259,6 +1345,8 @@ const make = Effect.gen(function* () {
           kind: "top_up",
           reference: `stripe:checkout:${session.id}`,
           paymentReference,
+          paymentAmount: null,
+          stripeInvoiceId: null,
           expiresAt: null,
         })
         .pipe(Effect.mapError(() => stripeError("Could not grant top-up credits")))
@@ -1271,16 +1359,20 @@ const make = Effect.gen(function* () {
     charge,
     reversedAmount,
     reversalGroup,
+    lossReference,
     reference,
     eventCreatedAt,
+    stripeInvoiceId,
     monotonic,
     terminal,
   }: {
     readonly charge: Stripe.Charge
     readonly reversedAmount: number
     readonly reversalGroup: string
+    readonly lossReference: string
     readonly reference: string
     readonly eventCreatedAt: Date
+    readonly stripeInvoiceId: string | null
     readonly monotonic: boolean
     readonly terminal: boolean
   }) =>
@@ -1290,10 +1382,12 @@ const make = Effect.gen(function* () {
         .setPaymentCreditReversal({
           paymentReference,
           reversalGroup,
+          lossReference,
           reversedAmount,
           paymentAmount: charge.amount,
           reference,
           eventCreatedAt,
+          stripeInvoiceId,
           monotonic,
           terminal,
         })
@@ -1320,16 +1414,137 @@ const make = Effect.gen(function* () {
               client.charges.retrieve(disputeCharge)
             )
           : disputeCharge
-      const reversedAmount = currentDispute.status === "won" ? 0 : currentDispute.amount
+      const reversal = disputeCreditReversal(currentDispute)
       yield* applyChargeReversal({
         charge,
-        reversedAmount,
+        reversedAmount: reversal.reversedAmount,
         reversalGroup: `stripe:dispute:${dispute.id}`,
+        lossReference: `stripe:dispute:${dispute.id}`,
         reference: `stripe:dispute:${dispute.id}:${eventId}`,
         eventCreatedAt,
+        stripeInvoiceId: null,
         monotonic: false,
-        terminal: currentDispute.status === "won" || currentDispute.status === "lost",
+        terminal: reversal.terminal,
       })
+    })
+
+  const applyCreditNoteRefunds = ({
+    creditNote,
+    eventId,
+    eventCreatedAt,
+  }: {
+    readonly creditNote: Stripe.CreditNote
+    readonly eventId: string
+    readonly eventCreatedAt: Date
+  }) =>
+    Effect.forEach(
+      creditNote.refunds,
+      (refund) =>
+        Effect.gen(function* () {
+          const paymentRecordRefund = refund.payment_record_refund
+          if (creditNote.status !== "issued" || refund.amount_refunded <= 0) {
+            return
+          }
+
+          const invoiceId =
+            typeof creditNote.invoice === "string" ? creditNote.invoice : creditNote.invoice.id
+
+          if (refund.type === "refund") {
+            const refundReference = refund.refund
+            const creditNoteRefund =
+              typeof refundReference === "string"
+                ? yield* stripePromise("Could not load credited refund", (client) =>
+                    client.refunds.retrieve(refundReference)
+                  )
+                : refundReference
+            if (creditNoteRefund === null) return
+            const refundCharge = creditNoteRefund.charge
+            const paymentReference =
+              paymentIntentId(creditNoteRefund.payment_intent) ??
+              (refundCharge === null
+                ? null
+                : typeof refundCharge === "string"
+                  ? refundCharge
+                  : refundCharge.id)
+            if (paymentReference === null || creditNoteRefund.amount <= 0) return
+
+            yield* billingRepository
+              .setPaymentCreditReversal({
+                paymentReference,
+                reversalGroup: `stripe:credit-note:${creditNote.id}:refund:${creditNoteRefund.id}`,
+                lossReference: `stripe:refund:${creditNoteRefund.id}`,
+                reversedAmount: refund.amount_refunded,
+                paymentAmount: creditNoteRefund.amount,
+                reference: `stripe:credit-note:${creditNote.id}:${eventId}`,
+                eventCreatedAt,
+                stripeInvoiceId: invoiceId,
+                monotonic: true,
+                terminal: true,
+              })
+              .pipe(Effect.mapError(() => stripeError("Could not attribute refunded credits")))
+            return
+          }
+
+          if (refund.type !== "payment_record_refund" || paymentRecordRefund === null) return
+
+          const paymentRecord = yield* stripePromise(
+            "Could not load refunded payment record",
+            (client) => client.paymentRecords.retrieve(paymentRecordRefund.payment_record)
+          )
+          if (
+            paymentRecord.amount.value <= 0 ||
+            paymentRecord.amount.currency !== creditNote.currency
+          ) {
+            return yield* Effect.fail(stripeError("Invalid refunded payment record amount"))
+          }
+
+          yield* billingRepository
+            .setPaymentCreditReversal({
+              paymentReference: paymentRecord.id,
+              reversalGroup: `stripe:credit-note:${creditNote.id}:payment-record-refund:${paymentRecordRefund.refund_group}`,
+              lossReference: `stripe:payment-record-refund:${paymentRecordRefund.refund_group}`,
+              reversedAmount: refund.amount_refunded,
+              paymentAmount: paymentRecord.amount.value,
+              reference: `stripe:credit-note:${creditNote.id}:${eventId}`,
+              eventCreatedAt,
+              stripeInvoiceId: invoiceId,
+              monotonic: true,
+              terminal: true,
+            })
+            .pipe(Effect.mapError(() => stripeError("Could not reverse payment record credits")))
+        }),
+      { discard: true }
+    )
+
+  const applyChargeRefunds = ({
+    charge,
+    eventId,
+    eventCreatedAt,
+  }: {
+    readonly charge: Stripe.Charge
+    readonly eventId: string
+    readonly eventCreatedAt: Date
+  }) =>
+    Effect.gen(function* () {
+      const refunds = yield* stripePromise("Could not load charge refunds", (client) =>
+        client.refunds.list({ charge: charge.id }).autoPagingToArray({ limit: 100 })
+      )
+      yield* Effect.forEach(
+        refunds.filter((refund) => refund.status === "succeeded"),
+        (refund) =>
+          applyChargeReversal({
+            charge,
+            reversedAmount: refund.amount,
+            reversalGroup: `stripe:refund:${refund.id}:payment`,
+            lossReference: `stripe:refund:${refund.id}`,
+            reference: `stripe:refund:${refund.id}:${eventId}`,
+            eventCreatedAt,
+            stripeInvoiceId: null,
+            monotonic: true,
+            terminal: true,
+          }),
+        { discard: true }
+      )
     })
 
   const processWebhook: StripeBillingServiceShape["processWebhook"] = (input) =>
@@ -1359,14 +1574,17 @@ const make = Effect.gen(function* () {
             "Could not load current subscription state",
             (client) => client.subscriptions.retrieve(event.data.object.id)
           )
-          const annualPrice = yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)
-          const currentProductId = productId(annualPrice.product)
           const account = yield* billingRepository
             .findByStripeCustomerId(customer)
             .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
           const trackedSubscriptionId = Option.isSome(account)
             ? account.value.stripeSubscriptionId
             : null
+          const taggedAnnualSubscription = isTaxMaxiAnnualSubscription({ subscription })
+          const currentProductId =
+            taggedAnnualSubscription || subscription.id === trackedSubscriptionId
+              ? undefined
+              : yield* findCurrentAnnualProductId
           if (
             !shouldReconcileAnnualSubscription({
               subscription,
@@ -1378,19 +1596,18 @@ const make = Effect.gen(function* () {
           }
           if (!isTaxMaxiAnnualSubscription({ subscription, currentProductId })) {
             const syncGeneration = yield* billingRepository
-              .reserveSubscriptionSync(customer)
+              .reserveSubscriptionSync({ stripeCustomerId: customer, eventCreatedAt })
               .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
             yield* reconcileTrackedAnnualSubscription({
               customer,
               trackedSubscriptionId: subscription.id,
               eventCreatedAt,
               syncGeneration,
-              currentProductId,
             })
             break
           }
           const syncGeneration = yield* billingRepository
-            .reserveSubscriptionSync(customer)
+            .reserveSubscriptionSync({ stripeCustomerId: customer, eventCreatedAt })
             .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
           yield* syncSubscription({
             subscription,
@@ -1420,7 +1637,6 @@ const make = Effect.gen(function* () {
               trackedSubscriptionId: subscription.id,
               eventCreatedAt,
               syncGeneration,
-              currentProductId,
             })
           }
           break
@@ -1438,15 +1654,13 @@ const make = Effect.gen(function* () {
             break
           }
           const syncGeneration = yield* billingRepository
-            .reserveSubscriptionSync(customer)
+            .reserveSubscriptionSync({ stripeCustomerId: customer, eventCreatedAt })
             .pipe(Effect.mapError(() => stripeError("Could not reserve subscription sync")))
-          const annualPrice = yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)
           yield* reconcileTrackedAnnualSubscription({
             customer,
             trackedSubscriptionId: event.data.object.id,
             eventCreatedAt,
             syncGeneration,
-            currentProductId: productId(annualPrice.product),
           })
           break
         }
@@ -1463,14 +1677,17 @@ const make = Effect.gen(function* () {
           yield* grantTopUpCredits(event.data.object)
           break
         case "charge.refunded":
-          yield* applyChargeReversal({
+          yield* applyChargeRefunds({
             charge: event.data.object,
-            reversedAmount: event.data.object.amount_refunded,
-            reversalGroup: `stripe:refund:${event.data.object.id}`,
-            reference: `stripe:refund:${event.data.object.id}:${event.id}`,
+            eventId: event.id,
             eventCreatedAt,
-            monotonic: true,
-            terminal: false,
+          })
+          break
+        case "credit_note.created":
+          yield* applyCreditNoteRefunds({
+            creditNote: event.data.object,
+            eventId: event.id,
+            eventCreatedAt,
           })
           break
         case "charge.dispute.created":

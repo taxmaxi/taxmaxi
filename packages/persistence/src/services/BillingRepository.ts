@@ -39,7 +39,7 @@ export interface BillingAccount {
   readonly currentPeriodEnd: Date | null
   /** Whether Stripe will cancel the tracked subscription at its current period end. */
   readonly cancelAtPeriodEnd: boolean
-  /** Stripe event creation time used to ignore older subscription state after newer state. */
+  /** Latest reserved Stripe event time used to ignore older subscription state and fetches. */
   readonly lastSubscriptionEventCreatedAt: Date | null
 }
 
@@ -70,9 +70,11 @@ export interface BillingRepositoryService {
     readonly eventCreatedAt: Date
     readonly syncGeneration: number
   }) => Effect.Effect<boolean, PersistenceError>
-  readonly reserveSubscriptionSync: (
-    stripeCustomerId: string
-  ) => Effect.Effect<number, PersistenceError>
+  /** Reserves the newest observed subscription event and rejects older in-flight fetches. */
+  readonly reserveSubscriptionSync: (input: {
+    readonly stripeCustomerId: string
+    readonly eventCreatedAt: Date
+  }) => Effect.Effect<number, PersistenceError>
   readonly clearCustomer: (stripeCustomerId: string) => Effect.Effect<void, PersistenceError>
   readonly reserveAnnualCheckout: (input: {
     readonly userId: AuthUserId
@@ -87,6 +89,8 @@ export interface BillingRepositoryService {
     readonly kind: Exclude<CreditEntryKind, "transaction_usage">
     readonly reference: string
     readonly paymentReference: string | null
+    readonly paymentAmount?: number | null
+    readonly stripeInvoiceId?: string | null
     readonly expiresAt: Date | null
   }) => Effect.Effect<boolean, PersistenceError>
   readonly reconcilePaymentCreditReversals: (
@@ -95,10 +99,12 @@ export interface BillingRepositoryService {
   readonly setPaymentCreditReversal: (input: {
     readonly paymentReference: string
     readonly reversalGroup: string
+    readonly lossReference?: string
     readonly reversedAmount: number
     readonly paymentAmount: number
     readonly reference: string
     readonly eventCreatedAt: Date
+    readonly stripeInvoiceId?: string | null
     readonly monotonic: boolean
     readonly terminal: boolean
   }) => Effect.Effect<boolean, PersistenceError>
