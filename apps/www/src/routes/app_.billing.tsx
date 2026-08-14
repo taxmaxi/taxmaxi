@@ -1,7 +1,8 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
 import { ArrowLeft, CreditCard, Plus } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { isTaxMaxiUnauthorizedError, type BillingCatalog, type BillingStatus } from "taxmaxi"
+import { z } from "zod"
 
 import { AppHeader } from "#/components/app-header"
 import { PageShell } from "#/components/page-shell"
@@ -16,7 +17,44 @@ import {
 } from "#/components/ui/card"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 
+const billingSearchSchema = z.object({
+  checkout: z.literal("success").optional(),
+  top_up: z.literal("success").optional(),
+})
+
+type CheckoutReturnKind = "annual" | "topUp"
+
+export const refreshBillingStatusAfterCheckout = async ({
+  initialStatus,
+  kind,
+  loadStatus,
+  wait,
+  attempts = 6,
+}: {
+  readonly initialStatus: BillingStatus
+  readonly kind: CheckoutReturnKind
+  readonly loadStatus: () => Promise<BillingStatus>
+  readonly wait: () => Promise<void>
+  readonly attempts?: number
+}): Promise<BillingStatus> => {
+  let latest = initialStatus
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    await wait()
+    latest = await loadStatus()
+    if (
+      (kind === "annual" &&
+        (latest.subscriptionStatus === "active" || latest.subscriptionStatus === "trialing") &&
+        latest.credits > initialStatus.credits) ||
+      (kind === "topUp" && latest.credits !== initialStatus.credits)
+    ) {
+      return latest
+    }
+  }
+  return latest
+}
+
 export const Route = createFileRoute("/app_/billing")({
+  validateSearch: billingSearchSchema,
   beforeLoad: async () => {
     const { isAuthenticated } = await getAuthStatus()
     if (!isAuthenticated) throw redirect({ to: "/login" })
@@ -40,16 +78,42 @@ export const Route = createFileRoute("/app_/billing")({
 
 function BillingPage() {
   const { catalog, status } = Route.useLoaderData()
+  const search = Route.useSearch()
   const { taxmaxi } = Route.useRouteContext()
   const navigate = Route.useNavigate()
+  const [liveStatus, setLiveStatus] = useState(status)
   const [pendingAction, setPendingAction] = useState<"annual" | "portal" | "topUp" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const subscribed =
-    status.subscriptionStatus !== null &&
-    status.subscriptionStatus !== "canceled" &&
-    status.subscriptionStatus !== "incomplete_expired"
+    liveStatus.subscriptionStatus !== null &&
+    liveStatus.subscriptionStatus !== "canceled" &&
+    liveStatus.subscriptionStatus !== "incomplete_expired"
   const topUpEligible =
-    status.subscriptionStatus === "active" || status.subscriptionStatus === "trialing"
+    liveStatus.subscriptionStatus === "active" || liveStatus.subscriptionStatus === "trialing"
+
+  useEffect(() => {
+    const kind =
+      search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
+    if (kind === null) return
+    let active = true
+    void refreshBillingStatusAfterCheckout({
+      initialStatus: status,
+      kind,
+      loadStatus: () => taxmaxi().billing.status(),
+      wait: () => new Promise((resolve) => window.setTimeout(resolve, 500)),
+    })
+      .then((refreshed) => {
+        if (active) setLiveStatus(refreshed)
+      })
+      .catch(async (cause: unknown) => {
+        if (!active || !isTaxMaxiUnauthorizedError(cause)) return
+        await clearAuthSessionCookie()
+        await navigate({ to: "/login", replace: true })
+      })
+    return () => {
+      active = false
+    }
+  }, [navigate, search.checkout, search.top_up, status, taxmaxi])
 
   const redirectToStripe = async (action: "annual" | "portal" | "topUp") => {
     setPendingAction(action)
@@ -121,7 +185,7 @@ function BillingPage() {
               disabled={pendingAction !== null}
               onAction={() => void redirectToStripe(subscribed ? "portal" : "annual")}
               pending={pendingAction === (subscribed ? "portal" : "annual")}
-              status={status}
+              status={liveStatus}
               subscribed={subscribed}
             />
             <TopUpCard

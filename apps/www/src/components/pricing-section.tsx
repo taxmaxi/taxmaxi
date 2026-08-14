@@ -322,16 +322,30 @@ function formatCatalogPrice(price: CatalogPrice): string {
   }).format(price.amount / 100)
 }
 
-function catalogPriceSuffix(price: CatalogPrice | undefined, fallback: string): string {
+export function catalogPriceSuffix(price: CatalogPrice | undefined, fallback: string): string {
   if (price === undefined) return fallback
   const isGerman = getLocale() === "de"
+  const unit = isGerman
+    ? fallback
+        .replace(/^netto\s+/i, "")
+        .replace(/inklusive MwSt\.\s*/i, "")
+        .replace(/,?\s*zzgl\. MwSt\. soweit anwendbar/i, "")
+        .replace(/,\s*$/, "")
+        .trim()
+    : fallback
+        .replace(/^net\s+/i, "")
+        .replace(/including VAT\s*/i, "")
+        .replace(/,?\s*plus VAT where applicable/i, "")
+        .replace(/,\s*$/, "")
+        .trim()
+  const withTax = (tax: string) => (unit === "" ? tax : `${unit}, ${tax}`)
   switch (price.taxBehavior) {
     case "inclusive":
-      return isGerman ? "Steuern enthalten" : "tax included"
+      return withTax(isGerman ? "Steuern enthalten" : "tax included")
     case "exclusive":
-      return isGerman ? "zzgl. anwendbarer Steuern" : "plus applicable tax"
+      return withTax(isGerman ? "zzgl. anwendbarer Steuern" : "plus applicable tax")
     case "unspecified":
-      return isGerman ? "Steuern werden im Checkout angezeigt" : "tax shown at checkout"
+      return withTax(isGerman ? "Steuern werden im Checkout angezeigt" : "tax shown at checkout")
   }
 }
 
