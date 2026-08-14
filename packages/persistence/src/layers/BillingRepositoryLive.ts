@@ -180,12 +180,14 @@ const make = Effect.gen(function* () {
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
         lastSubscriptionEventCreatedAt: null,
+        annualCheckoutExpiresAt: null,
+        annualCheckoutPriceId: null,
         updatedAt: new Date(),
       })
       .where(eq(billingAccounts.stripeCustomerId, stripeCustomerId))
       .pipe(Effect.asVoid, wrapSqlError("billing.clearCustomer"))
 
-  const reserveAnnualCheckout: BillingRepositoryService["reserveAnnualCheckout"] = (userId) =>
+  const reserveAnnualCheckout: BillingRepositoryService["reserveAnnualCheckout"] = (input) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
@@ -193,17 +195,22 @@ const make = Effect.gen(function* () {
             .select({
               generation: billingAccounts.annualCheckoutGeneration,
               expiresAt: billingAccounts.annualCheckoutExpiresAt,
+              priceId: billingAccounts.annualCheckoutPriceId,
             })
             .from(billingAccounts)
-            .where(eq(billingAccounts.userId, userId))
+            .where(eq(billingAccounts.userId, input.userId))
             .for("update")
           if (account === undefined) {
             return yield* Effect.dieMessage("Billing account missing after customer creation")
           }
 
           const now = new Date()
-          if (account.expiresAt !== null && account.expiresAt > now) {
-            return { generation: account.generation, expiresAt: account.expiresAt }
+          if (account.expiresAt !== null && account.expiresAt > now && account.priceId !== null) {
+            return {
+              generation: account.generation,
+              expiresAt: account.expiresAt,
+              priceId: account.priceId,
+            }
           }
 
           const generation = account.generation + 1
@@ -213,11 +220,12 @@ const make = Effect.gen(function* () {
             .set({
               annualCheckoutGeneration: generation,
               annualCheckoutExpiresAt: expiresAt,
+              annualCheckoutPriceId: input.priceId,
               updatedAt: now,
             })
-            .where(eq(billingAccounts.userId, userId))
+            .where(eq(billingAccounts.userId, input.userId))
 
-          return { generation, expiresAt }
+          return { generation, expiresAt, priceId: input.priceId }
         })
       )
       .pipe(wrapSqlError("billing.reserveAnnualCheckout"))

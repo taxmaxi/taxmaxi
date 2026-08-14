@@ -108,6 +108,43 @@ describe("BillingRepositoryLive", () => {
     })
   })
 
+  it("keeps one zero-due annual allowance across webhook retries", async () => {
+    const expiresAt = new Date("2027-08-14T00:00:00.000Z")
+    const grant = {
+      userId: TEST_USER_ID,
+      amount: 10_000,
+      kind: "annual_grant" as const,
+      reference: "stripe:annual:sub_zero_due:1:2:invoice:in_zero_due",
+      paymentReference: null,
+      expiresAt,
+    }
+
+    const available = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        yield* repository.grantCredits(grant)
+        yield* repository.grantCredits(grant)
+        return yield* repository.availableCredits(TEST_USER_ID)
+      })
+    )
+    const rows = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            delta: schema.creditLedger.delta,
+            paymentReference: schema.creditLedger.paymentReference,
+            expiresAt: schema.creditLedger.expiresAt,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.reference, grant.reference))
+      })
+    )
+
+    expect(available).toBe(10_000)
+    expect(rows).toEqual([{ delta: 10_000, paymentReference: null, expiresAt }])
+  })
+
   it("moves a payment reversal to the latest proportional refund amount", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
@@ -461,8 +498,8 @@ describe("BillingRepositoryLive", () => {
         const repository = yield* BillingRepository
         return yield* Effect.all(
           [
-            repository.reserveAnnualCheckout(TEST_USER_ID),
-            repository.reserveAnnualCheckout(TEST_USER_ID),
+            repository.reserveAnnualCheckout({ userId: TEST_USER_ID, priceId: "price_annual" }),
+            repository.reserveAnnualCheckout({ userId: TEST_USER_ID, priceId: "price_annual" }),
           ],
           { concurrency: "unbounded" }
         )
@@ -477,7 +514,7 @@ describe("BillingRepositoryLive", () => {
   it("advances the annual Checkout generation after its reservation expires", async () => {
     const first = await runRepository(
       Effect.flatMap(BillingRepository, (repository) =>
-        repository.reserveAnnualCheckout(TEST_USER_ID)
+        repository.reserveAnnualCheckout({ userId: TEST_USER_ID, priceId: "price_annual" })
       )
     )
     await context.runPg(
@@ -491,7 +528,7 @@ describe("BillingRepositoryLive", () => {
     )
     const second = await runRepository(
       Effect.flatMap(BillingRepository, (repository) =>
-        repository.reserveAnnualCheckout(TEST_USER_ID)
+        repository.reserveAnnualCheckout({ userId: TEST_USER_ID, priceId: "price_annual" })
       )
     )
 
@@ -500,11 +537,34 @@ describe("BillingRepositoryLive", () => {
     expect(second.expiresAt.getTime()).toBeGreaterThan(Date.now())
   })
 
+  it("pins the annual price for the lifetime of a Checkout reservation", async () => {
+    const reservations = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+        const first = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_original",
+        })
+        const afterLookupChange = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_new",
+        })
+        return { first, afterLookupChange }
+      })
+    )
+
+    expect(reservations.afterLookupChange).toEqual(reservations.first)
+    expect(reservations.afterLookupChange.priceId).toBe("price_original")
+  })
+
   it("keeps a new annual Checkout reservation when a terminal subscription event arrives", async () => {
     const result = await runRepository(
       Effect.gen(function* () {
         const repository = yield* BillingRepository
-        const first = yield* repository.reserveAnnualCheckout(TEST_USER_ID)
+        const first = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_annual",
+        })
         const syncGeneration = yield* repository.reserveSubscriptionSync(STRIPE_CUSTOMER_ID)
         yield* repository.saveSubscription({
           stripeCustomerId: STRIPE_CUSTOMER_ID,
@@ -515,7 +575,10 @@ describe("BillingRepositoryLive", () => {
           eventCreatedAt: REVERSAL_EVENT_AT,
           syncGeneration,
         })
-        const second = yield* repository.reserveAnnualCheckout(TEST_USER_ID)
+        const second = yield* repository.reserveAnnualCheckout({
+          userId: TEST_USER_ID,
+          priceId: "price_annual",
+        })
 
         return { first, second }
       })

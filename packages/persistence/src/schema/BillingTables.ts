@@ -43,6 +43,7 @@ export const billingAccounts = pgTable(
     stripeCustomerGeneration: integer("stripe_customer_generation").notNull().default(0),
     annualCheckoutGeneration: integer("annual_checkout_generation").notNull().default(0),
     annualCheckoutExpiresAt: timestamp("annual_checkout_expires_at"),
+    annualCheckoutPriceId: text("annual_checkout_price_id"),
     subscriptionSyncGeneration: integer("subscription_sync_generation").notNull().default(0),
     stripeSubscriptionId: text("stripe_subscription_id"),
     subscriptionStatus: billingSubscriptionStatusEnum("subscription_status"),

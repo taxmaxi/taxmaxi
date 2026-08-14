@@ -8,7 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm"
+import { and, asc, eq, gt, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -485,6 +485,37 @@ const make = Effect.gen(function* () {
       // Anonymous x402 principals keep their payment-based access path. Every
       // registered user transaction must be backed by a billing credit.
       if (principal?.userId === null || principal === undefined) return
+
+      if (sourceRawRecordId !== null) {
+        const [paidRawRecord] = yield* executor
+          .select({ id: schema.sourceRecordsRaw.id })
+          .from(schema.sourceRecordsRaw)
+          .innerJoin(
+            schema.principalClaims,
+            and(
+              eq(schema.principalClaims.sourceId, schema.sourceRecordsRaw.sourceId),
+              eq(schema.principalClaims.claimType, "x402_receipt")
+            )
+          )
+          .where(
+            and(
+              eq(schema.sourceRecordsRaw.id, sourceRawRecordId),
+              eq(schema.sourceRecordsRaw.sourceId, sourceId),
+              isNotNull(schema.principalClaims.consumedAt),
+              lte(schema.sourceRecordsRaw.createdAt, schema.principalClaims.consumedAt)
+            )
+          )
+          .limit(1)
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.consumeTransactionCredit.findClaimedX402Payment"
+            )
+          )
+
+        // The x402 payment covered raw records retained when the source was claimed.
+        // Records imported after the claim still use the registered user's credits.
+        if (paidRawRecord !== undefined) return
+      }
 
       const [account] = yield* executor
         .select({ userId: schema.billingAccounts.userId })

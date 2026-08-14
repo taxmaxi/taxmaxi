@@ -11,14 +11,58 @@ import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+
+interface StripeMockState {
+  event: unknown
+  invoicePayments: Array<unknown>
+  prices: Array<unknown>
+  retrievedPrices: Record<string, unknown>
+  subscription: unknown
+}
+
+const stripeMockState = vi.hoisted<StripeMockState>(() => ({
+  event: null,
+  invoicePayments: [],
+  prices: [],
+  retrievedPrices: {},
+  subscription: null,
+}))
+
+vi.mock("stripe", () => ({
+  default: class StripeMock {
+    readonly prices = {
+      list: () => Promise.resolve({ data: stripeMockState.prices }),
+      retrieve: (priceId: string) => Promise.resolve(stripeMockState.retrievedPrices[priceId]),
+    }
+    readonly subscriptions = {
+      list: () => ({
+        autoPagingToArray: () => Promise.resolve([stripeMockState.subscription]),
+      }),
+      retrieve: () => Promise.resolve(stripeMockState.subscription),
+    }
+    readonly invoicePayments = {
+      list: () => ({
+        autoPagingToArray: () => Promise.resolve(stripeMockState.invoicePayments),
+      }),
+    }
+    readonly webhooks = {
+      constructEventAsync: () => Promise.resolve(stripeMockState.event),
+    }
+  },
+}))
 
 import {
   allocateAnnualCreditsAcrossPayments,
+  annualInvoiceProductId,
+  annualInvoiceCreditAllocations,
+  annualPaymentAllocationsFromInvoicePayments,
   annualCheckoutIdempotencyKey,
   buildAnnualCheckoutParams,
   buildTopUpCheckoutParams,
+  chargePaymentReference,
   completeInvoiceLines,
+  createReservedAnnualCheckoutSession,
   currentExistingAnnualSubscription,
   hasExistingTaxMaxiAnnualSubscription,
   hasFixedUnitAmount,
@@ -29,8 +73,11 @@ import {
   isPaidTopUpSessionEligible,
   isTaxMaxiAnnualSubscription,
   isValidAnnualPrice,
+  isValidTopUpPrice,
   loadAllStripeItems,
+  persistAnnualCreditAllocations,
   resolvePaidFulfillmentUserId,
+  resolveReservedAnnualCheckoutPrice,
   shouldReconcileAnnualSubscription,
   subscriptionIdToClearAfterConfirmation,
   StripeBillingServiceLive,
@@ -70,7 +117,11 @@ const billingRepositoryStub: BillingRepositoryService = {
   reserveSubscriptionSync: () => Effect.succeed(1),
   clearCustomer: () => Effect.void,
   reserveAnnualCheckout: () =>
-    Effect.succeed({ generation: 1, expiresAt: new Date("2026-08-14T11:00:00.000Z") }),
+    Effect.succeed({
+      generation: 1,
+      expiresAt: new Date("2026-08-14T11:00:00.000Z"),
+      priceId: "price_annual",
+    }),
   grantCredits: () => Effect.succeed(true),
   reconcilePaymentCreditReversals: () => Effect.succeed(false),
   setPaymentCreditReversal: () => Effect.succeed(true),
@@ -103,19 +154,57 @@ const loadServiceWithoutStripeConfig = () =>
     )
   )
 
+const loadServiceWithStripe = (billingRepository: BillingRepositoryService) =>
+  Effect.runPromise(
+    StripeBillingService.pipe(
+      Effect.provide(
+        StripeBillingServiceLive.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.succeed(BillingRepository, billingRepository),
+              Layer.succeed(UserRepository, userRepositoryStub)
+            )
+          )
+        )
+      ),
+      Effect.withConfigProvider(
+        ConfigProvider.fromMap(
+          new Map([
+            ["STRIPE_SECRET_KEY", "sk_test"],
+            ["STRIPE_WEBHOOK_SECRET", "whsec_test"],
+          ])
+        )
+      )
+    )
+  )
+
 describe("StripeBillingServiceLive", () => {
   it("scopes annual billing state to the TaxMaxi annual plan", () => {
     const subscription = ({
       lookupKey,
       product,
+      interval = "year",
+      intervalCount = 1,
       metadata = {},
     }: {
       readonly lookupKey: string | null
       readonly product: string
+      readonly interval?: string
+      readonly intervalCount?: number
       readonly metadata?: Readonly<Record<string, string>>
     }) => ({
       metadata,
-      items: { data: [{ price: { lookup_key: lookupKey, product } }] },
+      items: {
+        data: [
+          {
+            price: {
+              lookup_key: lookupKey,
+              product,
+              recurring: { interval, interval_count: intervalCount },
+            },
+          },
+        ],
+      },
     })
 
     expect(
@@ -136,6 +225,26 @@ describe("StripeBillingServiceLive", () => {
         currentProductId: "prod_annual",
       })
     ).toBe(true)
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({
+          lookupKey: null,
+          product: "prod_annual",
+          interval: "month",
+        }),
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+    expect(
+      isTaxMaxiAnnualSubscription({
+        subscription: subscription({
+          lookupKey: null,
+          product: "prod_annual",
+          intervalCount: 2,
+        }),
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
     expect(
       isTaxMaxiAnnualSubscription({
         subscription: subscription({ lookupKey: "professional_annual", product: "prod_other" }),
@@ -179,7 +288,15 @@ describe("StripeBillingServiceLive", () => {
       status: "active",
       metadata: { plan_lookup_key: "taxmaxi_professional_annual" },
       items: {
-        data: [{ price: { lookup_key: "taxmaxi_professional_annual", product: "prod_pro" } }],
+        data: [
+          {
+            price: {
+              lookup_key: "taxmaxi_professional_annual",
+              product: "prod_pro",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
       },
     }
 
@@ -193,13 +310,43 @@ describe("StripeBillingServiceLive", () => {
       hasExistingTaxMaxiAnnualSubscription({
         subscriptions: [
           {
+            status: "active",
+            metadata: {},
+            items: {
+              data: [
+                {
+                  price: {
+                    lookup_key: null,
+                    product: "prod_annual",
+                    recurring: { interval: "month", interval_count: 1 },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+    expect(
+      hasExistingTaxMaxiAnnualSubscription({
+        subscriptions: [
+          {
             status: "past_due",
             metadata: {
               plan_lookup_key: "taxmaxi_annual_10k_eur",
               plan_product_id: "prod_archived_annual",
             },
             items: {
-              data: [{ price: { lookup_key: null, product: "prod_archived_annual" } }],
+              data: [
+                {
+                  price: {
+                    lookup_key: null,
+                    product: "prod_archived_annual",
+                    recurring: { interval: "year", interval_count: 1 },
+                  },
+                },
+              ],
             },
           },
         ],
@@ -232,7 +379,17 @@ describe("StripeBillingServiceLive", () => {
         plan_lookup_key: "taxmaxi_annual_10k_eur",
         plan_product_id: "prod_annual",
       },
-      items: { data: [{ price: { lookup_key: null, product: "prod_annual" } }] },
+      items: {
+        data: [
+          {
+            price: {
+              lookup_key: null,
+              product: "prod_annual",
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
     })
 
     expect(
@@ -241,6 +398,29 @@ describe("StripeBillingServiceLive", () => {
         annualSubscription("sub_replacement", "active"),
       ])
     ).toMatchObject({ id: "sub_replacement", status: "active" })
+    expect(
+      currentExistingAnnualSubscription(
+        [
+          {
+            id: "sub_legacy_same_product",
+            status: "active",
+            metadata: {},
+            items: {
+              data: [
+                {
+                  price: {
+                    lookup_key: null,
+                    product: "prod_annual",
+                    recurring: { interval: "year", interval_count: 1 },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        "prod_annual"
+      )
+    ).toMatchObject({ id: "sub_legacy_same_product", status: "active" })
   })
 
   it("reconciles current annual and tracked off-plan subscription events only", () => {
@@ -255,7 +435,17 @@ describe("StripeBillingServiceLive", () => {
     }) => ({
       id,
       metadata: {},
-      items: { data: [{ price: { lookup_key: lookupKey, product } }] },
+      items: {
+        data: [
+          {
+            price: {
+              lookup_key: lookupKey,
+              product,
+              recurring: { interval: "year", interval_count: 1 },
+            },
+          },
+        ],
+      },
     })
 
     expect(
@@ -266,6 +456,17 @@ describe("StripeBillingServiceLive", () => {
           product: "prod_annual",
         }),
         trackedSubscriptionId: null,
+      })
+    ).toBe(true)
+    expect(
+      shouldReconcileAnnualSubscription({
+        subscription: subscription({
+          id: "sub_legacy_same_product",
+          lookupKey: null,
+          product: "prod_annual",
+        }),
+        trackedSubscriptionId: null,
+        currentProductId: "prod_annual",
       })
     ).toBe(true)
     expect(
@@ -333,18 +534,81 @@ describe("StripeBillingServiceLive", () => {
     })
   })
 
-  it("scopes annual Checkout idempotency to the selected Stripe price", () => {
+  it("keeps annual Checkout idempotency stable for one reservation", () => {
     const input = {
       userId: TEST_USER_ID,
       customer: "cus_test",
       generation: 3,
     } as const
-    const oldPrice = annualCheckoutIdempotencyKey({ ...input, priceId: "price_old" })
-    const newPrice = annualCheckoutIdempotencyKey({ ...input, priceId: "price_new" })
+    const firstRequest = annualCheckoutIdempotencyKey(input)
+    const repeatedRequestAfterPriceChange = annualCheckoutIdempotencyKey(input)
 
-    expect(oldPrice).toContain("price_old")
-    expect(newPrice).toContain("price_new")
-    expect(oldPrice).not.toBe(newPrice)
+    expect(firstRequest).toBe(repeatedRequestAfterPriceChange)
+    expect(firstRequest).toBe(`taxmaxi-annual-checkout-${TEST_USER_ID}-cus_test-3`)
+  })
+
+  it("reuses the complete reserved annual Checkout request after the lookup key changes", async () => {
+    const loadedPriceIds: Array<string> = []
+    const requests: Array<{
+      readonly params: {
+        readonly line_items?: ReadonlyArray<{
+          readonly price?: string
+          readonly quantity?: number
+        }>
+      }
+      readonly idempotencyKey: string
+    }> = []
+    const reservation = {
+      generation: 3,
+      expiresAt: new Date("2026-08-14T11:00:00.000Z"),
+      priceId: "price_original",
+    }
+    const runCheckout = (currentPriceId: string) =>
+      Effect.runPromise(
+        createReservedAnnualCheckoutSession({
+          currentPrice: { id: currentPriceId, product: "prod_annual" },
+          reservation,
+          customer: "cus_test",
+          userId: TEST_USER_ID,
+          frontendUrl: "https://taxmaxi.test",
+          loadPrice: (priceId) =>
+            Effect.sync(() => {
+              loadedPriceIds.push(priceId)
+              return { id: priceId, product: "prod_annual" }
+            }),
+          createSession: ({ params, idempotencyKey }) =>
+            Effect.sync(() => {
+              requests.push({ params, idempotencyKey })
+              return { url: "https://checkout.stripe.test/original" }
+            }),
+        })
+      )
+
+    await runCheckout("price_original")
+    await runCheckout("price_new")
+
+    expect(loadedPriceIds).toEqual(["price_original"])
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toEqual(requests[0])
+    expect(requests[0]?.params.line_items).toEqual([{ price: "price_original", quantity: 1 }])
+  })
+
+  it("loads a reserved annual price only when it differs from the current lookup", async () => {
+    const loadedPriceIds: Array<string> = []
+    const price = await Effect.runPromise(
+      resolveReservedAnnualCheckoutPrice({
+        currentPrice: { id: "price_new" },
+        reservedPriceId: "price_original",
+        loadPrice: (priceId) =>
+          Effect.sync(() => {
+            loadedPriceIds.push(priceId)
+            return { id: priceId }
+          }),
+      })
+    )
+
+    expect(price.id).toBe("price_original")
+    expect(loadedPriceIds).toEqual(["price_original"])
   })
 
   it("rejects Stripe catalog prices without a fixed unit amount", () => {
@@ -397,6 +661,7 @@ describe("StripeBillingServiceLive", () => {
           data: {
             object: {
               id: "in_unrelated",
+              amount_due: 0,
               billing_reason: "subscription_cycle",
               customer: "cus_unrelated",
               parent: {
@@ -430,6 +695,26 @@ describe("StripeBillingServiceLive", () => {
         planLookupKey: "taxmaxi_annual_10k_eur",
       })
     ).toBe(true)
+    expect(
+      isAnnualInvoiceEligible({
+        billingReason: "subscription_cycle",
+        planLookupKey: undefined,
+      })
+    ).toBe(true)
+    expect(
+      annualInvoiceProductId({
+        planLookupKey: undefined,
+        planProductId: undefined,
+        currentProductId: "prod_annual",
+      })
+    ).toBe("prod_annual")
+    expect(
+      annualInvoiceProductId({
+        planLookupKey: "taxmaxi_professional_annual",
+        planProductId: "prod_professional",
+        currentProductId: "prod_annual",
+      })
+    ).toBeNull()
     expect(
       isAnnualInvoiceEligible({
         billingReason: "subscription_update",
@@ -536,6 +821,64 @@ describe("StripeBillingServiceLive", () => {
     ).toBe(10_000)
   })
 
+  it("persists one stable allowance for a zero-due annual invoice across retries", async () => {
+    const input = {
+      invoiceId: "in_zero_due",
+      amountDue: 0,
+      paymentAllocations: [],
+    } as const
+
+    const allocations = annualInvoiceCreditAllocations(input)
+    expect(allocations).toEqual([
+      {
+        paymentReference: null,
+        referenceSuffix: "invoice:in_zero_due",
+        credits: 10_000,
+      },
+    ])
+    const grants: Array<Parameters<BillingRepositoryService["grantCredits"]>[0]> = []
+    const reconciled: Array<string> = []
+    const persist = () =>
+      Effect.runPromise(
+        persistAnnualCreditAllocations({
+          userId: TEST_USER_ID,
+          subscriptionId: "sub_zero_due",
+          periodStart: 1_700_000_000,
+          periodEnd: 1_731_536_000,
+          allocations,
+          grantCredits: (grant) =>
+            Effect.sync(() => {
+              grants.push(grant)
+              return true
+            }),
+          reconcilePaymentCreditReversals: (paymentReference) =>
+            Effect.sync(() => {
+              reconciled.push(paymentReference)
+              return true
+            }),
+        })
+      )
+    await persist()
+    await persist()
+
+    expect(grants).toHaveLength(2)
+    expect(grants[1]).toEqual(grants[0])
+    expect(grants[0]).toMatchObject({
+      amount: 10_000,
+      kind: "annual_grant",
+      paymentReference: null,
+      reference: "stripe:annual:sub_zero_due:1700000000:1731536000:invoice:in_zero_due",
+    })
+    expect(reconciled).toEqual([])
+    expect(
+      annualInvoiceCreditAllocations({
+        invoiceId: "in_missing_payment",
+        amountDue: 1,
+        paymentAllocations: [],
+      })
+    ).toEqual([])
+  })
+
   it("keeps every supported paid invoice contribution separate", () => {
     expect(
       [
@@ -544,6 +887,67 @@ describe("StripeBillingServiceLive", () => {
         { payment: { type: "payment_record" as const, payment_record: "pyr_test" } },
       ].map(invoicePaymentReference)
     ).toEqual(["pi_test", "ch_test", "pyr_test"])
+
+    expect(
+      invoicePaymentReference({
+        payment: {
+          type: "charge",
+          charge: { id: "ch_with_intent", payment_intent: "pi_canonical" },
+        },
+      })
+    ).toBe("pi_canonical")
+    expect(chargePaymentReference({ id: "ch_without_intent", payment_intent: null })).toBe(
+      "ch_without_intent"
+    )
+  })
+
+  it("uses one canonical PaymentIntent reference from annual grant through reversal", async () => {
+    const allocations = annualPaymentAllocationsFromInvoicePayments([
+      {
+        amount_paid: 10_000,
+        payment: {
+          type: "charge",
+          charge: { id: "ch_annual", payment_intent: "pi_annual" },
+        },
+      },
+    ])
+    const grants: Array<Parameters<BillingRepositoryService["grantCredits"]>[0]> = []
+    const reconciled: Array<string> = []
+    await Effect.runPromise(
+      persistAnnualCreditAllocations({
+        userId: TEST_USER_ID,
+        subscriptionId: "sub_annual",
+        periodStart: 1_700_000_000,
+        periodEnd: 1_731_536_000,
+        allocations: annualInvoiceCreditAllocations({
+          invoiceId: "in_annual",
+          amountDue: 10_000,
+          paymentAllocations: allocations,
+        }),
+        grantCredits: (grant) =>
+          Effect.sync(() => {
+            grants.push(grant)
+            return true
+          }),
+        reconcilePaymentCreditReversals: (paymentReference) =>
+          Effect.sync(() => {
+            reconciled.push(paymentReference)
+            return true
+          }),
+      })
+    )
+
+    expect(grants[0]?.paymentReference).toBe("pi_annual")
+    expect(reconciled).toEqual(["pi_annual"])
+    expect(chargePaymentReference({ id: "ch_annual", payment_intent: "pi_annual" })).toBe(
+      grants[0]?.paymentReference
+    )
+  })
+
+  it("requires top-up prices to be one-time", () => {
+    expect(isValidTopUpPrice({ recurring: null })).toBe(true)
+    expect(isValidTopUpPrice({ recurring: { interval: "month" } })).toBe(false)
+    expect(isValidTopUpPrice({ recurring: { interval: "year" } })).toBe(false)
   })
 
   it("accepts delayed top-ups from payment facts without consulting current subscription state", () => {
@@ -647,6 +1051,155 @@ describe("StripeBillingServiceLive", () => {
     )
 
     expect(customer).toBe("cus_test")
+  })
+
+  it("syncs a legacy yearly subscription through the webhook service path", async () => {
+    const annualPrice = {
+      id: "price_annual",
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_annual",
+      recurring: { interval: "year", interval_count: 1 },
+    }
+    stripeMockState.prices = [annualPrice]
+    stripeMockState.subscription = {
+      id: "sub_legacy_same_product",
+      customer: "cus_test",
+      status: "active",
+      cancel_at_period_end: false,
+      metadata: {},
+      items: {
+        data: [
+          {
+            current_period_end: 1_731_536_000,
+            price: { ...annualPrice, lookup_key: null },
+          },
+        ],
+      },
+    }
+    stripeMockState.event = {
+      id: "evt_subscription_updated",
+      created: 1_700_000_000,
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_legacy_same_product", customer: "cus_test" } },
+    }
+    const saved: Array<Parameters<BillingRepositoryService["saveSubscription"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(
+          Option.some({
+            ...billingAccount({ stripeCustomerId: "cus_test" }),
+            stripeSubscriptionId: null,
+            subscriptionStatus: null,
+          })
+        ),
+      saveSubscription: (input) =>
+        Effect.sync(() => {
+          saved.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(saved).toHaveLength(2)
+    expect(saved[0]).toMatchObject({
+      stripeCustomerId: "cus_test",
+      stripeSubscriptionId: "sub_legacy_same_product",
+      status: "active",
+    })
+  })
+
+  it("keeps annual grant and refund references aligned through the webhook service path", async () => {
+    const annualPrice = {
+      id: "price_annual",
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_annual",
+      recurring: { interval: "year", interval_count: 1 },
+    }
+    stripeMockState.prices = [annualPrice]
+    stripeMockState.retrievedPrices = { price_annual: annualPrice }
+    stripeMockState.invoicePayments = [
+      {
+        amount_paid: 10_000,
+        payment: {
+          type: "charge",
+          charge: { id: "ch_annual", payment_intent: "pi_annual" },
+        },
+      },
+    ]
+    stripeMockState.event = {
+      id: "evt_invoice_paid",
+      created: 1_700_000_000,
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_annual",
+          amount_due: 10_000,
+          billing_reason: "subscription_cycle",
+          customer: "cus_test",
+          parent: {
+            subscription_details: {
+              subscription: "sub_legacy_same_product",
+              metadata: null,
+            },
+          },
+          lines: {
+            has_more: false,
+            data: [
+              {
+                parent: { subscription_item_details: { proration: false } },
+                pricing: { price_details: { price: "price_annual" } },
+                period: { start: 1_700_000_000, end: 1_731_536_000 },
+              },
+            ],
+          },
+        },
+      },
+    }
+    const grants: Array<Parameters<BillingRepositoryService["grantCredits"]>[0]> = []
+    const reversals: Array<Parameters<BillingRepositoryService["setPaymentCreditReversal"]>[0]> = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByStripeCustomerId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      grantCredits: (input) =>
+        Effect.sync(() => {
+          grants.push(input)
+          return true
+        }),
+      setPaymentCreditReversal: (input) =>
+        Effect.sync(() => {
+          reversals.push(input)
+          return true
+        }),
+    })
+
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+    stripeMockState.event = {
+      id: "evt_charge_refunded",
+      created: 1_700_000_100,
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_annual",
+          amount: 10_000,
+          amount_refunded: 10_000,
+          payment_intent: "pi_annual",
+        },
+      },
+    }
+    await Effect.runPromise(service.processWebhook({ payload: "{}", signature: "sig_test" }))
+
+    expect(grants[0]).toMatchObject({
+      amount: 10_000,
+      paymentReference: "pi_annual",
+      reference: "stripe:annual:sub_legacy_same_product:1700000000:1731536000:pi_annual",
+    })
+    expect(reversals[0]).toMatchObject({
+      paymentReference: "pi_annual",
+      reversalGroup: "stripe:refund:ch_annual",
+    })
   })
 
   it("starts without Stripe configuration and keeps local billing status available", async () => {

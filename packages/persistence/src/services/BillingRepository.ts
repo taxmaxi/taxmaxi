@@ -23,14 +23,23 @@ export type BillingSubscriptionStatus =
 
 export type CreditEntryKind = "annual_grant" | "top_up" | "transaction_usage" | "manual_adjustment"
 
+/** Persisted Stripe billing state used for ordering webhooks and Checkout reservations. */
 export interface BillingAccount {
+  /** TaxMaxi user that owns the billing account. */
   readonly userId: AuthUserId
+  /** Current Stripe customer, or `null` before creation or after Stripe deletes it. */
   readonly stripeCustomerId: string | null
+  /** Increases when a deleted Stripe customer is replaced so retries use a new idempotency key. */
   readonly stripeCustomerGeneration: number
+  /** Current TaxMaxi annual subscription tracked from Stripe webhook reconciliation. */
   readonly stripeSubscriptionId: string | null
+  /** Last reconciled Stripe status for the tracked annual subscription. */
   readonly subscriptionStatus: BillingSubscriptionStatus | null
+  /** Latest item period end for the tracked subscription. */
   readonly currentPeriodEnd: Date | null
+  /** Whether Stripe will cancel the tracked subscription at its current period end. */
   readonly cancelAtPeriodEnd: boolean
+  /** Stripe event creation time used to ignore older subscription state after newer state. */
   readonly lastSubscriptionEventCreatedAt: Date | null
 }
 
@@ -65,9 +74,13 @@ export interface BillingRepositoryService {
     stripeCustomerId: string
   ) => Effect.Effect<number, PersistenceError>
   readonly clearCustomer: (stripeCustomerId: string) => Effect.Effect<void, PersistenceError>
-  readonly reserveAnnualCheckout: (
-    userId: AuthUserId
-  ) => Effect.Effect<{ readonly generation: number; readonly expiresAt: Date }, PersistenceError>
+  readonly reserveAnnualCheckout: (input: {
+    readonly userId: AuthUserId
+    readonly priceId: string
+  }) => Effect.Effect<
+    { readonly generation: number; readonly expiresAt: Date; readonly priceId: string },
+    PersistenceError
+  >
   readonly grantCredits: (input: {
     readonly userId: AuthUserId
     readonly amount: number
