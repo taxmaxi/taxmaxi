@@ -29,12 +29,15 @@ const SOL_ASSET_ID = "00000000-0000-0000-0000-000000001601"
 const USDC_ASSET_ID = "00000000-0000-0000-0000-000000001602"
 const USDT_ASSET_ID = "00000000-0000-0000-0000-000000001603"
 const UNKNOWN_ASSET_ID = "00000000-0000-0000-0000-000000001604"
+const NFT_ASSET_ID = "00000000-0000-0000-0000-000000001606"
 const SOL_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001601"
 const WRAPPED_SOL_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001605"
 const USDC_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001602"
 const USDT_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001603"
 const UNKNOWN_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001604"
+const NFT_REPRESENTATION_ID = "00000000-0000-4000-8000-000000001606"
 const UNKNOWN_MINT = "Drift111111111111111111111111111111111111111"
+const NFT_MINT = "Nft11111111111111111111111111111111111111111"
 const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
 
@@ -94,7 +97,13 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
   yield* db
     .delete(schema.assets)
     .where(
-      inArray(schema.assets.id, [SOL_ASSET_ID, USDC_ASSET_ID, USDT_ASSET_ID, UNKNOWN_ASSET_ID])
+      inArray(schema.assets.id, [
+        SOL_ASSET_ID,
+        USDC_ASSET_ID,
+        USDT_ASSET_ID,
+        UNKNOWN_ASSET_ID,
+        NFT_ASSET_ID,
+      ])
     )
 
   yield* db.insert(schema.assets).values([
@@ -494,6 +503,126 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       source: "helius_das_get_asset_batch",
       tokenProgram: TOKEN_2022_PROGRAM,
       nftHint: false,
+    })
+  })
+
+  it("automatically resolves an exact known Solana representation", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Drift Example",
+          symbol: "DRIFT",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 6,
+          type: "token",
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            symbol: "DRIFT",
+            name: "Drift Example",
+            decimals: 6,
+          }),
+        ])
+    )
+
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+    expect(state).toMatchObject({
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+    })
+    expect(state?.sourceNotes).toContain("exact mint, type, and compatible decimals")
+  })
+
+  it("derives an exact known NFT type when DAS type evidence is missing", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: NFT_ASSET_ID,
+          name: "Known NFT",
+          symbol: "KNFT",
+          type: "nft",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: NFT_REPRESENTATION_ID,
+          assetId: NFT_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: NFT_MINT,
+          decimals: 0,
+          type: "nft",
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: NFT_MINT,
+        })
+      ),
+      () => Effect.succeed([])
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      assetKind: "nft",
+      representationTypeObserved: true,
+      decimals: 0,
+      mappingStatus: "approved",
+      canonicalAssetId: NFT_ASSET_ID,
+      assetRepresentationId: NFT_REPRESENTATION_ID,
+      nftHint: true,
     })
   })
 

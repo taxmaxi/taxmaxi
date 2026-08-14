@@ -62,6 +62,39 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
   }),
 }) {}
 
+export class UnresolvedTransferReconciliationRow extends Schema.Class<UnresolvedTransferReconciliationRow>(
+  "UnresolvedTransferReconciliationRow"
+)({
+  id: Schema.UUID,
+  principalId: Schema.UUID,
+  providerTransferId: Schema.UUID,
+  providerSourceId: Schema.UUID,
+  providerTimestamp: Schema.String,
+  providerDirection: Schema.Literal("inbound", "outbound"),
+  providerAmount: Schema.String,
+  networkName: Schema.NullOr(Schema.String),
+  networkHash: Schema.NullOr(Schema.String),
+  canonicalTransferId: Schema.NullOr(Schema.UUID),
+  canonicalTransactionId: Schema.NullOr(Schema.UUID),
+  status: Schema.Literal("pending", "needs_review"),
+  matchReason: Schema.String,
+  confidence: Schema.String,
+  deterministic: Schema.Boolean,
+  reviewMetadata: Schema.Unknown,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+}) {}
+
+export class UnresolvedTransferReconciliationListResponse extends Schema.Class<UnresolvedTransferReconciliationListResponse>(
+  "UnresolvedTransferReconciliationListResponse"
+)({
+  reconciliations: Schema.Array(UnresolvedTransferReconciliationRow),
+  page: Schema.Struct({
+    nextCursor: Schema.NullOr(Schema.String),
+    hasMore: Schema.Boolean,
+  }),
+}) {}
+
 export class PendingAssetResponse extends Schema.Class<PendingAssetResponse>(
   "PendingAssetResponse"
 )({
@@ -178,6 +211,18 @@ const ProviderAssetReviewQuery = Schema.Struct({
   ),
 })
 
+const UnresolvedTransferReconciliationQuery = Schema.Struct({
+  status: Schema.optional(Schema.Literal("pending", "needs_review")),
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(
+      Schema.int(),
+      Schema.greaterThanOrEqualTo(1),
+      Schema.lessThanOrEqualTo(100)
+    )
+  ),
+})
+
 const PendingAssetListQuery = Schema.Struct({
   q: Schema.optional(AssetCatalogSearchQuery),
   provider: Schema.optional(Schema.String),
@@ -260,6 +305,23 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
   )
   .middleware(AdminAuthMiddleware)
 
+const listUnresolvedTransferReconciliations = HttpApiEndpoint.get(
+  "listUnresolvedTransferReconciliations",
+  "/assets/transfer-reconciliations/unresolved"
+)
+  .setUrlParams(UnresolvedTransferReconciliationQuery)
+  .addSuccess(UnresolvedTransferReconciliationListResponse)
+  .addError(AssetBadRequestError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "List unresolved transfer reconciliation evidence",
+      description:
+        "Lists pending and ambiguous transfer matches for the narrow admin review queue.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
 const canonicalizeProviderAsset = HttpApiEndpoint.post(
   "canonicalizeProviderAsset",
   "/assets/provider-assets/:id/canonicalize"
@@ -288,6 +350,7 @@ export class AssetsApi extends HttpApiGroup.make("assets")
   .add(getAsset)
   .add(listPendingAssets)
   .add(listProviderAssetReviews)
+  .add(listUnresolvedTransferReconciliations)
   .add(canonicalizeProviderAsset)
   .prefix("/v1")
   .annotateContext(
