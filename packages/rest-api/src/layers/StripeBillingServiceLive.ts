@@ -70,6 +70,18 @@ export const buildAnnualCheckoutParams = ({
   },
 })
 
+export const annualCheckoutIdempotencyKey = ({
+  userId,
+  customer,
+  priceId,
+  generation,
+}: {
+  readonly userId: AuthUserId
+  readonly customer: string
+  readonly priceId: string
+  readonly generation: number
+}): string => `taxmaxi-annual-checkout-${userId}-${customer}-${priceId}-${generation}`
+
 export const buildTopUpCheckoutParams = ({
   customer,
   price,
@@ -244,6 +256,7 @@ export const isAnnualInvoiceLineEligible = ({
   periodStart,
   periodEnd,
   interval,
+  intervalCount,
   productId,
   currentProductId,
 }: {
@@ -251,10 +264,15 @@ export const isAnnualInvoiceLineEligible = ({
   readonly periodStart: number
   readonly periodEnd: number
   readonly interval: string | undefined
+  readonly intervalCount: number | undefined
   readonly productId: string
   readonly currentProductId: string
 }): boolean =>
-  !proration && periodEnd > periodStart && interval === "year" && productId === currentProductId
+  !proration &&
+  periodEnd > periodStart &&
+  interval === "year" &&
+  intervalCount === 1 &&
+  productId === currentProductId
 
 export const isPaidTopUpSessionEligible = ({
   purchaseKind,
@@ -271,6 +289,7 @@ export const findEligibleAnnualInvoiceLine = <Line>(
     readonly periodStart: number
     readonly periodEnd: number
     readonly interval: string | undefined
+    readonly intervalCount: number | undefined
     readonly productId: string
     readonly currentProductId: string
   }>
@@ -312,6 +331,7 @@ export const verifiedTopUpCustomer = ({
   userId,
   getOrCreateCustomer,
   findByUserId,
+  hasCurrentAnnualSubscription,
 }: {
   readonly account: Option.Option<BillingAccount>
   readonly userId: AuthUserId
@@ -319,13 +339,12 @@ export const verifiedTopUpCustomer = ({
   readonly findByUserId: (
     userId: AuthUserId
   ) => Effect.Effect<Option.Option<BillingAccount>, StripeBillingError>
+  readonly hasCurrentAnnualSubscription: (
+    stripeCustomerId: string
+  ) => Effect.Effect<boolean, StripeBillingError>
 }) =>
   Effect.gen(function* () {
-    if (
-      Option.isNone(account) ||
-      account.value.stripeCustomerId === null ||
-      !isTopUpEligibleSubscription(account.value.subscriptionStatus)
-    ) {
+    if (Option.isNone(account) || account.value.stripeCustomerId === null) {
       return yield* Effect.fail(stripeError("An active annual subscription is required"))
     }
 
@@ -333,13 +352,58 @@ export const verifiedTopUpCustomer = ({
     const refreshedAccount = yield* findByUserId(userId)
     if (
       Option.isNone(refreshedAccount) ||
-      refreshedAccount.value.stripeCustomerId !== stripeCustomerId ||
-      !isTopUpEligibleSubscription(refreshedAccount.value.subscriptionStatus)
+      refreshedAccount.value.stripeCustomerId !== stripeCustomerId
     ) {
+      return yield* Effect.fail(stripeError("An active annual subscription is required"))
+    }
+    if (!(yield* hasCurrentAnnualSubscription(stripeCustomerId))) {
       return yield* Effect.fail(stripeError("An active annual subscription is required"))
     }
     return stripeCustomerId
   })
+
+export const isValidAnnualPrice = (price: {
+  readonly recurring: { readonly interval: string; readonly interval_count: number } | null
+}): boolean => price.recurring?.interval === "year" && price.recurring.interval_count === 1
+
+export const invoicePaymentReference = (
+  payment: Pick<Stripe.InvoicePayment, "payment">
+): string | null => {
+  switch (payment.payment.type) {
+    case "payment_intent":
+      return paymentIntentId(payment.payment.payment_intent ?? null)
+    case "charge": {
+      const charge = payment.payment.charge
+      return charge === undefined ? null : typeof charge === "string" ? charge : charge.id
+    }
+    case "payment_record": {
+      const paymentRecord = payment.payment.payment_record
+      return paymentRecord === undefined
+        ? null
+        : typeof paymentRecord === "string"
+          ? paymentRecord
+          : paymentRecord.id
+    }
+  }
+}
+
+export const allocateAnnualCreditsAcrossPayments = (
+  payments: ReadonlyArray<{ readonly paymentReference: string; readonly amountPaid: number }>
+): ReadonlyArray<{ readonly paymentReference: string; readonly credits: number }> => {
+  const positive = payments.filter((payment) => payment.amountPaid > 0)
+  const totalPaid = positive.reduce((total, payment) => total + payment.amountPaid, 0)
+  if (totalPaid === 0) return []
+
+  let allocated = 0
+  return positive.map((payment, index) => {
+    const credits =
+      index === positive.length - 1
+        ? ANNUAL_CREDITS - allocated
+        : Math.floor((ANNUAL_CREDITS * payment.amountPaid) / totalPaid)
+    allocated += credits
+    return { paymentReference: payment.paymentReference, credits }
+  })
+}
 
 const toBillingSubscriptionStatus = (
   status: Stripe.Subscription.Status
@@ -418,9 +482,13 @@ const make = Effect.gen(function* () {
     ).pipe(
       Effect.flatMap((prices) => {
         const price = prices.data[0]
-        return price === undefined
-          ? Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
-          : Effect.succeed(price)
+        if (price === undefined) {
+          return Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
+        }
+        if (lookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY && !isValidAnnualPrice(price)) {
+          return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
+        }
+        return Effect.succeed(price)
       })
     )
 
@@ -495,17 +563,25 @@ const make = Effect.gen(function* () {
     "Could not load Stripe prices",
     (client) => client.prices.list({ active: true, lookup_keys: [...catalogLookupKeys], limit: 10 })
   ).pipe(
-    Effect.map((prices) =>
-      prices.data.map(
-        (price): BillingCatalogPrice => ({
-          lookupKey: price.lookup_key ?? "",
-          amount: price.unit_amount ?? 0,
-          currency: price.currency,
-          taxBehavior: price.tax_behavior ?? "unspecified",
-          recurringInterval: price.recurring?.interval === "year" ? "year" : null,
-        })
+    Effect.flatMap((prices) => {
+      const annualPrice = prices.data.find(
+        (price) => price.lookup_key === TAXMAXI_ANNUAL_LOOKUP_KEY
       )
-    )
+      if (annualPrice !== undefined && !isValidAnnualPrice(annualPrice)) {
+        return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
+      }
+      return Effect.succeed(
+        prices.data.map(
+          (price): BillingCatalogPrice => ({
+            lookupKey: price.lookup_key ?? "",
+            amount: price.unit_amount ?? 0,
+            currency: price.currency,
+            taxBehavior: price.tax_behavior ?? "unspecified",
+            recurringInterval: price.recurring?.interval === "year" ? "year" : null,
+          })
+        )
+      )
+    })
   )
 
   const status: StripeBillingServiceShape["status"] = (userId) =>
@@ -558,7 +634,12 @@ const make = Effect.gen(function* () {
             expiresAt: checkoutReservation.expiresAt,
           }),
           {
-            idempotencyKey: `taxmaxi-annual-checkout-${userId}-${customer}-${checkoutReservation.generation}`,
+            idempotencyKey: annualCheckoutIdempotencyKey({
+              userId,
+              customer,
+              priceId: price.id,
+              generation: checkoutReservation.generation,
+            }),
           }
         )
       )
@@ -581,6 +662,28 @@ const make = Effect.gen(function* () {
           billingRepository
             .findByUserId(id)
             .pipe(Effect.mapError(() => stripeError("Could not refresh billing account"))),
+        hasCurrentAnnualSubscription: (customerId) =>
+          Effect.gen(function* () {
+            const annualPrice = yield* findPrice(TAXMAXI_ANNUAL_LOOKUP_KEY)
+            const subscriptions = yield* stripePromise(
+              "Could not verify current annual subscription",
+              (client) =>
+                loadAllStripeItems({
+                  page: client.subscriptions.list({
+                    customer: customerId,
+                    status: "all",
+                    limit: 100,
+                  }),
+                })
+            )
+            return subscriptions.some(
+              (subscription) =>
+                isTaxMaxiAnnualSubscription({
+                  subscription,
+                  currentProductId: productId(annualPrice.product),
+                }) && isTopUpEligibleSubscription(subscription.status)
+            )
+          }),
       })
       const price = yield* findPrice(TAXMAXI_TOP_UP_LOOKUP_KEY)
       const session = yield* stripePromise("Could not create top-up Checkout", (client) =>
@@ -698,15 +801,20 @@ const make = Effect.gen(function* () {
       }
     })
 
-  const paidInvoicePaymentReference = (invoiceId: string) =>
-    stripePromise("Could not load paid invoice payment", (client) =>
-      client.invoicePayments.list({ invoice: invoiceId, status: "paid", limit: 10 })
+  const paidInvoicePaymentAllocations = (invoiceId: string) =>
+    stripePromise("Could not load paid invoice payments", (client) =>
+      loadAllStripeItems({
+        page: client.invoicePayments.list({ invoice: invoiceId, status: "paid", limit: 100 }),
+      })
     ).pipe(
       Effect.map((payments) => {
-        const payment = payments.data.find(
-          (candidate) => candidate.payment.type === "payment_intent"
-        )
-        return paymentIntentId(payment?.payment.payment_intent ?? null)
+        const contributions = payments.flatMap((payment) => {
+          const reference = invoicePaymentReference(payment)
+          return reference === null || payment.amount_paid === null
+            ? []
+            : [{ paymentReference: reference, amountPaid: payment.amount_paid }]
+        })
+        return allocateAnnualCreditsAcrossPayments(contributions)
       })
     )
 
@@ -755,6 +863,7 @@ const make = Effect.gen(function* () {
             periodStart: line.period.start,
             periodEnd: line.period.end,
             interval: price.recurring?.interval,
+            intervalCount: price.recurring?.interval_count,
             productId: productId(price.product),
             currentProductId: expectedAnnualProductId,
           }))
@@ -778,23 +887,27 @@ const make = Effect.gen(function* () {
             .pipe(Effect.mapError(() => stripeError("Could not load billing account"))),
       })
       if (userId === null) return
-      const paymentReference = yield* paidInvoicePaymentReference(invoice.id)
-
-      yield* billingRepository
-        .grantCredits({
-          userId,
-          amount: ANNUAL_CREDITS,
-          kind: "annual_grant",
-          reference: `stripe:annual:${id}:${annualLine.period.start}:${annualLine.period.end}`,
-          paymentReference,
-          expiresAt: new Date(annualLine.period.end * 1_000),
-        })
-        .pipe(Effect.mapError(() => stripeError("Could not grant annual credits")))
-      if (paymentReference !== null) {
-        yield* billingRepository
-          .reconcilePaymentCreditReversals(paymentReference)
-          .pipe(Effect.mapError(() => stripeError("Could not reconcile annual credit reversals")))
+      const paymentAllocations = yield* paidInvoicePaymentAllocations(invoice.id)
+      if (paymentAllocations.length === 0) {
+        return yield* Effect.fail(stripeError("Paid annual invoice has no supported payment"))
       }
+      yield* Effect.forEach(
+        paymentAllocations.filter(({ credits }) => credits > 0),
+        ({ paymentReference, credits }) =>
+          billingRepository
+            .grantCredits({
+              userId,
+              amount: credits,
+              kind: "annual_grant",
+              reference: `stripe:annual:${id}:${annualLine.period.start}:${annualLine.period.end}:${paymentReference}`,
+              paymentReference,
+              expiresAt: new Date(annualLine.period.end * 1_000),
+            })
+            .pipe(
+              Effect.andThen(billingRepository.reconcilePaymentCreditReversals(paymentReference)),
+              Effect.mapError(() => stripeError("Could not grant annual credits"))
+            )
+      )
     })
 
   const grantTopUpCredits = (session: Stripe.Checkout.Session) =>
@@ -857,8 +970,7 @@ const make = Effect.gen(function* () {
     readonly terminal: boolean
   }) =>
     Effect.gen(function* () {
-      const paymentReference = paymentIntentId(charge.payment_intent)
-      if (paymentReference === null) return
+      const paymentReference = paymentIntentId(charge.payment_intent) ?? charge.id
       yield* billingRepository
         .setPaymentCreditReversal({
           paymentReference,

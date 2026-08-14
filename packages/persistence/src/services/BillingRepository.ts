@@ -34,6 +34,7 @@ export interface BillingAccount {
   readonly lastSubscriptionEventCreatedAt: Date | null
 }
 
+/** Durable Stripe account, subscription, credit-ledger, and webhook operations. */
 export interface BillingRepositoryService {
   readonly findByUserId: (
     userId: AuthUserId

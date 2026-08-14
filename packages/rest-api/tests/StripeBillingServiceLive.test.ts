@@ -14,16 +14,20 @@ import * as Option from "effect/Option"
 import { describe, expect, it } from "vitest"
 
 import {
+  allocateAnnualCreditsAcrossPayments,
+  annualCheckoutIdempotencyKey,
   buildAnnualCheckoutParams,
   buildTopUpCheckoutParams,
   completeInvoiceLines,
   currentExistingAnnualSubscription,
   hasExistingTaxMaxiAnnualSubscription,
+  invoicePaymentReference,
   isAnnualInvoiceEligible,
   isAnnualInvoiceLineEligible,
   findEligibleAnnualInvoiceLine,
   isPaidTopUpSessionEligible,
   isTaxMaxiAnnualSubscription,
+  isValidAnnualPrice,
   loadAllStripeItems,
   resolvePaidFulfillmentUserId,
   shouldReconcileAnnualSubscription,
@@ -327,7 +331,24 @@ describe("StripeBillingServiceLive", () => {
     })
   })
 
+  it("scopes annual Checkout idempotency to the selected Stripe price", () => {
+    const input = {
+      userId: TEST_USER_ID,
+      customer: "cus_test",
+      generation: 3,
+    } as const
+    const oldPrice = annualCheckoutIdempotencyKey({ ...input, priceId: "price_old" })
+    const newPrice = annualCheckoutIdempotencyKey({ ...input, priceId: "price_new" })
+
+    expect(oldPrice).toContain("price_old")
+    expect(newPrice).toContain("price_new")
+    expect(oldPrice).not.toBe(newPrice)
+  })
+
   it("grants annual credits only for create or renewal invoices on the annual product", () => {
+    expect(isValidAnnualPrice({ recurring: { interval: "year", interval_count: 1 } })).toBe(true)
+    expect(isValidAnnualPrice({ recurring: { interval: "year", interval_count: 2 } })).toBe(false)
+    expect(isValidAnnualPrice({ recurring: { interval: "month", interval_count: 1 } })).toBe(false)
     expect(
       isAnnualInvoiceEligible({
         billingReason: "subscription_cycle",
@@ -346,6 +367,7 @@ describe("StripeBillingServiceLive", () => {
         periodStart: 1_700_000_000,
         periodEnd: 1_731_536_000,
         interval: "year",
+        intervalCount: 1,
         productId: "prod_annual",
         currentProductId: "prod_annual",
       })
@@ -356,6 +378,7 @@ describe("StripeBillingServiceLive", () => {
         periodStart: 1_700_000_000,
         periodEnd: 1_731_536_000,
         interval: "year",
+        intervalCount: 1,
         productId: "prod_annual",
         currentProductId: "prod_annual",
       })
@@ -366,6 +389,7 @@ describe("StripeBillingServiceLive", () => {
         periodStart: 1_700_000_000,
         periodEnd: 1_731_536_000,
         interval: "year",
+        intervalCount: 1,
         productId: "prod_other",
         currentProductId: "prod_annual",
       })
@@ -379,6 +403,7 @@ describe("StripeBillingServiceLive", () => {
           periodStart: 1_700_000_000,
           periodEnd: 1_702_678_400,
           interval: "month",
+          intervalCount: 1,
           productId: "prod_add_on",
           currentProductId: "prod_annual",
         },
@@ -388,6 +413,7 @@ describe("StripeBillingServiceLive", () => {
           periodStart: 1_700_000_000,
           periodEnd: 1_731_536_000,
           interval: "year",
+          intervalCount: 1,
           productId: "prod_annual",
           currentProductId: "prod_annual",
         },
@@ -399,10 +425,50 @@ describe("StripeBillingServiceLive", () => {
         periodStart: 1_700_000_000,
         periodEnd: 1_702_678_400,
         interval: "month",
+        intervalCount: 1,
         productId: "prod_annual",
         currentProductId: "prod_annual",
       })
     ).toBe(false)
+    expect(
+      isAnnualInvoiceLineEligible({
+        proration: false,
+        periodStart: 1_700_000_000,
+        periodEnd: 1_763_072_000,
+        interval: "year",
+        intervalCount: 2,
+        productId: "prod_annual",
+        currentProductId: "prod_annual",
+      })
+    ).toBe(false)
+  })
+
+  it("splits annual credits across every paid PaymentIntent contribution", () => {
+    expect(
+      allocateAnnualCreditsAcrossPayments([
+        { paymentReference: "pi_first", amountPaid: 4_000 },
+        { paymentReference: "pi_second", amountPaid: 6_000 },
+      ])
+    ).toEqual([
+      { paymentReference: "pi_first", credits: 4_000 },
+      { paymentReference: "pi_second", credits: 6_000 },
+    ])
+    expect(
+      allocateAnnualCreditsAcrossPayments([
+        { paymentReference: "pi_first", amountPaid: 1 },
+        { paymentReference: "pi_second", amountPaid: 2 },
+      ]).reduce((total, payment) => total + payment.credits, 0)
+    ).toBe(10_000)
+  })
+
+  it("keeps every supported paid invoice contribution separate", () => {
+    expect(
+      [
+        { payment: { type: "payment_intent" as const, payment_intent: "pi_test" } },
+        { payment: { type: "charge" as const, charge: "ch_test" } },
+        { payment: { type: "payment_record" as const, payment_record: "pyr_test" } },
+      ].map(invoicePaymentReference)
+    ).toEqual(["pi_test", "ch_test", "pyr_test"])
   })
 
   it("accepts delayed top-ups from payment facts without consulting current subscription state", () => {
@@ -458,12 +524,54 @@ describe("StripeBillingServiceLive", () => {
         getOrCreateCustomer: () => Effect.succeed("cus_replacement"),
         findByUserId: () =>
           Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_replacement" }))),
+        hasCurrentAnnualSubscription: () => Effect.succeed(true),
       })
     )
     requestedCustomers.push(customer)
 
     expect(requestedCustomers).toEqual(["cus_replacement"])
     expect(requestedCustomers).not.toContain("cus_deleted")
+  })
+
+  it("rejects top-up Checkout when Stripe no longer has an active annual subscription", async () => {
+    const result = await Effect.runPromise(
+      Effect.either(
+        verifiedTopUpCustomer({
+          account: Option.some(billingAccount({ stripeCustomerId: "cus_test" })),
+          userId: TEST_USER_ID,
+          getOrCreateCustomer: () => Effect.succeed("cus_test"),
+          findByUserId: () =>
+            Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+          hasCurrentAnnualSubscription: () => Effect.succeed(false),
+        })
+      )
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Left",
+      left: { message: "An active annual subscription is required" },
+    })
+  })
+
+  it("allows top-up Checkout when Stripe is active while local subscription state is stale", async () => {
+    const customer = await Effect.runPromise(
+      verifiedTopUpCustomer({
+        account: Option.some(
+          billingAccount({ stripeCustomerId: "cus_test", subscriptionStatus: "canceled" })
+        ),
+        userId: TEST_USER_ID,
+        getOrCreateCustomer: () => Effect.succeed("cus_test"),
+        findByUserId: () =>
+          Effect.succeed(
+            Option.some(
+              billingAccount({ stripeCustomerId: "cus_test", subscriptionStatus: "canceled" })
+            )
+          ),
+        hasCurrentAnnualSubscription: () => Effect.succeed(true),
+      })
+    )
+
+    expect(customer).toBe("cus_test")
   })
 
   it("starts without Stripe configuration and keeps local billing status available", async () => {

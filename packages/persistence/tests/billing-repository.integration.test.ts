@@ -1,5 +1,5 @@
 import { AuthUserId } from "@my/core/authentication"
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { afterAll, beforeEach, describe, expect, it } from "vitest"
@@ -236,6 +236,182 @@ describe("BillingRepositoryLive", () => {
       reconciledAfterGrant: true,
       available: 500,
     })
+  })
+
+  it("recalculates refund debt across split annual payments", async () => {
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1_000)
+    const result = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 4,
+          kind: "annual_grant",
+          reference: "invoice:split:first",
+          paymentReference: "pi_split_first",
+          expiresAt,
+        })
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 6,
+          kind: "annual_grant",
+          reference: "invoice:split:second",
+          paymentReference: "pi_split_second",
+          expiresAt,
+        })
+        yield* Effect.forEach([1, 2, 3, 4, 5], (transactionId) =>
+          repository.consumeTransactionCredit({
+            userId: TEST_USER_ID,
+            transactionId: `split-payment-usage-${transactionId}`,
+          })
+        )
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_split_first",
+          reversalGroup: "stripe:dispute:dp_split_first",
+          reversedAmount: 4,
+          paymentAmount: 4,
+          reference: "stripe:dispute:dp_split_first:open",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          monotonic: false,
+          terminal: false,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_split_second",
+          reversalGroup: "stripe:dispute:dp_split_second",
+          reversedAmount: 6,
+          paymentAmount: 6,
+          reference: "stripe:dispute:dp_split_second:open",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          monotonic: false,
+          terminal: false,
+        })
+        const bothReversed = yield* repository.availableCredits(TEST_USER_ID)
+
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_split_first",
+          reversalGroup: "stripe:dispute:dp_split_first",
+          reversedAmount: 0,
+          paymentAmount: 4,
+          reference: "stripe:dispute:dp_split_first:won",
+          eventCreatedAt: new Date(REVERSAL_EVENT_AT.getTime() + 1_000),
+          monotonic: false,
+          terminal: true,
+        })
+        const firstRestored = yield* repository.availableCredits(TEST_USER_ID)
+
+        return { bothReversed, firstRestored }
+      })
+    )
+
+    expect(result).toEqual({ bothReversed: -5, firstRestored: -1 })
+  })
+
+  it("reverses every annual period funded by the same payment", async () => {
+    const firstExpiry = new Date(Date.now() + 60 * 60 * 1_000)
+    const secondExpiry = new Date(Date.now() + 2 * 60 * 60 * 1_000)
+    const available = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 4,
+          kind: "annual_grant",
+          reference: "invoice:shared-payment:first-period",
+          paymentReference: "pi_shared_periods",
+          expiresAt: firstExpiry,
+        })
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 6,
+          kind: "annual_grant",
+          reference: "invoice:shared-payment:second-period",
+          paymentReference: "pi_shared_periods",
+          expiresAt: secondExpiry,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_shared_periods",
+          reversalGroup: "stripe:refund:ch_shared_periods",
+          reversedAmount: 10,
+          paymentAmount: 10,
+          reference: "stripe:refund:ch_shared_periods:full",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          monotonic: true,
+          terminal: false,
+        })
+
+        return yield* repository.availableCredits(TEST_USER_ID)
+      })
+    )
+
+    expect(available).toBe(0)
+  })
+
+  it("moves refund debt when later grants change the expiry bucket", async () => {
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1_000)
+    await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 10,
+          kind: "annual_grant",
+          reference: "invoice:bucket-state:refunded",
+          paymentReference: "pi_bucket_refunded",
+          expiresAt,
+        })
+        yield* Effect.forEach([1, 2, 3, 4, 5, 6, 7, 8, 9], (transactionId) =>
+          repository.consumeTransactionCredit({
+            userId: TEST_USER_ID,
+            transactionId: `bucket-state-usage-${transactionId}`,
+          })
+        )
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_bucket_refunded",
+          reversalGroup: "stripe:refund:ch_bucket_refunded",
+          reversedAmount: 10,
+          paymentAmount: 10,
+          reference: "stripe:refund:ch_bucket_refunded:full",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          monotonic: true,
+          terminal: false,
+        })
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 10,
+          kind: "annual_grant",
+          reference: "invoice:bucket-state:sibling",
+          paymentReference: "pi_bucket_sibling",
+          expiresAt,
+        })
+        yield* repository.reconcilePaymentCreditReversals("pi_bucket_sibling")
+      })
+    )
+
+    const adjustments = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ delta: schema.creditLedger.delta, expiresAt: schema.creditLedger.expiresAt })
+          .from(schema.creditLedger)
+          .where(
+            and(
+              eq(schema.creditLedger.paymentReference, "pi_bucket_refunded"),
+              eq(schema.creditLedger.kind, "manual_adjustment")
+            )
+          )
+      })
+    )
+    const permanent = adjustments
+      .filter((adjustment) => adjustment.expiresAt === null)
+      .reduce((total, adjustment) => total + adjustment.delta, 0)
+    const expiring = adjustments
+      .filter((adjustment) => adjustment.expiresAt !== null)
+      .reduce((total, adjustment) => total + adjustment.delta, 0)
+
+    expect({ permanent, expiring }).toEqual({ permanent: 0, expiring: -10 })
   })
 
   it("does not let an older reversal event reduce a newer cumulative refund", async () => {
