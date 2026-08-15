@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { TaxCalculationServiceLive } from "../src/layers/TaxCalculationServiceLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
 import { schema } from "../src/schema/index.ts"
@@ -289,8 +289,6 @@ const updateIncomeLegCurrency = (fiatCurrency: string | null) =>
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TaxCalculationServiceLive", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   beforeEach(() =>
     Effect.gen(function* () {
       yield* context.recreateTestDatabase()

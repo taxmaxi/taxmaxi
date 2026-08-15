@@ -8,7 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
-import { and, asc, eq, gt, lte, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -36,6 +36,7 @@ import {
   type SourceVenueContextDraft,
   type SourceNormalizationRepositoryShape,
   SyncEngineStorageError,
+  TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
 } from "@my/sync-engine/services"
 import {
   nowDate,
@@ -454,6 +455,337 @@ const make = Effect.gen(function* () {
       }
 
       return persisted
+    })
+
+  const consumeTransactionCredit = ({
+    executor,
+    externalId,
+    mode,
+    principalId,
+    replayReservationId,
+    sourceId,
+    sourceRawRecordId,
+  }: {
+    readonly executor: SourceNormalizationExecutor
+    readonly externalId: string | null
+    readonly mode: "persist" | "reserve"
+    readonly principalId: string
+    readonly replayReservationId: string | null
+    readonly sourceId: string
+    readonly sourceRawRecordId: string | null
+  }) =>
+    Effect.gen(function* () {
+      const [principal] = yield* executor
+        .select({ userId: schema.principals.userId })
+        .from(schema.principals)
+        .where(eq(schema.principals.id, principalId))
+        .limit(1)
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.findPrincipal"
+          )
+        )
+
+      // Anonymous x402 principals keep their payment-based access path. Every
+      // registered user transaction must be backed by a billing credit.
+      if (principal?.userId === null || principal === undefined) return null
+
+      if (sourceRawRecordId !== null) {
+        const [paidRawRecord] = yield* executor
+          .select({ id: schema.sourceRecordsRaw.id })
+          .from(schema.sourceRecordsRaw)
+          .innerJoin(
+            schema.principalClaims,
+            and(
+              eq(schema.principalClaims.sourceId, schema.sourceRecordsRaw.sourceId),
+              eq(schema.principalClaims.claimType, "x402_receipt")
+            )
+          )
+          .where(
+            and(
+              eq(schema.sourceRecordsRaw.id, sourceRawRecordId),
+              eq(schema.sourceRecordsRaw.sourceId, sourceId),
+              isNotNull(schema.principalClaims.consumedAt),
+              lte(schema.sourceRecordsRaw.createdAt, schema.principalClaims.consumedAt)
+            )
+          )
+          .limit(1)
+          .pipe(
+            wrapSyncEngineSqlError(
+              "sourceNormalizationRepository.consumeTransactionCredit.findClaimedX402Payment"
+            )
+          )
+
+        // The x402 payment covered raw records retained when the source was claimed.
+        // Records imported after the claim still use the registered user's credits.
+        if (paidRawRecord !== undefined) return null
+      }
+
+      const [account] = yield* executor
+        .select({ userId: schema.billingAccounts.userId })
+        .from(schema.billingAccounts)
+        .where(eq(schema.billingAccounts.userId, principal.userId))
+        .limit(1)
+        .for("update")
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.lockAccount"
+          )
+        )
+
+      if (account === undefined) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+            error: "Transaction credit balance is exhausted",
+          })
+        )
+      }
+
+      const rawReference =
+        sourceRawRecordId === null ? null : `transaction:${sourceId}:raw:${sourceRawRecordId}`
+      const externalReference =
+        externalId === null ? null : `transaction:${sourceId}:external:${externalId}`
+      if (rawReference === null && externalReference === null) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
+            error: "Transaction is missing a stable source identity",
+          })
+        )
+      }
+
+      const [previousForRawRecord] =
+        sourceRawRecordId === null
+          ? []
+          : yield* executor
+              .select({ externalId: schema.transactions.externalId })
+              .from(schema.transactions)
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, sourceId),
+                  eq(schema.transactions.sourceRawRecordId, sourceRawRecordId)
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.consumeTransactionCredit.findPreviousByRawRecord"
+                )
+              )
+      const [previousForExternalId] =
+        externalId === null
+          ? []
+          : yield* executor
+              .select({ sourceRawRecordId: schema.transactions.sourceRawRecordId })
+              .from(schema.transactions)
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, sourceId),
+                  eq(schema.transactions.externalId, externalId)
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.consumeTransactionCredit.findPreviousByExternalId"
+                )
+              )
+      const previousExternalReference =
+        previousForRawRecord?.externalId === null || previousForRawRecord?.externalId === undefined
+          ? null
+          : `transaction:${sourceId}:external:${previousForRawRecord.externalId}`
+      const previousRawReference =
+        previousForExternalId?.sourceRawRecordId === null ||
+        previousForExternalId?.sourceRawRecordId === undefined
+          ? null
+          : `transaction:${sourceId}:raw:${previousForExternalId.sourceRawRecordId}`
+      const candidateReferences = [
+        rawReference,
+        externalReference,
+        previousExternalReference,
+        previousRawReference,
+      ].filter((reference): reference is string => reference !== null)
+      const existingEntries = yield* executor
+        .select({
+          id: schema.creditLedger.id,
+          reference: schema.creditLedger.reference,
+          replayReservationId: schema.creditLedger.replayReservationId,
+        })
+        .from(schema.creditLedger)
+        .where(inArray(schema.creditLedger.reference, [...new Set(candidateReferences)]))
+        .for("update")
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.findExisting"
+          )
+        )
+      const existingByReference = new Map(
+        existingEntries.map((entry) => [entry.reference, entry] as const)
+      )
+      const existingRaw = rawReference === null ? undefined : existingByReference.get(rawReference)
+      const existingExternal =
+        externalReference === null ? undefined : existingByReference.get(externalReference)
+      const existingForSameExternalRaw =
+        previousRawReference === null ? undefined : existingByReference.get(previousRawReference)
+      const existingForPreviousExternal =
+        previousExternalReference === null
+          ? undefined
+          : existingByReference.get(previousExternalReference)
+      const existing =
+        existingRaw ?? existingExternal ?? existingForSameExternalRaw ?? existingForPreviousExternal
+      if (existing !== undefined) {
+        if (
+          mode === "persist" &&
+          existing.replayReservationId !== null &&
+          existing.replayReservationId !== replayReservationId
+        ) {
+          return yield* Effect.fail(
+            toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
+              error: "Replay transaction credit reservation ownership changed",
+            })
+          )
+        }
+        const migratedReference =
+          existing === existingForPreviousExternal &&
+          existingRaw === undefined &&
+          existingExternal === undefined &&
+          existingForSameExternalRaw === undefined
+            ? (externalReference ?? rawReference ?? existing.reference)
+            : existing.reference
+        const nextReplayReservationId =
+          mode === "persist"
+            ? existing.replayReservationId === replayReservationId
+              ? null
+              : existing.replayReservationId
+            : replayReservationId === null
+              ? existing.replayReservationId
+              : existing.replayReservationId === null
+                ? null
+                : replayReservationId
+        if (
+          migratedReference !== existing.reference ||
+          nextReplayReservationId !== existing.replayReservationId
+        ) {
+          const [updated] = yield* executor
+            .update(schema.creditLedger)
+            .set({
+              reference: migratedReference,
+              replayReservationId: nextReplayReservationId,
+            })
+            .where(
+              existing.replayReservationId === null
+                ? eq(schema.creditLedger.id, existing.id)
+                : and(
+                    eq(schema.creditLedger.id, existing.id),
+                    eq(schema.creditLedger.replayReservationId, existing.replayReservationId)
+                  )
+            )
+            .returning({ id: schema.creditLedger.id })
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceNormalizationRepository.consumeTransactionCredit.updateExisting"
+              )
+            )
+          if (updated === undefined) {
+            return yield* Effect.fail(
+              toSyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
+                error: "Replay transaction credit reservation ownership changed",
+              })
+            )
+          }
+        }
+        return mode === "reserve" &&
+          replayReservationId !== null &&
+          nextReplayReservationId === replayReservationId
+          ? migratedReference
+          : null
+      }
+
+      if (mode === "persist" && replayReservationId !== null) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.missingReservation",
+            error: "Replay transaction credit reservation no longer exists",
+          })
+        )
+      }
+
+      const reference = externalReference ?? rawReference
+      if (reference === null) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
+            error: "Transaction is missing a stable source identity",
+          })
+        )
+      }
+
+      const now = nowDate()
+      const rows = yield* executor
+        .select({
+          balance: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+          expiresAt: schema.creditLedger.expiresAt,
+        })
+        .from(schema.creditLedger)
+        .where(
+          and(
+            eq(schema.creditLedger.userId, account.userId),
+            or(isNull(schema.creditLedger.expiresAt), gt(schema.creditLedger.expiresAt, now))
+          )
+        )
+        .groupBy(schema.creditLedger.expiresAt)
+        .orderBy(asc(schema.creditLedger.expiresAt))
+        .pipe(
+          wrapSyncEngineSqlError(
+            "sourceNormalizationRepository.consumeTransactionCredit.loadBalance"
+          )
+        )
+
+      const buckets = rows.map((row) => ({
+        balance: Number(row.balance),
+        expiresAt: row.expiresAt,
+      }))
+      const totalBalance = buckets.reduce((total, candidate) => total + candidate.balance, 0)
+      if (totalBalance <= 0) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+            error: "Transaction credit balance is exhausted",
+          })
+        )
+      }
+
+      const bucket = buckets.find((candidate) => candidate.balance > 0)
+      if (bucket === undefined) {
+        return yield* Effect.fail(
+          toSyncEngineStorageError({
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+            error: "Transaction credit balance is exhausted",
+          })
+        )
+      }
+
+      yield* executor
+        .insert(schema.creditLedger)
+        .values({
+          userId: account.userId,
+          delta: -1,
+          kind: "transaction_usage",
+          reference,
+          paymentReference: null,
+          replayReservationId,
+          expiresAt: bucket.expiresAt,
+        })
+        .pipe(
+          wrapSyncEngineSqlError("sourceNormalizationRepository.consumeTransactionCredit.insert")
+        )
+
+      return reference
     })
 
   const upsertVenueContext = ({
@@ -2122,6 +2454,15 @@ const make = Effect.gen(function* () {
             executor: tx,
             transaction: params.transaction,
           })
+          yield* consumeTransactionCredit({
+            executor: tx,
+            externalId: persistedTransaction.externalId,
+            mode: "persist",
+            principalId: persistedTransaction.principalId,
+            replayReservationId: params.replayReservationId ?? null,
+            sourceId: persistedTransaction.sourceId,
+            sourceRawRecordId: persistedTransaction.sourceRawRecordId,
+          })
           const persistedVenueContext = yield* upsertVenueContext({
             executor: tx,
             venueContext: {
@@ -2262,7 +2603,66 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSyncEngineStorageError("sourceNormalizationRepository.persistNormalizedArtifacts"))
 
+  const reserveReplayTransactionCredits: SourceNormalizationRepositoryShape["reserveReplayTransactionCredits"] =
+    ({ reservationId, transactions }) =>
+      db
+        .transaction((tx) =>
+          Effect.forEach(
+            transactions,
+            (transaction) =>
+              consumeTransactionCredit({
+                executor: tx,
+                externalId: transaction.externalId,
+                mode: "reserve",
+                principalId: transaction.principalId,
+                replayReservationId: reservationId,
+                sourceId: transaction.sourceId,
+                sourceRawRecordId: transaction.sourceRawRecordId,
+              }),
+            { concurrency: 1 }
+          ).pipe(
+            Effect.map((references) =>
+              references.flatMap((reference, index) =>
+                reference === null
+                  ? []
+                  : [
+                      {
+                        reference,
+                        sourceRawRecordId: transactions[index]?.sourceRawRecordId ?? null,
+                      },
+                    ]
+              )
+            )
+          )
+        )
+        .pipe(
+          wrapSyncEngineStorageError(
+            "sourceNormalizationRepository.reserveReplayTransactionCredits"
+          )
+        )
+
+  const releaseReplayTransactionCredits: SourceNormalizationRepositoryShape["releaseReplayTransactionCredits"] =
+    ({ references, reservationId }) =>
+      references.length === 0
+        ? Effect.void
+        : db
+            .delete(schema.creditLedger)
+            .where(
+              and(
+                eq(schema.creditLedger.kind, "transaction_usage"),
+                eq(schema.creditLedger.replayReservationId, reservationId),
+                inArray(schema.creditLedger.reference, references)
+              )
+            )
+            .pipe(
+              wrapSyncEngineStorageError(
+                "sourceNormalizationRepository.releaseReplayTransactionCredits"
+              )
+            )
+
   return SourceNormalizationRepository.of({
+    reserveReplayTransactionCredits,
+    releaseReplayTransactionCredits,
     persistNormalizedArtifacts,
   } satisfies SourceNormalizationRepositoryShape)
 })

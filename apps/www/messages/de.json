@@ -25,7 +25,37 @@
   },
   "app": {
     "title": "TaxMaxi App",
-    "description": "Du bist angemeldet. Der App-Workspace entsteht hier."
+    "description": "Du bist angemeldet. Der App-Workspace entsteht hier.",
+    "billing": {
+      "dashboard": "Übersicht",
+      "eyebrow": "Abrechnung",
+      "title": "Tarif und Transaktionsguthaben",
+      "description": "Stripe verarbeitet Zahlungen und Rechnungen. TaxMaxi zeigt das verfügbare Guthaben deines Kontos.",
+      "annual": {
+        "title": "TaxMaxi Jahresabo",
+        "description": "10.000 Transaktionsguthaben mit jährlicher Verlängerung.",
+        "priceSuffix": "/ Jahr, {taxLabel}",
+        "manage": "Abo verwalten",
+        "subscribe": "Für {price} abonnieren"
+      },
+      "topUp": {
+        "title": "Zusätzliches Transaktionspaket",
+        "description": "1.000 zusätzliche Transaktionsguthaben. Kein automatischer Kauf.",
+        "buy": "1.000 Guthaben kaufen",
+        "eligibility": "Stripe prüft beim Fortfahren, ob ein aktives Jahresabo besteht."
+      },
+      "availableCredits": "Verfügbares Guthaben",
+      "priceUnavailable": "Preis nicht verfügbar",
+      "openingStripe": "Stripe wird geöffnet…",
+      "tax": {
+        "included": "inklusive Steuern",
+        "exclusive": "zzgl. anfallender Steuern",
+        "checkout": "Steuern werden beim Bezahlen angezeigt"
+      },
+      "errors": {
+        "unavailable": "Die Abrechnung ist vorübergehend nicht verfügbar."
+      }
+    }
   },
   "assetCatalog": {
     "title": "Asset Katalog",
@@ -209,136 +239,77 @@
   },
   "pricing": {
     "eyebrow": "Preise",
-    "title": "Zahle pro Transaktion. Skaliere auf Millionen.",
-    "description": "Du kaufst Klassifizierungs-Kapazität. Die Stufe ändert nur deinen Preis pro 1.000 Transaktionen.",
-    "billingNote": "Jährliche Abrechnung mit monatlichen Kapazitäts-Commitments. Zusätzliche Nutzung bleibt linear zum Tarif deiner Stufe.",
-    "includedLabel": "So funktioniert die Abrechnung",
-    "included": {
-      "unit": "Jede klassifizierte Transaktion entspricht genau einer Preiseinheit.",
-      "minimum": "Dein monatlicher Mindestumsatz kauft ein klares Transaktions-Kontingent.",
-      "rate": "Die Stufen ändern nur den Preis pro 1.000 klassifizierte Transaktionen.",
-      "autoscale": "Zusätzliche Nutzung skaliert automatisch zum gleichen Tarif statt in starren Blöcken.",
-      "sharedCapabilities": "API-Zugriff, Audit Trail, KI-Erklärungen und Workspaces sind in allen Stufen enthalten.",
-      "enterpriseSupport": "Enterprise ergänzt Governance, Beschaffung und Rollout-Support, nicht ein anderes Preismodell."
-    },
-    "tiers": {
-      "build": {
-        "name": "Build",
-        "audience": "Teams, die ihren ersten Steuer-Workflow validieren",
-        "price": "€5,90",
-        "priceSuffix": "pro 1.000 klassifizierte Transaktionen",
-        "description": "€590 Mindestumsatz pro Monat kaufen 100.000 klassifizierte Transaktionen und machen die Stückkosten von Beginn an klar.",
-        "cta": "Build besprechen",
-        "stats": {
-          "monthlyMinimum": {
-            "label": "Monatlicher Mindestumsatz",
-            "value": "€590"
-          },
-          "includedCapacity": {
-            "label": "Inkludierte Kapazität",
-            "value": "100.000 Tx / Monat"
-          },
-          "additionalUsage": {
-            "label": "Zusätzliche Nutzung",
-            "value": "€5,90 / 1.000 Tx"
-          }
-        },
-        "features": {
-          "one": "Onboarding mit TaxMaxi Gründer",
-          "two": "Rechtssystemspezifische Logik + Quellenangaben",
-          "three": "Exportierbare Memos und Review-Historie",
-          "four": "E-Mail-Support"
-        }
-      },
-      "scale": {
-        "name": "Scale",
-        "audience": "Firmen, die Krypto-Steuer als Produkt-Infrastruktur betreiben",
-        "price": "€1,95",
-        "priceSuffix": "pro 1.000 klassifizierte Transaktionen",
-        "description": "€1.950 Mindestumsatz pro Monat kaufen 1.000.000 klassifizierte Transaktionen für Teams, die Steuer-Workflows produktiv betreiben.",
-        "cta": "Scale besprechen",
-        "stats": {
-          "monthlyMinimum": {
-            "label": "Monatlicher Mindestumsatz",
-            "value": "€1.950"
-          },
-          "includedCapacity": {
-            "label": "Inkludierte Kapazität",
-            "value": "1.000.000 Tx / Monat"
-          },
-          "additionalUsage": {
-            "label": "Zusätzliche Nutzung",
-            "value": "€1,95 / 1.000 Tx"
-          }
-        },
-        "features": {
-          "one": "Priorisierter Support",
-          "two": "Geteilte Review-Queues + Playbooks",
-          "three": "Sandbox- und Produktionsumgebungen",
-          "four": "Webhook- und Integrationssupport"
-        },
-        "badge": "Am beliebtesten"
-      },
-      "enterprise": {
-        "name": "Enterprise",
-        "audience": "Börsen, Banken und regulierte Plattformen",
-        "price": "Individuell",
-        "priceSuffix": "verhandeltes Nutzungsmodell",
-        "description": "Für Institutionen mit Governance, Rollout-Support und verhandelten Stückkosten über Teams oder Märkte hinweg.",
-        "cta": "Enterprise planen",
-        "stats": {
-          "monthlyMinimum": {
-            "label": "Monatlicher Mindestumsatz",
-            "value": "Verbindliches Nutzungsvolumen"
-          },
-          "includedCapacity": {
-            "label": "Inkludierte Kapazität",
-            "value": "Individuell"
-          },
-          "additionalUsage": {
-            "label": "Zusätzliche Nutzung",
-            "value": "Vorab verhandelter Tarif"
-          }
-        },
-        "features": {
-          "one": "SSO / SCIM",
-          "two": "SLA + dediziertes Onboarding",
-          "three": "Individuelle Konnektoren und Workflows",
-          "four": "EU-Datenresidenz und Private-Deployment-Optionen"
-        }
+    "title": "Für einzelne Steuerpflichtige oder eine ganze Kanzlei.",
+    "description": "Privatpersonen können direkt starten. Steuerkanzleien können den Professional-Umfang in einer Design-Partnerschaft erproben. Große Gesellschaften beginnen mit einem klar abgegrenzten Pilotprojekt.",
+    "individual": {
+      "name": "Privatperson",
+      "badge": "Self-Service",
+      "description": "Deutsche Krypto-Steuerberechnungen und Prüfwerkzeuge für eine steuerpflichtige Person.",
+      "price": "159 €",
+      "priceSuffix": "pro Jahr, inklusive MwSt.",
+      "cta": "Als Privatperson starten",
+      "note": "Verlängert sich jährlich. Vor der nächsten Verlängerung kündbar.",
+      "features": {
+        "transactions": "10.000 verarbeitete Transaktionen pro Jahr",
+        "api": "Zugriff auf TaxMaxi API und CLI",
+        "reports": "Deutsche Steuerberechnungen und Berichte",
+        "auditTrail": "Prüfverlauf und Quellenangaben"
       }
     },
-    "overages": {
-      "title": "Lineare Nutzungspreise",
-      "description": "Die Basiseinheit sind klassifizierte Transaktionen. Mindestumsätze kaufen Kapazität, zusätzliches Volumen bleibt linear zum gleichen Preis pro 1.000.",
-      "label": "Nutzungsposition",
-      "rows": {
-        "effectiveRate": {
-          "label": "Effektiver Tarif",
-          "build": "€5,90 / 1.000 Tx",
-          "scale": "€1,95 / 1.000 Tx",
-          "enterprise": "Individuell verhandelter Tarif"
-        },
-        "monthlyMinimum": {
-          "label": "Monatlicher Mindestumsatz",
-          "build": "€590",
-          "scale": "€1.950",
-          "enterprise": "Jährliches Commitment"
-        },
-        "includedCapacity": {
-          "label": "Inkludierte Kapazität",
-          "build": "100.000 Tx / Monat",
-          "scale": "1.000.000 Tx / Monat",
-          "enterprise": "Individuell"
-        },
-        "autoscaling": {
-          "label": "Automatische Skalierung",
-          "build": "Weiter zum Stufentarif",
-          "scale": "Weiter zum Stufentarif",
-          "enterprise": "Vorab definierte Skalierung"
-        }
+    "professional": {
+      "name": "Professional",
+      "badge": "Steuerkanzleien",
+      "description": "Eine Design-Partner-Vorschau für Kanzleien, die Abläufe für deutsche Krypto-Steuermandate erproben.",
+      "price": "1.590 €",
+      "priceSuffix": "netto pro Jahr, zzgl. MwSt. soweit anwendbar",
+      "cta": "Professional-Zugang besprechen",
+      "note": "Einführungsangebot als klar abgegrenzte Design-Partnerschaft.",
+      "features": {
+        "users": "Vorgesehener Startumfang für bis zu 3 professionelle Nutzer",
+        "matters": "Workflow-Entwurf für bis zu 10 Mandate",
+        "transactions": "Angestrebtes Kontingent von 100.000 gemeinsam nutzbaren Transaktionen pro Jahr",
+        "support": "API-Zugang, exportierbare Nachweise und E-Mail-Support"
       }
-    }
+    },
+    "enterprise": {
+      "name": "Enterprise",
+      "badge": "Prüfungsgesellschaften",
+      "description": "Ein bezahltes Pilotprojekt für ein vereinbartes Team, einen Workflow, Datenumfang und Nachweisstandard.",
+      "price": "5.000 €",
+      "priceSuffix": "netto pro abgegrenztem Pilotprojekt",
+      "cta": "Enterprise-Pilot planen",
+      "note": "Erfolgreiche Piloten können in Jahresverträge ab 15.000 € netto übergehen.",
+      "features": {
+        "scope": "Ein Team und ein vereinbarter Workflow",
+        "procurement": "Beschaffung per Rechnung und Banküberweisung",
+        "security": "Prüfung von Sicherheit und Datenverarbeitung",
+        "contract": "Individuelle Nutzer, Integrationen, Support und Volumen"
+      }
+    },
+    "addOns": {
+      "title": "Kontingent, das du bewusst hinzubuchst",
+      "individual": {
+        "name": "Transaktionspaket für Privatpersonen",
+        "description": "Für ein aktives Privatpersonen-Abo.",
+        "price": "20 €",
+        "suffix": "inklusive MwSt. pro weitere 1.000 Transaktionen"
+      },
+      "matter": {
+        "name": "Zusätzliches Mandat",
+        "description": "Ergänzt Professional um ein Mandat mit 10.000 Transaktionen.",
+        "price": "149 €",
+        "suffix": "netto pro Vertragsjahr, zzgl. MwSt. soweit anwendbar"
+      },
+      "professional": {
+        "name": "Professional-Transaktionspaket",
+        "description": "Gemeinsam nutzbar in einem aktiven Professional-Workspace.",
+        "price": "200 €",
+        "suffix": "netto pro weitere 20.000 Transaktionen"
+      }
+    },
+    "taxNote": "Preise für Privatpersonen enthalten MwSt. Geschäftskundenpreise sind netto und verstehen sich zzgl. MwSt.",
+    "taxNoteLive": "Steuern werden bei jedem Preis oben ausgewiesen und im Checkout bestätigt.",
+    "explanation": "Es gibt keine automatischen Mehrkosten. Enthaltenes Kontingent erneuert sich mit dem Jahresvertrag; Erweiterungen werden separat gekauft. Professional- und Enterprise-Zugang bleibt auf die beim Onboarding vereinbarten Produktfunktionen begrenzt."
   },
   "useCases": {
     "eyebrow": "Anwendungsfälle",

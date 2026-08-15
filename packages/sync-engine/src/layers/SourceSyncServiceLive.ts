@@ -93,6 +93,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const message = "Recovered stale source sync job after a previous execution stopped."
       const completedAt = nowDate()
+      const staleBefore = new Date(completedAt.getTime() - ACTIVE_SYNC_JOB_STALE_AFTER_MILLIS)
 
       yield* Effect.logWarning(
         {
@@ -108,6 +109,7 @@ const make = Effect.gen(function* () {
         .recoverStaleActiveJob({
           sourceId,
           jobId,
+          staleBefore,
           message,
           completedAt,
         })

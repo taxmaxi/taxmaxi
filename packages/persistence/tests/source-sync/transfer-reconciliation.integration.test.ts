@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, ne } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import {
   SourceNormalizationRepository,
@@ -473,10 +473,6 @@ describe("TransferReconciliationServiceLive", () => {
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
       })
     )
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("keeps split evidence-only transfers out of inventory and reconciliation", async () => {

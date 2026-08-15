@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -26,10 +26,6 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
 
 describe("ProviderAssetRepositoryLive", () => {
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
-  })
-
   describe("current schema", () => {
     beforeEach(async () => {
       await Effect.runPromise(context.recreateTestDatabase())
