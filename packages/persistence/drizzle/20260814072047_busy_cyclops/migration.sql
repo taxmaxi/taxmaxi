@@ -1,1 +1,0 @@
-ALTER TABLE "billing_accounts" ADD COLUMN "annual_checkout_price_id" text;
