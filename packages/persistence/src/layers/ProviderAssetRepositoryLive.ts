@@ -451,36 +451,74 @@ const make = Effect.gen(function* () {
               sourceRowsAfterLock,
               ({ principalId, sourceId }) =>
                 Effect.gen(function* () {
-                  const [activeJob] = yield* tx
-                    .update(schema.processingJobs)
-                    .set({ followUpMode: "replay", updatedAt: now })
-                    .where(
-                      and(
-                        eq(schema.processingJobs.sourceId, sourceId),
-                        eq(schema.processingJobs.principalId, principalId),
-                        inArray(schema.processingJobs.status, ["pending", "processing"])
+                  const requestReplay = (
+                    attemptsRemaining: number
+                  ): Effect.Effect<void, SyncEngineStorageError> =>
+                    Effect.gen(function* () {
+                      const [activeJob] = yield* tx
+                        .update(schema.processingJobs)
+                        .set({ followUpMode: "replay", updatedAt: now })
+                        .where(
+                          and(
+                            eq(schema.processingJobs.sourceId, sourceId),
+                            eq(schema.processingJobs.principalId, principalId),
+                            inArray(schema.processingJobs.status, ["pending", "processing"])
+                          )
+                        )
+                        .returning({ id: schema.processingJobs.id })
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.requestActiveReplay"
+                          )
+                        )
+
+                      if (activeJob !== undefined) {
+                        return
+                      }
+
+                      const [createdJob] = yield* tx
+                        .insert(schema.processingJobs)
+                        .values({
+                          sourceId,
+                          principalId,
+                          mode: "replay",
+                          status: "pending",
+                          attemptCount: 0,
+                          maxAttempts: 3,
+                          progressDetails: { mode: "replay", reason: "asset_mapping_approved" },
+                          createdAt: now,
+                          updatedAt: now,
+                        })
+                        .onConflictDoNothing()
+                        .returning({ id: schema.processingJobs.id })
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.createReplay"
+                          )
+                        )
+
+                      if (createdJob !== undefined) {
+                        return
+                      }
+
+                      if (attemptsRemaining > 1) {
+                        return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
+                      }
+
+                      return yield* Effect.fail(
+                        new SyncEngineStorageError({
+                          operation:
+                            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.requestReplay",
+                          cause: {
+                            principalId,
+                            sourceId,
+                            message: "Active replay owner changed repeatedly.",
+                          },
+                        })
                       )
-                    )
-                    .returning({ id: schema.processingJobs.id })
-
-                  if (activeJob !== undefined) {
-                    return
-                  }
-
-                  yield* tx
-                    .insert(schema.processingJobs)
-                    .values({
-                      sourceId,
-                      principalId,
-                      mode: "replay",
-                      status: "pending",
-                      attemptCount: 0,
-                      maxAttempts: 3,
-                      progressDetails: { mode: "replay", reason: "asset_mapping_approved" },
-                      createdAt: now,
-                      updatedAt: now,
                     })
-                    .onConflictDoNothing()
+
+                  yield* requestReplay(3)
                 }),
               { discard: true }
             )

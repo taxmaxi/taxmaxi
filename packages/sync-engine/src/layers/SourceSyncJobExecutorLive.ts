@@ -467,7 +467,7 @@ const make = Effect.gen(function* () {
         principalId,
       })
 
-      return yield* Effect.reduce(
+      const reconciliationSummary = yield* Effect.reduce(
         principalSources,
         {
           evaluatedProviderTransfers: 0,
@@ -495,6 +495,24 @@ const make = Effect.gen(function* () {
                   kind: "client",
                 })
               )
+            yield* heartbeatSourceSyncJob({ jobId, workerId })
+
+            return {
+              evaluatedProviderTransfers:
+                summary.evaluatedProviderTransfers + reconciliation.evaluatedProviderTransfers,
+              pending: summary.pending + reconciliation.pending,
+              needsReview: summary.needsReview + reconciliation.needsReview,
+              autoApplied: summary.autoApplied + reconciliation.autoApplied,
+              canonicalizedPairs: summary.canonicalizedPairs,
+            } satisfies PrincipalReconciliationSummary
+          })
+      )
+
+      return yield* Effect.reduce(
+        principalSources,
+        reconciliationSummary,
+        (summary, candidateSource) =>
+          Effect.gen(function* () {
             const canonicalization = yield* transferReconciliationService
               .applyDeterministicInternalTransferCanonicalization({
                 principalId,
@@ -516,13 +534,9 @@ const make = Effect.gen(function* () {
             yield* heartbeatSourceSyncJob({ jobId, workerId })
 
             return {
-              evaluatedProviderTransfers:
-                summary.evaluatedProviderTransfers + reconciliation.evaluatedProviderTransfers,
-              pending: summary.pending + reconciliation.pending,
-              needsReview: summary.needsReview + reconciliation.needsReview,
-              autoApplied: summary.autoApplied + reconciliation.autoApplied,
+              ...summary,
               canonicalizedPairs: summary.canonicalizedPairs + canonicalization.canonicalizedPairs,
-            } satisfies PrincipalReconciliationSummary
+            }
           })
       )
     })

@@ -63,12 +63,6 @@ export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
 
 const normalize = (value: string) => value.trim().toLowerCase()
-const MissingHeliusDasPayload = Schema.Struct({
-  source: Schema.Literal("helius_das_get_asset_batch_missing"),
-})
-
-const hasMissingHeliusDasMetadata = (providerAsset: ProviderAssetRecord): boolean =>
-  Schema.is(MissingHeliusDasPayload)(providerAsset.rawProviderPayload)
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
@@ -289,14 +283,15 @@ const matchesObservedRepresentation = ({
   readonly observed: ProviderAssetObservedRepresentationRecord
 }) =>
   normalize(representation.blockchainName) === normalize(observed.blockchainName) &&
-  (observed.representationType === null ||
-    representation.representationType === observed.representationType) &&
+  observed.representationType !== null &&
+  representation.representationType === observed.representationType &&
   (observed.contractAddress === null
     ? representation.contractAddress === null
     : representation.contractAddress !== null &&
       normalize(representation.contractAddress) === normalize(observed.contractAddress)) &&
   representation.mintAddress === observed.mintAddress &&
-  (observed.decimals === null || representation.decimals === observed.decimals)
+  observed.decimals !== null &&
+  representation.decimals === observed.decimals
 
 const validateManualRepresentationSelection = ({
   providerAsset,
@@ -364,6 +359,10 @@ export const validateManualRepresentationIdentity = ({
     )
   }
 
+  if (observedRepresentations.length > 0) {
+    return Effect.void
+  }
+
   if (isNativeOnchainObservation(providerAsset)) {
     return normalize(representation.blockchainName) === "solana" &&
       representation.representationType === "native"
@@ -380,12 +379,14 @@ export const validateManualRepresentationIdentity = ({
 
   const providerType =
     providerAsset.providerType === null ? "" : normalize(providerAsset.providerType)
-  const expectedType = providerType === "nft" ? "nft" : "token"
+  const expectedType =
+    providerType === "nft" ? "nft" : providerType === "spl-token" ? "token" : null
   return normalize(representation.blockchainName) === "solana" &&
-    (hasMissingHeliusDasMetadata(providerAsset) ||
-      representation.representationType === expectedType) &&
+    expectedType !== null &&
+    representation.representationType === expectedType &&
     representation.mintAddress === observedTokenId &&
-    (providerAsset.exponent === null || representation.decimals === providerAsset.exponent)
+    providerAsset.exponent !== null &&
+    representation.decimals === providerAsset.exponent
     ? Effect.void
     : Effect.fail(
         makeBadRequest("Selected representation does not match the observed Solana mint.")
@@ -884,9 +885,79 @@ const make = Effect.gen(function* () {
           observedRepresentations,
         })
 
+        if (
+          providerAssetReview.mapping?.mappingStatus === "pending_review" &&
+          observedRepresentations.length === 0 &&
+          !isNativeOnchainObservation(providerAssetReview.providerAsset) &&
+          observedProviderTokenId(providerAssetReview.providerAsset) === null
+        ) {
+          return yield* Effect.fail(
+            makeBadRequest(
+              "Provider assets without exact on-chain identity require a reviewed canonical target."
+            )
+          )
+        }
+
         const resolved = yield* resolveCoinGeckoDrafts({
           providerAsset: providerAssetReview.providerAsset,
         })
+        const existingMapping = providerAssetReview.mapping
+        if (existingMapping?.mappingStatus === "approved") {
+          const existingAsset = yield* assetRepository
+            .findAssetByCoinGeckoId({ coingeckoCoinId: resolved.asset.coingeckoCoinId ?? "" })
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new AssetCanonicalizationInternalError({
+                    message: "Failed to validate the approved CoinGecko target.",
+                  })
+              )
+            )
+          const selectsRepresentation =
+            representationIdForProviderObservation({
+              providerAsset: providerAssetReview.providerAsset,
+              representationId: "resolved-representation",
+              observedRepresentations,
+            }) !== null
+          const targetAssetMatches =
+            existingMapping.mappingKind === "asset" &&
+            Option.isSome(existingAsset) &&
+            existingMapping.canonicalAssetId === existingAsset.value.id
+          const representationPresenceMatches = selectsRepresentation
+            ? existingMapping.assetRepresentationId !== null
+            : existingMapping.assetRepresentationId === null
+
+          let representationMatches = !selectsRepresentation
+          if (selectsRepresentation && existingMapping.assetRepresentationId !== null) {
+            const existingRepresentation = yield* assetRepository
+              .findRepresentationById({
+                assetRepresentationId: existingMapping.assetRepresentationId,
+              })
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new AssetCanonicalizationInternalError({
+                      message: "Failed to validate the approved CoinGecko representation.",
+                    })
+                )
+              )
+            representationMatches =
+              Option.isSome(existingRepresentation) &&
+              normalize(existingRepresentation.value.blockchainName) ===
+                normalize(resolved.blockchain.name) &&
+              existingRepresentation.value.representationType === resolved.representation.type &&
+              normalize(existingRepresentation.value.contractAddress ?? "") ===
+                normalize(resolved.representation.contractAddress ?? "") &&
+              existingRepresentation.value.mintAddress === resolved.representation.mintAddress &&
+              existingRepresentation.value.decimals === resolved.representation.decimals
+          }
+
+          if (!targetAssetMatches || !representationPresenceMatches || !representationMatches) {
+            return yield* Effect.fail(
+              makeBadRequest("Provider asset mapping is already approved for a different target.")
+            )
+          }
+        }
         const canonicalAsset = yield* assetRepository
           .upsertEconomicAssetRepresentation({
             blockchain: resolved.blockchain,

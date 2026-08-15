@@ -16,6 +16,7 @@ type FetchInput = Parameters<typeof globalThis.fetch>[0]
 type FetchInit = NonNullable<Parameters<typeof globalThis.fetch>[1]>
 
 type CapturedRequest = {
+  readonly body?: string
   readonly credentials: string | undefined
   readonly headers: TaxMaxiHeaders
   readonly url: string
@@ -244,6 +245,24 @@ const assetCanonicalizationResponseBody = JSON.stringify({
     platformName: "Cardano",
     contractAddress: null,
   },
+})
+
+const approvedProviderAssetResponseBody = JSON.stringify({
+  id: "00000000-0000-4000-8000-000000000009",
+  provider: "coinbase",
+  providerAssetId: "63062039-7afb-56ff-8e19-5e3215dc404a",
+  naturalKey: null,
+  currencyCode: "ADA",
+  name: "Cardano",
+  exponent: 6,
+  providerType: "crypto",
+  mappingKind: "asset",
+  canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+  assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+  canonicalFiatCurrency: null,
+  mappingStatus: "approved",
+  reviewerNotes: "Identity checked.",
+  sourceNotes: "Approved from exact representation evidence.",
 })
 
 const emptySourceTransactionsResponseBody = JSON.stringify({
@@ -734,12 +753,16 @@ describe("TaxMaxi Promise client", () => {
       unresolvedTransferReconciliationsResponseBody,
       unresolvedTransferReconciliationsResponseBody,
       assetCanonicalizationResponseBody,
+      approvedProviderAssetResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
       apiKey: "tm_assets",
       baseUrl: "https://sdk.example.test",
       fetch: async (input, init) => {
+        const requestBody =
+          init?.body === undefined ? undefined : await new Response(init.body).text()
         capturedRequests.push({
+          body: requestBody === "" ? undefined : requestBody,
           credentials: init?.credentials === undefined ? undefined : String(init.credentials),
           headers: toHeaderRecord(init?.headers),
           url: getRequestUrl(input),
@@ -803,6 +826,14 @@ describe("TaxMaxi Promise client", () => {
         mappingStatus: "approved",
       },
     })
+    await expect(
+      taxmaxi.assets.approveProviderAsset({
+        id: providerAssetId,
+        canonicalAssetId: "00000000-0000-4000-8000-000000000011",
+        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+        reviewerNotes: "Identity checked.",
+      })
+    ).resolves.toMatchObject({ mappingStatus: "approved" })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
@@ -816,6 +847,14 @@ describe("TaxMaxi Promise client", () => {
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
+      }),
+      expect.objectContaining({
+        body: JSON.stringify({
+          canonicalAssetId: "00000000-0000-4000-8000-000000000011",
+          assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+          reviewerNotes: "Identity checked.",
+        }),
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve",
       }),
     ])
   })

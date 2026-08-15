@@ -113,6 +113,39 @@ describe("AssetCanonicalizationService", () => {
     expect(wrongDecimals._tag).toBe("Left")
   })
 
+  it.each([
+    ["blockchain", { blockchainName: "solana" }],
+    ["contract", { contractAddress: "0x1234" }],
+    ["representation type", { representationType: "nft" as const }],
+    ["missing representation type", { representationType: null }],
+    ["missing decimals", { decimals: null }],
+  ])("rejects %s evidence that does not prove the selected representation", (_, observed) => {
+    const result = Effect.runSync(
+      validateManualRepresentationIdentity({
+        providerAsset: makeProviderAsset(),
+        representation: {
+          blockchainName: "ethereum",
+          representationType: "token",
+          contractAddress: "0xabcdef",
+          mintAddress: null,
+          decimals: 6,
+        },
+        observedRepresentations: [
+          {
+            blockchainName: "ethereum",
+            representationType: "token",
+            contractAddress: "0xABCDEF",
+            mintAddress: null,
+            decimals: 6,
+            ...observed,
+          },
+        ],
+      }).pipe(Effect.either)
+    )
+
+    expect(result._tag).toBe("Left")
+  })
+
   it("rejects a fungible economic asset paired with an NFT representation", () => {
     const result = Effect.runSync(
       validateEconomicAssetType({

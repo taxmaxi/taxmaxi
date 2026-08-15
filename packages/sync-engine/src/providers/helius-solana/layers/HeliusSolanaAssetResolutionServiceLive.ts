@@ -705,17 +705,20 @@ const make = Effect.gen(function* () {
         Option.filter(
           representation,
           (candidate) =>
-            (observedType === null || candidate.representationType === observedType) &&
-            (providerAsset.exponent === null || candidate.decimals === providerAsset.exponent) &&
+            observedType !== null &&
+            candidate.representationType === observedType &&
+            providerAsset.exponent !== null &&
+            candidate.decimals === providerAsset.exponent &&
             observations.every(
               (observation) =>
                 observation.blockchainName.toLowerCase() ===
                   candidate.blockchainName.toLowerCase() &&
-                (observation.representationType === null ||
-                  observation.representationType === candidate.representationType) &&
+                observation.representationType !== null &&
+                observation.representationType === candidate.representationType &&
                 observation.contractAddress === candidate.contractAddress &&
                 observation.mintAddress === candidate.mintAddress &&
-                (observation.decimals === null || observation.decimals === candidate.decimals)
+                observation.decimals !== null &&
+                observation.decimals === candidate.decimals
             )
         )
       ),

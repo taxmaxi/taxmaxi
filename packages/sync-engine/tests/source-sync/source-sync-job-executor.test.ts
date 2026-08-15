@@ -444,7 +444,7 @@ describe("SourceSyncJobExecutor", () => {
         Effect.provide(
           makeExecutorLayer({
             mode: "sync",
-            principalSources: [source, destinationSource],
+            principalSources: [destinationSource, source],
             events,
           })
         )
@@ -452,10 +452,12 @@ describe("SourceSyncJobExecutor", () => {
     )
 
     expect(result.status).toBe("completed")
-    expect(events).toContain("reconcile-source:source-1")
-    expect(events).toContain("canonicalize-source:source-1")
-    expect(events).toContain("reconcile-source:source-2")
-    expect(events).toContain("canonicalize-source:source-2")
+    expect(events.filter((event) => event.includes("-source:"))).toEqual([
+      "reconcile-source:source-2",
+      "reconcile-source:source-1",
+      "canonicalize-source:source-2",
+      "canonicalize-source:source-1",
+    ])
   })
 
   it("runs a non-Coinbase provider module through fetch and normalization hooks", async () => {

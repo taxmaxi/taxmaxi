@@ -3145,7 +3145,7 @@ describe("TransferReconciliationServiceLive", () => {
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
         assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
         originalAmount: expect.stringContaining("0.20000000"),
-        remainingAmount: expect.stringContaining("0.08000000"),
+        remainingAmount: expect.stringContaining("0.10000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
       }),
@@ -3274,13 +3274,7 @@ describe("TransferReconciliationServiceLive", () => {
       reconciliationStatus: "unmatched",
       taxTreatment: "pending_review",
     })
-    expect(state.allocations).toEqual([
-      expect.objectContaining({
-        inventoryMovementId: destinationRecoveryFixture.feeMovementId,
-        fifoLotId: movedLots[0]?.id,
-        matchedAmount: expect.stringContaining("0.02000000"),
-      }),
-    ])
+    expect(state.allocations).toEqual([])
     expect(state.canonicalMovementAllocations).toHaveLength(0)
     expect(state.redundantPrincipalMovement).toEqual({ reconciliationStatus: "unmatched" })
     expect(state.redundantPrincipalMovementAllocations).toHaveLength(0)
@@ -3309,8 +3303,8 @@ describe("TransferReconciliationServiceLive", () => {
           transactionId: firstReceipt.transactionId,
           reviewStatus: "needs_review",
           categorizationReason:
-            "provider_asset_mapping: Keep this unresolved provider review.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
-          matchedLayer: "provider_asset_mapping,transfer_reconciliation",
+            "provider_asset_mapping: Keep this unresolved provider review.\nfifo_inventory: Review required because destination fee inventory is incomplete.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+          matchedLayer: "provider_asset_mapping,fifo_inventory,transfer_reconciliation",
           needsReview: true,
         }),
       ])
@@ -3331,11 +3325,11 @@ describe("TransferReconciliationServiceLive", () => {
       expect.arrayContaining([
         expect.objectContaining({
           fifoLotId: movedLots[0]?.id,
-          matchedAmount: expect.stringContaining("0.08000000"),
+          matchedAmount: expect.stringContaining("0.10000000"),
         }),
         expect.objectContaining({
           fifoLotId: movedLots[1]?.id,
-          matchedAmount: expect.stringContaining("0.07000000"),
+          matchedAmount: expect.stringContaining("0.05000000"),
         }),
         expect.objectContaining({
           disposalLegId: destinationRecoveryFixture.laterDisposalLegId,
