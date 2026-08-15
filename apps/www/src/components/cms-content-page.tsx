@@ -6,6 +6,7 @@ import { LandingButton } from "#/components/landing-button"
 import { Logo } from "#/components/logo"
 import { PageShell } from "#/components/page-shell"
 import {
+  formatCmsDate,
   getCmsPagePath,
   type CmsContentPage as CmsContentPageModel,
   type PayloadLocale,
@@ -15,6 +16,7 @@ import { localizeHref } from "#/paraglide/runtime"
 const labels = {
   en: {
     article: "Article",
+    author: "By",
     effective: "Effective from",
     faq: "Frequently asked questions",
     lastUpdated: "Last updated",
@@ -24,6 +26,7 @@ const labels = {
   },
   de: {
     article: "Artikel",
+    author: "Von",
     effective: "Gültig ab",
     faq: "Häufig gestellte Fragen",
     lastUpdated: "Zuletzt aktualisiert",
@@ -35,7 +38,6 @@ const labels = {
 
 export function CmsContentPage({ page }: { readonly page: CmsContentPageModel }) {
   const text = labels[page.locale]
-  const dateLocale = page.locale === "de" ? "de-DE" : "en-US"
 
   return (
     <PageShell
@@ -74,7 +76,7 @@ export function CmsContentPage({ page }: { readonly page: CmsContentPageModel })
                   {page.excerpt}
                 </p>
               ) : null}
-              <ContentDates dateLocale={dateLocale} page={page} />
+              <ContentDates page={page} />
               <ContentActions page={page} />
             </header>
 
@@ -185,13 +187,7 @@ function CmsHeader({ page }: { readonly page: CmsContentPageModel }) {
   )
 }
 
-function ContentDates({
-  dateLocale,
-  page,
-}: {
-  readonly dateLocale: string
-  readonly page: CmsContentPageModel
-}) {
+function ContentDates({ page }: { readonly page: CmsContentPageModel }) {
   const text = labels[page.locale]
   const items = [
     page.publishedAt
@@ -210,15 +206,15 @@ function ContentDates({
         return (
           <span className="inline-flex items-center gap-2" key={item.label}>
             <Icon aria-hidden="true" className="size-4" />
-            {item.label}{" "}
-            <time dateTime={item.value}>
-              {new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium" }).format(
-                new Date(item.value)
-              )}
-            </time>
+            {item.label} <time dateTime={item.value}>{formatCmsDate(item.value, page.locale)}</time>
           </span>
         )
       })}
+      {page.author ? (
+        <span>
+          {text.author} {page.author}
+        </span>
+      ) : null}
       {page.reviewedBy ? (
         <span>
           {text.reviewedBy} {page.reviewedBy}

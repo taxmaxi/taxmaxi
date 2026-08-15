@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   createPayloadCollectionUrl,
+  formatCmsDate,
   getCmsPagePath,
   getCmsPageUrl,
   lexicalToPlainText,
@@ -59,5 +60,10 @@ describe("Payload content integration", () => {
     }
 
     expect(lexicalToPlainText(document)).toBe("Hold assets for one year.")
+  })
+
+  it("formats CMS dates in UTC for stable server and client output", () => {
+    expect(formatCmsDate("2026-08-14T00:30:00.000Z", "en")).toBe("Aug 14, 2026")
+    expect(formatCmsDate("2026-08-14T00:30:00.000Z", "de")).toBe("14.08.2026")
   })
 })

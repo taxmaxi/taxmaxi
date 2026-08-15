@@ -163,6 +163,7 @@ export interface CmsContentPage {
   readonly publishedAt?: string
   readonly effectiveFrom?: string
   readonly updatedAt: string
+  readonly author?: string
   readonly reviewedBy?: string
   readonly category?: string
   readonly image?: CmsImage
@@ -258,6 +259,13 @@ export function getCmsPageUrl({
 
 export function lexicalToPlainText(document: LexicalDocument): string {
   return nodeToPlainText(document.root).replace(/\s+/g, " ").trim()
+}
+
+export function formatCmsDate(value: string, locale: PayloadLocale): string {
+  return new Intl.DateTimeFormat(locale === "de" ? "de-DE" : "en-US", {
+    dateStyle: "medium",
+    timeZone: "UTC",
+  }).format(new Date(value))
 }
 
 function nodeToPlainText(node: LexicalNode): string {

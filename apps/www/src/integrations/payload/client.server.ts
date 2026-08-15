@@ -273,7 +273,7 @@ function toNewsArticle({
     content: resolveRichTextMedia(doc.content, baseUrl),
     publishedAt: doc.publishedAt,
     updatedAt: doc.updatedAt,
-    ...(doc.authorName ? { reviewedBy: doc.authorName } : {}),
+    ...(doc.authorName ? { author: doc.authorName } : {}),
     category: doc.category,
     ...(image ? { image } : {}),
     ...(socialImage ? { socialImage } : {}),

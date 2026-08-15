@@ -38,7 +38,7 @@ export function createCmsPageHead(page: CmsContentPage) {
         dateModified: page.updatedAt,
         inLanguage: page.locale,
         mainEntityOfPage: canonicalUrl,
-        ...(page.reviewedBy ? { author: { "@type": "Person", name: page.reviewedBy } } : {}),
+        ...(page.author ? { author: { "@type": "Person", name: page.author } } : {}),
         ...(socialImage ? { image: socialImage.url } : {}),
       }),
     })

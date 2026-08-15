@@ -81,10 +81,6 @@ export const localeStrategy = ["url", "cookie", "baseLocale"] satisfies LocaleSt
 export const translatedPathnames = [
   ...preferenceLocalePathnames,
   ...createTranslatedPathnames({
-    "/$slug": {
-      en: "/$slug",
-      de: "/$slug",
-    },
     "/": {
       en: "/",
       de: "/",
@@ -172,6 +168,10 @@ export const translatedPathnames = [
     "/tax-law/$slug": {
       en: "/tax-law/$slug",
       de: "/steuerrecht/$slug",
+    },
+    "/$slug": {
+      en: "/$slug",
+      de: "/$slug",
     },
   }),
 ] satisfies UrlPatterns
