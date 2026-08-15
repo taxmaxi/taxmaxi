@@ -18,7 +18,7 @@ import * as Chunk from "effect/Chunk"
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { afterAll, describe, expect, it, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
@@ -295,8 +295,6 @@ await context.runPg(
 )
 
 describe("BillingApiLive", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   it("enforces billing auth and forwards the raw signed Stripe webhook", async () => {
     stripeHttpMockState.prices = catalogPrices()
     stripeHttpMockState.subscriptions = []

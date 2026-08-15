@@ -1,7 +1,7 @@
 import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
@@ -330,10 +330,6 @@ describe("SourceNormalizationRepositoryLive", () => {
         occurredAt: new Date("2025-01-01T10:00:00.000Z"),
       })
     )
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("reserves replay credits atomically before derived state can be reset", async () => {

@@ -19,7 +19,7 @@ import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
-import { afterAll, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
@@ -190,8 +190,6 @@ const decodeTestProviderAssetCursor = Schema.decodeUnknownSync(
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AssetsApiLive", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   it("lists canonical assets from the asset table without authentication", async () => {
     const response = await Effect.runPromise(
       getJson({

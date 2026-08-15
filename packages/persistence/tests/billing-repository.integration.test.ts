@@ -2,7 +2,7 @@ import { AuthUserId } from "@my/core/authentication"
 import { and, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 
 import { BillingRepositoryLive } from "../src/layers/BillingRepositoryLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
@@ -68,10 +68,6 @@ describe("BillingRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await seedBillingAccount()
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("keeps one zero-due annual allowance across webhook retries", async () => {

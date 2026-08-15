@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -471,8 +471,6 @@ const fetchNormalizationState = () =>
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("coinbase reference mappings", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   beforeEach(() =>
     Effect.gen(function* () {
       activeSyncRecords = syncRecords

@@ -1,6 +1,6 @@
 import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -149,10 +149,6 @@ describe("SourceSyncJobRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("creates a sync job as pending with sync mode", async () => {

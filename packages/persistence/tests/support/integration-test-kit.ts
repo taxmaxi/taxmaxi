@@ -216,15 +216,6 @@ export const makeIntegrationTestDatabaseContext = ({
       defaultSchemaMigrated = false
     })
 
-  const destroyTestDatabase = () =>
-    Effect.gen(function* () {
-      yield* terminateTestDatabaseConnections()
-      yield* runAdminSql({
-        statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`,
-      })
-      defaultSchemaMigrated = false
-    })
-
   const runPg = <A, E>(effect: Effect.Effect<A, E, SyncEngineRepositoryTestRuntime>) =>
     Effect.runPromise(effect.pipe(Effect.provide(TestPgClientLive), Effect.scoped))
 
@@ -272,7 +263,6 @@ export const makeIntegrationTestDatabaseContext = ({
     TestPgClientLive,
     recreateTestDatabase,
     recreateEmptyTestDatabase,
-    destroyTestDatabase,
     runPg,
     runWithLayer,
     waitForQueryBlockedOnLock,

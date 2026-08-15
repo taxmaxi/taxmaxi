@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceSyncStateRepositoryLive } from "../../src/layers/SourceSyncStateRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -46,10 +46,6 @@ describe("SourceSyncStateRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("returns default execution state before any sync row exists", async () => {
