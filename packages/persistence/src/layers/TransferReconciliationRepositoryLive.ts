@@ -24,6 +24,14 @@ import { drizzle } from "./PgClientLive.ts"
 import { nowDate, wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 
+const isUniformlyCasedBitcoinBech32Address = (address: string): boolean => {
+  const lowercaseAddress = address.toLowerCase()
+  const isBech32Address = /^(bc1|tb1|bcrt1)/.test(lowercaseAddress)
+  const isUniformlyCased = address === lowercaseAddress || address === address.toUpperCase()
+
+  return isBech32Address && isUniformlyCased
+}
+
 const make = Effect.gen(function* () {
   const db = yield* drizzle
   const providerTransactionTable = aliasedTable(schema.transactions, "provider_transaction")
@@ -130,6 +138,25 @@ const make = Effect.gen(function* () {
     }: FindOnchainTransferReconciliationCandidatesParams) => {
       const ownershipColumn =
         direction === "outbound" ? schema.transfers.toAddress : schema.transfers.fromAddress
+      const isCaseInsensitiveAddress = isUniformlyCasedBitcoinBech32Address(walletAddress)
+      const sourceAddressCondition = isCaseInsensitiveAddress
+        ? and(
+            or(
+              sql`${schema.addresses.address} = lower(${schema.addresses.address})`,
+              sql`${schema.addresses.address} = upper(${schema.addresses.address})`
+            ),
+            sql`lower(${schema.addresses.address}) = lower(${walletAddress})`
+          )
+        : eq(schema.addresses.address, walletAddress)
+      const ownershipAddressCondition = isCaseInsensitiveAddress
+        ? and(
+            or(
+              sql`${ownershipColumn} = lower(${ownershipColumn})`,
+              sql`${ownershipColumn} = upper(${ownershipColumn})`
+            ),
+            sql`lower(${ownershipColumn}) = lower(${walletAddress})`
+          )
+        : eq(ownershipColumn, walletAddress)
 
       const networkNameCondition =
         networkName === null
@@ -174,8 +201,8 @@ const make = Effect.gen(function* () {
               ? []
               : [eq(schema.transfers.assetRepresentationId, assetRepresentationId)]),
             sql`${schema.transfers.addressId} = ${schema.sources.addressId}`,
-            eq(schema.addresses.address, walletAddress),
-            sql`lower(${ownershipColumn}) = lower(${walletAddress})`,
+            sourceAddressCondition,
+            ownershipAddressCondition,
             gte(schema.transfers.timestamp, timestampStart),
             lte(schema.transfers.timestamp, timestampEnd),
             networkNameCondition,

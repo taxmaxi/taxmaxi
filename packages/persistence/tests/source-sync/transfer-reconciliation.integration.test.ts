@@ -580,6 +580,85 @@ describe("TransferReconciliationServiceLive", () => {
     )
   })
 
+  it.each([
+    {
+      expectedMatch: true,
+      name: "matches uniformly cased Bitcoin Bech32 addresses",
+      ownedAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+      providerAddress: "BC1QXY2KGDYGJRSQTZQ2N0YRF2493P83KKFJHX0WLH",
+      receiptAddress: "BC1QXY2KGDYGJRSQTZQ2N0YRF2493P83KKFJHX0WLH",
+    },
+    {
+      expectedMatch: false,
+      name: "keeps mixed-case Bitcoin Bech32 addresses case-sensitive",
+      ownedAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+      providerAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhX0wlh",
+      receiptAddress: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+    },
+    {
+      expectedMatch: false,
+      name: "keeps Bitcoin Base58 addresses case-sensitive",
+      ownedAddress: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+      providerAddress: "1boatslrhtknngkdxeeobr76b53lettpyt",
+      receiptAddress: "1BoatSLRHtKNngkdXEeobR76b53LETtpyT",
+    },
+  ])("$name", async ({ expectedMatch, ownedAddress, providerAddress, receiptAddress }) => {
+    const timestamp = new Date("2025-04-10T10:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-address-case" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress: ownedAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-address-case",
+        timestamp,
+        amount: "0.125",
+        toAddress: providerAddress,
+        networkHash: null,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-address-case",
+        txHash: "btc-address-case",
+        timestamp: new Date("2025-04-10T10:05:00.000Z"),
+        amount: "0.125",
+        walletAddress: receiptAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(reconciliation).toEqual({
+      canonicalTransferId: expectedMatch ? receipt.transferId : null,
+      matchReason: expectedMatch
+        ? "deterministic_wallet_receipt_match"
+        : "no_candidate_onchain_receipt",
+    })
+  })
+
   it("marks competing owned receipts as needs_review instead of forcing a match", async () => {
     const walletAddress = "bc1qownedwalletambiguous000000000000000000"
     const timestamp = new Date("2025-04-11T10:00:00.000Z")
