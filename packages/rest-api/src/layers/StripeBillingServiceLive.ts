@@ -573,43 +573,90 @@ export const invoicePaymentReference = (payment: InvoicePaymentReferenceInput): 
   }
 }
 
-export const allocateAnnualCreditsAcrossPayments = (
-  payments: ReadonlyArray<{ readonly paymentReference: string; readonly amountPaid: number }>
-): ReadonlyArray<{
+interface AnnualCreditPaymentAllocation {
   readonly paymentReference: string
   readonly paymentAmount: number
   readonly credits: number
-}> => {
+}
+
+const ensurePositivePaymentCreditLinks = (
+  allocations: ReadonlyArray<AnnualCreditPaymentAllocation>
+): ReadonlyArray<AnnualCreditPaymentAllocation> => {
+  const result = allocations.map((allocation) => ({ ...allocation }))
+  const zeroIndexes = result.flatMap((allocation, index) =>
+    allocation.credits === 0 ? [index] : []
+  )
+  if (zeroIndexes.length === 0) return allocations
+
+  // The ledger cannot store zero-credit grants, so borrow from the largest grants to retain
+  // a reversible link for every positive payment without changing the total allowance.
+  const donorIndexes = result
+    .flatMap((allocation, index) => (allocation.credits > 1 ? [index] : []))
+    .sort((leftIndex, rightIndex) => {
+      const left = result[leftIndex]
+      const right = result[rightIndex]
+      if (left === undefined || right === undefined) return leftIndex - rightIndex
+      return (
+        right.credits - left.credits ||
+        left.paymentReference.localeCompare(right.paymentReference) ||
+        leftIndex - rightIndex
+      )
+    })
+
+  let zeroCursor = 0
+  for (const donorIndex of donorIndexes) {
+    const donor = result[donorIndex]
+    if (donor === undefined) continue
+    const transferCount = Math.min(donor.credits - 1, zeroIndexes.length - zeroCursor)
+    result[donorIndex] = { ...donor, credits: donor.credits - transferCount }
+    for (let transfer = 0; transfer < transferCount; transfer += 1) {
+      const recipientIndex = zeroIndexes[zeroCursor]
+      zeroCursor += 1
+      if (recipientIndex === undefined) break
+      const recipient = result[recipientIndex]
+      if (recipient !== undefined) result[recipientIndex] = { ...recipient, credits: 1 }
+    }
+    if (zeroCursor === zeroIndexes.length) break
+  }
+
+  return result
+}
+
+export const allocateAnnualCreditsAcrossPayments = (
+  payments: ReadonlyArray<{ readonly paymentReference: string; readonly amountPaid: number }>
+): ReadonlyArray<AnnualCreditPaymentAllocation> => {
   const positive = payments.filter((payment) => payment.amountPaid > 0)
   const totalPaid = positive.reduce((total, payment) => total + payment.amountPaid, 0)
-  if (totalPaid === 0) return []
+  if (totalPaid === 0 || positive.length > ANNUAL_CREDITS) return []
 
   let allocated = 0
-  return positive.map((payment, index) => {
-    const credits =
-      index === positive.length - 1
-        ? ANNUAL_CREDITS - allocated
-        : BigDecimal.unsafeToNumber(
-            BigDecimal.floor(
-              Option.getOrElse(
-                BigDecimal.divide(
-                  BigDecimal.multiply(
-                    BigDecimal.fromNumber(ANNUAL_CREDITS),
-                    BigDecimal.fromNumber(payment.amountPaid)
+  return ensurePositivePaymentCreditLinks(
+    positive.map((payment, index) => {
+      const credits =
+        index === positive.length - 1
+          ? ANNUAL_CREDITS - allocated
+          : BigDecimal.unsafeToNumber(
+              BigDecimal.floor(
+                Option.getOrElse(
+                  BigDecimal.divide(
+                    BigDecimal.multiply(
+                      BigDecimal.fromNumber(ANNUAL_CREDITS),
+                      BigDecimal.fromNumber(payment.amountPaid)
+                    ),
+                    BigDecimal.fromNumber(totalPaid)
                   ),
-                  BigDecimal.fromNumber(totalPaid)
-                ),
-                () => BigDecimal.fromNumber(0)
+                  () => BigDecimal.fromNumber(0)
+                )
               )
             )
-          )
-    allocated += credits
-    return {
-      paymentReference: payment.paymentReference,
-      paymentAmount: payment.amountPaid,
-      credits,
-    }
-  })
+      allocated += credits
+      return {
+        paymentReference: payment.paymentReference,
+        paymentAmount: payment.amountPaid,
+        credits,
+      }
+    })
+  )
 }
 
 export const annualPaymentAllocationsFromInvoicePayments = (

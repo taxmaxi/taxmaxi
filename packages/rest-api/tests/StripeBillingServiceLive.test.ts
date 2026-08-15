@@ -1069,6 +1069,24 @@ describe("StripeBillingServiceLive", () => {
         { paymentReference: "pi_second", amountPaid: 2 },
       ]).reduce((total, payment) => total + payment.credits, 0)
     ).toBe(10_000)
+    expect(
+      allocateAnnualCreditsAcrossPayments([
+        { paymentReference: "pi_one_cent", amountPaid: 1 },
+        { paymentReference: "pi_remainder", amountPaid: 15_899 },
+      ])
+    ).toEqual([
+      { paymentReference: "pi_one_cent", paymentAmount: 1, credits: 1 },
+      { paymentReference: "pi_remainder", paymentAmount: 15_899, credits: 9_999 },
+    ])
+    const multipleSmallPayments = allocateAnnualCreditsAcrossPayments([
+      { paymentReference: "pi_small_first", amountPaid: 1 },
+      { paymentReference: "pi_small_second", amountPaid: 1 },
+      { paymentReference: "pi_large", amountPaid: 15_898 },
+    ])
+    expect(multipleSmallPayments.map(({ credits }) => credits)).toEqual([1, 1, 9_998])
+    expect(multipleSmallPayments.reduce((total, payment) => total + payment.credits, 0)).toBe(
+      10_000
+    )
   })
 
   it("allocates credit-note reversals deterministically across invoice payments", () => {

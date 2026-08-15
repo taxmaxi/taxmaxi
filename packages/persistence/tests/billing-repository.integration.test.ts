@@ -256,6 +256,51 @@ describe("BillingRepositoryLive", () => {
     expect(available).toBe(999)
   })
 
+  it("reverses the credit linked to a one-cent annual payment", async () => {
+    const expiresAt = new Date("2027-08-14T00:00:00.000Z")
+    const available = await runRepository(
+      Effect.gen(function* () {
+        const repository = yield* BillingRepository
+
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 1,
+          kind: "annual_grant",
+          reference: "invoice:one-cent:first",
+          paymentReference: "pi_one_cent",
+          paymentAmount: 1,
+          stripeInvoiceId: "in_one_cent",
+          expiresAt,
+        })
+        yield* repository.grantCredits({
+          userId: TEST_USER_ID,
+          amount: 9_999,
+          kind: "annual_grant",
+          reference: "invoice:one-cent:remainder",
+          paymentReference: "pi_one_cent_remainder",
+          paymentAmount: 15_899,
+          stripeInvoiceId: "in_one_cent",
+          expiresAt,
+        })
+        yield* repository.setPaymentCreditReversal({
+          paymentReference: "pi_one_cent",
+          reversalGroup: "stripe:refund:re_one_cent:payment",
+          lossReference: "stripe:refund:re_one_cent",
+          reversedAmount: 1,
+          paymentAmount: 1,
+          reference: "stripe:refund:re_one_cent:payment",
+          eventCreatedAt: REVERSAL_EVENT_AT,
+          monotonic: true,
+          terminal: true,
+        })
+
+        return yield* repository.availableCredits(TEST_USER_ID)
+      })
+    )
+
+    expect(available).toBe(9_999)
+  })
+
   it.each([
     {
       firstExpiresAt: null,
