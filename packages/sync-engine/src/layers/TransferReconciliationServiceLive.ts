@@ -299,7 +299,27 @@ const make = Effect.gen(function* () {
             ...draft,
             candidateSnapshot,
           })
-          .pipe(Effect.map(({ status: persistedStatus }) => persistedStatus))
+          .pipe(
+            Effect.flatMap(({ conflictingProviderTransferId, status: persistedStatus }) =>
+              conflictingProviderTransferId === null
+                ? Effect.succeed(persistedStatus)
+                : transferReconciliationRepository
+                    .upsertTransferReconciliation({
+                      principalId: draft.principalId,
+                      providerTransferId: conflictingProviderTransferId,
+                      canonicalTransferId: null,
+                      canonicalTransactionId: null,
+                      status: "needs_review",
+                      matchReason: "canonical_transfer_claim_conflict",
+                      confidence: "0.0000",
+                      deterministic: false,
+                      reviewMetadata: {
+                        conflictingProviderTransferId: draft.providerTransferId,
+                      },
+                    })
+                    .pipe(Effect.as(persistedStatus))
+            )
+          )
 
       if (exactAmountCandidates.length === 0) {
         return yield* persistCandidateState({

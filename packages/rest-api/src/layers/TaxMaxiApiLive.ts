@@ -31,6 +31,7 @@ import type {
   ProtocolCandidateRepository,
   SourceSyncRunService,
   SourceSyncService,
+  SyncEngineTransaction,
   TransferReconciliationRepository,
   TransferReconciliationService,
 } from "@my/sync-engine/services"
@@ -136,6 +137,7 @@ type TaxMaxiApiLiveContext =
   | SourceSyncRunService
   | SourceSyncService
   | SyncEngineSourceRepository
+  | SyncEngineTransaction
   | TaxCalculationService
   | TokenValidator
   | TransferReconciliationRepository

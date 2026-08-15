@@ -853,7 +853,7 @@ describe("TaxMaxi Promise client", () => {
         const requestBody =
           init?.body === undefined ? undefined : await new Response(init.body).text()
         capturedRequests.push({
-          body: requestBody === "" ? undefined : requestBody,
+          ...(requestBody === undefined || requestBody === "" ? {} : { body: requestBody }),
           credentials: init?.credentials === undefined ? undefined : String(init.credentials),
           headers: toHeaderRecord(init?.headers),
           url: getRequestUrl(input),

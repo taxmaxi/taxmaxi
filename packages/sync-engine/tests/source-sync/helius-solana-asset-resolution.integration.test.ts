@@ -568,7 +568,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     expect(state?.sourceNotes).toContain("exact mint, type, and compatible decimals")
   })
 
-  it("derives an exact known NFT type when DAS type evidence is missing", async () => {
+  it("keeps an exact known NFT pending when DAS decimals are missing", async () => {
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -607,17 +607,24 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: NFT_MINT,
         })
       ),
-      () => Effect.succeed([])
+      () =>
+        Effect.succeed([
+          {
+            id: NFT_MINT,
+            interface: "V1_PRINT",
+            content: { metadata: { name: "Known NFT", symbol: "KNFT" } },
+          },
+        ])
     )
 
     expect(result).toMatchObject({
-      kind: "canonical",
+      kind: "review_required",
       assetKind: "nft",
       representationTypeObserved: true,
-      decimals: 0,
-      mappingStatus: "approved",
-      canonicalAssetId: NFT_ASSET_ID,
-      assetRepresentationId: NFT_REPRESENTATION_ID,
+      decimals: null,
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
       nftHint: true,
     })
   })

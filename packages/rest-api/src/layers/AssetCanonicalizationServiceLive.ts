@@ -7,6 +7,7 @@
 import {
   AssetRepository,
   ProviderAssetRepository,
+  SyncEngineTransaction,
   type AssetRepresentationDraft,
   type CanonicalBlockchainDraft,
   type EconomicAssetDraft,
@@ -571,6 +572,7 @@ const make = Effect.gen(function* () {
   const coinGeckoClient = yield* CoinGeckoClient
   const providerAssetRepository = yield* ProviderAssetRepository
   const assetRepository = yield* AssetRepository
+  const syncEngineTransaction = yield* SyncEngineTransaction
 
   const mapCoinGeckoError = (error: { readonly message: string }) =>
     new AssetCanonicalizationProviderError({ message: error.message })
@@ -747,11 +749,34 @@ const make = Effect.gen(function* () {
             expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
           })
           .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to approve provider asset mapping.",
-                })
+            Effect.catchAll(() =>
+              Effect.gen(function* () {
+                const latest = yield* loadProviderAssetReview({ providerAssetRowId })
+                const latestMapping = latest.mapping
+                if (
+                  latestMapping?.mappingStatus === "approved" &&
+                  (latestMapping.mappingKind !== "asset" ||
+                    latestMapping.canonicalAssetId !== canonicalAssetId ||
+                    latestMapping.assetRepresentationId !== assetRepresentationId)
+                ) {
+                  return yield* Effect.fail(
+                    makeBadRequest(
+                      "Provider asset mapping was concurrently approved for a different target."
+                    )
+                  )
+                }
+                if (latestMapping?.mappingStatus === "rejected") {
+                  return yield* Effect.fail(
+                    makeBadRequest("Provider asset mapping was concurrently rejected.")
+                  )
+                }
+
+                return yield* Effect.fail(
+                  new AssetCanonicalizationInternalError({
+                    message: "Failed to approve provider asset mapping.",
+                  })
+                )
+              })
             )
           )
 
@@ -876,158 +901,215 @@ const make = Effect.gen(function* () {
 
   const canonicalizeProviderAssetFromCoinGecko: AssetCanonicalizationServiceShape["canonicalizeProviderAssetFromCoinGecko"] =
     ({ providerAssetRowId, reviewerNotes }) =>
-      Effect.gen(function* () {
-        const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
-        yield* validateApprovableProviderAsset(providerAssetReview)
-        const observedRepresentations = yield* loadObservedRepresentations({ providerAssetRowId })
-        yield* validateDurableObservationAvailability({
-          providerAsset: providerAssetReview.providerAsset,
-          observedRepresentations,
-        })
-
-        if (
-          providerAssetReview.mapping?.mappingStatus === "pending_review" &&
-          observedRepresentations.length === 0 &&
-          !isNativeOnchainObservation(providerAssetReview.providerAsset) &&
-          observedProviderTokenId(providerAssetReview.providerAsset) === null
-        ) {
-          return yield* Effect.fail(
-            makeBadRequest(
-              "Provider assets without exact on-chain identity require a reviewed canonical target."
-            )
-          )
-        }
-
-        const resolved = yield* resolveCoinGeckoDrafts({
-          providerAsset: providerAssetReview.providerAsset,
-        })
-        const existingMapping = providerAssetReview.mapping
-        if (existingMapping?.mappingStatus === "approved") {
-          const existingAsset = yield* assetRepository
-            .findAssetByCoinGeckoId({ coingeckoCoinId: resolved.asset.coingeckoCoinId ?? "" })
-            .pipe(
-              Effect.mapError(
-                () =>
-                  new AssetCanonicalizationInternalError({
-                    message: "Failed to validate the approved CoinGecko target.",
-                  })
-              )
-            )
-          const selectsRepresentation =
-            representationIdForProviderObservation({
+      syncEngineTransaction
+        .run(
+          Effect.gen(function* () {
+            const providerAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
+            yield* validateApprovableProviderAsset(providerAssetReview)
+            const observedRepresentations = yield* loadObservedRepresentations({
+              providerAssetRowId,
+            })
+            yield* validateDurableObservationAvailability({
               providerAsset: providerAssetReview.providerAsset,
-              representationId: "resolved-representation",
               observedRepresentations,
-            }) !== null
-          const targetAssetMatches =
-            existingMapping.mappingKind === "asset" &&
-            Option.isSome(existingAsset) &&
-            existingMapping.canonicalAssetId === existingAsset.value.id
-          const representationPresenceMatches = selectsRepresentation
-            ? existingMapping.assetRepresentationId !== null
-            : existingMapping.assetRepresentationId === null
+            })
 
-          let representationMatches = !selectsRepresentation
-          if (selectsRepresentation && existingMapping.assetRepresentationId !== null) {
-            const existingRepresentation = yield* assetRepository
-              .findRepresentationById({
-                assetRepresentationId: existingMapping.assetRepresentationId,
+            if (
+              providerAssetReview.mapping?.mappingStatus === "pending_review" &&
+              observedRepresentations.length === 0 &&
+              !isNativeOnchainObservation(providerAssetReview.providerAsset) &&
+              observedProviderTokenId(providerAssetReview.providerAsset) === null
+            ) {
+              return yield* Effect.fail(
+                makeBadRequest(
+                  "Provider assets without exact on-chain identity require a reviewed canonical target."
+                )
+              )
+            }
+
+            const resolved = yield* resolveCoinGeckoDrafts({
+              providerAsset: providerAssetReview.providerAsset,
+            })
+            const existingMapping = providerAssetReview.mapping
+            if (existingMapping?.mappingStatus === "approved") {
+              const existingAsset = yield* assetRepository
+                .findAssetByCoinGeckoId({ coingeckoCoinId: resolved.asset.coingeckoCoinId ?? "" })
+                .pipe(
+                  Effect.mapError(
+                    () =>
+                      new AssetCanonicalizationInternalError({
+                        message: "Failed to validate the approved CoinGecko target.",
+                      })
+                  )
+                )
+              const selectsRepresentation =
+                representationIdForProviderObservation({
+                  providerAsset: providerAssetReview.providerAsset,
+                  representationId: "resolved-representation",
+                  observedRepresentations,
+                }) !== null
+              const targetAssetMatches =
+                existingMapping.mappingKind === "asset" &&
+                Option.isSome(existingAsset) &&
+                existingMapping.canonicalAssetId === existingAsset.value.id
+              const representationPresenceMatches = selectsRepresentation
+                ? existingMapping.assetRepresentationId !== null
+                : existingMapping.assetRepresentationId === null
+
+              let representationMatches = !selectsRepresentation
+              if (selectsRepresentation && existingMapping.assetRepresentationId !== null) {
+                const existingRepresentation = yield* assetRepository
+                  .findRepresentationById({
+                    assetRepresentationId: existingMapping.assetRepresentationId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new AssetCanonicalizationInternalError({
+                          message: "Failed to validate the approved CoinGecko representation.",
+                        })
+                    )
+                  )
+                representationMatches =
+                  Option.isSome(existingRepresentation) &&
+                  normalize(existingRepresentation.value.blockchainName) ===
+                    normalize(resolved.blockchain.name) &&
+                  existingRepresentation.value.representationType ===
+                    resolved.representation.type &&
+                  normalize(existingRepresentation.value.contractAddress ?? "") ===
+                    normalize(resolved.representation.contractAddress ?? "") &&
+                  existingRepresentation.value.mintAddress ===
+                    resolved.representation.mintAddress &&
+                  existingRepresentation.value.decimals === resolved.representation.decimals
+              }
+
+              if (!targetAssetMatches || !representationPresenceMatches || !representationMatches) {
+                return yield* Effect.fail(
+                  makeBadRequest(
+                    "Provider asset mapping is already approved for a different target."
+                  )
+                )
+              }
+            }
+            if (existingMapping?.mappingStatus === "pending_review") {
+              const latest = yield* loadProviderAssetReview({ providerAssetRowId })
+              if (latest.mapping?.mappingStatus === "approved") {
+                return yield* Effect.fail(
+                  makeBadRequest(
+                    "Provider asset mapping was concurrently approved before canonical writes."
+                  )
+                )
+              }
+            }
+            const canonicalAsset = yield* assetRepository
+              .upsertEconomicAssetRepresentation({
+                blockchain: resolved.blockchain,
+                asset: resolved.asset,
+                representation: resolved.representation,
               })
               .pipe(
                 Effect.mapError(
                   () =>
                     new AssetCanonicalizationInternalError({
-                      message: "Failed to validate the approved CoinGecko representation.",
+                      message: "Failed to persist canonical asset.",
                     })
                 )
               )
-            representationMatches =
-              Option.isSome(existingRepresentation) &&
-              normalize(existingRepresentation.value.blockchainName) ===
-                normalize(resolved.blockchain.name) &&
-              existingRepresentation.value.representationType === resolved.representation.type &&
-              normalize(existingRepresentation.value.contractAddress ?? "") ===
-                normalize(resolved.representation.contractAddress ?? "") &&
-              existingRepresentation.value.mintAddress === resolved.representation.mintAddress &&
-              existingRepresentation.value.decimals === resolved.representation.decimals
-          }
 
-          if (!targetAssetMatches || !representationPresenceMatches || !representationMatches) {
-            return yield* Effect.fail(
-              makeBadRequest("Provider asset mapping is already approved for a different target.")
-            )
-          }
-        }
-        const canonicalAsset = yield* assetRepository
-          .upsertEconomicAssetRepresentation({
-            blockchain: resolved.blockchain,
-            asset: resolved.asset,
-            representation: resolved.representation,
-          })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to persist canonical asset.",
-                })
-            )
-          )
+            const assetRepresentationId = representationIdForProviderObservation({
+              providerAsset: providerAssetReview.providerAsset,
+              representationId: canonicalAsset.representationId,
+              observedRepresentations,
+            })
+            if (assetRepresentationId !== null) {
+              yield* validateManualRepresentationIdentity({
+                providerAsset: providerAssetReview.providerAsset,
+                representation: canonicalAsset,
+                observedRepresentations,
+              })
+              if (
+                (canonicalAsset.representationType === "nft") !==
+                (canonicalAsset.type === "nft")
+              ) {
+                return yield* Effect.fail(
+                  makeBadRequest(
+                    "Asset representation type does not match the selected economic asset type."
+                  )
+                )
+              }
+            }
 
-        const assetRepresentationId = representationIdForProviderObservation({
-          providerAsset: providerAssetReview.providerAsset,
-          representationId: canonicalAsset.representationId,
-          observedRepresentations,
-        })
-        if (assetRepresentationId !== null) {
-          yield* validateManualRepresentationIdentity({
-            providerAsset: providerAssetReview.providerAsset,
-            representation: canonicalAsset,
-            observedRepresentations,
-          })
-          if ((canonicalAsset.representationType === "nft") !== (canonicalAsset.type === "nft")) {
-            return yield* Effect.fail(
-              makeBadRequest(
-                "Asset representation type does not match the selected economic asset type."
+            yield* providerAssetRepository
+              .approveProviderAssetMappingAndRequestReplay({
+                mapping: {
+                  providerAssetRowId,
+                  mappingKind: "asset",
+                  canonicalAssetId: canonicalAsset.id,
+                  assetRepresentationId,
+                  canonicalFiatCurrency: null,
+                  mappingStatus: "approved",
+                  reviewerNotes,
+                  sourceNotes: appendSourceNote({
+                    existing: providerAssetReview.mapping?.sourceNotes,
+                    note: COINGECKO_SOURCE_NOTES,
+                  }),
+                },
+                expectedObservedRepresentations: observedRepresentations,
+                expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+              })
+              .pipe(
+                Effect.catchAll(() =>
+                  Effect.gen(function* () {
+                    const latest = yield* loadProviderAssetReview({ providerAssetRowId })
+                    const latestMapping = latest.mapping
+                    if (
+                      latestMapping?.mappingStatus === "approved" &&
+                      latestMapping.mappingKind === "asset" &&
+                      latestMapping.canonicalAssetId === canonicalAsset.id &&
+                      latestMapping.assetRepresentationId === assetRepresentationId
+                    ) {
+                      return
+                    }
+                    if (latestMapping?.mappingStatus === "approved") {
+                      return yield* Effect.fail(
+                        makeBadRequest(
+                          "Provider asset mapping was concurrently approved for a different target."
+                        )
+                      )
+                    }
+                    if (latestMapping?.mappingStatus === "rejected") {
+                      return yield* Effect.fail(
+                        makeBadRequest("Provider asset mapping was concurrently rejected.")
+                      )
+                    }
+
+                    return yield* Effect.fail(
+                      new AssetCanonicalizationInternalError({
+                        message: "Failed to approve provider asset mapping.",
+                      })
+                    )
+                  })
+                )
               )
-            )
-          }
-        }
 
-        yield* providerAssetRepository
-          .approveProviderAssetMappingAndRequestReplay({
-            mapping: {
-              providerAssetRowId,
-              mappingKind: "asset",
-              canonicalAssetId: canonicalAsset.id,
-              assetRepresentationId,
-              canonicalFiatCurrency: null,
-              mappingStatus: "approved",
-              reviewerNotes,
-              sourceNotes: appendSourceNote({
-                existing: providerAssetReview.mapping?.sourceNotes,
-                note: COINGECKO_SOURCE_NOTES,
-              }),
-            },
-            expectedObservedRepresentations: observedRepresentations,
-            expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+            const approvedProviderAsset = yield* loadApprovedProviderAsset({ providerAssetRowId })
+
+            return {
+              providerAsset: approvedProviderAsset,
+              canonicalAsset,
+              evidence: resolved.evidence,
+            }
           })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new AssetCanonicalizationInternalError({
-                  message: "Failed to approve provider asset mapping.",
-                })
-            )
+        )
+        .pipe(
+          Effect.catchTag(
+            "SyncEngineStorageError",
+            () =>
+              new AssetCanonicalizationInternalError({
+                message: "Failed to commit canonical asset approval.",
+              })
           )
-
-        const approvedProviderAsset = yield* loadApprovedProviderAsset({ providerAssetRowId })
-
-        return {
-          providerAsset: approvedProviderAsset,
-          canonicalAsset,
-          evidence: resolved.evidence,
-        }
-      })
+        )
 
   return AssetCanonicalizationService.of({
     approveProviderAssetMapping,

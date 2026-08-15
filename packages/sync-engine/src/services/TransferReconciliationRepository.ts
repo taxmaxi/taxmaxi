@@ -115,6 +115,8 @@ export interface TransferReconciliationCandidateSnapshot {
 /** Outcome of one reconciliation-state write. */
 export interface UpsertTransferReconciliationResult {
   readonly candidateSnapshotChanged: boolean
+  /** Existing automatic claim that must also be moved to review and rolled back. */
+  readonly conflictingProviderTransferId: string | null
   readonly status: TransferReconciliationStatus
 }
 
