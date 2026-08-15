@@ -30,6 +30,9 @@ export type {
   ProviderAssetReview,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
+  UnresolvedTransferReconciliation,
+  UnresolvedTransferReconciliationList,
+  UnresolvedTransferReconciliationListInput,
 } from "./assets/index.ts"
 
 export type TaxMaxiInternalEffectClient =

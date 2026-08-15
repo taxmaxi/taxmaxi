@@ -142,6 +142,35 @@ const emptyProviderAssetReviewsResponseBody = JSON.stringify({
   },
 })
 
+const unresolvedTransferReconciliationsResponseBody = JSON.stringify({
+  reconciliations: [
+    {
+      id: "00000000-0000-4000-8000-000000000021",
+      principalId: "00000000-0000-4000-8000-000000000002",
+      providerTransferId: "00000000-0000-4000-8000-000000000022",
+      providerSourceId: "00000000-0000-4000-8000-000000000023",
+      providerTimestamp: "2026-08-13T10:00:00.000Z",
+      providerDirection: "outbound",
+      providerAmount: "1.25",
+      networkName: "solana",
+      networkHash: "signature",
+      canonicalTransferId: null,
+      canonicalTransactionId: "00000000-0000-4000-8000-000000000024",
+      status: "pending",
+      matchReason: "asset_representation_review_pending",
+      confidence: "1.0000",
+      deterministic: false,
+      reviewMetadata: { candidateCount: 1 },
+      createdAt: "2026-08-13T10:01:00.000Z",
+      updatedAt: "2026-08-13T10:01:00.000Z",
+    },
+  ],
+  page: {
+    nextCursor: null,
+    hasMore: false,
+  },
+})
+
 const pendingAssetResponse = {
   id: "00000000-0000-4000-8000-000000000019",
   provider: "coinbase",
@@ -793,6 +822,8 @@ describe("TaxMaxi Promise client", () => {
     const providerAssetId = "00000000-0000-4000-8000-000000000009"
     const responseBodies = [
       emptyProviderAssetReviewsResponseBody,
+      unresolvedTransferReconciliationsResponseBody,
+      unresolvedTransferReconciliationsResponseBody,
       assetCanonicalizationResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
@@ -829,6 +860,30 @@ describe("TaxMaxi Promise client", () => {
       },
     })
     await expect(
+      taxmaxi.assets.listUnresolvedTransferReconciliations({
+        status: "pending",
+        cursor: "opaque-cursor",
+        limit: 25,
+      })
+    ).resolves.toMatchObject({
+      reconciliations: [
+        {
+          status: "pending",
+          matchReason: "asset_representation_review_pending",
+        },
+      ],
+    })
+    await expect(
+      Effect.runPromise(
+        taxmaxi.effect.assets.listUnresolvedTransferReconciliations({
+          status: "needs_review",
+          limit: 10,
+        })
+      )
+    ).resolves.toMatchObject({
+      reconciliations: [{ providerAmount: "1.25" }],
+    })
+    await expect(
       taxmaxi.assets.canonicalizeProviderAsset({
         id: providerAssetId,
         reviewerNotes: "Looks correct.",
@@ -843,6 +898,12 @@ describe("TaxMaxi Promise client", () => {
     expect(capturedRequests).toEqual([
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=pending&cursor=opaque-cursor&limit=25",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=needs_review&limit=10",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",

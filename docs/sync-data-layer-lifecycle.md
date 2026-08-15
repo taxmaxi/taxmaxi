@@ -31,9 +31,9 @@ flowchart TD
   E --> J["transfers: canonical movements and fees"]
   H --> K["inventory_movements and FIFO state"]
   I --> L["fifo_lots and disposal_matches"]
-  H --> M["transfer_reconciliations"]
+  H --> M["transfer_reconciliations: candidate evidence"]
   J --> M
-  M --> N["internal-transfer canonicalization and corrected inventory"]
+  M --> N["unresolved reconciliation review queue"]
   D --> O["processing_jobs = completed"]
   O --> P["sync_run_items and sync_runs are refreshed"]
 ```
@@ -225,26 +225,26 @@ A provider-specific, recoverable normalization problem is handled differently: t
 
 ## Chapter 8: two views of one transfer are reconciled
 
-After classification, the job enters `reconciling`. `TransferReconciliationServiceLive` reads every `provider_transfers` row for the source, joining its approved `provider_asset_mappings` row when one exists ([reconciliation service](../packages/sync-engine/src/layers/TransferReconciliationServiceLive.ts)).
+After classification, the job enters `reconciling`. `TransferReconciliationServiceLive` reads the completed, principal CEX movements for the source, joining an approved `provider_asset_mappings` row when one exists ([reconciliation service](../packages/sync-engine/src/layers/TransferReconciliationServiceLive.ts)).
 
-For each provider transfer it searches `transfers` across all sources owned by the same principal. Matching uses:
+For each provider transfer it searches both canonical `transfers` and exact provider observations from onchain sources owned by the same principal. Candidate lookup uses movement facts before economic-asset identity:
 
-- the canonical asset and, when known, asset representation;
-- direction and the wallet-side address;
-- a twelve-hour time window;
-- exact amount;
-- network name and transaction hash when available.
+- an exact transaction hash when the provider supplied one, with chain-specific case rules;
+- otherwise, the owned wallet-side address, opposite direction, network when supplied, and a twelve-hour time window;
+- exact amount after candidates are loaded;
+- only principal movements, excluding fees and other non-principal rows.
 
-The result is upserted into `transfer_reconciliations` by `TransferReconciliationRepositoryLive` ([repository](../packages/persistence/src/layers/TransferReconciliationRepositoryLive.ts#L187)):
+If the provider movement already has an approved canonical asset mapping, the service then removes candidates for a different economic asset or representation before deciding whether the result is unique or ambiguous. A known exact onchain representation can resolve to its approved economic asset. A first-seen exact representation remains evidence for review; symbol or name equality is not enough to approve it.
 
-- `pending` when asset mapping, wallet data, or an onchain candidate is missing;
-- `needs_review` when more than one exact candidate exists;
-- `auto_applied` when there is one deterministic exact match;
-- `approved` or `rejected` when a reviewer has decided.
+The result is upserted into `transfer_reconciliations` by `TransferReconciliationRepositoryLive` ([repository](../packages/persistence/src/layers/TransferReconciliationRepositoryLive.ts#L501)):
 
-Each row always points to the provider transfer. Successful matches also point to the canonical transfer and transaction. The schema is in [`TransferReconciliationsTable.ts`](../packages/persistence/src/schema/TransferReconciliationsTable.ts).
+- `pending` when routing facts, an onchain candidate, destination replay, or representation approval is still missing;
+- `needs_review` when candidates are ambiguous or the known asset and representation evidence conflict;
+- `pending` with `fifo_application_deferred` when movement and economic identity have a unique deterministic match.
 
-The service then applies deterministic internal-transfer canonicalization. This is more than adding a label. It can adjust transaction legs, reviews, FIFO lots, disposal matches, inventory movements, and allocations so that the same movement seen by an exchange and a wallet is not taxed or counted twice. Because those changes can affect later FIFO use, the repository locks all connected source inventories and can rebuild dependent allocations in time order. The detailed recovery logic starts in [`TransferReconciliationRepositoryLive.ts`](../packages/persistence/src/layers/TransferReconciliationRepositoryLive.ts#L236).
+Each row always points to the provider transfer. A candidate based on an exact provider observation can point to the canonical transaction before that observation has produced a canonical transfer. A fully resolved deterministic candidate points to both, but remains pending. The schema is in [`TransferReconciliationsTable.ts`](../packages/persistence/src/schema/TransferReconciliationsTable.ts). Admins can inspect pending and `needs_review` evidence through the narrow unresolved-reconciliation endpoint in [`AssetsApi.ts`](../packages/rest-api/src/definitions/AssetsApi.ts).
+
+Candidate reconciliation does not approve mappings or change FIFO/internal-transfer state. The executor still runs the canonicalization pass, but that pass accepts only `approved` rows or legacy deterministic `auto_applied` rows; the new pending candidate states are not eligible. Approval, replay after a later destination sync, and FIFO application belong to the next delivery step.
 
 ## Chapter 9: completion moves back up the tree
 

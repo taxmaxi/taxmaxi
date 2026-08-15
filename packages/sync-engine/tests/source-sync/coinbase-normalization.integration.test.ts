@@ -726,163 +726,6 @@ const seedMatchedOnchainSend = ({
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
-const seedConsumedOnchainReceiptAcquisition = () =>
-  Effect.gen(function* () {
-    const db = yield* drizzle
-    const now = new Date("2025-04-02T10:00:00.000Z")
-
-    const [receiptTransaction] = yield* db
-      .select({
-        id: schema.transactions.id,
-        timestamp: schema.transactions.timestamp,
-        principalId: schema.transactions.principalId,
-      })
-      .from(schema.transactions)
-      .where(
-        and(
-          eq(schema.transactions.sourceId, ownedOnchainSourceId),
-          eq(schema.transactions.externalId, "onchain-receipt-1")
-        )
-      )
-      .limit(1)
-
-    if (receiptTransaction === undefined) {
-      return yield* Effect.dieMessage("Missing onchain receipt transaction fixture")
-    }
-
-    const [btcAsset] = yield* db
-      .select({ id: schema.assets.id })
-      .from(schema.assets)
-      .where(eq(schema.assets.symbol, "BTC"))
-      .limit(1)
-
-    if (btcAsset === undefined) {
-      return yield* Effect.dieMessage("Missing BTC asset fixture for consumed receipt test")
-    }
-
-    const [receiptLeg] = yield* db
-      .insert(schema.transactionLegs)
-      .values({
-        sourceId: ownedOnchainSourceId,
-        sourceRawRecordId: null,
-        externalId: "onchain-receipt-1:main",
-        txHash: null,
-        timestamp: receiptTransaction.timestamp,
-        principalId: receiptTransaction.principalId,
-        addressId: null,
-        assetId: btcAsset.id,
-        amount: "0.10000000",
-        kind: "acquisition",
-        provenance: "deterministic",
-        derivationRule: "onchain_transfer_in",
-        metadata: {
-          provider: "bitcoin",
-          downstreamUsageFixture: true,
-        },
-        transactionId: receiptTransaction.id,
-        sourceTransferId: null,
-        fiatAmount: "1500.00000000",
-        fiatCurrency: "EUR",
-        feeForTransactionId: null,
-        createdAt: receiptTransaction.timestamp,
-        updatedAt: receiptTransaction.timestamp,
-      })
-      .returning({ id: schema.transactionLegs.id })
-
-    if (receiptLeg === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain receipt acquisition leg")
-    }
-
-    const [receiptLot] = yield* db
-      .insert(schema.fifoLots)
-      .values({
-        principalId: receiptTransaction.principalId,
-        sourceId: ownedOnchainSourceId,
-        assetId: btcAsset.id,
-        acquiredAt: receiptTransaction.timestamp,
-        originalAmount: "0.100000000000000000000000000000",
-        remainingAmount: "0.050000000000000000000000000000",
-        costBasisPerToken: "15000.000000000000000000",
-        costBasisCurrency: "EUR",
-        sourceLegId: receiptLeg.id,
-        sourceLegSequence: 0,
-        createdAt: receiptTransaction.timestamp,
-        updatedAt: now,
-      })
-      .returning({ id: schema.fifoLots.id })
-
-    if (receiptLot === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain receipt FIFO lot")
-    }
-
-    const [spendTransaction] = yield* db
-      .insert(schema.transactions)
-      .values({
-        sourceId: ownedOnchainSourceId,
-        sourceRawRecordId: null,
-        externalId: "onchain-spend-1",
-        externalGroupId: "onchain-spend-1",
-        timestamp: now,
-        transactionType: null,
-        providerTransactionType: null,
-        providerStatus: "confirmed",
-        providerResourcePath: null,
-        providerDescription: "Fixture spend from owned wallet receipt",
-        providerCreatedAt: now,
-        providerUpdatedAt: now,
-        metadata: { provider: "bitcoin" },
-        principalId: receiptTransaction.principalId,
-      })
-      .returning({ id: schema.transactions.id })
-
-    if (spendTransaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain spend transaction")
-    }
-
-    const [spendLeg] = yield* db
-      .insert(schema.transactionLegs)
-      .values({
-        sourceId: ownedOnchainSourceId,
-        sourceRawRecordId: null,
-        externalId: "onchain-spend-1:main",
-        txHash: null,
-        timestamp: now,
-        principalId: receiptTransaction.principalId,
-        addressId: null,
-        assetId: btcAsset.id,
-        amount: "0.05000000",
-        kind: "disposal",
-        provenance: "deterministic",
-        derivationRule: "user_spend",
-        metadata: {
-          provider: "bitcoin",
-          downstreamUsageFixture: true,
-        },
-        transactionId: spendTransaction.id,
-        sourceTransferId: null,
-        fiatAmount: "800.00000000",
-        fiatCurrency: "EUR",
-        feeForTransactionId: null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning({ id: schema.transactionLegs.id })
-
-    if (spendLeg === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain spend leg")
-    }
-
-    yield* db.insert(schema.disposalMatches).values({
-      disposalLegId: spendLeg.id,
-      fifoLotId: receiptLot.id,
-      matchedAmount: "0.05000000",
-      costBasis: "750.00000000",
-      proceeds: "800.00000000",
-      gainLoss: "50.00000000",
-      createdAt: now,
-    })
-  }).pipe(Effect.provide(TestPgClientLive))
-
 const fetchCanonicalizationState = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -890,6 +733,8 @@ const fetchCanonicalizationState = () =>
     const reconciliations = yield* db
       .select({
         status: schema.transferReconciliations.status,
+        matchReason: schema.transferReconciliations.matchReason,
+        deterministic: schema.transferReconciliations.deterministic,
         canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
         canonicalTransactionId: schema.transferReconciliations.canonicalTransactionId,
       })
@@ -897,16 +742,7 @@ const fetchCanonicalizationState = () =>
 
     const reviews = yield* db
       .select({
-        sourceId: schema.transactions.sourceId,
-        transactionId: schema.transactions.id,
-        externalId: schema.transactions.externalId,
-        transactionType: schema.transactions.transactionType,
-        reviewStatus: schema.transactionReviews.reviewStatus,
-        needsReview: schema.transactionReviews.needsReview,
-        originalTypeKey: schema.transactionReviews.originalTypeKey,
-        currentTypeKey: schema.transactionReviews.currentTypeKey,
         matchedLayer: schema.transactionReviews.matchedLayer,
-        userNotes: schema.transactionReviews.userNotes,
       })
       .from(schema.transactionReviews)
       .innerJoin(
@@ -917,11 +753,7 @@ const fetchCanonicalizationState = () =>
 
     const legs = yield* db
       .select({
-        sourceId: schema.transactionLegs.sourceId,
-        externalId: schema.transactionLegs.externalId,
-        kind: schema.transactionLegs.kind,
         derivationRule: schema.transactionLegs.derivationRule,
-        sourceTransferId: schema.transactionLegs.sourceTransferId,
       })
       .from(schema.transactionLegs)
       .where(inArray(schema.transactionLegs.sourceId, [sourceId, ownedOnchainSourceId]))
@@ -929,8 +761,6 @@ const fetchCanonicalizationState = () =>
     const fifoLots = yield* db
       .select({
         sourceId: schema.fifoLots.sourceId,
-        originalAmount: schema.fifoLots.originalAmount,
-        remainingAmount: schema.fifoLots.remainingAmount,
       })
       .from(schema.fifoLots)
       .where(inArray(schema.fifoLots.sourceId, [sourceId, ownedOnchainSourceId]))
@@ -941,57 +771,6 @@ const fetchCanonicalizationState = () =>
       legs,
       fifoLots,
     }
-  }).pipe(Effect.provide(TestPgClientLive))
-
-const applyUserOverrideToCanonicalizedTransfer = ({
-  externalId,
-  transactionType,
-  userNotes,
-}: {
-  readonly externalId: string
-  readonly transactionType: string
-  readonly userNotes: string
-}) =>
-  Effect.gen(function* () {
-    const db = yield* drizzle
-    const reviewedAt = new Date("2025-04-03T09:00:00.000Z")
-
-    const [transaction] = yield* db
-      .select({
-        id: schema.transactions.id,
-      })
-      .from(schema.transactions)
-      .where(
-        and(
-          eq(schema.transactions.sourceId, sourceId),
-          eq(schema.transactions.externalId, externalId)
-        )
-      )
-      .limit(1)
-
-    if (transaction === undefined) {
-      return yield* Effect.dieMessage("Missing canonicalized transfer fixture for review override")
-    }
-
-    yield* db
-      .update(schema.transactions)
-      .set({
-        transactionType,
-        updatedAt: reviewedAt,
-      })
-      .where(eq(schema.transactions.id, transaction.id))
-
-    yield* db
-      .update(schema.transactionReviews)
-      .set({
-        currentTypeKey: transactionType,
-        reviewStatus: "changed",
-        needsReview: false,
-        userNotes,
-        reviewedAt,
-        updatedAt: reviewedAt,
-      })
-      .where(eq(schema.transactionReviews.transactionId, transaction.id))
   }).pipe(Effect.provide(TestPgClientLive))
 
 const fetchCounts = () =>
@@ -1248,107 +1027,6 @@ const approveProviderAssetMappingToCanonicalAsset = ({
       .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
   }).pipe(Effect.provide(TestPgClientLive))
 
-const injectLegacySendDisposalArtifacts = () =>
-  Effect.gen(function* () {
-    const db = yield* drizzle
-    const now = new Date("2025-04-01T10:00:00.000Z")
-
-    const transactions = yield* db
-      .select({
-        id: schema.transactions.id,
-        sourceRawRecordId: schema.transactions.sourceRawRecordId,
-        timestamp: schema.transactions.timestamp,
-        principalId: schema.transactions.principalId,
-        externalId: schema.transactions.externalId,
-        sourceId: schema.transactions.sourceId,
-      })
-      .from(schema.transactions)
-      .where(eq(schema.transactions.sourceId, sourceId))
-    const sendTransaction = transactions.find(
-      (transaction) => transaction.externalId === "tx-send-1"
-    )
-
-    if (sendTransaction === undefined || sendTransaction.sourceRawRecordId === null) {
-      return yield* Effect.dieMessage("Missing send transaction fixture for replay regression test")
-    }
-
-    const assets = yield* db
-      .select({
-        id: schema.assets.id,
-        symbol: schema.assets.symbol,
-      })
-      .from(schema.assets)
-    const btcAsset = assets.find((asset) => asset.symbol === "BTC")
-
-    if (btcAsset === undefined) {
-      return yield* Effect.dieMessage("Missing BTC asset fixture for replay regression test")
-    }
-
-    const fifoLots = yield* db
-      .select({
-        id: schema.fifoLots.id,
-        assetId: schema.fifoLots.assetId,
-        sourceId: schema.fifoLots.sourceId,
-      })
-      .from(schema.fifoLots)
-    const btcLot = fifoLots.find((lot) => lot.sourceId === sourceId && lot.assetId === btcAsset.id)
-
-    if (btcLot === undefined) {
-      return yield* Effect.dieMessage("Missing BTC FIFO lot fixture for replay regression test")
-    }
-
-    const [legacyLeg] = yield* db
-      .insert(schema.transactionLegs)
-      .values({
-        sourceId,
-        sourceRawRecordId: sendTransaction.sourceRawRecordId,
-        externalId: "tx-send-1:main",
-        txHash: null,
-        timestamp: sendTransaction.timestamp,
-        principalId: sendTransaction.principalId,
-        addressId: null,
-        assetId: btcAsset.id,
-        amount: "0.10000000",
-        kind: "disposal",
-        provenance: "deterministic",
-        derivationRule: "coinbase_send_outflow",
-        metadata: {
-          provider: "coinbase",
-          legacyReplayFixture: true,
-        },
-        transactionId: sendTransaction.id,
-        sourceTransferId: null,
-        fiatAmount: "1500.00000000",
-        fiatCurrency: "EUR",
-        feeForTransactionId: null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning({ id: schema.transactionLegs.id })
-
-    if (legacyLeg === undefined) {
-      return yield* Effect.dieMessage("Failed to insert legacy send disposal leg fixture")
-    }
-
-    yield* db.insert(schema.disposalMatches).values({
-      disposalLegId: legacyLeg.id,
-      fifoLotId: btcLot.id,
-      matchedAmount: "0.10000000",
-      costBasis: "1000.00000000",
-      proceeds: "1500.00000000",
-      gainLoss: "500.00000000",
-      createdAt: now,
-    })
-
-    yield* db
-      .update(schema.fifoLots)
-      .set({
-        remainingAmount: "0.500000000000000000000000000000",
-        updatedAt: now,
-      })
-      .where(eq(schema.fifoLots.id, btcLot.id))
-  }).pipe(Effect.provide(TestPgClientLive))
-
 await Effect.runPromise(recreateTestDatabase())
 
 describe("coinbase normalization persistence", () => {
@@ -1458,7 +1136,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("canonicalizes a matched Coinbase withdrawal into an internal transfer on sync and replay", async () => {
+  it("defers matched Coinbase withdrawal FIFO effects through sync and replay", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* seedMatchedOnchainReceipt({
@@ -1472,61 +1150,26 @@ describe("coinbase normalization persistence", () => {
 
         expect(firstRun.reconciliations).toEqual([
           expect.objectContaining({
-            status: "auto_applied",
+            status: "pending",
+            matchReason: "fifo_application_deferred",
+            deterministic: true,
             canonicalTransferId: expect.any(String),
             canonicalTransactionId: expect.any(String),
           }),
         ])
 
-        expect(firstRun.reviews).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId,
-              externalId: "tx-send-1",
-              reviewStatus: "auto_applied",
-              needsReview: false,
-              currentTypeKey: "internal_transfer",
-              matchedLayer: "transfer_reconciliation",
-            }),
-            expect.objectContaining({
-              sourceId: ownedOnchainSourceId,
-              externalId: "onchain-receipt-1",
-              reviewStatus: "auto_applied",
-              needsReview: false,
-              currentTypeKey: "internal_transfer",
-              matchedLayer: "transfer_reconciliation",
-            }),
-          ])
-        )
-
-        expect(firstRun.legs).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId,
-              externalId: "tx-send-1:internal_transfer_out",
-              kind: "disposal",
-              derivationRule: "internal_transfer_out",
-              sourceTransferId: null,
-            }),
-            expect.objectContaining({
-              sourceId: ownedOnchainSourceId,
-              externalId: "onchain-receipt-1:internal_transfer_in",
-              kind: "acquisition",
-              derivationRule: "internal_transfer_in",
-              sourceTransferId: expect.any(String),
-            }),
-          ])
-        )
-        expect(firstRun.legs.some((leg) => leg.derivationRule === "coinbase_send_outflow")).toBe(
+        expect(
+          firstRun.reviews.some(
+            (review) => review.matchedLayer?.includes("transfer_reconciliation") === true
+          )
+        ).toBe(false)
+        expect(firstRun.legs.some((leg) => leg.derivationRule === "internal_transfer_out")).toBe(
           false
         )
-
-        const movedLot = firstRun.fifoLots.find((lot) => lot.sourceId === ownedOnchainSourceId)
-        expect(movedLot).toBeDefined()
-        if (movedLot !== undefined) {
-          expectDecimalAmount(movedLot.originalAmount, "0.1")
-          expectDecimalAmount(movedLot.remainingAmount, "0.1")
-        }
+        expect(firstRun.legs.some((leg) => leg.derivationRule === "internal_transfer_in")).toBe(
+          false
+        )
+        expect(firstRun.fifoLots.some((lot) => lot.sourceId === ownedOnchainSourceId)).toBe(false)
 
         const taxAfterSync = yield* calculateTax()
         expect(taxAfterSync.taxableGains).toBe(2000)
@@ -1548,7 +1191,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("canonicalizes a matched Coinbase receive from an owned wallet into an internal transfer", async () => {
+  it("defers matched Coinbase receive FIFO effects", async () => {
     activeSyncRecords = makeReceiveSyncRecords({
       walletAddress: "bc1qexamplesource",
       txHash: "tx-receive-hash-1",
@@ -1567,141 +1210,26 @@ describe("coinbase normalization persistence", () => {
 
         expect(state.reconciliations).toEqual([
           expect.objectContaining({
-            status: "auto_applied",
+            status: "pending",
+            matchReason: "fifo_application_deferred",
+            deterministic: true,
             canonicalTransferId: expect.any(String),
             canonicalTransactionId: expect.any(String),
           }),
         ])
 
-        expect(state.reviews).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId,
-              externalId: "tx-receive-1",
-              reviewStatus: "auto_applied",
-              needsReview: false,
-              currentTypeKey: "internal_transfer",
-              matchedLayer: "transfer_reconciliation",
-            }),
-            expect.objectContaining({
-              sourceId: ownedOnchainSourceId,
-              externalId: "onchain-send-1",
-              reviewStatus: "auto_applied",
-              needsReview: false,
-              currentTypeKey: "internal_transfer",
-              matchedLayer: "transfer_reconciliation",
-            }),
-          ])
-        )
-
-        expect(state.legs).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId: ownedOnchainSourceId,
-              externalId: "onchain-send-1:internal_transfer_out",
-              kind: "disposal",
-              derivationRule: "internal_transfer_out",
-              sourceTransferId: expect.any(String),
-            }),
-            expect.objectContaining({
-              sourceId,
-              externalId: "tx-receive-1:internal_transfer_in",
-              kind: "acquisition",
-              derivationRule: "internal_transfer_in",
-              sourceTransferId: null,
-            }),
-          ])
-        )
-
-        const taxAfterSync = yield* calculateTax()
-        expect(taxAfterSync.taxableGains).toBe(2000)
-        expect(taxAfterSync.incomeTotal).toBe(700)
-      })
-    )
-  })
-
-  it("preserves existing downstream usage when deterministic canonicalization would require rewriting the destination acquisition", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* seedMatchedOnchainReceipt({
-          walletAddress: "bc1qexampledestination",
-          txHash: "tx-send-hash-1",
-          amount: "0.10000000",
-        })
-        yield* seedConsumedOnchainReceiptAcquisition()
-
-        yield* runSync()
-        const state = yield* fetchCanonicalizationState()
-
-        expect(state.reconciliations).toEqual([
-          expect.objectContaining({
-            status: "auto_applied",
-            canonicalTransferId: expect.any(String),
-            canonicalTransactionId: expect.any(String),
-          }),
-        ])
-
-        expect(state.legs).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId: ownedOnchainSourceId,
-              externalId: "onchain-receipt-1:main",
-              kind: "acquisition",
-              derivationRule: "onchain_transfer_in",
-            }),
-          ])
-        )
-        expect(state.legs.some((leg) => leg.derivationRule === "internal_transfer_out")).toBe(false)
-        expect(state.legs.some((leg) => leg.derivationRule === "internal_transfer_in")).toBe(false)
-        expect(state.legs.some((leg) => leg.derivationRule === "coinbase_send_outflow")).toBe(false)
         expect(
           state.reviews.some(
-            (review) =>
-              review.sourceId === ownedOnchainSourceId && review.externalId === "onchain-receipt-1"
+            (review) => review.matchedLayer?.includes("transfer_reconciliation") === true
           )
         ).toBe(false)
+        expect(state.legs.some((leg) => leg.derivationRule === "internal_transfer_out")).toBe(false)
+        expect(state.legs.some((leg) => leg.derivationRule === "internal_transfer_in")).toBe(false)
+        expect(state.fifoLots.some((lot) => lot.sourceId === ownedOnchainSourceId)).toBe(false)
 
         const taxAfterSync = yield* calculateTax()
         expect(taxAfterSync.taxableGains).toBe(2000)
         expect(taxAfterSync.incomeTotal).toBe(700)
-      })
-    )
-  })
-
-  it("preserves user overrides on reconciled transactions across incremental canonicalization reruns", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* seedMatchedOnchainReceipt({
-          walletAddress: "bc1qexampledestination",
-          txHash: "tx-send-hash-1",
-          amount: "0.10000000",
-        })
-
-        yield* runSync()
-        yield* applyUserOverrideToCanonicalizedTransfer({
-          externalId: "tx-send-1",
-          transactionType: "sell_fiat",
-          userNotes: "User override should survive replay",
-        })
-
-        yield* runSync()
-
-        const state = yield* fetchCanonicalizationState()
-        expect(state.reviews).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              sourceId,
-              externalId: "tx-send-1",
-              transactionType: "sell_fiat",
-              reviewStatus: "changed",
-              needsReview: false,
-              originalTypeKey: "internal_transfer",
-              currentTypeKey: "sell_fiat",
-              matchedLayer: "transfer_reconciliation",
-              userNotes: "User override should survive replay",
-            }),
-          ])
-        )
       })
     )
   })
@@ -1965,44 +1493,6 @@ describe("coinbase normalization persistence", () => {
         expect(tax.taxableLosses).toBe(0)
         expect(tax.taxFreeGains).toBe(0)
         expect(tax.incomeTotal).toBe(700)
-      })
-    )
-  })
-
-  it("replays a source from cached raw rows after clearing legacy send disposal artifacts", async () => {
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* runSync()
-        yield* injectLegacySendDisposalArtifacts()
-
-        const taxBeforeReplay = yield* calculateTax()
-        expect(taxBeforeReplay.taxableGains).toBe(2500)
-
-        const replay = yield* replaySource()
-        expect(replay.status).toBe("completed")
-
-        const counts = yield* fetchCounts()
-        expect(counts.legs.map((row) => row.kind).sort()).toEqual([
-          "acquisition",
-          "disposal",
-          "fee",
-          "income",
-        ])
-        expect(counts.disposalMatches.map((row) => String(row.gainLoss)).sort()).toEqual([
-          "2000.00000000",
-        ])
-        expect(counts.transactionReviews).toEqual([
-          expect.objectContaining({
-            reviewStatus: "needs_review",
-            needsReview: true,
-            originalTypeKey: "internal_transfer",
-            currentTypeKey: "internal_transfer",
-          }),
-        ])
-
-        const taxAfterReplay = yield* calculateTax()
-        expect(taxAfterReplay.taxableGains).toBe(2000)
-        expect(taxAfterReplay.taxableLosses).toBe(0)
       })
     )
   })

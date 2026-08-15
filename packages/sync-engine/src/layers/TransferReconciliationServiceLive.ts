@@ -100,6 +100,27 @@ const buildCandidateMetadata = ({
   candidateCount: candidates.length,
   candidateTransferIds: candidates.map((candidate) => candidate.transferId),
   candidateTransactionIds: candidates.map((candidate) => candidate.transactionId),
+  candidates: candidates.map((candidate) => ({
+    transferId: candidate.transferId,
+    observedProviderTransferId: candidate.observedProviderTransferId,
+    transactionId: candidate.transactionId,
+    sourceId: candidate.sourceId,
+    blockchainId: candidate.blockchainId,
+    blockchainName: candidate.blockchainName,
+    txHash: candidate.txHash,
+    timestamp: candidate.timestamp.toISOString(),
+    fromAddress: candidate.fromAddress,
+    toAddress: candidate.toAddress,
+    providerAssetRowId: candidate.providerAssetRowId,
+    providerAssetMappingStatus: candidate.providerAssetMappingStatus,
+    assetId: candidate.assetId,
+    assetRepresentationId: candidate.assetRepresentationId,
+    representationType: candidate.representationType,
+    contractAddress: candidate.contractAddress,
+    mintAddress: candidate.mintAddress,
+    decimals: candidate.decimals,
+    amount: candidate.amount,
+  })),
 })
 
 const filterExactAmountCandidates = ({
@@ -120,6 +141,33 @@ const filterExactAmountCandidates = ({
         Effect.map((isExactAmountMatch) => (isExactAmountMatch ? [...matches, candidate] : matches))
       )
   )
+
+const filterKnownAssetCandidates = ({
+  providerTransfer,
+  candidates,
+}: {
+  readonly providerTransfer: ProviderTransferReconciliationCandidate
+  readonly candidates: ReadonlyArray<OnchainTransferReconciliationCandidate>
+}): ReadonlyArray<OnchainTransferReconciliationCandidate> => {
+  if (providerTransfer.canonicalAssetId === null) {
+    return candidates
+  }
+
+  return candidates.filter((candidate) => {
+    if (candidate.providerAssetMappingStatus !== "approved" || candidate.assetId === null) {
+      return true
+    }
+
+    if (candidate.assetId !== providerTransfer.canonicalAssetId) {
+      return false
+    }
+
+    return (
+      providerTransfer.assetRepresentationId === null ||
+      candidate.assetRepresentationId === providerTransfer.assetRepresentationId
+    )
+  })
+}
 
 const summarizeOutcome = ({
   status,
@@ -165,28 +213,9 @@ const make = Effect.gen(function* () {
     providerTransfer: ProviderTransferReconciliationCandidate
   ): Effect.Effect<TransferReconciliationStatus, SyncEngineStorageError> =>
     Effect.gen(function* () {
-      if (providerTransfer.canonicalAssetId === null) {
-        yield* transferReconciliationRepository.upsertTransferReconciliation({
-          principalId: providerTransfer.principalId,
-          providerTransferId: providerTransfer.providerTransferId,
-          canonicalTransferId: null,
-          canonicalTransactionId: null,
-          status: "pending",
-          matchReason: "provider_asset_mapping_pending",
-          confidence: "0",
-          deterministic: false,
-          reviewMetadata: buildPendingMetadata({
-            reason: "provider_asset_mapping_pending",
-            providerTransfer,
-          }),
-        })
-
-        return "pending"
-      }
-
       const walletAddress = candidateWalletAddress(providerTransfer)
 
-      if (walletAddress === null) {
+      if (walletAddress === null && providerTransfer.networkHash === null) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
@@ -209,8 +238,6 @@ const make = Effect.gen(function* () {
       const broadCandidates = yield* transferReconciliationRepository.findOnchainTransferCandidates(
         {
           principalId: providerTransfer.principalId,
-          canonicalAssetId: providerTransfer.canonicalAssetId,
-          assetRepresentationId: providerTransfer.assetRepresentationId,
           direction: providerTransfer.direction,
           walletAddress,
           timestampStart,
@@ -248,7 +275,32 @@ const make = Effect.gen(function* () {
         return "pending"
       }
 
-      if (exactAmountCandidates.length > 1) {
+      const compatibleCandidates = filterKnownAssetCandidates({
+        providerTransfer,
+        candidates: exactAmountCandidates,
+      })
+
+      if (compatibleCandidates.length === 0) {
+        yield* transferReconciliationRepository.upsertTransferReconciliation({
+          principalId: providerTransfer.principalId,
+          providerTransferId: providerTransfer.providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: null,
+          status: "needs_review",
+          matchReason: "known_asset_candidate_conflict",
+          confidence: "1.0000",
+          deterministic: false,
+          reviewMetadata: {
+            providerCanonicalAssetId: providerTransfer.canonicalAssetId,
+            providerAssetRepresentationId: providerTransfer.assetRepresentationId,
+            ...buildCandidateMetadata({ candidates: exactAmountCandidates }),
+          },
+        })
+
+        return "needs_review"
+      }
+
+      if (compatibleCandidates.length > 1) {
         yield* transferReconciliationRepository.upsertTransferReconciliation({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
@@ -259,14 +311,14 @@ const make = Effect.gen(function* () {
           confidence: "0.5000",
           deterministic: false,
           reviewMetadata: buildCandidateMetadata({
-            candidates: exactAmountCandidates,
+            candidates: compatibleCandidates,
           }),
         })
 
         return "needs_review"
       }
 
-      const matchedCandidate = exactAmountCandidates[0]
+      const matchedCandidate = compatibleCandidates[0]
 
       if (matchedCandidate === undefined) {
         return yield* Effect.fail(
@@ -277,23 +329,201 @@ const make = Effect.gen(function* () {
         )
       }
 
+      const candidateMetadata = buildCandidateMetadata({ candidates: [matchedCandidate] })
+
+      if (providerTransfer.canonicalAssetId === null) {
+        yield* transferReconciliationRepository.upsertTransferReconciliation({
+          principalId: providerTransfer.principalId,
+          providerTransferId: providerTransfer.providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: matchedCandidate.transactionId,
+          status: "pending",
+          matchReason: "provider_asset_mapping_pending",
+          confidence: "0.7500",
+          deterministic: false,
+          reviewMetadata: {
+            ...buildPendingMetadata({
+              reason: "provider_asset_mapping_pending",
+              providerTransfer,
+            }),
+            ...candidateMetadata,
+          },
+        })
+
+        return "pending"
+      }
+
+      if (matchedCandidate.providerAssetMappingStatus === "rejected") {
+        yield* transferReconciliationRepository.upsertTransferReconciliation({
+          principalId: providerTransfer.principalId,
+          providerTransferId: providerTransfer.providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: matchedCandidate.transactionId,
+          status: "needs_review",
+          matchReason: "destination_representation_mapping_rejected",
+          confidence: "0.7500",
+          deterministic: false,
+          reviewMetadata: candidateMetadata,
+        })
+
+        return "needs_review"
+      }
+
+      if (
+        matchedCandidate.providerAssetMappingStatus === "approved" &&
+        matchedCandidate.assetId !== null
+      ) {
+        if (matchedCandidate.assetId !== providerTransfer.canonicalAssetId) {
+          yield* transferReconciliationRepository.upsertTransferReconciliation({
+            principalId: providerTransfer.principalId,
+            providerTransferId: providerTransfer.providerTransferId,
+            canonicalTransferId: null,
+            canonicalTransactionId: matchedCandidate.transactionId,
+            status: "needs_review",
+            matchReason: "representation_economic_asset_conflict",
+            confidence: "1.0000",
+            deterministic: false,
+            reviewMetadata: {
+              providerCanonicalAssetId: providerTransfer.canonicalAssetId,
+              ...candidateMetadata,
+            },
+          })
+
+          return "needs_review"
+        }
+
+        if (
+          providerTransfer.assetRepresentationId !== null &&
+          matchedCandidate.assetRepresentationId !== providerTransfer.assetRepresentationId
+        ) {
+          yield* transferReconciliationRepository.upsertTransferReconciliation({
+            principalId: providerTransfer.principalId,
+            providerTransferId: providerTransfer.providerTransferId,
+            canonicalTransferId: null,
+            canonicalTransactionId: matchedCandidate.transactionId,
+            status: "needs_review",
+            matchReason: "provider_asset_representation_conflict",
+            confidence: "1.0000",
+            deterministic: false,
+            reviewMetadata: {
+              providerAssetRepresentationId: providerTransfer.assetRepresentationId,
+              ...candidateMetadata,
+            },
+          })
+
+          return "needs_review"
+        }
+
+        if (
+          matchedCandidate.transferId === null &&
+          matchedCandidate.assetRepresentationId === null
+        ) {
+          yield* transferReconciliationRepository.upsertTransferReconciliation({
+            principalId: providerTransfer.principalId,
+            providerTransferId: providerTransfer.providerTransferId,
+            canonicalTransferId: null,
+            canonicalTransactionId: matchedCandidate.transactionId,
+            status: "needs_review",
+            matchReason: "approved_destination_representation_missing",
+            confidence: "0.7500",
+            deterministic: false,
+            reviewMetadata: candidateMetadata,
+          })
+
+          return "needs_review"
+        }
+
+        if (matchedCandidate.transferId === null) {
+          yield* transferReconciliationRepository.upsertTransferReconciliation({
+            principalId: providerTransfer.principalId,
+            providerTransferId: providerTransfer.providerTransferId,
+            canonicalTransferId: null,
+            canonicalTransactionId: matchedCandidate.transactionId,
+            status: "pending",
+            matchReason: "destination_source_replay_pending",
+            confidence: "1.0000",
+            deterministic: false,
+            reviewMetadata: candidateMetadata,
+          })
+
+          return "pending"
+        }
+
+        yield* transferReconciliationRepository.upsertTransferReconciliation({
+          principalId: providerTransfer.principalId,
+          providerTransferId: providerTransfer.providerTransferId,
+          canonicalTransferId: matchedCandidate.transferId,
+          canonicalTransactionId: matchedCandidate.transactionId,
+          status: "pending",
+          matchReason: "fifo_application_deferred",
+          confidence: "1.0000",
+          deterministic: true,
+          reviewMetadata: {
+            matchedTransferId: matchedCandidate.transferId,
+            matchedTransactionId: matchedCandidate.transactionId,
+            candidateCount: compatibleCandidates.length,
+            representationId: matchedCandidate.assetRepresentationId,
+          },
+        })
+
+        return "pending"
+      }
+
+      const hasObservedIdentity =
+        matchedCandidate.blockchainId !== null &&
+        (matchedCandidate.representationType === "native" ||
+          matchedCandidate.contractAddress !== null ||
+          matchedCandidate.mintAddress !== null)
+
+      if (
+        matchedCandidate.providerAssetRowId !== null &&
+        matchedCandidate.observedProviderTransferId !== null &&
+        hasObservedIdentity
+      ) {
+        yield* transferReconciliationRepository.upsertTransferReconciliation({
+          principalId: providerTransfer.principalId,
+          providerTransferId: providerTransfer.providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: matchedCandidate.transactionId,
+          status: "pending",
+          matchReason: "asset_representation_review_pending",
+          confidence: providerTransfer.networkHash === null ? "0.9000" : "1.0000",
+          deterministic: false,
+          reviewMetadata: {
+            proposedCanonicalAssetId: providerTransfer.canonicalAssetId,
+            evidenceKind:
+              providerTransfer.networkHash === null
+                ? "owned_address_amount_time_window"
+                : walletAddress === null
+                  ? "network_hash_amount"
+                  : "network_hash_owned_address_amount",
+            ...candidateMetadata,
+          },
+        })
+
+        yield* transferReconciliationRepository.recordOnchainRepresentationEvidence({
+          providerAssetRowId: matchedCandidate.providerAssetRowId,
+          sourceProviderTransferId: providerTransfer.providerTransferId,
+          destinationProviderTransferId: matchedCandidate.observedProviderTransferId,
+          proposedCanonicalAssetId: providerTransfer.canonicalAssetId,
+        })
+
+        return "pending"
+      }
+
       yield* transferReconciliationRepository.upsertTransferReconciliation({
         principalId: providerTransfer.principalId,
         providerTransferId: providerTransfer.providerTransferId,
-        canonicalTransferId: matchedCandidate.transferId,
+        canonicalTransferId: null,
         canonicalTransactionId: matchedCandidate.transactionId,
-        status: "auto_applied",
-        matchReason: "deterministic_wallet_receipt_match",
-        confidence: "1.0000",
-        deterministic: true,
-        reviewMetadata: {
-          matchedTransferId: matchedCandidate.transferId,
-          matchedTransactionId: matchedCandidate.transactionId,
-          candidateCount: exactAmountCandidates.length,
-        },
+        status: "pending",
+        matchReason: "destination_representation_observation_missing",
+        confidence: "0.7500",
+        deterministic: false,
+        reviewMetadata: candidateMetadata,
       })
 
-      return "auto_applied"
+      return "pending"
     })
 
   const reconcileTransferCandidates: TransferReconciliationServiceShape["reconcileTransferCandidates"] =

@@ -63,9 +63,18 @@ const make = Effect.gen(function* () {
           id: schema.assetRepresentations.id,
           assetId: schema.assetRepresentations.assetId,
           symbol: schema.assets.symbol,
+          blockchainName: schema.blockchains.name,
+          representationType: schema.assetRepresentations.type,
+          contractAddress: schema.assetRepresentations.contractAddress,
+          mintAddress: schema.assetRepresentations.mintAddress,
+          decimals: schema.assetRepresentations.decimals,
         })
         .from(schema.assetRepresentations)
         .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
+        .innerJoin(
+          schema.blockchains,
+          eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
+        )
         .where(eq(schema.assetRepresentations.id, assetRepresentationId))
         .limit(1)
         .pipe(wrapSyncEngineSqlError("assetRepository.findRepresentationById"))
@@ -81,6 +90,11 @@ const make = Effect.gen(function* () {
             id: schema.assetRepresentations.id,
             assetId: schema.assetRepresentations.assetId,
             symbol: schema.assets.symbol,
+            blockchainName: schema.blockchains.name,
+            representationType: schema.assetRepresentations.type,
+            contractAddress: schema.assetRepresentations.contractAddress,
+            mintAddress: schema.assetRepresentations.mintAddress,
+            decimals: schema.assetRepresentations.decimals,
           })
           .from(schema.assetRepresentations)
           .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
@@ -108,6 +122,11 @@ const make = Effect.gen(function* () {
             id: schema.assetRepresentations.id,
             assetId: schema.assetRepresentations.assetId,
             symbol: schema.assets.symbol,
+            blockchainName: schema.blockchains.name,
+            representationType: schema.assetRepresentations.type,
+            contractAddress: schema.assetRepresentations.contractAddress,
+            mintAddress: schema.assetRepresentations.mintAddress,
+            decimals: schema.assetRepresentations.decimals,
           })
           .from(schema.assetRepresentations)
           .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))

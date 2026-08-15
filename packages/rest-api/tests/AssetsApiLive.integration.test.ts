@@ -25,6 +25,7 @@ import {
   AssetCatalogListResponse,
   PendingAssetListResponse,
   ProviderAssetReviewListResponse,
+  UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
@@ -33,7 +34,12 @@ import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { eq } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
-import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
+import {
+  TEST_PRINCIPAL_ID,
+  TEST_SOURCE_ID,
+  makeIntegrationTestDatabaseContext,
+  seedSyncEngineRepositoryFixture,
+} from "../../persistence/tests/support/integration-test-kit.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
@@ -272,6 +278,12 @@ describe("AssetsApiLive", () => {
       endpoint: "admin provider assets",
       max: 100,
       path: "/v1/assets/provider-assets",
+      requiresAdmin: true,
+    },
+    {
+      endpoint: "admin unresolved transfer reconciliations",
+      max: 100,
+      path: "/v1/assets/transfer-reconciliations/unresolved",
       requiresAdmin: true,
     },
   ] as const)(
@@ -881,6 +893,11 @@ describe("AssetsApiLive", () => {
       path: `/v1/assets/provider-assets?cursor=${encodeTestCursor({ version: 2, assetId: crypto.randomUUID() })}`,
       requiresAdmin: true,
     },
+    {
+      endpoint: "admin unresolved transfer reconciliations",
+      path: `/v1/assets/transfer-reconciliations/unresolved?cursor=${Buffer.from("not-json").toString("base64url")}`,
+      requiresAdmin: true,
+    },
   ] as const)("rejects an invalid cursor for $endpoint", async ({ path, requiresAdmin }) => {
     const status = await Effect.runPromise(
       (requiresAdmin ? getAdminStatus(path) : getStatus(path)).pipe(
@@ -953,11 +970,91 @@ describe("AssetsApiLive", () => {
     expect(secondPage.body.page).toEqual({ hasMore: false, nextCursor: null })
   })
 
-  it("keeps provider asset review endpoints admin protected", async () => {
-    const status = await Effect.runPromise(
-      getStatus("/v1/assets/provider-assets").pipe(Effect.provide(HttpLive), Effect.scoped)
+  it("lists only unresolved reconciliation evidence for admins", async () => {
+    const timestamp = new Date("2026-08-13T10:00:00.000Z")
+    const providerAssetRowId = crypto.randomUUID()
+    const providerTransferId = crypto.randomUUID()
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* seedSyncEngineRepositoryFixture()
+        yield* db.insert(schema.providerAssets).values({
+          id: providerAssetRowId,
+          provider: "admin-reconciliation-test",
+          providerAssetId: "admin-reconciliation-asset",
+          currencyCode: "ADMIN_RECONCILIATION",
+          providerType: "crypto",
+          retrievedAt: timestamp,
+        })
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "admin-reconciliation-transaction",
+            timestamp,
+            providerTransactionType: "send",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to seed admin reconciliation transaction")
+        }
+
+        yield* db.insert(schema.providerTransfers).values({
+          id: providerTransferId,
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: "admin-reconciliation-transfer",
+          providerAssetId: providerAssetRowId,
+          timestamp,
+          direction: "outbound",
+          processingMode: "accounting_and_evidence",
+          fromAccountRef: "coinbase-account",
+          toAddress: "owned-destination",
+          networkName: "solana",
+          networkHash: "admin-reconciliation-hash",
+          amount: "12.5",
+        })
+        yield* db.insert(schema.transferReconciliations).values({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId,
+          status: "needs_review",
+          matchReason: "multiple_candidate_onchain_receipts",
+          confidence: "0.5",
+          deterministic: false,
+          reviewMetadata: { candidateTransferIds: [crypto.randomUUID(), crypto.randomUUID()] },
+        })
+      })
     )
 
-    expect(status).toBe(401)
+    const response = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/transfer-reconciliations/unresolved",
+        responseSchema: UnresolvedTransferReconciliationListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body.reconciliations).toEqual([
+      expect.objectContaining({
+        providerTransferId,
+        status: "needs_review",
+        matchReason: "multiple_candidate_onchain_receipts",
+      }),
+    ])
   })
+
+  it.each(["/v1/assets/provider-assets", "/v1/assets/transfer-reconciliations/unresolved"])(
+    "keeps the admin review endpoint protected: %s",
+    async (path) => {
+      const status = await Effect.runPromise(
+        getStatus(path).pipe(Effect.provide(HttpLive), Effect.scoped)
+      )
+
+      expect(status).toBe(401)
+    }
+  )
 })
