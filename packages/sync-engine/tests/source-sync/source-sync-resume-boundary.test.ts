@@ -129,6 +129,8 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("upsertProviderAssetMappings should not be called"),
             seedProviderAssetMappingsIfMissing: () =>
               Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
+            approveProviderAssetMappingIfPending: () =>
+              Effect.dieMessage("approveProviderAssetMappingIfPending should not be called"),
             findProviderAssetByProviderAssetId: () =>
               Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
             findProviderAssetByNaturalKey: () =>
@@ -139,6 +141,8 @@ const runWithProvider = <A, E>(
               Effect.dieMessage("findProviderAssetReviewById should not be called"),
             listProviderAssetReviews: () =>
               Effect.dieMessage("listProviderAssetReviews should not be called"),
+            listProviderAssetObservedRepresentations: () =>
+              Effect.dieMessage("listProviderAssetObservedRepresentations should not be called"),
             findProviderAssetMapping: () =>
               Effect.dieMessage("findProviderAssetMapping should not be called"),
           })

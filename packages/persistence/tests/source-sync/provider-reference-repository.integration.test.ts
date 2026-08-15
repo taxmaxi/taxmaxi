@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderReferenceRepositoryLive.ts"
 import {
   makeIntegrationTestDatabaseContext,
@@ -23,10 +23,6 @@ describe("ProviderReferenceRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("persists transaction-type catalogs, approved mappings, and pending-review discoveries", async () => {

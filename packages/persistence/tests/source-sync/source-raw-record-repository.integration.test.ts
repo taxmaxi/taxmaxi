@@ -1,6 +1,6 @@
 import { asc, eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -48,10 +48,6 @@ describe("SourceRawRecordRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("upserts raw batches idempotently and exposes replay candidates", async () => {

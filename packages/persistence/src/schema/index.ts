@@ -3,6 +3,7 @@ import * as assetPrices from "./AssetPricesTable.ts"
 import * as assetRepresentations from "./AssetRepresentationsTable.ts"
 import * as assets from "./AssetsTable.ts"
 import * as blockchains from "./BlockchainsTable.ts"
+import * as billing from "./BillingTables.ts"
 import * as cex from "./CexTable.ts"
 import * as cexAccount from "./CexAccountTable.ts"
 import * as disposalMatches from "./DisposalMatchesTable.ts"
@@ -49,6 +50,7 @@ export const schema = {
   ...assetRepresentations,
   ...assets,
   ...blockchains,
+  ...billing,
   ...cex,
   ...cexAccount,
   ...disposalMatches,
@@ -99,6 +101,7 @@ export type {
 } from "./AssetRepresentationsTable.ts"
 export type { Asset, AssetInsert, AssetType } from "./AssetsTable.ts"
 export type { Blockchain, BlockchainInsert } from "./BlockchainsTable.ts"
+export type { BillingAccountRow, CreditLedgerRow, StripeEventRow } from "./BillingTables.ts"
 export type { Cex, CexInsert } from "./CexTable.ts"
 export type { CexAccount, CexAccountInsert } from "./CexAccountTable.ts"
 export type { DisposalMatch, DisposalMatchInsert } from "./DisposalMatchesTable.ts"

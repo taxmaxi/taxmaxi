@@ -6,7 +6,7 @@ import {
   HttpClientRequest,
 } from "@effect/platform"
 import { NodeHttpServer } from "@effect/platform-node"
-import { afterAll, beforeEach, describe, expect, it } from "@effect/vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
   AuthService,
   HashedPassword,
@@ -256,8 +256,6 @@ const seedOlderPendingProtocolCandidate = Effect.gen(function* () {
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AdminProtocolReviewApiLive", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
   })

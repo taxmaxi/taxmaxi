@@ -25,7 +25,37 @@
   },
   "app": {
     "title": "TaxMaxi App",
-    "description": "You are signed in. The app workspace will live here."
+    "description": "You are signed in. The app workspace will live here.",
+    "billing": {
+      "dashboard": "Dashboard",
+      "eyebrow": "Billing",
+      "title": "Plan and transaction credits",
+      "description": "Stripe handles payments and invoices. TaxMaxi tracks the credits available to your account.",
+      "annual": {
+        "title": "TaxMaxi Annual",
+        "description": "10,000 transaction credits with annual renewal.",
+        "priceSuffix": "/ year, {taxLabel}",
+        "manage": "Manage subscription",
+        "subscribe": "Subscribe for {price}"
+      },
+      "topUp": {
+        "title": "Extra transaction pack",
+        "description": "1,000 additional credits. Never purchased automatically.",
+        "buy": "Buy 1,000 credits",
+        "eligibility": "Stripe verifies an active annual subscription when you continue."
+      },
+      "availableCredits": "Available credits",
+      "priceUnavailable": "Price unavailable",
+      "openingStripe": "Opening Stripe…",
+      "tax": {
+        "included": "tax included",
+        "exclusive": "plus applicable tax",
+        "checkout": "tax shown at checkout"
+      },
+      "errors": {
+        "unavailable": "Billing is temporarily unavailable."
+      }
+    }
   },
   "assetCatalog": {
     "title": "Asset catalog",
@@ -209,136 +239,77 @@
   },
   "pricing": {
     "eyebrow": "Pricing",
-    "title": "Pay per transaction. Scale to millions.",
-    "description": "Buy transaction classification capacity. Plans only change your rate per 1,000 transactions.",
-    "billingNote": "Annual billing with monthly capacity commits. Additional usage keeps the same tier rate.",
-    "includedLabel": "How capacity pricing works",
-    "included": {
-      "unit": "Every classified transaction maps to one pricing unit.",
-      "minimum": "Your monthly minimum buys a clear bucket of transaction capacity.",
-      "rate": "Plans only change your price per 1,000 classified transactions.",
-      "autoscale": "Additional usage auto-scales at the same tier rate instead of jumping in blocks.",
-      "sharedCapabilities": "API access, audit trails, AI explanations, and workspaces are included across tiers.",
-      "enterpriseSupport": "Enterprise adds governance, procurement, and rollout support, not a different pricing model."
-    },
-    "tiers": {
-      "build": {
-        "name": "Build",
-        "audience": "Teams validating their first tax workflow",
-        "price": "€5.90",
-        "priceSuffix": "per 1,000 classified transactions",
-        "description": "A €590 monthly minimum buys 100,000 classified transactions and keeps pricing explicit from day one.",
-        "cta": "Talk about Build",
-        "stats": {
-          "monthlyMinimum": {
-            "label": "Monthly minimum",
-            "value": "€590"
-          },
-          "includedCapacity": {
-            "label": "Included capacity",
-            "value": "100,000 tx / month"
-          },
-          "additionalUsage": {
-            "label": "Additional usage",
-            "value": "€5.90 / 1k tx"
-          }
-        },
-        "features": {
-          "one": "Onboarding with TaxMaxi Founder",
-          "two": "Jurisdiction-specific reasoning + source citations",
-          "three": "Exportable memos and review history",
-          "four": "Email support"
-        }
-      },
-      "scale": {
-        "name": "Scale",
-        "audience": "Companies depending on crypto tax as core product feature",
-        "price": "€1.95",
-        "priceSuffix": "per 1,000 classified transactions",
-        "description": "A €1,950 monthly minimum buys 1,000,000 classified transactions for teams operating tax workflows at production scale.",
-        "cta": "Talk about Scale",
-        "stats": {
-          "monthlyMinimum": {
-            "label": "Monthly minimum",
-            "value": "€1,950"
-          },
-          "includedCapacity": {
-            "label": "Included capacity",
-            "value": "1,000,000 tx / month"
-          },
-          "additionalUsage": {
-            "label": "Additional usage",
-            "value": "€1.95 / 1k tx"
-          }
-        },
-        "features": {
-          "one": "Priority support",
-          "two": "Shared review queues + playbooks",
-          "three": "Sandbox and production environments",
-          "four": "Webhook + integration support"
-        },
-        "badge": "Most common"
-      },
-      "enterprise": {
-        "name": "Enterprise",
-        "audience": "Exchanges, banks, and regulated platforms",
-        "price": "Custom",
-        "priceSuffix": "committed usage pricing",
-        "description": "For institutions that need governance, rollout support, and negotiated unit economics across teams or markets.",
-        "cta": "Plan Enterprise",
-        "stats": {
-          "monthlyMinimum": {
-            "label": "Monthly minimum",
-            "value": "Committed usage"
-          },
-          "includedCapacity": {
-            "label": "Included capacity",
-            "value": "Custom"
-          },
-          "additionalUsage": {
-            "label": "Additional usage",
-            "value": "Pre-negotiated rate"
-          }
-        },
-        "features": {
-          "one": "SSO / SCIM",
-          "two": "SLA + dedicated onboarding",
-          "three": "Custom connectors and workflows",
-          "four": "Private deployment options"
-        }
+    "title": "For one taxpayer or a whole practice.",
+    "description": "Individuals can start directly. Tax advisers can explore a Professional design-partner scope. Large firms begin with a scoped pilot.",
+    "individual": {
+      "name": "Individual",
+      "badge": "Self-serve",
+      "description": "German crypto tax calculations and review tools for one taxpayer.",
+      "price": "€159",
+      "priceSuffix": "per year, including VAT",
+      "cta": "Start as an individual",
+      "note": "Renews annually. Cancel before the next renewal.",
+      "features": {
+        "transactions": "10,000 processed transactions per year",
+        "api": "TaxMaxi API and CLI access",
+        "reports": "German tax calculations and reports",
+        "auditTrail": "Review history and source references"
       }
     },
-    "overages": {
-      "title": "Linear usage economics",
-      "description": "The core unit is classified transactions. Monthly minimums buy capacity, and extra volume keeps the same per-1,000 rate.",
-      "label": "Usage line item",
-      "rows": {
-        "effectiveRate": {
-          "label": "Effective rate",
-          "build": "€5.90 / 1k tx",
-          "scale": "€1.95 / 1k tx",
-          "enterprise": "Custom committed rate"
-        },
-        "monthlyMinimum": {
-          "label": "Monthly minimum",
-          "build": "€590",
-          "scale": "€1,950",
-          "enterprise": "Annual commit"
-        },
-        "includedCapacity": {
-          "label": "Included capacity",
-          "build": "100,000 tx / month",
-          "scale": "1,000,000 tx / month",
-          "enterprise": "Custom"
-        },
-        "autoscaling": {
-          "label": "Autoscaling",
-          "build": "Continue at tier rate",
-          "scale": "Continue at tier rate",
-          "enterprise": "Pre-agreed expansion"
-        }
+    "professional": {
+      "name": "Professional",
+      "badge": "Tax advisers",
+      "description": "A design-partner preview for tax practices evaluating German crypto-tax client workflows.",
+      "price": "€1,590",
+      "priceSuffix": "net per year, plus VAT where applicable",
+      "cta": "Discuss professional access",
+      "note": "Launch offer for a bounded design-partner engagement.",
+      "features": {
+        "users": "Proposed launch scope for up to 3 professional users",
+        "matters": "Workflow design for up to 10 client matters",
+        "transactions": "Target capacity of 100,000 shared transactions per year",
+        "support": "API access, exportable evidence, and email support"
       }
-    }
+    },
+    "enterprise": {
+      "name": "Enterprise",
+      "badge": "Audit firms",
+      "description": "A paid pilot for an agreed team, workflow, data scope, and evidence standard.",
+      "price": "€5,000",
+      "priceSuffix": "net per scoped pilot",
+      "cta": "Plan an enterprise pilot",
+      "note": "Successful pilots can move to annual contracts from €15,000 net.",
+      "features": {
+        "scope": "One team and one agreed workflow",
+        "procurement": "Invoice and bank-transfer procurement",
+        "security": "Security and data-processing review",
+        "contract": "Custom users, integrations, support, and volume"
+      }
+    },
+    "addOns": {
+      "title": "Capacity you add deliberately",
+      "individual": {
+        "name": "Individual transaction pack",
+        "description": "For an active Individual subscription.",
+        "price": "€20",
+        "suffix": "including VAT per additional 1,000 transactions"
+      },
+      "matter": {
+        "name": "Additional client matter",
+        "description": "Adds one matter with 10,000 transactions to Professional.",
+        "price": "€149",
+        "suffix": "net per contract year, plus VAT where applicable"
+      },
+      "professional": {
+        "name": "Professional transaction pack",
+        "description": "Shared across an active Professional workspace.",
+        "price": "€200",
+        "suffix": "net per additional 20,000 transactions"
+      }
+    },
+    "taxNote": "Individual prices include VAT. Business prices are net and exclude VAT.",
+    "taxNoteLive": "Taxes are shown for each price above and confirmed at checkout.",
+    "explanation": "There are no automatic overage charges. Included capacity renews with the annual contract; add-ons are purchased separately. Professional and Enterprise access stays scoped to the product capabilities agreed during onboarding."
   },
   "useCases": {
     "eyebrow": "Use Cases",

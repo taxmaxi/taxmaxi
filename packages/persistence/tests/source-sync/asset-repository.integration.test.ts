@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { eq } from "drizzle-orm"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -35,10 +35,6 @@ describe("AssetRepositoryLive", () => {
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
       })
     )
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("loads canonical assets and blockchain lookups", async () => {

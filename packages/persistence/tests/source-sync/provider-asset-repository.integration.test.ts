@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -26,10 +26,6 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
 
 describe("ProviderAssetRepositoryLive", () => {
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
-  })
-
   describe("current schema", () => {
     beforeEach(async () => {
       await Effect.runPromise(context.recreateTestDatabase())
@@ -157,6 +153,102 @@ describe("ProviderAssetRepositoryLive", () => {
         mappingStatus: "approved",
       })
       expect(providerAssetRows).toHaveLength(1)
+    })
+
+    it("approves only mappings that are still pending review", async () => {
+      const providerAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "helius-solana",
+            entries: [
+              {
+                providerAssetId: "conditional-mint",
+                naturalKey: "solana:mint:conditional-mint",
+                currencyCode: "COND",
+                name: "Conditional Token",
+                exponent: 6,
+                providerType: "spl-token",
+                payload: { source: "test" },
+              },
+            ],
+          })
+          const result = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "helius-solana",
+            providerAssetId: "conditional-mint",
+          })
+
+          if (Option.isNone(result)) {
+            return yield* Effect.dieMessage("Expected conditional provider asset")
+          }
+
+          return result.value
+        })
+      )
+      const approvedDraft = {
+        providerAssetRowId: providerAsset.id,
+        mappingKind: "asset" as const,
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+        assetRepresentationId: null,
+        canonicalFiatCurrency: null,
+        mappingStatus: "approved" as const,
+        reviewerNotes: null,
+        sourceNotes: "Exact representation match",
+      }
+
+      const firstResult = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                ...approvedDraft,
+                canonicalAssetId: null,
+                mappingStatus: "pending_review",
+                sourceNotes: "Pending review",
+              },
+            ],
+          })
+
+          return yield* repository.approveProviderAssetMappingIfPending({
+            mapping: approvedDraft,
+          })
+        })
+      )
+
+      expect(firstResult).toBe(true)
+
+      const secondResult = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                ...approvedDraft,
+                canonicalAssetId: null,
+                mappingStatus: "rejected",
+                reviewerNotes: "Admin rejected",
+                sourceNotes: "Admin decision",
+              },
+            ],
+          })
+
+          return yield* repository.approveProviderAssetMappingIfPending({
+            mapping: approvedDraft,
+          })
+        })
+      )
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.id })
+        )
+      )
+
+      expect(secondResult).toBe(false)
+      expect(Option.getOrNull(mapping)).toMatchObject({
+        mappingStatus: "rejected",
+        canonicalAssetId: null,
+      })
     })
 
     it("falls back to provider-scoped natural-key lookup when provider asset id is absent", async () => {

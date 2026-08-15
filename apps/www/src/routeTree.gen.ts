@@ -29,6 +29,7 @@ import { Route as DemoAiImageRouteImport } from './routes/demo/ai-image'
 import { Route as DemoAiChatRouteImport } from './routes/demo/ai-chat'
 import { Route as AssetsAssetIdRouteImport } from './routes/assets/$assetId'
 import { Route as ArticlesSlugRouteImport } from './routes/articles.$slug'
+import { Route as AppBillingRouteImport } from './routes/app_.billing'
 import { Route as DemoGuitarsIndexRouteImport } from './routes/demo/guitars/index'
 import { Route as DemoGuitarsGuitarIdRouteImport } from './routes/demo/guitars/$guitarId'
 import { Route as DemoFormSimpleRouteImport } from './routes/demo/form.simple'
@@ -139,6 +140,11 @@ const ArticlesSlugRoute = ArticlesSlugRouteImport.update({
   path: '/articles/$slug',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppBillingRoute = AppBillingRouteImport.update({
+  id: '/app_/billing',
+  path: '/app/billing',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DemoGuitarsIndexRoute = DemoGuitarsIndexRouteImport.update({
   id: '/demo/guitars/',
   path: '/demo/guitars/',
@@ -196,6 +202,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/billing': typeof AppBillingRoute
   '/articles/$slug': typeof ArticlesSlugRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -227,6 +234,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app/billing': typeof AppBillingRoute
   '/articles/$slug': typeof ArticlesSlugRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -259,6 +267,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sign-up': typeof SignUpRoute
   '/terms': typeof TermsRoute
+  '/app_/billing': typeof AppBillingRoute
   '/articles/$slug': typeof ArticlesSlugRoute
   '/assets/$assetId': typeof AssetsAssetIdRoute
   '/demo/ai-chat': typeof DemoAiChatRoute
@@ -292,6 +301,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/billing'
     | '/articles/$slug'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -323,6 +333,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app/billing'
     | '/articles/$slug'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -354,6 +365,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-up'
     | '/terms'
+    | '/app_/billing'
     | '/articles/$slug'
     | '/assets/$assetId'
     | '/demo/ai-chat'
@@ -386,6 +398,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SignUpRoute: typeof SignUpRoute
   TermsRoute: typeof TermsRoute
+  AppBillingRoute: typeof AppBillingRoute
   ArticlesSlugRoute: typeof ArticlesSlugRoute
   AssetsAssetIdRoute: typeof AssetsAssetIdRoute
   DemoAiChatRoute: typeof DemoAiChatRoute
@@ -549,6 +562,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ArticlesSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app_/billing': {
+      id: '/app_/billing'
+      path: '/app/billing'
+      fullPath: '/app/billing'
+      preLoaderRoute: typeof AppBillingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/demo/guitars/': {
       id: '/demo/guitars/'
       path: '/demo/guitars'
@@ -626,6 +646,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SignUpRoute: SignUpRoute,
   TermsRoute: TermsRoute,
+  AppBillingRoute: AppBillingRoute,
   ArticlesSlugRoute: ArticlesSlugRoute,
   AssetsAssetIdRoute: AssetsAssetIdRoute,
   DemoAiChatRoute: DemoAiChatRoute,

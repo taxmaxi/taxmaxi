@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import {
@@ -58,10 +58,6 @@ describe("EmailVerificationRequestRepositoryLive", () => {
         }),
       ])
     )
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("creates, loads, replaces, and consumes verification requests", async () => {

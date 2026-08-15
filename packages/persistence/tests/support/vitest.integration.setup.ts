@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { PgClient } from "@effect/sql-pg"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Redacted from "effect/Redacted"
@@ -9,7 +10,10 @@ import {
   runSqlUnsafe,
 } from "../../src/layers/PgClientLive.ts"
 import { seedData } from "../../src/seed/data.ts"
-import { makeTestDatabaseTemplateName } from "./test-database-name.ts"
+import {
+  makeIntegrationTestDatabaseRunMarker,
+  makeTestDatabaseTemplateName,
+} from "./test-database-name.ts"
 
 const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `""`)}"`
 
@@ -32,8 +36,17 @@ export const prepareTemplateDatabase = <E, R, R2>({
   readonly prepareTemplate: Effect.Effect<void, E, R>
 }) => prepareTemplate.pipe(Effect.onError(() => cleanupTemplate))
 
+export const cleanupIntegrationTestDatabases = <E, R>({
+  databaseNames,
+  cleanupDatabase,
+}: {
+  readonly databaseNames: ReadonlyArray<string>
+  readonly cleanupDatabase: (databaseName: string) => Effect.Effect<void, E, R>
+}) => Effect.forEach(databaseNames, cleanupDatabase, { discard: true })
+
 export const setup = async (project: TestProject) => {
   const testRunId = randomUUID()
+  const integrationTestDatabaseRunMarker = makeIntegrationTestDatabaseRunMarker({ testRunId })
   const migratedTestDatabaseTemplateName = makeTestDatabaseTemplateName({ testRunId })
   project.provide("integrationTestRunId", testRunId)
 
@@ -53,66 +66,75 @@ export const setup = async (project: TestProject) => {
     url: templateDatabaseUrl,
   })
 
-  const runAdminSql = ({
+  const executeAdminSql = ({
     statement,
     params,
   }: {
     readonly statement: string
     readonly params?: ReadonlyArray<unknown>
   }) =>
-    runSqlUnsafe(params === undefined ? { statement } : { statement, params }).pipe(
-      Effect.provide(AdminPgClientLive),
-      Effect.asVoid,
-      Effect.scoped
-    )
+    runSqlUnsafe(params === undefined ? { statement } : { statement, params }).pipe(Effect.asVoid)
 
-  const cleanupTemplate = Effect.gen(function* () {
-    yield* runAdminSql({
+  const terminateDatabaseConnections = ({ databaseName }: { readonly databaseName: string }) =>
+    executeAdminSql({
       statement: `
         SELECT pg_terminate_backend(pid)
         FROM pg_stat_activity
         WHERE datname = $1
           AND pid <> pg_backend_pid()
       `,
-      params: [migratedTestDatabaseTemplateName],
+      params: [databaseName],
     })
-    yield* runAdminSql({
-      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
+
+  const dropDatabase = ({ databaseName }: { readonly databaseName: string }) =>
+    executeAdminSql({
+      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`,
     })
-  }).pipe(Effect.orDie)
+
+  const cleanupDatabase = (databaseName: string) =>
+    Effect.gen(function* () {
+      yield* terminateDatabaseConnections({ databaseName })
+      yield* dropDatabase({ databaseName })
+    })
+
+  const listIntegrationTestDatabaseNames = Effect.gen(function* () {
+    const sql = yield* PgClient.PgClient
+    const rows = yield* sql<{ readonly databaseName: string }>`
+      SELECT datname AS "databaseName"
+      FROM pg_database
+      WHERE strpos(datname, ${integrationTestDatabaseRunMarker}) > 0
+      ORDER BY datname
+    `
+
+    return rows.map((row) => row.databaseName)
+  })
+
+  const cleanupTemplate = cleanupDatabase(migratedTestDatabaseTemplateName).pipe(Effect.orDie)
 
   const prepareTemplate = Effect.gen(function* () {
-    yield* runAdminSql({
-      statement: `
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname = $1
-          AND pid <> pg_backend_pid()
-      `,
-      params: [migratedTestDatabaseTemplateName],
-    })
-    yield* runAdminSql({
-      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
-    })
-    yield* runAdminSql({
+    yield* cleanupDatabase(migratedTestDatabaseTemplateName)
+    yield* executeAdminSql({
       statement: `CREATE DATABASE ${quoteIdentifier(migratedTestDatabaseTemplateName)}`,
     })
     yield* runDrizzleMigrations().pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
     yield* seedData.pipe(Effect.provide(TemplatePgClientLive), Effect.scoped)
-    yield* runAdminSql({
-      statement: `
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname = $1
-          AND pid <> pg_backend_pid()
-      `,
-      params: [migratedTestDatabaseTemplateName],
-    })
+    yield* terminateDatabaseConnections({ databaseName: migratedTestDatabaseTemplateName })
   })
 
-  await Effect.runPromise(prepareTemplateDatabase({ cleanupTemplate, prepareTemplate }))
+  await Effect.runPromise(
+    prepareTemplateDatabase({ cleanupTemplate, prepareTemplate }).pipe(
+      Effect.provide(AdminPgClientLive),
+      Effect.scoped
+    )
+  )
 
   return async () => {
-    await Effect.runPromise(cleanupTemplate)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const databaseNames = yield* listIntegrationTestDatabaseNames
+        yield* cleanupIntegrationTestDatabases({ databaseNames, cleanupDatabase })
+        yield* cleanupTemplate
+      }).pipe(Effect.provide(AdminPgClientLive), Effect.scoped)
+    )
   }
 }

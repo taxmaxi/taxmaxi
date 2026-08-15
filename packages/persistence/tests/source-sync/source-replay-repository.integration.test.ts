@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SourceRawRecordRepositoryLive } from "../../src/layers/SourceRawRecordRepositoryLive.ts"
@@ -72,10 +72,6 @@ describe("SourceReplayRepositoryLive", () => {
       })
     )
     await runPg(seedReplayRawRecord())
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("waits for the source inventory lock before resetting replay state", async () => {

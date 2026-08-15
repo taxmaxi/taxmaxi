@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect"
 import { eq } from "drizzle-orm"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { PortfolioRepositoryLive } from "../src/layers/PortfolioRepositoryLive.ts"
 import { drizzle } from "../src/layers/PgClientLive.ts"
 import { schema } from "../src/schema/index.ts"
@@ -36,10 +36,6 @@ describe("PortfolioRepositoryLive", () => {
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
       })
     )
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("excludes spam representation lots while retaining chainless custody lots", async () => {

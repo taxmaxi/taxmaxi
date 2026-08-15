@@ -18,6 +18,8 @@ import {
   SourceSyncJobExecutionNotFoundError,
   SourceSyncJobExecutor,
   SourceSyncQueuePayload,
+  SyncEngineStorageError,
+  TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
   type ExecuteSourceSyncJobParams,
   type SourceSyncJobExecutorShape,
   type SourceSyncJobSummary,
@@ -378,6 +380,45 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
 
     const executor: SourceSyncJobExecutorShape = {
       execute: ({ jobId }) => Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
+    }
+
+    await runWithConsumer({
+      executor,
+      acquireWorker: (_config, acquiredProcessor) =>
+        Effect.sync(() => {
+          processor = acquiredProcessor
+          return { close: Effect.void }
+        }),
+      effect: Effect.gen(function* () {
+        if (processor === null) {
+          return yield* Effect.dieMessage("Processor was not acquired")
+        }
+        const acquiredProcessor = processor
+
+        const result = yield* Effect.tryPromise({
+          try: () => acquiredProcessor(makeJob({ data: syncPayload })),
+          catch: toPromiseRejectionError,
+        }).pipe(Effect.either)
+
+        expect(result._tag).toBe("Left")
+        if (result._tag === "Left") {
+          expect(result.left.cause).toBeInstanceOf(UnrecoverableError)
+        }
+      }),
+    })
+  })
+
+  it("marks transaction credit exhaustion terminal for BullMQ", async () => {
+    let processor: WorkerBullMqSourceSyncProcessor | null = null
+
+    const executor: SourceSyncJobExecutorShape = {
+      execute: () =>
+        Effect.fail(
+          new SyncEngineStorageError({
+            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+            cause: "Transaction credit balance is exhausted",
+          })
+        ),
     }
 
     await runWithConsumer({

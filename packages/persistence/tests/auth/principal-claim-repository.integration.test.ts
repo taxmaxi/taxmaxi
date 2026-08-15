@@ -3,7 +3,7 @@ import { PrincipalId } from "@my/core/ownership"
 import { SourceId } from "@my/core/source"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { PrincipalClaimRepositoryLive } from "../../src/layers/PrincipalClaimRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -96,10 +96,6 @@ describe("PrincipalClaimRepositoryLive", () => {
         ])
       })
     )
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("locks the source before either ownership principal", async () => {

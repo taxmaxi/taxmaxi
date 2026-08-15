@@ -10,6 +10,7 @@
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "@effect/platform"
 import * as Schema from "effect/Schema"
 import { AuthApi, AuthSessionApi, CoinbaseCompatApi } from "./AuthApi.ts"
+import { BillingApi } from "./BillingApi.ts"
 import { AdminProtocolReviewApi } from "./AdminProtocolReviewApi.ts"
 import { AnonApi } from "./AnonApi.ts"
 import { LegalReferenceApi } from "./LegalReferenceApi.ts"
@@ -83,6 +84,7 @@ export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(AdminProtocolReviewApi)
   .add(AuthApi)
   .add(AuthSessionApi)
+  .add(BillingApi)
   .add(CoinbaseCompatApi)
   .add(LegalReferenceApi)
   .add(PrincipalsApi)

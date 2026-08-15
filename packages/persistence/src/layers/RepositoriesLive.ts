@@ -28,6 +28,7 @@ import {
   CryptoRandomAdapterTag,
 } from "@my/core/authentication"
 import { UserRepositoryLive } from "./UserRepositoryLive.ts"
+import { BillingRepositoryLive } from "./BillingRepositoryLive.ts"
 import { EmailVerificationDeliveryServiceLive } from "./EmailVerificationDeliveryServiceLive.ts"
 import { EmailVerificationRequestRepositoryLive } from "./EmailVerificationRequestRepositoryLive.ts"
 import { IdentityRepositoryLive } from "./IdentityRepositoryLive.ts"
@@ -98,6 +99,7 @@ import { AuthServiceConfig, SessionDurationConfig } from "../services/AuthServic
  * ```
  */
 export const RepositoriesLive = Layer.mergeAll(
+  BillingRepositoryLive,
   UserRepositoryLive,
   EmailVerificationRequestRepositoryLive,
   IdentityRepositoryLive,

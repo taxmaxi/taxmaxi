@@ -11,7 +11,7 @@ import * as Chunk from "effect/Chunk"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
-import { afterAll, describe, expect, it } from "vitest"
+import { describe, expect, it } from "vitest"
 import {
   SourceSyncRunService,
   type SourceSyncRunServiceShape,
@@ -163,8 +163,6 @@ const resolveQuestionViaService = ({
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("LegalReferenceApiLive", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   it("returns question-level DE legal references from the active fresh-DB ruleset", async () => {
     const serviceResponse = await Effect.runPromise(
       resolveQuestionViaService({

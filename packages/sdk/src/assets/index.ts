@@ -5,6 +5,7 @@ import type {
   AssetCanonicalizationResponse,
   PendingAssetListResponse,
   ProviderAssetReviewListResponse,
+  UnresolvedTransferReconciliationListResponse,
 } from "@my/rest-api/contracts"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import { HttpApiClient, type HttpApi } from "@effect/platform"
@@ -20,6 +21,9 @@ type TaxMaxiAssetsClient =
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
+export type UnresolvedTransferReconciliation =
+  UnresolvedTransferReconciliationListResponse["reconciliations"][number]
+export type UnresolvedTransferReconciliationList = UnresolvedTransferReconciliationListResponse
 export type PendingAsset = {
   readonly id: string
   readonly provider: string
@@ -96,6 +100,12 @@ export type ProviderAssetReviewListInput = {
   readonly limit?: number
 }
 
+export type UnresolvedTransferReconciliationListInput = {
+  readonly status?: "pending" | "needs_review"
+  readonly cursor?: string | null
+  readonly limit?: number
+}
+
 export type AssetRequestOptions = {
   readonly signal?: AbortSignal
 }
@@ -130,6 +140,9 @@ export type InternalAssetsEffectResource = AssetsEffectResource & {
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Effect.Effect<AssetCanonicalization, unknown, never>
+  readonly listUnresolvedTransferReconciliations: (
+    input?: UnresolvedTransferReconciliationListInput
+  ) => Effect.Effect<UnresolvedTransferReconciliationList, unknown, never>
 }
 
 export type InternalAssetsPromiseResource = AssetsPromiseResource & {
@@ -139,6 +152,10 @@ export type InternalAssetsPromiseResource = AssetsPromiseResource & {
   readonly canonicalizeProviderAsset: (
     input: AssetCanonicalizationInput
   ) => Promise<AssetCanonicalization>
+  readonly listUnresolvedTransferReconciliations: (
+    input?: UnresolvedTransferReconciliationListInput,
+    options?: AssetRequestOptions
+  ) => Promise<UnresolvedTransferReconciliationList>
 }
 
 const toAssetCatalogAsset = (asset: AssetCatalogAssetResponse): AssetCatalogAsset => ({
@@ -246,6 +263,16 @@ export const makeInternalAssetsEffectResource = (
         },
       })
     ),
+  listUnresolvedTransferReconciliations: (input) =>
+    Effect.flatMap(client, (resolved) =>
+      resolved.assets.listUnresolvedTransferReconciliations({
+        urlParams: {
+          status: input?.status,
+          cursor: input?.cursor ?? undefined,
+          limit: input?.limit,
+        },
+      })
+    ),
   canonicalizeProviderAsset: ({ id, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.canonicalizeProviderAsset({
@@ -274,5 +301,7 @@ export const makeInternalAssetsPromiseResource = (
 ): InternalAssetsPromiseResource => ({
   ...makeAssetsPromiseResource(effect, run),
   listProviderAssetReviews: (input) => run(effect.listProviderAssetReviews(input)),
+  listUnresolvedTransferReconciliations: (input, options) =>
+    run(effect.listUnresolvedTransferReconciliations(input), options),
   canonicalizeProviderAsset: (input) => run(effect.canonicalizeProviderAsset(input)),
 })
