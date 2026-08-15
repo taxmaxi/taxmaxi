@@ -331,6 +331,8 @@ export interface PersistNormalizedSourceArtifactsContext {
  * PersistNormalizedSourceArtifactsParamsBase - Shared normalized artifact inputs.
  */
 export interface PersistNormalizedSourceArtifactsParamsBase {
+  /** Replay reservation that this persistence call is allowed to finalize. */
+  readonly replayReservationId?: string
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
@@ -367,10 +369,32 @@ export type PersistNormalizedSourceArtifactsParams<E> =
   | PersistNormalizedSourceArtifactsWithLegsParams
   | PersistNormalizedSourceArtifactsWithDerivationParams<E>
 
+/** Stable transaction identity used to reserve replay credits before destructive reset work. */
+export type ReplayTransactionCreditReservation = Pick<
+  SourceTransactionDraft,
+  "externalId" | "principalId" | "sourceId" | "sourceRawRecordId"
+>
+
+/** Credit usage inserted and owned by one replay job until persistence succeeds. */
+export interface ReservedReplayTransactionCredit {
+  readonly reference: string
+  readonly sourceRawRecordId: string | null
+}
+
 /**
  * SourceNormalizationRepositoryShape - Atomic canonical write surface for normalized source artifacts.
  */
 export interface SourceNormalizationRepositoryShape {
+  /** Reserve every missing transaction credit atomically before a source replay resets state. */
+  readonly reserveReplayTransactionCredits: (params: {
+    readonly reservationId: string
+    readonly transactions: ReadonlyArray<ReplayTransactionCreditReservation>
+  }) => Effect.Effect<ReadonlyArray<ReservedReplayTransactionCredit>, SyncEngineStorageError>
+  /** Release credits that are still owned by a failed replay reservation. */
+  readonly releaseReplayTransactionCredits: (params: {
+    readonly reservationId: string
+    readonly references: ReadonlyArray<string>
+  }) => Effect.Effect<void, SyncEngineStorageError>
   /**
    * Persist normalized canonical artifacts for one raw row, including review rows and FIFO side effects.
    */

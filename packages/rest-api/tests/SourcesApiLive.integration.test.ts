@@ -6,7 +6,7 @@ import {
   HttpClientRequest,
 } from "@effect/platform"
 import { NodeHttpServer } from "@effect/platform-node"
-import { afterAll, beforeEach, describe, expect, it } from "@effect/vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
   AuthService,
   HashedPassword,
@@ -718,8 +718,6 @@ const seedSourceReportTaxTreatmentRows = ({
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("SourcesApiLive", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   beforeEach(async () => {
     queueEvents.length = 0
     settlementEvents.length = 0

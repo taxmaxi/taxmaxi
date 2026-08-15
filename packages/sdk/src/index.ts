@@ -37,6 +37,12 @@ import {
 } from "./assets/index.ts"
 import { toTaxMaxiError } from "./errors.ts"
 import {
+  makeBillingEffectResource,
+  makeBillingPromiseResource,
+  type BillingEffectResource,
+  type BillingPromiseResource,
+} from "./billing/index.ts"
+import {
   makePortfolioEffectResource,
   makePortfolioPromiseResource,
   type PortfolioEffectResource,
@@ -100,6 +106,13 @@ export type {
 export { TaxMaxiError, isTaxMaxiUnauthorizedError, toTaxMaxiError } from "./errors.ts"
 export type { TaxMaxiFieldError } from "./errors.ts"
 export type {
+  BillingCatalog,
+  BillingEffectResource,
+  BillingPromiseResource,
+  BillingRedirect,
+  BillingStatus,
+} from "./billing/index.ts"
+export type {
   PortfolioAssets,
   PortfolioAssetsInput,
   PortfolioEffectResource,
@@ -146,6 +159,7 @@ export type TaxMaxiEffectResources = {
   readonly anon: AnonEffectResource
   readonly assets: AssetsEffectResource
   readonly auth: AuthEffectResource
+  readonly billing: BillingEffectResource
   readonly portfolio: PortfolioEffectResource
   readonly sources: SourcesEffectResource
 }
@@ -155,6 +169,7 @@ export type TaxMaxiPromiseResources = {
   readonly anon: AnonPromiseResource
   readonly assets: AssetsPromiseResource
   readonly auth: AuthPromiseResource
+  readonly billing: BillingPromiseResource
   readonly portfolio: PortfolioPromiseResource
   readonly sources: SourcesPromiseResource
 }
@@ -166,6 +181,7 @@ const makeTaxMaxiEffectResources = (
   anon: makeAnonEffectResource(client),
   assets: makeAssetsEffectResource(client),
   auth: makeAuthEffectResource(client),
+  billing: makeBillingEffectResource(client),
   portfolio: makePortfolioEffectResource(client),
   sources: makeSourcesEffectResource(client),
 })
@@ -185,6 +201,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   readonly anon: AnonPromiseResource
   readonly assets: AssetsPromiseResource
   readonly auth: AuthPromiseResource
+  readonly billing: BillingPromiseResource
   readonly portfolio: PortfolioPromiseResource
   readonly effect: TaxMaxiEffectResources
   readonly sources: SourcesPromiseResource
@@ -201,6 +218,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
     this.anon = makeAnonPromiseResource(this.effect.anon, this.run)
     this.assets = makeAssetsPromiseResource(this.effect.assets, this.run)
     this.auth = makeAuthPromiseResource(this.effect.auth, this.run)
+    this.billing = makeBillingPromiseResource(this.effect.billing, this.run)
     this.portfolio = makePortfolioPromiseResource(this.effect.portfolio, this.run)
     this.sources = makeSourcesPromiseResource(this.effect.sources, this.run)
   }

@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
@@ -238,10 +238,6 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await context.runPg(resetAssetResolutionFixture)
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("resolves native SOL without a DAS metadata call", async () => {

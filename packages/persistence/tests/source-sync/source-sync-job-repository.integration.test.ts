@@ -1,12 +1,13 @@
 import { eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
 import {
   TEST_SOURCE_ID,
   TEST_PRINCIPAL_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
@@ -148,10 +149,6 @@ describe("SourceSyncJobRepositoryLive", () => {
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await runPg(seedSyncEngineRepositoryFixture())
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("creates a sync job as pending with sync mode", async () => {
@@ -546,6 +543,7 @@ describe("SourceSyncJobRepositoryLive", () => {
         repository.recoverStaleActiveJob({
           sourceId: TEST_SOURCE_ID,
           jobId: heartbeatJob.id,
+          staleBefore,
           message: "Recovered stale heartbeat",
           completedAt: new Date("2025-01-02T00:30:00.000Z"),
         })
@@ -566,6 +564,131 @@ describe("SourceSyncJobRepositoryLive", () => {
     )
 
     expect(staleByUpdatedAt.map((job) => job.id)).toContain(pendingJob.id)
+  })
+
+  it("does not recover a processing job that heartbeated after stale selection", async () => {
+    const staleBefore = new Date("2025-01-02T00:10:00.000Z")
+    const staleHeartbeatAt = new Date("2025-01-02T00:00:00.000Z")
+    const freshHeartbeatAt = new Date("2025-01-02T00:20:00.000Z")
+    const created = await createJob()
+
+    await claimJob({ jobId: created.id, workerId: "worker-1" })
+    await updateProcessingJobStaleTimestamps({
+      jobId: created.id,
+      heartbeatAt: staleHeartbeatAt,
+      updatedAt: staleHeartbeatAt,
+    })
+
+    const selected = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.listStaleActiveJobs({ staleBefore, limit: 10 })
+      )
+    )
+    expect(selected.map((job) => job.id)).toContain(created.id)
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.heartbeatJob({
+          jobId: created.id,
+          workerId: "worker-1",
+          heartbeatAt: freshHeartbeatAt,
+        })
+      )
+    )
+
+    const recovery = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository
+          .recoverStaleActiveJob({
+            sourceId: TEST_SOURCE_ID,
+            jobId: created.id,
+            staleBefore,
+            message: "Recovered stale source sync job after timeout.",
+            completedAt: new Date("2025-01-02T00:30:00.000Z"),
+          })
+          .pipe(Effect.either)
+      )
+    )
+
+    expect(recovery._tag).toBe("Left")
+    if (recovery._tag === "Left") {
+      expect(recovery.left._tag).toBe("SourceSyncJobExecutionRecordConflictError")
+    }
+    expect(await selectProcessingJob({ jobId: created.id })).toMatchObject({
+      status: "processing",
+      heartbeatAt: freshHeartbeatAt,
+      workerId: "worker-1",
+    })
+  })
+
+  it("releases replay credits owned by a recovered stale job", async () => {
+    const staleBefore = new Date("2025-01-02T00:10:00.000Z")
+    const staleAt = new Date("2025-01-02T00:00:00.000Z")
+    const created = await createJob({ mode: "replay" })
+
+    await claimJob({ jobId: created.id, workerId: "worker-1" })
+    await updateProcessingJobStaleTimestamps({
+      jobId: created.id,
+      heartbeatAt: staleAt,
+      updatedAt: staleAt,
+    })
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.creditLedger).values([
+          {
+            userId: TEST_USER_ID,
+            delta: -1,
+            kind: "transaction_usage",
+            reference: "test:stale-replay-owned",
+            paymentReference: null,
+            replayReservationId: created.id,
+            expiresAt: null,
+          },
+          {
+            userId: TEST_USER_ID,
+            delta: -1,
+            kind: "transaction_usage",
+            reference: "test:stale-replay-adopted",
+            paymentReference: null,
+            replayReservationId: "successor-job",
+            expiresAt: null,
+          },
+        ])
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.recoverStaleActiveJob({
+          sourceId: TEST_SOURCE_ID,
+          jobId: created.id,
+          staleBefore,
+          message: "Recovered stale replay job.",
+          completedAt: new Date("2025-01-02T00:30:00.000Z"),
+        })
+      )
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            reference: schema.creditLedger.reference,
+            replayReservationId: schema.creditLedger.replayReservationId,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(usage).toEqual([
+      {
+        reference: "test:stale-replay-adopted",
+        replayReservationId: "successor-job",
+      },
+    ])
   })
 
   it("lists repairable active jobs by queue metadata and stale execution predicates", async () => {
@@ -699,13 +822,23 @@ describe("SourceSyncJobRepositoryLive", () => {
   })
 
   it("recovers a stale active job and allows a fresh job to start", async () => {
+    const staleBefore = new Date("2025-01-03T00:00:00.000Z")
+    const staleHeartbeatAt = new Date("2025-01-02T00:00:00.000Z")
     const created = await createJob()
+
+    await claimJob({ jobId: created.id })
+    await updateProcessingJobStaleTimestamps({
+      jobId: created.id,
+      heartbeatAt: staleHeartbeatAt,
+      updatedAt: staleHeartbeatAt,
+    })
 
     await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.recoverStaleActiveJob({
           sourceId: TEST_SOURCE_ID,
           jobId: created.id,
+          staleBefore,
           message: "Recovered stale source sync job after timeout.",
           completedAt: new Date("2025-01-04T00:00:00.000Z"),
         })

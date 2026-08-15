@@ -32,6 +32,25 @@ const sourceListResponseBody = JSON.stringify({
   sources: [],
 })
 
+const billingCatalogResponse = {
+  prices: [
+    {
+      lookupKey: "taxmaxi_annual_10k_eur",
+      amountMinor: 15_900,
+      currency: "eur",
+      taxBehavior: "inclusive",
+      recurringInterval: "year",
+    },
+  ],
+} as const
+
+const billingStatusResponse = {
+  credits: 10_000,
+  subscriptionStatus: "active",
+  currentPeriodEnd: "2027-08-14T12:00:00.000Z",
+  cancelAtPeriodEnd: false,
+} as const
+
 const sourceCreateResponseBody = JSON.stringify({
   source: {
     id: "00000000-0000-4000-8000-000000000001",
@@ -481,6 +500,78 @@ describe("TaxMaxi Promise client", () => {
         }),
         url: "https://sdk.example.test/v1/sources",
       }),
+    ])
+  })
+
+  it("uses the browser session for every billing route and returns encoded responses", async () => {
+    const capturedRequests: Array<{
+      readonly credentials: string | undefined
+      readonly method: string
+      readonly url: string
+    }> = []
+    const responseBodies = [
+      JSON.stringify(billingCatalogResponse),
+      JSON.stringify(billingStatusResponse),
+      JSON.stringify({ url: "https://checkout.stripe.test/annual" }),
+      JSON.stringify({ url: "https://checkout.stripe.test/top-up" }),
+      JSON.stringify({ url: "https://billing.stripe.test/portal" }),
+    ]
+    const taxmaxi = TaxMaxi.fromBrowserSession({
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          method:
+            typeof input === "string" || input instanceof URL
+              ? (init?.method ?? "GET")
+              : input.method,
+          url: getRequestUrl(input),
+        })
+        return new Response(responseBodies.shift(), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(taxmaxi.billing.catalog()).resolves.toEqual(billingCatalogResponse)
+    await expect(taxmaxi.billing.status()).resolves.toEqual(billingStatusResponse)
+    await expect(taxmaxi.billing.createAnnualCheckout()).resolves.toEqual({
+      url: "https://checkout.stripe.test/annual",
+    })
+    await expect(taxmaxi.billing.createTopUpCheckout()).resolves.toEqual({
+      url: "https://checkout.stripe.test/top-up",
+    })
+    await expect(taxmaxi.billing.createPortalSession()).resolves.toEqual({
+      url: "https://billing.stripe.test/portal",
+    })
+
+    expect(capturedRequests).toEqual([
+      {
+        credentials: "include",
+        method: "GET",
+        url: "https://sdk.example.test/v1/billing/catalog",
+      },
+      {
+        credentials: "include",
+        method: "GET",
+        url: "https://sdk.example.test/v1/billing/status",
+      },
+      {
+        credentials: "include",
+        method: "POST",
+        url: "https://sdk.example.test/v1/billing/checkout/annual",
+      },
+      {
+        credentials: "include",
+        method: "POST",
+        url: "https://sdk.example.test/v1/billing/checkout/top-up",
+      },
+      {
+        credentials: "include",
+        method: "POST",
+        url: "https://sdk.example.test/v1/billing/portal",
+      },
     ])
   })
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   makeIntegrationTestDatabaseName,
+  makeIntegrationTestDatabaseRunMarker,
   makeTestDatabaseTemplateName,
 } from "./test-database-name.ts"
 
@@ -61,6 +62,29 @@ describe("test database names", () => {
     const concurrent = makeIntegrationTestDatabaseName({ ...base, testRunId: "concurrent-run" })
 
     expect(first).not.toBe(concurrent)
+  })
+
+  it("marks temporary databases for run-scoped global cleanup", () => {
+    const worktreeRoot = "/worktrees/first/taxmaxi"
+    const testRunId = "test-run"
+    const runMarker = makeIntegrationTestDatabaseRunMarker({ testRunId, worktreeRoot })
+    const databaseName = makeIntegrationTestDatabaseName({
+      databaseNamePrefix: "taxmaxi_source_sync_repo",
+      testRunId,
+      workerId: "1",
+      worktreeRoot,
+    })
+    const concurrentDatabaseName = makeIntegrationTestDatabaseName({
+      databaseNamePrefix: "taxmaxi_source_sync_repo",
+      testRunId: "concurrent-run",
+      workerId: "1",
+      worktreeRoot,
+    })
+    const templateDatabaseName = makeTestDatabaseTemplateName({ testRunId, worktreeRoot })
+
+    expect(databaseName).toContain(runMarker)
+    expect(concurrentDatabaseName).not.toContain(runMarker)
+    expect(templateDatabaseName).not.toContain(runMarker)
   })
 
   it("keeps temporary database names within PostgreSQL's identifier limit", () => {

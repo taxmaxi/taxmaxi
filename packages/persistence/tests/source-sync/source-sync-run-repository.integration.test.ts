@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { SourceSyncRunRepositoryLive } from "../../src/layers/SourceSyncRunRepositoryLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -177,10 +177,6 @@ describe("SourceSyncRunRepositoryLive", () => {
     await Effect.runPromise(context.recreateTestDatabase())
     await runPg(seedSyncEngineRepositoryFixture())
     await seedSecondSource()
-  })
-
-  afterAll(async () => {
-    await Effect.runPromise(context.destroyTestDatabase())
   })
 
   it("creates a run with principal id and initial counters", async () => {

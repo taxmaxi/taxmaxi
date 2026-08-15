@@ -501,6 +501,7 @@ const make = Effect.gen(function* () {
   const recoverStaleActiveJob: SourceSyncJobRepositoryShape["recoverStaleActiveJob"] = ({
     sourceId,
     jobId,
+    staleBefore,
     message,
     completedAt,
   }) =>
@@ -520,7 +521,14 @@ const make = Effect.gen(function* () {
               and(
                 eq(schema.processingJobs.id, jobId),
                 eq(schema.processingJobs.sourceId, sourceId),
-                inArray(schema.processingJobs.status, ACTIVE_JOB_STATUSES)
+                eq(schema.processingJobs.status, "processing"),
+                or(
+                  lt(schema.processingJobs.heartbeatAt, staleBefore),
+                  and(
+                    isNull(schema.processingJobs.heartbeatAt),
+                    lt(schema.processingJobs.updatedAt, staleBefore)
+                  )
+                )
               )
             )
             .returning({
@@ -535,9 +543,18 @@ const make = Effect.gen(function* () {
             return yield* failExpectedState({
               jobId,
               operation: "sourceSyncJobRepository.recoverStaleActiveJob.select",
-              reason: "Only active jobs can be recovered as stale.",
+              reason: "Only processing jobs that are still stale can be recovered.",
             })
           }
+
+          yield* tx
+            .delete(schema.creditLedger)
+            .where(eq(schema.creditLedger.replayReservationId, jobId))
+            .pipe(
+              wrapSyncEngineSqlError(
+                "sourceSyncJobRepository.recoverStaleActiveJob.releaseReplayCredits"
+              )
+            )
 
           yield* materializeFollowUpJob({
             executor: tx,

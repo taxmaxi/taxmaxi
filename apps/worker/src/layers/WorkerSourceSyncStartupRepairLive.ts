@@ -441,15 +441,18 @@ const recoverStaleProcessingJob = ({
   job,
   repository,
   now,
+  staleBefore,
 }: {
   readonly job: SourceSyncRepairableActiveJob
   readonly repository: SourceSyncJobRepositoryShape
   readonly now: Date
+  readonly staleBefore: Date
 }) =>
   Effect.gen(function* () {
     yield* repository.recoverStaleActiveJob({
       sourceId: job.sourceId,
       jobId: job.id,
+      staleBefore,
       message: "Startup repair failed stale processing source sync job.",
       completedAt: now,
     })
@@ -477,12 +480,14 @@ const repairJob = ({
   repository,
   config,
   now,
+  staleBefore,
 }: {
   readonly job: SourceSyncRepairableActiveJob
   readonly queue: WorkerSourceSyncStartupRepairQueue
   readonly repository: SourceSyncJobRepositoryShape
   readonly config: WorkerSourceSyncStartupRepairConfig
   readonly now: Date
+  readonly staleBefore: Date
 }): Effect.Effect<WorkerSourceSyncStartupRepairJobOutcome> => {
   const effect: Effect.Effect<
     WorkerSourceSyncStartupRepairJobOutcome,
@@ -490,7 +495,7 @@ const repairJob = ({
   > =
     job.status === "pending"
       ? repairPendingJob({ job, queue, repository, config, now })
-      : recoverStaleProcessingJob({ job, repository, now })
+      : recoverStaleProcessingJob({ job, repository, now, staleBefore })
 
   return effect.pipe(
     Effect.catchAll((cause) => {
@@ -617,7 +622,7 @@ export const makeWorkerSourceSyncStartupRepairLive = (
 
           const outcomes = yield* Effect.forEach(
             jobs,
-            (job) => repairJob({ job, queue, repository, config, now }),
+            (job) => repairJob({ job, queue, repository, config, now, staleBefore }),
             { concurrency: 1 }
           )
 
@@ -648,7 +653,7 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           )
         const outcomes = yield* Effect.forEach(
           jobs,
-          (job) => repairJob({ job, queue, repository, config, now }),
+          (job) => repairJob({ job, queue, repository, config, now, staleBefore }),
           { concurrency: 1 }
         )
 

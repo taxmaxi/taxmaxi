@@ -3,7 +3,7 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import { afterAll, beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it } from "vitest"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
@@ -26,7 +26,10 @@ import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLi
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../../persistence/src/services/index.ts"
-import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
+import {
+  makeIntegrationTestDatabaseContext,
+  seedSyncEngineRepositoryFixture,
+} from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
@@ -371,70 +374,37 @@ const seedCoinbaseSource = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
-    yield* db.insert(schema.users).values({
-      id: userId,
-      email: "coinbase-pr03@taxmaxi.test",
-      name: "Coinbase PR-03 Test User",
-    })
-    yield* db.insert(schema.principals).values({
-      id: principalId,
-      kind: "user",
+    yield* seedSyncEngineRepositoryFixture({
       userId,
+      principalId,
+      sourceId,
     })
 
-    const [coinbaseCex] = yield* db
-      .select({ id: schema.cex.id })
-      .from(schema.cex)
-      .where(eq(schema.cex.name, "coinbase"))
-      .limit(1)
-
-    if (coinbaseCex === undefined) {
-      return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
-    }
-
-    const [createdAccount] = yield* db
-      .insert(schema.cexAccount)
-      .values({
-        cexId: coinbaseCex.id,
-        principalId,
-        providerUserId: "coinbase-user-1",
-        providerAccountId: "coinbase-account-1",
-        accessToken: "test-access-token",
-        refreshToken: "test-refresh-token",
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-        scopes: "wallet:accounts:read wallet:transactions:read",
-      })
-      .returning({ id: schema.cexAccount.id })
-
-    if (createdAccount === undefined) {
-      return yield* Effect.dieMessage("Failed to create cex account fixture")
-    }
+    yield* db.insert(schema.assets).values([
+      {
+        id: BTC_ASSET_ID,
+        name: "Bitcoin",
+        symbol: "BTC",
+        coingeckoCoinId: "bitcoin",
+        type: "fungible",
+      },
+      {
+        id: DOT_ASSET_ID,
+        name: "Polkadot",
+        symbol: "DOT",
+        coingeckoCoinId: "polkadot",
+        type: "fungible",
+      },
+    ])
 
     const [baseBlockchain] = yield* db
       .select({ id: schema.blockchains.id })
       .from(schema.blockchains)
       .where(eq(schema.blockchains.name, "base"))
       .limit(1)
-
     if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
+      return yield* Effect.dieMessage("Missing seeded base blockchain")
     }
-
-    yield* db.insert(schema.assets).values({
-      id: BTC_ASSET_ID,
-      name: "Bitcoin",
-      symbol: "BTC",
-      coingeckoCoinId: "bitcoin",
-      type: "fungible",
-    })
-
-    yield* db.insert(schema.assets).values({
-      id: DOT_ASSET_ID,
-      name: "Polkadot",
-      symbol: "DOT",
-      coingeckoCoinId: "polkadot",
-      type: "fungible",
-    })
 
     yield* db.insert(schema.assetRepresentations).values({
       id: BTC_BASE_REPRESENTATION_ID,
@@ -442,15 +412,6 @@ const seedCoinbaseSource = () =>
       blockchainId: baseBlockchain.id,
       type: "native",
       decimals: 8,
-    })
-
-    yield* db.insert(schema.sources).values({
-      id: sourceId,
-      name: "Coinbase",
-      providerKey: "coinbase",
-      sourceableType: "cex",
-      cexAccountId: createdAccount.id,
-      principalId,
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
@@ -1089,8 +1050,6 @@ const approveProviderAssetMappingToCanonicalAsset = ({
 await Effect.runPromise(recreateTestDatabase())
 
 describe("coinbase normalization persistence", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   beforeEach(() =>
     Effect.gen(function* () {
       activeSyncRecords = defaultSyncRecords

@@ -6,6 +6,10 @@
 
 import * as Schema from "effect/Schema"
 
+/** Operation used when a registered user has no transaction credits left. */
+export const TRANSACTION_CREDIT_EXHAUSTED_OPERATION =
+  "sourceNormalizationRepository.consumeTransactionCredit.exhausted"
+
 /**
  * SyncEngineStorageError - Wraps lower-level persistence/integration failures without
  * coupling sync-engine contracts to persistence package types.

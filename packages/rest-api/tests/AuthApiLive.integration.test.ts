@@ -12,7 +12,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
 import type * as Scope from "effect/Scope"
-import { afterAll, beforeEach, describe, expect, it } from "@effect/vitest"
+import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
   SourceSyncRunService,
   type SourceSyncRunServiceShape,
@@ -296,8 +296,6 @@ const jsonBody = <A = unknown>(response: Response) =>
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("AuthApiLive integration", () => {
-  afterAll(() => Effect.runPromise(context.destroyTestDatabase()))
-
   beforeEach(() => Effect.runPromise(clearAuthTables()))
 
   it.effect("clears an invalid session cookie on an unauthorized response", () =>
