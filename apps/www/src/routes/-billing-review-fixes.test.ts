@@ -2,7 +2,9 @@ import type { BillingStatus } from "taxmaxi"
 import { describe, expect, it } from "vitest"
 
 import { catalogPriceSuffix, catalogTaxNote } from "#/components/pricing-section"
+import { m } from "#/paraglide/messages"
 import {
+  formatCatalogPrice,
   isTopUpActionDisabled,
   loadBillingPageData,
   refreshBillingStatusAfterCheckout,
@@ -75,6 +77,79 @@ describe("billing review fixes", () => {
 
     expect(annual).toMatchObject({ credits: 10_000, subscriptionStatus: "active" })
     expect(topUp).toMatchObject({ credits: 11_000, subscriptionStatus: "active" })
+  })
+
+  it("keeps polling with backoff after six slow top-up checks", async () => {
+    const waits: Array<number> = []
+    let loadCount = 0
+    const refreshed = await refreshBillingStatusAfterCheckout({
+      initialStatus: status(10_000, "active"),
+      kind: "topUp",
+      loadStatus: () => {
+        loadCount += 1
+        return Promise.resolve(loadCount < 7 ? status(9_999, "active") : status(10_999, "active"))
+      },
+      wait: (delayMs) => {
+        waits.push(delayMs)
+        return Promise.resolve()
+      },
+    })
+
+    expect(refreshed.credits).toBe(10_999)
+    expect(loadCount).toBe(7)
+    expect(waits).toEqual([500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000])
+  })
+
+  it("stops the active polling window when fulfillment never arrives", async () => {
+    const waits: Array<number> = []
+    let loadCount = 0
+    const initialStatus = status(10_000, "active")
+    const refreshed = await refreshBillingStatusAfterCheckout({
+      initialStatus,
+      kind: "topUp",
+      loadStatus: () => {
+        loadCount += 1
+        return Promise.resolve(initialStatus)
+      },
+      wait: (delayMs) => {
+        waits.push(delayMs)
+        return Promise.resolve()
+      },
+    })
+
+    expect(refreshed).toEqual(initialStatus)
+    expect(loadCount).toBe(15)
+    expect(waits.at(-1)).toBe(30_000)
+  })
+
+  it("stops Checkout polling when the page is no longer active", async () => {
+    let active = true
+    let loadCount = 0
+    const initialStatus = status(10_000, "active")
+    const refreshed = await refreshBillingStatusAfterCheckout({
+      initialStatus,
+      kind: "topUp",
+      loadStatus: () => {
+        loadCount += 1
+        return Promise.resolve(status(11_000, "active"))
+      },
+      shouldContinue: () => active,
+      wait: () => {
+        active = false
+        return Promise.resolve()
+      },
+    })
+
+    expect(refreshed).toEqual(initialStatus)
+    expect(loadCount).toBe(0)
+  })
+
+  it("formats billing prices with the selected app locale", () => {
+    const price = { amountMinor: 15_950, currency: "eur" }
+
+    expect(formatCatalogPrice(price, "en")).toBe("€159.50")
+    expect(formatCatalogPrice(price, "de").replaceAll(" ", " ")).toBe("159,50 €")
+    expect(m["app.billing.title"]({}, { locale: "de" })).toBe("Tarif und Transaktionsguthaben")
   })
 
   it("keeps polling after a transient Checkout status failure", async () => {

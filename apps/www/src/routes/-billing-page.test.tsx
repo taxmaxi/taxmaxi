@@ -133,7 +133,7 @@ describe("BillingPageContent", () => {
   it.each([
     {
       expectedUrl: "https://stripe.test/annual",
-      label: /Subscribe for 159,00/,
+      label: /Subscribe for €159.00/,
       method: "annual" as const,
       subscriptionStatus: null,
     },
@@ -182,7 +182,7 @@ describe("BillingPageContent", () => {
       annualCheckout: () => checkout.promise,
     })
 
-    fireEvent.click(screen.getByRole("button", { name: /Subscribe for 159,00/ }))
+    fireEvent.click(screen.getByRole("button", { name: /Subscribe for €159.00/ }))
 
     expect(screen.getByRole("button", { name: "Opening Stripe…" }).hasAttribute("disabled")).toBe(
       true
@@ -197,7 +197,7 @@ describe("BillingPageContent", () => {
   it("shows a Checkout failure and lets the user try again", async () => {
     const annualCheckout = vi.fn().mockRejectedValue(new Error("Stripe is unavailable"))
     await renderBillingPage({ annualCheckout })
-    const subscribe = screen.getByRole("button", { name: /Subscribe for 159,00/ })
+    const subscribe = screen.getByRole("button", { name: /Subscribe for €159.00/ })
 
     fireEvent.click(subscribe)
 
@@ -262,6 +262,30 @@ describe("BillingPageContent", () => {
       })
 
       expect(onUnauthorized).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("refreshes a delayed Checkout return when the page regains focus", async () => {
+    vi.useFakeTimers()
+    const refreshedStatus = { ...status("active"), credits: 11_000 }
+    const loadStatus = vi.fn().mockResolvedValue(refreshedStatus)
+    try {
+      await renderBillingPage({
+        checkoutReturnKind: "topUp",
+        loadStatus,
+        subscriptionStatus: "active",
+      })
+
+      window.dispatchEvent(new Event("focus"))
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+
+      expect(loadStatus).toHaveBeenCalledTimes(1)
+      expect(screen.getByText(new Intl.NumberFormat().format(11_000))).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }

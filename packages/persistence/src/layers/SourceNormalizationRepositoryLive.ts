@@ -727,7 +727,10 @@ const make = Effect.gen(function* () {
 
       const now = nowDate()
       const rows = yield* executor
-        .select({ delta: schema.creditLedger.delta, expiresAt: schema.creditLedger.expiresAt })
+        .select({
+          balance: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+          expiresAt: schema.creditLedger.expiresAt,
+        })
         .from(schema.creditLedger)
         .where(
           and(
@@ -735,6 +738,7 @@ const make = Effect.gen(function* () {
             or(isNull(schema.creditLedger.expiresAt), gt(schema.creditLedger.expiresAt, now))
           )
         )
+        .groupBy(schema.creditLedger.expiresAt)
         .orderBy(asc(schema.creditLedger.expiresAt))
         .pipe(
           wrapSyncEngineSqlError(
@@ -742,16 +746,11 @@ const make = Effect.gen(function* () {
           )
         )
 
-      const buckets = new Map<string, { balance: number; expiresAt: Date | null }>()
-      for (const row of rows) {
-        const key = row.expiresAt?.toISOString() ?? "never"
-        const bucket = buckets.get(key) ?? { balance: 0, expiresAt: row.expiresAt }
-        buckets.set(key, { ...bucket, balance: bucket.balance + row.delta })
-      }
-      const totalBalance = [...buckets.values()].reduce(
-        (total, candidate) => total + candidate.balance,
-        0
-      )
+      const buckets = rows.map((row) => ({
+        balance: Number(row.balance),
+        expiresAt: row.expiresAt,
+      }))
+      const totalBalance = buckets.reduce((total, candidate) => total + candidate.balance, 0)
       if (totalBalance <= 0) {
         return yield* Effect.fail(
           toSyncEngineStorageError({
@@ -761,7 +760,7 @@ const make = Effect.gen(function* () {
         )
       }
 
-      const bucket = [...buckets.values()].find((candidate) => candidate.balance > 0)
+      const bucket = buckets.find((candidate) => candidate.balance > 0)
       if (bucket === undefined) {
         return yield* Effect.fail(
           toSyncEngineStorageError({

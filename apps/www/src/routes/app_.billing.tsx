@@ -20,6 +20,8 @@ import {
   CardHeader,
   CardTitle,
 } from "#/components/ui/card"
+import { m } from "#/paraglide/messages"
+import { getLocale, type Locale } from "#/paraglide/runtime"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 
 const billingSearchSchema = z.object({
@@ -28,6 +30,10 @@ const billingSearchSchema = z.object({
 })
 
 type CheckoutReturnKind = "annual" | "topUp"
+
+const CHECKOUT_STATUS_POLL_ATTEMPTS = 15
+
+const checkoutStatusPollDelayMs = (attempt: number): number => Math.min(500 * 2 ** attempt, 30_000)
 
 export const loadBillingPageData = async ({
   loadCatalog,
@@ -57,18 +63,22 @@ export const refreshBillingStatusAfterCheckout = async ({
   initialStatus,
   kind,
   loadStatus,
+  shouldContinue = () => true,
   wait,
-  attempts = 6,
+  attempts = CHECKOUT_STATUS_POLL_ATTEMPTS,
 }: {
   readonly initialStatus: BillingStatus
   readonly kind: CheckoutReturnKind
   readonly loadStatus: () => Promise<BillingStatus>
-  readonly wait: () => Promise<void>
+  readonly shouldContinue?: () => boolean
+  readonly wait: (delayMs: number) => Promise<void>
   readonly attempts?: number
 }): Promise<BillingStatus> => {
   let latest = initialStatus
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    await wait()
+    if (!shouldContinue()) return latest
+    await wait(checkoutStatusPollDelayMs(attempt))
+    if (!shouldContinue()) return latest
     try {
       latest = await loadStatus()
     } catch (error) {
@@ -79,7 +89,7 @@ export const refreshBillingStatusAfterCheckout = async ({
       (kind === "annual" &&
         (latest.subscriptionStatus === "active" || latest.subscriptionStatus === "trialing") &&
         latest.credits > initialStatus.credits) ||
-      (kind === "topUp" && latest.credits !== initialStatus.credits)
+      (kind === "topUp" && latest.credits > initialStatus.credits)
     ) {
       return latest
     }
@@ -114,8 +124,14 @@ function BillingPage() {
   const search = Route.useSearch()
   const { taxmaxi } = Route.useRouteContext()
   const navigate = Route.useNavigate()
-  const checkoutReturnKind =
+  const [checkoutReturnKind] = useState<CheckoutReturnKind | null>(() =>
     search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
+  )
+
+  useEffect(() => {
+    if (checkoutReturnKind === null) return
+    void navigate({ to: "/app/billing", search: {}, replace: true })
+  }, [checkoutReturnKind, navigate])
 
   return (
     <BillingPageContent
@@ -147,6 +163,7 @@ export function BillingPageContent({
   readonly onUnauthorized: () => Promise<void>
   readonly status: BillingStatus
 }) {
+  const locale = getLocale()
   const [liveStatus, setLiveStatus] = useState(status)
   const [pendingAction, setPendingAction] = useState<"annual" | "portal" | "topUp" | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -160,21 +177,43 @@ export function BillingPageContent({
   useEffect(() => {
     if (checkoutReturnKind === null) return
     let active = true
+
+    const handleRefreshError = async (cause: unknown) => {
+      if (!active || !isTaxMaxiUnauthorizedError(cause)) return
+      await onUnauthorized()
+    }
+
+    const refreshOnce = async () => {
+      try {
+        const refreshed = await billing.status()
+        if (active) setLiveStatus(refreshed)
+      } catch (cause) {
+        await handleRefreshError(cause)
+      }
+    }
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshOnce()
+    }
+
+    window.addEventListener("focus", refreshOnce)
+    document.addEventListener("visibilitychange", refreshWhenVisible)
+
     void refreshBillingStatusAfterCheckout({
       initialStatus: status,
       kind: checkoutReturnKind,
       loadStatus: billing.status,
-      wait: () => new Promise((resolve) => window.setTimeout(resolve, 500)),
+      shouldContinue: () => active,
+      wait: (delayMs) => new Promise((resolve) => window.setTimeout(resolve, delayMs)),
     })
       .then((refreshed) => {
         if (active) setLiveStatus(refreshed)
       })
-      .catch(async (cause: unknown) => {
-        if (!active || !isTaxMaxiUnauthorizedError(cause)) return
-        await onUnauthorized()
-      })
+      .catch(handleRefreshError)
     return () => {
       active = false
+      window.removeEventListener("focus", refreshOnce)
+      document.removeEventListener("visibilitychange", refreshWhenVisible)
     }
   }, [billing, checkoutReturnKind, onUnauthorized, status])
 
@@ -194,7 +233,7 @@ export function BillingPageContent({
         await onUnauthorized()
         return
       }
-      setError(cause instanceof Error ? cause.message : "Billing is temporarily unavailable.")
+      setError(cause instanceof Error ? cause.message : m["app.billing.errors.unavailable"]())
       setPendingAction(null)
     }
   }
@@ -214,21 +253,20 @@ export function BillingPageContent({
           <Button asChild size="sm" variant="outline">
             <Link preload="intent" to="/app">
               <ArrowLeft data-icon="inline-start" />
-              Dashboard
+              {m["app.billing.dashboard"]()}
             </Link>
           </Button>
         </AppHeader>
 
         <section className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 pt-32 pb-16 sm:px-8">
           <header className="flex max-w-2xl flex-col gap-3">
-            <p className="text-sm font-medium text-marketing-accent">Billing</p>
-            <h1 className="font-display text-4xl tracking-[-0.045em] sm:text-5xl">
-              Plan and transaction credits
-            </h1>
-            <p className="leading-7 text-marketing-muted">
-              Stripe handles payments and invoices. TaxMaxi tracks the credits available to your
-              account.
+            <p className="text-sm font-medium text-marketing-accent">
+              {m["app.billing.eyebrow"]()}
             </p>
+            <h1 className="font-display text-4xl tracking-[-0.045em] sm:text-5xl">
+              {m["app.billing.title"]()}
+            </h1>
+            <p className="leading-7 text-marketing-muted">{m["app.billing.description"]()}</p>
           </header>
 
           {error === null ? null : (
@@ -246,6 +284,7 @@ export function BillingPageContent({
               disabled={pendingAction !== null}
               onAction={() => void redirectToStripe(subscribed ? "portal" : "annual")}
               pending={pendingAction === (subscribed ? "portal" : "annual")}
+              locale={locale}
               status={liveStatus}
               subscribed={subscribed}
             />
@@ -254,6 +293,7 @@ export function BillingPageContent({
               disabled={pendingAction !== null}
               onAction={() => void redirectToStripe("topUp")}
               pending={pendingAction === "topUp"}
+              locale={locale}
               subscribed={topUpEligible}
             />
           </div>
@@ -268,6 +308,7 @@ function AnnualBillingCard({
   disabled,
   onAction,
   pending,
+  locale,
   status,
   subscribed,
 }: {
@@ -275,28 +316,31 @@ function AnnualBillingCard({
   readonly disabled: boolean
   readonly onAction: () => void
   readonly pending: boolean
+  readonly locale: Locale
   readonly status: BillingStatus
   readonly subscribed: boolean
 }) {
   const price = catalog?.prices.find((item) => item.lookupKey === "taxmaxi_annual_10k_eur")
-  const displayedPrice = price === undefined ? null : formatCatalogPrice(price)
+  const displayedPrice = price === undefined ? null : formatCatalogPrice(price, locale)
   return (
     <Card>
       <CardHeader>
-        <CardTitle>TaxMaxi Annual</CardTitle>
-        <CardDescription>10,000 transaction credits with annual renewal.</CardDescription>
+        <CardTitle>{m["app.billing.annual.title"]()}</CardTitle>
+        <CardDescription>{m["app.billing.annual.description"]()}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         <p className="text-4xl font-semibold tabular-nums">
-          {displayedPrice ?? "Price unavailable"}
+          {displayedPrice ?? m["app.billing.priceUnavailable"]()}
           <span className="ml-2 text-sm font-normal text-muted-foreground">
-            / year, {taxLabel(price?.taxBehavior)}
+            {m["app.billing.annual.priceSuffix"]({
+              taxLabel: taxLabel(price?.taxBehavior),
+            })}
           </span>
         </p>
         <div className="rounded-xl border p-4">
-          <p className="text-sm text-muted-foreground">Available credits</p>
+          <p className="text-sm text-muted-foreground">{m["app.billing.availableCredits"]()}</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">
-            {new Intl.NumberFormat().format(status.credits)}
+            {new Intl.NumberFormat(locale).format(status.credits)}
           </p>
         </div>
       </CardContent>
@@ -304,12 +348,12 @@ function AnnualBillingCard({
         <Button disabled={disabled || (!subscribed && displayedPrice === null)} onClick={onAction}>
           <CreditCard data-icon="inline-start" />
           {pending
-            ? "Opening Stripe…"
+            ? m["app.billing.openingStripe"]()
             : subscribed
-              ? "Manage subscription"
+              ? m["app.billing.annual.manage"]()
               : displayedPrice === null
-                ? "Price unavailable"
-                : `Subscribe for ${displayedPrice}`}
+                ? m["app.billing.priceUnavailable"]()
+                : m["app.billing.annual.subscribe"]({ price: displayedPrice })}
         </Button>
       </CardFooter>
     </Card>
@@ -321,25 +365,27 @@ function TopUpCard({
   disabled,
   onAction,
   pending,
+  locale,
   subscribed,
 }: {
   readonly catalog: BillingCatalog | null
   readonly disabled: boolean
   readonly onAction: () => void
   readonly pending: boolean
+  readonly locale: Locale
   readonly subscribed: boolean
 }) {
   const price = catalog?.prices.find((item) => item.lookupKey === "taxmaxi_topup_1k_eur")
-  const displayedPrice = price === undefined ? null : formatCatalogPrice(price)
+  const displayedPrice = price === undefined ? null : formatCatalogPrice(price, locale)
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Extra transaction pack</CardTitle>
-        <CardDescription>1,000 additional credits. Never purchased automatically.</CardDescription>
+        <CardTitle>{m["app.billing.topUp.title"]()}</CardTitle>
+        <CardDescription>{m["app.billing.topUp.description"]()}</CardDescription>
       </CardHeader>
       <CardContent>
         <p className="text-4xl font-semibold tabular-nums">
-          {displayedPrice ?? "Price unavailable"}
+          {displayedPrice ?? m["app.billing.priceUnavailable"]()}
           <span className="ml-2 text-sm font-normal text-muted-foreground">
             {taxLabel(price?.taxBehavior)}
           </span>
@@ -355,23 +401,24 @@ function TopUpCard({
           variant="outline"
         >
           <Plus data-icon="inline-start" />
-          {pending ? "Opening Stripe…" : "Buy 1,000 credits"}
+          {pending ? m["app.billing.openingStripe"]() : m["app.billing.topUp.buy"]()}
         </Button>
         {subscribed ? null : (
-          <p className="text-xs text-muted-foreground">
-            Stripe verifies an active annual subscription when you continue.
-          </p>
+          <p className="text-xs text-muted-foreground">{m["app.billing.topUp.eligibility"]()}</p>
         )}
       </CardFooter>
     </Card>
   )
 }
 
-function formatCatalogPrice(price: {
-  readonly amountMinor: number
-  readonly currency: string
-}): string {
-  return new Intl.NumberFormat("de-DE", {
+export function formatCatalogPrice(
+  price: {
+    readonly amountMinor: number
+    readonly currency: string
+  },
+  locale: Locale = getLocale()
+): string {
+  return new Intl.NumberFormat(locale, {
     style: "currency",
     currency: price.currency.toUpperCase(),
   }).format(price.amountMinor / 100)
@@ -380,10 +427,10 @@ function formatCatalogPrice(price: {
 function taxLabel(taxBehavior: "exclusive" | "inclusive" | "unspecified" | undefined): string {
   switch (taxBehavior) {
     case "inclusive":
-      return "tax included"
+      return m["app.billing.tax.included"]()
     case "exclusive":
-      return "plus applicable tax"
+      return m["app.billing.tax.exclusive"]()
     default:
-      return "tax shown at checkout"
+      return m["app.billing.tax.checkout"]()
   }
 }

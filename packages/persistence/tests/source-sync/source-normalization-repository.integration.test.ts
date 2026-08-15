@@ -738,6 +738,121 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
   })
 
+  it("aggregates active credit entries by expiry before choosing a bucket", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const depletedExpiry = new Date(Date.now() + 60 * 60 * 1_000)
+    const availableExpiry = new Date(Date.now() + 2 * 60 * 60 * 1_000)
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values([
+          {
+            userId: fixture.userId,
+            delta: 2,
+            kind: "manual_adjustment",
+            reference: "test:depleted-expiring-grant",
+            expiresAt: depletedExpiry,
+          },
+          {
+            userId: fixture.userId,
+            delta: -2,
+            kind: "transaction_usage",
+            reference: "test:depleted-expiring-usage",
+            expiresAt: depletedExpiry,
+          },
+          {
+            userId: fixture.userId,
+            delta: 1,
+            kind: "manual_adjustment",
+            reference: "test:available-expiring-grant:first",
+            expiresAt: availableExpiry,
+          },
+          {
+            userId: fixture.userId,
+            delta: 1,
+            kind: "manual_adjustment",
+            reference: "test:available-expiring-grant:second",
+            expiresAt: availableExpiry,
+          },
+          {
+            userId: fixture.userId,
+            delta: 100,
+            kind: "manual_adjustment",
+            reference: "test:expired-grant",
+            expiresAt: new Date(Date.now() - 60 * 60 * 1_000),
+          },
+          {
+            userId: fixture.userId,
+            delta: 2,
+            kind: "manual_adjustment",
+            reference: "test:permanent-grant",
+            expiresAt: null,
+          },
+        ])
+      })
+    )
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "transaction-using-aggregated-credit-bucket",
+            externalGroupId: null,
+            timestamp: occurredAt,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: occurredAt,
+            providerUpdatedAt: occurredAt,
+            metadata: null,
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "coinbase-account-1",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "buy",
+            instrument: "BTC-EUR",
+            fillPrice: "10000.00",
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ expiresAt: schema.creditLedger.expiresAt })
+          .from(schema.creditLedger)
+          .where(
+            eq(
+              schema.creditLedger.reference,
+              `transaction:${TEST_SOURCE_ID}:external:transaction-using-aggregated-credit-bucket`
+            )
+          )
+      })
+    )
+
+    expect(usage).toEqual([{ expiresAt: availableExpiry }])
+  })
+
   it("keeps a raw-record credit when replay later discovers external ids", async () => {
     const occurredAt = new Date("2025-01-01T10:00:00.000Z")
     const artifacts = (externalId: string | null) =>

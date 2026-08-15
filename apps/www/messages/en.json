@@ -25,7 +25,37 @@
   },
   "app": {
     "title": "TaxMaxi App",
-    "description": "You are signed in. The app workspace will live here."
+    "description": "You are signed in. The app workspace will live here.",
+    "billing": {
+      "dashboard": "Dashboard",
+      "eyebrow": "Billing",
+      "title": "Plan and transaction credits",
+      "description": "Stripe handles payments and invoices. TaxMaxi tracks the credits available to your account.",
+      "annual": {
+        "title": "TaxMaxi Annual",
+        "description": "10,000 transaction credits with annual renewal.",
+        "priceSuffix": "/ year, {taxLabel}",
+        "manage": "Manage subscription",
+        "subscribe": "Subscribe for {price}"
+      },
+      "topUp": {
+        "title": "Extra transaction pack",
+        "description": "1,000 additional credits. Never purchased automatically.",
+        "buy": "Buy 1,000 credits",
+        "eligibility": "Stripe verifies an active annual subscription when you continue."
+      },
+      "availableCredits": "Available credits",
+      "priceUnavailable": "Price unavailable",
+      "openingStripe": "Opening Stripe…",
+      "tax": {
+        "included": "tax included",
+        "exclusive": "plus applicable tax",
+        "checkout": "tax shown at checkout"
+      },
+      "errors": {
+        "unavailable": "Billing is temporarily unavailable."
+      }
+    }
   },
   "assetCatalog": {
     "title": "Asset catalog",

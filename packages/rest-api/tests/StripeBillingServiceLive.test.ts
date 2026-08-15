@@ -216,7 +216,6 @@ const billingRepositoryStub: BillingRepositoryService = {
   grantCredits: () => Effect.succeed(true),
   reconcilePaymentCreditReversals: () => Effect.succeed(false),
   setPaymentCreditReversal: () => Effect.succeed(true),
-  consumeTransactionCredit: () => Effect.succeed("exhausted"),
   availableCredits: () => Effect.succeed(0),
   hasProcessedEvent: () => Effect.succeed(false),
   markEventProcessed: () => Effect.void,
