@@ -23,7 +23,9 @@ import {
 } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 
-class ReplaySourceSetChanged extends Data.TaggedError("ReplaySourceSetChanged")<{
+class ApprovalObservationSourceSetChanged extends Data.TaggedError(
+  "ApprovalObservationSourceSetChanged"
+)<{
   readonly sourceIds: ReadonlyArray<string>
 }> {}
 
@@ -230,81 +232,36 @@ const make = Effect.gen(function* () {
         return insertedRows.length
       })
 
-  const approveProviderAssetMappingIfPending: ProviderAssetRepositoryShape["approveProviderAssetMappingIfPending"] =
-    ({ mapping }) => {
-      const now = nowDate()
-
-      return db
-        .update(schema.providerAssetMappings)
-        .set({
-          mappingKind: mapping.mappingKind,
-          canonicalAssetId: mapping.canonicalAssetId,
-          assetRepresentationId: mapping.assetRepresentationId,
-          canonicalFiatCurrency: mapping.canonicalFiatCurrency,
-          mappingStatus: mapping.mappingStatus,
-          reviewerNotes: mapping.reviewerNotes,
-          sourceNotes: mapping.sourceNotes,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(schema.providerAssetMappings.providerAssetRowId, mapping.providerAssetRowId),
-            eq(schema.providerAssetMappings.mappingStatus, "pending_review")
-          )
-        )
-        .returning({ id: schema.providerAssetMappings.providerAssetRowId })
-        .pipe(
-          Effect.map((rows) => rows.length === 1),
-          wrapSyncEngineSqlError("providerAssetRepository.approveProviderAssetMappingIfPending")
-        )
-    }
-
-  const approveProviderAssetMappingAndRequestReplay: ProviderAssetRepositoryShape["approveProviderAssetMappingAndRequestReplay"] =
-    ({ mapping, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
+  const lockProviderAssetApprovalSnapshot: ProviderAssetRepositoryShape["lockProviderAssetApprovalSnapshot"] =
+    ({ providerAssetRowId, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
-            const loadReplaySources = () =>
+            const loadObservationSourceIds = () =>
               tx
-                .selectDistinct({
-                  principalId: schema.sources.principalId,
-                  sourceId: schema.sources.id,
-                })
+                .selectDistinct({ sourceId: schema.providerTransfers.sourceId })
                 .from(schema.providerTransfers)
-                .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
-                .where(eq(schema.providerTransfers.providerAssetId, mapping.providerAssetRowId))
-                .orderBy(asc(schema.sources.id))
+                .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+                .orderBy(asc(schema.providerTransfers.sourceId))
 
-            const sourceRowsBeforeLock = yield* loadReplaySources()
-            const sourceIdsBeforeLock = sourceRowsBeforeLock.map(({ sourceId }) => sourceId)
-            const lockedSources =
-              sourceIdsBeforeLock.length === 0
+            const observationSourceIdsBeforeLock = (yield* loadObservationSourceIds()).map(
+              ({ sourceId }) => sourceId
+            )
+            const lockedObservationSources =
+              observationSourceIdsBeforeLock.length === 0
                 ? []
                 : yield* tx
-                    .select({
-                      principalId: schema.sources.principalId,
-                      sourceId: schema.sources.id,
-                    })
+                    .select({ sourceId: schema.sources.id })
                     .from(schema.sources)
-                    .where(inArray(schema.sources.id, sourceIdsBeforeLock))
+                    .where(inArray(schema.sources.id, observationSourceIdsBeforeLock))
                     .orderBy(asc(schema.sources.id))
                     .for("update")
 
-            if (lockedSources.length !== sourceIdsBeforeLock.length) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.lockSources",
-                  cause: "A replay source changed before mapping approval.",
-                })
-              )
-            }
-
             const [providerAsset] = yield* tx
-              .select({ retrievedAt: schema.providerAssets.retrievedAt })
+              .select(providerAssetReviewProjection.providerAsset)
               .from(schema.providerAssets)
-              .where(eq(schema.providerAssets.id, mapping.providerAssetRowId))
-              .for("update")
+              .where(eq(schema.providerAssets.id, providerAssetRowId))
+              .for("no key update")
               .limit(1)
 
             if (
@@ -314,21 +271,39 @@ const make = Effect.gen(function* () {
               return yield* Effect.fail(
                 new SyncEngineStorageError({
                   operation:
-                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.providerAssetSnapshot",
+                    "providerAssetRepository.lockProviderAssetApprovalSnapshot.providerAsset",
                   cause: "Provider asset metadata changed before approval.",
                 })
               )
             }
 
-            const sourceRowsAfterLock = yield* loadReplaySources()
-            const lockedSourceIdSet = new Set(lockedSources.map(({ sourceId }) => sourceId))
-            const newlyObservedSourceIds = sourceRowsAfterLock
+            const [mapping] = yield* tx
+              .select(providerAssetReviewProjection.mapping)
+              .from(schema.providerAssetMappings)
+              .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+              .for("update")
+              .limit(1)
+
+            if (lockedObservationSources.length !== observationSourceIdsBeforeLock.length) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.lockProviderAssetApprovalSnapshot.lockSources",
+                  cause: "A provider asset observation source changed before approval.",
+                })
+              )
+            }
+
+            const lockedSourceIds = new Set(
+              lockedObservationSources.map(({ sourceId }) => sourceId)
+            )
+            const newlyObservedSourceIds = (yield* loadObservationSourceIds())
               .map(({ sourceId }) => sourceId)
-              .filter((sourceId) => !lockedSourceIdSet.has(sourceId))
+              .filter((sourceId) => !lockedSourceIds.has(sourceId))
 
             if (newlyObservedSourceIds.length > 0) {
               return yield* Effect.fail(
-                new ReplaySourceSetChanged({ sourceIds: newlyObservedSourceIds })
+                new ApprovalObservationSourceSetChanged({ sourceIds: newlyObservedSourceIds })
               )
             }
 
@@ -349,7 +324,7 @@ const make = Effect.gen(function* () {
               )
               .where(
                 and(
-                  eq(schema.providerTransfers.providerAssetId, mapping.providerAssetRowId),
+                  eq(schema.providerTransfers.providerAssetId, providerAssetRowId),
                   or(
                     eq(schema.providerTransfers.observedRepresentationType, "native"),
                     sql`${schema.providerTransfers.observedMintAddress} is not null`,
@@ -374,27 +349,34 @@ const make = Effect.gen(function* () {
               return yield* Effect.fail(
                 new SyncEngineStorageError({
                   operation:
-                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.observationSnapshot",
+                    "providerAssetRepository.lockProviderAssetApprovalSnapshot.observations",
                   cause: "Provider asset observations changed before approval.",
                 })
               )
             }
 
-            const [currentMapping] = yield* tx
-              .select({
-                mappingKind: schema.providerAssetMappings.mappingKind,
-                canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
-                assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
-                canonicalFiatCurrency: schema.providerAssetMappings.canonicalFiatCurrency,
-                mappingStatus: schema.providerAssetMappings.mappingStatus,
-              })
-              .from(schema.providerAssetMappings)
-              .where(
-                eq(schema.providerAssetMappings.providerAssetRowId, mapping.providerAssetRowId)
-              )
-              .for("update")
-              .limit(1)
+            return { providerAsset, mapping: mapping ?? null }
+          })
+        )
+        .pipe(
+          Effect.retry({
+            times: 2,
+            while: (error) => error instanceof ApprovalObservationSourceSetChanged,
+          }),
+          wrapSyncEngineStorageError("providerAssetRepository.lockProviderAssetApprovalSnapshot")
+        )
 
+  const approveProviderAssetMappingAndRequestReplay: ProviderAssetRepositoryShape["approveProviderAssetMappingAndRequestReplay"] =
+    ({ mapping, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const approvalSnapshot = yield* lockProviderAssetApprovalSnapshot({
+              providerAssetRowId: mapping.providerAssetRowId,
+              expectedObservedRepresentations,
+              expectedProviderAssetRetrievedAt,
+            })
+            const currentMapping = approvalSnapshot.mapping
             const sameApprovedTarget =
               currentMapping?.mappingStatus === "approved" &&
               currentMapping.mappingKind === mapping.mappingKind &&
@@ -415,6 +397,38 @@ const make = Effect.gen(function* () {
                 })
               )
             }
+
+            const recordedReplaySources = yield* tx
+              .select({
+                principalId: schema.sources.principalId,
+                sourceId: schema.sources.id,
+              })
+              .from(schema.providerAssetSourceUses)
+              .innerJoin(
+                schema.sources,
+                eq(schema.sources.id, schema.providerAssetSourceUses.sourceId)
+              )
+              .where(
+                eq(schema.providerAssetSourceUses.providerAssetRowId, mapping.providerAssetRowId)
+              )
+              .orderBy(asc(schema.sources.id))
+            const observedReplaySources = yield* tx
+              .selectDistinct({
+                principalId: schema.sources.principalId,
+                sourceId: schema.sources.id,
+              })
+              .from(schema.providerTransfers)
+              .innerJoin(schema.sources, eq(schema.sources.id, schema.providerTransfers.sourceId))
+              .where(eq(schema.providerTransfers.providerAssetId, mapping.providerAssetRowId))
+              .orderBy(asc(schema.sources.id))
+            const replaySources = Array.from(
+              new Map(
+                [...recordedReplaySources, ...observedReplaySources].map((source) => [
+                  source.sourceId,
+                  source,
+                ])
+              ).values()
+            ).sort((left, right) => left.sourceId.localeCompare(right.sourceId))
 
             const now = nowDate()
             const [approved] = yield* tx
@@ -448,7 +462,7 @@ const make = Effect.gen(function* () {
             }
 
             yield* Effect.forEach(
-              sourceRowsAfterLock,
+              replaySources,
               ({ principalId, sourceId }) =>
                 Effect.gen(function* () {
                   const requestReplay = (
@@ -527,14 +541,154 @@ const make = Effect.gen(function* () {
           })
         )
         .pipe(
-          Effect.retry({
-            times: 2,
-            while: (error) => error instanceof ReplaySourceSetChanged,
-          }),
           wrapSyncEngineStorageError(
             "providerAssetRepository.approveProviderAssetMappingAndRequestReplay"
           )
         )
+
+  const recordProviderAssetSourceUses: ProviderAssetRepositoryShape["recordProviderAssetSourceUses"] =
+    ({ sourceId, providerAssetRowIds }) => {
+      const distinctProviderAssetRowIds = [...new Set(providerAssetRowIds)]
+      if (distinctProviderAssetRowIds.length === 0) {
+        return Effect.succeed(0)
+      }
+
+      return db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const now = nowDate()
+            const mappings = yield* tx
+              .select({
+                providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+                mappingStatus: schema.providerAssetMappings.mappingStatus,
+              })
+              .from(schema.providerAssetMappings)
+              .where(
+                inArray(
+                  schema.providerAssetMappings.providerAssetRowId,
+                  distinctProviderAssetRowIds
+                )
+              )
+              .orderBy(asc(schema.providerAssetMappings.providerAssetRowId))
+              .for("update")
+            const [source] = yield* tx
+              .select({ principalId: schema.sources.principalId })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, sourceId))
+              .limit(1)
+            if (source === undefined) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "providerAssetRepository.recordProviderAssetSourceUses.source",
+                  cause: `Source ${sourceId} does not exist.`,
+                })
+              )
+            }
+
+            const rows = yield* tx
+              .insert(schema.providerAssetSourceUses)
+              .values(
+                distinctProviderAssetRowIds.map((providerAssetRowId) => ({
+                  providerAssetRowId,
+                  sourceId,
+                  createdAt: now,
+                  updatedAt: now,
+                }))
+              )
+              .onConflictDoNothing({
+                target: [
+                  schema.providerAssetSourceUses.providerAssetRowId,
+                  schema.providerAssetSourceUses.sourceId,
+                ],
+              })
+              .returning({ providerAssetRowId: schema.providerAssetSourceUses.providerAssetRowId })
+
+            const newlyRecordedProviderAssetRowIds = new Set(
+              rows.map(({ providerAssetRowId }) => providerAssetRowId)
+            )
+            if (
+              mappings.some(
+                ({ mappingStatus, providerAssetRowId }) =>
+                  mappingStatus === "approved" &&
+                  newlyRecordedProviderAssetRowIds.has(providerAssetRowId)
+              )
+            ) {
+              const requestReplay = (
+                attemptsRemaining: number
+              ): Effect.Effect<void, SyncEngineStorageError> =>
+                Effect.gen(function* () {
+                  const [activeJob] = yield* tx
+                    .update(schema.processingJobs)
+                    .set({ followUpMode: "replay", updatedAt: now })
+                    .where(
+                      and(
+                        eq(schema.processingJobs.sourceId, sourceId),
+                        eq(schema.processingJobs.principalId, source.principalId),
+                        inArray(schema.processingJobs.status, ["pending", "processing"])
+                      )
+                    )
+                    .returning({ id: schema.processingJobs.id })
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "providerAssetRepository.recordProviderAssetSourceUses.attachReplay"
+                      )
+                    )
+                  if (activeJob !== undefined) {
+                    return
+                  }
+
+                  const [createdJob] = yield* tx
+                    .insert(schema.processingJobs)
+                    .values({
+                      sourceId,
+                      principalId: source.principalId,
+                      mode: "replay",
+                      status: "pending",
+                      attemptCount: 0,
+                      maxAttempts: 3,
+                      progressDetails: {
+                        mode: "replay",
+                        reason: "approved_asset_use_discovered",
+                      },
+                      createdAt: now,
+                      updatedAt: now,
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: schema.processingJobs.id })
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "providerAssetRepository.recordProviderAssetSourceUses.createReplay"
+                      )
+                    )
+                  if (createdJob !== undefined) {
+                    return
+                  }
+
+                  if (attemptsRemaining > 1) {
+                    return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
+                  }
+
+                  return yield* Effect.fail(
+                    new SyncEngineStorageError({
+                      operation:
+                        "providerAssetRepository.recordProviderAssetSourceUses.requestReplay",
+                      cause: {
+                        sourceId,
+                        principalId: source.principalId,
+                        message: "Active replay owner changed repeatedly.",
+                      },
+                    })
+                  )
+                })
+
+              yield* requestReplay(3)
+            }
+
+            return rows.length
+          })
+        )
+        .pipe(wrapSyncEngineSqlError("providerAssetRepository.recordProviderAssetSourceUses"))
+    }
 
   const findProviderAssetByProviderAssetId: ProviderAssetRepositoryShape["findProviderAssetByProviderAssetId"] =
     ({ providerKey, providerAssetId }) =>
@@ -776,8 +930,9 @@ const make = Effect.gen(function* () {
     upsertProviderAssets,
     upsertProviderAssetMappings,
     seedProviderAssetMappingsIfMissing,
-    approveProviderAssetMappingIfPending,
     approveProviderAssetMappingAndRequestReplay,
+    lockProviderAssetApprovalSnapshot,
+    recordProviderAssetSourceUses,
     findProviderAssetByProviderAssetId,
     findProviderAssetByNaturalKey,
     findProviderAssetByCurrencyCode,

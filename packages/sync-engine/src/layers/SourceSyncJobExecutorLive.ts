@@ -43,6 +43,7 @@ import {
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
   SourceSyncStateRepository,
+  SyncEngineTransaction,
   SyncEngineStorageError,
   TransferReconciliationService,
   UnsupportedProviderError,
@@ -165,6 +166,7 @@ const make = Effect.gen(function* () {
   const sourceRawRecordRepository = yield* SourceRawRecordRepository
   const sourceNormalizationRepository = yield* SourceNormalizationRepository
   const sourceReplayRepository = yield* SourceReplayRepository
+  const syncEngineTransaction = yield* SyncEngineTransaction
   const transferReconciliationService = yield* TransferReconciliationService
   const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
   const heartbeatIntervalMs = yield* SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG
@@ -1021,12 +1023,19 @@ const make = Effect.gen(function* () {
       return yield* Effect.gen(function* () {
         yield* heartbeatSourceSyncJob({ jobId, workerId })
         yield* withActiveJobHeartbeat({
-          effect: sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
-            sourceSyncSpan({
-              name: "source-replay.reset-derived-state",
-              attributes: { sourceId: source.id, jobId, provider },
-              kind: "client",
-            })
+          effect: syncEngineTransaction.run(
+            Effect.gen(function* () {
+              yield* transferReconciliationService.rollbackReconciliationsForSourceReplay({
+                sourceId: source.id,
+              })
+              yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id })
+            }).pipe(
+              sourceSyncSpan({
+                name: "source-replay.reset-derived-state",
+                attributes: { sourceId: source.id, jobId, provider },
+                kind: "client",
+              })
+            )
           ),
           jobId,
           workerId,

@@ -19,6 +19,7 @@ import {
   ActivityOnchainFacts,
 } from "../../../services/ActivityClassificationService.ts"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
+import { ProviderAssetRepository } from "../../../services/ProviderAssetRepository.ts"
 import type { ResolvedProviderTransactionTypeMapping } from "../../../services/ProviderReferenceRepository.ts"
 import type {
   SourceTransactionDraft,
@@ -1205,6 +1206,7 @@ const make = ({
     const heliusSyncClient = yield* HeliusSolanaSyncClient
     const assetRepository = yield* AssetRepository
     const assetResolutionService = yield* HeliusSolanaAssetResolutionService
+    const providerAssetRepository = yield* ProviderAssetRepository
 
     const cacheWalletTransferEvidenceForRawBatch = ({
       walletAddress,
@@ -2766,12 +2768,47 @@ const make = ({
             })),
           ]
           const canonicalMovements = [...rawSolMovements, ...joinedCanonicalSplMovements]
+          const conflictingApprovedMovement = canonicalMovements.find(
+            (movement) =>
+              movement.asset.mappingStatus === "approved" &&
+              movement.observedDecimals !== null &&
+              movement.asset.decimals !== null &&
+              movement.observedDecimals !== movement.asset.decimals
+          )
+          if (conflictingApprovedMovement !== undefined) {
+            return yield* Effect.fail(
+              new HeliusSolanaNormalizationReferenceError({
+                message: `Approved Solana asset mapping for ${conflictingApprovedMovement.asset.currencyCode} conflicts with observed type or decimals evidence.`,
+              })
+            )
+          }
           const ambiguousNativeSolMovementSet = new Set(ambiguousNativeSolMovements)
           const providerObservationMovements = [
             ...movements,
             ...supplementalSplEvidenceMovements,
             ...ambiguousNativeSolMovements,
           ]
+
+          yield* providerAssetRepository
+            .recordProviderAssetSourceUses({
+              sourceId: source.id,
+              providerAssetRowIds: [
+                ...new Set(
+                  [...canonicalMovements, ...providerObservationMovements].map(
+                    (movement) => movement.asset.providerAssetRowId
+                  )
+                ),
+              ],
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new HeliusSolanaNormalizationReferenceError({
+                    message: "Failed to record Solana provider asset source use.",
+                    cause,
+                  })
+              )
+            )
 
           const canonicalTransfers = canonicalMovements.flatMap((movement) => {
             const draft = buildTransferDraft({

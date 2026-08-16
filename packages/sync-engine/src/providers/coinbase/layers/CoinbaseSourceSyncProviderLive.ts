@@ -1049,7 +1049,22 @@ const make = Effect.gen(function* () {
         resolveBlockchainId: (networkName) =>
           Option.fromNullable(lookups.blockchainIdByName.get(networkName.toLowerCase())),
       })
-
+      const providerAssetIdsByCurrency = new Map(
+        yield* Effect.forEach(
+          Array.from(
+            new Set([
+              normalized.primaryAssetCurrency.toUpperCase(),
+              ...normalized.unresolvedAssetCurrencies.map((currencyCode) =>
+                currencyCode.toUpperCase()
+              ),
+            ])
+          ),
+          (currencyCode) =>
+            loadProviderAssetIdentity({ currencyCode }).pipe(
+              Effect.map((providerAssetRowId) => [currencyCode, providerAssetRowId] as const)
+            )
+        )
+      )
       const normalizedMetadata = yield* decodeCoinbaseNormalizedMetadata(
         normalized.transaction.metadata
       )
@@ -1086,9 +1101,8 @@ const make = Effect.gen(function* () {
             message: `Missing asset row for resolved Coinbase asset ${assetId}`,
           }).pipe(Effect.map(Option.some)),
       })
-      const primaryProviderAssetId = yield* loadProviderAssetIdentity({
-        currencyCode: normalized.primaryAssetCurrency,
-      })
+      const primaryProviderAssetId =
+        providerAssetIdsByCurrency.get(normalized.primaryAssetCurrency.toUpperCase()) ?? null
       const baseTransactionReview = determineCoinbaseReview({
         providerTransactionType: normalized.transaction.providerTransactionType,
         resolvedTransactionType,
@@ -1107,6 +1121,12 @@ const make = Effect.gen(function* () {
               principalId: source.principalId,
               affectedCurrencies: unresolvedAssetCurrencies,
             })
+      yield* providerAssetRepository.recordProviderAssetSourceUses({
+        sourceId: source.id,
+        providerAssetRowIds: Array.from(providerAssetIdsByCurrency.values()).filter(
+          (providerAssetRowId): providerAssetRowId is string => providerAssetRowId !== null
+        ),
+      })
 
       return {
         transaction: {

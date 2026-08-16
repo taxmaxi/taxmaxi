@@ -169,33 +169,6 @@ const reconciliationCandidateFingerprint = (
     candidate.amount,
   ])
 
-const filterKnownAssetCandidates = ({
-  providerTransfer,
-  candidates,
-}: {
-  readonly providerTransfer: ProviderTransferReconciliationCandidate
-  readonly candidates: ReadonlyArray<OnchainTransferReconciliationCandidate>
-}): ReadonlyArray<OnchainTransferReconciliationCandidate> => {
-  if (providerTransfer.canonicalAssetId === null) {
-    return candidates
-  }
-
-  return candidates.filter((candidate) => {
-    if (candidate.providerAssetMappingStatus !== "approved" || candidate.assetId === null) {
-      return true
-    }
-
-    if (candidate.assetId !== providerTransfer.canonicalAssetId) {
-      return false
-    }
-
-    return (
-      providerTransfer.assetRepresentationId === null ||
-      candidate.assetRepresentationId === providerTransfer.assetRepresentationId
-    )
-  })
-}
-
 const summarizeOutcome = ({
   status,
   current,
@@ -342,30 +315,7 @@ const make = Effect.gen(function* () {
         })
       }
 
-      const compatibleCandidates = filterKnownAssetCandidates({
-        providerTransfer,
-        candidates: exactAmountCandidates,
-      })
-
-      if (compatibleCandidates.length === 0) {
-        return yield* persistCandidateState({
-          principalId: providerTransfer.principalId,
-          providerTransferId: providerTransfer.providerTransferId,
-          canonicalTransferId: null,
-          canonicalTransactionId: null,
-          status: "needs_review",
-          matchReason: "known_asset_candidate_conflict",
-          confidence: "1.0000",
-          deterministic: false,
-          reviewMetadata: {
-            providerCanonicalAssetId: providerTransfer.canonicalAssetId,
-            providerAssetRepresentationId: providerTransfer.assetRepresentationId,
-            ...buildCandidateMetadata({ candidates: exactAmountCandidates }),
-          },
-        })
-      }
-
-      if (compatibleCandidates.length > 1) {
+      if (exactAmountCandidates.length > 1) {
         return yield* persistCandidateState({
           principalId: providerTransfer.principalId,
           providerTransferId: providerTransfer.providerTransferId,
@@ -376,12 +326,12 @@ const make = Effect.gen(function* () {
           confidence: "0.5000",
           deterministic: false,
           reviewMetadata: buildCandidateMetadata({
-            candidates: compatibleCandidates,
+            candidates: exactAmountCandidates,
           }),
         })
       }
 
-      const matchedCandidate = compatibleCandidates[0]
+      const matchedCandidate = exactAmountCandidates[0]
 
       if (matchedCandidate === undefined) {
         return yield* Effect.fail(
@@ -498,6 +448,7 @@ const make = Effect.gen(function* () {
             matchedTransactionId: matchedCandidate.transactionId,
             candidateCount: exactAmountCandidates.length,
             representationId: matchedCandidate.assetRepresentationId,
+            revalidateMovementFacts: true,
           },
         })
       }
@@ -608,8 +559,12 @@ const make = Effect.gen(function* () {
     (params) =>
       transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization(params)
 
+  const rollbackReconciliationsForSourceReplay: TransferReconciliationServiceShape["rollbackReconciliationsForSourceReplay"] =
+    (params) => transferReconciliationRepository.rollbackReconciliationsForSourceReplay(params)
+
   return TransferReconciliationService.of({
     reconcileTransferCandidates,
+    rollbackReconciliationsForSourceReplay,
     applyDeterministicInternalTransferCanonicalization,
   } satisfies TransferReconciliationServiceShape)
 })

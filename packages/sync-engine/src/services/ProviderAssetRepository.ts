@@ -130,14 +130,6 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**
-   * Replace a pending mapping only if it is still pending. A concurrent admin
-   * decision wins and is never overwritten.
-   */
-  readonly approveProviderAssetMappingIfPending: (params: {
-    readonly mapping: ProviderAssetMappingDraft
-  }) => Effect.Effect<boolean, SyncEngineStorageError>
-
-  /**
    * Approve a reviewed asset mapping and atomically request replay for every
    * source that uses it. Retrying the same target is a successful no-op.
    */
@@ -146,6 +138,25 @@ export interface ProviderAssetRepositoryShape {
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
+
+  /**
+   * Lock and reload the provider-asset decision snapshot before a caller writes
+   * related canonical rows in the same transaction.
+   */
+  readonly lockProviderAssetApprovalSnapshot: (params: {
+    readonly providerAssetRowId: string
+    readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<ProviderAssetReviewRecord, SyncEngineStorageError>
+
+  /**
+   * Record that normalization found this provider asset in a source record.
+   * If the asset is already approved, request a replay in the same transaction.
+   */
+  readonly recordProviderAssetSourceUses: (params: {
+    readonly sourceId: string
+    readonly providerAssetRowIds: ReadonlyArray<string>
+  }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**
    * Seed provider asset mappings keyed by providerAssetRowId only when no row

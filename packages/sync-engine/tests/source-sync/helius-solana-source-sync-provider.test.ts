@@ -25,6 +25,10 @@ import {
   ActivityFacts,
 } from "../../src/services/ActivityClassificationService.ts"
 import { AssetRepository } from "../../src/services/AssetRepository.ts"
+import {
+  ProviderAssetRepository,
+  type ProviderAssetRepositoryShape,
+} from "../../src/services/ProviderAssetRepository.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
 import { FetchProviderRawBatchParams } from "../../src/shared/SourceProviderRawBatch.ts"
 
@@ -34,6 +38,8 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 const NFT_MINT = "NftMint111111111111111111111111111111111111"
 const UNKNOWN_MINT = "UnknownMint11111111111111111111111111111111"
 const STALE_DECIMALS_MINT = "StaleDecimals1111111111111111111111111111111"
+const EIGHTEEN_DECIMALS_MINT = "EighteenDecimals11111111111111111111111111111"
+const MAX_DECIMALS_MINT = "MaxDecimals111111111111111111111111111111111"
 const OMITTED_TYPE_EVIDENCE_MINT = "OmittedType111111111111111111111111111111111"
 
 const makeFetchParams = ({
@@ -133,11 +139,35 @@ const makeProviderLayer = ({
         nextCursor: null,
       },
     }),
+  recordProviderAssetSourceUses = () => Effect.succeed(0),
 }: {
   readonly fetchTransactionsForAddress: HeliusSolanaSyncClientShape["fetchTransactionsForAddress"]
   readonly fetchTransfersForAddress?: HeliusSolanaSyncClientShape["fetchTransfersForAddress"]
+  readonly recordProviderAssetSourceUses?: ProviderAssetRepositoryShape["recordProviderAssetSourceUses"]
 }) =>
   HeliusSolanaSourceSyncProviderFromClientLive.pipe(
+    Layer.provide(
+      Layer.succeed(
+        ProviderAssetRepository,
+        ProviderAssetRepository.of({
+          upsertProviderAssets: () => Effect.succeed(0),
+          upsertProviderAssetMappings: () => Effect.succeed(0),
+          approveProviderAssetMappingAndRequestReplay: () =>
+            Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
+          lockProviderAssetApprovalSnapshot: () =>
+            Effect.dieMessage("lockProviderAssetApprovalSnapshot should not be called"),
+          recordProviderAssetSourceUses,
+          seedProviderAssetMappingsIfMissing: () => Effect.succeed(0),
+          findProviderAssetByProviderAssetId: () => Effect.succeed(Option.none()),
+          findProviderAssetByNaturalKey: () => Effect.succeed(Option.none()),
+          findProviderAssetByCurrencyCode: () => Effect.succeed(Option.none()),
+          listProviderAssetObservedRepresentations: () => Effect.succeed([]),
+          findProviderAssetReviewById: () => Effect.succeed(Option.none()),
+          listProviderAssetReviews: () => Effect.succeed([]),
+          findProviderAssetMapping: () => Effect.succeed(Option.none()),
+        })
+      )
+    ),
     Layer.provide(
       Layer.succeed(
         AssetRepository,
@@ -267,7 +297,14 @@ const makeProviderLayer = ({
                                 naturalKey: `spl:${asset.mintAddress}`,
                                 currencyCode: "USDC",
                                 name: "USD Coin",
-                                decimals: asset.mintAddress === STALE_DECIMALS_MINT ? 2 : 6,
+                                decimals:
+                                  asset.mintAddress === STALE_DECIMALS_MINT
+                                    ? 2
+                                    : asset.mintAddress === EIGHTEEN_DECIMALS_MINT
+                                      ? 18
+                                      : asset.mintAddress === MAX_DECIMALS_MINT
+                                        ? 255
+                                        : 6,
                                 tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                                 nftHint: false,
                                 mappingStatus: "approved",
@@ -310,6 +347,62 @@ const runProvider = <A, E>(
   )
 
 describe("HeliusSolanaSourceSyncProviderLive", () => {
+  it("records source use before returning a prepared record", async () => {
+    const sourceUses: Array<{
+      readonly sourceId: string
+      readonly providerAssetRowIds: ReadonlyArray<string>
+    }> = []
+    let prepared = false
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        const normalized = yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({
+            fullTransaction: makeHeliusTransaction({
+              signature: "signature-record-source-use",
+              blockTime: 1_735_689_600,
+              meta: {
+                err: null,
+                fee: 5_000,
+                preBalances: [2_000_000_000],
+                postBalances: [1_999_995_000],
+                preTokenBalances: [],
+                postTokenBalances: [],
+              },
+            }),
+          }),
+          lookups,
+        })
+        prepared = true
+        return normalized
+      }).pipe(
+        Effect.provide(
+          makeProviderLayer({
+            fetchTransactionsForAddress: () =>
+              Effect.dieMessage("Helius client should not be called during normalization"),
+            recordProviderAssetSourceUses: (params) =>
+              Effect.sync(() => {
+                expect(prepared).toBe(false)
+                sourceUses.push(params)
+                return 1
+              }),
+          })
+        )
+      )
+    )
+
+    expect(result.providerTransfers).not.toHaveLength(0)
+    expect(sourceUses).toEqual([
+      {
+        sourceId: "source-solana-1",
+        providerAssetRowIds: ["provider-asset-sol"],
+      },
+    ])
+  })
+
   it("imports paginated full Solana transactions including failed transactions", async () => {
     const calls: Array<FetchHeliusSolanaTransactionsForAddressParams> = []
     const responses: Array<unknown> = [
@@ -2527,7 +2620,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     ).toHaveLength(1)
   })
 
-  it("prefers exact wallet-row decimals over stale catalog decimals for parsed transfers", async () => {
+  it("rejects exact wallet-row decimals that conflict with an approved mapping", async () => {
     const walletTransferEvidence = [
       {
         signature: "signature-stale-catalog-decimals",
@@ -2577,11 +2670,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       Effect.gen(function* () {
         const provider = yield* HeliusSolanaSourceSyncProvider
         const lookups = yield* provider.loadNormalizationLookups()
-        return yield* provider.prepareNormalization({
-          source: makeSource(),
-          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
-          lookups,
-        })
+        return yield* provider
+          .prepareNormalization({
+            source: makeSource(),
+            sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
+            lookups,
+          })
+          .pipe(Effect.either)
       }),
       () => Effect.dieMessage("Helius client should not be called during normalization"),
       () =>
@@ -2606,24 +2701,14 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    const providerTransfer = result.providerTransfers.find(
-      (transfer) => transfer.providerAssetId === `provider-asset-${STALE_DECIMALS_MINT}`
-    )
-
-    expect(providerTransfer).toMatchObject({
-      amount: "1.23456",
-      observedDecimals: 5,
-      metadata: {
-        rawUnits: "123456",
-        supplementalTransferRow: {
-          amountRaw: "123456",
-          decimals: 5,
-        },
-      },
-    })
-    expect(result.transaction.metadata).toMatchObject({
-      transferEvidenceContradictions: [],
-    })
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        _tag: "HeliusSolanaNormalizationReferenceError",
+        message:
+          "Approved Solana asset mapping for USDC conflicts with observed type or decimals evidence.",
+      })
+    }
   })
 
   it("uses wallet transfer rows as SPL evidence when full transaction SPL evidence is absent", async () => {
@@ -2715,7 +2800,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         timestamp: 1_735_689_600,
         direction: "in",
         counterparty: "counterparty-address",
-        mint: USDC_MINT,
+        mint: EIGHTEEN_DECIMALS_MINT,
         symbol: "USDC",
         amount: 1.2345678901234567,
         amountRaw: "1234567890123456789",
@@ -2765,7 +2850,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
               timestamp: 1_735_689_600,
               direction: "in",
               counterparty: "counterparty-address",
-              mint: USDC_MINT,
+              mint: EIGHTEEN_DECIMALS_MINT,
               symbol: "USDC",
               amount: 1.2345678901234567,
               amountRaw: "1234567890123456789",
@@ -3682,7 +3767,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         preTokenBalances: [
           {
             accountIndex: 2,
-            mint: USDC_MINT,
+            mint: EIGHTEEN_DECIMALS_MINT,
             owner: WALLET_ADDRESS,
             uiTokenAmount: { amount: "0", decimals: 18 },
           },
@@ -3690,7 +3775,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         postTokenBalances: [
           {
             accountIndex: 2,
-            mint: USDC_MINT,
+            mint: EIGHTEEN_DECIMALS_MINT,
             owner: WALLET_ADDRESS,
             uiTokenAmount: { amount: "1234567890123456789", decimals: 18 },
           },
@@ -3699,7 +3784,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       blockTime: 1_735_689_600,
       tokenTransfers: [
         {
-          mint: USDC_MINT,
+          mint: EIGHTEEN_DECIMALS_MINT,
           tokenAmount: 1.2345678901234567,
           fromUserAccount: "counterparty-address",
           toUserAccount: WALLET_ADDRESS,
@@ -4200,7 +4285,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         timestamp: 1_735_689_600,
         direction: "in",
         counterparty: "counterparty-address",
-        mint: USDC_MINT,
+        mint: MAX_DECIMALS_MINT,
         symbol: "USDC",
         amount: 1e-255,
         amountRaw: "1",
@@ -4245,7 +4330,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
               timestamp: 1_735_689_600,
               direction: "in" as const,
               counterparty: "counterparty-address",
-              mint: USDC_MINT,
+              mint: MAX_DECIMALS_MINT,
               symbol: "USDC",
               amount: 1e-255,
               amountRaw: "1",
@@ -4260,7 +4345,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       expect.arrayContaining([
         expect.objectContaining({
           amount: expectedAmount,
-          observedMintAddress: USDC_MINT,
+          observedMintAddress: MAX_DECIMALS_MINT,
           observedDecimals: 255,
         }),
       ])

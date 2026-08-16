@@ -24,6 +24,7 @@ import {
   SourceSyncJobRepository,
   SourceSyncStateRepository,
   SyncEngineStorageError,
+  SyncEngineTransaction,
   TransferReconciliationService,
   type SourceSyncExecutionState,
   type SourceSyncJobMode,
@@ -586,12 +587,20 @@ const makeExecutorLayer = ({
           autoApplied: 0,
         }
       }),
+    rollbackReconciliationsForSourceReplay: () =>
+      Effect.sync(() => {
+        events.push("rollback-reconciliations")
+      }),
     applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
       Effect.sync(() => {
         events.push(`canonicalize:${sourceId}`)
         return { canonicalizedPairs: 0 }
       }),
   })
+  const SyncEngineTransactionTestLive = Layer.succeed(
+    SyncEngineTransaction,
+    SyncEngineTransaction.of({ run: (effect) => effect })
+  )
 
   return SourceSyncJobExecutorLive.pipe(
     Layer.provide(SourceRepositoryTestLive),
@@ -601,6 +610,7 @@ const makeExecutorLayer = ({
     Layer.provide(SourceProviderRegistryTestLive),
     Layer.provide(SourceReplayRepositoryTestLive),
     Layer.provide(SourceNormalizationRepositoryTestLive),
+    Layer.provide(SyncEngineTransactionTestLive),
     Layer.provide(TransferReconciliationServiceTestLive),
     Layer.provide(
       Layer.setConfigProvider(
@@ -824,6 +834,7 @@ describe("SourceSyncJobExecutor", () => {
     )
 
     expect(result.status).toBe("completed")
+    expect(events).toContain("rollback-reconciliations")
     expect(events).toContain("reset-derived-state")
     expect(events).toContain("heartbeat:source-sync-inline-executor")
     expect(events).toContain("mark-raw-normalized")
@@ -857,9 +868,10 @@ describe("SourceSyncJobExecutor", () => {
             event.startsWith("normalize:") ||
             event.startsWith("heartbeat:") ||
             event === "reserve-replay-credits" ||
+            event === "rollback-reconciliations" ||
             event === "reset-derived-state"
         )
-        .slice(0, 8)
+        .slice(0, 9)
     ).toEqual([
       "normalize:raw-1",
       "heartbeat:source-sync-inline-executor",
@@ -868,6 +880,7 @@ describe("SourceSyncJobExecutor", () => {
       "heartbeat:source-sync-inline-executor",
       "reserve-replay-credits",
       "heartbeat:source-sync-inline-executor",
+      "rollback-reconciliations",
       "reset-derived-state",
     ])
   })
@@ -936,7 +949,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({
             mode: "replay",
             replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
-            heartbeatFailureAt: 5,
+            heartbeatFailureAt: 6,
             heartbeatIntervalMs: 1,
             holdReplayReset: true,
             prepareReplayTransactions: true,

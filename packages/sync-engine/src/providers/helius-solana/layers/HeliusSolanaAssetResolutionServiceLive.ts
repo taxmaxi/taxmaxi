@@ -780,8 +780,14 @@ const make = Effect.gen(function* () {
               mappings: [exactMapping.value],
             })
           } else if (existingMapping.mappingStatus === "pending_review") {
-            yield* providerAssetRepository.approveProviderAssetMappingIfPending({
+            const observations =
+              yield* providerAssetRepository.listProviderAssetObservedRepresentations({
+                providerAssetRowId: providerAsset.id,
+              })
+            yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
               mapping: exactMapping.value,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
           }
         } else {
@@ -882,6 +888,30 @@ const make = Effect.gen(function* () {
             mintAddress: reference.mintAddress,
             providerAssetRowId: providerAsset.id,
             message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at an invalid network representation ${mapping.assetRepresentationId}.`,
+          })
+        )
+      }
+
+      const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
+      const expectedRepresentationType =
+        reference.kind === "native"
+          ? "native"
+          : providerType === "nft"
+            ? "nft"
+            : providerType === "spl-token" || providerType === "spl-token-2022"
+              ? "token"
+              : null
+      if (
+        expectedRepresentationType === null ||
+        representation.value.representationType !== expectedRepresentationType ||
+        providerAsset.exponent === null ||
+        representation.value.decimals !== providerAsset.exponent
+      ) {
+        return yield* Effect.fail(
+          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+            mintAddress: reference.mintAddress,
+            providerAssetRowId: providerAsset.id,
+            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} conflicts with its exact type or decimals evidence.`,
           })
         )
       }

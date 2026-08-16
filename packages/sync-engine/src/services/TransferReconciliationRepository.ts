@@ -199,6 +199,14 @@ export interface TransferReconciliationRepositoryShape {
   ) => Effect.Effect<UpsertTransferReconciliationResult, SyncEngineStorageError>
 
   /**
+   * Unapply reconciliation effects connected to a source before its derived rows
+   * are deleted and rebuilt by replay.
+   */
+  readonly rollbackReconciliationsForSourceReplay: (params: {
+    readonly sourceId: string
+  }) => Effect.Effect<void, SyncEngineStorageError>
+
+  /**
    * Replace false provider/onchain tax-visible state with canonical internal-transfer
    * legs and review rows for deterministic reconciliations belonging to one source.
    */
