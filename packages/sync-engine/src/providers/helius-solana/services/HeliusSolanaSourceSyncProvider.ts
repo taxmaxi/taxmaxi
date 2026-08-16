@@ -69,6 +69,7 @@ export interface PrepareHeliusSolanaNormalizationParams {
  * PreparedHeliusSolanaNormalization - Canonical Solana artifacts ready for persistence.
  */
 export interface PreparedHeliusSolanaNormalization {
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext: SourceOnchainContextDraft | null

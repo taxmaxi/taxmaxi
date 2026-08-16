@@ -11,6 +11,7 @@ import {
   UnsupportedSyncProviderError,
 } from "../../src/shared/SourceProviderRawBatch.ts"
 import {
+  ProviderAssetRepository,
   SourceNormalizationRepository,
   SourceProviderRecoverableNormalizationError,
   SourceProviderRegistry,
@@ -312,6 +313,7 @@ const makeExecutorLayer = ({
         if (prepareReplayTransactions) {
           return Effect.succeed({
             kind: "prepared",
+            providerAssetRowIds: [],
             transaction: {
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,
@@ -601,6 +603,32 @@ const makeExecutorLayer = ({
     SyncEngineTransaction,
     SyncEngineTransaction.of({ run: (effect) => effect })
   )
+  const ProviderAssetRepositoryTestLive = Layer.succeed(ProviderAssetRepository, {
+    upsertProviderAssets: () => Effect.dieMessage("upsertProviderAssets should not be called"),
+    upsertProviderAssetMappings: () =>
+      Effect.dieMessage("upsertProviderAssetMappings should not be called"),
+    seedProviderAssetMappingsIfMissing: () =>
+      Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
+    approveProviderAssetMappingAndRequestReplay: () =>
+      Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
+    lockProviderAssetApprovalSnapshot: () =>
+      Effect.dieMessage("lockProviderAssetApprovalSnapshot should not be called"),
+    recordProviderAssetSourceUses: () => Effect.succeed(0),
+    findProviderAssetByProviderAssetId: () =>
+      Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
+    findProviderAssetByNaturalKey: () =>
+      Effect.dieMessage("findProviderAssetByNaturalKey should not be called"),
+    findProviderAssetByCurrencyCode: () =>
+      Effect.dieMessage("findProviderAssetByCurrencyCode should not be called"),
+    findProviderAssetReviewById: () =>
+      Effect.dieMessage("findProviderAssetReviewById should not be called"),
+    listProviderAssetReviews: () =>
+      Effect.dieMessage("listProviderAssetReviews should not be called"),
+    listProviderAssetObservedRepresentations: () =>
+      Effect.dieMessage("listProviderAssetObservedRepresentations should not be called"),
+    findProviderAssetMapping: () =>
+      Effect.dieMessage("findProviderAssetMapping should not be called"),
+  })
 
   return SourceSyncJobExecutorLive.pipe(
     Layer.provide(SourceRepositoryTestLive),
@@ -610,6 +638,7 @@ const makeExecutorLayer = ({
     Layer.provide(SourceProviderRegistryTestLive),
     Layer.provide(SourceReplayRepositoryTestLive),
     Layer.provide(SourceNormalizationRepositoryTestLive),
+    Layer.provide(ProviderAssetRepositoryTestLive),
     Layer.provide(SyncEngineTransactionTestLive),
     Layer.provide(TransferReconciliationServiceTestLive),
     Layer.provide(

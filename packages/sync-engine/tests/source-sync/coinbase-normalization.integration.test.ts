@@ -1,6 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
-import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -33,7 +32,6 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
-import { ProviderAssetRepository } from "../../src/services/ProviderAssetRepository.ts"
 import type { SourceRawRecord, SourceSyncSource } from "../../src/services/SourceSyncModels.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
@@ -1353,7 +1351,7 @@ describe("coinbase normalization persistence", () => {
     )
   })
 
-  it("finishes asset resolution before the source-use approval handshake", async () => {
+  it("returns source uses without persisting them before normalized artifacts", async () => {
     activeCryptoCurrencies = [...defaultCryptoCurrencies, hypeCryptoCurrency]
 
     const hypeRecord = makeHypeReviewableSyncRecords().find(
@@ -1393,7 +1391,6 @@ describe("coinbase normalization persistence", () => {
         const provider = yield* CoinbaseSourceSyncProvider
         yield* provider.refreshReferenceData()
         const lookups = yield* provider.loadNormalizationLookups()
-        const canonicalAssetId = yield* seedCanonicalAsset({ symbol: "HYPE" })
         const db = yield* drizzle
         const [providerAsset] = yield* db
           .select({ id: schema.providerAssets.id, retrievedAt: schema.providerAssets.retrievedAt })
@@ -1410,43 +1407,13 @@ describe("coinbase normalization persistence", () => {
         }
 
         return {
-          canonicalAssetId,
           lookups,
-          providerAssetRetrievedAt: providerAsset.retrievedAt,
           providerAssetRowId: providerAsset.id,
         }
       }).pipe(Effect.provide(TestLayer))
     )
 
-    const sourceUseHandshakeStarted = await Effect.runPromise(Deferred.make<void>())
-    const approvalFinished = await Effect.runPromise(Deferred.make<void>())
-    const orderingRepositoryLive = Layer.effect(
-      ProviderAssetRepository,
-      Effect.map(ProviderAssetRepository, (repository) =>
-        ProviderAssetRepository.of({
-          ...repository,
-          recordProviderAssetSourceUses: (params) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(sourceUseHandshakeStarted, undefined)
-              yield* Deferred.await(approvalFinished)
-              return yield* repository.recordProviderAssetSourceUses(params)
-            }),
-        })
-      )
-    ).pipe(Layer.provide(ProviderAssetRepositoryLive))
-    const orderingProviderLive = CoinbaseSourceSyncProviderLive.pipe(
-      Layer.provide(CoinbaseRecordNormalizerLive),
-      Layer.provide(CoinbaseLegDerivationServiceLive),
-      Layer.provide(CoinbaseReferenceDataWithDepsLive),
-      Layer.provide(CoinbaseReferenceMappingWithDepsLive),
-      Layer.provide(CoinbaseSyncClientTestLive),
-      Layer.provide(AssetRepositoryLive),
-      Layer.provide(orderingRepositoryLive),
-      Layer.provideMerge(RepositoriesLive),
-      Layer.provideMerge(TestPgClientLive)
-    )
-
-    const preparation = Effect.runPromise(
+    const prepared = await Effect.runPromise(
       Effect.gen(function* () {
         const provider = yield* CoinbaseSourceSyncProvider
         return yield* provider.prepareNormalization({
@@ -1454,29 +1421,8 @@ describe("coinbase normalization persistence", () => {
           sourceRecord,
           lookups: fixture.lookups,
         })
-      }).pipe(Effect.provide(orderingProviderLive))
+      }).pipe(Effect.provide(TestLayer))
     )
-    await Effect.runPromise(Deferred.await(sourceUseHandshakeStarted))
-    await Effect.runPromise(
-      Effect.flatMap(ProviderAssetRepository, (repository) =>
-        repository.approveProviderAssetMappingAndRequestReplay({
-          mapping: {
-            providerAssetRowId: fixture.providerAssetRowId,
-            mappingKind: "asset",
-            canonicalAssetId: fixture.canonicalAssetId,
-            assetRepresentationId: null,
-            canonicalFiatCurrency: null,
-            mappingStatus: "approved",
-            reviewerNotes: "Approval raced Coinbase normalization",
-            sourceNotes: "Approval raced Coinbase normalization",
-          },
-          expectedObservedRepresentations: [],
-          expectedProviderAssetRetrievedAt: fixture.providerAssetRetrievedAt,
-        })
-      ).pipe(Effect.provide(TestLayer))
-    )
-    await Effect.runPromise(Deferred.succeed(approvalFinished, undefined))
-    const prepared = await preparation
 
     const state = await context.runPg(
       Effect.gen(function* () {
@@ -1494,12 +1440,13 @@ describe("coinbase normalization persistence", () => {
     )
 
     expect(prepared.legDerivationStrategy).toBe("skip")
+    expect(prepared.providerAssetRowIds).toContain(fixture.providerAssetRowId)
     expect(prepared.transactionReview).toMatchObject({
       matchedLayer: "provider_asset_mapping",
       reviewStatus: "needs_review",
     })
-    expect(state.sourceUses).toEqual([{ sourceId }])
-    expect(state.jobs).toEqual([{ mode: "replay", status: "pending" }])
+    expect(state.sourceUses).toEqual([])
+    expect(state.jobs).toEqual([])
   }, 15_000)
 
   it("replays reviewable raw rows after approving an economic asset mapping", async () => {

@@ -2477,6 +2477,10 @@ const make = Effect.gen(function* () {
             )
           }
 
+          if (params.beforePersist !== undefined) {
+            yield* params.beforePersist
+          }
+
           const persistedTransaction = yield* upsertTransaction({
             executor: tx,
             transaction: params.transaction,

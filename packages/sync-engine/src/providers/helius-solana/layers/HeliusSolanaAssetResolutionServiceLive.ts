@@ -52,6 +52,7 @@ interface DefaultAssetMapping {
 interface NormalizedAssetReference {
   readonly kind: "native" | "spl"
   readonly mintAddress: string | null
+  readonly observedDecimals: number | null | undefined
   readonly rawProviderPayload: unknown
 }
 
@@ -345,6 +346,7 @@ const normalizeReference = (
     return Effect.succeed({
       kind: "native",
       mintAddress: null,
+      observedDecimals: reference.observedDecimals,
       rawProviderPayload: reference.rawProviderPayload,
     })
   }
@@ -363,6 +365,7 @@ const normalizeReference = (
   return Effect.succeed({
     kind: "spl",
     mintAddress,
+    observedDecimals: reference.observedDecimals,
     rawProviderPayload: reference.rawProviderPayload,
   })
 }
@@ -709,6 +712,9 @@ const make = Effect.gen(function* () {
             candidate.representationType === observedType &&
             providerAsset.exponent !== null &&
             candidate.decimals === providerAsset.exponent &&
+            reference.observedDecimals !== null &&
+            (reference.observedDecimals === undefined ||
+              candidate.decimals === reference.observedDecimals) &&
             observations.every(
               (observation) =>
                 observation.blockchainName.toLowerCase() ===

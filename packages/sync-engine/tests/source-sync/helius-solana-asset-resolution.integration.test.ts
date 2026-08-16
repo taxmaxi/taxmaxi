@@ -613,6 +613,71 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     expect(state?.sourceNotes).toContain("exact mint, type, and compatible decimals")
   })
 
+  it("keeps an exact mint pending when current raw decimals conflict", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Drift Example",
+          symbol: "DRIFT",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 6,
+          type: "token",
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: 5,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            symbol: "DRIFT",
+            name: "Drift Example",
+            decimals: 6,
+          }),
+        ])
+    )
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+    expect(state).toMatchObject({
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+  })
+
   it("requests replay when an exact representation promotes a pending mapping", async () => {
     const dasAsset = makeDasAsset({
       mintAddress: UNKNOWN_MINT,

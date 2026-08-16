@@ -1121,14 +1121,12 @@ const make = Effect.gen(function* () {
               principalId: source.principalId,
               affectedCurrencies: unresolvedAssetCurrencies,
             })
-      yield* providerAssetRepository.recordProviderAssetSourceUses({
-        sourceId: source.id,
-        providerAssetRowIds: Array.from(providerAssetIdsByCurrency.values()).filter(
-          (providerAssetRowId): providerAssetRowId is string => providerAssetRowId !== null
-        ),
-      })
+      const providerAssetRowIds = Array.from(providerAssetIdsByCurrency.values()).filter(
+        (providerAssetRowId): providerAssetRowId is string => providerAssetRowId !== null
+      )
 
       return {
+        providerAssetRowIds,
         transaction: {
           ...normalized.transaction,
           transactionType: resolvedTransactionType.transactionType,

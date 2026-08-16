@@ -47,6 +47,8 @@ export type HeliusSolanaAssetKind = "native" | "spl"
 export interface HeliusSolanaAssetReference {
   readonly kind: HeliusSolanaAssetKind
   readonly mintAddress: string | null
+  /** Exact decimals observed on the current raw record; null means conflicting observations. */
+  readonly observedDecimals?: number | null
   readonly rawProviderPayload?: unknown
 }
 

@@ -110,6 +110,16 @@ export interface ProviderAssetObservedRepresentationRecord {
   readonly decimals: number | null
 }
 
+/** Representation evidence prepared for a provider-asset source use; null fields are unknown. */
+export interface ProviderAssetSourceUseObservation {
+  readonly providerAssetRowId: string
+  readonly observedBlockchainId: string
+  readonly representationType: "native" | "token" | "nft" | null
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
+}
+
 /**
  * ProviderAssetRepositoryShape - Provider asset persistence and lookup operations.
  */
@@ -150,12 +160,16 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<ProviderAssetReviewRecord, SyncEngineStorageError>
 
   /**
-   * Record that normalization found this provider asset in a source record.
+   * Reserve and record that normalization artifacts use this provider asset.
+   * The caller must invoke this after taking the normalized artifact locks and keep the
+   * reservation plus artifact persistence in one transaction. This makes approval either
+   * observe the evidence or win before the evidence is written.
    * If the asset is already approved, request a replay in the same transaction.
    */
   readonly recordProviderAssetSourceUses: (params: {
     readonly sourceId: string
     readonly providerAssetRowIds: ReadonlyArray<string>
+    readonly observations: ReadonlyArray<ProviderAssetSourceUseObservation>
   }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**

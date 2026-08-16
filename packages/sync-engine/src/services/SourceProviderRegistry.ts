@@ -71,6 +71,7 @@ export type SourceProviderModuleError = SourceSyncProviderError | SourceProvider
  */
 export interface SourceProviderPreparedNormalization {
   readonly kind: "prepared"
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined

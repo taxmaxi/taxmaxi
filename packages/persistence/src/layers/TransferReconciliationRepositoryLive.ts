@@ -4477,6 +4477,44 @@ const make = Effect.gen(function* () {
                 const { destinationTransaction, originTransaction } =
                   resolveReconciliationTransactions({ canonicalTransactionId, row })
 
+                const manuallyReviewedTransactions = yield* tx
+                  .select({
+                    transactionId: schema.transactionReviews.transactionId,
+                    reviewStatus: schema.transactionReviews.reviewStatus,
+                  })
+                  .from(schema.transactionReviews)
+                  .where(
+                    and(
+                      inArray(schema.transactionReviews.transactionId, [
+                        originTransaction.id,
+                        destinationTransaction.id,
+                      ]),
+                      inArray(schema.transactionReviews.reviewStatus, ["approved", "changed"])
+                    )
+                  )
+                  .for("update")
+                  .pipe(
+                    wrapSyncEngineSqlError(
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.applyPair.loadManualReviews"
+                    )
+                  )
+
+                if (manuallyReviewedTransactions.length > 0) {
+                  return yield* Effect.fail(
+                    new SyncEngineStorageError({
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.applyPair.manualTransactionReview",
+                      cause: {
+                        providerTransferId: row.providerTransferId,
+                        canonicalTransferId,
+                        reviewedTransactions: manuallyReviewedTransactions,
+                        message:
+                          "Automatic canonicalization cannot replace manually reviewed accounting.",
+                      },
+                    })
+                  )
+                }
+
                 const originExternalId = `${originTransaction.externalId ?? originTransaction.id}:internal_transfer_out`
                 const destinationExternalId = `${destinationTransaction.externalId ?? destinationTransaction.id}:internal_transfer_in`
                 const originSourceTransferId =
@@ -4834,14 +4872,19 @@ const make = Effect.gen(function* () {
                   const dependentInboundProviderLotUsage = error.operation.endsWith(
                     ".removeUnusedInboundProviderLot.dependentUsage"
                   )
+                  const manualTransactionReview = error.operation.endsWith(
+                    ".applyPair.manualTransactionReview"
+                  )
                   return error.operation.startsWith(
                     "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition."
                   ) ||
                     unrebuildableDownstreamUsage ||
-                    dependentInboundProviderLotUsage
+                    dependentInboundProviderLotUsage ||
+                    manualTransactionReview
                     ? Effect.gen(function* () {
-                        const reason =
-                          unrebuildableDownstreamUsage || dependentInboundProviderLotUsage
+                        const reason = manualTransactionReview
+                          ? "manual_transaction_review_preserved"
+                          : unrebuildableDownstreamUsage || dependentInboundProviderLotUsage
                             ? "dependent_fifo_rebuild_blocked"
                             : error.operation.endsWith(".remainingAmount")
                               ? "insufficient_fifo_inventory"

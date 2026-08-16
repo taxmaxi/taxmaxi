@@ -19,7 +19,6 @@ import {
   ActivityOnchainFacts,
 } from "../../../services/ActivityClassificationService.ts"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
-import { ProviderAssetRepository } from "../../../services/ProviderAssetRepository.ts"
 import type { ResolvedProviderTransactionTypeMapping } from "../../../services/ProviderReferenceRepository.ts"
 import type {
   SourceTransactionDraft,
@@ -1186,6 +1185,41 @@ const collectSplTokenMints = ({
     ])
   )
 
+const collectObservedSplDecimals = ({
+  payload,
+  walletTransferEvidence,
+}: {
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletTransferEvidence: ReadonlyArray<HeliusSolanaWalletTransfer>
+}): ReadonlyMap<string, number | null> => {
+  const decimalsByMint = new Map<string, number | null>()
+  const observations = [
+    ...(payload.meta?.preTokenBalances ?? []).map((balance) => ({
+      mintAddress: balance.mint,
+      decimals: balance.uiTokenAmount.decimals,
+    })),
+    ...(payload.meta?.postTokenBalances ?? []).map((balance) => ({
+      mintAddress: balance.mint,
+      decimals: balance.uiTokenAmount.decimals,
+    })),
+    ...walletTransferEvidence.map((transfer) => ({
+      mintAddress: transfer.mint,
+      decimals: transfer.decimals,
+    })),
+  ]
+
+  for (const observation of observations) {
+    const current = decimalsByMint.get(observation.mintAddress)
+    if (current === undefined) {
+      decimalsByMint.set(observation.mintAddress, observation.decimals)
+    } else if (current !== observation.decimals) {
+      decimalsByMint.set(observation.mintAddress, null)
+    }
+  }
+
+  return decimalsByMint
+}
+
 const mapAssetsByMint = (
   requestedMints: ReadonlyArray<string>,
   resolvedTokens: ReadonlyArray<HeliusSolanaResolvedAsset>
@@ -1206,7 +1240,6 @@ const make = ({
     const heliusSyncClient = yield* HeliusSolanaSyncClient
     const assetRepository = yield* AssetRepository
     const assetResolutionService = yield* HeliusSolanaAssetResolutionService
-    const providerAssetRepository = yield* ProviderAssetRepository
 
     const cacheWalletTransferEvidenceForRawBatch = ({
       walletAddress,
@@ -2659,13 +2692,21 @@ const make = ({
             payload,
             walletTransferEvidence: [...splWalletTransferEvidence, ...ambiguousNativeSolTransfers],
           })
+          const observedDecimalsByMint = collectObservedSplDecimals({
+            payload,
+            walletTransferEvidence: [...splWalletTransferEvidence, ...ambiguousNativeSolTransfers],
+          })
 
           const resolvedTokens = yield* assetResolutionService
             .resolveAssets({
-              assets: tokenMints.map((mintAddress) => ({
-                kind: "spl",
-                mintAddress,
-              })),
+              assets: tokenMints.map((mintAddress) => {
+                const observedDecimals = observedDecimalsByMint.get(mintAddress)
+                return {
+                  kind: "spl",
+                  mintAddress,
+                  ...(observedDecimals === undefined ? {} : { observedDecimals }),
+                }
+              }),
             })
             .pipe(
               Effect.mapError(
@@ -2789,26 +2830,13 @@ const make = ({
             ...ambiguousNativeSolMovements,
           ]
 
-          yield* providerAssetRepository
-            .recordProviderAssetSourceUses({
-              sourceId: source.id,
-              providerAssetRowIds: [
-                ...new Set(
-                  [...canonicalMovements, ...providerObservationMovements].map(
-                    (movement) => movement.asset.providerAssetRowId
-                  )
-                ),
-              ],
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new HeliusSolanaNormalizationReferenceError({
-                    message: "Failed to record Solana provider asset source use.",
-                    cause,
-                  })
+          const providerAssetRowIds = [
+            ...new Set(
+              [...canonicalMovements, ...providerObservationMovements].map(
+                (movement) => movement.asset.providerAssetRowId
               )
-            )
+            ),
+          ]
 
           const canonicalTransfers = canonicalMovements.flatMap((movement) => {
             const draft = buildTransferDraft({
@@ -2921,6 +2949,7 @@ const make = ({
           })
 
           return {
+            providerAssetRowIds,
             transaction: buildTransactionDraft({
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,

@@ -547,7 +547,7 @@ const make = Effect.gen(function* () {
         )
 
   const recordProviderAssetSourceUses: ProviderAssetRepositoryShape["recordProviderAssetSourceUses"] =
-    ({ sourceId, providerAssetRowIds }) => {
+    ({ sourceId, providerAssetRowIds, observations }) => {
       const distinctProviderAssetRowIds = [...new Set(providerAssetRowIds)]
       if (distinctProviderAssetRowIds.length === 0) {
         return Effect.succeed(0)
@@ -560,6 +560,9 @@ const make = Effect.gen(function* () {
             const mappings = yield* tx
               .select({
                 providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
+                mappingKind: schema.providerAssetMappings.mappingKind,
+                canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+                assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
                 mappingStatus: schema.providerAssetMappings.mappingStatus,
               })
               .from(schema.providerAssetMappings)
@@ -571,6 +574,76 @@ const make = Effect.gen(function* () {
               )
               .orderBy(asc(schema.providerAssetMappings.providerAssetRowId))
               .for("update")
+            const approvedRepresentationIds = mappings.flatMap((mapping) =>
+              mapping.mappingStatus === "approved" && mapping.assetRepresentationId !== null
+                ? [mapping.assetRepresentationId]
+                : []
+            )
+            const approvedRepresentations =
+              approvedRepresentationIds.length === 0
+                ? []
+                : yield* tx
+                    .select({
+                      id: schema.assetRepresentations.id,
+                      assetId: schema.assetRepresentations.assetId,
+                      blockchainId: schema.assetRepresentations.blockchainId,
+                      representationType: schema.assetRepresentations.type,
+                      contractAddress: schema.assetRepresentations.contractAddress,
+                      mintAddress: schema.assetRepresentations.mintAddress,
+                      decimals: schema.assetRepresentations.decimals,
+                    })
+                    .from(schema.assetRepresentations)
+                    .where(inArray(schema.assetRepresentations.id, approvedRepresentationIds))
+            const mappingByProviderAssetRowId = new Map(
+              mappings.map((mapping) => [mapping.providerAssetRowId, mapping])
+            )
+            const representationById = new Map(
+              approvedRepresentations.map((representation) => [representation.id, representation])
+            )
+
+            for (const observation of observations) {
+              const mapping = mappingByProviderAssetRowId.get(observation.providerAssetRowId)
+              if (mapping?.mappingStatus !== "approved") {
+                continue
+              }
+
+              const representation =
+                mapping.assetRepresentationId === null
+                  ? undefined
+                  : representationById.get(mapping.assetRepresentationId)
+              const matchesApprovedTarget =
+                mapping.mappingKind === "asset" &&
+                mapping.canonicalAssetId !== null &&
+                representation !== undefined &&
+                representation.assetId === mapping.canonicalAssetId &&
+                representation.blockchainId === observation.observedBlockchainId &&
+                (observation.representationType === null ||
+                  representation.representationType === observation.representationType) &&
+                (observation.contractAddress === null
+                  ? true
+                  : representation.contractAddress !== null &&
+                    representation.contractAddress.trim().toLowerCase() ===
+                      observation.contractAddress.trim().toLowerCase()) &&
+                (observation.mintAddress === null ||
+                  representation.mintAddress === observation.mintAddress) &&
+                (observation.decimals === null || representation.decimals === observation.decimals)
+
+              if (!matchesApprovedTarget) {
+                return yield* Effect.fail(
+                  new SyncEngineStorageError({
+                    operation:
+                      "providerAssetRepository.recordProviderAssetSourceUses.validateApprovedMapping",
+                    cause: {
+                      providerAssetRowId: observation.providerAssetRowId,
+                      mapping,
+                      observation,
+                      message:
+                        "Prepared representation evidence conflicts with the approved provider asset mapping.",
+                    },
+                  })
+                )
+              }
+            }
             const [source] = yield* tx
               .select({ principalId: schema.sources.principalId })
               .from(schema.sources)
