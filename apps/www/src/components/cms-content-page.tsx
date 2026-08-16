@@ -10,6 +10,7 @@ import {
   getCmsPagePath,
   type CmsContentPage as CmsContentPageModel,
   type PayloadLocale,
+  type PayloadNewsCategory,
 } from "#/integrations/payload/content"
 import { localizeHref } from "#/paraglide/runtime"
 
@@ -19,6 +20,7 @@ const labels = {
     author: "By",
     effective: "Effective from",
     faq: "Frequently asked questions",
+    lastReviewed: "Last reviewed",
     lastUpdated: "Last updated",
     published: "Published",
     reviewedBy: "Reviewed by",
@@ -29,12 +31,32 @@ const labels = {
     author: "Von",
     effective: "Gültig ab",
     faq: "Häufig gestellte Fragen",
+    lastReviewed: "Zuletzt geprüft",
     lastUpdated: "Zuletzt aktualisiert",
     published: "Veröffentlicht",
     reviewedBy: "Geprüft von",
     sources: "Quellen",
   },
 } as const satisfies Record<PayloadLocale, Record<string, string>>
+
+const newsCategoryLabels = {
+  en: {
+    "general-news": "News",
+    "regulatory-update": "Regulatory update",
+    "exchange-update": "Exchange update",
+    "blockchain-update": "Blockchain update",
+    "company-news": "Company news",
+    "product-launch": "Product launch",
+  },
+  de: {
+    "general-news": "Nachrichten",
+    "regulatory-update": "Regulatorisches Update",
+    "exchange-update": "Börsen-Update",
+    "blockchain-update": "Blockchain-Update",
+    "company-news": "Unternehmensnews",
+    "product-launch": "Produktneuheit",
+  },
+} as const satisfies Record<PayloadLocale, Record<PayloadNewsCategory, string>>
 
 export function CmsContentPage({ page }: { readonly page: CmsContentPageModel }) {
   const text = labels[page.locale]
@@ -66,7 +88,12 @@ export function CmsContentPage({ page }: { readonly page: CmsContentPageModel })
           <article>
             <header className="mx-auto max-w-4xl text-center">
               <p className="m-0 text-sm font-semibold uppercase tracking-[0.2em] text-marketing-accent">
-                {page.eyebrow ?? (page.kind === "landing" ? "TaxMaxi" : text.article)}
+                {page.eyebrow ??
+                  (page.category
+                    ? newsCategoryLabels[page.locale][page.category]
+                    : page.kind === "landing"
+                      ? "TaxMaxi"
+                      : text.article)}
               </p>
               <h1 className="mt-5 text-balance font-display text-4xl font-semibold leading-[1.06] text-marketing-foreground sm:text-6xl lg:text-7xl">
                 {page.title}
@@ -94,7 +121,7 @@ export function CmsContentPage({ page }: { readonly page: CmsContentPageModel })
             ) : null}
 
             <div className="cms-rich-text mx-auto mt-14 max-w-3xl text-marketing-text">
-              <CmsRichText document={page.content} />
+              <CmsRichText document={page.content} locale={page.locale} />
             </div>
 
             {page.faqs.length > 0 ? (
@@ -115,7 +142,7 @@ export function CmsContentPage({ page }: { readonly page: CmsContentPageModel })
                         </span>
                       </summary>
                       <div className="cms-rich-text pb-6 text-marketing-text">
-                        <CmsRichText document={faq.answer} />
+                        <CmsRichText document={faq.answer} locale={page.locale} />
                       </div>
                     </details>
                   ))}
@@ -195,6 +222,9 @@ function ContentDates({ page }: { readonly page: CmsContentPageModel }) {
       : undefined,
     page.effectiveFrom
       ? { label: text.effective, value: page.effectiveFrom, icon: CheckCircle2 }
+      : undefined,
+    page.lastReviewedAt
+      ? { label: text.lastReviewed, value: page.lastReviewedAt, icon: CheckCircle2 }
       : undefined,
     { label: text.lastUpdated, value: page.updatedAt, icon: FileText },
   ].filter((item) => item !== undefined)

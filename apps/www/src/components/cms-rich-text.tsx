@@ -1,6 +1,12 @@
 import { Fragment, type ReactNode } from "react"
 
-import type { LexicalDocument, LexicalNode, PayloadMedia } from "#/integrations/payload/content"
+import type {
+  LexicalDocument,
+  LexicalNode,
+  PayloadLocale,
+  PayloadMedia,
+} from "#/integrations/payload/content"
+import { localizeHref } from "#/paraglide/runtime"
 
 const TEXT_BOLD = 1
 const TEXT_ITALIC = 2
@@ -10,17 +16,23 @@ const TEXT_CODE = 16
 const TEXT_SUBSCRIPT = 32
 const TEXT_SUPERSCRIPT = 64
 
-export function CmsRichText({ document }: { readonly document: LexicalDocument }) {
-  return <>{renderChildren(document.root)}</>
+export function CmsRichText({
+  document,
+  locale,
+}: {
+  readonly document: LexicalDocument
+  readonly locale: PayloadLocale
+}) {
+  return <>{renderChildren(document.root, locale)}</>
 }
 
-function renderChildren(node: LexicalNode): ReactNode {
+function renderChildren(node: LexicalNode, locale: PayloadLocale): ReactNode {
   return node.children?.map((child, index) => (
-    <Fragment key={`${child.type}-${index}`}>{renderNode(child)}</Fragment>
+    <Fragment key={`${child.type}-${index}`}>{renderNode(child, locale)}</Fragment>
   ))
 }
 
-function renderNode(node: LexicalNode): ReactNode {
+function renderNode(node: LexicalNode, locale: PayloadLocale): ReactNode {
   if (node.type === "text" && node.text !== undefined) {
     return renderText(node.text, typeof node.format === "number" ? node.format : 0)
   }
@@ -28,7 +40,7 @@ function renderNode(node: LexicalNode): ReactNode {
   if (node.type === "linebreak") return <br />
 
   if (node.type === "heading") {
-    const children = renderChildren(node)
+    const children = renderChildren(node, locale)
     if (node.tag === "h3") return <h3>{children}</h3>
     if (node.tag === "h4") return <h4>{children}</h4>
     if (node.tag === "h5") return <h5>{children}</h5>
@@ -36,25 +48,25 @@ function renderNode(node: LexicalNode): ReactNode {
     return <h2>{children}</h2>
   }
 
-  if (node.type === "paragraph") return <p>{renderChildren(node)}</p>
-  if (node.type === "quote") return <blockquote>{renderChildren(node)}</blockquote>
-  if (node.type === "listitem") return <li>{renderChildren(node)}</li>
+  if (node.type === "paragraph") return <p>{renderChildren(node, locale)}</p>
+  if (node.type === "quote") return <blockquote>{renderChildren(node, locale)}</blockquote>
+  if (node.type === "listitem") return <li>{renderChildren(node, locale)}</li>
 
   if (node.type === "list") {
     return node.listType === "number" ? (
-      <ol>{renderChildren(node)}</ol>
+      <ol>{renderChildren(node, locale)}</ol>
     ) : (
-      <ul>{renderChildren(node)}</ul>
+      <ul>{renderChildren(node, locale)}</ul>
     )
   }
 
   if (node.type === "link" || node.type === "autolink") {
-    const href = safeHref(node.fields?.url ?? node.url)
-    if (!href) return renderChildren(node)
+    const href = safeHref(node.fields?.url ?? node.url, locale)
+    if (!href) return renderChildren(node, locale)
     const newTab = node.fields?.newTab ?? false
     return (
       <a href={href} {...(newTab ? { target: "_blank", rel: "noreferrer" } : {})}>
-        {renderChildren(node)}
+        {renderChildren(node, locale)}
       </a>
     )
   }
@@ -63,7 +75,7 @@ function renderNode(node: LexicalNode): ReactNode {
     return renderUpload(node.value)
   }
 
-  return renderChildren(node)
+  return renderChildren(node, locale)
 }
 
 function renderText(text: string, format: number): ReactNode {
@@ -98,9 +110,10 @@ function renderUpload(media: PayloadMedia): ReactNode {
   )
 }
 
-function safeHref(value: string | null | undefined): string | undefined {
+function safeHref(value: string | null | undefined, locale: PayloadLocale): string | undefined {
   if (!value) return undefined
-  if (value.startsWith("/") || value.startsWith("#") || value.startsWith("mailto:")) return value
+  if (value.startsWith("/")) return localizeHref(value, { locale })
+  if (value.startsWith("#") || value.startsWith("mailto:")) return value
 
   try {
     const url = new URL(value)

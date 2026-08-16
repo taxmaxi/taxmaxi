@@ -226,6 +226,7 @@ function toLandingPage({
     content: resolveRichTextMedia(doc.content, baseUrl),
     ...(doc.publishedAt ? { publishedAt: doc.publishedAt } : {}),
     ...(doc.effectiveFrom ? { effectiveFrom: doc.effectiveFrom } : {}),
+    ...(doc.lastReviewedAt ? { lastReviewedAt: doc.lastReviewedAt } : {}),
     updatedAt: doc.updatedAt,
     ...(doc.reviewedBy ? { reviewedBy: doc.reviewedBy } : {}),
     ...(image ? { image } : {}),

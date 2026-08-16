@@ -110,6 +110,8 @@ export interface PayloadNewsArticle extends PayloadSeoFields {
   readonly updatedAt: string
 }
 
+export type PayloadNewsCategory = PayloadNewsArticle["category"]
+
 export interface PayloadTaxLawArticle extends PayloadSeoFields {
   readonly id: number
   readonly slug: string
@@ -162,10 +164,11 @@ export interface CmsContentPage {
   readonly content: LexicalDocument
   readonly publishedAt?: string
   readonly effectiveFrom?: string
+  readonly lastReviewedAt?: string
   readonly updatedAt: string
   readonly author?: string
   readonly reviewedBy?: string
-  readonly category?: string
+  readonly category?: PayloadNewsCategory
   readonly image?: CmsImage
   readonly socialImage?: CmsImage
   readonly primaryCta?: CmsCta
