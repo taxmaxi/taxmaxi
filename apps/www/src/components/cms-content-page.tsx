@@ -16,6 +16,7 @@ import { localizeHref } from "#/paraglide/runtime"
 
 const labels = {
   en: {
+    accessed: "Accessed",
     article: "Article",
     author: "By",
     effective: "Effective from",
@@ -27,6 +28,7 @@ const labels = {
     sources: "Sources",
   },
   de: {
+    accessed: "Abgerufen am",
     article: "Artikel",
     author: "Von",
     effective: "Gültig ab",
@@ -169,6 +171,16 @@ export function CmsContentPage({ page }: { readonly page: CmsContentPageModel })
                       >
                         {source.label}
                       </a>
+                      {source.accessedAt ? (
+                        <span>
+                          {" "}
+                          ({text.accessed}{" "}
+                          <time dateTime={source.accessedAt}>
+                            {formatCmsDate(source.accessedAt, page.locale)}
+                          </time>
+                          )
+                        </span>
+                      ) : null}
                     </li>
                   ))}
                 </ol>

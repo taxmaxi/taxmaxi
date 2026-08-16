@@ -16,6 +16,7 @@ describe("CmsRichText", () => {
         children: [
           link("Privacy", "/privacy"),
           link("FAQ", "#faq"),
+          link("Phone", "tel:+49123456789"),
           link("Payload", "https://payloadcms.com"),
         ],
       },
@@ -25,6 +26,7 @@ describe("CmsRichText", () => {
 
     expect(getByRole("link", { name: "Privacy" }).getAttribute("href")).toBe("/de/datenschutz")
     expect(getByRole("link", { name: "FAQ" }).getAttribute("href")).toBe("#faq")
+    expect(getByRole("link", { name: "Phone" }).getAttribute("href")).toBe("tel:+49123456789")
     expect(getByRole("link", { name: "Payload" }).getAttribute("href")).toBe(
       "https://payloadcms.com/"
     )

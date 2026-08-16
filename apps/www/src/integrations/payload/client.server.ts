@@ -172,16 +172,27 @@ function resolveRichTextNode(node: LexicalNode, baseUrl: URL): LexicalNode {
 
 function translationList({
   locale,
-  slug,
+  doc,
   alternate,
 }: {
   readonly locale: PayloadLocale
-  readonly slug: string
-  readonly alternate?: { readonly slug: string }
+  readonly doc: { readonly slug: string; readonly canonicalUrl?: string | null }
+  readonly alternate?: { readonly slug: string; readonly canonicalUrl?: string | null }
 }): ReadonlyArray<CmsTranslation> {
+  const canonicalUrl = toCanonicalUrl(doc.canonicalUrl)
+  const alternateCanonicalUrl = toCanonicalUrl(alternate?.canonicalUrl)
+
   return [
-    { locale, slug },
-    ...(alternate ? [{ locale: otherLocale(locale), slug: alternate.slug }] : []),
+    { locale, slug: doc.slug, ...(canonicalUrl ? { canonicalUrl } : {}) },
+    ...(alternate
+      ? [
+          {
+            locale: otherLocale(locale),
+            slug: alternate.slug,
+            ...(alternateCanonicalUrl ? { canonicalUrl: alternateCanonicalUrl } : {}),
+          },
+        ]
+      : []),
   ]
 }
 
@@ -238,7 +249,7 @@ function toLandingPage({
       answer: resolveRichTextMedia(faq.answer, baseUrl),
     })),
     sources,
-    translations: translationList({ locale, slug: doc.slug, alternate }),
+    translations: translationList({ locale, doc, alternate }),
     seo: {
       title: doc.seoTitle ?? doc.title,
       description: doc.seoDescription ?? doc.excerpt,
@@ -281,7 +292,7 @@ function toNewsArticle({
     ...(primaryCta ? { primaryCta } : {}),
     faqs: [],
     sources: [],
-    translations: translationList({ locale, slug: doc.slug, alternate }),
+    translations: translationList({ locale, doc, alternate }),
     seo: {
       title: doc.seoTitle ?? doc.title,
       ...((doc.seoDescription ?? doc.excerpt)
@@ -320,7 +331,7 @@ function toTaxLawArticle({
     ...(image ? { image } : {}),
     faqs: [],
     sources: [],
-    translations: translationList({ locale, slug: doc.slug, alternate }),
+    translations: translationList({ locale, doc, alternate }),
     seo: {
       title: doc.seoTitle ?? doc.title,
       ...((doc.seoDescription ?? doc.excerpt)

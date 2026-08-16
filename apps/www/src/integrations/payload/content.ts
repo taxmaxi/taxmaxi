@@ -135,6 +135,7 @@ export interface CmsImage {
 export interface CmsTranslation {
   readonly locale: PayloadLocale
   readonly slug: string
+  readonly canonicalUrl?: string
 }
 
 export interface CmsCta {

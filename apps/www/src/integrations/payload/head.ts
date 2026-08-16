@@ -68,14 +68,16 @@ export function createCmsPageHead(page: CmsContentPage) {
       ...page.translations.map((translation) => ({
         rel: "alternate",
         hrefLang: translation.locale,
-        href: getCmsPageUrl({ kind: page.kind, ...translation }),
+        href: translation.canonicalUrl ?? getCmsPageUrl({ kind: page.kind, ...translation }),
       })),
       ...(englishTranslation
         ? [
             {
               rel: "alternate",
               hrefLang: "x-default",
-              href: getCmsPageUrl({ kind: page.kind, ...englishTranslation }),
+              href:
+                englishTranslation.canonicalUrl ??
+                getCmsPageUrl({ kind: page.kind, ...englishTranslation }),
             },
           ]
         : []),

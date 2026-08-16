@@ -113,7 +113,9 @@ function renderUpload(media: PayloadMedia): ReactNode {
 function safeHref(value: string | null | undefined, locale: PayloadLocale): string | undefined {
   if (!value) return undefined
   if (value.startsWith("/")) return localizeHref(value, { locale })
-  if (value.startsWith("#") || value.startsWith("mailto:")) return value
+  if (value.startsWith("#") || value.startsWith("mailto:") || value.startsWith("tel:")) {
+    return value
+  }
 
   try {
     const url = new URL(value)

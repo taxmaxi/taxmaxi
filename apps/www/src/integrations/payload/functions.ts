@@ -4,8 +4,7 @@ import { z } from "zod"
 
 import { findLandingPage, findNewsArticle, findTaxLawArticle } from "./client.server"
 import { payloadLocales } from "./content"
-
-const CMS_CACHE_CONTROL = "public, max-age=60, s-maxage=300, stale-while-revalidate=86400"
+import { CMS_CACHE_CONTROL } from "./edge-cache.server"
 
 const contentPageInput = z.object({
   locale: z.enum(payloadLocales),
