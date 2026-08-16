@@ -2733,6 +2733,7 @@ const make = Effect.gen(function* () {
                   acquiredAt: schema.fifoLots.acquiredAt,
                   costBasisPerToken: schema.fifoLots.costBasisPerToken,
                   costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                  costBasisStatus: schema.fifoLots.costBasisStatus,
                 })
                 .from(schema.disposalMatches)
                 .innerJoin(
@@ -2848,6 +2849,7 @@ const make = Effect.gen(function* () {
                   remainingAmount: schema.fifoLots.remainingAmount,
                   costBasisPerToken: schema.fifoLots.costBasisPerToken,
                   costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                  costBasisStatus: schema.fifoLots.costBasisStatus,
                 })
                 .from(schema.fifoLots)
                 .innerJoin(
@@ -2914,6 +2916,7 @@ const make = Effect.gen(function* () {
                           acquiredAt: schema.fifoLots.acquiredAt,
                           costBasisPerToken: schema.fifoLots.costBasisPerToken,
                           costBasisCurrency: schema.fifoLots.costBasisCurrency,
+                          costBasisStatus: schema.fifoLots.costBasisStatus,
                         })
                         .from(schema.inventoryMovements)
                         .innerJoin(
@@ -3074,6 +3077,7 @@ const make = Effect.gen(function* () {
                       acquiredAt: allocation.acquiredAt,
                       costBasisPerToken: allocation.costBasisPerToken,
                       costBasisCurrency: allocation.costBasisCurrency,
+                      costBasisStatus: allocation.costBasisStatus,
                     })
                     totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
                     remainingToMove = BigDecimal.subtract(remainingToMove, matchedAmount)
@@ -3201,6 +3205,7 @@ const make = Effect.gen(function* () {
                     acquiredAt: lot.acquiredAt,
                     costBasisPerToken: lot.costBasisPerToken,
                     costBasisCurrency: lot.costBasisCurrency,
+                    costBasisStatus: lot.costBasisStatus,
                     remainingAmount: BigDecimal.format(updatedRemainingAmount),
                   })
                   totalCostBasis = BigDecimal.sum(totalCostBasis, costBasis)
@@ -3524,6 +3529,7 @@ const make = Effect.gen(function* () {
                   readonly acquiredAt: Date
                   readonly costBasisPerToken: unknown
                   readonly costBasisCurrency: string
+                  readonly costBasisStatus: "known" | "pending_review"
                 }>
                 readonly fiatAmount: string
                 readonly fiatCurrency: string | null
@@ -3537,7 +3543,10 @@ const make = Effect.gen(function* () {
                 })
 
                 const existingLots = yield* tx
-                  .select({ id: schema.fifoLots.id })
+                  .select({
+                    id: schema.fifoLots.id,
+                    sourceLegSequence: schema.fifoLots.sourceLegSequence,
+                  })
                   .from(schema.fifoLots)
                   .where(eq(schema.fifoLots.sourceLegId, destinationLegId))
                   .orderBy(asc(schema.fifoLots.sourceLegSequence))
@@ -3548,19 +3557,41 @@ const make = Effect.gen(function* () {
                   )
 
                 if (existingLots.length > 0) {
-                  yield* tx
-                    .update(schema.fifoLots)
-                    .set({
-                      assetId,
-                      assetRepresentationId,
-                      updatedAt: nowDate(),
-                    })
-                    .where(eq(schema.fifoLots.sourceLegId, destinationLegId))
-                    .pipe(
-                      wrapSyncEngineSqlError(
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.updateExistingLots"
-                      )
-                    )
+                  yield* Effect.forEach(
+                    existingLots,
+                    (existingLot) => {
+                      const match = disposition.matches[existingLot.sourceLegSequence]
+                      if (match === undefined) {
+                        return Effect.fail(
+                          new SyncEngineStorageError({
+                            operation:
+                              "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.matchExistingLot",
+                            cause: {
+                              destinationLegId,
+                              sourceLegSequence: existingLot.sourceLegSequence,
+                              message: "Existing carried lot has no matching source disposition.",
+                            },
+                          })
+                        )
+                      }
+
+                      return tx
+                        .update(schema.fifoLots)
+                        .set({
+                          assetId,
+                          assetRepresentationId,
+                          costBasisStatus: match.costBasisStatus,
+                          updatedAt: nowDate(),
+                        })
+                        .where(eq(schema.fifoLots.id, existingLot.id))
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.moveLotsForInternalTransfer.updateExistingLot"
+                          )
+                        )
+                    },
+                    { concurrency: 1, discard: true }
+                  )
                   return
                 }
 
@@ -3589,6 +3620,7 @@ const make = Effect.gen(function* () {
                       remainingAmount: matchedAmount,
                       costBasisPerToken,
                       costBasisCurrency: match.costBasisCurrency,
+                      costBasisStatus: match.costBasisStatus,
                       sourceLegId: destinationLegId,
                       sourceLegSequence: sequence,
                       createdAt: nowDate(),

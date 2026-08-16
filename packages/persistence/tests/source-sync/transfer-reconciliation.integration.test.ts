@@ -4354,7 +4354,7 @@ describe("TransferReconciliationServiceLive", () => {
             timestamp: new Date("2025-04-01T10:00:00.000Z"),
             principalId: TEST_PRINCIPAL_ID,
             assetId: TEST_BTC_ASSET_ID,
-            amount: "1.00000000",
+            amount: "0.30000000",
             kind: "acquisition",
             provenance: "deterministic",
             fiatAmount: "50000.00",
@@ -4373,14 +4373,48 @@ describe("TransferReconciliationServiceLive", () => {
             sourceId: TEST_SOURCE_ID,
             assetId: TEST_BTC_ASSET_ID,
             acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
-            originalAmount: "1.00000000",
-            remainingAmount: "0.90000000",
+            originalAmount: "0.15000000",
+            remainingAmount: "0.05000000",
             costBasisPerToken: "50000.000000000000000000",
             costBasisCurrency: "EUR",
+            costBasisStatus: "pending_review",
             sourceLegId: leg.id,
             sourceLegSequence: 0,
           })
           .returning({ id: schema.fifoLots.id })
+        const [knownLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "scoped-replay-known-acquisition-leg",
+            timestamp: new Date("2025-04-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.15000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: null,
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (knownLeg === undefined) {
+          return yield* Effect.dieMessage("Failed to create known acquisition leg fixture")
+        }
+
+        yield* db.insert(schema.fifoLots).values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: new Date("2025-04-02T10:00:00.000Z"),
+          originalAmount: "0.15000000",
+          remainingAmount: "0.15000000",
+          costBasisPerToken: "60000.000000000000000000",
+          costBasisCurrency: "EUR",
+          costBasisStatus: "known",
+          sourceLegId: knownLeg.id,
+          sourceLegSequence: 0,
+        })
         const [providerTransfer] = yield* db
           .select({ transactionId: schema.providerTransfers.transactionId })
           .from(schema.providerTransfers)
@@ -4993,6 +5027,8 @@ describe("TransferReconciliationServiceLive", () => {
             remainingAmount: schema.fifoLots.remainingAmount,
             costBasisPerToken: schema.fifoLots.costBasisPerToken,
             costBasisCurrency: schema.fifoLots.costBasisCurrency,
+            costBasisStatus: schema.fifoLots.costBasisStatus,
+            sourceLegSequence: schema.fifoLots.sourceLegSequence,
           })
           .from(schema.fifoLots)
           .where(
@@ -5014,16 +5050,68 @@ describe("TransferReconciliationServiceLive", () => {
         remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+        sourceLegSequence: 0,
       }),
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
         assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-        originalAmount: expect.stringContaining("0.20000000"),
-        remainingAmount: expect.stringContaining("0.10000000"),
+        originalAmount: expect.stringContaining("0.05000000"),
+        remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+        sourceLegSequence: 0,
+      }),
+      expect.objectContaining({
+        acquiredAt: new Date("2025-04-02T10:00:00.000Z"),
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        originalAmount: expect.stringContaining("0.15000000"),
+        remainingAmount: expect.stringContaining("0.10000000"),
+        costBasisPerToken: expect.stringContaining("60000.000000000000000000"),
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegSequence: 1,
       }),
     ])
+
+    const pendingMovedLot = movedLots.find(
+      (lot) => lot.costBasisStatus === "pending_review" && lot.originalAmount.includes("0.05000000")
+    )
+    expect(pendingMovedLot).toBeDefined()
+    if (pendingMovedLot === undefined) {
+      return
+    }
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.fifoLots)
+          .set({ costBasisStatus: "known" })
+          .where(eq(schema.fifoLots.id, pendingMovedLot.id))
+      })
+    )
+    const retrySummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId: secondReconciliationId,
+        })
+      )
+    )
+    const [repairedPendingLot] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ costBasisStatus: schema.fifoLots.costBasisStatus })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, pendingMovedLot.id))
+      })
+    )
+
+    expect(retrySummary).toEqual({ canonicalizedPairs: 1 })
+    expect(repairedPendingLot).toEqual({ costBasisStatus: "pending_review" })
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -5207,7 +5295,7 @@ describe("TransferReconciliationServiceLive", () => {
         }),
         expect.objectContaining({
           disposalLegId: destinationRecoveryFixture.laterDisposalLegId,
-          fifoLotId: movedLots[1]?.id,
+          fifoLotId: movedLots[2]?.id,
           matchedAmount: expect.stringContaining("0.05000000"),
         }),
       ])
@@ -5218,7 +5306,7 @@ describe("TransferReconciliationServiceLive", () => {
       expect.arrayContaining([
         expect.objectContaining({
           sourceId: TEST_SOURCE_ID,
-          remainingAmount: expect.stringContaining("0.70000000"),
+          remainingAmount: expect.stringContaining("0.20000000"),
         }),
         expect.objectContaining({
           sourceId: ONCHAIN_SOURCE_ID,
