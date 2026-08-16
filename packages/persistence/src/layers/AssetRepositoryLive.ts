@@ -28,12 +28,16 @@ const normalizeAddress = ({
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
-  const findAssetById: AssetRepositoryShape["findAssetById"] = ({ assetId }) =>
+  const findAssetById: AssetRepositoryShape["findAssetById"] = ({
+    assetId,
+    lockForApproval = false,
+  }) =>
     Effect.gen(function* () {
-      const [asset] = yield* db
-        .select({ id: schema.assets.id, symbol: schema.assets.symbol })
+      const query = db
+        .select({ id: schema.assets.id, symbol: schema.assets.symbol, type: schema.assets.type })
         .from(schema.assets)
         .where(eq(schema.assets.id, assetId))
+      const [asset] = yield* (lockForApproval ? query.for("share") : query)
         .limit(1)
         .pipe(wrapSyncEngineSqlError("assetRepository.findAssetById"))
 
@@ -45,7 +49,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const [asset] = yield* db
-        .select({ id: schema.assets.id, symbol: schema.assets.symbol })
+        .select({ id: schema.assets.id, symbol: schema.assets.symbol, type: schema.assets.type })
         .from(schema.assets)
         .where(eq(schema.assets.coingeckoCoinId, coingeckoCoinId))
         .limit(1)
@@ -56,9 +60,10 @@ const make = Effect.gen(function* () {
 
   const findRepresentationById: AssetRepositoryShape["findRepresentationById"] = ({
     assetRepresentationId,
+    lockForApproval = false,
   }) =>
     Effect.gen(function* () {
-      const [representation] = yield* db
+      const query = db
         .select({
           id: schema.assetRepresentations.id,
           assetId: schema.assetRepresentations.assetId,
@@ -76,6 +81,9 @@ const make = Effect.gen(function* () {
           eq(schema.assetRepresentations.blockchainId, schema.blockchains.id)
         )
         .where(eq(schema.assetRepresentations.id, assetRepresentationId))
+      const [representation] = yield* (
+        lockForApproval ? query.for("share", { of: schema.assetRepresentations }) : query
+      )
         .limit(1)
         .pipe(wrapSyncEngineSqlError("assetRepository.findRepresentationById"))
 
@@ -269,6 +277,9 @@ const make = Effect.gen(function* () {
                 id: schema.assetRepresentations.id,
                 assetId: schema.assetRepresentations.assetId,
                 assetCoingeckoCoinId: schema.assets.coingeckoCoinId,
+                assetType: schema.assets.type,
+                decimals: schema.assetRepresentations.decimals,
+                representationType: schema.assetRepresentations.type,
               })
               .from(schema.assetRepresentations)
               .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
@@ -290,7 +301,7 @@ const make = Effect.gen(function* () {
                 : eq(schema.assets.coingeckoCoinId, asset.coingeckoCoinId)
 
             const [existingAssetByIdentity] = yield* tx
-              .select({ id: schema.assets.id })
+              .select({ id: schema.assets.id, type: schema.assets.type })
               .from(schema.assets)
               .where(economicAssetFilter)
               .limit(1)
@@ -328,7 +339,44 @@ const make = Effect.gen(function* () {
               existingAssetByIdentity ??
               (existingRepresentation === undefined
                 ? undefined
-                : { id: existingRepresentation.assetId })
+                : { id: existingRepresentation.assetId, type: existingRepresentation.assetType })
+
+            if (existingAsset !== undefined && existingAsset.type !== asset.type) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.validateEconomicAssetType",
+                  cause: {
+                    assetId: existingAsset.id,
+                    existingType: existingAsset.type,
+                    incomingType: asset.type,
+                    message: "Economic asset type cannot change after the identity is created.",
+                  },
+                })
+              )
+            }
+
+            if (
+              existingRepresentation !== undefined &&
+              (existingRepresentation.representationType !== representation.type ||
+                existingRepresentation.decimals !== representation.decimals)
+            ) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.validateRepresentationIdentity",
+                  cause: {
+                    existingDecimals: existingRepresentation.decimals,
+                    existingType: existingRepresentation.representationType,
+                    incomingDecimals: representation.decimals,
+                    incomingType: representation.type,
+                    representationId: existingRepresentation.id,
+                    message:
+                      "Representation type and decimals cannot change after the identity is created.",
+                  },
+                })
+              )
+            }
 
             const assetValues = {
               name: asset.name,
@@ -345,7 +393,15 @@ const make = Effect.gen(function* () {
                     .values({ ...assetValues, createdAt: now })
                     .onConflictDoUpdate({
                       target: schema.assets.coingeckoCoinId,
-                      set: assetValues,
+                      set: {
+                        name: assetValues.name,
+                        symbol: assetValues.symbol,
+                        ...(asset.coingeckoCoinId === null
+                          ? {}
+                          : { coingeckoCoinId: asset.coingeckoCoinId }),
+                        ...(asset.logoUrl === null ? {} : { logoUrl: asset.logoUrl }),
+                        updatedAt: now,
+                      },
                     })
                     .returning({
                       id: schema.assets.id,
@@ -382,6 +438,21 @@ const make = Effect.gen(function* () {
                   cause: {
                     assetSymbol: asset.symbol,
                     message: "Economic asset missing after upsert.",
+                  },
+                })
+              )
+            }
+
+            if (persistedAsset.type !== asset.type) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.validateEconomicAssetType",
+                  cause: {
+                    assetId: persistedAsset.id,
+                    existingType: persistedAsset.type,
+                    incomingType: asset.type,
+                    message: "Economic asset type cannot change after the identity is created.",
                   },
                 })
               )
@@ -439,6 +510,8 @@ const make = Effect.gen(function* () {
                     .select({
                       id: schema.assetRepresentations.id,
                       assetId: schema.assetRepresentations.assetId,
+                      decimals: schema.assetRepresentations.decimals,
+                      representationType: schema.assetRepresentations.type,
                     })
                     .from(schema.assetRepresentations)
                     .where(representationFilter)
@@ -474,6 +547,27 @@ const make = Effect.gen(function* () {
                     existingAssetId: representationToPersist.assetId,
                     representationId: representationToPersist.id,
                     message: "Representation belongs to a different economic asset.",
+                  },
+                })
+              )
+            }
+
+            if (
+              representationToPersist.representationType !== representation.type ||
+              representationToPersist.decimals !== representation.decimals
+            ) {
+              return yield* Effect.fail(
+                new SyncEngineStorageError({
+                  operation:
+                    "assetRepository.upsertEconomicAssetRepresentation.validateRepresentationIdentity",
+                  cause: {
+                    existingDecimals: representationToPersist.decimals,
+                    existingType: representationToPersist.representationType,
+                    incomingDecimals: representation.decimals,
+                    incomingType: representation.type,
+                    representationId: representationToPersist.id,
+                    message:
+                      "Representation type and decimals cannot change after the identity is created.",
                   },
                 })
               )

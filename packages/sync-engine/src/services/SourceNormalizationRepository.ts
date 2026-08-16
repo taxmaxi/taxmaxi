@@ -333,6 +333,11 @@ export interface PersistNormalizedSourceArtifactsContext {
 export interface PersistNormalizedSourceArtifactsParamsBase {
   /** Replay reservation that this persistence call is allowed to finalize. */
   readonly replayReservationId?: string
+  /**
+   * Reserve related rows after persistence locks are held but before canonical artifacts are
+   * written. The reservation shares this repository transaction and is rolled back on failure.
+   */
+  readonly beforePersist?: Effect.Effect<void, SyncEngineStorageError>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined

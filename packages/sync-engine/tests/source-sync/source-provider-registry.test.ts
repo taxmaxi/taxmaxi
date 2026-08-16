@@ -93,6 +93,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
       }),
     prepareNormalization: () =>
       Effect.succeed({
+        providerAssetRowIds: [],
         transaction: {
           sourceId: source.id,
           sourceRawRecordId: sourceRecord.id,

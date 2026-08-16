@@ -15,6 +15,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 export interface SyncEngineAsset {
   readonly id: string
   readonly symbol: string
+  readonly type: "fungible" | "nft"
 }
 
 /** Network representation resolved from exact chain reference data. */
@@ -98,6 +99,7 @@ export interface AssetRepositoryShape {
    */
   readonly findAssetById: (params: {
     readonly assetId: string
+    readonly lockForApproval?: boolean
   }) => Effect.Effect<Option.Option<SyncEngineAsset>, SyncEngineStorageError>
 
   /** Load a canonical asset by its stable CoinGecko coin id. */
@@ -108,6 +110,7 @@ export interface AssetRepositoryShape {
   /** Load a network representation by id. */
   readonly findRepresentationById: (params: {
     readonly assetRepresentationId: string
+    readonly lockForApproval?: boolean
   }) => Effect.Effect<Option.Option<SyncEngineAssetRepresentation>, SyncEngineStorageError>
 
   /**

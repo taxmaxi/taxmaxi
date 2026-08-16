@@ -11,6 +11,7 @@ import {
   UnsupportedSyncProviderError,
 } from "../../src/shared/SourceProviderRawBatch.ts"
 import {
+  ProviderAssetRepository,
   SourceNormalizationRepository,
   SourceProviderRecoverableNormalizationError,
   SourceProviderRegistry,
@@ -24,6 +25,7 @@ import {
   SourceSyncJobRepository,
   SourceSyncStateRepository,
   SyncEngineStorageError,
+  SyncEngineTransaction,
   TransferReconciliationService,
   type SourceSyncExecutionState,
   type SourceSyncJobMode,
@@ -101,6 +103,7 @@ const makeExecutorLayer = ({
   replayRawRecords = [],
   replayCandidates = [],
   failNormalizeOnce = false,
+  principalSources,
   failReplayCreditReservation = false,
   failReplayPersistenceRawRecordId,
   failReplayPersistenceStorageRawRecordId,
@@ -123,6 +126,7 @@ const makeExecutorLayer = ({
   readonly replayRawRecords?: ReadonlyArray<SourceRawRecord>
   readonly replayCandidates?: ReadonlyArray<SourceRawRecord>
   readonly failNormalizeOnce?: boolean
+  readonly principalSources?: ReadonlyArray<SourceSyncSource>
   readonly failReplayCreditReservation?: boolean
   readonly failReplayPersistenceRawRecordId?: string
   readonly failReplayPersistenceStorageRawRecordId?: string
@@ -150,7 +154,7 @@ const makeExecutorLayer = ({
   }
   const SourceRepositoryTestLive = Layer.succeed(SourceRepository, {
     findOwnedSourceSyncContext: () => Effect.succeed(Option.some(syncSource)),
-    listPrincipalSourceSyncContexts: () => Effect.succeed([syncSource]),
+    listPrincipalSourceSyncContexts: () => Effect.succeed(principalSources ?? [syncSource]),
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
@@ -309,6 +313,7 @@ const makeExecutorLayer = ({
         if (prepareReplayTransactions) {
           return Effect.succeed({
             kind: "prepared",
+            providerAssetRowIds: [],
             transaction: {
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,
@@ -574,15 +579,55 @@ const makeExecutorLayer = ({
   })
 
   const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
-    reconcileTransferCandidates: () =>
-      Effect.succeed({
-        evaluatedProviderTransfers: 0,
-        pending: 0,
-        needsReview: 0,
-        autoApplied: 0,
+    reconcileTransferCandidates: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`reconcile:${sourceId}`)
+        return {
+          evaluatedProviderTransfers: 0,
+          pending: 0,
+          needsReview: 0,
+          autoApplied: 0,
+        }
       }),
-    applyDeterministicInternalTransferCanonicalization: () =>
-      Effect.succeed({ canonicalizedPairs: 0 }),
+    rollbackReconciliationsForSourceReplay: () =>
+      Effect.sync(() => {
+        events.push("rollback-reconciliations")
+      }),
+    applyDeterministicInternalTransferCanonicalization: ({ sourceId }) =>
+      Effect.sync(() => {
+        events.push(`canonicalize:${sourceId}`)
+        return { canonicalizedPairs: 0 }
+      }),
+  })
+  const SyncEngineTransactionTestLive = Layer.succeed(
+    SyncEngineTransaction,
+    SyncEngineTransaction.of({ run: (effect) => effect })
+  )
+  const ProviderAssetRepositoryTestLive = Layer.succeed(ProviderAssetRepository, {
+    upsertProviderAssets: () => Effect.dieMessage("upsertProviderAssets should not be called"),
+    upsertProviderAssetMappings: () =>
+      Effect.dieMessage("upsertProviderAssetMappings should not be called"),
+    seedProviderAssetMappingsIfMissing: () =>
+      Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
+    approveProviderAssetMappingAndRequestReplay: () =>
+      Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
+    lockProviderAssetApprovalSnapshot: () =>
+      Effect.dieMessage("lockProviderAssetApprovalSnapshot should not be called"),
+    recordProviderAssetSourceUses: () => Effect.succeed(0),
+    findProviderAssetByProviderAssetId: () =>
+      Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
+    findProviderAssetByNaturalKey: () =>
+      Effect.dieMessage("findProviderAssetByNaturalKey should not be called"),
+    findProviderAssetByCurrencyCode: () =>
+      Effect.dieMessage("findProviderAssetByCurrencyCode should not be called"),
+    findProviderAssetReviewById: () =>
+      Effect.dieMessage("findProviderAssetReviewById should not be called"),
+    listProviderAssetReviews: () =>
+      Effect.dieMessage("listProviderAssetReviews should not be called"),
+    listProviderAssetObservedRepresentations: () =>
+      Effect.dieMessage("listProviderAssetObservedRepresentations should not be called"),
+    findProviderAssetMapping: () =>
+      Effect.dieMessage("findProviderAssetMapping should not be called"),
   })
 
   return SourceSyncJobExecutorLive.pipe(
@@ -593,6 +638,8 @@ const makeExecutorLayer = ({
     Layer.provide(SourceProviderRegistryTestLive),
     Layer.provide(SourceReplayRepositoryTestLive),
     Layer.provide(SourceNormalizationRepositoryTestLive),
+    Layer.provide(ProviderAssetRepositoryTestLive),
+    Layer.provide(SyncEngineTransactionTestLive),
     Layer.provide(TransferReconciliationServiceTestLive),
     Layer.provide(
       Layer.setConfigProvider(
@@ -608,6 +655,38 @@ const makeExecutorLayer = ({
 }
 
 describe("SourceSyncJobExecutor", () => {
+  it("reconciles every principal source before canonicalizing any source", async () => {
+    const events: Array<string> = []
+    const principalSources = ["source-c", "source-b", "source-a"].map((id) => ({
+      ...source,
+      id,
+    }))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            principalSources,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(events.filter((event) => /^(reconcile|canonicalize):/.test(event))).toEqual([
+      "reconcile:source-c",
+      "reconcile:source-b",
+      "reconcile:source-a",
+      "canonicalize:source-c",
+      "canonicalize:source-b",
+      "canonicalize:source-a",
+    ])
+  })
+
   it("runs sync mode and marks the job completed", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
@@ -784,6 +863,7 @@ describe("SourceSyncJobExecutor", () => {
     )
 
     expect(result.status).toBe("completed")
+    expect(events).toContain("rollback-reconciliations")
     expect(events).toContain("reset-derived-state")
     expect(events).toContain("heartbeat:source-sync-inline-executor")
     expect(events).toContain("mark-raw-normalized")
@@ -817,9 +897,10 @@ describe("SourceSyncJobExecutor", () => {
             event.startsWith("normalize:") ||
             event.startsWith("heartbeat:") ||
             event === "reserve-replay-credits" ||
+            event === "rollback-reconciliations" ||
             event === "reset-derived-state"
         )
-        .slice(0, 8)
+        .slice(0, 9)
     ).toEqual([
       "normalize:raw-1",
       "heartbeat:source-sync-inline-executor",
@@ -828,6 +909,7 @@ describe("SourceSyncJobExecutor", () => {
       "heartbeat:source-sync-inline-executor",
       "reserve-replay-credits",
       "heartbeat:source-sync-inline-executor",
+      "rollback-reconciliations",
       "reset-derived-state",
     ])
   })
@@ -896,7 +978,7 @@ describe("SourceSyncJobExecutor", () => {
           makeExecutorLayer({
             mode: "replay",
             replayRawRecords: [makeReplayRawRecord(1), makeReplayRawRecord(2)],
-            heartbeatFailureAt: 5,
+            heartbeatFailureAt: 6,
             heartbeatIntervalMs: 1,
             holdReplayReset: true,
             prepareReplayTransactions: true,

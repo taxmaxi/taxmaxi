@@ -63,6 +63,13 @@ export interface CanonicalizeProviderAssetResult {
 }
 
 export interface AssetCanonicalizationServiceShape {
+  readonly approveProviderAssetMapping: (params: {
+    readonly providerAssetRowId: string
+    readonly canonicalAssetId: string
+    readonly assetRepresentationId: string | null
+    readonly reviewerNotes: string | null
+  }) => Effect.Effect<ProviderAssetReviewRecord, AssetCanonicalizationError>
+
   readonly canonicalizeProviderAssetFromCoinGecko: (params: {
     readonly providerAssetRowId: string
     readonly reviewerNotes: string | null

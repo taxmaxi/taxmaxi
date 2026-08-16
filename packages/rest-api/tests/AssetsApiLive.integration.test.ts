@@ -24,6 +24,7 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   PendingAssetListResponse,
+  ProviderAssetReviewRow,
   ProviderAssetReviewListResponse,
   UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
@@ -75,6 +76,7 @@ const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliati
     Effect.dieMessage(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
     Effect.dieMessage(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
@@ -180,6 +182,35 @@ const getAdminStatus = (path: string) =>
     )
     return response.status
   })
+
+const postAdminJson = <Response, Encoded, Requirements>({
+  path,
+  payload,
+  responseSchema,
+}: {
+  readonly path: string
+  readonly payload: unknown
+  readonly responseSchema: Schema.Schema<Response, Encoded, Requirements>
+}) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.post(path).pipe(
+      HttpClientRequest.bodyUnsafeJson(payload),
+      HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+      HttpClient.execute
+    )
+    const body = yield* response.json
+    const decodedBody = yield* Schema.decodeUnknown(responseSchema)(body)
+
+    return { status: response.status, body: decodedBody }
+  })
+
+const postAdminStatus = ({ path, payload }: { readonly path: string; readonly payload: unknown }) =>
+  HttpClientRequest.post(path).pipe(
+    HttpClientRequest.bodyUnsafeJson(payload),
+    HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+    HttpClient.execute,
+    Effect.map((response) => response.status)
+  )
 
 const encodeTestCursor = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
@@ -1047,6 +1078,162 @@ describe("AssetsApiLive", () => {
     ])
   })
 
+  it("approves an exact provider asset target through the admin route", async () => {
+    const routeUserId = "00000000-0000-4000-8000-000000000141"
+    const routePrincipalId = "00000000-0000-4000-8000-000000000142"
+    const routeSourceId = "00000000-0000-4000-8000-000000000143"
+    const seeded = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const fixture = yield* seedSyncEngineRepositoryFixture({
+          userId: routeUserId,
+          principalId: routePrincipalId,
+          sourceId: routeSourceId,
+        })
+        const [bitcoinAsset] = yield* db
+          .select({ id: schema.assets.id })
+          .from(schema.assets)
+          .where(eq(schema.assets.symbol, "BTC"))
+          .limit(1)
+        const [bitcoinRepresentation] = yield* db
+          .select({ id: schema.assetRepresentations.id })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.blockchainId, fixture.bitcoinBlockchainId))
+          .limit(1)
+
+        if (bitcoinAsset === undefined || bitcoinRepresentation === undefined) {
+          return yield* Effect.dieMessage("Missing Bitcoin approval fixture")
+        }
+
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "approval-route-test",
+            providerAssetId: "btc-approval-route",
+            currencyCode: "BTC",
+            name: "Bitcoin",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-15T10:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.dieMessage("Failed to seed approval provider asset")
+        }
+
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+          sourceNotes: "Exact Bitcoin representation observed.",
+        })
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: routeSourceId,
+            externalId: "approval-route-transaction",
+            timestamp: new Date("2026-08-15T10:01:00.000Z"),
+            principalId: routePrincipalId,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.dieMessage("Failed to seed approval route transaction")
+        }
+
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: routeSourceId,
+          transactionId: transaction.id,
+          externalId: "approval-route-transfer",
+          providerAssetId: providerAsset.id,
+          timestamp: new Date("2026-08-15T10:01:00.000Z"),
+          direction: "outbound",
+          processingMode: "accounting_and_evidence",
+          fromAccountRef: "approval-route-account",
+          toAddress: "bc1qapprovalroute000000000000000000000000",
+          amount: "0.1",
+          observedBlockchainId: fixture.bitcoinBlockchainId,
+          observedRepresentationType: "native",
+          observedDecimals: 8,
+          metadata: {},
+        })
+
+        return {
+          providerAssetId: providerAsset.id,
+          canonicalAssetId: bitcoinAsset.id,
+          assetRepresentationId: bitcoinRepresentation.id,
+        }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const response = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        payload: {
+          canonicalAssetId: seeded.canonicalAssetId,
+          assetRepresentationId: seeded.assetRepresentationId,
+          reviewerNotes: "Exact identity checked.",
+        },
+        responseSchema: ProviderAssetReviewRow,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      id: seeded.providerAssetId,
+      mappingStatus: "approved",
+      canonicalAssetId: seeded.canonicalAssetId,
+      assetRepresentationId: seeded.assetRepresentationId,
+      reviewerNotes: "Exact identity checked.",
+    })
+
+    const repeated = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        payload: {
+          canonicalAssetId: seeded.canonicalAssetId,
+          assetRepresentationId: seeded.assetRepresentationId,
+          reviewerNotes: "Exact identity checked again.",
+        },
+        responseSchema: ProviderAssetReviewRow,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const conflictingStatus = await Effect.runPromise(
+      postAdminStatus({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        payload: {
+          canonicalAssetId: "00000000-0000-4000-8000-000000000199",
+          assetRepresentationId: null,
+          reviewerNotes: "Conflicting target.",
+        },
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const durableState = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [mapping] = yield* db
+          .select({
+            canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+          })
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, seeded.providerAssetId))
+        const jobs = yield* db
+          .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, routeSourceId))
+        return { jobs, mapping }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    expect(repeated.status).toBe(200)
+    expect(conflictingStatus).toBe(400)
+    expect(durableState.mapping).toEqual({
+      canonicalAssetId: seeded.canonicalAssetId,
+      assetRepresentationId: seeded.assetRepresentationId,
+    })
+    expect(durableState.jobs).toEqual([{ mode: "replay", status: "pending" }])
+  })
+
   it.each(["/v1/assets/provider-assets", "/v1/assets/transfer-reconciliations/unresolved"])(
     "keeps the admin review endpoint protected: %s",
     async (path) => {
@@ -1057,4 +1244,23 @@ describe("AssetsApiLive", () => {
       expect(status).toBe(401)
     }
   )
+
+  it("keeps provider asset approval protected", async () => {
+    const status = await Effect.runPromise(
+      HttpClientRequest.post(
+        "/v1/assets/provider-assets/00000000-0000-4000-8000-000000000199/approve"
+      ).pipe(
+        HttpClientRequest.bodyUnsafeJson({
+          canonicalAssetId: "00000000-0000-4000-8000-000000000198",
+          assetRepresentationId: null,
+        }),
+        HttpClient.execute,
+        Effect.map((response) => response.status),
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+    )
+
+    expect(status).toBe(401)
+  })
 })

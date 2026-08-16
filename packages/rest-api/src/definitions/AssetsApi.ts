@@ -162,6 +162,14 @@ export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicaliza
   reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
 }) {}
 
+export class ProviderAssetApprovalRequest extends Schema.Class<ProviderAssetApprovalRequest>(
+  "ProviderAssetApprovalRequest"
+)({
+  canonicalAssetId: Schema.UUID,
+  assetRepresentationId: Schema.NullOr(Schema.UUID),
+  reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
+}) {}
+
 export class CanonicalAssetResponse extends Schema.Class<CanonicalAssetResponse>(
   "CanonicalAssetResponse"
 )({
@@ -345,12 +353,36 @@ const canonicalizeProviderAsset = HttpApiEndpoint.post(
   )
   .middleware(AdminAuthMiddleware)
 
+const approveProviderAsset = HttpApiEndpoint.post(
+  "approveProviderAsset",
+  "/assets/provider-assets/:id/approve"
+)
+  .setPath(
+    Schema.Struct({
+      id: Schema.UUID,
+    })
+  )
+  .setPayload(ProviderAssetApprovalRequest)
+  .addSuccess(ProviderAssetReviewRow)
+  .addError(AssetBadRequestError)
+  .addError(AssetNotFoundError)
+  .addError(InternalServerError)
+  .annotateContext(
+    OpenApi.annotations({
+      summary: "Approve provider asset mapping",
+      description:
+        "Approves an exact provider-asset target and requests replay for affected sources.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
 export class AssetsApi extends HttpApiGroup.make("assets")
   .add(listAssets)
   .add(getAsset)
   .add(listPendingAssets)
   .add(listProviderAssetReviews)
   .add(listUnresolvedTransferReconciliations)
+  .add(approveProviderAsset)
   .add(canonicalizeProviderAsset)
   .prefix("/v1")
   .annotateContext(

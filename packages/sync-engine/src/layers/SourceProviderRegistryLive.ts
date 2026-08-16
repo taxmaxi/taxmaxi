@@ -92,6 +92,7 @@ const makeCoinbaseProviderModule = (
 
               return {
                 kind: "prepared",
+                providerAssetRowIds: prepared.providerAssetRowIds,
                 transaction: prepared.transaction,
                 venueContext: prepared.venueContext,
                 onchainContext: null,
@@ -142,6 +143,7 @@ const makeHeliusSolanaProviderModule = (
 
               return {
                 kind: "prepared",
+                providerAssetRowIds: prepared.providerAssetRowIds,
                 transaction: prepared.transaction,
                 venueContext: prepared.venueContext,
                 onchainContext: prepared.onchainContext,

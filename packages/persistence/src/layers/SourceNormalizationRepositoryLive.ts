@@ -2423,6 +2423,33 @@ const make = Effect.gen(function* () {
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const networkMovementLockKeys = [
+            ...new Set(
+              params.providerTransfers
+                .filter(
+                  (providerTransfer) =>
+                    providerTransfer.networkHash !== null &&
+                    providerTransfer.networkHash.trim() !== ""
+                )
+                .map(
+                  (providerTransfer) =>
+                    `${params.transaction.principalId}:${providerTransfer.networkName?.toLowerCase() ?? ""}:${providerTransfer.networkHash?.toLowerCase() ?? ""}`
+                )
+            ),
+          ].sort()
+          yield* Effect.forEach(
+            networkMovementLockKeys,
+            (lockKey) =>
+              tx
+                .execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`)
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "sourceNormalizationRepository.persistNormalizedArtifacts.lockNetworkMovement"
+                  )
+                ),
+            { concurrency: 1, discard: true }
+          )
+
           const [ownedSource] = yield* tx
             .select({ id: schema.sources.id })
             .from(schema.sources)
@@ -2448,6 +2475,10 @@ const make = Effect.gen(function* () {
                 error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
               })
             )
+          }
+
+          if (params.beforePersist !== undefined) {
+            yield* params.beforePersist
           }
 
           const persistedTransaction = yield* upsertTransaction({

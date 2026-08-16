@@ -58,10 +58,102 @@ describe("AssetRepositoryLive", () => {
     expect(Option.getOrNull(asset)).toEqual({
       id: TEST_BTC_ASSET_ID,
       symbol: "BTC",
+      type: "fungible",
     })
     expect(Option.isNone(missingAsset)).toBe(true)
     expect(blockchains.some((blockchain) => blockchain.name === "base")).toBe(true)
     expect(blockchains.some((blockchain) => blockchain.name === "bitcoin")).toBe(true)
+  })
+
+  it.each([
+    ["economic asset type", "asset-type", "validateEconomicAssetType"],
+    ["representation type", "representation-type", "validateRepresentationIdentity"],
+    ["representation decimals", "representation-decimals", "validateRepresentationIdentity"],
+  ] as const)("rejects changes to an existing %s", async (_field, mutation, operation) => {
+    const upsert = (change: typeof mutation | null) =>
+      runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.upsertEconomicAssetRepresentation({
+            blockchain: {
+              name: "base",
+              chainType: "evm",
+              chainId: 8453,
+              nativeAssetSymbol: "ETH",
+              explorerUrl: null,
+              logoUrl: null,
+              coingeckoPlatformId: "base",
+            },
+            asset: {
+              name: "Immutable Coin",
+              symbol: "IMM",
+              coingeckoCoinId: "immutable-coin",
+              logoUrl: null,
+              type: change === "asset-type" ? "nft" : "fungible",
+            },
+            representation: {
+              contractAddress: "0x0000000000000000000000000000000000001a11",
+              mintAddress: null,
+              decimals: change === "representation-decimals" ? 8 : 6,
+              logoUrl: null,
+              type: change === "representation-type" ? "nft" : "token",
+              isSpam: false,
+              metadata: null,
+            },
+          })
+        )
+      )
+
+    const created = await upsert(null)
+    const result = await runRepository(
+      Effect.either(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.upsertEconomicAssetRepresentation({
+            blockchain: {
+              name: "base",
+              chainType: "evm",
+              chainId: 8453,
+              nativeAssetSymbol: "ETH",
+              explorerUrl: null,
+              logoUrl: null,
+              coingeckoPlatformId: "base",
+            },
+            asset: {
+              name: "Immutable Coin",
+              symbol: "IMM",
+              coingeckoCoinId: "immutable-coin",
+              logoUrl: null,
+              type: mutation === "asset-type" ? "nft" : "fungible",
+            },
+            representation: {
+              contractAddress: "0x0000000000000000000000000000000000001a11",
+              mintAddress: null,
+              decimals: mutation === "representation-decimals" ? 8 : 6,
+              logoUrl: null,
+              type: mutation === "representation-type" ? "nft" : "token",
+              isSpam: false,
+              metadata: null,
+            },
+          })
+        )
+      )
+    )
+    const stored = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findRepresentationById({ assetRepresentationId: created.representationId })
+      )
+    )
+
+    expect(result._tag).toBe("Left")
+    if (result._tag === "Left") {
+      expect(result.left).toMatchObject({
+        operation: "assetRepository.upsertEconomicAssetRepresentation",
+        cause: { operation: `assetRepository.upsertEconomicAssetRepresentation.${operation}` },
+      })
+    }
+    expect(Option.getOrNull(stored)).toMatchObject({
+      representationType: "token",
+      decimals: 6,
+    })
   })
 
   it("matches EVM token contracts case-insensitively and preserves existing asset logos", async () => {

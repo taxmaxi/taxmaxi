@@ -146,6 +146,7 @@ const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliati
     Effect.dieMessage(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
     Effect.dieMessage(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"

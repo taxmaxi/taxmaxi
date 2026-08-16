@@ -20,6 +20,7 @@ import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { FetchProviderRawBatchParams } from "../shared/SourceProviderRawBatch.ts"
 import {
   SourceNormalizationRepository,
+  ProviderAssetRepository,
   SourceNotFoundError,
   SourceRawRecordRepository,
   SourceReplayDependencyError,
@@ -43,6 +44,7 @@ import {
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
   SourceSyncStateRepository,
+  SyncEngineTransaction,
   SyncEngineStorageError,
   TransferReconciliationService,
   UnsupportedProviderError,
@@ -70,6 +72,14 @@ interface NormalizationSummary {
 interface ReplaySummary {
   readonly normalizedRecords: number
   readonly failedRecordsDelta: number
+}
+
+interface PrincipalReconciliationSummary {
+  readonly evaluatedProviderTransfers: number
+  readonly pending: number
+  readonly needsReview: number
+  readonly autoApplied: number
+  readonly canonicalizedPairs: number
 }
 
 interface SyncLoopState {
@@ -156,7 +166,9 @@ const make = Effect.gen(function* () {
   const sourceSyncStateRepository = yield* SourceSyncStateRepository
   const sourceRawRecordRepository = yield* SourceRawRecordRepository
   const sourceNormalizationRepository = yield* SourceNormalizationRepository
+  const providerAssetRepository = yield* ProviderAssetRepository
   const sourceReplayRepository = yield* SourceReplayRepository
+  const syncEngineTransaction = yield* SyncEngineTransaction
   const transferReconciliationService = yield* TransferReconciliationService
   const pageSize = yield* SOURCE_SYNC_PAGE_SIZE_CONFIG
   const heartbeatIntervalMs = yield* SOURCE_SYNC_HEARTBEAT_INTERVAL_MS_CONFIG
@@ -281,17 +293,44 @@ const make = Effect.gen(function* () {
         } satisfies NormalizationSummary
       }
 
-      yield* sourceNormalizationRepository.persistNormalizedArtifacts({
-        ...(replayReservationId === null ? {} : { replayReservationId }),
-        transaction: decision.transaction,
-        venueContext: decision.venueContext,
-        onchainContext: decision.onchainContext,
-        providerTransfers: decision.providerTransfers,
-        feeTransfers: decision.feeTransfers,
-        transactionReview: decision.transactionReview,
-        resolvedTransactionType: decision.resolvedTransactionType,
-        deriveLegs: decision.deriveLegs,
-      })
+      yield* syncEngineTransaction.run(
+        Effect.gen(function* () {
+          yield* sourceNormalizationRepository.persistNormalizedArtifacts({
+            ...(replayReservationId === null ? {} : { replayReservationId }),
+            beforePersist: providerAssetRepository
+              .recordProviderAssetSourceUses({
+                sourceId: decision.transaction.sourceId,
+                providerAssetRowIds: decision.providerAssetRowIds,
+                observations: decision.providerTransfers.flatMap((providerTransfer) => {
+                  const providerAssetRowId = providerTransfer.providerAssetId
+                  const observedBlockchainId = providerTransfer.observedBlockchainId
+                  if (providerAssetRowId === null || observedBlockchainId == null) {
+                    return []
+                  }
+                  return [
+                    {
+                      providerAssetRowId,
+                      observedBlockchainId,
+                      representationType: providerTransfer.observedRepresentationType ?? null,
+                      contractAddress: providerTransfer.observedContractAddress ?? null,
+                      mintAddress: providerTransfer.observedMintAddress ?? null,
+                      decimals: providerTransfer.observedDecimals ?? null,
+                    },
+                  ]
+                }),
+              })
+              .pipe(Effect.asVoid),
+            transaction: decision.transaction,
+            venueContext: decision.venueContext,
+            onchainContext: decision.onchainContext,
+            providerTransfers: decision.providerTransfers,
+            feeTransfers: decision.feeTransfers,
+            transactionReview: decision.transactionReview,
+            resolvedTransactionType: decision.resolvedTransactionType,
+            deriveLegs: decision.deriveLegs,
+          })
+        })
+      )
 
       return {
         normalizedRecords: 1,
@@ -558,6 +597,95 @@ const make = Effect.gen(function* () {
       } satisfies ReplaySummary
     })
 
+  const reconcilePrincipalTransfers = ({
+    principalId,
+    triggerSourceId,
+    jobId,
+    workerId,
+    provider,
+    spanPrefix,
+  }: {
+    readonly principalId: string
+    readonly triggerSourceId: string
+    readonly jobId: string
+    readonly workerId: string
+    readonly provider: string
+    readonly spanPrefix: "source-sync" | "source-replay"
+  }): Effect.Effect<PrincipalReconciliationSummary, SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      const principalSources = yield* sourceRepository.listPrincipalSourceSyncContexts({
+        principalId,
+      })
+      const reconciliationSummary = yield* Effect.reduce(
+        principalSources,
+        {
+          evaluatedProviderTransfers: 0,
+          pending: 0,
+          needsReview: 0,
+          autoApplied: 0,
+          canonicalizedPairs: 0,
+        } satisfies PrincipalReconciliationSummary,
+        (summary, candidateSource) =>
+          Effect.gen(function* () {
+            const reconciliation = yield* transferReconciliationService
+              .reconcileTransferCandidates({ principalId, sourceId: candidateSource.id })
+              .pipe(
+                sourceSyncSpan({
+                  name: `${spanPrefix}.reconcile-transfers`,
+                  attributes: {
+                    sourceId: candidateSource.id,
+                    triggerSourceId,
+                    jobId,
+                    provider,
+                  },
+                  kind: "client",
+                })
+              )
+            yield* heartbeatSourceSyncJob({ jobId, workerId })
+
+            return {
+              evaluatedProviderTransfers:
+                summary.evaluatedProviderTransfers + reconciliation.evaluatedProviderTransfers,
+              pending: summary.pending + reconciliation.pending,
+              needsReview: summary.needsReview + reconciliation.needsReview,
+              autoApplied: summary.autoApplied + reconciliation.autoApplied,
+              canonicalizedPairs: summary.canonicalizedPairs,
+            } satisfies PrincipalReconciliationSummary
+          })
+      )
+
+      return yield* Effect.reduce(
+        principalSources,
+        reconciliationSummary,
+        (summary, candidateSource) =>
+          Effect.gen(function* () {
+            const canonicalization = yield* transferReconciliationService
+              .applyDeterministicInternalTransferCanonicalization({
+                principalId,
+                sourceId: candidateSource.id,
+              })
+              .pipe(
+                sourceSyncSpan({
+                  name: `${spanPrefix}.apply-transfer-canonicalization`,
+                  attributes: {
+                    sourceId: candidateSource.id,
+                    triggerSourceId,
+                    jobId,
+                    provider,
+                  },
+                  kind: "client",
+                })
+              )
+            yield* heartbeatSourceSyncJob({ jobId, workerId })
+
+            return {
+              ...summary,
+              canonicalizedPairs: summary.canonicalizedPairs + canonicalization.canonicalizedPairs,
+            }
+          })
+      )
+    })
+
   const runSync = ({
     source,
     jobId,
@@ -777,27 +905,14 @@ const make = Effect.gen(function* () {
         lastSyncedAt: null,
         lastErrorMessage: null,
       })
-      const reconciliationSummary = yield* transferReconciliationService
-        .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
-        .pipe(
-          sourceSyncSpan({
-            name: "source-sync.reconcile-transfers",
-            attributes: { sourceId: source.id, jobId, provider },
-            kind: "client",
-          })
-        )
-      const canonicalizationSummary = yield* transferReconciliationService
-        .applyDeterministicInternalTransferCanonicalization({
-          principalId: source.principalId,
-          sourceId: source.id,
-        })
-        .pipe(
-          sourceSyncSpan({
-            name: "source-sync.apply-transfer-canonicalization",
-            attributes: { sourceId: source.id, jobId, provider },
-            kind: "client",
-          })
-        )
+      const reconciliationSummary = yield* reconcilePrincipalTransfers({
+        principalId: source.principalId,
+        triggerSourceId: source.id,
+        jobId,
+        workerId,
+        provider,
+        spanPrefix: "source-sync",
+      })
       const completedAt = nowDate()
       const completedExecution: SourceSyncExecutionState = {
         ...reconciliationExecution,
@@ -825,7 +940,7 @@ const make = Effect.gen(function* () {
         pendingReconciliations: reconciliationSummary.pending,
         reviewReconciliations: reconciliationSummary.needsReview,
         autoAppliedReconciliations: reconciliationSummary.autoApplied,
-        canonicalizedInternalTransfers: canonicalizationSummary.canonicalizedPairs,
+        canonicalizedInternalTransfers: reconciliationSummary.canonicalizedPairs,
       })
 
       yield* Effect.logInfo(
@@ -839,7 +954,7 @@ const make = Effect.gen(function* () {
           pendingReconciliations: reconciliationSummary.pending,
           reviewReconciliations: reconciliationSummary.needsReview,
           autoAppliedReconciliations: reconciliationSummary.autoApplied,
-          canonicalizedInternalTransfers: canonicalizationSummary.canonicalizedPairs,
+          canonicalizedInternalTransfers: reconciliationSummary.canonicalizedPairs,
         },
         "source-sync:completed"
       )
@@ -937,12 +1052,19 @@ const make = Effect.gen(function* () {
       return yield* Effect.gen(function* () {
         yield* heartbeatSourceSyncJob({ jobId, workerId })
         yield* withActiveJobHeartbeat({
-          effect: sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id }).pipe(
-            sourceSyncSpan({
-              name: "source-replay.reset-derived-state",
-              attributes: { sourceId: source.id, jobId, provider },
-              kind: "client",
-            })
+          effect: syncEngineTransaction.run(
+            Effect.gen(function* () {
+              yield* transferReconciliationService.rollbackReconciliationsForSourceReplay({
+                sourceId: source.id,
+              })
+              yield* sourceReplayRepository.resetSourceDerivedState({ sourceId: source.id })
+            }).pipe(
+              sourceSyncSpan({
+                name: "source-replay.reset-derived-state",
+                attributes: { sourceId: source.id, jobId, provider },
+                kind: "client",
+              })
+            )
           ),
           jobId,
           workerId,
@@ -986,27 +1108,14 @@ const make = Effect.gen(function* () {
           lastSyncedAt: null,
           lastErrorMessage: null,
         })
-        const reconciliationSummary = yield* transferReconciliationService
-          .reconcileTransferCandidates({ principalId: source.principalId, sourceId: source.id })
-          .pipe(
-            sourceSyncSpan({
-              name: "source-replay.reconcile-transfers",
-              attributes: { sourceId: source.id, jobId, provider },
-              kind: "client",
-            })
-          )
-        const canonicalizationSummary = yield* transferReconciliationService
-          .applyDeterministicInternalTransferCanonicalization({
-            principalId: source.principalId,
-            sourceId: source.id,
-          })
-          .pipe(
-            sourceSyncSpan({
-              name: "source-replay.apply-transfer-canonicalization",
-              attributes: { sourceId: source.id, jobId, provider },
-              kind: "client",
-            })
-          )
+        const reconciliationSummary = yield* reconcilePrincipalTransfers({
+          principalId: source.principalId,
+          triggerSourceId: source.id,
+          jobId,
+          workerId,
+          provider,
+          spanPrefix: "source-replay",
+        })
 
         const replayExecution: SourceSyncExecutionState = {
           ...reconciliationExecution,
@@ -1026,7 +1135,7 @@ const make = Effect.gen(function* () {
           pendingReconciliations: reconciliationSummary.pending,
           reviewReconciliations: reconciliationSummary.needsReview,
           autoAppliedReconciliations: reconciliationSummary.autoApplied,
-          canonicalizedInternalTransfers: canonicalizationSummary.canonicalizedPairs,
+          canonicalizedInternalTransfers: reconciliationSummary.canonicalizedPairs,
         })
 
         yield* Effect.logInfo(
@@ -1040,7 +1149,7 @@ const make = Effect.gen(function* () {
             pendingReconciliations: reconciliationSummary.pending,
             reviewReconciliations: reconciliationSummary.needsReview,
             autoAppliedReconciliations: reconciliationSummary.autoApplied,
-            canonicalizedInternalTransfers: canonicalizationSummary.canonicalizedPairs,
+            canonicalizedInternalTransfers: reconciliationSummary.canonicalizedPairs,
           },
           "source-replay:completed"
         )

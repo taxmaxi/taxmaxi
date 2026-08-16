@@ -57,6 +57,7 @@ export interface PrepareCoinbaseNormalizationParams {
  * PreparedCoinbaseNormalization - Canonical Coinbase artifacts ready for persistence.
  */
 export interface PreparedCoinbaseNormalization {
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>

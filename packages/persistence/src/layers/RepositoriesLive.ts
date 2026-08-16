@@ -61,6 +61,7 @@ import { SourceSyncRunRepositoryLive } from "./SourceSyncRunRepositoryLive.ts"
 import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.ts"
 import { SyncEngineSourceRepositoryLive } from "./SyncEngineSourceRepositoryLive.ts"
 import { TransferReconciliationRepositoryLive } from "./TransferReconciliationRepositoryLive.ts"
+import { SyncEngineTransactionLive } from "./SyncEngineTransactionLive.ts"
 import { CoinbaseAuthProvider } from "../services/CoinbaseAuthProvider.ts"
 import { CoinbaseConfigTag } from "../services/CoinbaseConfig.ts"
 import { GoogleAuthProvider } from "../services/GoogleAuthProvider.ts"
@@ -127,6 +128,7 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceSyncRunRepositoryLive,
   SourceSyncStateRepositoryLive,
   SyncEngineSourceRepositoryLive,
+  SyncEngineTransactionLive,
   TransferReconciliationRepositoryLive
 )
 

@@ -48,6 +48,11 @@ export interface TransferReconciliationServiceShape {
     params: ReconcileTransferCandidatesParams
   ) => Effect.Effect<TransferReconciliationSummary, SyncEngineStorageError>
 
+  /** Unapply cross-source reconciliation effects before replay resets a source. */
+  readonly rollbackReconciliationsForSourceReplay: (params: {
+    readonly sourceId: string
+  }) => Effect.Effect<void, SyncEngineStorageError>
+
   /**
    * Rewrite deterministic provider/onchain matches into canonical internal-transfer
    * tax state after reconciliation has been persisted for the current pass.

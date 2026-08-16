@@ -52,6 +52,7 @@ interface DefaultAssetMapping {
 interface NormalizedAssetReference {
   readonly kind: "native" | "spl"
   readonly mintAddress: string | null
+  readonly observedDecimals: number | null | undefined
   readonly rawProviderPayload: unknown
 }
 
@@ -345,6 +346,7 @@ const normalizeReference = (
     return Effect.succeed({
       kind: "native",
       mintAddress: null,
+      observedDecimals: reference.observedDecimals,
       rawProviderPayload: reference.rawProviderPayload,
     })
   }
@@ -363,6 +365,7 @@ const normalizeReference = (
   return Effect.succeed({
     kind: "spl",
     mintAddress,
+    observedDecimals: reference.observedDecimals,
     rawProviderPayload: reference.rawProviderPayload,
   })
 }
@@ -705,17 +708,23 @@ const make = Effect.gen(function* () {
         Option.filter(
           representation,
           (candidate) =>
-            (observedType === null || candidate.representationType === observedType) &&
-            (providerAsset.exponent === null || candidate.decimals === providerAsset.exponent) &&
+            observedType !== null &&
+            candidate.representationType === observedType &&
+            providerAsset.exponent !== null &&
+            candidate.decimals === providerAsset.exponent &&
+            reference.observedDecimals !== null &&
+            (reference.observedDecimals === undefined ||
+              candidate.decimals === reference.observedDecimals) &&
             observations.every(
               (observation) =>
                 observation.blockchainName.toLowerCase() ===
                   candidate.blockchainName.toLowerCase() &&
-                (observation.representationType === null ||
-                  observation.representationType === candidate.representationType) &&
+                observation.representationType !== null &&
+                observation.representationType === candidate.representationType &&
                 observation.contractAddress === candidate.contractAddress &&
                 observation.mintAddress === candidate.mintAddress &&
-                (observation.decimals === null || observation.decimals === candidate.decimals)
+                observation.decimals !== null &&
+                observation.decimals === candidate.decimals
             )
         )
       ),
@@ -777,8 +786,14 @@ const make = Effect.gen(function* () {
               mappings: [exactMapping.value],
             })
           } else if (existingMapping.mappingStatus === "pending_review") {
-            yield* providerAssetRepository.approveProviderAssetMappingIfPending({
+            const observations =
+              yield* providerAssetRepository.listProviderAssetObservedRepresentations({
+                providerAssetRowId: providerAsset.id,
+              })
+            yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
               mapping: exactMapping.value,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
           }
         } else {
@@ -879,6 +894,30 @@ const make = Effect.gen(function* () {
             mintAddress: reference.mintAddress,
             providerAssetRowId: providerAsset.id,
             message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at an invalid network representation ${mapping.assetRepresentationId}.`,
+          })
+        )
+      }
+
+      const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
+      const expectedRepresentationType =
+        reference.kind === "native"
+          ? "native"
+          : providerType === "nft"
+            ? "nft"
+            : providerType === "spl-token" || providerType === "spl-token-2022"
+              ? "token"
+              : null
+      if (
+        expectedRepresentationType === null ||
+        representation.value.representationType !== expectedRepresentationType ||
+        providerAsset.exponent === null ||
+        representation.value.decimals !== providerAsset.exponent
+      ) {
+        return yield* Effect.fail(
+          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+            mintAddress: reference.mintAddress,
+            providerAssetRowId: providerAsset.id,
+            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} conflicts with its exact type or decimals evidence.`,
           })
         )
       }
