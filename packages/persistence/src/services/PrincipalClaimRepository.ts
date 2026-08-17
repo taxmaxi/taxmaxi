@@ -248,6 +248,7 @@ export interface PrincipalClaimRepositoryService {
 /**
  * PrincipalClaimRepository - Context tag for ownership claim persistence.
  */
-export class PrincipalClaimRepository extends Context.Tag(
-  "@my/persistence/PrincipalClaimRepository"
-)<PrincipalClaimRepository, PrincipalClaimRepositoryService>() {}
+export class PrincipalClaimRepository extends Context.Service<
+  PrincipalClaimRepository,
+  PrincipalClaimRepositoryService
+>()("@my/persistence/PrincipalClaimRepository") {}

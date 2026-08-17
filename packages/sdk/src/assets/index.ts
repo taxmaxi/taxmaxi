@@ -9,16 +9,12 @@ import type {
   UnresolvedTransferReconciliationListResponse,
 } from "@my/rest-api/contracts"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
-import { HttpApiClient, type HttpApi } from "@effect/platform"
 import * as Effect from "effect/Effect"
+import { HttpApiClient } from "effect/unstable/httpapi"
 
-type TaxMaxiAssetsClient =
-  typeof TaxMaxiApi extends HttpApi.HttpApi<string, infer Groups, infer ApiError, infer _ApiContext>
-    ? Pick<
-        HttpApiClient.Client<Groups, ApiError, never>,
-        Extract<keyof HttpApiClient.Client<Groups, ApiError, never>, "assets">
-      >
-    : never
+type TaxMaxiApiFullClient = HttpApiClient.ForApi<typeof TaxMaxiApi>
+
+type TaxMaxiAssetsClient = Pick<TaxMaxiApiFullClient, Extract<keyof TaxMaxiApiFullClient, "assets">>
 
 export type ProviderAssetReview = ProviderAssetReviewListResponse["providerAssets"][number]
 export type ProviderAssetReviewList = ProviderAssetReviewListResponse
@@ -220,7 +216,7 @@ export const makeAssetsEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.assets.listAssets({
-          urlParams: {
+          query: {
             q: input?.query ?? undefined,
             cursor: input?.cursor ?? undefined,
             limit: input?.limit,
@@ -233,7 +229,7 @@ export const makeAssetsEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.assets.getAsset({
-          path: {
+          params: {
             assetId,
           },
         })
@@ -244,7 +240,7 @@ export const makeAssetsEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.assets.listPendingAssets({
-          urlParams: {
+          query: {
             q: input?.query ?? undefined,
             provider: input?.provider,
             cursor: input?.cursor ?? undefined,
@@ -263,7 +259,7 @@ export const makeInternalAssetsEffectResource = (
   listProviderAssetReviews: (input) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.listProviderAssetReviews({
-        urlParams: {
+        query: {
           provider: input?.provider,
           status: input?.status,
           cursor: input?.cursor ?? undefined,
@@ -274,7 +270,7 @@ export const makeInternalAssetsEffectResource = (
   listUnresolvedTransferReconciliations: (input) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.listUnresolvedTransferReconciliations({
-        urlParams: {
+        query: {
           status: input?.status,
           cursor: input?.cursor ?? undefined,
           limit: input?.limit,
@@ -284,7 +280,7 @@ export const makeInternalAssetsEffectResource = (
   canonicalizeProviderAsset: ({ id, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.canonicalizeProviderAsset({
-        path: {
+        params: {
           id,
         },
         payload: {
@@ -295,7 +291,7 @@ export const makeInternalAssetsEffectResource = (
   approveProviderAsset: ({ id, canonicalAssetId, assetRepresentationId, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.approveProviderAsset({
-        path: { id },
+        params: { id },
         payload: {
           canonicalAssetId,
           assetRepresentationId,

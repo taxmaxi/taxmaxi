@@ -66,7 +66,7 @@ const tracingConfig = Effect.gen(function* () {
  * endpoint is configured. Without an endpoint, tracing stays disabled so local
  * development does not try to export spans.
  */
-export const TracingLive = Layer.unwrapEffect(
+export const TracingLive = Layer.unwrap(
   Effect.map(tracingConfig, ({ endpoint, serviceName, serviceVersion, environment }) => {
     if (endpoint === null) {
       return Layer.empty

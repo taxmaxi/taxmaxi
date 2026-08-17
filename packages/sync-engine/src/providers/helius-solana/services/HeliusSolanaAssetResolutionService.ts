@@ -146,6 +146,7 @@ export interface HeliusSolanaAssetResolutionServiceShape {
 /**
  * HeliusSolanaAssetResolutionService - Context tag for Solana asset mapping resolution.
  */
-export class HeliusSolanaAssetResolutionService extends Context.Tag(
-  "HeliusSolanaAssetResolutionService"
-)<HeliusSolanaAssetResolutionService, HeliusSolanaAssetResolutionServiceShape>() {}
+export class HeliusSolanaAssetResolutionService extends Context.Service<
+  HeliusSolanaAssetResolutionService,
+  HeliusSolanaAssetResolutionServiceShape
+>()("HeliusSolanaAssetResolutionService") {}

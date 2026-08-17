@@ -153,9 +153,9 @@ const makeProviderLayer = ({
           upsertProviderAssets: () => Effect.succeed(0),
           upsertProviderAssetMappings: () => Effect.succeed(0),
           approveProviderAssetMappingAndRequestReplay: () =>
-            Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
+            Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
           lockProviderAssetApprovalSnapshot: () =>
-            Effect.dieMessage("lockProviderAssetApprovalSnapshot should not be called"),
+            Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
           recordProviderAssetSourceUses,
           seedProviderAssetMappingsIfMissing: () => Effect.succeed(0),
           findProviderAssetByProviderAssetId: () => Effect.succeed(Option.none()),
@@ -179,7 +179,7 @@ const makeProviderLayer = ({
           findRepresentationByBlockchainAndAddress: () => Effect.succeed(Option.none()),
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
           upsertEconomicAssetRepresentation: () =>
-            Effect.dieMessage("upsertEconomicAssetRepresentation should not be called"),
+            Effect.die("upsertEconomicAssetRepresentation should not be called"),
         })
       )
     ),
@@ -326,7 +326,7 @@ const makeProviderLayer = ({
         HeliusSolanaSyncClient,
         HeliusSolanaSyncClient.of({
           fetchTransactionsForAddress,
-          fetchAssetBatch: () => Effect.dieMessage("fetchAssetBatch should not be called"),
+          fetchAssetBatch: () => Effect.die("fetchAssetBatch should not be called"),
           fetchTransfersForAddress,
         })
       )
@@ -377,7 +377,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         Effect.provide(
           makeProviderLayer({
             fetchTransactionsForAddress: () =>
-              Effect.dieMessage("Helius client should not be called during normalization"),
+              Effect.die("Helius client should not be called during normalization"),
           })
         )
       )
@@ -424,7 +424,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           const response = responses.shift()
 
           if (response === undefined) {
-            return yield* Effect.dieMessage("Unexpected Helius request")
+            return yield* Effect.die("Unexpected Helius request")
           }
 
           return response
@@ -519,7 +519,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         const firstRawRecord = firstBatch.records[0]
         const secondRawRecord = secondBatch.records[0]
         if (firstRawRecord === undefined || secondRawRecord === undefined) {
-          return yield* Effect.dieMessage("Expected two cached raw records")
+          return yield* Effect.die("Expected two cached raw records")
         }
 
         const lookups = yield* provider.loadNormalizationLookups()
@@ -648,7 +648,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams({ pageSize: 1 }))
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
       () =>
         Effect.succeed({
           data: [
@@ -690,9 +690,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     )
 
     expect(walletTransferCalls).toBe(2)
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncProviderFailureError",
         providerKey: HELIUS_SOLANA_PROVIDER_KEY,
         retryable: true,
@@ -748,7 +748,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           const response = responses.shift()
 
           if (response === undefined) {
-            return yield* Effect.dieMessage("Unexpected Helius request")
+            return yield* Effect.die("Unexpected Helius request")
           }
 
           return response
@@ -816,17 +816,17 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
             cursorPayload: { paginationToken: 42 },
           })
         )
-      ).pipe(Effect.either),
-      () => Effect.dieMessage("Helius client should not be called for malformed cursors")
+      ).pipe(Effect.result),
+      () => Effect.die("Helius client should not be called for malformed cursors")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncCursorDecodeError",
         providerKey: HELIUS_SOLANA_PROVIDER_KEY,
       })
-      expect(result.left.message).toContain("Invalid persisted Helius Solana cursor payload")
+      expect(result.failure.message).toContain("Invalid persisted Helius Solana cursor payload")
     }
   })
 
@@ -838,17 +838,17 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
             cursorPayload: { paginationToken: null },
           })
         )
-      ).pipe(Effect.either),
-      () => Effect.dieMessage("Helius client should not be called for incomplete cursors")
+      ).pipe(Effect.result),
+      () => Effect.die("Helius client should not be called for incomplete cursors")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncCursorDecodeError",
         providerKey: HELIUS_SOLANA_PROVIDER_KEY,
       })
-      expect(result.left.message).toContain("Invalid persisted Helius Solana cursor payload")
+      expect(result.failure.message).toContain("Invalid persisted Helius Solana cursor payload")
     }
   })
 
@@ -856,18 +856,18 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams({ walletAddress: null }))
-      ).pipe(Effect.either),
-      () => Effect.dieMessage("Helius client should not be called without a wallet address")
+      ).pipe(Effect.result),
+      () => Effect.die("Helius client should not be called without a wallet address")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncProviderFailureError",
         providerKey: HELIUS_SOLANA_PROVIDER_KEY,
         retryable: false,
       })
-      expect(result.left.message).toContain("has no wallet address")
+      expect(result.failure.message).toContain("has no wallet address")
     }
   })
 
@@ -875,13 +875,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams({ providerKey: "coinbase" }))
-      ).pipe(Effect.either),
-      () => Effect.dieMessage("Helius client should not be called for unsupported providers")
+      ).pipe(Effect.result),
+      () => Effect.die("Helius client should not be called for unsupported providers")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "UnsupportedSyncProviderError",
         providerKey: "coinbase",
       })
@@ -892,7 +892,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams())
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
       () =>
         Effect.fail(
           new HeliusSolanaAuthError({
@@ -901,13 +901,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         )
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncProviderFailureError",
         retryable: false,
       })
-      expect(result.left.message).toBe("HELIUS_API_KEY is not configured")
+      expect(result.failure.message).toBe("HELIUS_API_KEY is not configured")
     }
   })
 
@@ -915,7 +915,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams())
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
       () =>
         Effect.fail(
           new HeliusSolanaProviderError({
@@ -926,9 +926,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         )
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncProviderFailureError",
         retryable: true,
       })
@@ -939,7 +939,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams())
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
       () =>
         Effect.succeed({
           data: [
@@ -955,13 +955,13 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncProviderFailureError",
         retryable: false,
       })
-      expect(result.left.message).toContain("missing signature")
+      expect(result.failure.message).toContain("missing signature")
     }
   })
 
@@ -969,7 +969,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     const result = await runProvider(
       Effect.flatMap(HeliusSolanaSourceSyncProvider, (provider) =>
         provider.fetchRawBatch(makeFetchParams())
-      ).pipe(Effect.either),
+      ).pipe(Effect.result),
       () =>
         Effect.succeed({
           data: [
@@ -983,15 +983,15 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "SourceSyncProviderFailureError",
         providerKey: HELIUS_SOLANA_PROVIDER_KEY,
         retryable: false,
       })
-      expect(result.left.message).toContain("signature-null-block-time")
-      expect(result.left.message).toContain("missing blockTime")
+      expect(result.failure.message).toContain("signature-null-block-time")
+      expect(result.failure.message).toContain("missing blockTime")
     }
   })
 
@@ -1032,7 +1032,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(result.transaction.externalId).toBe("signature-normalized")
@@ -1110,7 +1110,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -1200,7 +1200,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(result.providerTransfers).toEqual([
@@ -1278,7 +1278,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const principalProviderTransfers = result.providerTransfers.filter(
@@ -1381,7 +1381,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const observedPrincipalTransfers = result.providerTransfers.filter(
@@ -1428,7 +1428,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
     const ambiguousEvidenceTransfers = ambiguousResult.providerTransfers.filter(
       (transfer) =>
@@ -1512,7 +1512,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const principalProviderTransfers = result.providerTransfers.filter(
@@ -1578,7 +1578,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native"])
@@ -1625,7 +1625,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native"])
@@ -1668,7 +1668,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(result.transaction.providerStatus).toBe("failed")
@@ -1713,7 +1713,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(result.feeTransfers).toHaveLength(0)
@@ -1780,7 +1780,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -1897,7 +1897,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
@@ -1997,7 +1997,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -2130,7 +2130,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -2255,7 +2255,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const usdcProviderTransfers = result.providerTransfers.filter(
@@ -2416,7 +2416,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       ({ cursor }) =>
         Effect.succeed(
           cursor === null
@@ -2585,7 +2585,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () => Effect.succeed({ data: [], pagination: { hasMore: false, nextCursor: null } })
     )
 
@@ -2686,9 +2686,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
               sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
               lookups,
             })
-            .pipe(Effect.either)
+            .pipe(Effect.result)
         }),
-        () => Effect.dieMessage("Helius client should not be called during normalization"),
+        () => Effect.die("Helius client should not be called during normalization"),
         () =>
           Effect.succeed({
             data: [
@@ -2711,9 +2711,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           })
       )
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
           _tag: "HeliusSolanaNormalizationReferenceError",
           message:
             "Approved Solana asset mapping for USDC conflicts with observed type or decimals evidence.",
@@ -2770,7 +2770,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -2852,7 +2852,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -2938,7 +2938,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const wrappedSolTransfer = result.feeTransfers.find(
@@ -3053,7 +3053,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -3200,7 +3200,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -3331,7 +3331,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -3437,7 +3437,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
@@ -3512,7 +3512,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const usdcProviderTransfers = result.providerTransfers.filter(
@@ -3583,7 +3583,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const providerTransfer = result.providerTransfers.find(
@@ -3663,7 +3663,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const principalTransfers = result.providerTransfers.filter(
@@ -3739,7 +3739,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     expect(
@@ -3813,7 +3813,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
@@ -3890,7 +3890,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -3987,7 +3987,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -4096,7 +4096,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
     const rentTransfer = result.feeTransfers.find((transfer) => transfer.notes !== null)
@@ -4152,14 +4152,14 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
               sourceRecord: makeRawRecord({ fullTransaction: payload }),
               lookups,
             })
-            .pipe(Effect.either)
+            .pipe(Effect.result)
         }),
-        () => Effect.dieMessage("Helius client should not be called during normalization")
+        () => Effect.die("Helius client should not be called during normalization")
       )
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("HeliusSolanaNormalizationDecodeError")
       }
     }
   )
@@ -4212,14 +4212,14 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
               }),
               lookups,
             })
-            .pipe(Effect.either)
+            .pipe(Effect.result)
         }),
-        () => Effect.dieMessage("Helius client should not be called during normalization")
+        () => Effect.die("Helius client should not be called during normalization")
       )
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("HeliusSolanaNormalizationDecodeError")
       }
     }
   )
@@ -4273,14 +4273,14 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
             sourceRecord: makeRawRecord({ fullTransaction: payload }),
             lookups,
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "HeliusSolanaNormalizationDecodeError",
         message: "Conflicting Solana token decimals were observed for the same balance.",
       })
@@ -4332,7 +4332,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
           lookups,
         })
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization"),
       () =>
         Effect.succeed({
           data: [
@@ -4374,14 +4374,14 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
             sourceRecord: makeRawRecord({ fullTransaction: { malformed: true } }),
             lookups,
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("HeliusSolanaNormalizationDecodeError")
     }
   })
 
@@ -4401,15 +4401,15 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
             sourceRecord: makeRawRecord({ rawRecordPayload: fullTransaction }),
             lookups,
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       }),
-      () => Effect.dieMessage("Helius client should not be called during normalization"),
-      () => Effect.dieMessage("Helius client should not be called during normalization")
+      () => Effect.die("Helius client should not be called during normalization"),
+      () => Effect.die("Helius client should not be called during normalization")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("HeliusSolanaNormalizationDecodeError")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("HeliusSolanaNormalizationDecodeError")
     }
   })
 })

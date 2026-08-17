@@ -191,7 +191,7 @@ export interface HeliusSolanaSourceSyncProviderShape {
 /**
  * HeliusSolanaSourceSyncProvider - Context tag for the Helius Solana provider boundary.
  */
-export class HeliusSolanaSourceSyncProvider extends Context.Tag("HeliusSolanaSourceSyncProvider")<
+export class HeliusSolanaSourceSyncProvider extends Context.Service<
   HeliusSolanaSourceSyncProvider,
   HeliusSolanaSourceSyncProviderShape
->() {}
+>()("HeliusSolanaSourceSyncProvider") {}

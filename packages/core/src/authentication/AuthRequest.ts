@@ -51,7 +51,7 @@ export class OAuthAuthRequest extends Schema.TaggedClass<OAuthAuthRequest>()("OA
   /**
    * The authorization code received from the OAuth provider
    */
-  code: Schema.NonEmptyTrimmedString.annotations({
+  code: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Authorization Code",
     description: "The OAuth authorization code from the callback",
   }),
@@ -59,7 +59,7 @@ export class OAuthAuthRequest extends Schema.TaggedClass<OAuthAuthRequest>()("OA
   /**
    * The state parameter for CSRF protection
    */
-  state: Schema.NonEmptyTrimmedString.annotations({
+  state: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "State",
     description: "The OAuth state parameter for CSRF protection",
   }),
@@ -91,7 +91,7 @@ export type AuthRequest = LocalAuthRequest | OAuthAuthRequest
 /**
  * AuthRequestSchema - Schema for discriminated union of all auth request types
  */
-export const AuthRequestSchema = Schema.Union(LocalAuthRequest, OAuthAuthRequest).annotations({
+export const AuthRequestSchema = Schema.Union([LocalAuthRequest, OAuthAuthRequest]).annotate({
   identifier: "AuthRequest",
   title: "Authentication Request",
   description: "A request for authentication with any supported provider",

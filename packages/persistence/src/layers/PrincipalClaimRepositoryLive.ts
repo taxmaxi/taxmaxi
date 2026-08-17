@@ -70,7 +70,7 @@ const rowToPrincipalClaim = (row: SelectedPrincipalClaimRow): Effect.Effect<Prin
         ? null
         : row.chainType === "evm" || row.chainType === "solana" || row.chainType === "bitcoin"
           ? row.chainType
-          : yield* Effect.dieMessage(`Invalid principal claim chain type: ${row.chainType}`)
+          : yield* Effect.die(`Invalid principal claim chain type: ${row.chainType}`)
     const payerChainType: ChainType | null =
       row.payerChainType === null
         ? null
@@ -78,9 +78,7 @@ const rowToPrincipalClaim = (row: SelectedPrincipalClaimRow): Effect.Effect<Prin
             row.payerChainType === "solana" ||
             row.payerChainType === "bitcoin"
           ? row.payerChainType
-          : yield* Effect.dieMessage(
-              `Invalid principal claim payer chain type: ${row.payerChainType}`
-            )
+          : yield* Effect.die(`Invalid principal claim payer chain type: ${row.payerChainType}`)
     return {
       id: row.id,
       principalId: PrincipalId.make(row.principalId),
@@ -103,7 +101,9 @@ const isPrincipalClaimTransferError = (error: unknown): error is PrincipalClaimT
   isPrincipalClaimTransferConflictError(error) || isPrincipalClaimTransferStaleError(error)
 
 const SourceSyncJobProgressSnapshot = Schema.Struct({
-  phase: Schema.optional(Schema.Literal("discovering", "classifying", "reconciling", "completed")),
+  phase: Schema.optional(
+    Schema.Literals(["discovering", "classifying", "reconciling", "completed"])
+  ),
   processedRecords: Schema.optional(Schema.Number),
   totalRecords: Schema.optional(Schema.NullOr(Schema.Number)),
   importedRecords: Schema.optional(Schema.Number),
@@ -126,7 +126,7 @@ const toPublicJobStatus = (status: "pending" | "processing" | "completed" | "fai
 const decodeProgress = (progressDetails: unknown) =>
   progressDetails === null
     ? Effect.succeed(null)
-    : Schema.decodeUnknown(SourceSyncJobProgressSnapshot)(progressDetails).pipe(
+    : Schema.decodeUnknownEffect(SourceSyncJobProgressSnapshot)(progressDetails).pipe(
         Effect.map((progress) => ({
           phase: progress.phase ?? null,
           processedRecords: progress.processedRecords ?? null,
@@ -135,7 +135,7 @@ const decodeProgress = (progressDetails: unknown) =>
           normalizedRecords: progress.normalizedRecords ?? null,
           failedRecords: progress.failedRecords ?? null,
         })),
-        Effect.catchAll(() =>
+        Effect.catch(() =>
           Effect.succeed({
             phase: null,
             processedRecords: null,
@@ -197,12 +197,10 @@ const make = Effect.gen(function* () {
         .returning(selectPrincipalClaimFields)
 
       if (row === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "principalClaimRepository.create",
-            cause: "failed to create principal claim",
-          })
-        )
+        return yield* new PersistenceError({
+          operation: "principalClaimRepository.create",
+          cause: "failed to create principal claim",
+        })
       }
 
       return yield* rowToPrincipalClaim(row)
@@ -321,13 +319,13 @@ const make = Effect.gen(function* () {
               row.year === null ||
               row.jurisdiction === null
             ) {
-              return yield* Effect.dieMessage("Invalid payer entitlement claim context.")
+              return yield* Effect.die("Invalid payer entitlement claim context.")
             }
 
             const chainType: ChainType =
               row.chainType === "evm" || row.chainType === "solana" || row.chainType === "bitcoin"
                 ? row.chainType
-                : yield* Effect.dieMessage(`Invalid entitlement chain type: ${row.chainType}`)
+                : yield* Effect.die(`Invalid entitlement chain type: ${row.chainType}`)
 
             return {
               principalId: PrincipalId.make(row.principalId),
@@ -346,7 +344,7 @@ const make = Effect.gen(function* () {
     (params) =>
       findAnonymousSourceEntitlementsByPayer(params).pipe(
         Effect.map((entitlements) =>
-          Option.fromNullable(entitlements.find((source) => source.sourceId === params.sourceId))
+          Option.fromNullishOr(entitlements.find((source) => source.sourceId === params.sourceId))
         )
       )
 
@@ -406,7 +404,7 @@ const make = Effect.gen(function* () {
   const findAnonymousSourceSyncJobByPayer: PrincipalClaimRepositoryService["findAnonymousSourceSyncJobByPayer"] =
     (params) =>
       listAnonymousSourceSyncJobsByPayer(params).pipe(
-        Effect.map((jobs) => Option.fromNullable(jobs.find((job) => job.jobId === params.jobId)))
+        Effect.map((jobs) => Option.fromNullishOr(jobs.find((job) => job.jobId === params.jobId)))
       )
 
   const findValidSiwxSourceClaim: PrincipalClaimRepositoryService["findValidSiwxSourceClaim"] = (
@@ -522,11 +520,9 @@ const make = Effect.gen(function* () {
               claimRow.year === null ||
               claimRow.jurisdiction === null
             ) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Valid claim token not found.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Valid claim token not found.",
+              })
             }
 
             const [receiptRow] = yield* tx
@@ -548,11 +544,9 @@ const make = Effect.gen(function* () {
               .limit(1)
 
             if (receiptRow === undefined) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Matching receipt claim not found.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Matching receipt claim not found.",
+              })
             }
 
             const [targetAddressRow] = yield* tx
@@ -570,11 +564,9 @@ const make = Effect.gen(function* () {
               // Merging a paid anonymous source into an existing user-owned wallet source is
               // intentionally deferred until normalized and tax artifact collisions have a
               // complete idempotency design. Keep the claim reusable by leaving it unconsumed.
-              return yield* Effect.fail(
-                new PrincipalClaimTransferConflictError({
-                  message: "Target principal already owns the claimed wallet address.",
-                })
-              )
+              return yield* new PrincipalClaimTransferConflictError({
+                message: "Target principal already owns the claimed wallet address.",
+              })
             }
 
             const movedSources = yield* tx
@@ -589,11 +581,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.sources.id })
 
             if (movedSources.length !== 1) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Claimed source was not moved.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Claimed source was not moved.",
+              })
             }
 
             const movedAddresses = yield* tx
@@ -608,11 +598,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.addresses.id })
 
             if (movedAddresses.length !== 1) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Claimed address was not moved.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Claimed address was not moved.",
+              })
             }
 
             yield* tx
@@ -708,11 +696,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.principalClaims.id })
 
             if (consumedClaims.length < 2) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Request claims were not consumed.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Request claims were not consumed.",
+              })
             }
 
             return params.sourceId
@@ -794,11 +780,9 @@ const make = Effect.gen(function* () {
               claimRow.year === null ||
               claimRow.jurisdiction === null
             ) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Valid payer entitlement not found.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Valid payer entitlement not found.",
+              })
             }
 
             const [targetAddressRow] = yield* tx
@@ -813,11 +797,9 @@ const make = Effect.gen(function* () {
               .limit(1)
 
             if (targetAddressRow !== undefined) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferConflictError({
-                  message: "Target principal already owns the claimed wallet address.",
-                })
-              )
+              return yield* new PrincipalClaimTransferConflictError({
+                message: "Target principal already owns the claimed wallet address.",
+              })
             }
 
             const movedSources = yield* tx
@@ -832,11 +814,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.sources.id })
 
             if (movedSources.length !== 1) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Claimed source was not moved.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Claimed source was not moved.",
+              })
             }
 
             const movedAddresses = yield* tx
@@ -851,11 +831,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.addresses.id })
 
             if (movedAddresses.length !== 1) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Claimed address was not moved.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Claimed address was not moved.",
+              })
             }
 
             yield* tx
@@ -951,11 +929,9 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.principalClaims.id })
 
             if (consumedClaims.length < 1) {
-              return yield* Effect.fail(
-                new PrincipalClaimTransferStaleError({
-                  message: "Request claims were not consumed.",
-                })
-              )
+              return yield* new PrincipalClaimTransferStaleError({
+                message: "Request claims were not consumed.",
+              })
             }
 
             return params.sourceId

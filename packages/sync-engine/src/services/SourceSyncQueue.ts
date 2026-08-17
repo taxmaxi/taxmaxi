@@ -59,7 +59,6 @@ export interface SourceSyncQueueShape {
 /**
  * SourceSyncQueue - Context tag for source sync queue producers.
  */
-export class SourceSyncQueue extends Context.Tag("SourceSyncQueue")<
-  SourceSyncQueue,
-  SourceSyncQueueShape
->() {}
+export class SourceSyncQueue extends Context.Service<SourceSyncQueue, SourceSyncQueueShape>()(
+  "SourceSyncQueue"
+) {}

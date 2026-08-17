@@ -9,8 +9,9 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as ParseResult from "effect/ParseResult"
 import * as Schema from "effect/Schema"
+import * as SchemaGetter from "effect/SchemaGetter"
+import * as SchemaIssue from "effect/SchemaIssue"
 import {
   ActivityEvidence,
   ActivityFacts,
@@ -101,14 +102,14 @@ const HeliusSolanaFullTransactionEntrySchema = Schema.Struct({
   blockTime: Schema.NullOr(Schema.Number),
 })
 
-const HeliusSolanaAccountKeySchema = Schema.Union(
+const HeliusSolanaAccountKeySchema = Schema.Union([
   Schema.String,
   Schema.Struct({
     pubkey: Schema.String,
     signer: Schema.optional(Schema.Boolean),
     writable: Schema.optional(Schema.Boolean),
-  })
-)
+  }),
+])
 
 const HeliusSolanaInstructionSchema = Schema.Struct({
   programId: Schema.optional(Schema.String),
@@ -122,13 +123,13 @@ const HeliusSolanaInnerInstructionsSchema = Schema.Struct({
 })
 
 const HeliusSolanaCloseAccountParsedInstructionSchema = Schema.Struct({
-  type: Schema.Literal("closeAccount"),
+  type: Schema.Literals(["closeAccount"]),
 })
 
-const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
-const SolanaRawTokenAmountSchema = Schema.String.pipe(
-  Schema.filter((amount) => /^(0|[1-9]\d*)$/.test(amount), {
-    message: () => "Expected canonical unsigned token raw units.",
+const SolanaTokenDecimalsSchema = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }))
+const SolanaRawTokenAmountSchema = Schema.String.check(
+  Schema.isPattern(/^(0|[1-9]\d*)$/, {
+    message: "Expected canonical unsigned token raw units.",
   })
 )
 
@@ -144,23 +145,24 @@ const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   }),
 })
 
-const HeliusSolanaDecimalStringSchema = Schema.transformOrFail(
-  Schema.Union(Schema.String, Schema.Number),
-  Schema.String,
-  {
-    strict: true,
-    decode: (value, _, ast) => {
+const HeliusSolanaDecimalStringSchema = Schema.Union([Schema.String, Schema.Number]).pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transformOrFail((value, options) => {
       const amount = typeof value === "number" ? String(value) : value.trim()
       return Option.match(BigDecimal.fromString(amount), {
         onNone: () =>
           Effect.fail(
-            new ParseResult.Type(ast, value, "Expected a decimal token amount string or number.")
+            new SchemaIssue.InvalidValue(
+              { message: "Expected a decimal token amount string or number." },
+              value,
+              options
+            )
           ),
         onSome: () => Effect.succeed(amount),
       })
-    },
-    encode: (value) => Effect.succeed(value),
-  }
+    }),
+    encode: SchemaGetter.transform((value) => value),
+  })
 )
 
 const HeliusSolanaParsedTokenTransferSchema = Schema.Struct({
@@ -175,11 +177,11 @@ const HeliusSolanaParsedTokenTransferSchema = Schema.Struct({
 const HeliusSolanaWalletTransferSchema = Schema.Struct({
   signature: Schema.String,
   timestamp: Schema.Number,
-  direction: Schema.Literal("in", "out"),
+  direction: Schema.Literals(["in", "out"]),
   counterparty: Schema.String,
   mint: Schema.String,
   symbol: Schema.NullOr(Schema.String),
-  amount: Schema.Union(Schema.Number, Schema.NumberFromString),
+  amount: Schema.Union([Schema.Number, Schema.NumberFromString]),
   amountRaw: SolanaRawTokenAmountSchema,
   decimals: SolanaTokenDecimalsSchema,
 })
@@ -287,13 +289,15 @@ interface MovementContradiction {
   readonly evidence: unknown
 }
 
-const decodeUnknownCursorPayload = Schema.decodeUnknown(HeliusSolanaCursorPayloadSchema)
-const decodeUnknownTransactionsPage = Schema.decodeUnknown(HeliusSolanaTransactionsPageSchema)
-const decodeUnknownFullTransactionEntry = Schema.decodeUnknown(
+const decodeUnknownCursorPayload = Schema.decodeUnknownEffect(HeliusSolanaCursorPayloadSchema)
+const decodeUnknownTransactionsPage = Schema.decodeUnknownEffect(HeliusSolanaTransactionsPageSchema)
+const decodeUnknownFullTransactionEntry = Schema.decodeUnknownEffect(
   HeliusSolanaFullTransactionEntrySchema
 )
-const decodeUnknownRawRecordPayload = Schema.decodeUnknown(HeliusSolanaRawRecordPayloadSchema)
-const decodeUnknownWalletTransfersPage = Schema.decodeUnknown(HeliusSolanaWalletTransfersPageSchema)
+const decodeUnknownRawRecordPayload = Schema.decodeUnknownEffect(HeliusSolanaRawRecordPayloadSchema)
+const decodeUnknownWalletTransfersPage = Schema.decodeUnknownEffect(
+  HeliusSolanaWalletTransfersPageSchema
+)
 const decodeCloseAccountParsedInstruction = Schema.decodeUnknownOption(
   HeliusSolanaCloseAccountParsedInstructionSchema
 )

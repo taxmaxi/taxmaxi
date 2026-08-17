@@ -12,7 +12,6 @@ import type { AuthProvider } from "@my/core/authentication"
 /**
  * CoinbaseAuthProvider - Context.Tag for dependency injection
  */
-export class CoinbaseAuthProvider extends Context.Tag("CoinbaseAuthProvider")<
-  CoinbaseAuthProvider,
-  AuthProvider
->() {}
+export class CoinbaseAuthProvider extends Context.Service<CoinbaseAuthProvider, AuthProvider>()(
+  "CoinbaseAuthProvider"
+) {}

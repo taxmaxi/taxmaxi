@@ -20,7 +20,7 @@ import { Timestamp } from "../shared/values/Timestamp.ts"
  * - 'owner': Workspace owner with full org access
  * - 'viewer': Read-only access
  */
-export const UserRole = Schema.Literal("admin", "owner", "member", "viewer").annotations({
+export const UserRole = Schema.Literals(["admin", "owner", "member", "viewer"]).annotate({
   identifier: "UserRole",
   title: "User Role",
   description: "The role assigned to a user determining their access level",
@@ -68,7 +68,7 @@ export class AuthUser extends Schema.Class<AuthUser>("AuthUser")({
   /**
    * User's display name
    */
-  displayName: Schema.NonEmptyTrimmedString.annotations({
+  displayName: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Display Name",
     description: "The user's display name",
     examples: ["Max Mustermann"],
@@ -87,7 +87,7 @@ export class AuthUser extends Schema.Class<AuthUser>("AuthUser")({
   /**
    * Whether the user's email address has been verified
    */
-  emailVerified: Schema.Boolean.annotations({
+  emailVerified: Schema.Boolean.annotate({
     title: "Email Verified",
     description: "Whether the user's email address has been verified",
   }),

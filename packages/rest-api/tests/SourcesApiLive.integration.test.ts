@@ -1,10 +1,5 @@
-import {
-  Headers,
-  HttpApiBuilder,
-  HttpApiClient,
-  HttpClient,
-  HttpClientRequest,
-} from "@effect/platform"
+import { HttpApiClient } from "effect/unstable/httpapi"
+import { Cookies, Headers, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
@@ -67,11 +62,20 @@ const queuedAt = new Date("2026-01-01T00:00:00.000Z")
 const queueEvents: Array<SourceSyncQueuePayload> = []
 const settlementEvents: Array<string> = []
 const validX402PaymentHeader = "valid-test-x402-payment"
-const ClaimTokenConfigProvider = ConfigProvider.fromMap(
-  new Map([
-    ["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"],
-    ["CLAIM_TOKEN_PEPPER", "test-claim-token-pepper"],
-  ])
+const REPORT_TEST_USER_ID = "00000000-0000-4000-8000-000000000181"
+const REPORT_TEST_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000183"
+const REPORT_TEST_SOURCE_ID = "00000000-0000-4000-8000-000000000281"
+const REPORT_TEST_FIXTURE = {
+  userId: REPORT_TEST_USER_ID,
+  principalId: REPORT_TEST_PRINCIPAL_ID,
+  sourceId: REPORT_TEST_SOURCE_ID,
+}
+const ClaimTokenConfigProvider = ConfigProvider.fromEnvRecord({
+  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
+  CLAIM_TOKEN_PEPPER: "test-claim-token-pepper",
+})
+const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
+  Layer.provide(ConfigProvider.layer(ClaimTokenConfigProvider))
 )
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: validX402PaymentHeader,
@@ -130,29 +134,25 @@ const SourceSyncQueueFailureTestLive = Layer.succeed(SourceSyncQueue, {
 })
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
-  startSyncRun: () =>
-    Effect.dieMessage("SourceSyncRunService test stub: startSyncRun not implemented"),
-  getSyncRun: () => Effect.dieMessage("SourceSyncRunService test stub: getSyncRun not implemented"),
+  startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
+  getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
 } satisfies SourceSyncRunServiceShape)
 
 const AuthServiceTestLive = Layer.succeed(AuthService, {
-  login: () => Effect.dieMessage("AuthService test stub: login not implemented"),
-  register: () => Effect.dieMessage("AuthService test stub: register not implemented"),
+  login: () => Effect.die("AuthService test stub: login not implemented"),
+  register: () => Effect.die("AuthService test stub: register not implemented"),
   startEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: startEmailVerification not implemented"),
+    Effect.die("AuthService test stub: startEmailVerification not implemented"),
   resendEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: resendEmailVerification not implemented"),
-  verifyEmail: () => Effect.dieMessage("AuthService test stub: verifyEmail not implemented"),
-  startOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: startOAuthLogin not implemented"),
-  completeOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: completeOAuthLogin not implemented"),
-  startLink: () => Effect.dieMessage("AuthService test stub: startLink not implemented"),
-  completeLink: () => Effect.dieMessage("AuthService test stub: completeLink not implemented"),
-  logout: () => Effect.dieMessage("AuthService test stub: logout not implemented"),
-  validateSession: () =>
-    Effect.dieMessage("AuthService test stub: validateSession not implemented"),
-  linkIdentity: () => Effect.dieMessage("AuthService test stub: linkIdentity not implemented"),
+    Effect.die("AuthService test stub: resendEmailVerification not implemented"),
+  verifyEmail: () => Effect.die("AuthService test stub: verifyEmail not implemented"),
+  startOAuthLogin: () => Effect.die("AuthService test stub: startOAuthLogin not implemented"),
+  completeOAuthLogin: () => Effect.die("AuthService test stub: completeOAuthLogin not implemented"),
+  startLink: () => Effect.die("AuthService test stub: startLink not implemented"),
+  completeLink: () => Effect.die("AuthService test stub: completeLink not implemented"),
+  logout: () => Effect.die("AuthService test stub: logout not implemented"),
+  validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
+  linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
   getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
@@ -162,17 +162,17 @@ const PasswordHasherTestLive = Layer.succeed(PasswordHasher, {
 })
 
 const TaxCalculationServiceTestLive = Layer.succeed(TaxCalculationService, {
-  calculateTax: () => Effect.dieMessage("TaxCalculationService test stub: calculateTax"),
+  calculateTax: () => Effect.die("TaxCalculationService test stub: calculateTax"),
 })
 
 const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
   reconcileTransferCandidates: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
   rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
     ),
 } satisfies TransferReconciliationServiceShape)
@@ -199,15 +199,17 @@ const makeHttpLive = (
   sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>,
   x402PaymentValidatorLayer: Layer.Layer<X402PaymentValidator> = X402PaymentValidatorTestLive
 ) =>
-  HttpApiBuilder.serve().pipe(
-    Layer.provide(TaxMaxiApiLive),
-    Layer.provide(AnonSessionServiceLive),
-    Layer.provide(SIWXProofVerifierTestLive),
-    Layer.provide(x402PaymentValidatorLayer),
-    Layer.provide(SimpleTokenValidatorLive),
+  HttpRouter.serve(
+    TaxMaxiApiLive.pipe(
+      Layer.provide(AnonSessionServiceTestLive),
+      Layer.provide(SIWXProofVerifierTestLive),
+      Layer.provide(x402PaymentValidatorLayer),
+      Layer.provide(SimpleTokenValidatorLive)
+    )
+  ).pipe(
     Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer)),
     Layer.provideMerge(NodeHttpServer.layerTest),
-    Layer.provide(Layer.setConfigProvider(ClaimTokenConfigProvider))
+    Layer.provide(ConfigProvider.layer(ClaimTokenConfigProvider))
   )
 
 const HttpLive = makeHttpLive(SourceSyncQueueTestLive)
@@ -338,7 +340,8 @@ const createAnonSessionCookie = ({
       ANON_CHALLENGE_COOKIE_NAME
     )
     const challengeJson = yield* challengeResponse.json
-    const challenge = yield* EffectSchema.decodeUnknown(AnonSessionChallengeBody)(challengeJson)
+    const challenge =
+      yield* EffectSchema.decodeUnknownEffect(AnonSessionChallengeBody)(challengeJson)
     const siwxProof = makeTestSiwxProof({
       chainType: "solana",
       walletAddress,
@@ -348,10 +351,17 @@ const createAnonSessionCookie = ({
     const sessionResponse = yield* HttpClient.execute(
       HttpClientRequest.post("/v1/anon/session").pipe(
         HttpClientRequest.setHeader("cookie", `${ANON_CHALLENGE_COOKIE_NAME}=${challengeCookie}`),
-        HttpClientRequest.bodyUnsafeJson({ siwxProof })
+        HttpClientRequest.bodyJsonUnsafe({ siwxProof })
       )
     )
-    return extractCookieValue(sessionResponse.headers, ANON_SESSION_COOKIE_NAME)
+    const sessionCookie = Cookies.getValue(sessionResponse.cookies, ANON_SESSION_COOKIE_NAME)
+    if (Option.isNone(sessionCookie)) {
+      const body = yield* sessionResponse.text
+      return yield* Effect.die(
+        `Missing anon session cookie from status ${sessionResponse.status}: ${body}`
+      )
+    }
+    return sessionCookie.value
   })
 
 const postRawSourceCreate = ({
@@ -365,7 +375,7 @@ const postRawSourceCreate = ({
 }) =>
   Effect.gen(function* () {
     const baseRequest = HttpClientRequest.post("/v1/sources").pipe(
-      HttpClientRequest.bodyUnsafeJson(payload)
+      HttpClientRequest.bodyJsonUnsafe(payload)
     )
     const xPaymentRequest =
       paymentHeader === undefined
@@ -410,7 +420,7 @@ const seedCoinbaseSource = ({
       .pipe(Effect.map((rows) => rows.find((row) => row.name === "coinbase")))
 
     if (coinbaseCex === undefined) {
-      return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
+      return yield* Effect.die("Missing seeded coinbase CEX fixture")
     }
 
     const [createdAccount] = yield* db
@@ -428,7 +438,7 @@ const seedCoinbaseSource = ({
       .returning({ id: schema.cexAccount.id })
 
     if (createdAccount === undefined) {
-      return yield* Effect.dieMessage("Failed to create cex account fixture")
+      return yield* Effect.die("Failed to create cex account fixture")
     }
 
     yield* db.insert(schema.sources).values({
@@ -464,21 +474,21 @@ const seedPrincipalUser = ({
   })
 
 const reportFixtureIds = {
-  buyTransactionId: "00000000-0000-0000-0000-000000046101",
-  sellTransactionId: "00000000-0000-0000-0000-000000046102",
-  acquisitionLegId: "00000000-0000-0000-0000-000000046201",
-  disposalLegId: "00000000-0000-0000-0000-000000046202",
-  feeTransactionId: "00000000-0000-0000-0000-000000046203",
-  feeLegId: "00000000-0000-0000-0000-000000046204",
-  internalTransferTransactionId: "00000000-0000-0000-0000-000000046205",
-  internalTransferLegId: "00000000-0000-0000-0000-000000046206",
-  internalTransferInTransactionId: "00000000-0000-0000-0000-000000046207",
-  internalTransferInLegId: "00000000-0000-0000-0000-000000046208",
-  taxFreeFifoLotId: "00000000-0000-0000-0000-000000046301",
-  taxableFifoLotId: "00000000-0000-0000-0000-000000046302",
-  internalTransferFifoLotId: "00000000-0000-0000-0000-000000046303",
-  custodyProviderTransferId: "00000000-0000-0000-0000-000000046401",
-  custodyMovementId: "00000000-0000-0000-0000-000000046402",
+  buyTransactionId: "00000000-0000-4000-8000-000000046101",
+  sellTransactionId: "00000000-0000-4000-8000-000000046102",
+  acquisitionLegId: "00000000-0000-4000-8000-000000046201",
+  disposalLegId: "00000000-0000-4000-8000-000000046202",
+  feeTransactionId: "00000000-0000-4000-8000-000000046203",
+  feeLegId: "00000000-0000-4000-8000-000000046204",
+  internalTransferTransactionId: "00000000-0000-4000-8000-000000046205",
+  internalTransferLegId: "00000000-0000-4000-8000-000000046206",
+  internalTransferInTransactionId: "00000000-0000-4000-8000-000000046207",
+  internalTransferInLegId: "00000000-0000-4000-8000-000000046208",
+  taxFreeFifoLotId: "00000000-0000-4000-8000-000000046301",
+  taxableFifoLotId: "00000000-0000-4000-8000-000000046302",
+  internalTransferFifoLotId: "00000000-0000-4000-8000-000000046303",
+  custodyProviderTransferId: "00000000-0000-4000-8000-000000046401",
+  custodyMovementId: "00000000-0000-4000-8000-000000046402",
 } as const
 
 const seedSourceReportRows = ({
@@ -727,7 +737,7 @@ describe("SourcesApiLive", () => {
 
   it.effect("returns source-generic report read projections for a populated source", () =>
     Effect.gen(function* () {
-      const fixture = yield* seedSyncEngineRepositoryFixture()
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
       yield* seedSyncEngineAssets({
         baseBlockchainId: fixture.baseBlockchainId,
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
@@ -776,7 +786,7 @@ describe("SourcesApiLive", () => {
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
       const overview = yield* client.sources.getSourceOverview({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
       expect(overview.source.id).toBe(fixture.sourceId)
       expect(overview.source.providerKey).toBe("coinbase")
@@ -785,7 +795,7 @@ describe("SourcesApiLive", () => {
       expect(overview.totals.realizedGainLoss).toBe("2000")
 
       const assetPnl = yield* client.sources.listSourceAssetPnl({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
       expect(assetPnl.assets).toHaveLength(1)
       expect(assetPnl.assets[0]).toMatchObject({
@@ -799,8 +809,8 @@ describe("SourcesApiLive", () => {
       })
 
       const transactions = yield* client.sources.listSourceTransactions({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 1 },
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 1 },
       })
       expect(transactions.transactions).toHaveLength(1)
       expect(transactions.transactions[0]?.transactionId).toBe(reportFixtureIds.sellTransactionId)
@@ -809,8 +819,8 @@ describe("SourcesApiLive", () => {
       expect(transactions.page.nextCursor).not.toBeNull()
 
       const taxEvents = yield* client.sources.listSourceTaxEvents({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 10 },
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
       })
       expect(taxEvents.taxEvents.map((event) => event.kind)).toEqual(["disposal", "acquisition"])
       expect(taxEvents.taxEvents[0]).toMatchObject({
@@ -822,8 +832,8 @@ describe("SourcesApiLive", () => {
       })
 
       const fifoLots = yield* client.sources.listSourceFifoLots({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 10 },
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
       })
       expect(fifoLots.fifoLots).toHaveLength(2)
       expect(fifoLots.fifoLots[0]).toMatchObject({
@@ -838,7 +848,7 @@ describe("SourcesApiLive", () => {
       })
 
       const explanation = yield* client.sources.explainSourceDisposal({
-        path: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
+        params: { sourceId: fixture.sourceId, legId: reportFixtureIds.disposalLegId },
       })
       expect(explanation).toMatchObject({
         disposalLegId: reportFixtureIds.disposalLegId,
@@ -858,7 +868,7 @@ describe("SourcesApiLive", () => {
 
   it.effect("surfaces FIFO inventory review state for unmatched source disposals", () =>
     Effect.gen(function* () {
-      const fixture = yield* seedSyncEngineRepositoryFixture()
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
 
       yield* seedSyncEngineAssets({
         baseBlockchainId: fixture.baseBlockchainId,
@@ -891,7 +901,7 @@ describe("SourcesApiLive", () => {
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
       const overview = yield* client.sources.getSourceOverview({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
 
       expect(overview.totals.disposalCount).toBe(1)
@@ -911,7 +921,7 @@ describe("SourcesApiLive", () => {
       })
 
       const assetPnl = yield* client.sources.listSourceAssetPnl({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
       expect(assetPnl.assets[0]).toMatchObject({
         disposedAmount: "0.4",
@@ -935,36 +945,36 @@ describe("SourcesApiLive", () => {
 
   it.effect("returns empty source report lists for a source with no canonical rows", () =>
     Effect.gen(function* () {
-      const fixture = yield* seedSyncEngineRepositoryFixture()
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
 
       const overview = yield* client.sources.getSourceOverview({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
       expect(overview.totals.transactionCount).toBe(0)
       expect(overview.totals.assetCount).toBe(0)
 
       const assetPnl = yield* client.sources.listSourceAssetPnl({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
       expect(assetPnl.assets).toEqual([])
 
       const transactions = yield* client.sources.listSourceTransactions({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 10 },
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
       })
       expect(transactions.transactions).toEqual([])
       expect(transactions.page).toMatchObject({ hasMore: false, nextCursor: null })
 
       const taxEvents = yield* client.sources.listSourceTaxEvents({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 10 },
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
       })
       expect(taxEvents.taxEvents).toEqual([])
 
       const fifoLots = yield* client.sources.listSourceFifoLots({
-        path: { sourceId: fixture.sourceId },
-        urlParams: { limit: 10 },
+        params: { sourceId: fixture.sourceId },
+        query: { limit: 10 },
       })
       expect(fifoLots.fifoLots).toEqual([])
     }).pipe(Effect.provide(HttpLive))
@@ -972,14 +982,14 @@ describe("SourcesApiLive", () => {
 
   it.effect("counts provider-origin FIFO lot assets in the source overview", () =>
     Effect.gen(function* () {
-      const fixture = yield* seedSyncEngineRepositoryFixture()
+      const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
       yield* seedSyncEngineAssets({
         baseBlockchainId: fixture.baseBlockchainId,
         bitcoinBlockchainId: fixture.bitcoinBlockchainId,
       })
 
-      const transactionId = "00000000-0000-0000-0000-000000046501"
-      const providerTransferId = "00000000-0000-0000-0000-000000046502"
+      const transactionId = "00000000-0000-4000-8000-000000046501"
+      const providerTransferId = "00000000-0000-4000-8000-000000046502"
       const db = yield* drizzle
 
       yield* db.insert(schema.transactions).values({
@@ -1016,7 +1026,7 @@ describe("SourcesApiLive", () => {
 
       const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
       const overview = yield* client.sources.getSourceOverview({
-        path: { sourceId: fixture.sourceId },
+        params: { sourceId: fixture.sourceId },
       })
 
       expect(overview.totals).toMatchObject({
@@ -1032,7 +1042,7 @@ describe("SourcesApiLive", () => {
     "labels deductible fees and internal transfer disposals without taxable treatment",
     () =>
       Effect.gen(function* () {
-        const fixture = yield* seedSyncEngineRepositoryFixture()
+        const fixture = yield* seedSyncEngineRepositoryFixture(REPORT_TEST_FIXTURE)
         yield* seedSyncEngineAssets({
           baseBlockchainId: fixture.baseBlockchainId,
           bitcoinBlockchainId: fixture.bitcoinBlockchainId,
@@ -1048,11 +1058,11 @@ describe("SourcesApiLive", () => {
 
         const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
         const overview = yield* client.sources.getSourceOverview({
-          path: { sourceId: fixture.sourceId },
+          params: { sourceId: fixture.sourceId },
         })
         const taxEvents = yield* client.sources.listSourceTaxEvents({
-          path: { sourceId: fixture.sourceId },
-          urlParams: { limit: 10 },
+          params: { sourceId: fixture.sourceId },
+          query: { limit: 10 },
         })
         const feeEvent = taxEvents.taxEvents.find(
           (event) => event.legId === reportFixtureIds.feeLegId
@@ -1080,7 +1090,7 @@ describe("SourcesApiLive", () => {
         })
         expect(overview.totals.disposalCount).toBe(1)
         const assetPnl = yield* client.sources.listSourceAssetPnl({
-          path: { sourceId: fixture.sourceId },
+          params: { sourceId: fixture.sourceId },
         })
         expect(assetPnl.assets[0]).toMatchObject({
           acquiredAmount: "1",
@@ -1092,7 +1102,7 @@ describe("SourcesApiLive", () => {
         })
 
         const explanation = yield* client.sources.explainSourceDisposal({
-          path: {
+          params: {
             sourceId: fixture.sourceId,
             legId: reportFixtureIds.internalTransferLegId,
           },
@@ -1189,7 +1199,7 @@ describe("SourcesApiLive", () => {
         providerKey: "helius-solana",
       })
       if (response.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
       expect(response.claim.requestId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -1291,7 +1301,7 @@ describe("SourcesApiLive", () => {
           },
         })
         const body = yield* response.json
-        const decodedBody = yield* EffectSchema.decodeUnknown(SourceCreateResponse)(body)
+        const decodedBody = yield* EffectSchema.decodeUnknownEffect(SourceCreateResponse)(body)
 
         expect(response.status).toBe(200)
         expect(Headers.get(response.headers, "payment-response")).toEqual(
@@ -1303,7 +1313,7 @@ describe("SourcesApiLive", () => {
         expect(decodedBody.claim).not.toBeNull()
 
         if (decodedBody.claim === null) {
-          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+          return yield* Effect.die("Anonymous source creation did not return claim metadata")
         }
 
         const db = yield* drizzle
@@ -1350,7 +1360,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const userId = crypto.randomUUID()
@@ -1427,7 +1437,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (first.claim === null || second.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const sessionCookie = yield* createAnonSessionCookie()
@@ -1473,7 +1483,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null || created.syncJob === null) {
-        return yield* Effect.dieMessage(
+        return yield* Effect.die(
           "Anonymous source creation did not return claim metadata and sync job"
         )
       }
@@ -1484,7 +1494,7 @@ describe("SourcesApiLive", () => {
       )
 
       const listed = yield* anonSessionClient.anon.listAnonSourceJobs({
-        path: { sourceId: created.source.id },
+        params: { sourceId: created.source.id },
       })
       expect(listed.jobs).toEqual([
         expect.objectContaining({
@@ -1498,7 +1508,7 @@ describe("SourcesApiLive", () => {
       ])
 
       const job = yield* anonSessionClient.anon.getAnonSourceJob({
-        path: {
+        params: {
           sourceId: created.source.id,
           jobId: created.syncJob.jobId,
         },
@@ -1527,7 +1537,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null || created.syncJob === null) {
-        return yield* Effect.dieMessage(
+        return yield* Effect.die(
           "Anonymous source creation did not return claim metadata and sync job"
         )
       }
@@ -1537,7 +1547,7 @@ describe("SourcesApiLive", () => {
         `${ANON_SESSION_COOKIE_NAME}=${matchingSessionCookie}`
       )
       const source = yield* matchingPayerClient.anon.getAnonSource({
-        path: { sourceId: created.source.id },
+        params: { sourceId: created.source.id },
       })
       expect(source).toMatchObject({
         sourceId: created.source.id,
@@ -1557,21 +1567,21 @@ describe("SourcesApiLive", () => {
       )
 
       const otherSourceResult = yield* otherPayerClient.anon
-        .getAnonSource({ path: { sourceId: created.source.id } })
-        .pipe(Effect.either)
+        .getAnonSource({ params: { sourceId: created.source.id } })
+        .pipe(Effect.result)
       const otherJobsResult = yield* otherPayerClient.anon
-        .listAnonSourceJobs({ path: { sourceId: created.source.id } })
-        .pipe(Effect.either)
+        .listAnonSourceJobs({ params: { sourceId: created.source.id } })
+        .pipe(Effect.result)
       const otherJobResult = yield* otherPayerClient.anon
         .getAnonSourceJob({
-          path: { sourceId: created.source.id, jobId: created.syncJob.jobId },
+          params: { sourceId: created.source.id, jobId: created.syncJob.jobId },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
       for (const result of [otherSourceResult, otherJobsResult, otherJobResult]) {
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left._tag).toBe("AnonNotFoundError")
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure._tag).toBe("AnonNotFoundError")
         }
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
@@ -1593,7 +1603,7 @@ describe("SourcesApiLive", () => {
         })
 
         if (anonymousCreated.claim === null) {
-          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+          return yield* Effect.die("Anonymous source creation did not return claim metadata")
         }
 
         const userId = crypto.randomUUID()
@@ -1636,10 +1646,10 @@ describe("SourcesApiLive", () => {
         )
         const authenticatedApiResult = yield* anonOnlyClient.sources
           .listSources()
-          .pipe(Effect.either)
-        expect(authenticatedApiResult._tag).toBe("Left")
-        if (authenticatedApiResult._tag === "Left") {
-          expect(authenticatedApiResult.left._tag).toBe("UnauthorizedError")
+          .pipe(Effect.result)
+        expect(authenticatedApiResult._tag).toBe("Failure")
+        if (authenticatedApiResult._tag === "Failure") {
+          expect(authenticatedApiResult.failure._tag).toBe("UnauthorizedError")
         }
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -1658,7 +1668,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const sessionCookie = yield* createAnonSessionCookie()
@@ -1689,11 +1699,11 @@ describe("SourcesApiLive", () => {
       expect(afterClaim.sources.map((source) => source.sourceId)).not.toContain(created.source.id)
 
       const sourceResult = yield* anonSessionClient.anon
-        .getAnonSource({ path: { sourceId: created.source.id } })
-        .pipe(Effect.either)
-      expect(sourceResult._tag).toBe("Left")
-      if (sourceResult._tag === "Left") {
-        expect(sourceResult.left._tag).toBe("AnonNotFoundError")
+        .getAnonSource({ params: { sourceId: created.source.id } })
+        .pipe(Effect.result)
+      expect(sourceResult._tag).toBe("Failure")
+      if (sourceResult._tag === "Failure") {
+        expect(sourceResult.failure._tag).toBe("AnonNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -1749,7 +1759,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const userId = crypto.randomUUID()
@@ -1803,7 +1813,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const userId = crypto.randomUUID()
@@ -1823,11 +1833,11 @@ describe("SourcesApiLive", () => {
             }),
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -1879,11 +1889,11 @@ describe("SourcesApiLive", () => {
       for (const siwxProof of badProofs) {
         const result = yield* anonChallengeClient.anon
           .createAnonSession({ payload: { siwxProof } })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left._tag).toBe("AnonBadRequestError")
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure._tag).toBe("AnonBadRequestError")
         }
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
@@ -1904,7 +1914,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const userId = crypto.randomUUID()
@@ -1925,11 +1935,11 @@ describe("SourcesApiLive", () => {
 
       const replayResult = yield* authenticatedClient.principals
         .claimPrincipal({ payload: claimPayload })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(replayResult._tag).toBe("Left")
-      if (replayResult._tag === "Left") {
-        expect(replayResult.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(replayResult._tag).toBe("Failure")
+      if (replayResult._tag === "Failure") {
+        expect(replayResult.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
 
       const db = yield* drizzle
@@ -1966,7 +1976,7 @@ describe("SourcesApiLive", () => {
         })
 
         if (created.claim === null) {
-          return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+          return yield* Effect.die("Anonymous source creation did not return claim metadata")
         }
 
         const claimingUserId = crypto.randomUUID()
@@ -1992,11 +2002,11 @@ describe("SourcesApiLive", () => {
         const otherClient = yield* makeAuthenticatedClient({ userId: otherUserId })
         const otherClaimResult = yield* otherClient.principals
           .claimPrincipal({ payload: claimPayload })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
 
-        expect(otherClaimResult._tag).toBe("Left")
-        if (otherClaimResult._tag === "Left") {
-          expect(otherClaimResult.left._tag).toBe("PrincipalClaimNotFoundError")
+        expect(otherClaimResult._tag).toBe("Failure")
+        if (otherClaimResult._tag === "Failure") {
+          expect(otherClaimResult.failure._tag).toBe("PrincipalClaimNotFoundError")
         }
 
         const claimingSources = yield* claimingClient.sources.listSources()
@@ -2028,7 +2038,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const db = yield* drizzle
@@ -2049,11 +2059,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2072,7 +2082,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const db = yield* drizzle
@@ -2099,11 +2109,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2122,7 +2132,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const claimedUserId = crypto.randomUUID()
@@ -2147,11 +2157,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2170,7 +2180,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const db = yield* drizzle
@@ -2191,11 +2201,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2215,7 +2225,7 @@ describe("SourcesApiLive", () => {
       })
 
       if (created.claim === null) {
-        return yield* Effect.dieMessage("Anonymous source creation did not return claim metadata")
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
       }
 
       const userId = crypto.randomUUID()
@@ -2239,11 +2249,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimConflictError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimConflictError")
       }
 
       const db = yield* drizzle
@@ -2303,11 +2313,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("PrincipalClaimNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("PrincipalClaimNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2323,11 +2333,11 @@ describe("SourcesApiLive", () => {
             siwxProof: null,
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("UnauthorizedError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("UnauthorizedError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2344,9 +2354,9 @@ describe("SourcesApiLive", () => {
         },
       })
       const body = yield* response.json
-      const decodedBody = yield* EffectSchema.decodeUnknown(SourcePaymentRequiredError)(body)
-      const bodyRecord = yield* EffectSchema.decodeUnknown(
-        EffectSchema.Record({ key: EffectSchema.String, value: EffectSchema.Unknown })
+      const decodedBody = yield* EffectSchema.decodeUnknownEffect(SourcePaymentRequiredError)(body)
+      const bodyRecord = yield* EffectSchema.decodeUnknownEffect(
+        EffectSchema.Record(EffectSchema.String, EffectSchema.Unknown)
       )(body)
 
       expect(response.status).toBe(402)
@@ -2386,7 +2396,7 @@ describe("SourcesApiLive", () => {
         },
       })
       const body = yield* response.json
-      const decodedBody = yield* EffectSchema.decodeUnknown(SourceCreateResponse)(body)
+      const decodedBody = yield* EffectSchema.decodeUnknownEffect(SourceCreateResponse)(body)
 
       expect(response.status).toBe(200)
       expect(Headers.get(response.headers, "payment-response")).toEqual(
@@ -2423,11 +2433,11 @@ describe("SourcesApiLive", () => {
             jurisdiction: "germany",
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("SourcePaymentRequiredError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SourcePaymentRequiredError")
       }
 
       const db = yield* drizzle
@@ -2459,9 +2469,9 @@ describe("SourcesApiLive", () => {
         },
       })
       const body = yield* response.json
-      const decodedBody = yield* EffectSchema.decodeUnknown(SourcePaymentRequiredError)(body)
-      const bodyRecord = yield* EffectSchema.decodeUnknown(
-        EffectSchema.Record({ key: EffectSchema.String, value: EffectSchema.Unknown })
+      const decodedBody = yield* EffectSchema.decodeUnknownEffect(SourcePaymentRequiredError)(body)
+      const bodyRecord = yield* EffectSchema.decodeUnknownEffect(
+        EffectSchema.Record(EffectSchema.String, EffectSchema.Unknown)
       )(body)
 
       expect(response.status).toBe(402)
@@ -2494,12 +2504,12 @@ describe("SourcesApiLive", () => {
             jurisdiction: "germany",
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("InternalServerError")
-        expect(result.left.message).toBe("Failed to enqueue source sync job.")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("InternalServerError")
+        expect(result.failure.message).toBe("Failed to enqueue source sync job.")
       }
 
       const db = yield* drizzle
@@ -2523,11 +2533,11 @@ describe("SourcesApiLive", () => {
             walletAddress: "So11111111111111111111111111111111111111112",
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("UnauthorizedError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("UnauthorizedError")
       }
 
       const db = yield* drizzle
@@ -2548,11 +2558,11 @@ describe("SourcesApiLive", () => {
             name: "First",
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("UnauthorizedError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("UnauthorizedError")
       }
 
       const db = yield* drizzle
@@ -2640,12 +2650,12 @@ describe("SourcesApiLive", () => {
             walletAddress: "not-an-address",
           },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("SourceBadRequestError")
-        expect(result.left.message).toBe("Invalid crypto address.")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SourceBadRequestError")
+        expect(result.failure.message).toBe("Invalid crypto address.")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -2659,7 +2669,7 @@ describe("SourcesApiLive", () => {
 
       const client = yield* makeAuthenticatedClient({ userId })
       const job = yield* client.sources.startSourceSyncJob({
-        path: { sourceId },
+        params: { sourceId },
       })
 
       expect(job).toMatchObject({
@@ -2686,10 +2696,10 @@ describe("SourcesApiLive", () => {
 
       const client = yield* makeAuthenticatedClient({ userId })
       const started = yield* client.sources.startSourceSyncJob({
-        path: { sourceId },
+        params: { sourceId },
       })
       const status = yield* client.sources.getSourceSyncJobStatus({
-        path: { sourceId, jobId: started.jobId },
+        params: { sourceId, jobId: started.jobId },
       })
 
       expect(status).toEqual({
@@ -2717,10 +2727,10 @@ describe("SourcesApiLive", () => {
 
       const client = yield* makeAuthenticatedClient({ userId })
       const firstJob = yield* client.sources.startSourceSyncJob({
-        path: { sourceId },
+        params: { sourceId },
       })
       const secondJob = yield* client.sources.startSourceSyncJob({
-        path: { sourceId },
+        params: { sourceId },
       })
 
       expect(secondJob.jobId).toBe(firstJob.jobId)
@@ -2738,7 +2748,7 @@ describe("SourcesApiLive", () => {
 
       const client = yield* makeAuthenticatedClient({ userId })
       const replay = yield* client.sources.replaySourceSyncJob({
-        path: { sourceId },
+        params: { sourceId },
       })
 
       expect(replay.status).toBe("queued")
@@ -2760,14 +2770,14 @@ describe("SourcesApiLive", () => {
       const client = yield* makeAuthenticatedClient({ userId })
       const result = yield* client.sources
         .startSourceSyncJob({
-          path: { sourceId },
+          params: { sourceId },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("InternalServerError")
-        expect(result.left.message).toBe("Failed to enqueue source sync job.")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("InternalServerError")
+        expect(result.failure.message).toBe("Failed to enqueue source sync job.")
       }
     }).pipe(Effect.provide(QueueFailureHttpLive), Effect.scoped)
   )

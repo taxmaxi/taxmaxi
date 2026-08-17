@@ -16,10 +16,10 @@ import * as Schema from "effect/Schema"
  * Supports decimal values.
  */
 export const Percentage = Schema.Number.pipe(
-  Schema.greaterThanOrEqualTo(0),
-  Schema.lessThanOrEqualTo(100),
+  Schema.check(Schema.isGreaterThanOrEqualTo(0)),
+  Schema.check(Schema.isLessThanOrEqualTo(100)),
   Schema.brand("Percentage"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "Percentage",
     title: "Percentage",
     description: "A percentage value between 0 and 100 (inclusive)",

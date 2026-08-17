@@ -25,7 +25,7 @@ export const listProtocolCandidates = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.adminProtocolReview.listProtocolCandidates({
-        urlParams: {
+        query: {
           cursor: cursor ?? undefined,
           limit: undefined,
         },
@@ -46,10 +46,10 @@ export const getProtocolCandidate = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.adminProtocolReview.getProtocolCandidate({
-        path: {
+        params: {
           candidateId,
         },
-        urlParams: {
+        query: {
           observationCursor: observationCursor ?? undefined,
           observationLimit: undefined,
         },

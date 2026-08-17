@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { Command } from "@effect/cli"
-import { NodeContext, NodeHttpClient, NodeRuntime } from "@effect/platform-node"
+import { NodeHttpClient, NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Console, Effect, Layer } from "effect"
+import { Command } from "effect/unstable/cli"
 import { PgClientLive, ProtocolCandidateRepositoryLive } from "@my/persistence/layers"
 import { CrawlerCommandError } from "./errors.ts"
 import { SolanaBehaviorSamplerClientLive } from "./solana-behavior-sampler-live.ts"
@@ -30,25 +30,25 @@ const crawlCommand = Command.make("crawl", {}).pipe(
 
 const command = Command.make("crawler", {}).pipe(Command.withSubcommands([crawlCommand]))
 
-const cli = Command.run(command, { name: "TaxMaxi crawler", version: "0.0.0" })
+const cli = Command.runWith(command, { version: "0.0.0" })
 
 const runtimeLayer = Layer.mergeAll(
-  NodeContext.layer,
+  NodeServices.layer,
   SolanaBehaviorSamplerClientLive,
-  SolanaDuneClientLive.pipe(Layer.provide(NodeHttpClient.layer))
+  SolanaDuneClientLive.pipe(Layer.provide(NodeHttpClient.layerNodeHttp))
 )
 
-cli(process.argv).pipe(
-  Effect.catchAll((error) => {
+cli(process.argv.slice(2)).pipe(
+  Effect.catch((error) => {
     const markFailedExit = Effect.sync(() => {
       process.exitCode = 1
     })
 
     if (error instanceof CrawlerCommandError) {
-      return Console.error(`Error: ${error.message}`).pipe(Effect.zipRight(markFailedExit))
+      return Console.error(`Error: ${error.message}`).pipe(Effect.andThen(markFailedExit))
     }
 
-    return Console.error("Unexpected crawler error").pipe(Effect.zipRight(markFailedExit))
+    return Console.error("Unexpected crawler error").pipe(Effect.andThen(markFailedExit))
   }),
   Effect.provide(runtimeLayer),
   NodeRuntime.runMain

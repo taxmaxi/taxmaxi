@@ -358,7 +358,7 @@ const seedCanonicalAsset = ({
       .limit(1)
 
     if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
+      return yield* Effect.die("Failed to load base blockchain fixture")
     }
 
     yield* db.insert(schema.assets).values({

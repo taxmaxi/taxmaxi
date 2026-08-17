@@ -39,17 +39,17 @@ const proportionalCredits = ({
     numerators.some((amount) => amount <= 0) ||
     denominators.some((amount) => amount <= 0)
   ) {
-    return BigDecimal.fromNumber(0)
+    return BigDecimal.fromNumberUnsafe(0)
   }
 
   const numerator = numerators.reduce(
-    (result, amount) => BigDecimal.multiply(result, BigDecimal.fromNumber(amount)),
-    BigDecimal.fromNumber(credits)
+    (result, amount) => BigDecimal.multiply(result, BigDecimal.fromNumberUnsafe(amount)),
+    BigDecimal.fromNumberUnsafe(credits)
   )
   return denominators.reduce(
     (result, amount) =>
-      Option.getOrElse(BigDecimal.divide(result, BigDecimal.fromNumber(amount)), () =>
-        BigDecimal.fromNumber(0)
+      Option.getOrElse(BigDecimal.divide(result, BigDecimal.fromNumberUnsafe(amount)), () =>
+        BigDecimal.fromNumberUnsafe(0)
       ),
     numerator
   )
@@ -116,23 +116,23 @@ const exactReversedCredits = ({
       )
     })
   )
-  return BigDecimal.min(BigDecimal.fromNumber(grant.amount), exact)
+  return BigDecimal.min(BigDecimal.fromNumberUnsafe(grant.amount), exact)
 }
 
 const allocateRoundedCreditReversals = (
   grants: ReadonlyArray<PaymentCreditGrant & { readonly exact: BigDecimal.BigDecimal }>
 ): ReadonlyMap<string, number> => {
   const allocations = grants.map((grant) => {
-    const base = BigDecimal.unsafeToNumber(BigDecimal.floor(grant.exact))
+    const base = BigDecimal.toNumberUnsafe(BigDecimal.floor(grant.exact))
     return {
       ...grant,
       base,
-      remainder: BigDecimal.subtract(grant.exact, BigDecimal.fromNumber(base)),
+      remainder: BigDecimal.subtract(grant.exact, BigDecimal.fromNumberUnsafe(base)),
     }
   })
   const targetTotal = Math.min(
     grants.reduce((total, grant) => total + grant.amount, 0),
-    BigDecimal.unsafeToNumber(BigDecimal.ceil(BigDecimal.sumAll(grants.map(({ exact }) => exact))))
+    BigDecimal.toNumberUnsafe(BigDecimal.ceil(BigDecimal.sumAll(grants.map(({ exact }) => exact))))
   )
   let remaining = targetTotal - allocations.reduce((total, grant) => total + grant.base, 0)
   const rounded = new Map(allocations.map((grant) => [grant.allocationId, grant.base] as const))
@@ -140,7 +140,7 @@ const allocateRoundedCreditReversals = (
     .filter(
       (grant) =>
         grant.base < grant.amount &&
-        BigDecimal.greaterThan(grant.remainder, BigDecimal.fromNumber(0))
+        BigDecimal.isGreaterThan(grant.remainder, BigDecimal.fromNumberUnsafe(0))
     )
     .sort(
       (left, right) =>
@@ -222,10 +222,7 @@ const make = Effect.gen(function* () {
         target: billingAccounts.userId,
         set: { stripeCustomerId: input.stripeCustomerId, updatedAt: new Date() },
       })
-      .pipe(
-        Effect.map(() => undefined),
-        wrapSqlError("billing.saveCustomer")
-      )
+      .pipe(Effect.asVoid, wrapSqlError("billing.saveCustomer"))
 
   const saveSubscription: BillingRepositoryService["saveSubscription"] = (input) =>
     Effect.gen(function* () {
@@ -354,7 +351,7 @@ const make = Effect.gen(function* () {
             .where(eq(billingAccounts.userId, input.userId))
             .for("update")
           if (account === undefined) {
-            return yield* Effect.dieMessage("Billing account missing after customer creation")
+            return yield* Effect.die("Billing account missing after customer creation")
           }
 
           const now = new Date()
@@ -813,10 +810,7 @@ const make = Effect.gen(function* () {
       .insert(stripeEvents)
       .values({ id: input.eventId, type: input.eventType })
       .onConflictDoNothing({ target: stripeEvents.id })
-      .pipe(
-        Effect.map(() => undefined),
-        wrapSqlError("billing.markEventProcessed")
-      )
+      .pipe(Effect.asVoid, wrapSqlError("billing.markEventProcessed"))
 
   return {
     findByUserId,

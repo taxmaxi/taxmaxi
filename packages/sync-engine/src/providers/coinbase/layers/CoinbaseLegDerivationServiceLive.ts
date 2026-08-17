@@ -45,28 +45,28 @@ const CoinbaseMetadataSchema = Schema.Struct({
   to: Schema.NullOr(CoinbasePartySchema),
   coinbaseReferenceMapping: Schema.Struct({
     transactionType: Schema.NullOr(Schema.String),
-    inventoryEffect: Schema.Literal(
+    inventoryEffect: Schema.Literals([
       "acquisition",
       "disposal",
       "income",
       "internal_transfer",
       "non_inventory",
-      "unknown"
-    ),
-    taxTreatment: Schema.Literal(
+      "unknown",
+    ]),
+    taxTreatment: Schema.Literals([
       "taxable_by_default",
       "non_taxable_by_default",
-      "requires_additional_rule_logic"
-    ),
-    resolutionStrategy: Schema.Literal(
+      "requires_additional_rule_logic",
+    ]),
+    resolutionStrategy: Schema.Literals([
       "static",
       "amount_sign",
       "venue_side",
       "paired_spread_fee",
-      "no_leg"
-    ),
+      "no_leg",
+    ]),
     pairedRecordRequired: Schema.Boolean,
-    mappingStatus: Schema.Literal("approved", "pending_review"),
+    mappingStatus: Schema.Literals(["approved", "pending_review"]),
   }),
   pairedRecord: Schema.optional(
     Schema.Struct({
@@ -87,7 +87,7 @@ const invalidDecimalError = (value: string) =>
 const decodeCoinbaseMetadata = (
   metadata: unknown
 ): Effect.Effect<CoinbaseMetadata, CoinbaseLegDerivationError> =>
-  Schema.decodeUnknown(CoinbaseMetadataSchema)(metadata).pipe(
+  Schema.decodeUnknownEffect(CoinbaseMetadataSchema)(metadata).pipe(
     Effect.mapError(
       (cause) =>
         new CoinbaseLegDerivationError({

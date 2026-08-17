@@ -64,7 +64,7 @@ export interface SourceSyncStateRepositoryShape {
 /**
  * SourceSyncStateRepository - Context tag for source sync state persistence.
  */
-export class SourceSyncStateRepository extends Context.Tag("SourceSyncStateRepository")<
+export class SourceSyncStateRepository extends Context.Service<
   SourceSyncStateRepository,
   SourceSyncStateRepositoryShape
->() {}
+>()("SourceSyncStateRepository") {}

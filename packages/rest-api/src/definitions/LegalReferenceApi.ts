@@ -7,10 +7,10 @@
  * @module LegalReferenceApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 
-const NullableString = Schema.Union(Schema.String, Schema.Null)
+const NullableString = Schema.Union([Schema.String, Schema.Null])
 
 /**
  * LegalReferenceValidationError - Request validation failure (400).
@@ -20,7 +20,7 @@ export class LegalReferenceValidationError extends Schema.TaggedError<LegalRefer
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -31,7 +31,7 @@ export class LegalReferenceInternalError extends Schema.TaggedError<LegalReferen
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 500 })
+  { httpApiStatus: 500 }
 ) {}
 
 /**
@@ -83,14 +83,14 @@ export class LegalRuleReferenceResponse extends Schema.Class<LegalRuleReferenceR
 export class TransactionTypeLegalReferencesRequest extends Schema.Class<TransactionTypeLegalReferencesRequest>(
   "TransactionTypeLegalReferencesRequest"
 )({
-  transactionTypeKey: Schema.NonEmptyTrimmedString,
-  jurisdictionCode: Schema.optional(Schema.NonEmptyTrimmedString),
-  ruleSetVersion: Schema.optional(Schema.NonEmptyTrimmedString),
+  transactionTypeKey: Schema.Trimmed.check(Schema.isNonEmpty()),
+  jurisdictionCode: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
+  ruleSetVersion: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   maxReferences: Schema.optional(
-    Schema.Number.pipe(Schema.int(), Schema.greaterThan(0), Schema.lessThanOrEqualTo(20))
+    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
   ),
   maxCitationsPerReference: Schema.optional(
-    Schema.Number.pipe(Schema.int(), Schema.greaterThan(0), Schema.lessThanOrEqualTo(20))
+    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
   ),
 }) {}
 
@@ -112,11 +112,11 @@ export class TransactionTypeLegalReferencesResponse extends Schema.Class<Transac
 export class QuestionLegalReferencesRequest extends Schema.Class<QuestionLegalReferencesRequest>(
   "QuestionLegalReferencesRequest"
 )({
-  question: Schema.NonEmptyTrimmedString,
-  jurisdictionCode: Schema.optional(Schema.NonEmptyTrimmedString),
-  ruleSetVersion: Schema.optional(Schema.NonEmptyTrimmedString),
+  question: Schema.Trimmed.check(Schema.isNonEmpty()),
+  jurisdictionCode: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
+  ruleSetVersion: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   maxClauses: Schema.optional(
-    Schema.Number.pipe(Schema.int(), Schema.greaterThan(0), Schema.lessThanOrEqualTo(20))
+    Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))
   ),
 }) {}
 
@@ -154,37 +154,37 @@ export class QuestionLegalReferencesResponse extends Schema.Class<QuestionLegalR
  */
 const resolveTransactionTypeReferences = HttpApiEndpoint.post(
   "resolveTransactionTypeReferences",
-  "/references/transaction-type"
+  "/references/transaction-type",
+  {
+    payload: Schema.Struct(TransactionTypeLegalReferencesRequest.fields),
+    success: TransactionTypeLegalReferencesResponse,
+    error: [LegalReferenceValidationError, LegalReferenceInternalError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "Resolve legal references by transaction type",
+    description: "Returns deterministic legal references from the configured ruleset.",
+  })
 )
-  .setPayload(TransactionTypeLegalReferencesRequest)
-  .addSuccess(TransactionTypeLegalReferencesResponse)
-  .addError(LegalReferenceValidationError)
-  .addError(LegalReferenceInternalError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Resolve legal references by transaction type",
-      description: "Returns deterministic legal references from the configured ruleset.",
-    })
-  )
 
 /**
  * resolveQuestionReferences - Endpoint definition for question-level clause ranking.
  */
 const resolveQuestionReferences = HttpApiEndpoint.post(
   "resolveQuestionReferences",
-  "/references/question"
+  "/references/question",
+  {
+    payload: Schema.Struct(QuestionLegalReferencesRequest.fields),
+    success: QuestionLegalReferencesResponse,
+    error: [LegalReferenceValidationError, LegalReferenceInternalError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "Resolve legal references by question",
+    description:
+      "Ranks legal clauses from the configured ruleset to ground AI responses with valid citations.",
+  })
 )
-  .setPayload(QuestionLegalReferencesRequest)
-  .addSuccess(QuestionLegalReferencesResponse)
-  .addError(LegalReferenceValidationError)
-  .addError(LegalReferenceInternalError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Resolve legal references by question",
-      description:
-        "Ranks legal clauses from the configured ruleset to ground AI responses with valid citations.",
-    })
-  )
 
 /**
  * LegalReferenceApi - API group for legal reference retrieval.
@@ -193,7 +193,7 @@ export class LegalReferenceApi extends HttpApiGroup.make("legalReferences")
   .add(resolveTransactionTypeReferences)
   .add(resolveQuestionReferences)
   .prefix("/v1/legal")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Legal References",
       description:

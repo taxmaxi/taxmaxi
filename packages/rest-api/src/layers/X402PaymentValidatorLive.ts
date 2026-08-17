@@ -37,8 +37,8 @@ const DEFAULT_SOURCE_CREATION_MIME_TYPE = "application/json"
 const DEFAULT_SOURCE_CREATION_PATH = "/v1/sources"
 const DEFAULT_SOURCE_CREATION_RESOURCE = "https://api.taxmaxi.com/v1/sources"
 const DEFAULT_X402_MAX_TIMEOUT_SECONDS = 120
-const X402Network = Schema.TemplateLiteral(Schema.String, ":", Schema.String).pipe(
-  Schema.pattern(/^[^:\s]+:[^,\s=]+$/)
+const X402Network = Schema.TemplateLiteral([Schema.String, ":", Schema.String]).check(
+  Schema.isPattern(/^[^:\s]+:[^,\s=]+$/)
 )
 
 const requiredTrimmedConfig = (key: string) =>
@@ -64,7 +64,7 @@ const x402Config = {
     Config.withDefault(DEFAULT_SOURCE_CREATION_RESOURCE),
     Config.map((value) => value.trim())
   ),
-  maxTimeoutSeconds: Config.integer("X402_MAX_TIMEOUT_SECONDS").pipe(
+  maxTimeoutSeconds: Config.int("X402_MAX_TIMEOUT_SECONDS").pipe(
     Config.withDefault(DEFAULT_X402_MAX_TIMEOUT_SECONDS)
   ),
 }
@@ -78,7 +78,7 @@ const splitNetworks = (
       .map((network) => network.trim())
       .filter((network) => network.length > 0),
     (network) =>
-      Schema.decodeUnknown(X402Network)(network).pipe(
+      Schema.decodeUnknownEffect(X402Network)(network).pipe(
         Effect.mapError(() =>
           buildPaymentRequiredError({
             message: `Invalid x402 network configuration: ${network}`,
@@ -115,7 +115,7 @@ const parseReceivingWalletAddresses = (
               Option.none<{ readonly network: Network; readonly walletAddress: string }>()
             ),
           onSome: ({ network, walletAddress }) =>
-            Schema.decodeUnknown(X402Network)(network).pipe(
+            Schema.decodeUnknownEffect(X402Network)(network).pipe(
               Effect.map((decodedNetwork) =>
                 Option.some({ network: decodedNetwork, walletAddress })
               ),
@@ -165,13 +165,13 @@ const decodePaymentRequiredFromHeaders = (
 ): Effect.Effect<PaymentRequired | undefined> => {
   const encoded = firstHeaderValue(headers, "PAYMENT-REQUIRED")
   if (encoded === undefined) {
-    return Effect.succeed(undefined)
+    return Effect.as(Effect.void, undefined)
   }
 
   return Effect.try({
     try: () => decodePaymentRequiredHeader(encoded),
     catch: () => undefined,
-  }).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
+  }).pipe(Effect.catch(() => Effect.as(Effect.void, undefined)))
 }
 
 const decodePaymentRequired = (
@@ -202,10 +202,10 @@ const buildSettlementError = ({
 
 const toPaymentError = (
   response: Extract<HTTPProcessResult, { readonly type: "payment-error" }>["response"]
-): Effect.Effect<X402PaymentRequiredError> =>
+): Effect.Effect<never, X402PaymentRequiredError> =>
   Effect.gen(function* () {
     const paymentRequired = yield* decodePaymentRequired(response)
-    return buildPaymentRequiredError({
+    return yield* buildPaymentRequiredError({
       message: paymentRequired?.error ?? "x402 payment required.",
       paymentRequired,
       paymentRequiredHeader: firstHeaderValue(response.headers, "PAYMENT-REQUIRED"),
@@ -216,14 +216,14 @@ const toSettlementError = (result: {
   readonly errorReason: string
   readonly errorMessage?: string | undefined
   readonly response: { readonly headers: Readonly<Record<string, string>> }
-}): Effect.Effect<X402PaymentSettlementError> =>
+}): Effect.Effect<never, X402PaymentSettlementError> =>
   Effect.gen(function* () {
     const paymentRequiredHeader = firstHeaderValue(result.response.headers, "PAYMENT-REQUIRED")
     const paymentRequired =
       paymentRequiredHeader === undefined
         ? undefined
         : yield* decodePaymentRequiredFromHeaders(result.response.headers)
-    return buildSettlementError({
+    return yield* buildSettlementError({
       message: result.errorMessage ?? result.errorReason,
       paymentRequired,
       paymentRequiredHeader,
@@ -282,14 +282,14 @@ const make = Effect.gen(function* () {
   const maxTimeoutSeconds = yield* x402Config.maxTimeoutSeconds
 
   if (acceptedNetworks.length === 0) {
-    return yield* Effect.dieMessage("X402_ACCEPTED_NETWORKS must contain at least one network.")
+    return yield* Effect.die("X402_ACCEPTED_NETWORKS must contain at least one network.")
   }
 
   const resolveReceivingWalletAddress = (network: Network) =>
     receivingWalletAddresses.get(network) ?? receivingWalletAddress
 
   if (acceptedNetworks.some((network) => resolveReceivingWalletAddress(network) === "")) {
-    return yield* Effect.dieMessage(
+    return yield* Effect.die(
       "Configure X402_RECEIVING_WALLET_ADDRESS or X402_RECEIVING_WALLET_ADDRESSES."
     )
   }
@@ -298,18 +298,16 @@ const make = Effect.gen(function* () {
   const evmNetworks = acceptedNetworks.filter((network) => network.startsWith("eip155:"))
   const svmNetworks = acceptedNetworks.filter((network) => network.startsWith("solana:"))
 
-  yield* Effect.when(
-    Effect.sync(() => {
+  if (evmNetworks.length > 0) {
+    yield* Effect.sync(() => {
       registerExactEvmScheme(resourceServer, { networks: [...evmNetworks] })
-    }),
-    () => evmNetworks.length > 0
-  )
-  yield* Effect.when(
-    Effect.sync(() => {
+    })
+  }
+  if (svmNetworks.length > 0) {
+    yield* Effect.sync(() => {
       registerExactSvmScheme(resourceServer, { networks: [...svmNetworks] })
-    }),
-    () => svmNetworks.length > 0
-  )
+    })
+  }
 
   const httpResourceServer = new x402HTTPResourceServer(resourceServer, {
     [`POST ${DEFAULT_SOURCE_CREATION_PATH}`]: {
@@ -332,16 +330,12 @@ const make = Effect.gen(function* () {
 
   yield* Effect.tryPromise({
     try: () => httpResourceServer.initialize(),
-    catch: (cause) => cause,
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new X402PaymentRequiredError({
-          message:
-            cause instanceof Error ? cause.message : "x402 payment validation is not configured.",
-        })
-    )
-  )
+    catch: (cause) =>
+      new X402PaymentRequiredError({
+        message:
+          cause instanceof Error ? cause.message : "x402 payment validation is not configured.",
+      }),
+  })
 
   const validateAnonymousSourceCreation: X402PaymentValidatorService["validateAnonymousSourceCreation"] =
     ({ paymentHeader }) =>
@@ -371,24 +365,19 @@ const make = Effect.gen(function* () {
                     "Payment required"
                   )
                 ),
-            catch: (cause) => cause,
-          }).pipe(
-            Effect.mapError((cause) =>
+            catch: (cause) =>
               buildPaymentRequiredError({
                 message:
                   cause instanceof Error
                     ? cause.message
                     : "Failed to build x402 payment requirements.",
-              })
-            )
-          )
-          return yield* Effect.fail(
-            buildPaymentRequiredError({
-              message: "x402 payment required.",
-              paymentRequired: requirements,
-              paymentRequiredHeader: encodePaymentRequiredHeader(requirements),
-            })
-          )
+              }),
+          })
+          return yield* buildPaymentRequiredError({
+            message: "x402 payment required.",
+            paymentRequired: requirements,
+            paymentRequiredHeader: encodePaymentRequiredHeader(requirements),
+          })
         }
 
         const processResult = yield* Effect.tryPromise({
@@ -399,22 +388,19 @@ const make = Effect.gen(function* () {
               path: DEFAULT_SOURCE_CREATION_PATH,
               paymentHeader: paymentHeader.value,
             }),
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.mapError((cause) =>
+          catch: (cause) =>
             buildPaymentRequiredError({
               message: cause instanceof Error ? cause.message : "x402 payment verification failed.",
-            })
-          )
-        )
+            }),
+        })
 
         switch (processResult.type) {
           case "no-payment-required":
-            return yield* Effect.fail(
-              buildPaymentRequiredError({ message: "x402 payment validation is not configured." })
-            )
+            return yield* buildPaymentRequiredError({
+              message: "x402 payment validation is not configured.",
+            })
           case "payment-error":
-            return yield* Effect.fail(yield* toPaymentError(processResult.response))
+            return yield* toPaymentError(processResult.response)
           case "payment-verified":
             return {
               settle: () =>
@@ -434,20 +420,17 @@ const make = Effect.gen(function* () {
                           },
                         }
                       ),
-                    catch: (cause) => cause,
-                  }).pipe(
-                    Effect.mapError((cause) =>
+                    catch: (cause) =>
                       buildSettlementError({
                         message:
                           cause instanceof Error
                             ? cause.message
                             : "x402 payment settlement failed.",
-                      })
-                    )
-                  )
+                      }),
+                  })
 
                   if (!settlement.success) {
-                    return yield* Effect.fail(yield* toSettlementError(settlement))
+                    return yield* toSettlementError(settlement)
                   }
 
                   const payerIdentity = yield* payerIdentityFromSettlement(settlement)

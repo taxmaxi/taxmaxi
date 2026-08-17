@@ -11,7 +11,7 @@ import { makePortfolioAssetRow, makePortfolioSummary } from "../src/layers/Portf
 const encodeSummary = Schema.encodeSync(PortfolioSummary)
 const encodeAsset = Schema.encodeSync(PortfolioAssetRow)
 
-const decodeDecimal = Schema.decodeSync(Schema.BigDecimal)
+const decodeDecimal = Schema.decodeSync(Schema.BigDecimalFromString)
 
 const decodeNullableDecimal = (value: string | null): BigDecimal.BigDecimal | null =>
   value === null ? null : decodeDecimal(value)

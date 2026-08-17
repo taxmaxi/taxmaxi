@@ -176,8 +176,8 @@ import {
 } from "../src/layers/StripeBillingServiceLive.ts"
 import { StripeBillingService } from "../src/services/StripeBillingService.ts"
 
-const TEST_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000192")
-const OTHER_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000193")
+const TEST_USER_ID = AuthUserId.make("00000000-0000-4000-8000-000000000192")
+const OTHER_USER_ID = AuthUserId.make("00000000-0000-4000-8000-000000000193")
 
 const billingAccount = ({
   userId = TEST_USER_ID,
@@ -224,9 +224,9 @@ const billingRepositoryStub: BillingRepositoryService = {
 const userRepositoryStub: UserRepositoryService = {
   findById: () => Effect.succeed(Option.none()),
   findByEmail: () => Effect.succeed(Option.none()),
-  create: () => Effect.dieMessage("unused user repository create"),
-  update: () => Effect.dieMessage("unused user repository update"),
-  delete: () => Effect.dieMessage("unused user repository delete"),
+  create: () => Effect.die("unused user repository create"),
+  update: () => Effect.die("unused user repository update"),
+  delete: () => Effect.die("unused user repository delete"),
   findPlatformAdmins: () => Effect.succeed([]),
   isPlatformAdmin: () => Effect.succeed(false),
 }
@@ -240,7 +240,7 @@ const loadServiceWithoutStripeConfig = () =>
   Effect.runPromise(
     StripeBillingService.pipe(
       Effect.provide(StripeBillingServiceLive.pipe(Layer.provide(repositoryLayers))),
-      Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))
+      Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromEnvRecord({}))
     )
   )
 
@@ -257,13 +257,12 @@ const loadServiceWithStripe = (billingRepository: BillingRepositoryService) =>
           )
         )
       ),
-      Effect.withConfigProvider(
-        ConfigProvider.fromMap(
-          new Map([
-            ["STRIPE_SECRET_KEY", "sk_test"],
-            ["STRIPE_WEBHOOK_SECRET", "whsec_test"],
-          ])
-        )
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromEnvRecord({
+          STRIPE_SECRET_KEY: "sk_test",
+          STRIPE_WEBHOOK_SECRET: "whsec_test",
+        })
       )
     )
   )
@@ -781,11 +780,11 @@ describe("StripeBillingServiceLive", () => {
     ]
     const service = await loadServiceWithStripe(billingRepositoryStub)
 
-    const result = await Effect.runPromise(Effect.either(service.catalog))
+    const result = await Effect.runPromise(Effect.result(service.catalog))
 
     expect(result).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe catalog price cadence does not match its lookup key" },
+      _tag: "Failure",
+      failure: { message: "Stripe catalog price cadence does not match its lookup key" },
     })
   })
 
@@ -802,23 +801,23 @@ describe("StripeBillingServiceLive", () => {
     stripeMockState.prices = [annualPrice]
     const service = await loadServiceWithStripe(billingRepositoryStub)
 
-    const partial = await Effect.runPromise(Effect.either(service.catalog))
+    const partial = await Effect.runPromise(Effect.result(service.catalog))
     stripeMockState.prices = [{ ...annualPrice, currency: "usd" }]
-    const nonEur = await Effect.runPromise(Effect.either(service.catalog))
+    const nonEur = await Effect.runPromise(Effect.result(service.catalog))
 
     expect(partial).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe catalog must include every supported lookup key exactly once" },
+      _tag: "Failure",
+      failure: { message: "Stripe catalog must include every supported lookup key exactly once" },
     })
     expect(nonEur).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe catalog prices must use EUR" },
+      _tag: "Failure",
+      failure: { message: "Stripe catalog prices must use EUR" },
     })
   })
 
   it("validates the nested shapes used by accepted Stripe webhook events", async () => {
     const valid = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         validateStripeWebhookEvent({
           id: "evt_valid",
           created: 1_700_000_000,
@@ -836,7 +835,7 @@ describe("StripeBillingServiceLive", () => {
       )
     )
     const invalid = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         validateStripeWebhookEvent({
           id: "evt_invalid",
           created: 1_700_000_000,
@@ -853,7 +852,7 @@ describe("StripeBillingServiceLive", () => {
       )
     )
     const unrelatedInvoice = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         validateStripeWebhookEvent({
           id: "evt_unrelated_invoice",
           created: 1_700_000_000,
@@ -877,7 +876,7 @@ describe("StripeBillingServiceLive", () => {
       )
     )
     const invalidDeletedSubscription = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         validateStripeWebhookEvent({
           id: "evt_invalid_deleted_subscription",
           created: 1_700_000_000,
@@ -892,15 +891,15 @@ describe("StripeBillingServiceLive", () => {
       )
     )
 
-    expect(valid).toMatchObject({ _tag: "Right" })
-    expect(unrelatedInvoice).toMatchObject({ _tag: "Right" })
+    expect(valid).toMatchObject({ _tag: "Success" })
+    expect(unrelatedInvoice).toMatchObject({ _tag: "Success" })
     expect(invalid).toMatchObject({
-      _tag: "Left",
-      left: { message: "Invalid Stripe webhook event payload" },
+      _tag: "Failure",
+      failure: { message: "Invalid Stripe webhook event payload" },
     })
     expect(invalidDeletedSubscription).toMatchObject({
-      _tag: "Left",
-      left: { message: "Invalid Stripe webhook event payload" },
+      _tag: "Failure",
+      failure: { message: "Invalid Stripe webhook event payload" },
     })
   })
 
@@ -1284,7 +1283,7 @@ describe("StripeBillingServiceLive", () => {
       })
     )
     const invalid = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         resolvePaidFulfillmentUserId({
           metadataUserId: OTHER_USER_ID,
           stripeCustomerId: "cus_deleted",
@@ -1297,8 +1296,8 @@ describe("StripeBillingServiceLive", () => {
 
     expect(resolved).toBe(TEST_USER_ID)
     expect(invalid).toMatchObject({
-      _tag: "Left",
-      left: { message: "TaxMaxi billing account not found" },
+      _tag: "Failure",
+      failure: { message: "TaxMaxi billing account not found" },
     })
   })
 
@@ -1322,7 +1321,7 @@ describe("StripeBillingServiceLive", () => {
 
   it("rejects top-up Checkout when Stripe no longer has an active annual subscription", async () => {
     const result = await Effect.runPromise(
-      Effect.either(
+      Effect.result(
         verifiedTopUpCustomer({
           account: Option.some(billingAccount({ stripeCustomerId: "cus_test" })),
           userId: TEST_USER_ID,
@@ -1335,8 +1334,8 @@ describe("StripeBillingServiceLive", () => {
     )
 
     expect(result).toMatchObject({
-      _tag: "Left",
-      left: { message: "An active annual subscription is required" },
+      _tag: "Failure",
+      failure: { message: "An active annual subscription is required" },
     })
   })
 
@@ -1763,14 +1762,14 @@ describe("StripeBillingServiceLive", () => {
         }),
     })
 
-    const first = await Effect.runPromise(Effect.either(service.createAnnualCheckout(TEST_USER_ID)))
+    const first = await Effect.runPromise(Effect.result(service.createAnnualCheckout(TEST_USER_ID)))
     stripeMockState.checkoutFailure = null
     const retryUrl = await Effect.runPromise(service.createAnnualCheckout(TEST_USER_ID))
     stripeMockState.listedSubscriptions = null
 
     expect(first).toMatchObject({
-      _tag: "Left",
-      left: { message: "Could not create annual Checkout: Price is inactive" },
+      _tag: "Failure",
+      failure: { message: "Could not create annual Checkout: Price is inactive" },
     })
     expect(cleared).toEqual([1])
     expect(retryUrl).toBe("https://checkout.stripe.test/session")
@@ -1814,14 +1813,14 @@ describe("StripeBillingServiceLive", () => {
     })
 
     const result = await Effect.runPromise(
-      Effect.either(service.createAnnualCheckout(TEST_USER_ID))
+      Effect.result(service.createAnnualCheckout(TEST_USER_ID))
     )
     stripeMockState.checkoutFailure = null
     stripeMockState.listedSubscriptions = null
 
     expect(result).toMatchObject({
-      _tag: "Left",
-      left: { message: "Could not create annual Checkout: Connection timed out" },
+      _tag: "Failure",
+      failure: { message: "Could not create annual Checkout: Connection timed out" },
     })
     expect(cleared).toEqual([])
   })
@@ -1862,7 +1861,7 @@ describe("StripeBillingServiceLive", () => {
     })
 
     const tieredTopUp = await Effect.runPromise(
-      Effect.either(service.createTopUpCheckout(TEST_USER_ID))
+      Effect.result(service.createTopUpCheckout(TEST_USER_ID))
     )
 
     stripeMockState.prices = [
@@ -1877,17 +1876,17 @@ describe("StripeBillingServiceLive", () => {
     ]
     stripeMockState.listedSubscriptions = []
     const nonEurAnnual = await Effect.runPromise(
-      Effect.either(service.createAnnualCheckout(TEST_USER_ID))
+      Effect.result(service.createAnnualCheckout(TEST_USER_ID))
     )
     stripeMockState.listedSubscriptions = null
 
     expect(tieredTopUp).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe Checkout prices must have a fixed unit amount" },
+      _tag: "Failure",
+      failure: { message: "Stripe Checkout prices must have a fixed unit amount" },
     })
     expect(nonEurAnnual).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe Checkout prices must use EUR" },
+      _tag: "Failure",
+      failure: { message: "Stripe Checkout prices must use EUR" },
     })
     expect(stripeMockState.checkoutParams).toEqual([])
   })
@@ -1928,12 +1927,12 @@ describe("StripeBillingServiceLive", () => {
     })
 
     const result = await Effect.runPromise(
-      Effect.either(service.createAnnualCheckout(TEST_USER_ID))
+      Effect.result(service.createAnnualCheckout(TEST_USER_ID))
     )
 
     expect(result).toMatchObject({
-      _tag: "Left",
-      left: { message: "This account already has a subscription" },
+      _tag: "Failure",
+      failure: { message: "This account already has a subscription" },
     })
     expect(stripeMockState.checkoutParams).toEqual([])
   })
@@ -2618,9 +2617,9 @@ describe("StripeBillingServiceLive", () => {
   it("starts without Stripe configuration and keeps local billing status available", async () => {
     const service = await loadServiceWithoutStripeConfig()
     const status = await Effect.runPromise(service.status(TEST_USER_ID))
-    const catalog = await Effect.runPromise(Effect.either(service.catalog))
+    const catalog = await Effect.runPromise(Effect.result(service.catalog))
     const webhook = await Effect.runPromise(
-      Effect.either(service.processWebhook({ payload: "{}", signature: "missing" }))
+      Effect.result(service.processWebhook({ payload: "{}", signature: "missing" }))
     )
 
     expect(status).toEqual({
@@ -2630,12 +2629,12 @@ describe("StripeBillingServiceLive", () => {
       cancelAtPeriodEnd: false,
     })
     expect(catalog).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe billing is not configured" },
+      _tag: "Failure",
+      failure: { message: "Stripe billing is not configured" },
     })
     expect(webhook).toMatchObject({
-      _tag: "Left",
-      left: { message: "Stripe webhook is not configured" },
+      _tag: "Failure",
+      failure: { message: "Stripe webhook is not configured" },
     })
   })
 })

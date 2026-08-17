@@ -1,4 +1,4 @@
-import { ConfigProvider, Effect, Either, Schema } from "effect"
+import { ConfigProvider, Effect, Schema } from "effect"
 import { createServer } from "node:http"
 import { describe, expect, it } from "vitest"
 import {
@@ -10,8 +10,7 @@ const AddressInUseCause = Schema.Struct({
   code: Schema.Literal("EADDRINUSE"),
 })
 
-const isAddressInUseError = (cause: unknown) =>
-  Either.isRight(Schema.decodeUnknownEither(AddressInUseCause)(cause))
+const isAddressInUseError = Schema.is(AddressInUseCause)
 
 class WorkerHealthTestPromiseRejectionError extends Schema.TaggedError<WorkerHealthTestPromiseRejectionError>()(
   "WorkerHealthTestPromiseRejectionError",
@@ -69,8 +68,9 @@ describe("WorkerHealthServerLive", () => {
             expect(body).toBe("ok")
           }).pipe(
             Effect.provide(WorkerHealthServerLive),
-            Effect.withConfigProvider(
-              ConfigProvider.fromMap(new Map([["WORKER_HEALTH_PORT", String(port)]]))
+            Effect.provideService(
+              ConfigProvider.ConfigProvider,
+              ConfigProvider.fromEnvRecord({ WORKER_HEALTH_PORT: String(port) })
             )
           )
         )

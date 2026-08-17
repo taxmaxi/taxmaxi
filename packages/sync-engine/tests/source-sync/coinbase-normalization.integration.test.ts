@@ -405,7 +405,7 @@ const seedCoinbaseSource = () =>
       .where(eq(schema.blockchains.name, "base"))
       .limit(1)
     if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Missing seeded base blockchain")
+      return yield* Effect.die("Missing seeded base blockchain")
     }
 
     yield* db.insert(schema.assetRepresentations).values({
@@ -512,7 +512,7 @@ const seedMatchedOnchainReceipt = ({
       .limit(1)
 
     if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture for onchain match")
+      return yield* Effect.die("Failed to load base blockchain fixture for onchain match")
     }
 
     const [btcAsset] = yield* db
@@ -522,7 +522,7 @@ const seedMatchedOnchainReceipt = ({
       .limit(1)
 
     if (btcAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to load BTC asset fixture for onchain match")
+      return yield* Effect.die("Failed to load BTC asset fixture for onchain match")
     }
 
     yield* db.insert(schema.addresses).values({
@@ -567,7 +567,7 @@ const seedMatchedOnchainReceipt = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain receipt transaction fixture")
+      return yield* Effect.die("Failed to create onchain receipt transaction fixture")
     }
 
     yield* db.insert(schema.transactionOnchainContext).values({
@@ -639,7 +639,7 @@ const seedMatchedOnchainSend = ({
       .limit(1)
 
     if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture for onchain send")
+      return yield* Effect.die("Failed to load base blockchain fixture for onchain send")
     }
 
     const [btcAsset] = yield* db
@@ -649,7 +649,7 @@ const seedMatchedOnchainSend = ({
       .limit(1)
 
     if (btcAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to load BTC asset fixture for onchain send")
+      return yield* Effect.die("Failed to load BTC asset fixture for onchain send")
     }
 
     yield* db.insert(schema.addresses).values({
@@ -694,7 +694,7 @@ const seedMatchedOnchainSend = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain send transaction fixture")
+      return yield* Effect.die("Failed to create onchain send transaction fixture")
     }
 
     yield* db.insert(schema.transactionOnchainContext).values({
@@ -969,7 +969,7 @@ const seedPendingProviderAssetMapping = ({
       })
 
     if (providerAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to seed provider asset fixture")
+      return yield* Effect.die("Failed to seed provider asset fixture")
     }
 
     yield* db.insert(schema.providerAssetMappings).values({
@@ -999,7 +999,7 @@ const seedCanonicalAsset = ({ symbol }: { readonly symbol: string }) =>
       .returning({ id: schema.assets.id })
 
     if (asset === undefined) {
-      return yield* Effect.dieMessage(`Failed to seed ${symbol} canonical asset fixture`)
+      return yield* Effect.die(`Failed to seed ${symbol} canonical asset fixture`)
     }
 
     return asset.id
@@ -1029,7 +1029,7 @@ const approveProviderAssetMappingToCanonicalAsset = ({
       .limit(1)
 
     if (providerAsset === undefined) {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         `Missing ${currencyCode} provider asset fixture for mapping approval`
       )
     }
@@ -1403,7 +1403,7 @@ describe("coinbase normalization persistence", () => {
           )
           .limit(1)
         if (providerAsset === undefined) {
-          return yield* Effect.dieMessage("Missing HYPE provider asset fixture")
+          return yield* Effect.die("Missing HYPE provider asset fixture")
         }
 
         return {

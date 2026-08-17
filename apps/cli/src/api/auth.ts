@@ -30,10 +30,10 @@ export const startCoinbaseOAuth = ({
   makeCliTaxMaxiClient({ apiUrl }).pipe(
     Effect.flatMap((resolved) =>
       resolved.auth.authorize({
-        path: {
+        params: {
           provider: "coinbase",
         },
-        urlParams: {},
+        query: {},
       })
     ),
     Effect.mapError(toCliApiError("Failed to start OAuth connect flow."))
@@ -49,7 +49,7 @@ export const getOAuthSession = ({
   makeCliTaxMaxiClient({ apiUrl }).pipe(
     Effect.flatMap((resolved) =>
       resolved.auth.getOAuthSession({
-        path: {
+        params: {
           id: sessionId,
         },
       })

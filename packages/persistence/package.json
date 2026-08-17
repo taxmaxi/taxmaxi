@@ -38,22 +38,20 @@
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
-    "@effect/platform": "0.96.1",
-    "@effect/platform-node": "0.106.0",
-    "@effect/sql": "0.51.1",
-    "@effect/sql-pg": "0.52.1",
+    "@effect/platform-node": "4.0.0-rc.109",
+    "@effect/sql-pg": "4.0.0-rc.109",
     "@my/core": "workspace:*",
     "@my/sync-engine": "workspace:*",
-    "drizzle-orm": "1.0.0-beta.13-f728631",
-    "effect": "3.21.2",
-    "pg": "8.20.0",
+    "drizzle-orm": "1.0.0-rc.5-169397b",
+    "effect": "4.0.0-rc.109",
+    "pg": "8.23.0",
     "resend": "6.10.0"
   },
   "devDependencies": {
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
-    "@types/pg": "8.20.0",
-    "drizzle-kit": "1.0.0-beta.13-f728631",
+    "@types/pg": "8.21.0",
+    "drizzle-kit": "1.0.0-rc.5-ab785fc",
     "typescript": "6.0.3"
   }
 }

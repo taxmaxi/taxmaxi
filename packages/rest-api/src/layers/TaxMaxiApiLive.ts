@@ -6,41 +6,12 @@
  * @module TaxMaxiApiLive
  */
 
-import { FetchHttpClient, HttpApiBuilder, type HttpApi } from "@effect/platform"
-import type { PasswordHasher, AuthService } from "@my/core/authentication"
-import type { LegalReferenceRepository } from "@my/core/legal"
-import type {
-  AssetCatalogRepository,
-  BillingRepository,
-  PortfolioRepository,
-  CexAccountRepository,
-  IdentityRepository,
-  OAuthStateStore,
-  PrincipalClaimRepository,
-  PrincipalRepository,
-  SessionRepository,
-  SourceRepository as PersistenceSourceRepository,
-  SourceReportRepository,
-  TaxCalculationService,
-  UserRepository,
-} from "@my/persistence/services"
-import type {
-  SourceRepository as SyncEngineSourceRepository,
-  AssetRepository,
-  ProviderAssetRepository,
-  ProtocolCandidateRepository,
-  SourceSyncRunService,
-  SourceSyncService,
-  SyncEngineTransaction,
-  TransferReconciliationRepository,
-  TransferReconciliationService,
-} from "@my/sync-engine/services"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { FetchHttpClient } from "effect/unstable/http"
 import * as Effect from "effect/Effect"
-import type * as ConfigError from "effect/ConfigError"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { TaxMaxiApi, HealthCheckResponse } from "../definitions/TaxMaxiApi.ts"
-import { TokenValidator } from "../definitions/AuthMiddleware.ts"
 import {
   AdminAuthMiddlewareLive,
   AuthMiddlewareLive,
@@ -61,9 +32,6 @@ import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import { BillingApiLive } from "./BillingApiLive.ts"
 import { StripeBillingServiceLive } from "./StripeBillingServiceLive.ts"
-import type { X402PaymentValidator } from "../services/X402PaymentValidator.ts"
-import type { SIWXProofVerifier } from "../services/SIWXProofVerifier.ts"
-import type { AnonSessionService } from "../services/AnonSessionService.ts"
 
 // =============================================================================
 // Health API Implementation
@@ -114,37 +82,6 @@ const CoreApiGroup = Layer.mergeAll(
   Layer.provide(CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.layer)))
 )
 
-type TaxMaxiApiLiveContext =
-  | AuthService
-  | AnonSessionService
-  | AssetCatalogRepository
-  | BillingRepository
-  | CexAccountRepository
-  | IdentityRepository
-  | LegalReferenceRepository
-  | OAuthStateStore
-  | PasswordHasher
-  | PrincipalClaimRepository
-  | PrincipalRepository
-  | PortfolioRepository
-  | PersistenceSourceRepository
-  | SessionRepository
-  | SIWXProofVerifier
-  | AssetRepository
-  | ProviderAssetRepository
-  | ProtocolCandidateRepository
-  | SourceReportRepository
-  | SourceSyncRunService
-  | SourceSyncService
-  | SyncEngineSourceRepository
-  | SyncEngineTransaction
-  | TaxCalculationService
-  | TokenValidator
-  | TransferReconciliationRepository
-  | TransferReconciliationService
-  | UserRepository
-  | X402PaymentValidator
-
 /**
  * MasterDataApiGroup - Master data API implementations
  */
@@ -164,11 +101,7 @@ type TaxMaxiApiLiveContext =
  * Dependencies (required from consumer):
  * - Auth, source sync, legal reference, and tax calculation services
  */
-export const TaxMaxiApiLive: Layer.Layer<
-  HttpApi.Api,
-  ConfigError.ConfigError,
-  TaxMaxiApiLiveContext
-> = HttpApiBuilder.api(TaxMaxiApi).pipe(
+export const TaxMaxiApiLive = HttpApiBuilder.layer(TaxMaxiApi).pipe(
   // Core API group (merged to reduce pipe arguments)
   Layer.provide(CoreApiGroup),
   // Layer.provide(MasterDataApiGroup),

@@ -1,38 +1,28 @@
-import { HttpApiBuilder, HttpApiError, HttpApp, HttpServerResponse } from "@effect/platform"
+import { HttpApiError } from "effect/unstable/httpapi"
+import { HttpMiddleware, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import * as Cause from "effect/Cause"
 import * as Effect from "effect/Effect"
-import * as Either from "effect/Either"
-import * as Schema from "effect/Schema"
+import * as Result from "effect/Result"
+import * as SchemaIssue from "effect/SchemaIssue"
 
-const decodeHttpApiDecodeError = Schema.decodeUnknownEither(HttpApiError.HttpApiDecodeError)
+const formatSchemaIssue = SchemaIssue.makeFormatterStandardSchemaV1()
 
-const toFieldPath = (path: ReadonlyArray<PropertyKey>): string => {
+type StandardSchemaPathSegment = PropertyKey | { readonly key: PropertyKey }
+
+const toFieldPath = (path: ReadonlyArray<StandardSchemaPathSegment> | undefined): string => {
   const segments: string[] = []
 
-  for (const segment of path) {
-    if (typeof segment === "string") {
-      segments.push(segment)
-    } else if (typeof segment === "number") {
-      segments.push(`${segment}`)
+  for (const segment of path ?? []) {
+    const key = typeof segment === "object" ? segment.key : segment
+
+    if (typeof key === "string") {
+      segments.push(key)
+    } else if (typeof key === "number") {
+      segments.push(`${key}`)
     }
   }
 
   return segments.join(".")
-}
-
-const extractJsonBody = (response: HttpServerResponse.HttpServerResponse): unknown | null => {
-  if (response.body._tag === "Raw") {
-    return response.body.body
-  }
-
-  if (response.body._tag !== "Uint8Array") {
-    return null
-  }
-
-  try {
-    return JSON.parse(new TextDecoder().decode(response.body.body))
-  } catch {
-    return null
-  }
 }
 
 const isProviderNoiseIssue = ({
@@ -46,7 +36,7 @@ const isProviderNoiseIssue = ({
 }): boolean => field === "provider" && hasCredentialIssues && message.startsWith('Expected "local"')
 
 const normalizeIssueMessage = ({ field, message }: { field: string; message: string }): string => {
-  if (message === "is missing") {
+  if (message === "is missing" || message === "Missing key") {
     return "This field is required"
   }
 
@@ -64,8 +54,9 @@ const normalizeIssueMessage = ({ field, message }: { field: string; message: str
   return message
 }
 
-const makeValidationErrorResponse = (decodeError: HttpApiError.HttpApiDecodeError) => {
-  const hasCredentialIssues = decodeError.issues.some((issue) =>
+const makeValidationErrorResponse = (decodeError: HttpApiError.HttpApiSchemaError) => {
+  const issues = formatSchemaIssue(decodeError.cause.issue).issues
+  const hasCredentialIssues = issues.some((issue) =>
     toFieldPath(issue.path).startsWith("credentials.")
   )
 
@@ -73,7 +64,7 @@ const makeValidationErrorResponse = (decodeError: HttpApiError.HttpApiDecodeErro
     error: {
       code: "VALIDATION_ERROR",
       message: "Some request fields are invalid. Please check your input and try again.",
-      details: decodeError.issues.flatMap((issue) => {
+      details: issues.flatMap((issue) => {
         const field = toFieldPath(issue.path) || "request"
         const normalizedMessage = normalizeIssueMessage({
           field,
@@ -101,26 +92,23 @@ const makeValidationErrorResponse = (decodeError: HttpApiError.HttpApiDecodeErro
   }
 }
 
-const toUserFriendlyDecodeResponse = (
-  response: HttpServerResponse.HttpServerResponse
-): Effect.Effect<HttpServerResponse.HttpServerResponse> => {
-  const body = extractJsonBody(response)
-  const decodeResult = decodeHttpApiDecodeError(body)
-
-  if (Either.isLeft(decodeResult)) {
-    return Effect.succeed(response)
-  }
-
-  return HttpServerResponse.json(makeValidationErrorResponse(decodeResult.right), {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-    cookies: response.cookies,
-  }).pipe(Effect.orDie)
-}
-
-export const ServeWithUserFriendlyErrorsLive = HttpApiBuilder.serve((httpApp) =>
-  HttpApp.withPreResponseHandler(httpApp, (_request, response) =>
-    toUserFriendlyDecodeResponse(response)
-  )
+export const ServeWithUserFriendlyErrorsLive = HttpMiddleware.make(
+  <E, R>(
+    httpEffect: Effect.Effect<
+      HttpServerResponse.HttpServerResponse,
+      E,
+      R | HttpServerRequest.HttpServerRequest
+    >
+  ) =>
+    httpEffect.pipe(
+      Effect.catchCause((cause) => {
+        const defect = Cause.findDefect(cause)
+        if (Result.isSuccess(defect) && HttpApiError.HttpApiSchemaError.is(defect.success)) {
+          return HttpServerResponse.json(makeValidationErrorResponse(defect.success), {
+            status: 400,
+          }).pipe(Effect.orDie)
+        }
+        return Effect.failCause(cause)
+      })
+    )
 )

@@ -90,25 +90,18 @@ const hasFailedProviderStatus = (providerStatus: string | null): boolean =>
   providerStatus?.toLowerCase() === "failed"
 
 const ProviderTransferMetadataSchema = Schema.Struct({
-  role: Schema.optional(Schema.Literal("principal", "fee", "rent")),
+  role: Schema.optional(Schema.Literals(["principal", "fee", "rent"])),
 })
 
 const decodeProviderTransferMetadata = (metadata: unknown) =>
-  Schema.decodeUnknown(ProviderTransferMetadataSchema)(metadata).pipe(
+  Schema.decodeUnknownEffect(ProviderTransferMetadataSchema)(metadata).pipe(
     Effect.map((decoded) => ({
       purpose: decoded.role === "fee" ? ("fee" as const) : ("principal" as const),
     })),
-    Effect.catchAll(() => Effect.succeed({ purpose: "principal" as const }))
+    Effect.catch(() => Effect.succeed({ purpose: "principal" as const }))
   )
 
-const NumericStringSchema = Schema.Union(
-  Schema.String,
-  Schema.transform(Schema.Number, Schema.String, {
-    strict: true,
-    decode: (value) => String(value),
-    encode: (value) => Number(value),
-  })
-)
+const NumericStringSchema = Schema.Union([Schema.String, Schema.Number])
 
 const decodeNumericString = ({
   value,
@@ -117,7 +110,8 @@ const decodeNumericString = ({
   readonly value: unknown
   readonly operation: string
 }): Effect.Effect<string, ReturnType<typeof toSyncEngineStorageError>> =>
-  Schema.decodeUnknown(NumericStringSchema)(value).pipe(
+  Schema.decodeUnknownEffect(NumericStringSchema)(value).pipe(
+    Effect.map(String),
     Effect.mapError(() =>
       toSyncEngineStorageError({
         operation,
@@ -446,12 +440,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertTransaction"))
 
       if (persisted === undefined) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.upsertTransaction",
-            error: "failed to persist transaction",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.upsertTransaction",
+          error: "failed to persist transaction",
+        })
       }
 
       return persisted
@@ -534,12 +526,10 @@ const make = Effect.gen(function* () {
         )
 
       if (account === undefined) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-            error: "Transaction credit balance is exhausted",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+          error: "Transaction credit balance is exhausted",
+        })
       }
 
       const rawReference =
@@ -547,12 +537,10 @@ const make = Effect.gen(function* () {
       const externalReference =
         externalId === null ? null : `transaction:${sourceId}:external:${externalId}`
       if (rawReference === null && externalReference === null) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
-            error: "Transaction is missing a stable source identity",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
+          error: "Transaction is missing a stable source identity",
+        })
       }
 
       const [previousForRawRecord] =
@@ -640,13 +628,11 @@ const make = Effect.gen(function* () {
           existing.replayReservationId !== null &&
           existing.replayReservationId !== replayReservationId
         ) {
-          return yield* Effect.fail(
-            toSyncEngineStorageError({
-              operation:
-                "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
-              error: "Replay transaction credit reservation ownership changed",
-            })
-          )
+          return yield* toSyncEngineStorageError({
+            operation:
+              "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
+            error: "Replay transaction credit reservation ownership changed",
+          })
         }
         const migratedReference =
           existing === existingForPreviousExternal &&
@@ -690,13 +676,11 @@ const make = Effect.gen(function* () {
               )
             )
           if (updated === undefined) {
-            return yield* Effect.fail(
-              toSyncEngineStorageError({
-                operation:
-                  "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
-                error: "Replay transaction credit reservation ownership changed",
-              })
-            )
+            return yield* toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.consumeTransactionCredit.reservationOwnership",
+              error: "Replay transaction credit reservation ownership changed",
+            })
           }
         }
         return mode === "reserve" &&
@@ -707,22 +691,18 @@ const make = Effect.gen(function* () {
       }
 
       if (mode === "persist" && replayReservationId !== null) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit.missingReservation",
-            error: "Replay transaction credit reservation no longer exists",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.consumeTransactionCredit.missingReservation",
+          error: "Replay transaction credit reservation no longer exists",
+        })
       }
 
       const reference = externalReference ?? rawReference
       if (reference === null) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
-            error: "Transaction is missing a stable source identity",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.consumeTransactionCredit.identity",
+          error: "Transaction is missing a stable source identity",
+        })
       }
 
       const now = nowDate()
@@ -752,22 +732,18 @@ const make = Effect.gen(function* () {
       }))
       const totalBalance = buckets.reduce((total, candidate) => total + candidate.balance, 0)
       if (totalBalance <= 0) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-            error: "Transaction credit balance is exhausted",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+          error: "Transaction credit balance is exhausted",
+        })
       }
 
       const bucket = buckets.find((candidate) => candidate.balance > 0)
       if (bucket === undefined) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-            error: "Transaction credit balance is exhausted",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
+          error: "Transaction credit balance is exhausted",
+        })
       }
 
       yield* executor
@@ -827,12 +803,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertVenueContext"))
 
       if (persisted === undefined) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.upsertVenueContext",
-            error: "failed to persist transaction venue context",
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.upsertVenueContext",
+          error: "failed to persist transaction venue context",
+        })
       }
 
       return {
@@ -960,12 +934,10 @@ const make = Effect.gen(function* () {
           .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertFeeTransfers"))
 
         if (persisted === undefined) {
-          return yield* Effect.fail(
-            toSyncEngineStorageError({
-              operation: "sourceNormalizationRepository.upsertFeeTransfers",
-              error: "failed to persist transfer",
-            })
-          )
+          return yield* toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.upsertFeeTransfers",
+            error: "failed to persist transfer",
+          })
         }
 
         const amount = yield* decodeNumericString({
@@ -1096,12 +1068,10 @@ const make = Effect.gen(function* () {
           .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertProviderTransfers"))
 
         if (persisted === undefined) {
-          return yield* Effect.fail(
-            toSyncEngineStorageError({
-              operation: "sourceNormalizationRepository.upsertProviderTransfers",
-              error: "failed to persist provider transfer",
-            })
-          )
+          return yield* toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.upsertProviderTransfers",
+            error: "failed to persist provider transfer",
+          })
         }
 
         const amount = yield* decodeNumericString({
@@ -1161,12 +1131,10 @@ const make = Effect.gen(function* () {
           .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertTransactionLegs"))
 
         if (persisted === undefined) {
-          return yield* Effect.fail(
-            toSyncEngineStorageError({
-              operation: "sourceNormalizationRepository.upsertTransactionLegs",
-              error: "failed to persist transaction leg",
-            })
-          )
+          return yield* toSyncEngineStorageError({
+            operation: "sourceNormalizationRepository.upsertTransactionLegs",
+            error: "failed to persist transaction leg",
+          })
         }
 
         const amount = yield* decodeNumericString({
@@ -1325,10 +1293,10 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const allocations = yield* Effect.reduce(
         lots,
-        {
+        () => ({
           remainingAmount: disposalAmount,
           items: [] as ReadonlyArray<FifoLotAllocation>,
-        },
+        }),
         (state, lot) =>
           Effect.gen(function* () {
             const remainingComparison = yield* compareDecimalQuantities({
@@ -1398,12 +1366,10 @@ const make = Effect.gen(function* () {
         right: "0",
       })
       if (remainingComparison > 0) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.buildFifoLotAllocations",
-            error: `Insufficient FIFO inventory for outbound amount ${allocations.remainingAmount}`,
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.buildFifoLotAllocations",
+          error: `Insufficient FIFO inventory for outbound amount ${allocations.remainingAmount}`,
+        })
       }
 
       return allocations.items
@@ -1631,12 +1597,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError(`${operation}.deleteLot`))
 
       if (deletedLot === undefined) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation,
-            error: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation,
+          error: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+        })
       }
     })
 
@@ -1682,25 +1646,21 @@ const make = Effect.gen(function* () {
       })
 
       if (existingLot.assetId !== assetId && consumedComparison > 0) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation:
-              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAsset",
-            error: `Cannot change asset of inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation:
+            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAsset",
+          error: `Cannot change asset of inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+        })
       }
 
       const comparison = yield* compareDecimalQuantities({ left: amount, right: consumedAmount })
 
       if (comparison < 0) {
-        return yield* Effect.fail(
-          toSyncEngineStorageError({
-            operation:
-              "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAmount",
-            error: `Cannot reduce inbound provider lot ${existingLot.id} below its consumed amount ${consumedAmount}`,
-          })
-        )
+        return yield* toSyncEngineStorageError({
+          operation:
+            "sourceNormalizationRepository.ensureInboundProviderLotCanChangeAmount.consumedAmount",
+          error: `Cannot reduce inbound provider lot ${existingLot.id} below its consumed amount ${consumedAmount}`,
+        })
       }
     })
 
@@ -1896,18 +1856,16 @@ const make = Effect.gen(function* () {
         ({ id, reconciliationStatus }) =>
           Effect.gen(function* () {
             if (reconciliationStatus === "auto_applied" || reconciliationStatus === "approved") {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation",
-                  cause: {
-                    providerTransferId: id,
-                    reconciliationStatus,
-                    message:
-                      "Cannot remove observed provider transfer evidence while its reconciliation is active.",
-                  },
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "sourceNormalizationRepository.clearStaleObservedProviderTransferRepresentations.activeReconciliation",
+                cause: {
+                  providerTransferId: id,
+                  reconciliationStatus,
+                  message:
+                    "Cannot remove observed provider transfer evidence while its reconciliation is active.",
+                },
+              })
             }
 
             yield* executor
@@ -2073,13 +2031,11 @@ const make = Effect.gen(function* () {
           )
 
         if (movement === undefined) {
-          return yield* Effect.fail(
-            toSyncEngineStorageError({
-              operation:
-                "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement",
-              error: "failed to persist inventory movement",
-            })
-          )
+          return yield* toSyncEngineStorageError({
+            operation:
+              "sourceNormalizationRepository.allocateProviderInventoryMovements.upsertMovement",
+            error: "failed to persist inventory movement",
+          })
         }
 
         yield* resetInventoryMovementAllocations({
@@ -2279,13 +2235,11 @@ const make = Effect.gen(function* () {
           }
 
           if (leg.transactionId === null) {
-            return yield* Effect.fail(
-              toSyncEngineStorageError({
-                operation:
-                  "sourceNormalizationRepository.allocateFeeInventoryMovements.transactionId",
-                error: "fee leg is missing its transaction",
-              })
-            )
+            return yield* toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.allocateFeeInventoryMovements.transactionId",
+              error: "fee leg is missing its transaction",
+            })
           }
 
           const now = nowDate()
@@ -2351,13 +2305,11 @@ const make = Effect.gen(function* () {
             )
 
           if (movement === undefined) {
-            return yield* Effect.fail(
-              toSyncEngineStorageError({
-                operation:
-                  "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement",
-                error: "failed to persist fee inventory movement",
-              })
-            )
+            return yield* toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.allocateFeeInventoryMovements.upsertMovement",
+              error: "failed to persist fee inventory movement",
+            })
           }
 
           yield* resetInventoryMovementAllocations({
@@ -2468,13 +2420,11 @@ const make = Effect.gen(function* () {
             )
 
           if (ownedSource === undefined) {
-            return yield* Effect.fail(
-              toSyncEngineStorageError({
-                operation:
-                  "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory",
-                error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
-              })
-            )
+            return yield* toSyncEngineStorageError({
+              operation:
+                "sourceNormalizationRepository.persistNormalizedArtifacts.lockSourceInventory",
+              error: `Source ${params.transaction.sourceId} is no longer owned by principal ${params.transaction.principalId}`,
+            })
           }
 
           if (params.beforePersist !== undefined) {
@@ -2563,7 +2513,7 @@ const make = Effect.gen(function* () {
             executor: tx,
             legs: persistedLegs,
           }).pipe(
-            Effect.zipRight(
+            Effect.andThen(
               materializesProviderMovements
                 ? allocateProviderInventoryMovements({
                     executor: tx,
@@ -2574,7 +2524,7 @@ const make = Effect.gen(function* () {
                   })
                 : Effect.void
             ),
-            Effect.zipRight(
+            Effect.andThen(
               materializesProviderMovements
                 ? allocateFeeInventoryMovements({
                     executor: tx,

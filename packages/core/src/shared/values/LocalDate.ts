@@ -11,8 +11,9 @@
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Order from "effect/Order"
-import * as ParseResult from "effect/ParseResult"
 import * as Schema from "effect/Schema"
+import * as SchemaIssue from "effect/SchemaIssue"
+import * as SchemaTransformation from "effect/SchemaTransformation"
 
 /**
  * LocalDate - A Schema.Class representing a calendar date without time
@@ -22,19 +23,19 @@ import * as Schema from "effect/Schema"
  */
 export class LocalDate extends Schema.Class<LocalDate>("LocalDate")({
   year: Schema.Number.pipe(
-    Schema.int(),
-    Schema.greaterThanOrEqualTo(1),
-    Schema.lessThanOrEqualTo(9999)
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(1)),
+    Schema.check(Schema.isLessThanOrEqualTo(9999))
   ),
   month: Schema.Number.pipe(
-    Schema.int(),
-    Schema.greaterThanOrEqualTo(1),
-    Schema.lessThanOrEqualTo(12)
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(1)),
+    Schema.check(Schema.isLessThanOrEqualTo(12))
   ),
   day: Schema.Number.pipe(
-    Schema.int(),
-    Schema.greaterThanOrEqualTo(1),
-    Schema.lessThanOrEqualTo(31)
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(1)),
+    Schema.check(Schema.isLessThanOrEqualTo(31))
   ),
 }) {
   /**
@@ -58,7 +59,7 @@ export class LocalDate extends Schema.Class<LocalDate>("LocalDate")({
    * Convert to Effect DateTime.Utc at midnight UTC
    */
   toDateTime(): DateTime.Utc {
-    return DateTime.unsafeMake({ year: this.year, month: this.month, day: this.day })
+    return DateTime.makeUnsafe({ year: this.year, month: this.month, day: this.day })
   }
 
   /**
@@ -81,36 +82,38 @@ const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
 
 /**
  * Create a LocalDate from an ISO 8601 date string (YYYY-MM-DD)
- * Returns an Effect that may fail with ParseError
+ * Returns an Effect that may fail with SchemaError
  */
 export const fromString = (
   dateString: string
-): Effect.Effect<LocalDate, ParseResult.ParseError, never> => {
+): Effect.Effect<LocalDate, Schema.SchemaError, never> => {
   const match = dateString.match(ISO_DATE_PATTERN)
   if (!match) {
     return Effect.fail(
-      new ParseResult.ParseError({
-        issue: new ParseResult.Type(
-          Schema.String.ast,
+      new Schema.SchemaError(
+        new SchemaIssue.InvalidValue(
+          { message: `Invalid date format: expected YYYY-MM-DD, got "${dateString}"` },
           dateString,
-          `Invalid date format: expected YYYY-MM-DD, got "${dateString}"`
-        ),
-      })
+          { reportInput: true }
+        )
+      )
     )
   }
   const [, yearStr, monthStr, dayStr] = match
   if (yearStr === undefined || monthStr === undefined || dayStr === undefined) {
     return Effect.fail(
-      new ParseResult.ParseError({
-        issue: new ParseResult.Type(Schema.String.ast, dateString, "Invalid date capture groups"),
-      })
+      new Schema.SchemaError(
+        new SchemaIssue.InvalidValue({ message: "Invalid date capture groups" }, dateString, {
+          reportInput: true,
+        })
+      )
     )
   }
   const year = parseInt(yearStr, 10)
   const month = parseInt(monthStr, 10)
   const day = parseInt(dayStr, 10)
 
-  return Schema.decodeUnknown(LocalDate)({ year, month, day })
+  return Schema.decodeUnknownEffect(LocalDate)({ year, month, day })
 }
 
 /**
@@ -276,78 +279,90 @@ export const daysInMonth = (year: number, month: number): number => {
  * })
  *
  * // Decoding
- * const date = yield* Schema.decodeUnknown(LocalDateFromString)("2024-06-15")
+ * const date = yield* Schema.decodeUnknownEffect(LocalDateFromString)("2024-06-15")
  * // date is now LocalDate { year: 2024, month: 6, day: 15 }
  *
  * // Encoding
- * const str = yield* Schema.encode(LocalDateFromString)(date)
+ * const str = yield* Schema.encodeEffect(LocalDateFromString)(date)
  * // str is "2024-06-15"
  * ```
  */
-export const LocalDateFromString: Schema.Schema<LocalDate, string> = Schema.transformOrFail(
-  Schema.String.annotations({
-    description: "ISO 8601 date string in YYYY-MM-DD format",
-    examples: ["2024-06-15", "2024-01-01", "2024-12-31"],
-  }),
-  LocalDate,
-  {
-    strict: true,
-    decode: (dateString, _, ast) => {
-      const match = dateString.match(ISO_DATE_PATTERN)
-      if (!match) {
-        return Effect.fail(
-          new ParseResult.Type(
-            ast,
-            dateString,
-            `Expected ISO date format YYYY-MM-DD, but received "${dateString}"`
-          )
-        )
-      }
-      const [, yearStr, monthStr, dayStr] = match
-      if (yearStr === undefined || monthStr === undefined || dayStr === undefined) {
-        return Effect.fail(
-          new ParseResult.Type(Schema.String.ast, dateString, "Invalid date capture groups")
-        )
-      }
-      const year = parseInt(yearStr, 10)
-      const month = parseInt(monthStr, 10)
-      const day = parseInt(dayStr, 10)
-
-      // Validate month range
-      if (month < 1 || month > 12) {
-        return Effect.fail(
-          new ParseResult.Type(
-            ast,
-            dateString,
-            `Invalid month ${month} in date "${dateString}". Month must be between 1 and 12.`
-          )
-        )
-      }
-
-      // Validate day range for the given month
-      const maxDays = daysInMonth(year, month)
-      if (day < 1 || day > maxDays) {
-        return Effect.fail(
-          new ParseResult.Type(
-            ast,
-            dateString,
-            `Invalid day ${day} in date "${dateString}". Day must be between 1 and ${maxDays} for ${year}-${String(month).padStart(2, "0")}.`
-          )
-        )
-      }
-
-      return Effect.succeed(LocalDate.make({ year, month, day }))
-    },
-    encode: (localDate) => {
-      // Format as ISO 8601 date string (YYYY-MM-DD)
-      const y = String(localDate.year).padStart(4, "0")
-      const m = String(localDate.month).padStart(2, "0")
-      const d = String(localDate.day).padStart(2, "0")
-      return Effect.succeed(`${y}-${m}-${d}`)
-    },
-  }
-).annotations({
-  identifier: "LocalDateFromString",
-  title: "Local Date from String",
-  description: "ISO 8601 date (YYYY-MM-DD) that transforms to/from LocalDate",
+export const LocalDateFromString: Schema.Codec<LocalDate, string> = Schema.String.annotate({
+  description: "ISO 8601 date string in YYYY-MM-DD format",
+  examples: ["2024-06-15", "2024-01-01", "2024-12-31"],
 })
+  .pipe(
+    Schema.decodeTo(
+      LocalDate,
+      SchemaTransformation.transformOrFail({
+        decode: (dateString, options) => {
+          const match = dateString.match(ISO_DATE_PATTERN)
+          if (!match) {
+            return Effect.fail(
+              new SchemaIssue.InvalidValue(
+                {
+                  message: `Expected ISO date format YYYY-MM-DD, but received "${dateString}"`,
+                },
+                dateString,
+                options
+              )
+            )
+          }
+          const [, yearStr, monthStr, dayStr] = match
+          if (yearStr === undefined || monthStr === undefined || dayStr === undefined) {
+            return Effect.fail(
+              new SchemaIssue.InvalidValue(
+                { message: "Invalid date capture groups" },
+                dateString,
+                options
+              )
+            )
+          }
+          const year = parseInt(yearStr, 10)
+          const month = parseInt(monthStr, 10)
+          const day = parseInt(dayStr, 10)
+
+          // Validate month range
+          if (month < 1 || month > 12) {
+            return Effect.fail(
+              new SchemaIssue.InvalidValue(
+                {
+                  message: `Invalid month ${month} in date "${dateString}". Month must be between 1 and 12.`,
+                },
+                dateString,
+                options
+              )
+            )
+          }
+
+          // Validate day range for the given month
+          const maxDays = daysInMonth(year, month)
+          if (day < 1 || day > maxDays) {
+            return Effect.fail(
+              new SchemaIssue.InvalidValue(
+                {
+                  message: `Invalid day ${day} in date "${dateString}". Day must be between 1 and ${maxDays} for ${year}-${String(month).padStart(2, "0")}.`,
+                },
+                dateString,
+                options
+              )
+            )
+          }
+
+          return Effect.succeed({ year, month, day })
+        },
+        encode: (localDate) => {
+          // Format as ISO 8601 date string (YYYY-MM-DD)
+          const y = String(localDate.year).padStart(4, "0")
+          const m = String(localDate.month).padStart(2, "0")
+          const d = String(localDate.day).padStart(2, "0")
+          return Effect.succeed(`${y}-${m}-${d}`)
+        },
+      })
+    )
+  )
+  .annotate({
+    identifier: "LocalDateFromString",
+    title: "Local Date from String",
+    description: "ISO 8601 date (YYYY-MM-DD) that transforms to/from LocalDate",
+  })

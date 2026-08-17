@@ -97,7 +97,7 @@ export interface SourceRawRecordRepositoryShape {
 /**
  * SourceRawRecordRepository - Context tag for raw record persistence.
  */
-export class SourceRawRecordRepository extends Context.Tag("SourceRawRecordRepository")<
+export class SourceRawRecordRepository extends Context.Service<
   SourceRawRecordRepository,
   SourceRawRecordRepositoryShape
->() {}
+>()("SourceRawRecordRepository") {}

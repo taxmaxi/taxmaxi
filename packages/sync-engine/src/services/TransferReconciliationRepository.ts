@@ -220,6 +220,7 @@ export interface TransferReconciliationRepositoryShape {
 /**
  * TransferReconciliationRepository - Context tag for reconciliation persistence.
  */
-export class TransferReconciliationRepository extends Context.Tag(
-  "TransferReconciliationRepository"
-)<TransferReconciliationRepository, TransferReconciliationRepositoryShape>() {}
+export class TransferReconciliationRepository extends Context.Service<
+  TransferReconciliationRepository,
+  TransferReconciliationRepositoryShape
+>()("TransferReconciliationRepository") {}

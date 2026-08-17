@@ -123,7 +123,7 @@ export interface CoinbaseSourceSyncProviderShape {
 /**
  * CoinbaseSourceSyncProvider - Context tag for the Coinbase provider boundary.
  */
-export class CoinbaseSourceSyncProvider extends Context.Tag("CoinbaseSourceSyncProvider")<
+export class CoinbaseSourceSyncProvider extends Context.Service<
   CoinbaseSourceSyncProvider,
   CoinbaseSourceSyncProviderShape
->() {}
+>()("CoinbaseSourceSyncProvider") {}

@@ -49,12 +49,10 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // Validate request type
         if (!isLocalAuthRequest(request)) {
-          return yield* Effect.fail(
-            new ProviderAuthFailedError({
-              provider: "local",
-              reason: "Invalid request type for local authentication",
-            })
-          )
+          return yield* new ProviderAuthFailedError({
+            provider: "local",
+            reason: "Invalid request type for local authentication",
+          })
         }
 
         const { email, password } = request
@@ -75,7 +73,7 @@ const make = Effect.gen(function* () {
 
         // Check if identity exists
         if (Option.isNone(maybeIdentity)) {
-          return yield* Effect.fail(new InvalidCredentialsError({ email }))
+          return yield* new InvalidCredentialsError({ email })
         }
 
         const identity = maybeIdentity.value
@@ -93,7 +91,7 @@ const make = Effect.gen(function* () {
 
         // Check if password hash exists
         if (Option.isNone(maybeHash)) {
-          return yield* Effect.fail(new InvalidCredentialsError({ email }))
+          return yield* new InvalidCredentialsError({ email })
         }
 
         const passwordHash = maybeHash.value
@@ -102,7 +100,7 @@ const make = Effect.gen(function* () {
         const isValid = yield* passwordHasher.verify(password, passwordHash)
 
         if (!isValid) {
-          return yield* Effect.fail(new InvalidCredentialsError({ email }))
+          return yield* new InvalidCredentialsError({ email })
         }
 
         // Look up the user to get display name
@@ -117,12 +115,10 @@ const make = Effect.gen(function* () {
         )
 
         if (Option.isNone(maybeUser)) {
-          return yield* Effect.fail(
-            new ProviderAuthFailedError({
-              provider: "local",
-              reason: "User not found for identity",
-            })
-          )
+          return yield* new ProviderAuthFailedError({
+            provider: "local",
+            reason: "User not found for identity",
+          })
         }
 
         const user = maybeUser.value

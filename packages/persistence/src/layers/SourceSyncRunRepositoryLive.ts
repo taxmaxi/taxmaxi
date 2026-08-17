@@ -240,7 +240,7 @@ const make = Effect.gen(function* () {
         .limit(1)
         .pipe(wrapSyncEngineSqlError(operation))
 
-      return Option.fromNullable(run).pipe(Option.map(rowToRun))
+      return Option.fromNullishOr(run).pipe(Option.map(rowToRun))
     })
 
   const loadRunItem = ({
@@ -268,12 +268,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError(operation))
 
       if (item === undefined) {
-        return yield* Effect.fail(
-          new SyncEngineStorageError({
-            operation,
-            cause: `Missing sync run item for run ${runId} and source ${sourceId}.`,
-          })
-        )
+        return yield* new SyncEngineStorageError({
+          operation,
+          cause: `Missing sync run item for run ${runId} and source ${sourceId}.`,
+        })
       }
 
       return yield* rowToRunItem(item)
@@ -302,7 +300,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.createRun.insert"))
 
       if (run === undefined) {
-        return yield* Effect.dieMessage("Failed to create sync run.")
+        return yield* Effect.die("Failed to create sync run.")
       }
 
       return rowToRun(run)
@@ -322,12 +320,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.attachRunItem.selectJob"))
 
       if (job === undefined) {
-        return yield* Effect.fail(
-          new SyncEngineStorageError({
-            operation: "sourceSyncRunRepository.attachRunItem.selectJob",
-            cause: `Missing processing job ${processingJobId} for sync run ${runId}.`,
-          })
-        )
+        return yield* new SyncEngineStorageError({
+          operation: "sourceSyncRunRepository.attachRunItem.selectJob",
+          cause: `Missing processing job ${processingJobId} for sync run ${runId}.`,
+        })
       }
 
       const now = nowDate()
@@ -403,7 +399,7 @@ const make = Effect.gen(function* () {
         .limit(1)
         .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.getVisibleRun.select"))
 
-      return Option.fromNullable(run).pipe(Option.map(rowToRun))
+      return Option.fromNullishOr(run).pipe(Option.map(rowToRun))
     })
 
   const listRunItems: SourceSyncRunRepositoryShape["listRunItems"] = ({ runId }) =>
@@ -443,7 +439,7 @@ const make = Effect.gen(function* () {
             .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.refreshRunStatus.selectRun"))
 
           if (lockedRun === undefined) {
-            return yield* Effect.fail(new SourceSyncRunRecordNotFoundError({ runId }))
+            return yield* new SourceSyncRunRecordNotFoundError({ runId })
           }
 
           const run = rowToRun(lockedRun)
@@ -503,7 +499,7 @@ const make = Effect.gen(function* () {
             .pipe(wrapSyncEngineSqlError("sourceSyncRunRepository.refreshRunStatus.updateRun"))
 
           if (updatedRun === undefined) {
-            return yield* Effect.fail(new SourceSyncRunRecordNotFoundError({ runId }))
+            return yield* new SourceSyncRunRecordNotFoundError({ runId })
           }
 
           return rowToRun(updatedRun)

@@ -437,12 +437,12 @@ export const resolvePaidFulfillmentUserId = ({
       return Option.isSome(account) ? account.value.userId : null
     }
 
-    const userId = yield* Schema.decodeUnknown(AuthUserId)(metadataUserId).pipe(
+    const userId = yield* Schema.decodeUnknownEffect(AuthUserId)(metadataUserId).pipe(
       Effect.mapError(() => stripeError("Invalid TaxMaxi user metadata on paid Stripe object"))
     )
     const account = yield* findByUserId(userId)
     if (Option.isNone(account)) {
-      return yield* Effect.fail(stripeError("TaxMaxi billing account not found"))
+      return yield* stripeError("TaxMaxi billing account not found")
     }
     return userId
   })
@@ -466,7 +466,7 @@ export const verifiedTopUpCustomer = ({
 }) =>
   Effect.gen(function* () {
     if (Option.isNone(account) || account.value.stripeCustomerId === null) {
-      return yield* Effect.fail(stripeError("An active annual subscription is required"))
+      return yield* stripeError("An active annual subscription is required")
     }
 
     const stripeCustomerId = yield* getOrCreateCustomer(userId)
@@ -475,10 +475,10 @@ export const verifiedTopUpCustomer = ({
       Option.isNone(refreshedAccount) ||
       refreshedAccount.value.stripeCustomerId !== stripeCustomerId
     ) {
-      return yield* Effect.fail(stripeError("An active annual subscription is required"))
+      return yield* stripeError("An active annual subscription is required")
     }
     if (!(yield* hasCurrentAnnualSubscription(stripeCustomerId))) {
-      return yield* Effect.fail(stripeError("An active annual subscription is required"))
+      return yield* stripeError("An active annual subscription is required")
     }
     return stripeCustomerId
   })
@@ -635,17 +635,17 @@ export const allocateAnnualCreditsAcrossPayments = (
       const credits =
         index === positive.length - 1
           ? ANNUAL_CREDITS - allocated
-          : BigDecimal.unsafeToNumber(
+          : BigDecimal.toNumberUnsafe(
               BigDecimal.floor(
                 Option.getOrElse(
                   BigDecimal.divide(
                     BigDecimal.multiply(
-                      BigDecimal.fromNumber(ANNUAL_CREDITS),
-                      BigDecimal.fromNumber(payment.amountPaid)
+                      BigDecimal.fromNumberUnsafe(ANNUAL_CREDITS),
+                      BigDecimal.fromNumberUnsafe(payment.amountPaid)
                     ),
-                    BigDecimal.fromNumber(totalPaid)
+                    BigDecimal.fromNumberUnsafe(totalPaid)
                   ),
-                  () => BigDecimal.fromNumber(0)
+                  () => BigDecimal.fromNumberUnsafe(0)
                 )
               )
             )
@@ -797,12 +797,12 @@ export const hasFixedUnitAmount = <Price extends Pick<Stripe.Price, "unit_amount
   price: Price
 ): price is Price & { readonly unit_amount: number } => price.unit_amount !== null
 
-const StripeReferenceSchema = Schema.Union(Schema.String, Schema.Struct({ id: Schema.String }))
+const StripeReferenceSchema = Schema.Union([Schema.String, Schema.Struct({ id: Schema.String })])
 const NullableStripeReferenceSchema = Schema.NullOr(StripeReferenceSchema)
-const StripeMetadataSchema = Schema.Record({ key: Schema.String, value: Schema.String })
+const StripeMetadataSchema = Schema.Record(Schema.String, Schema.String)
 const AnnualCheckoutMetadataSchema = Schema.Struct({
   annual_checkout_generation: Schema.optional(
-    Schema.NumberFromString.pipe(Schema.int(), Schema.positive())
+    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))
   ),
 })
 
@@ -904,11 +904,11 @@ const StripeCreditNoteWebhookObjectSchema = Schema.Struct({
   id: Schema.String,
   currency: Schema.String,
   invoice: StripeReferenceSchema,
-  post_payment_amount: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+  post_payment_amount: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
   status: Schema.String,
   refunds: Schema.Array(
     Schema.Struct({
-      amount_refunded: Schema.Number.pipe(Schema.int(), Schema.nonNegative()),
+      amount_refunded: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
       payment_record_refund: Schema.NullOr(
         Schema.Struct({ payment_record: Schema.String, refund_group: Schema.String })
       ),
@@ -926,35 +926,37 @@ const StripeWebhookEnvelopeSchema = Schema.Struct({
 })
 
 export const validateStripeWebhookEvent = (input: unknown) =>
-  Schema.decodeUnknown(StripeWebhookEnvelopeSchema)(input).pipe(
+  Schema.decodeUnknownEffect(StripeWebhookEnvelopeSchema)(input).pipe(
     Effect.flatMap((event) => {
       switch (event.type) {
         case "customer.subscription.created":
         case "customer.subscription.updated":
         case "customer.subscription.paused":
         case "customer.subscription.resumed":
-          return Schema.decodeUnknown(StripeSubscriptionWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeSubscriptionWebhookObjectSchema)(
+            event.data.object
+          )
         case "customer.subscription.deleted":
-          return Schema.decodeUnknown(StripeDeletedSubscriptionWebhookObjectSchema)(
+          return Schema.decodeUnknownEffect(StripeDeletedSubscriptionWebhookObjectSchema)(
             event.data.object
           )
         case "customer.deleted":
         case "charge.dispute.created":
         case "charge.dispute.closed":
-          return Schema.decodeUnknown(StripeIdWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeIdWebhookObjectSchema)(event.data.object)
         case "invoice.paid":
-          return Schema.decodeUnknown(StripeInvoiceWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeInvoiceWebhookObjectSchema)(event.data.object)
         case "checkout.session.completed":
         case "checkout.session.async_payment_succeeded":
-          return Schema.decodeUnknown(StripeCheckoutWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeCheckoutWebhookObjectSchema)(event.data.object)
         case "charge.refunded":
-          return Schema.decodeUnknown(StripeChargeWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeChargeWebhookObjectSchema)(event.data.object)
         case "refund.updated":
-          return Schema.decodeUnknown(StripeRefundWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeRefundWebhookObjectSchema)(event.data.object)
         case "credit_note.created":
-          return Schema.decodeUnknown(StripeCreditNoteWebhookObjectSchema)(event.data.object)
+          return Schema.decodeUnknownEffect(StripeCreditNoteWebhookObjectSchema)(event.data.object)
         default:
-          return Effect.void
+          return Effect.succeed({ id: event.id })
       }
     }),
     Effect.asVoid,
@@ -1038,7 +1040,7 @@ const make = Effect.gen(function* () {
     ).pipe(
       Effect.flatMap((prices) => {
         const price = prices.data[0]
-        if (price === undefined) return Effect.succeed(undefined)
+        if (price === undefined) return Effect.as(Effect.void, undefined)
         if (lookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY && !isValidAnnualPrice(price)) {
           return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
         }
@@ -1081,7 +1083,7 @@ const make = Effect.gen(function* () {
         .findById(userId)
         .pipe(Effect.mapError(() => stripeError("Could not load account details")))
       if (Option.isNone(maybeUser)) {
-        return yield* Effect.fail(stripeError("TaxMaxi account not found"))
+        return yield* stripeError("TaxMaxi account not found")
       }
 
       const customer = yield* stripePromise("Could not create Stripe customer", (client) =>
@@ -1203,7 +1205,7 @@ const make = Effect.gen(function* () {
           currentProductId: currentAnnualProductId,
         })
       ) {
-        return yield* Effect.fail(stripeError("This account already has a subscription"))
+        return yield* stripeError("This account already has a subscription")
       }
       const checkoutReservation = yield* billingRepository
         .reserveAnnualCheckout({ userId, priceId: price.id })
@@ -1232,7 +1234,7 @@ const make = Effect.gen(function* () {
                   ),
                 }),
               }).pipe(
-                Effect.catchAll(({ cause, error }) =>
+                Effect.catch(({ cause, error }) =>
                   isDefinitiveAnnualCheckoutCreationFailure(cause)
                     ? billingRepository
                         .clearAnnualCheckoutReservation({
@@ -1243,7 +1245,7 @@ const make = Effect.gen(function* () {
                           Effect.mapError(() =>
                             stripeError("Could not clear failed annual Checkout reservation")
                           ),
-                          Effect.zipRight(Effect.fail(error))
+                          Effect.andThen(Effect.fail(error))
                         )
                     : Effect.fail(error)
                 )
@@ -1252,7 +1254,7 @@ const make = Effect.gen(function* () {
           ),
       })
       if (session.url === null) {
-        return yield* Effect.fail(stripeError("Stripe did not return a Checkout URL"))
+        return yield* stripeError("Stripe did not return a Checkout URL")
       }
       return session.url
     })
@@ -1312,7 +1314,7 @@ const make = Effect.gen(function* () {
         )
       )
       if (session.url === null) {
-        return yield* Effect.fail(stripeError("Stripe did not return a Checkout URL"))
+        return yield* stripeError("Stripe did not return a Checkout URL")
       }
       return session.url
     })
@@ -1323,7 +1325,7 @@ const make = Effect.gen(function* () {
         .findByUserId(userId)
         .pipe(Effect.mapError(() => stripeError("Could not load billing account")))
       if (Option.isNone(account) || account.value.stripeCustomerId === null) {
-        return yield* Effect.fail(stripeError("No Stripe customer exists for this account"))
+        return yield* stripeError("No Stripe customer exists for this account")
       }
       const stripeCustomerId = yield* getOrCreateCustomer(userId)
       const session = yield* stripePromise("Could not create Customer Portal session", (client) =>
@@ -1537,7 +1539,7 @@ const make = Effect.gen(function* () {
         paymentAllocations: yield* paidInvoicePaymentAllocations(invoice.id),
       })
       if (paymentAllocations.length === 0) {
-        return yield* Effect.fail(stripeError("Paid annual invoice has no supported payment"))
+        return yield* stripeError("Paid annual invoice has no supported payment")
       }
       yield* persistAnnualCreditAllocations({
         userId,
@@ -1735,7 +1737,7 @@ const make = Effect.gen(function* () {
               paymentRecord.amount.value <= 0 ||
               paymentRecord.amount.currency !== creditNote.currency
             ) {
-              return yield* Effect.fail(stripeError("Invalid refunded payment record amount"))
+              return yield* stripeError("Invalid refunded payment record amount")
             }
 
             yield* billingRepository
@@ -1762,7 +1764,7 @@ const make = Effect.gen(function* () {
       )
       const nonRefundAmount = creditNote.post_payment_amount - refundedAmount
       if (nonRefundAmount < 0) {
-        return yield* Effect.fail(stripeError("Invalid credit note post-payment amount"))
+        return yield* stripeError("Invalid credit note post-payment amount")
       }
       if (nonRefundAmount === 0) return
 
@@ -1772,7 +1774,7 @@ const make = Effect.gen(function* () {
         payments: paymentAllocations,
       })
       if (reversalAllocations === null || reversalAllocations.length === 0) {
-        return yield* Effect.fail(stripeError("Could not attribute non-refund credit note value"))
+        return yield* stripeError("Could not attribute non-refund credit note value")
       }
 
       yield* Effect.forEach(
@@ -1863,7 +1865,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const secret = Option.getOrNull(webhookSecret)
       if (secret === null) {
-        return yield* Effect.fail(stripeError("Stripe webhook is not configured"))
+        return yield* Effect.failSync(() => stripeError("Stripe webhook is not configured"))
       }
       const event = yield* stripePromise("Invalid Stripe webhook signature", (client) =>
         client.webhooks.constructEventAsync(input.payload, input.signature, secret)

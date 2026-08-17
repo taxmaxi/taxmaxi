@@ -712,10 +712,8 @@ const make = Effect.gen(function* () {
                   existingMapping.canonicalAssetId !== canonicalAssetId ||
                   existingMapping.assetRepresentationId !== assetRepresentationId)
               ) {
-                return yield* Effect.fail(
-                  makeBadRequest(
-                    "Provider asset mapping is already approved for a different target."
-                  )
+                return yield* makeBadRequest(
+                  "Provider asset mapping is already approved for a different target."
                 )
               }
 
@@ -741,9 +739,9 @@ const make = Effect.gen(function* () {
                   )
                 )
               if (Option.isNone(canonicalAsset)) {
-                return yield* Effect.fail(
-                  new AssetCanonicalizationNotFoundError({ message: "Canonical asset not found." })
-                )
+                return yield* new AssetCanonicalizationNotFoundError({
+                  message: "Canonical asset not found.",
+                })
               }
 
               if (assetRepresentationId === null) {
@@ -766,15 +764,13 @@ const make = Effect.gen(function* () {
                     )
                   )
                 if (Option.isNone(representation)) {
-                  return yield* Effect.fail(
-                    new AssetCanonicalizationNotFoundError({
-                      message: "Asset representation not found.",
-                    })
-                  )
+                  return yield* new AssetCanonicalizationNotFoundError({
+                    message: "Asset representation not found.",
+                  })
                 }
                 if (representation.value.assetId !== canonicalAssetId) {
-                  return yield* Effect.fail(
-                    makeBadRequest("Asset representation does not belong to the selected asset.")
+                  return yield* makeBadRequest(
+                    "Asset representation does not belong to the selected asset."
                   )
                 }
 
@@ -808,7 +804,7 @@ const make = Effect.gen(function* () {
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
                 })
                 .pipe(
-                  Effect.catchAll(() =>
+                  Effect.catch(() =>
                     Effect.gen(function* () {
                       const latest = yield* loadProviderAssetReview({ providerAssetRowId })
                       const latestMapping = latest.mapping
@@ -818,23 +814,19 @@ const make = Effect.gen(function* () {
                           latestMapping.canonicalAssetId !== canonicalAssetId ||
                           latestMapping.assetRepresentationId !== assetRepresentationId)
                       ) {
-                        return yield* Effect.fail(
-                          makeBadRequest(
-                            "Provider asset mapping was concurrently approved for a different target."
-                          )
+                        return yield* makeBadRequest(
+                          "Provider asset mapping was concurrently approved for a different target."
                         )
                       }
                       if (latestMapping?.mappingStatus === "rejected") {
-                        return yield* Effect.fail(
-                          makeBadRequest("Provider asset mapping was concurrently rejected.")
+                        return yield* makeBadRequest(
+                          "Provider asset mapping was concurrently rejected."
                         )
                       }
 
-                      return yield* Effect.fail(
-                        new AssetCanonicalizationInternalError({
-                          message: "Failed to approve provider asset mapping.",
-                        })
-                      )
+                      return yield* new AssetCanonicalizationInternalError({
+                        message: "Failed to approve provider asset mapping.",
+                      })
                     })
                   )
                 )
@@ -883,10 +875,8 @@ const make = Effect.gen(function* () {
           platform: nativePlatform,
         })
         if (nativeDecimals === null) {
-          return yield* Effect.fail(
-            makeBadRequest(
-              `CoinGecko did not identify native asset decimals for ${providerAsset.currencyCode}; manual review is required.`
-            )
+          return yield* makeBadRequest(
+            `CoinGecko did not identify native asset decimals for ${providerAsset.currencyCode}; manual review is required.`
           )
         }
 
@@ -909,10 +899,8 @@ const make = Effect.gen(function* () {
       }
 
       if (nativePlatforms.length > 1) {
-        return yield* Effect.fail(
-          makeBadRequest(
-            `CoinGecko has multiple native platforms for ${providerAsset.currencyCode}; manual review is required.`
-          )
+        return yield* makeBadRequest(
+          `CoinGecko has multiple native platforms for ${providerAsset.currencyCode}; manual review is required.`
         )
       }
 
@@ -921,27 +909,23 @@ const make = Effect.gen(function* () {
       )
 
       if (tokenPlatforms.length !== 1) {
-        return yield* Effect.fail(
-          makeBadRequest(
-            `CoinGecko did not identify a single canonical platform for ${providerAsset.currencyCode}.`
-          )
+        return yield* makeBadRequest(
+          `CoinGecko did not identify a single canonical platform for ${providerAsset.currencyCode}.`
         )
       }
 
       const tokenPlatformEntry = tokenPlatforms[0]
       if (tokenPlatformEntry === undefined) {
-        return yield* Effect.fail(
-          makeBadRequest(
-            `CoinGecko did not identify a canonical platform for ${providerAsset.currencyCode}.`
-          )
+        return yield* makeBadRequest(
+          `CoinGecko did not identify a canonical platform for ${providerAsset.currencyCode}.`
         )
       }
 
       const [platformId, contractAddress] = tokenPlatformEntry
       const tokenPlatform = assetPlatforms.find((platform) => platform.id === platformId)
       if (tokenPlatform === undefined) {
-        return yield* Effect.fail(
-          makeBadRequest(`CoinGecko platform ${platformId} is not available in asset_platforms.`)
+        return yield* makeBadRequest(
+          `CoinGecko platform ${platformId} is not available in asset_platforms.`
         )
       }
       yield* validateProviderTokenIdentity({
@@ -988,10 +972,8 @@ const make = Effect.gen(function* () {
           !isNativeOnchainObservation(initialProviderAssetReview.providerAsset) &&
           observedProviderTokenId(initialProviderAssetReview.providerAsset) === null
         ) {
-          return yield* Effect.fail(
-            makeBadRequest(
-              "Provider assets without exact on-chain identity require a reviewed canonical target."
-            )
+          return yield* makeBadRequest(
+            "Provider assets without exact on-chain identity require a reviewed canonical target."
           )
         }
 
@@ -1081,20 +1063,16 @@ const make = Effect.gen(function* () {
                   !representationPresenceMatches ||
                   !representationMatches
                 ) {
-                  return yield* Effect.fail(
-                    makeBadRequest(
-                      "Provider asset mapping is already approved for a different target."
-                    )
+                  return yield* makeBadRequest(
+                    "Provider asset mapping is already approved for a different target."
                   )
                 }
               }
               if (existingMapping?.mappingStatus === "pending_review") {
                 const latest = yield* loadProviderAssetReview({ providerAssetRowId })
                 if (latest.mapping?.mappingStatus === "approved") {
-                  return yield* Effect.fail(
-                    makeBadRequest(
-                      "Provider asset mapping was concurrently approved before canonical writes."
-                    )
+                  return yield* makeBadRequest(
+                    "Provider asset mapping was concurrently approved before canonical writes."
                   )
                 }
               }
@@ -1128,10 +1106,8 @@ const make = Effect.gen(function* () {
                   (canonicalAsset.representationType === "nft") !==
                   (canonicalAsset.type === "nft")
                 ) {
-                  return yield* Effect.fail(
-                    makeBadRequest(
-                      "Asset representation type does not match the selected economic asset type."
-                    )
+                  return yield* makeBadRequest(
+                    "Asset representation type does not match the selected economic asset type."
                   )
                 }
               }
@@ -1155,7 +1131,7 @@ const make = Effect.gen(function* () {
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
                 })
                 .pipe(
-                  Effect.catchAll(() =>
+                  Effect.catch(() =>
                     Effect.gen(function* () {
                       const latest = yield* loadProviderAssetReview({ providerAssetRowId })
                       const latestMapping = latest.mapping
@@ -1168,23 +1144,19 @@ const make = Effect.gen(function* () {
                         return
                       }
                       if (latestMapping?.mappingStatus === "approved") {
-                        return yield* Effect.fail(
-                          makeBadRequest(
-                            "Provider asset mapping was concurrently approved for a different target."
-                          )
+                        return yield* makeBadRequest(
+                          "Provider asset mapping was concurrently approved for a different target."
                         )
                       }
                       if (latestMapping?.mappingStatus === "rejected") {
-                        return yield* Effect.fail(
-                          makeBadRequest("Provider asset mapping was concurrently rejected.")
+                        return yield* makeBadRequest(
+                          "Provider asset mapping was concurrently rejected."
                         )
                       }
 
-                      return yield* Effect.fail(
-                        new AssetCanonicalizationInternalError({
-                          message: "Failed to approve provider asset mapping.",
-                        })
-                      )
+                      return yield* new AssetCanonicalizationInternalError({
+                        message: "Failed to approve provider asset mapping.",
+                      })
                     })
                   )
                 )

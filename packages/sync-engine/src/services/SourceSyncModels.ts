@@ -20,12 +20,12 @@ export type ActiveSourceSyncJobStatus = Extract<SourceSyncJobStatus, "pending" |
 /**
  * SourceSyncPhase - Current user-visible phase of a running source job.
  */
-export const SourceSyncPhaseSchema = Schema.Literal(
+export const SourceSyncPhaseSchema = Schema.Literals([
   "discovering",
   "classifying",
   "reconciling",
-  "completed"
-)
+  "completed",
+])
 
 export type SourceSyncPhase = Schema.Schema.Type<typeof SourceSyncPhaseSchema>
 
@@ -96,7 +96,7 @@ export interface SourceSyncJobProgressSnapshot {
 /**
  * SourceSyncJobMode - Execution path for one source job.
  */
-export const SourceSyncJobModeSchema = Schema.Literal("sync", "replay")
+export const SourceSyncJobModeSchema = Schema.Literals(["sync", "replay"])
 
 export type SourceSyncJobMode = Schema.Schema.Type<typeof SourceSyncJobModeSchema>
 

@@ -20,8 +20,8 @@ import { Timestamp } from "../shared/values/Timestamp.ts"
  * Stores the browser/client user agent for security audit purposes.
  */
 export const UserAgent = Schema.String.pipe(
-  Schema.maxLength(1024),
-  Schema.annotations({
+  Schema.check(Schema.isMaxLength(1024)),
+  Schema.annotate({
     identifier: "UserAgent",
     title: "User Agent",
     description: "The browser or client user agent string",

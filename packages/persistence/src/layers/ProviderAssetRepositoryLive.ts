@@ -268,13 +268,11 @@ const make = Effect.gen(function* () {
               providerAsset === undefined ||
               providerAsset.retrievedAt.getTime() !== expectedProviderAssetRetrievedAt.getTime()
             ) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.lockProviderAssetApprovalSnapshot.providerAsset",
-                  cause: "Provider asset metadata changed before approval.",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.lockProviderAssetApprovalSnapshot.providerAsset",
+                cause: "Provider asset metadata changed before approval.",
+              })
             }
 
             const [mapping] = yield* tx
@@ -285,13 +283,10 @@ const make = Effect.gen(function* () {
               .limit(1)
 
             if (lockedObservationSources.length !== observationSourceIdsBeforeLock.length) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.lockProviderAssetApprovalSnapshot.lockSources",
-                  cause: "A provider asset observation source changed before approval.",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.lockProviderAssetApprovalSnapshot.lockSources",
+                cause: "A provider asset observation source changed before approval.",
+              })
             }
 
             const lockedSourceIds = new Set(
@@ -302,9 +297,9 @@ const make = Effect.gen(function* () {
               .filter((sourceId) => !lockedSourceIds.has(sourceId))
 
             if (newlyObservedSourceIds.length > 0) {
-              return yield* Effect.fail(
-                new ApprovalObservationSourceSetChanged({ sourceIds: newlyObservedSourceIds })
-              )
+              return yield* new ApprovalObservationSourceSetChanged({
+                sourceIds: newlyObservedSourceIds,
+              })
             }
 
             const currentObservations = yield* tx
@@ -346,13 +341,10 @@ const make = Effect.gen(function* () {
                 current: currentObservations,
               })
             ) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.lockProviderAssetApprovalSnapshot.observations",
-                  cause: "Provider asset observations changed before approval.",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.lockProviderAssetApprovalSnapshot.observations",
+                cause: "Provider asset observations changed before approval.",
+              })
             }
 
             return { providerAsset, mapping: mapping ?? null }
@@ -389,13 +381,11 @@ const make = Effect.gen(function* () {
             }
 
             if (currentMapping?.mappingStatus !== "pending_review") {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.mappingState",
-                  cause: "Provider asset mapping cannot be approved from its current state.",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.mappingState",
+                cause: "Provider asset mapping cannot be approved from its current state.",
+              })
             }
 
             const recordedReplaySources = yield* tx
@@ -452,13 +442,11 @@ const make = Effect.gen(function* () {
               .returning({ id: schema.providerAssetMappings.providerAssetRowId })
 
             if (approved === undefined) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.update",
-                  cause: "A concurrent mapping decision won before approval.",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.update",
+                cause: "A concurrent mapping decision won before approval.",
+              })
             }
 
             yield* Effect.forEach(
@@ -519,17 +507,15 @@ const make = Effect.gen(function* () {
                         return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
                       }
 
-                      return yield* Effect.fail(
-                        new SyncEngineStorageError({
-                          operation:
-                            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.requestReplay",
-                          cause: {
-                            principalId,
-                            sourceId,
-                            message: "Active replay owner changed repeatedly.",
-                          },
-                        })
-                      )
+                      return yield* new SyncEngineStorageError({
+                        operation:
+                          "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.requestReplay",
+                        cause: {
+                          principalId,
+                          sourceId,
+                          message: "Active replay owner changed repeatedly.",
+                        },
+                      })
                     })
 
                   yield* requestReplay(3)
@@ -629,19 +615,17 @@ const make = Effect.gen(function* () {
                 (observation.decimals === null || representation.decimals === observation.decimals)
 
               if (!matchesApprovedTarget) {
-                return yield* Effect.fail(
-                  new SyncEngineStorageError({
-                    operation:
-                      "providerAssetRepository.recordProviderAssetSourceUses.validateApprovedMapping",
-                    cause: {
-                      providerAssetRowId: observation.providerAssetRowId,
-                      mapping,
-                      observation,
-                      message:
-                        "Prepared representation evidence conflicts with the approved provider asset mapping.",
-                    },
-                  })
-                )
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.recordProviderAssetSourceUses.validateApprovedMapping",
+                  cause: {
+                    providerAssetRowId: observation.providerAssetRowId,
+                    mapping,
+                    observation,
+                    message:
+                      "Prepared representation evidence conflicts with the approved provider asset mapping.",
+                  },
+                })
               }
             }
             const [source] = yield* tx
@@ -650,12 +634,10 @@ const make = Effect.gen(function* () {
               .where(eq(schema.sources.id, sourceId))
               .limit(1)
             if (source === undefined) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation: "providerAssetRepository.recordProviderAssetSourceUses.source",
-                  cause: `Source ${sourceId} does not exist.`,
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.recordProviderAssetSourceUses.source",
+                cause: `Source ${sourceId} does not exist.`,
+              })
             }
 
             const rows = yield* tx
@@ -741,17 +723,15 @@ const make = Effect.gen(function* () {
                     return yield* Effect.suspend(() => requestReplay(attemptsRemaining - 1))
                   }
 
-                  return yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation:
-                        "providerAssetRepository.recordProviderAssetSourceUses.requestReplay",
-                      cause: {
-                        sourceId,
-                        principalId: source.principalId,
-                        message: "Active replay owner changed repeatedly.",
-                      },
-                    })
-                  )
+                  return yield* new SyncEngineStorageError({
+                    operation:
+                      "providerAssetRepository.recordProviderAssetSourceUses.requestReplay",
+                    cause: {
+                      sourceId,
+                      principalId: source.principalId,
+                      message: "Active replay owner changed repeatedly.",
+                    },
+                  })
                 })
 
               yield* requestReplay(3)
@@ -792,7 +772,7 @@ const make = Effect.gen(function* () {
             wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetByProviderAssetId")
           )
 
-        return Option.fromNullable(row)
+        return Option.fromNullishOr(row)
       })
 
   const findProviderAssetByNaturalKey: ProviderAssetRepositoryShape["findProviderAssetByNaturalKey"] =
@@ -822,7 +802,7 @@ const make = Effect.gen(function* () {
           .limit(1)
           .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetByNaturalKey"))
 
-        return Option.fromNullable(row)
+        return Option.fromNullishOr(row)
       })
 
   const findProviderAssetByCurrencyCode: ProviderAssetRepositoryShape["findProviderAssetByCurrencyCode"] =
@@ -866,7 +846,7 @@ const make = Effect.gen(function* () {
           .limit(1)
           .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetByCurrencyCode"))
 
-        return Option.fromNullable(row)
+        return Option.fromNullishOr(row)
       })
 
   const providerAssetReviewProjection = {
@@ -909,7 +889,7 @@ const make = Effect.gen(function* () {
           .limit(1)
           .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetReviewById"))
 
-        return Option.fromNullable(row)
+        return Option.fromNullishOr(row)
       })
 
   const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
@@ -996,7 +976,7 @@ const make = Effect.gen(function* () {
         .limit(1)
         .pipe(wrapSyncEngineSqlError("providerAssetRepository.findProviderAssetMapping"))
 
-      return Option.fromNullable(row)
+      return Option.fromNullishOr(row)
     })
 
   return ProviderAssetRepository.of({

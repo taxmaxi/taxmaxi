@@ -4,7 +4,7 @@
  * @module PrincipalsApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { InternalServerError } from "./ApiErrors.ts"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
@@ -17,7 +17,7 @@ export class PrincipalClaimBadRequestError extends Schema.TaggedError<PrincipalC
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -28,7 +28,7 @@ export class PrincipalClaimNotFoundError extends Schema.TaggedError<PrincipalCla
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 /**
@@ -39,7 +39,7 @@ export class PrincipalClaimConflictError extends Schema.TaggedError<PrincipalCla
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 409 })
+  { httpApiStatus: 409 }
 ) {}
 
 /**
@@ -48,8 +48,8 @@ export class PrincipalClaimConflictError extends Schema.TaggedError<PrincipalCla
 export class PrincipalClaimRequest extends Schema.Class<PrincipalClaimRequest>(
   "PrincipalClaimRequest"
 )({
-  requestId: Schema.UUID,
-  claimToken: Schema.NullOr(Schema.NonEmptyTrimmedString),
+  requestId: Schema.String.check(Schema.isUUID()),
+  claimToken: Schema.NullOr(Schema.Trimmed.check(Schema.isNonEmpty())),
   siwxProof: Schema.NullOr(Schema.Unknown),
 }) {}
 
@@ -65,29 +65,31 @@ export class PrincipalClaimResponse extends Schema.Class<PrincipalClaimResponse>
 /**
  * POST /principals/claim - Claim an anonymous principal resource.
  */
-const claimPrincipal = HttpApiEndpoint.post("claimPrincipal", "/principals/claim")
-  .setPayload(PrincipalClaimRequest)
-  .addSuccess(PrincipalClaimResponse)
-  .addError(PrincipalClaimBadRequestError)
-  .addError(PrincipalClaimNotFoundError)
-  .addError(PrincipalClaimConflictError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Claim principal resource",
-      description:
-        "Validates an anonymous wallet source claim token or payer-wallet SIWX proof and moves the claimed source to the authenticated user.",
-    })
-  )
+const claimPrincipal = HttpApiEndpoint.post("claimPrincipal", "/principals/claim", {
+  payload: Schema.Struct(PrincipalClaimRequest.fields),
+  success: PrincipalClaimResponse,
+  error: [
+    PrincipalClaimBadRequestError,
+    PrincipalClaimNotFoundError,
+    PrincipalClaimConflictError,
+    InternalServerError,
+  ],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Claim principal resource",
+    description:
+      "Validates an anonymous wallet source claim token or payer-wallet SIWX proof and moves the claimed source to the authenticated user.",
+  })
+)
 
 /**
  * PrincipalsApi - Protected ownership principal endpoints.
  */
 export class PrincipalsApi extends HttpApiGroup.make("principals")
   .add(claimPrincipal)
-  .middlewareEndpoints(AuthMiddleware)
+  .middleware(AuthMiddleware)
   .prefix("/v1")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Principals",
       description: "Endpoints for claiming principal-owned resources.",

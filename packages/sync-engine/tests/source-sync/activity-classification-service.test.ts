@@ -32,7 +32,7 @@ const solanaEvidence = [
     summary: "Principal SOL balance decreased by transfer amount plus fee.",
     payload: evidencePayload,
   },
-] satisfies ReadonlyArray<typeof ActivityEvidence.Type>
+] satisfies ReadonlyArray<ActivityEvidence>
 
 const cexEvidence = [
   {
@@ -41,7 +41,7 @@ const cexEvidence = [
     summary: "Coinbase row type is buy.",
     payload: { type: "buy", resourcePath: "/v2/accounts/account-1/transactions/tx-1" },
   },
-] satisfies ReadonlyArray<typeof ActivityEvidence.Type>
+] satisfies ReadonlyArray<ActivityEvidence>
 
 describe("ActivityClassificationService", () => {
   it("returns the deterministic review-required fallback for unknown facts", async () => {

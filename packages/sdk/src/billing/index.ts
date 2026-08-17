@@ -4,13 +4,19 @@ import {
   BillingStatusResponse,
 } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
+import * as DateTime from "effect/DateTime"
 import * as Schema from "effect/Schema"
 
 import type { TaxMaxiEffectClient } from "../client.ts"
 
-export type BillingCatalog = Schema.Schema.Encoded<typeof BillingCatalogResponse>
-export type BillingRedirect = Schema.Schema.Encoded<typeof BillingRedirectResponse>
-export type BillingStatus = Schema.Schema.Encoded<typeof BillingStatusResponse>
+export type BillingCatalog = Schema.Codec.Encoded<typeof BillingCatalogResponse>
+export type BillingRedirect = Schema.Codec.Encoded<typeof BillingRedirectResponse>
+export type BillingStatus = {
+  readonly credits: number
+  readonly subscriptionStatus: string | null
+  readonly currentPeriodEnd: string | null
+  readonly cancelAtPeriodEnd: boolean
+}
 
 export interface BillingEffectResource {
   readonly catalog: () => Effect.Effect<BillingCatalog, unknown, never>
@@ -29,7 +35,13 @@ export interface BillingPromiseResource {
 }
 
 const encodeCatalog = Schema.encodeSync(BillingCatalogResponse)
-const encodeStatus = Schema.encodeSync(BillingStatusResponse)
+const encodeStatus = (status: BillingStatusResponse): BillingStatus => ({
+  credits: status.credits,
+  subscriptionStatus: status.subscriptionStatus,
+  currentPeriodEnd:
+    status.currentPeriodEnd === null ? null : DateTime.formatIso(status.currentPeriodEnd),
+  cancelAtPeriodEnd: status.cancelAtPeriodEnd,
+})
 const encodeRedirect = Schema.encodeSync(BillingRedirectResponse)
 
 export const makeBillingEffectResource = (

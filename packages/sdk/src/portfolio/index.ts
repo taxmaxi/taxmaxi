@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import type { TaxMaxiEffectClient } from "../client.ts"
 
-export type PortfolioAssets = Schema.Schema.Encoded<typeof PortfolioAssetsResponse>
+export type PortfolioAssets = Schema.Codec.Encoded<typeof PortfolioAssetsResponse>
 
 export interface PortfolioAssetsInput {
   readonly sourceId?: string
@@ -29,7 +29,7 @@ export const makePortfolioEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.portfolio.listPortfolioAssets({
-          urlParams: {
+          query: {
             sourceId: input.sourceId,
             currency: input.currency?.toLowerCase(),
           },

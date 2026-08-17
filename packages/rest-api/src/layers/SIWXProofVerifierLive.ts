@@ -39,7 +39,7 @@ const verificationError = (
   message: string
 ): SIWXProofVerificationError => new SIWXProofVerificationError({ reason, message })
 
-const SIWXHeaderProof = Schema.NonEmptyTrimmedString
+const SIWXHeaderProof = Schema.Trimmed.check(Schema.isNonEmpty())
 
 const chainTypeFromChainId = (chainId: string) => {
   if (chainId.startsWith("eip155:")) return "evm" as const
@@ -53,7 +53,7 @@ const make = Effect.gen(function* () {
 
   const verify: SIWXProofVerifierService["verify"] = ({ proof: rawProof, expectedNonce }) =>
     Effect.gen(function* () {
-      const header = yield* Schema.decodeUnknown(SIWXHeaderProof)(rawProof).pipe(
+      const header = yield* Schema.decodeUnknownEffect(SIWXHeaderProof)(rawProof).pipe(
         Effect.mapError(() => verificationError("malformed_proof", "Malformed SIWX proof."))
       )
 
@@ -63,13 +63,11 @@ const make = Effect.gen(function* () {
       })
 
       if (payload.domain !== domain) {
-        return yield* Effect.fail(verificationError("domain_mismatch", "Invalid SIWX domain."))
+        return yield* verificationError("domain_mismatch", "Invalid SIWX domain.")
       }
 
       if (payload.nonce.trim() === "" || payload.nonce !== expectedNonce) {
-        return yield* Effect.fail(
-          verificationError("missing_or_invalid_nonce", "Invalid SIWX nonce.")
-        )
+        return yield* verificationError("missing_or_invalid_nonce", "Invalid SIWX nonce.")
       }
 
       const validation = yield* Effect.tryPromise({
@@ -82,17 +80,15 @@ const make = Effect.gen(function* () {
 
       if (!validation.valid) {
         const validationError = validation.error?.toLowerCase() ?? ""
-        return yield* Effect.fail(
-          verificationError(
-            validationError.includes("domain mismatch")
-              ? "domain_mismatch"
-              : validationError.includes("nonce")
-                ? "missing_or_invalid_nonce"
-                : validationError.includes("expired")
-                  ? "expired_proof"
-                  : "malformed_proof",
-            validation.error ?? "Invalid SIWX message."
-          )
+        return yield* verificationError(
+          validationError.includes("domain mismatch")
+            ? "domain_mismatch"
+            : validationError.includes("nonce")
+              ? "missing_or_invalid_nonce"
+              : validationError.includes("expired")
+                ? "expired_proof"
+                : "malformed_proof",
+          validation.error ?? "Invalid SIWX message."
         )
       }
 
@@ -102,8 +98,9 @@ const make = Effect.gen(function* () {
       })
 
       if (!verification.valid) {
-        return yield* Effect.fail(
-          verificationError("signature_mismatch", verification.error ?? "Invalid signature.")
+        return yield* verificationError(
+          "signature_mismatch",
+          verification.error ?? "Invalid signature."
         )
       }
 
@@ -111,9 +108,7 @@ const make = Effect.gen(function* () {
       const walletAddress = verification.address ?? payload.address
       const parsedWallet = parseCryptoAddress(walletAddress)
       if (chainType === null || parsedWallet === null || parsedWallet.chainType !== chainType) {
-        return yield* Effect.fail(
-          verificationError("unsupported_chain", "Unsupported SIWX wallet address.")
-        )
+        return yield* verificationError("unsupported_chain", "Unsupported SIWX wallet address.")
       }
 
       return {

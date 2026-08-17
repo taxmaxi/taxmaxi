@@ -74,12 +74,10 @@ const toExecutionJob = ({
 }): Effect.Effect<SourceSyncExecutionJob, SourceSyncJobExecutionRecordConflictError> =>
   Effect.gen(function* () {
     if (job.status !== "pending" && job.status !== "processing") {
-      return yield* Effect.fail(
-        new SourceSyncJobExecutionRecordConflictError({
-          jobId,
-          reason: `Job status ${job.status} is not executable.`,
-        })
-      )
+      return yield* new SourceSyncJobExecutionRecordConflictError({
+        jobId,
+        reason: `Job status ${job.status} is not executable.`,
+      })
     }
 
     return {
@@ -137,12 +135,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.insert"))
 
       if (followUpJob === undefined) {
-        return yield* Effect.fail(
-          new SyncEngineStorageError({
-            operation: "sourceSyncJobRepository.materializeFollowUpJob.insert",
-            cause: { sourceId, jobId },
-          })
-        )
+        return yield* new SyncEngineStorageError({
+          operation: "sourceSyncJobRepository.materializeFollowUpJob.insert",
+          cause: { sourceId, jobId },
+        })
       }
 
       yield* executor
@@ -190,7 +186,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError(operation))
 
       if (job === undefined) {
-        return yield* Effect.fail(new SourceSyncJobExecutionRecordNotFoundError({ jobId }))
+        return yield* new SourceSyncJobExecutionRecordNotFoundError({ jobId })
       }
 
       return yield* toExecutionJob({ job, jobId })
@@ -277,12 +273,10 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceSyncJobRepository.createProcessingJob.insert"))
 
       if (job === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceSyncJobRepository.createProcessingJob.insert",
-            cause: "failed to create processing job",
-          })
-        )
+        return yield* new PersistenceError({
+          operation: "sourceSyncJobRepository.createProcessingJob.insert",
+          cause: "failed to create processing job",
+        })
       }
 
       return job.id
@@ -304,7 +298,7 @@ const make = Effect.gen(function* () {
             id: jobId,
           })
         ),
-        Effect.catchAll((error) => {
+        Effect.catch((error) => {
           if (!isActiveProcessingJobConflict(error)) {
             return Effect.fail(toSyncEngineStorageError({ error }))
           }

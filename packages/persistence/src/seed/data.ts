@@ -1189,13 +1189,13 @@ export const seedData = Effect.gen(function* () {
     const assetId = assetIdsByCoinGeckoId.get(representation.assetCoinGeckoId)
 
     if (blockchainId === undefined) {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         `Missing ${representation.blockchainName} blockchain after seeding blockchains`
       )
     }
 
     if (assetId === undefined) {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         `Missing ${representation.assetCoinGeckoId} economic asset after seeding assets`
       )
     }
@@ -1321,7 +1321,7 @@ export const seedData = Effect.gen(function* () {
     .limit(1)
 
   if (legalSourceRow === undefined) {
-    return yield* Effect.dieMessage(`Missing legal source after seeding ${legalSource.sourceKey}`)
+    return yield* Effect.die(`Missing legal source after seeding ${legalSource.sourceKey}`)
   }
 
   for (const clause of legalClauses) {
@@ -1418,7 +1418,7 @@ export const seedData = Effect.gen(function* () {
     .limit(1)
 
   if (ruleSetRow === undefined) {
-    return yield* Effect.dieMessage(
+    return yield* Effect.die(
       `Missing jurisdiction rule set after seeding ${jurisdictionRuleSet.version}`
     )
   }
@@ -1441,7 +1441,7 @@ export const seedData = Effect.gen(function* () {
   for (const [ruleKey, priority] of jurisdictionRuleSetRules) {
     const ruleId = legalRuleIdsByKey.get(ruleKey)
     if (ruleId === undefined) {
-      return yield* Effect.dieMessage(`Missing legal rule after seeding ${ruleKey}`)
+      return yield* Effect.die(`Missing legal rule after seeding ${ruleKey}`)
     }
 
     yield* db
@@ -1482,12 +1482,12 @@ export const seedData = Effect.gen(function* () {
   for (const [ruleKey, clauseKey, citationOrder, quote] of legalRuleCitations) {
     const ruleId = legalRuleIdsByKey.get(ruleKey)
     if (ruleId === undefined) {
-      return yield* Effect.dieMessage(`Missing legal rule for citation ${ruleKey}`)
+      return yield* Effect.die(`Missing legal rule for citation ${ruleKey}`)
     }
 
     const clauseId = legalClauseIdsByKey.get(clauseKey)
     if (clauseId === undefined) {
-      return yield* Effect.dieMessage(`Missing legal clause for citation ${clauseKey}`)
+      return yield* Effect.die(`Missing legal clause for citation ${clauseKey}`)
     }
 
     yield* db
@@ -1513,7 +1513,7 @@ export const seedData = Effect.gen(function* () {
   for (const [transactionTypeKey, ruleKey, relevance, notes] of transactionTypeLegalRules) {
     const ruleId = legalRuleIdsByKey.get(ruleKey)
     if (ruleId === undefined) {
-      return yield* Effect.dieMessage(`Missing legal rule for transaction type ${ruleKey}`)
+      return yield* Effect.die(`Missing legal rule for transaction type ${ruleKey}`)
     }
 
     yield* db

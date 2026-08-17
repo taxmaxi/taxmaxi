@@ -65,7 +65,7 @@ export const startSourceSync = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.startSourceSyncJob({
-        path: {
+        params: {
           sourceId,
         },
       })
@@ -85,7 +85,7 @@ export const replaySourceSync = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.replaySourceSyncJob({
-        path: {
+        params: {
           sourceId,
         },
       })
@@ -107,7 +107,7 @@ export const getSyncJob = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.getSourceSyncJobStatus({
-        path: {
+        params: {
           jobId,
           sourceId,
         },
@@ -134,7 +134,7 @@ export const getSourceOverview = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.getSourceOverview({
-        path: {
+        params: {
           sourceId,
         },
       })
@@ -150,7 +150,7 @@ export const listSourceAssetPnl = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.listSourceAssetPnl({
-        path: {
+        params: {
           sourceId,
         },
       })
@@ -167,10 +167,10 @@ export const listSourceTransactions = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.listSourceTransactions({
-        path: {
+        params: {
           sourceId,
         },
-        urlParams: {
+        query: {
           cursor: cursor ?? undefined,
         },
       })
@@ -187,10 +187,10 @@ export const listSourceTaxEvents = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.listSourceTaxEvents({
-        path: {
+        params: {
           sourceId,
         },
-        urlParams: {
+        query: {
           cursor: cursor ?? undefined,
         },
       })
@@ -207,10 +207,10 @@ export const listSourceFifoLots = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.listSourceFifoLots({
-        path: {
+        params: {
           sourceId,
         },
-        urlParams: {
+        query: {
           cursor: cursor ?? undefined,
         },
       })
@@ -229,7 +229,7 @@ export const explainSourceDisposal = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.explainSourceDisposal({
-        path: {
+        params: {
           legId,
           sourceId,
         },
@@ -252,7 +252,7 @@ export const computeGermanTax = ({
   makeCliTaxMaxiClient({ apiUrl, sessionToken }).pipe(
     Effect.flatMap((resolved) =>
       resolved.sources.calculateTaxForSource({
-        path: {
+        params: {
           sourceId,
         },
         payload: {

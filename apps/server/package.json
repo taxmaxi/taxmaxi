@@ -10,9 +10,8 @@
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
-    "@effect/opentelemetry": "0.63.0",
-    "@effect/platform": "0.96.1",
-    "@effect/platform-node": "0.106.0",
+    "@effect/opentelemetry": "4.0.0-rc.109",
+    "@effect/platform-node": "4.0.0-rc.109",
     "@my/observability": "workspace:*",
     "@my/persistence": "workspace:*",
     "@my/rest-api": "workspace:*",
@@ -24,7 +23,7 @@
     "@opentelemetry/sdk-trace-node": "2.9.0",
     "@opentelemetry/semantic-conventions": "1.41.1",
     "bullmq": "5.76.4",
-    "effect": "3.21.2",
+    "effect": "4.0.0-rc.109",
     "ioredis": "5.10.1"
   },
   "devDependencies": {

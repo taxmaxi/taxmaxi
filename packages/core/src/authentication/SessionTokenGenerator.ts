@@ -36,9 +36,9 @@ export class SessionTokenConfig extends Schema.Class<SessionTokenConfig>("Sessio
    * Minimum 32 bytes ensures sufficient entropy for security
    */
   byteLength: Schema.Number.pipe(
-    Schema.int(),
-    Schema.greaterThanOrEqualTo(32),
-    Schema.annotations({
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThanOrEqualTo(32)),
+    Schema.annotate({
       description: "Number of random bytes for token entropy (minimum 32)",
     })
   ),
@@ -55,12 +55,12 @@ export class SessionTokenConfig extends Schema.Class<SessionTokenConfig>("Sessio
 }
 
 /**
- * SessionTokenConfigTag - Context.Tag for dependency injection
+ * SessionTokenConfigTag - Context.Service for dependency injection
  */
-export class SessionTokenConfigTag extends Context.Tag("SessionTokenConfig")<
+export class SessionTokenConfigTag extends Context.Service<
   SessionTokenConfigTag,
   SessionTokenConfig
->() {
+>()("SessionTokenConfig") {
   /**
    * Layer providing default configuration
    */
@@ -98,7 +98,7 @@ export interface SessionTokenGeneratorService {
 }
 
 /**
- * SessionTokenGenerator - Context.Tag for dependency injection
+ * SessionTokenGenerator - Context.Service for dependency injection
  *
  * Usage:
  * ```typescript
@@ -112,10 +112,10 @@ export interface SessionTokenGeneratorService {
  * program.pipe(Effect.provide(SessionTokenGeneratorLive))
  * ```
  */
-export class SessionTokenGenerator extends Context.Tag("SessionTokenGenerator")<
+export class SessionTokenGenerator extends Context.Service<
   SessionTokenGenerator,
   SessionTokenGeneratorService
->() {}
+>()("SessionTokenGenerator") {}
 
 // =============================================================================
 // Crypto Adapter (for dependency injection)
@@ -142,15 +142,15 @@ export interface CryptoRandomAdapter {
 }
 
 /**
- * CryptoRandomAdapterTag - Context.Tag for dependency injection
+ * CryptoRandomAdapterTag - Context.Service for dependency injection
  *
  * This tag is used to inject the actual crypto implementation.
  * Provide a platform-specific implementation at runtime.
  */
-export class CryptoRandomAdapterTag extends Context.Tag("CryptoRandomAdapter")<
+export class CryptoRandomAdapterTag extends Context.Service<
   CryptoRandomAdapterTag,
   CryptoRandomAdapter
->() {}
+>()("CryptoRandomAdapter") {}
 
 // =============================================================================
 // URL-safe Base64 Encoding

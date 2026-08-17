@@ -67,7 +67,7 @@ const loadBitcoinObservation = () =>
         .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
         .limit(1)
       if (representation === undefined) {
-        return yield* Effect.dieMessage("Missing Bitcoin representation fixture")
+        return yield* Effect.die("Missing Bitcoin representation fixture")
       }
       return representation
     })
@@ -99,7 +99,7 @@ const seedPendingApprovalAsset = async (
         providerAssetId: `btc-approval-${suffix}`,
       })
       if (Option.isNone(result)) {
-        return yield* Effect.dieMessage("Expected approval provider asset")
+        return yield* Effect.die("Expected approval provider asset")
       }
       yield* repository.upsertProviderAssetMappings({
         mappings: [
@@ -139,7 +139,7 @@ const seedPendingApprovalAsset = async (
         })
         .returning({ id: schema.transactions.id })
       if (transaction === undefined) {
-        return yield* Effect.dieMessage("Expected approval replay transaction")
+        return yield* Effect.die("Expected approval replay transaction")
       }
       yield* db.insert(schema.providerTransfers).values({
         sourceId: TEST_SOURCE_ID,
@@ -313,7 +313,7 @@ describe("ProviderAssetRepositoryLive", () => {
             providerAssetId: "btc-approval-replay",
           })
           if (Option.isNone(result)) {
-            return yield* Effect.dieMessage("Expected approval provider asset")
+            return yield* Effect.die("Expected approval provider asset")
           }
 
           yield* repository.upsertProviderAssetMappings({
@@ -351,7 +351,7 @@ describe("ProviderAssetRepositoryLive", () => {
             })
             .returning({ id: schema.transactions.id })
           if (transaction === undefined) {
-            return yield* Effect.dieMessage("Expected approval replay transaction")
+            return yield* Effect.die("Expected approval replay transaction")
           }
 
           yield* db.insert(schema.providerTransfers).values({
@@ -594,7 +594,7 @@ describe("ProviderAssetRepositoryLive", () => {
             })
             .returning({ id: schema.transactions.id })
           if (transaction === undefined) {
-            return yield* Effect.dieMessage("Expected legacy review transaction")
+            return yield* Effect.die("Expected legacy review transaction")
           }
           yield* db.insert(schema.transactionReviews).values({
             transactionId: transaction.id,
@@ -839,7 +839,7 @@ describe("ProviderAssetRepositoryLive", () => {
       )
 
       const result = await runRepository(
-        Effect.either(
+        Effect.result(
           Effect.flatMap(ProviderAssetRepository, (repository) =>
             repository.recordProviderAssetSourceUses({
               sourceId: TEST_SOURCE_ID,
@@ -850,7 +850,7 @@ describe("ProviderAssetRepositoryLive", () => {
         )
       )
 
-      expect(result._tag).toBe("Left")
+      expect(result._tag).toBe("Failure")
     })
 
     it("rejects newly persisted evidence that conflicts with an approved mapping", async () => {
@@ -877,7 +877,7 @@ describe("ProviderAssetRepositoryLive", () => {
       )
 
       const result = await runRepository(
-        Effect.either(
+        Effect.result(
           Effect.flatMap(ProviderAssetRepository, (repository) =>
             repository.recordProviderAssetSourceUses({
               sourceId: TEST_SOURCE_ID,
@@ -906,9 +906,9 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
           operation: "providerAssetRepository.recordProviderAssetSourceUses",
           cause: {
             operation:
@@ -949,105 +949,103 @@ describe("ProviderAssetRepositoryLive", () => {
             .from(schema.blockchains)
           const conflicting = blockchains.find(({ name }) => name.toLowerCase() !== "bitcoin")
           if (conflicting === undefined) {
-            return yield* Effect.dieMessage("Missing conflicting blockchain fixture")
+            return yield* Effect.die("Missing conflicting blockchain fixture")
           }
           return conflicting.id
         })
       )
 
       const result = await runAtomicNormalization(
-        Effect.either(
+        Effect.result(
           Effect.gen(function* () {
             const providerAssetRepository = yield* ProviderAssetRepository
             const sourceNormalizationRepository = yield* SourceNormalizationRepository
             const syncEngineTransaction = yield* SyncEngineTransaction
 
             yield* syncEngineTransaction.run(
-              Effect.gen(function* () {
-                yield* sourceNormalizationRepository.persistNormalizedArtifacts({
-                  beforePersist: providerAssetRepository
-                    .recordProviderAssetSourceUses({
-                      sourceId: TEST_SOURCE_ID,
-                      providerAssetRowIds: [providerAsset.id],
-                      observations: [
-                        {
-                          providerAssetRowId: providerAsset.id,
-                          observedBlockchainId: conflictingBlockchainId,
-                          representationType: "token",
-                          contractAddress: "0x0000000000000000000000000000000000000003",
-                          mintAddress: null,
-                          decimals: 18,
-                        },
-                      ],
-                    })
-                    .pipe(Effect.asVoid),
-                  transaction: {
+              sourceNormalizationRepository.persistNormalizedArtifacts({
+                beforePersist: providerAssetRepository
+                  .recordProviderAssetSourceUses({
+                    sourceId: TEST_SOURCE_ID,
+                    providerAssetRowIds: [providerAsset.id],
+                    observations: [
+                      {
+                        providerAssetRowId: providerAsset.id,
+                        observedBlockchainId: conflictingBlockchainId,
+                        representationType: "token",
+                        contractAddress: "0x0000000000000000000000000000000000000003",
+                        mintAddress: null,
+                        decimals: 18,
+                      },
+                    ],
+                  })
+                  .pipe(Effect.asVoid),
+                transaction: {
+                  sourceId: TEST_SOURCE_ID,
+                  sourceRawRecordId: null,
+                  externalId: "approval-wins-persistence-race",
+                  externalGroupId: null,
+                  timestamp: new Date("2025-04-21T10:00:00.000Z"),
+                  transactionType: "internal_transfer",
+                  providerTransactionType: "send",
+                  providerStatus: "completed",
+                  providerResourcePath: null,
+                  providerDescription: "Conflicting approval race fixture",
+                  providerCreatedAt: null,
+                  providerUpdatedAt: null,
+                  metadata: null,
+                  principalId: TEST_PRINCIPAL_ID,
+                },
+                venueContext: {
+                  venueType: "cex",
+                  cexAccountId: null,
+                  externalAccountId: null,
+                  externalOrderId: null,
+                  externalFillId: null,
+                  side: null,
+                  instrument: null,
+                  fillPrice: null,
+                  commissionAmount: null,
+                  commissionCurrency: null,
+                  metadata: null,
+                },
+                providerTransfers: [
+                  {
                     sourceId: TEST_SOURCE_ID,
                     sourceRawRecordId: null,
-                    externalId: "approval-wins-persistence-race",
+                    externalId: "approval-wins-persistence-race:transfer",
                     externalGroupId: null,
+                    providerAssetId: providerAsset.id,
                     timestamp: new Date("2025-04-21T10:00:00.000Z"),
-                    transactionType: "internal_transfer",
-                    providerTransactionType: "send",
-                    providerStatus: "completed",
-                    providerResourcePath: null,
-                    providerDescription: "Conflicting approval race fixture",
-                    providerCreatedAt: null,
-                    providerUpdatedAt: null,
-                    metadata: null,
-                    principalId: TEST_PRINCIPAL_ID,
+                    direction: "outbound",
+                    processingMode: "evidence_only",
+                    fromAccountRef: null,
+                    toAccountRef: null,
+                    fromAddress: "0x0000000000000000000000000000000000000001",
+                    toAddress: "0x0000000000000000000000000000000000000002",
+                    networkName: "ethereum",
+                    networkHash: "0xapproval-wins-persistence-race",
+                    observedBlockchainId: conflictingBlockchainId,
+                    observedRepresentationType: "token",
+                    observedContractAddress: "0x0000000000000000000000000000000000000003",
+                    observedMintAddress: null,
+                    observedDecimals: 18,
+                    amount: "0.10000000",
+                    metadata: { role: "principal" },
                   },
-                  venueContext: {
-                    venueType: "cex",
-                    cexAccountId: null,
-                    externalAccountId: null,
-                    externalOrderId: null,
-                    externalFillId: null,
-                    side: null,
-                    instrument: null,
-                    fillPrice: null,
-                    commissionAmount: null,
-                    commissionCurrency: null,
-                    metadata: null,
-                  },
-                  providerTransfers: [
-                    {
-                      sourceId: TEST_SOURCE_ID,
-                      sourceRawRecordId: null,
-                      externalId: "approval-wins-persistence-race:transfer",
-                      externalGroupId: null,
-                      providerAssetId: providerAsset.id,
-                      timestamp: new Date("2025-04-21T10:00:00.000Z"),
-                      direction: "outbound",
-                      processingMode: "evidence_only",
-                      fromAccountRef: null,
-                      toAccountRef: null,
-                      fromAddress: "0x0000000000000000000000000000000000000001",
-                      toAddress: "0x0000000000000000000000000000000000000002",
-                      networkName: "ethereum",
-                      networkHash: "0xapproval-wins-persistence-race",
-                      observedBlockchainId: conflictingBlockchainId,
-                      observedRepresentationType: "token",
-                      observedContractAddress: "0x0000000000000000000000000000000000000003",
-                      observedMintAddress: null,
-                      observedDecimals: 18,
-                      amount: "0.10000000",
-                      metadata: { role: "principal" },
-                    },
-                  ],
-                  feeTransfers: [],
-                  legs: [],
-                  transactionReview: null,
-                  resolvedTransactionType: {
-                    providerTransactionType: "send",
-                    transactionType: "internal_transfer",
-                    inventoryEffect: "internal_transfer",
-                    taxTreatment: "requires_additional_rule_logic",
-                    resolutionStrategy: "static",
-                    pairedRecordRequired: false,
-                    mappingStatus: "approved",
-                  },
-                })
+                ],
+                feeTransfers: [],
+                legs: [],
+                transactionReview: null,
+                resolvedTransactionType: {
+                  providerTransactionType: "send",
+                  transactionType: "internal_transfer",
+                  inventoryEffect: "internal_transfer",
+                  taxTreatment: "requires_additional_rule_logic",
+                  resolutionStrategy: "static",
+                  pairedRecordRequired: false,
+                  mappingStatus: "approved",
+                },
               })
             )
           })
@@ -1068,7 +1066,7 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(result._tag).toBe("Left")
+      expect(result._tag).toBe("Failure")
       expect(persistedState).toEqual({ sourceUses: [], transactions: [] })
     })
 
@@ -1084,7 +1082,7 @@ describe("ProviderAssetRepositoryLive", () => {
             .from(schema.blockchains)
           const conflicting = blockchains.find(({ name }) => name.toLowerCase() !== "bitcoin")
           if (conflicting === undefined) {
-            return yield* Effect.dieMessage("Missing conflicting blockchain fixture")
+            return yield* Effect.die("Missing conflicting blockchain fixture")
           }
           return conflicting.id
         })
@@ -1115,7 +1113,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 })
                 .pipe(
                   Effect.tap(() => Deferred.succeed(sourceUseReserved, undefined)),
-                  Effect.zipRight(Deferred.await(allowPersistence))
+                  Effect.andThen(Deferred.await(allowPersistence))
                 ),
               transaction: {
                 sourceId: TEST_SOURCE_ID,
@@ -1190,7 +1188,7 @@ describe("ProviderAssetRepositoryLive", () => {
 
       await Effect.runPromise(Deferred.await(sourceUseReserved))
       const approval = runRepository(
-        Effect.either(
+        Effect.result(
           Effect.flatMap(ProviderAssetRepository, (repository) =>
             repository.approveProviderAssetMappingAndRequestReplay({
               mapping: {
@@ -1230,7 +1228,7 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
 
-      expect(approvalResult._tag).toBe("Left")
+      expect(approvalResult._tag).toBe("Failure")
       expect(state.mapping).toEqual({ status: "pending_review" })
       expect(state.transactions).toHaveLength(1)
       expect(state.sourceUses).toEqual([{ sourceId: TEST_SOURCE_ID }])
@@ -1355,15 +1353,15 @@ describe("ProviderAssetRepositoryLive", () => {
             expectedObservedRepresentations: [],
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
-        ).pipe(Effect.either)
+        ).pipe(Effect.result)
       )
       await context.waitForQueryBlockedOnLock({ queryIncludes: 'from "sources"' })
       await Effect.runPromise(Deferred.succeed(updateProviderAsset, undefined))
       const [, result] = await Promise.all([heldNormalizationLock, approval])
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toBeInstanceOf(SyncEngineStorageError)
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toBeInstanceOf(SyncEngineStorageError)
       }
     })
 
@@ -1680,7 +1678,7 @@ describe("ProviderAssetRepositoryLive", () => {
           })
 
           if (Option.isNone(cardano) || Option.isNone(ethereum) || Option.isNone(solana)) {
-            return yield* Effect.dieMessage("Expected provider assets to exist")
+            return yield* Effect.die("Expected provider assets to exist")
           }
 
           return [cardano.value, ethereum.value, solana.value] as const

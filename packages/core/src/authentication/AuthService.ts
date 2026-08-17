@@ -368,7 +368,7 @@ export interface AuthServiceShape {
 }
 
 /**
- * AuthService - Context.Tag for the authentication service
+ * AuthService - Context.Service for the authentication service
  *
  * Usage:
  * ```typescript
@@ -385,7 +385,7 @@ export interface AuthServiceShape {
  * program.pipe(Effect.provide(AuthServiceLive))
  * ```
  */
-export class AuthService extends Context.Tag("AuthService")<AuthService, AuthServiceShape>() {}
+export class AuthService extends Context.Service<AuthService, AuthServiceShape>()("AuthService") {}
 
 // =============================================================================
 // Session Error Union

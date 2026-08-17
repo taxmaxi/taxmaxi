@@ -42,7 +42,7 @@ const make = Effect.gen(function* () {
         .limit(1)
         .pipe(wrapSyncEngineSqlError("syncEngineSourceRepository.findOwnedSourceSyncContext"))
 
-      return Option.fromNullable(source)
+      return Option.fromNullishOr(source)
     })
 
   const listPrincipalSourceSyncContexts: SourceRepositoryShape["listPrincipalSourceSyncContexts"] =

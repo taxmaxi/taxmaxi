@@ -26,15 +26,14 @@ const source: SourceSyncSource = {
 }
 
 const unusedJobLifecycleMethods = {
-  attachQueueMetadata: () => Effect.dieMessage("attachQueueMetadata should not be called"),
-  claimJob: () => Effect.dieMessage("claimJob should not be called"),
-  heartbeatJob: () => Effect.dieMessage("heartbeatJob should not be called"),
-  recordRetryableFailure: () => Effect.dieMessage("recordRetryableFailure should not be called"),
-  listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
-  listRepairableActiveJobs: () =>
-    Effect.dieMessage("listRepairableActiveJobs should not be called"),
+  attachQueueMetadata: () => Effect.die("attachQueueMetadata should not be called"),
+  claimJob: () => Effect.die("claimJob should not be called"),
+  heartbeatJob: () => Effect.die("heartbeatJob should not be called"),
+  recordRetryableFailure: () => Effect.die("recordRetryableFailure should not be called"),
+  listStaleActiveJobs: () => Effect.die("listStaleActiveJobs should not be called"),
+  listRepairableActiveJobs: () => Effect.die("listRepairableActiveJobs should not be called"),
   listPendingJobsNeedingDispatch: () =>
-    Effect.dieMessage("listPendingJobsNeedingDispatch should not be called"),
+    Effect.die("listPendingJobsNeedingDispatch should not be called"),
 }
 
 const makeActiveJob = ({
@@ -103,10 +102,10 @@ const makeServiceLayer = ({
     listStaleActiveJobs: unusedJobLifecycleMethods.listStaleActiveJobs,
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
-    failJob: () => Effect.dieMessage("failJob should not be called"),
-    completeJob: () => Effect.dieMessage("completeJob should not be called"),
-    getJob: () => Effect.dieMessage("getJob should not be called"),
-    getExecutionJob: () => Effect.dieMessage("getExecutionJob should not be called"),
+    failJob: () => Effect.die("failJob should not be called"),
+    completeJob: () => Effect.die("completeJob should not be called"),
+    getJob: () => Effect.die("getJob should not be called"),
+    getExecutionJob: () => Effect.die("getExecutionJob should not be called"),
   })
 
   const SourceSyncQueueTestLive = Layer.succeed(SourceSyncQueue, {
@@ -417,7 +416,7 @@ describe("SourceSyncService queue orchestration", () => {
         const service = yield* SourceSyncService
         return yield* service
           .startSourceSyncJob({ principalId: source.principalId, sourceId: source.id })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       }).pipe(
         Effect.provide(
           makeServiceLayer({
@@ -429,9 +428,9 @@ describe("SourceSyncService queue orchestration", () => {
       )
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("SourceSyncQueueError")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("SourceSyncQueueError")
     }
     expect(repositoryEvents).toEqual(["create:sync"])
     expect(enqueued).toEqual([])

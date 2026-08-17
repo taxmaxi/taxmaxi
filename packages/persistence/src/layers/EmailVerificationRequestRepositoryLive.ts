@@ -107,7 +107,7 @@ const make = Effect.gen(function* () {
         .from(emailVerificationRequests)
         .where(eq(emailVerificationRequests.id, id))
 
-      return Option.fromNullable(row).pipe(
+      return Option.fromNullishOr(row).pipe(
         Option.flatMap((value) => rowToEmailVerificationRequest(value))
       )
     }).pipe(wrapSqlError("findById"))
@@ -121,7 +121,7 @@ const make = Effect.gen(function* () {
         .orderBy(desc(emailVerificationRequests.createdAt))
         .limit(1)
 
-      return Option.fromNullable(row).pipe(
+      return Option.fromNullishOr(row).pipe(
         Option.flatMap((value) => rowToEmailVerificationRequest(value))
       )
     }).pipe(wrapSqlError("findByUserId"))
@@ -133,7 +133,7 @@ const make = Effect.gen(function* () {
         .where(eq(emailVerificationRequests.id, id))
         .returning(selectFields)
 
-      return Option.fromNullable(row).pipe(
+      return Option.fromNullishOr(row).pipe(
         Option.flatMap((value) => rowToEmailVerificationRequest(value))
       )
     }).pipe(wrapSqlError("consume"))

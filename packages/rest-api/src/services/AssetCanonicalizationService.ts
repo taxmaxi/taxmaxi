@@ -76,7 +76,7 @@ export interface AssetCanonicalizationServiceShape {
   }) => Effect.Effect<CanonicalizeProviderAssetResult, AssetCanonicalizationError>
 }
 
-export class AssetCanonicalizationService extends Context.Tag("AssetCanonicalizationService")<
+export class AssetCanonicalizationService extends Context.Service<
   AssetCanonicalizationService,
   AssetCanonicalizationServiceShape
->() {}
+>()("AssetCanonicalizationService") {}

@@ -16,7 +16,7 @@ export interface SyncEngineTransactionShape {
 }
 
 /** Transaction boundary used when one decision spans multiple repositories. */
-export class SyncEngineTransaction extends Context.Tag("SyncEngineTransaction")<
+export class SyncEngineTransaction extends Context.Service<
   SyncEngineTransaction,
   SyncEngineTransactionShape
->() {}
+>()("SyncEngineTransaction") {}

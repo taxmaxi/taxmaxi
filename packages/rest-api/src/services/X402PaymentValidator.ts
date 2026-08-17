@@ -91,7 +91,7 @@ export interface BuildX402PaymentRequiredErrorParams {
 /**
  * X402PaymentValidator - Context tag for x402 payment validation.
  */
-export class X402PaymentValidator extends Context.Tag("@my/rest-api/X402PaymentValidator")<
+export class X402PaymentValidator extends Context.Service<
   X402PaymentValidator,
   X402PaymentValidatorService
->() {}
+>()("@my/rest-api/X402PaymentValidator") {}

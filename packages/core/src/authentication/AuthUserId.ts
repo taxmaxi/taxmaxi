@@ -14,9 +14,9 @@ import * as Schema from "effect/Schema"
  *
  * Uses Effect's built-in UUID schema which validates UUIDv4 format.
  */
-export const AuthUserId = Schema.UUID.pipe(
+export const AuthUserId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("AuthUserId"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "AuthUserId",
     title: "Auth User ID",
     description: "A unique identifier for an authenticated user (UUID format)",

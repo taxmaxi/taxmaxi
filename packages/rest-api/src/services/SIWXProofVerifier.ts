@@ -31,15 +31,15 @@ export interface VerifySIWXProofParams {
 export class SIWXProofVerificationError extends Schema.TaggedError<SIWXProofVerificationError>()(
   "SIWXProofVerificationError",
   {
-    reason: Schema.Literal(
+    reason: Schema.Literals([
       "malformed_proof",
       "unsupported_chain",
       "domain_mismatch",
       "audience_mismatch",
       "missing_or_invalid_nonce",
       "expired_proof",
-      "signature_mismatch"
-    ),
+      "signature_mismatch",
+    ]),
     message: Schema.String,
   }
 ) {}
@@ -59,7 +59,7 @@ export interface SIWXProofVerifierService {
 /**
  * SIWXProofVerifier - Context tag for SIWX proof verification.
  */
-export class SIWXProofVerifier extends Context.Tag("@my/rest-api/SIWXProofVerifier")<
+export class SIWXProofVerifier extends Context.Service<
   SIWXProofVerifier,
   SIWXProofVerifierService
->() {}
+>()("@my/rest-api/SIWXProofVerifier") {}

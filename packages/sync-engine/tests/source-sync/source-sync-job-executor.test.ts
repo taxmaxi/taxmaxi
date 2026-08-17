@@ -82,15 +82,14 @@ const makeReplayRawRecord = (index: number): SourceRawRecord => ({
 })
 
 const unusedJobLifecycleMethods = {
-  attachQueueMetadata: () => Effect.dieMessage("attachQueueMetadata should not be called"),
-  claimJob: () => Effect.dieMessage("claimJob should not be called"),
-  heartbeatJob: () => Effect.dieMessage("heartbeatJob should not be called"),
-  recordRetryableFailure: () => Effect.dieMessage("recordRetryableFailure should not be called"),
-  listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
-  listRepairableActiveJobs: () =>
-    Effect.dieMessage("listRepairableActiveJobs should not be called"),
+  attachQueueMetadata: () => Effect.die("attachQueueMetadata should not be called"),
+  claimJob: () => Effect.die("claimJob should not be called"),
+  heartbeatJob: () => Effect.die("heartbeatJob should not be called"),
+  recordRetryableFailure: () => Effect.die("recordRetryableFailure should not be called"),
+  listStaleActiveJobs: () => Effect.die("listStaleActiveJobs should not be called"),
+  listRepairableActiveJobs: () => Effect.die("listRepairableActiveJobs should not be called"),
   listPendingJobsNeedingDispatch: () =>
-    Effect.dieMessage("listPendingJobsNeedingDispatch should not be called"),
+    Effect.die("listPendingJobsNeedingDispatch should not be called"),
 }
 
 const makeExecutorLayer = ({
@@ -158,11 +157,11 @@ const makeExecutorLayer = ({
   })
 
   const SourceSyncJobRepositoryTestLive = Layer.succeed(SourceSyncJobRepository, {
-    findActiveJob: () => Effect.dieMessage("findActiveJob should not be called"),
-    createOrReuseJob: () => Effect.dieMessage("createOrReuseJob should not be called"),
+    findActiveJob: () => Effect.die("findActiveJob should not be called"),
+    createOrReuseJob: () => Effect.die("createOrReuseJob should not be called"),
     attachQueueMetadata: unusedJobLifecycleMethods.attachQueueMetadata,
-    recoverStaleActiveJob: () => Effect.dieMessage("recoverStaleActiveJob should not be called"),
-    getJob: () => Effect.dieMessage("getJob should not be called"),
+    recoverStaleActiveJob: () => Effect.die("recoverStaleActiveJob should not be called"),
+    getJob: () => Effect.die("getJob should not be called"),
     getExecutionJob: ({ jobId }) => {
       switch (executionJobFailure) {
         case "not-found":
@@ -279,7 +278,7 @@ const makeExecutorLayer = ({
         events.push(`mark-raw-failed:${message}`)
       }),
     resetNormalizationStateForSource: () =>
-      Effect.dieMessage("resetNormalizationStateForSource should not be called"),
+      Effect.die("resetNormalizationStateForSource should not be called"),
   })
 
   const makeCoinbaseModule = (): SourceProviderModuleShape => ({
@@ -604,30 +603,28 @@ const makeExecutorLayer = ({
     SyncEngineTransaction.of({ run: (effect) => effect })
   )
   const ProviderAssetRepositoryTestLive = Layer.succeed(ProviderAssetRepository, {
-    upsertProviderAssets: () => Effect.dieMessage("upsertProviderAssets should not be called"),
+    upsertProviderAssets: () => Effect.die("upsertProviderAssets should not be called"),
     upsertProviderAssetMappings: () =>
-      Effect.dieMessage("upsertProviderAssetMappings should not be called"),
+      Effect.die("upsertProviderAssetMappings should not be called"),
     seedProviderAssetMappingsIfMissing: () =>
-      Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
+      Effect.die("seedProviderAssetMappingsIfMissing should not be called"),
     approveProviderAssetMappingAndRequestReplay: () =>
-      Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
+      Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
     lockProviderAssetApprovalSnapshot: () =>
-      Effect.dieMessage("lockProviderAssetApprovalSnapshot should not be called"),
+      Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
     recordProviderAssetSourceUses: () => Effect.succeed(0),
     findProviderAssetByProviderAssetId: () =>
-      Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
+      Effect.die("findProviderAssetByProviderAssetId should not be called"),
     findProviderAssetByNaturalKey: () =>
-      Effect.dieMessage("findProviderAssetByNaturalKey should not be called"),
+      Effect.die("findProviderAssetByNaturalKey should not be called"),
     findProviderAssetByCurrencyCode: () =>
-      Effect.dieMessage("findProviderAssetByCurrencyCode should not be called"),
+      Effect.die("findProviderAssetByCurrencyCode should not be called"),
     findProviderAssetReviewById: () =>
-      Effect.dieMessage("findProviderAssetReviewById should not be called"),
-    listProviderAssetReviews: () =>
-      Effect.dieMessage("listProviderAssetReviews should not be called"),
+      Effect.die("findProviderAssetReviewById should not be called"),
+    listProviderAssetReviews: () => Effect.die("listProviderAssetReviews should not be called"),
     listProviderAssetObservedRepresentations: () =>
-      Effect.dieMessage("listProviderAssetObservedRepresentations should not be called"),
-    findProviderAssetMapping: () =>
-      Effect.dieMessage("findProviderAssetMapping should not be called"),
+      Effect.die("listProviderAssetObservedRepresentations should not be called"),
+    findProviderAssetMapping: () => Effect.die("findProviderAssetMapping should not be called"),
   })
 
   return SourceSyncJobExecutorLive.pipe(
@@ -642,13 +639,11 @@ const makeExecutorLayer = ({
     Layer.provide(SyncEngineTransactionTestLive),
     Layer.provide(TransferReconciliationServiceTestLive),
     Layer.provide(
-      Layer.setConfigProvider(
-        ConfigProvider.fromMap(
-          new Map([
-            ["SOURCE_SYNC_PAGE_SIZE", String(pageSize)],
-            ["SOURCE_SYNC_HEARTBEAT_INTERVAL_MS", String(heartbeatIntervalMs)],
-          ])
-        )
+      ConfigProvider.layer(
+        ConfigProvider.fromUnknown({
+          SOURCE_SYNC_PAGE_SIZE: String(pageSize),
+          SOURCE_SYNC_HEARTBEAT_INTERVAL_MS: String(heartbeatIntervalMs),
+        })
       )
     )
   )
@@ -1168,14 +1163,14 @@ describe("SourceSyncJobExecutor", () => {
           },
         })
       }).pipe(
-        Effect.either,
+        Effect.result,
         Effect.provide(makeExecutorLayer({ mode: "sync", failFetch: true, events }))
       )
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("SourceSyncJobRetryableExecutionError")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("SourceSyncJobRetryableExecutionError")
     }
     expect(events).toContain("failure-metadata:provider unavailable")
     expect(events).toContain("retry:provider unavailable:1:2026-01-01T00:05:00.000Z")
@@ -1246,7 +1241,7 @@ describe("SourceSyncJobExecutor", () => {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
-        Effect.either,
+        Effect.result,
         Effect.provide(
           makeExecutorLayer({ mode: "sync", executionJobFailure: "not-found", events: [] })
         )
@@ -1257,7 +1252,7 @@ describe("SourceSyncJobExecutor", () => {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
-        Effect.either,
+        Effect.result,
         Effect.provide(
           makeExecutorLayer({ mode: "sync", executionJobFailure: "conflict", events: [] })
         )
@@ -1268,24 +1263,24 @@ describe("SourceSyncJobExecutor", () => {
         const executor = yield* SourceSyncJobExecutor
         return yield* executor.execute({ jobId: "job-1" })
       }).pipe(
-        Effect.either,
+        Effect.result,
         Effect.provide(
           makeExecutorLayer({ mode: "sync", executionJobFailure: "payload", events: [] })
         )
       )
     )
 
-    expect(notFound._tag).toBe("Left")
-    if (notFound._tag === "Left") {
-      expect(notFound.left._tag).toBe("SourceSyncJobExecutionNotFoundError")
+    expect(notFound._tag).toBe("Failure")
+    if (notFound._tag === "Failure") {
+      expect(notFound.failure._tag).toBe("SourceSyncJobExecutionNotFoundError")
     }
-    expect(conflict._tag).toBe("Left")
-    if (conflict._tag === "Left") {
-      expect(conflict.left._tag).toBe("SourceSyncJobExecutionConflictError")
+    expect(conflict._tag).toBe("Failure")
+    if (conflict._tag === "Failure") {
+      expect(conflict.failure._tag).toBe("SourceSyncJobExecutionConflictError")
     }
-    expect(payload._tag).toBe("Left")
-    if (payload._tag === "Left") {
-      expect(payload.left._tag).toBe("SourceSyncJobExecutionPayloadError")
+    expect(payload._tag).toBe("Failure")
+    if (payload._tag === "Failure") {
+      expect(payload.failure._tag).toBe("SourceSyncJobExecutionPayloadError")
     }
   })
 })

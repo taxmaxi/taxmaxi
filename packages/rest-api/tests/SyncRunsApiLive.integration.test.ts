@@ -1,4 +1,5 @@
-import { HttpApiBuilder, HttpApiClient, HttpClient, HttpClientRequest } from "@effect/platform"
+import { HttpApiClient } from "effect/unstable/httpapi"
+import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
@@ -18,6 +19,7 @@ import {
 } from "@my/sync-engine/services"
 import { SourceSyncRunServiceLive, SourceSyncServiceLive } from "@my/sync-engine/layers"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { drizzle, runSqlUnsafe } from "../../persistence/src/layers/PgClientLive.ts"
@@ -42,6 +44,12 @@ const queueEvents: Array<SourceSyncQueuePayload> = []
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
+const TestConfigProvider = ConfigProvider.fromEnvRecord({
+  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
+})
+const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
+  Layer.provide(ConfigProvider.layer(TestConfigProvider))
+)
 
 const SourceSyncQueueTestLive = Layer.effect(
   SourceSyncQueue,
@@ -74,23 +82,20 @@ const SourceSyncQueueTestLive = Layer.effect(
 )
 
 const AuthServiceTestLive = Layer.succeed(AuthService, {
-  login: () => Effect.dieMessage("AuthService test stub: login not implemented"),
-  register: () => Effect.dieMessage("AuthService test stub: register not implemented"),
+  login: () => Effect.die("AuthService test stub: login not implemented"),
+  register: () => Effect.die("AuthService test stub: register not implemented"),
   startEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: startEmailVerification not implemented"),
+    Effect.die("AuthService test stub: startEmailVerification not implemented"),
   resendEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: resendEmailVerification not implemented"),
-  verifyEmail: () => Effect.dieMessage("AuthService test stub: verifyEmail not implemented"),
-  startOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: startOAuthLogin not implemented"),
-  completeOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: completeOAuthLogin not implemented"),
-  startLink: () => Effect.dieMessage("AuthService test stub: startLink not implemented"),
-  completeLink: () => Effect.dieMessage("AuthService test stub: completeLink not implemented"),
-  logout: () => Effect.dieMessage("AuthService test stub: logout not implemented"),
-  validateSession: () =>
-    Effect.dieMessage("AuthService test stub: validateSession not implemented"),
-  linkIdentity: () => Effect.dieMessage("AuthService test stub: linkIdentity not implemented"),
+    Effect.die("AuthService test stub: resendEmailVerification not implemented"),
+  verifyEmail: () => Effect.die("AuthService test stub: verifyEmail not implemented"),
+  startOAuthLogin: () => Effect.die("AuthService test stub: startOAuthLogin not implemented"),
+  completeOAuthLogin: () => Effect.die("AuthService test stub: completeOAuthLogin not implemented"),
+  startLink: () => Effect.die("AuthService test stub: startLink not implemented"),
+  completeLink: () => Effect.die("AuthService test stub: completeLink not implemented"),
+  logout: () => Effect.die("AuthService test stub: logout not implemented"),
+  validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
+  linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
   getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
@@ -100,17 +105,17 @@ const PasswordHasherTestLive = Layer.succeed(PasswordHasher, {
 })
 
 const TaxCalculationServiceTestLive = Layer.succeed(TaxCalculationService, {
-  calculateTax: () => Effect.dieMessage("TaxCalculationService test stub: calculateTax"),
+  calculateTax: () => Effect.die("TaxCalculationService test stub: calculateTax"),
 })
 
 const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
   reconcileTransferCandidates: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
   rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
     ),
 } satisfies TransferReconciliationServiceShape)
@@ -135,15 +140,14 @@ const PersistenceLayer = Layer.mergeAll(
   PasswordHasherTestLive
 ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const HttpLive = HttpApiBuilder.serve().pipe(
-  Layer.provide(TaxMaxiApiLive),
-  Layer.provide(AnonSessionServiceLive),
-  Layer.provide(SIWXProofVerifierTestLive),
-  Layer.provide(X402PaymentValidatorTestLive),
-  Layer.provide(SimpleTokenValidatorLive),
-  Layer.provideMerge(PersistenceLayer),
-  Layer.provideMerge(NodeHttpServer.layerTest)
-)
+const HttpLive = HttpRouter.serve(
+  TaxMaxiApiLive.pipe(
+    Layer.provide(AnonSessionServiceTestLive),
+    Layer.provide(SIWXProofVerifierTestLive),
+    Layer.provide(X402PaymentValidatorTestLive),
+    Layer.provide(SimpleTokenValidatorLive)
+  )
+).pipe(Layer.provideMerge(PersistenceLayer), Layer.provideMerge(NodeHttpServer.layerTest))
 
 const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
   Effect.gen(function* () {
@@ -184,7 +188,7 @@ const seedCoinbaseSources = ({
       .pipe(Effect.map((rows) => rows.find((row) => row.name === "coinbase")))
 
     if (coinbaseCex === undefined) {
-      return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
+      return yield* Effect.die("Missing seeded coinbase CEX fixture")
     }
 
     yield* Effect.forEach(sourceIds, (sourceId, index) =>
@@ -204,7 +208,7 @@ const seedCoinbaseSources = ({
           .returning({ id: schema.cexAccount.id })
 
         if (createdAccount === undefined) {
-          return yield* Effect.dieMessage("Failed to create cex account fixture")
+          return yield* Effect.die("Failed to create cex account fixture")
         }
 
         yield* db.insert(schema.sources).values({
@@ -310,7 +314,7 @@ describe("SyncRunsApiLive", () => {
       const client = yield* makeAuthenticatedClient({ userId })
       const started = yield* client.syncRuns.startSyncRun(undefined)
       const loaded = yield* client.syncRuns.getSyncRun({
-        path: { runId: started.runId },
+        params: { runId: started.runId },
       })
 
       expect(loaded.runId).toBe(started.runId)
@@ -339,13 +343,13 @@ describe("SyncRunsApiLive", () => {
       const otherClient = yield* makeAuthenticatedClient({ userId: otherUserId })
       const result = yield* otherClient.syncRuns
         .getSyncRun({
-          path: { runId: started.runId },
+          params: { runId: started.runId },
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("SyncRunNotFoundError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("SyncRunNotFoundError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
@@ -367,14 +371,14 @@ describe("SyncRunsApiLive", () => {
         firstItem.jobId === null ||
         secondItem.jobId === null
       ) {
-        return yield* Effect.dieMessage("Expected two sync run items")
+        return yield* Effect.die("Expected two sync run items")
       }
 
       yield* markJobTerminal({ jobId: firstItem.jobId, status: "completed" })
       yield* markJobTerminal({ jobId: secondItem.jobId, status: "failed" })
 
       const loaded = yield* client.syncRuns.getSyncRun({
-        path: { runId: started.runId },
+        params: { runId: started.runId },
       })
 
       expect(loaded.status).toBe("partially_failed")

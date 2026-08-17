@@ -4,7 +4,7 @@
  * @module BillingApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 
 import { AuthMiddleware } from "./AuthMiddleware.ts"
@@ -14,12 +14,12 @@ export class BillingCatalogPriceResponse extends Schema.Class<BillingCatalogPric
   "BillingCatalogPriceResponse"
 )({
   lookupKey: Schema.String,
-  amountMinor: Schema.Int.annotations({
+  amountMinor: Schema.Int.annotate({
     title: "Amount Minor",
     description: "Price in the currency's minor unit, such as cents for EUR.",
   }),
   currency: Schema.String,
-  taxBehavior: Schema.Literal("inclusive", "exclusive", "unspecified"),
+  taxBehavior: Schema.Literals(["inclusive", "exclusive", "unspecified"]),
   recurringInterval: Schema.NullOr(Schema.Literal("year")),
 }) {}
 
@@ -36,54 +36,56 @@ export class BillingStatusResponse extends Schema.Class<BillingStatusResponse>(
 )({
   credits: Schema.Int,
   subscriptionStatus: Schema.NullOr(Schema.String),
-  currentPeriodEnd: Schema.NullOr(Schema.DateTimeUtc),
+  currentPeriodEnd: Schema.NullOr(Schema.DateTimeUtcFromString),
   cancelAtPeriodEnd: Schema.Boolean,
 }) {}
 
 export class BillingBadRequestError extends Schema.TaggedError<BillingBadRequestError>()(
   "BillingBadRequestError",
   { message: Schema.String },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
-const getCatalog = HttpApiEndpoint.get("getBillingCatalog", "/catalog")
-  .addSuccess(BillingCatalogResponse)
-  .addError(InternalServerError)
+const getCatalog = HttpApiEndpoint.get("getBillingCatalog", "/catalog", {
+  success: BillingCatalogResponse,
+  error: InternalServerError,
+})
 
-const getStatus = HttpApiEndpoint.get("getBillingStatus", "/status")
-  .addSuccess(BillingStatusResponse)
-  .addError(InternalServerError)
+const getStatus = HttpApiEndpoint.get("getBillingStatus", "/status", {
+  success: BillingStatusResponse,
+  error: InternalServerError,
+})
 
-const createAnnualCheckout = HttpApiEndpoint.post("createAnnualCheckout", "/checkout/annual")
-  .addSuccess(BillingRedirectResponse)
-  .addError(BillingBadRequestError)
-  .addError(InternalServerError)
+const createAnnualCheckout = HttpApiEndpoint.post("createAnnualCheckout", "/checkout/annual", {
+  success: BillingRedirectResponse,
+  error: [BillingBadRequestError, InternalServerError],
+})
 
-const createTopUpCheckout = HttpApiEndpoint.post("createTopUpCheckout", "/checkout/top-up")
-  .addSuccess(BillingRedirectResponse)
-  .addError(BillingBadRequestError)
-  .addError(InternalServerError)
+const createTopUpCheckout = HttpApiEndpoint.post("createTopUpCheckout", "/checkout/top-up", {
+  success: BillingRedirectResponse,
+  error: [BillingBadRequestError, InternalServerError],
+})
 
-const createPortalSession = HttpApiEndpoint.post("createBillingPortalSession", "/portal")
-  .addSuccess(BillingRedirectResponse)
-  .addError(BillingBadRequestError)
-  .addError(InternalServerError)
+const createPortalSession = HttpApiEndpoint.post("createBillingPortalSession", "/portal", {
+  success: BillingRedirectResponse,
+  error: [BillingBadRequestError, InternalServerError],
+})
 
-const stripeWebhook = HttpApiEndpoint.post("stripeWebhook", "/webhooks/stripe")
-  .addSuccess(Schema.Void)
-  .addError(BillingBadRequestError)
-  .addError(InternalServerError)
+const stripeWebhook = HttpApiEndpoint.post("stripeWebhook", "/webhooks/stripe", {
+  success: HttpApiSchema.NoContent,
+  error: [BillingBadRequestError, InternalServerError],
+})
 
 export class BillingApi extends HttpApiGroup.make("billing")
   .add(getStatus)
   .add(createAnnualCheckout)
   .add(createTopUpCheckout)
   .add(createPortalSession)
-  .middlewareEndpoints(AuthMiddleware)
+  .middleware(AuthMiddleware)
   .add(getCatalog)
   .add(stripeWebhook)
   .prefix("/v1/billing")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Billing",
       description: "Stripe Checkout, subscription management, and transaction credits",

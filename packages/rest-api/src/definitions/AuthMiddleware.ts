@@ -7,8 +7,8 @@
  * @module AuthMiddleware
  */
 
-import { HttpApiMiddleware, HttpApiSecurity } from "@effect/platform"
-import type * as HttpServerRequest from "@effect/platform/HttpServerRequest"
+import { HttpApiMiddleware, HttpApiSecurity } from "effect/unstable/httpapi"
+import type * as HttpServerRequest from "effect/unstable/http/HttpServerRequest"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
@@ -29,11 +29,11 @@ import { ForbiddenError, UnauthorizedError } from "./ApiErrors.ts"
  *
  * Uses proper branded types for userId and sessionId to ensure type safety
  * throughout the codebase. This eliminates the need for runtime conversions
- * with .make() or Schema.decodeUnknown() at usage sites.
+ * with .make() or Schema.decodeUnknownEffect() at usage sites.
  */
 export class User extends Schema.Class<User>("User")({
   userId: AuthUserId,
-  role: Schema.Literal("admin", "user", "readonly"),
+  role: Schema.Literals(["admin", "user", "readonly"]),
   /**
    * Session ID for session-based authentication.
    * Used by logout and refresh handlers to invalidate/renew the session.
@@ -55,10 +55,9 @@ export class User extends Schema.Class<User>("User")({
  * )
  * ```
  */
-export class CurrentUser extends Context.Tag("@my/rest-api/AuthMiddleware/CurrentUser")<
-  CurrentUser,
-  User
->() {}
+export class CurrentUser extends Context.Service<CurrentUser, User>()(
+  "@my/rest-api/AuthMiddleware/CurrentUser"
+) {}
 
 /**
  * OptionalCurrentUserService - Resolves an optional authenticated user for public endpoints.
@@ -78,9 +77,10 @@ export interface OptionalCurrentUserService {
 /**
  * OptionalCurrentUser - Service tag for optional-auth endpoint handlers.
  */
-export class OptionalCurrentUser extends Context.Tag(
-  "@my/rest-api/AuthMiddleware/OptionalCurrentUser"
-)<OptionalCurrentUser, OptionalCurrentUserService>() {}
+export class OptionalCurrentUser extends Context.Service<
+  OptionalCurrentUser,
+  OptionalCurrentUserService
+>()("@my/rest-api/AuthMiddleware/OptionalCurrentUser") {}
 
 // =============================================================================
 // Authentication Middleware
@@ -98,11 +98,14 @@ export class OptionalCurrentUser extends Context.Tag(
  * 4. Returns UnauthorizedError (401) for invalid/missing tokens
  *
  * Apply to protected API groups using `.middleware(AuthMiddleware)`
+ *
+ * @effect-expect-leaking HttpServerRequest ParsedSearchParams RouteContext
  */
-// @effect-diagnostics-next-line leakingRequirements:off
-export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()("AuthMiddleware", {
-  failure: UnauthorizedError,
-  provides: CurrentUser,
+export class AuthMiddleware extends HttpApiMiddleware.Service<
+  AuthMiddleware,
+  { provides: CurrentUser }
+>()("AuthMiddleware", {
+  error: UnauthorizedError,
   security: {
     bearer: HttpApiSecurity.bearer,
     cookie: HttpApiSecurity.apiKey({ in: "cookie", key: "taxmaxi_session" }),
@@ -114,19 +117,19 @@ export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()("Aut
  *
  * This middleware validates the caller like AuthMiddleware, then requires
  * CurrentUser.role to be "admin" before downstream handlers run.
+ *
+ * @effect-expect-leaking HttpServerRequest ParsedSearchParams RouteContext
  */
-// @effect-diagnostics-next-line leakingRequirements:off
-export class AdminAuthMiddleware extends HttpApiMiddleware.Tag<AdminAuthMiddleware>()(
-  "AdminAuthMiddleware",
-  {
-    failure: Schema.Union(UnauthorizedError, ForbiddenError),
-    provides: CurrentUser,
-    security: {
-      bearer: HttpApiSecurity.bearer,
-      cookie: HttpApiSecurity.apiKey({ in: "cookie", key: "taxmaxi_session" }),
-    },
-  }
-) {}
+export class AdminAuthMiddleware extends HttpApiMiddleware.Service<
+  AdminAuthMiddleware,
+  { provides: CurrentUser }
+>()("AdminAuthMiddleware", {
+  error: [UnauthorizedError, ForbiddenError],
+  security: {
+    bearer: HttpApiSecurity.bearer,
+    cookie: HttpApiSecurity.apiKey({ in: "cookie", key: "taxmaxi_session" }),
+  },
+}) {}
 
 // =============================================================================
 // Token Validation Service
@@ -148,7 +151,6 @@ export interface TokenValidatorService {
 /**
  * TokenValidator - Service tag for token validation
  */
-export class TokenValidator extends Context.Tag("TokenValidator")<
-  TokenValidator,
-  TokenValidatorService
->() {}
+export class TokenValidator extends Context.Service<TokenValidator, TokenValidatorService>()(
+  "TokenValidator"
+) {}

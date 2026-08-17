@@ -1,13 +1,13 @@
-import { Args, Command, Options } from "@effect/cli"
 import { Console, Effect } from "effect"
 import * as Option from "effect/Option"
+import { Argument as Args, Command, Flag as Options } from "effect/unstable/cli"
 import { coinbaseCommand } from "./coinbase.ts"
 import { syncOnchainSourceProgram } from "./onchain.ts"
 
 const jsonOption = Options.boolean("json").pipe(
   Options.withDescription("Output machine-readable JSON")
 )
-const walletAddressArgument = Args.text({ name: "wallet-address" }).pipe(
+const walletAddressArgument = Args.string("wallet-address").pipe(
   Args.optional,
   Args.withDescription("Onchain wallet address to create and sync")
 )

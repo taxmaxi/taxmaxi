@@ -32,7 +32,7 @@ interface PositionAccumulator {
 
 const decodeDecimal = (value: string, operation: string) =>
   Effect.try({
-    try: () => BigDecimal.unsafeFromString(value),
+    try: () => BigDecimal.fromStringUnsafe(value),
     catch: (cause) => ({ operation, cause }),
   })
 
@@ -60,7 +60,7 @@ const make = Effect.gen(function* () {
           .pipe(wrapSqlError("portfolioRepository.listAssetPositions.source"))
 
         if (ownedSource === undefined) {
-          return yield* Effect.fail(new PortfolioSourceNotFoundError({ sourceId: scope.sourceId }))
+          return yield* new PortfolioSourceNotFoundError({ sourceId: scope.sourceId })
         }
       }
 

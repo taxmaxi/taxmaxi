@@ -16,7 +16,7 @@
  * @module ApiErrors
  */
 
-import { HttpApiSchema } from "@effect/platform"
+import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
 /**
@@ -27,11 +27,11 @@ import * as Schema from "effect/Schema"
 export class UnauthorizedError extends Schema.TaggedError<UnauthorizedError>()(
   "UnauthorizedError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Authentication required")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Authentication required"))
     ),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {}
 
 /**
@@ -47,17 +47,15 @@ export const isUnauthorizedError = Schema.is(UnauthorizedError)
 export class ForbiddenError extends Schema.TaggedError<ForbiddenError>()(
   "ForbiddenError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Access denied")
-    ),
-    resource: Schema.OptionFromNullOr(Schema.String).annotations({
+    message: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("Access denied"))),
+    resource: Schema.OptionFromNullOr(Schema.String).annotate({
       description: "The resource access was denied to",
     }),
-    action: Schema.OptionFromNullOr(Schema.String).annotations({
+    action: Schema.OptionFromNullOr(Schema.String).annotate({
       description: "The action that was denied",
     }),
   },
-  HttpApiSchema.annotations({ status: 403 })
+  { httpApiStatus: 403 }
 ) {}
 
 /**
@@ -73,14 +71,14 @@ export const isForbiddenError = Schema.is(ForbiddenError)
 export class InternalServerError extends Schema.TaggedError<InternalServerError>()(
   "InternalServerError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "An unexpected error occurred")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("An unexpected error occurred"))
     ),
-    requestId: Schema.OptionFromNullOr(Schema.String).annotations({
+    requestId: Schema.OptionFromNullOr(Schema.String).annotate({
       description: "A unique identifier for the request, useful for debugging",
     }),
   },
-  HttpApiSchema.annotations({ status: 500 })
+  { httpApiStatus: 500 }
 ) {}
 
 /**
@@ -98,14 +96,14 @@ export const isInternalServerError = Schema.is(InternalServerError)
 export class AuditLogError extends Schema.TaggedError<AuditLogError>()(
   "AuditLogError",
   {
-    operation: Schema.String.annotations({
+    operation: Schema.String.annotate({
       description: "The audit operation that failed (e.g., 'logCreate', 'logUpdate')",
     }),
-    cause: Schema.Defect.annotations({
+    cause: Schema.Defect().annotate({
       description: "The underlying cause of the failure",
     }),
   },
-  HttpApiSchema.annotations({ status: 500 })
+  { httpApiStatus: 500 }
 ) {
   override get message(): string {
     return `Audit log error during ${this.operation}: ${String(this.cause)}`
@@ -127,14 +125,14 @@ export const isAuditLogError = Schema.is(AuditLogError)
 export class UserLookupError extends Schema.TaggedError<UserLookupError>()(
   "UserLookupError",
   {
-    userId: Schema.String.annotations({
+    userId: Schema.String.annotate({
       description: "The user ID that could not be looked up",
     }),
-    cause: Schema.Defect.annotations({
+    cause: Schema.Defect().annotate({
       description: "The underlying cause of the lookup failure",
     }),
   },
-  HttpApiSchema.annotations({ status: 500 })
+  { httpApiStatus: 500 }
 ) {
   override get message(): string {
     return `Failed to look up user ${this.userId} for audit log: ${String(this.cause)}`

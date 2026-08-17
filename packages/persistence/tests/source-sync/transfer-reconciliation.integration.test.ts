@@ -103,7 +103,7 @@ const seedApprovedProviderAsset = ({
       .returning({ id: schema.providerAssets.id })
 
     if (providerAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to create provider asset fixture")
+      return yield* Effect.die("Failed to create provider asset fixture")
     }
 
     yield* db.insert(schema.providerAssetMappings).values({
@@ -199,7 +199,7 @@ const seedProviderTransfer = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create provider transfer transaction fixture")
+      return yield* Effect.die("Failed to create provider transfer transaction fixture")
     }
 
     const [providerTransfer] = yield* db
@@ -226,7 +226,7 @@ const seedProviderTransfer = ({
       .returning({ id: schema.providerTransfers.id })
 
     if (providerTransfer === undefined) {
-      return yield* Effect.dieMessage("Failed to create provider transfer fixture")
+      return yield* Effect.die("Failed to create provider transfer fixture")
     }
 
     return providerTransfer.id
@@ -266,7 +266,7 @@ const seedCustodyInventory = ({
       })
       .returning({ id: schema.transactionLegs.id })
     if (providerTransfer === undefined || openingLeg === undefined) {
-      return yield* Effect.dieMessage("Failed to seed custody inventory")
+      return yield* Effect.die("Failed to seed custody inventory")
     }
     const [openingLot] = yield* db
       .insert(schema.fifoLots)
@@ -300,7 +300,7 @@ const seedCustodyInventory = ({
       })
       .returning({ id: schema.inventoryMovements.id })
     if (openingLot === undefined || movement === undefined) {
-      return yield* Effect.dieMessage("Failed to seed custody FIFO rows")
+      return yield* Effect.die("Failed to seed custody FIFO rows")
     }
     yield* db.insert(schema.inventoryMovementAllocations).values({
       inventoryMovementId: movement.id,
@@ -355,7 +355,7 @@ const seedOnchainReceipt = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain transaction fixture")
+      return yield* Effect.die("Failed to create onchain transaction fixture")
     }
 
     yield* db.insert(schema.transactionOnchainContext).values({
@@ -410,7 +410,7 @@ const seedOnchainReceipt = ({
       .returning({ id: schema.transfers.id })
 
     if (transfer === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain transfer fixture")
+      return yield* Effect.die("Failed to create onchain transfer fixture")
     }
 
     return {
@@ -490,7 +490,7 @@ const seedObservedOnchainReceipt = ({
       .returning({ id: schema.providerAssets.id })
 
     if (providerAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to create observed provider asset fixture")
+      return yield* Effect.die("Failed to create observed provider asset fixture")
     }
 
     const [transaction] = yield* db
@@ -514,7 +514,7 @@ const seedObservedOnchainReceipt = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create observed transaction fixture")
+      return yield* Effect.die("Failed to create observed transaction fixture")
     }
 
     const [providerTransfer] = yield* db
@@ -546,7 +546,7 @@ const seedObservedOnchainReceipt = ({
       .returning({ id: schema.providerTransfers.id })
 
     if (providerTransfer === undefined) {
-      return yield* Effect.dieMessage("Failed to create observed provider transfer fixture")
+      return yield* Effect.die("Failed to create observed provider transfer fixture")
     }
 
     return {
@@ -748,7 +748,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create evidence-only reconciliation")
+          return yield* Effect.die("Failed to create evidence-only reconciliation")
         }
 
         return reconciliation.id
@@ -883,7 +883,7 @@ describe("TransferReconciliationServiceLive", () => {
             .where(eq(schema.providerTransfers.id, providerTransferId))
             .limit(1)
           if (providerTransfer === undefined) {
-            return yield* Effect.dieMessage("Failed to load reviewed provider transaction")
+            return yield* Effect.die("Failed to load reviewed provider transaction")
           }
 
           const reviewedTransactionId =
@@ -939,7 +939,7 @@ describe("TransferReconciliationServiceLive", () => {
             })
             .returning({ id: schema.transactionLegs.id })
           if (openingLeg === undefined || giftLeg === undefined) {
-            return yield* Effect.dieMessage("Failed to create reviewed accounting legs")
+            return yield* Effect.die("Failed to create reviewed accounting legs")
           }
           const [openingLot] = yield* db
             .insert(schema.fifoLots)
@@ -957,7 +957,7 @@ describe("TransferReconciliationServiceLive", () => {
             })
             .returning({ id: schema.fifoLots.id })
           if (openingLot === undefined) {
-            return yield* Effect.dieMessage("Failed to create reviewed accounting lot")
+            return yield* Effect.die("Failed to create reviewed accounting lot")
           }
           yield* db.insert(schema.disposalMatches).values({
             disposalLegId: giftLeg.id,
@@ -1208,7 +1208,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactions.id })
         if (acquisitionLeg === undefined || laterTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to seed consumed receipt fixture")
+          return yield* Effect.die("Failed to seed consumed receipt fixture")
         }
         const [lot] = yield* db
           .insert(schema.fifoLots)
@@ -1244,7 +1244,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
         if (lot === undefined || disposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed consumed receipt FIFO effects")
+          return yield* Effect.die("Failed to seed consumed receipt FIFO effects")
         }
         yield* db.insert(schema.disposalMatches).values({
           disposalLegId: disposalLeg.id,
@@ -1353,7 +1353,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (providerTransfer === undefined || openingLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create late ambiguity inventory")
+          return yield* Effect.die("Failed to create late ambiguity inventory")
         }
 
         const [openingLot] = yield* db
@@ -1389,7 +1389,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (openingLot === undefined || movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create late ambiguity lot and movement")
+          return yield* Effect.die("Failed to create late ambiguity lot and movement")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -1469,7 +1469,7 @@ describe("TransferReconciliationServiceLive", () => {
           localLeg === undefined ||
           disposalTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed late ambiguity downstream usage")
+          return yield* Effect.die("Failed to seed late ambiguity downstream usage")
         }
 
         const [localLot] = yield* db
@@ -1505,7 +1505,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (localLot === undefined || disposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed late ambiguity downstream FIFO rows")
+          return yield* Effect.die("Failed to seed late ambiguity downstream FIFO rows")
         }
 
         const [duplicateProviderTransfer] = yield* db
@@ -1525,7 +1525,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.providerTransfers.id })
         if (duplicateProviderTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to seed duplicate disposal provider transfer")
+          return yield* Effect.die("Failed to seed duplicate disposal provider transfer")
         }
         const [duplicateMovement] = yield* db
           .insert(schema.inventoryMovements)
@@ -1545,7 +1545,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.inventoryMovements.id })
         if (duplicateMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to seed duplicate disposal movement")
+          return yield* Effect.die("Failed to seed duplicate disposal movement")
         }
 
         yield* db.insert(schema.disposalMatches).values({
@@ -1578,7 +1578,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.providerTransfers.id })
         if (feeProviderTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to seed downstream fee transfer")
+          return yield* Effect.die("Failed to seed downstream fee transfer")
         }
         const [feeMovement] = yield* db
           .insert(schema.inventoryMovements)
@@ -1597,7 +1597,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.inventoryMovements.id })
         if (feeMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to seed downstream fee movement")
+          return yield* Effect.die("Failed to seed downstream fee movement")
         }
         yield* db.insert(schema.inventoryMovementAllocations).values({
           inventoryMovementId: feeMovement.id,
@@ -1619,7 +1619,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactions.id })
         if (laterDisposalTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to seed later FIFO disposal")
+          return yield* Effect.die("Failed to seed later FIFO disposal")
         }
         const [laterDisposalLeg] = yield* db
           .insert(schema.transactionLegs)
@@ -1638,7 +1638,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
         if (laterDisposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed later FIFO disposal leg")
+          return yield* Effect.die("Failed to seed later FIFO disposal leg")
         }
         yield* db.insert(schema.disposalMatches).values({
           disposalLegId: laterDisposalLeg.id,
@@ -1663,7 +1663,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactions.id })
         if (preArrivalTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to seed pre-arrival disposal")
+          return yield* Effect.die("Failed to seed pre-arrival disposal")
         }
         const [preArrivalLeg] = yield* db
           .insert(schema.transactionLegs)
@@ -1682,7 +1682,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
         if (preArrivalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed pre-arrival disposal leg")
+          return yield* Effect.die("Failed to seed pre-arrival disposal leg")
         }
         yield* db.insert(schema.disposalMatches).values({
           disposalLegId: preArrivalLeg.id,
@@ -1721,7 +1721,7 @@ describe("TransferReconciliationServiceLive", () => {
           unrelatedOriginTransaction === undefined ||
           unrelatedDestinationTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed unrelated internal transfer")
+          return yield* Effect.die("Failed to seed unrelated internal transfer")
         }
         const [unrelatedProviderTransfer] = yield* db
           .insert(schema.providerTransfers)
@@ -1740,7 +1740,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.providerTransfers.id })
         if (unrelatedProviderTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to seed unrelated provider transfer")
+          return yield* Effect.die("Failed to seed unrelated provider transfer")
         }
         const unrelatedMetadata = {
           reconciliation: {
@@ -1781,7 +1781,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id, kind: schema.transactionLegs.kind })
         const unrelatedDestinationLeg = unrelatedLegs.find(({ kind }) => kind === "acquisition")
         if (unrelatedDestinationLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed unrelated destination leg")
+          return yield* Effect.die("Failed to seed unrelated destination leg")
         }
         const [unrelatedLot] = yield* db
           .insert(schema.fifoLots)
@@ -1815,7 +1815,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.inventoryMovements.id })
         if (unrelatedLot === undefined || unrelatedMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to seed unrelated FIFO effects")
+          return yield* Effect.die("Failed to seed unrelated FIFO effects")
         }
 
         const [downstreamOriginTransaction] = yield* db
@@ -1843,7 +1843,7 @@ describe("TransferReconciliationServiceLive", () => {
           downstreamOriginTransaction === undefined ||
           downstreamDestinationTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed late ambiguity downstream transfer")
+          return yield* Effect.die("Failed to seed late ambiguity downstream transfer")
         }
 
         const [downstreamProviderTransfer] = yield* db
@@ -1863,7 +1863,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.providerTransfers.id })
         if (downstreamProviderTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to seed downstream provider transfer")
+          return yield* Effect.die("Failed to seed downstream provider transfer")
         }
         const [downstreamMovement] = yield* db
           .insert(schema.inventoryMovements)
@@ -1882,7 +1882,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.inventoryMovements.id })
         if (downstreamMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to seed downstream custody movement")
+          return yield* Effect.die("Failed to seed downstream custody movement")
         }
         const downstreamMetadata = {
           reconciliation: {
@@ -1924,7 +1924,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (downstreamOriginLeg === undefined || downstreamDestinationLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed late ambiguity downstream legs")
+          return yield* Effect.die("Failed to seed late ambiguity downstream legs")
         }
 
         yield* db.insert(schema.disposalMatches).values({
@@ -1956,7 +1956,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (downstreamLot === undefined) {
-          return yield* Effect.dieMessage("Failed to seed late ambiguity downstream lot")
+          return yield* Effect.die("Failed to seed late ambiguity downstream lot")
         }
 
         return {
@@ -2327,7 +2327,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
         if (providerTransfer === undefined || openingLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed duplicate-claim inventory")
+          return yield* Effect.die("Failed to seed duplicate-claim inventory")
         }
         const [openingLot] = yield* db
           .insert(schema.fifoLots)
@@ -2361,7 +2361,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.inventoryMovements.id })
         if (openingLot === undefined || movement === undefined) {
-          return yield* Effect.dieMessage("Failed to seed duplicate-claim FIFO rows")
+          return yield* Effect.die("Failed to seed duplicate-claim FIFO rows")
         }
         yield* db.insert(schema.inventoryMovementAllocations).values({
           inventoryMovementId: movement.id,
@@ -3029,7 +3029,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (blockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         return blockchain.id
@@ -3791,7 +3791,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (blockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         return blockchain.id
@@ -4192,7 +4192,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create reselect reconciliation fixture")
+          return yield* Effect.die("Failed to create reselect reconciliation fixture")
         }
         return reconciliation.id
       })
@@ -4336,7 +4336,7 @@ describe("TransferReconciliationServiceLive", () => {
         const first = rows[0]
         const second = rows[1]
         if (first === undefined || second === undefined) {
-          return yield* Effect.dieMessage("Failed to create reconciliation fixtures")
+          return yield* Effect.die("Failed to create reconciliation fixtures")
         }
 
         return [first.id, second.id] as const
@@ -4363,7 +4363,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (leg === undefined) {
-          return yield* Effect.dieMessage("Failed to create acquisition leg fixture")
+          return yield* Effect.die("Failed to create acquisition leg fixture")
         }
 
         const [lot] = yield* db
@@ -4399,7 +4399,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (knownLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create known acquisition leg fixture")
+          return yield* Effect.die("Failed to create known acquisition leg fixture")
         }
 
         yield* db.insert(schema.fifoLots).values({
@@ -4422,7 +4422,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (lot === undefined || providerTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody allocation fixture")
+          return yield* Effect.die("Failed to create custody allocation fixture")
         }
 
         const [movement] = yield* db
@@ -4444,7 +4444,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create inventory movement fixture")
+          return yield* Effect.die("Failed to create inventory movement fixture")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -4472,7 +4472,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (feeLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create origin fee leg fixture")
+          return yield* Effect.die("Failed to create origin fee leg fixture")
         }
 
         // Match the transfer amount so the test proves that amount equality does not make this
@@ -4496,7 +4496,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (feeMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create origin fee movement fixture")
+          return yield* Effect.die("Failed to create origin fee movement fixture")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -4529,7 +4529,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (providerOriginLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create provider-origin lot fixture")
+          return yield* Effect.die("Failed to create provider-origin lot fixture")
         }
 
         return {
@@ -4621,7 +4621,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (reviewedTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to load reviewed disposal fixture")
+          return yield* Effect.die("Failed to load reviewed disposal fixture")
         }
 
         yield* db
@@ -4660,7 +4660,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.providerTransfers.id })
 
         if (redundantProviderTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create redundant principal transfer fixture")
+          return yield* Effect.die("Failed to create redundant principal transfer fixture")
         }
 
         const [redundantPrincipalMovement] = yield* db
@@ -4681,7 +4681,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (redundantPrincipalMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create redundant principal movement fixture")
+          return yield* Effect.die("Failed to create redundant principal movement fixture")
         }
 
         const [localAcquisitionLeg] = yield* db
@@ -4702,7 +4702,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (localAcquisitionLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create destination acquisition fixture")
+          return yield* Effect.die("Failed to create destination acquisition fixture")
         }
 
         const [localLot] = yield* db
@@ -4734,7 +4734,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactions.id })
 
         if (localLot === undefined || laterTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create later disposal fixtures")
+          return yield* Effect.die("Failed to create later disposal fixtures")
         }
 
         const [laterDisposalLeg] = yield* db
@@ -4757,7 +4757,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (laterDisposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create later disposal leg fixture")
+          return yield* Effect.die("Failed to create later disposal leg fixture")
         }
 
         yield* db.insert(schema.disposalMatches).values({
@@ -4789,7 +4789,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (feeLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create fee leg fixture")
+          return yield* Effect.die("Failed to create fee leg fixture")
         }
 
         const [feeMovement] = yield* db
@@ -4811,7 +4811,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (feeMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create fee movement fixture")
+          return yield* Effect.die("Failed to create fee movement fixture")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -4856,7 +4856,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (canonicalTransferTransaction === undefined || canonicalAcquisitionLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical transfer fixtures")
+          return yield* Effect.die("Failed to create canonical transfer fixtures")
         }
 
         const [canonicalTransferLeg] = yield* db
@@ -4894,7 +4894,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (canonicalTransferLeg === undefined || canonicalLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical transfer FIFO fixtures")
+          return yield* Effect.die("Failed to create canonical transfer FIFO fixtures")
         }
 
         const [canonicalMovement] = yield* db
@@ -4916,7 +4916,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (canonicalMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical custody movement fixture")
+          return yield* Effect.die("Failed to create canonical custody movement fixture")
         }
 
         yield* db.insert(schema.disposalMatches).values({
@@ -5338,7 +5338,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.assetRepresentations.id })
 
         if (representation === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay representation fixture")
+          return yield* Effect.die("Failed to create replay representation fixture")
         }
 
         yield* db
@@ -5379,7 +5379,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (destinationLeg === undefined) {
-          return yield* Effect.dieMessage("Missing replay destination leg")
+          return yield* Effect.die("Missing replay destination leg")
         }
 
         const destinationLots = yield* db
@@ -5455,7 +5455,7 @@ describe("TransferReconciliationServiceLive", () => {
             })
             .returning({ id: schema.transferReconciliations.id })
           if (reconciliation === undefined) {
-            return yield* Effect.dieMessage("Failed to create source replay reconciliation")
+            return yield* Effect.die("Failed to create source replay reconciliation")
           }
           return reconciliation.id
         })
@@ -5578,7 +5578,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transferReconciliations.id })
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay atomicity reconciliation")
+          return yield* Effect.die("Failed to create replay atomicity reconciliation")
         }
         return reconciliation.id
       })
@@ -5608,7 +5608,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.addresses.id })
         if (address === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay atomicity address")
+          return yield* Effect.die("Failed to create replay atomicity address")
         }
         yield* db.insert(schema.sources).values({
           id: dependentSourceId,
@@ -5637,7 +5637,7 @@ describe("TransferReconciliationServiceLive", () => {
           ])
           .returning({ id: schema.transactions.id })
         if (originTransaction === undefined || dependentTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay atomicity transactions")
+          return yield* Effect.die("Failed to create replay atomicity transactions")
         }
         const [originLeg, dependentLeg] = yield* db
           .insert(schema.transactionLegs)
@@ -5667,7 +5667,7 @@ describe("TransferReconciliationServiceLive", () => {
           ])
           .returning({ id: schema.transactionLegs.id })
         if (originLeg === undefined || dependentLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay atomicity legs")
+          return yield* Effect.die("Failed to create replay atomicity legs")
         }
         const [lot] = yield* db
           .insert(schema.fifoLots)
@@ -5684,7 +5684,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.fifoLots.id })
         if (lot === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay atomicity lot")
+          return yield* Effect.die("Failed to create replay atomicity lot")
         }
         yield* db.insert(schema.disposalMatches).values({
           disposalLegId: dependentLeg.id,
@@ -5698,7 +5698,7 @@ describe("TransferReconciliationServiceLive", () => {
     )
 
     const replayResult = await runReplayTransaction(
-      Effect.either(
+      Effect.result(
         Effect.gen(function* () {
           const reconciliationRepository = yield* TransferReconciliationRepository
           const replayRepository = yield* SourceReplayRepository
@@ -5715,8 +5715,8 @@ describe("TransferReconciliationServiceLive", () => {
       )
     )
     expect(replayResult).toMatchObject({
-      _tag: "Left",
-      left: {
+      _tag: "Failure",
+      failure: {
         _tag: "SourceReplayDependencyError",
         sourceId: TEST_SOURCE_ID,
         dependentSourceIds: [dependentSourceId],
@@ -5859,7 +5859,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transferReconciliations.id })
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay lock-set reconciliation")
+          return yield* Effect.die("Failed to create replay lock-set reconciliation")
         }
         return reconciliation.id
       })
@@ -5888,7 +5888,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.addresses.id })
         if (address === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay lock derived address")
+          return yield* Effect.die("Failed to create replay lock derived address")
         }
         yield* db.insert(schema.sources).values({
           id: derivedSourceId,
@@ -5954,13 +5954,13 @@ describe("TransferReconciliationServiceLive", () => {
       const [row] = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db.execute<{ readonly count: string }>(sql`
+          return yield* db.$client<{ readonly count: string }>`
             select count(*)::text as count
             from pg_stat_activity
             where datname = current_database()
               and wait_event_type = 'Lock'
               and query like '%sources%for update%'
-          `)
+          `
         })
       )
       blockedLockCount = Number(row?.count ?? "0")
@@ -6022,7 +6022,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create receipt-gating reconciliation")
+          return yield* Effect.die("Failed to create receipt-gating reconciliation")
         }
 
         const [originLeg] = yield* db
@@ -6047,7 +6047,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (originLeg === undefined || providerTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create receipt-gating origin fixture")
+          return yield* Effect.die("Failed to create receipt-gating origin fixture")
         }
 
         const [originLot] = yield* db
@@ -6083,7 +6083,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (originLot === undefined || movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create receipt-gating custody fixture")
+          return yield* Effect.die("Failed to create receipt-gating custody fixture")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -6211,7 +6211,7 @@ describe("TransferReconciliationServiceLive", () => {
           .where(eq(schema.transactions.externalId, "destination-disposal-before-receipt"))
 
         if (disposal === undefined) {
-          return yield* Effect.dieMessage("Failed to load receipt-gating disposal")
+          return yield* Effect.die("Failed to load receipt-gating disposal")
         }
 
         const matches = yield* db
@@ -6310,7 +6310,7 @@ describe("TransferReconciliationServiceLive", () => {
           reconciliation === undefined ||
           originAcquisitionLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create downstream transfer fixture")
+          return yield* Effect.die("Failed to create downstream transfer fixture")
         }
 
         const [originLot] = yield* db
@@ -6346,7 +6346,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (originLot === undefined || originMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream custody fixture")
+          return yield* Effect.die("Failed to create downstream custody fixture")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -6400,7 +6400,7 @@ describe("TransferReconciliationServiceLive", () => {
           downstreamOriginTransaction === undefined ||
           downstreamDestinationTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create downstream transactions")
+          return yield* Effect.die("Failed to create downstream transactions")
         }
 
         const [downstreamOriginLeg] = yield* db
@@ -6441,7 +6441,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (downstreamOriginLeg === undefined || downstreamDestinationLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream transfer legs")
+          return yield* Effect.die("Failed to create downstream transfer legs")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -6624,7 +6624,7 @@ describe("TransferReconciliationServiceLive", () => {
           upstreamReconciliation === undefined ||
           upstreamAcquisitionLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create upstream replay fixtures")
+          return yield* Effect.die("Failed to create upstream replay fixtures")
         }
 
         const [upstreamLot] = yield* db
@@ -6660,7 +6660,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (upstreamLot === undefined || upstreamMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create upstream replay inventory")
+          return yield* Effect.die("Failed to create upstream replay inventory")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -6699,7 +6699,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactions.id })
 
         if (localAcquisitionLeg === undefined || reviewedTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create reviewed replay fixtures")
+          return yield* Effect.die("Failed to create reviewed replay fixtures")
         }
 
         const [localLot] = yield* db
@@ -6737,7 +6737,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (localLot === undefined || reviewedDisposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create reviewed replay FIFO effects")
+          return yield* Effect.die("Failed to create reviewed replay FIFO effects")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -6781,7 +6781,7 @@ describe("TransferReconciliationServiceLive", () => {
           downstreamProviderTransaction === undefined ||
           downstreamCanonicalTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create downstream replay transactions")
+          return yield* Effect.die("Failed to create downstream replay transactions")
         }
 
         const [downstreamProviderTransfer] = yield* db
@@ -6828,7 +6828,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transfers.id })
 
         if (downstreamProviderTransfer === undefined || downstreamCanonicalTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream replay transfers")
+          return yield* Effect.die("Failed to create downstream replay transfers")
         }
 
         const [downstreamMovement] = yield* db
@@ -6863,7 +6863,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (downstreamMovement === undefined || downstreamReconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream replay reconciliation")
+          return yield* Effect.die("Failed to create downstream replay reconciliation")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -6931,7 +6931,7 @@ describe("TransferReconciliationServiceLive", () => {
           finalProviderTransaction === undefined ||
           finalCanonicalTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create final replay transactions")
+          return yield* Effect.die("Failed to create final replay transactions")
         }
 
         const [finalProviderTransfer] = yield* db
@@ -6978,7 +6978,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transfers.id })
 
         if (finalProviderTransfer === undefined || finalCanonicalTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create final replay transfers")
+          return yield* Effect.die("Failed to create final replay transfers")
         }
 
         const [finalMovement] = yield* db
@@ -7013,7 +7013,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (finalMovement === undefined || finalReconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create final replay reconciliation")
+          return yield* Effect.die("Failed to create final replay reconciliation")
         }
 
         yield* db
@@ -7325,7 +7325,7 @@ describe("TransferReconciliationServiceLive", () => {
           fundedReconciliation === undefined ||
           fundedSourceLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create partial inventory fixture")
+          return yield* Effect.die("Failed to create partial inventory fixture")
         }
 
         const [sourceLot] = yield* db
@@ -7345,7 +7345,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (sourceLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create partial source lot")
+          return yield* Effect.die("Failed to create partial source lot")
         }
 
         const [fundedSourceLot] = yield* db
@@ -7380,7 +7380,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.inventoryMovements.id })
         if (fundedSourceLot === undefined || fundedMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create funded same-batch inventory")
+          return yield* Effect.die("Failed to create funded same-batch inventory")
         }
         yield* db.insert(schema.inventoryMovementAllocations).values({
           inventoryMovementId: fundedMovement.id,
@@ -7531,7 +7531,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (providerTransfer === undefined || reconciliation === undefined || leg === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody mismatch fixtures")
+          return yield* Effect.die("Failed to create custody mismatch fixtures")
         }
 
         const [lot] = yield* db
@@ -7551,7 +7551,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (lot === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody mismatch lot")
+          return yield* Effect.die("Failed to create custody mismatch lot")
         }
 
         const [movement] = yield* db
@@ -7573,7 +7573,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody mismatch movement")
+          return yield* Effect.die("Failed to create custody mismatch movement")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -7683,7 +7683,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactions.id })
         if (providerTransaction === undefined || canonicalTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to seed inbound open-lot transactions")
+          return yield* Effect.die("Failed to seed inbound open-lot transactions")
         }
         const [inboundProviderTransfer] = yield* db
           .insert(schema.providerTransfers)
@@ -7744,7 +7744,7 @@ describe("TransferReconciliationServiceLive", () => {
           canonicalTransfer === undefined ||
           openingLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed inbound open-lot transfer")
+          return yield* Effect.die("Failed to seed inbound open-lot transfer")
         }
         const [openingLot] = yield* db
           .insert(schema.fifoLots)
@@ -7776,7 +7776,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transferReconciliations.id })
         if (openingLot === undefined || reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to seed inbound open-lot FIFO state")
+          return yield* Effect.die("Failed to seed inbound open-lot FIFO state")
         }
         return {
           openingLotId: openingLot.id,
@@ -7907,7 +7907,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactions.id })
 
         if (providerTransaction === undefined || canonicalTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create exact custody transactions")
+          return yield* Effect.die("Failed to create exact custody transactions")
         }
 
         const [inboundProviderTransfer] = yield* db
@@ -8017,7 +8017,7 @@ describe("TransferReconciliationServiceLive", () => {
           exactProviderTransfer === undefined ||
           unrelatedProviderTransfer === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create exact custody transfer fixtures")
+          return yield* Effect.die("Failed to create exact custody transfer fixtures")
         }
 
         const [unrelatedCanonicalLeg] = yield* db
@@ -8041,7 +8041,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (unrelatedCanonicalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create unrelated canonical leg fixture")
+          return yield* Effect.die("Failed to create unrelated canonical leg fixture")
         }
 
         const [unrelatedCanonicalLot] = yield* db
@@ -8061,7 +8061,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (unrelatedCanonicalLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create unrelated canonical lot fixture")
+          return yield* Effect.die("Failed to create unrelated canonical lot fixture")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -8159,7 +8159,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (inboundMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create inbound movement fixture")
+          return yield* Effect.die("Failed to create inbound movement fixture")
         }
 
         yield* db.insert(schema.fifoLots).values({
@@ -8192,7 +8192,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
         if (localAcquisitionLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create local destination acquisition")
+          return yield* Effect.die("Failed to create local destination acquisition")
         }
         const [localDestinationLot] = yield* db
           .insert(schema.fifoLots)
@@ -8223,7 +8223,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactions.id })
         if (localDestinationLot === undefined || laterDisposalTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create destination FIFO rebuild fixture")
+          return yield* Effect.die("Failed to create destination FIFO rebuild fixture")
         }
         const [laterDisposalLeg] = yield* db
           .insert(schema.transactionLegs)
@@ -8243,7 +8243,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
         if (laterDisposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create later destination disposal")
+          return yield* Effect.die("Failed to create later destination disposal")
         }
         const [reconciliation] = yield* db
           .insert(schema.transferReconciliations)
@@ -8261,7 +8261,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create exact custody reconciliation")
+          return yield* Effect.die("Failed to create exact custody reconciliation")
         }
 
         return {

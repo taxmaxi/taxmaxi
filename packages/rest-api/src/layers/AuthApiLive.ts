@@ -19,7 +19,8 @@
  * @module AuthApiLive
  */
 
-import { HttpApiBuilder, HttpServerRequest, HttpServerResponse, HttpApp } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import * as Chunk from "effect/Chunk"
 import * as Config from "effect/Config"
 import * as Duration from "effect/Duration"
@@ -299,8 +300,8 @@ const toAuthUserResponse = ({
 const setSessionCookie = (
   token: string,
   baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
-): Effect.Effect<void> => {
-  return HttpApp.appendPreResponseHandler((_req, response) =>
+): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> => {
+  return HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, token, {
         ...baseCookieOptions,
@@ -315,8 +316,8 @@ const setSessionCookie = (
  */
 const clearSessionCookie = (
   baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
-): Effect.Effect<void> => {
-  return HttpApp.appendPreResponseHandler((_req, response) =>
+): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> => {
+  return HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, SESSION_COOKIE_NAME, "", {
         ...baseCookieOptions,
@@ -337,8 +338,8 @@ const setVerificationCookie = ({
   readonly requestId: typeof EmailVerificationRequestId.Type
   readonly expiresAt: Date
   readonly baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
-}): Effect.Effect<void> =>
-  HttpApp.appendPreResponseHandler((_req, response) =>
+}): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> =>
+  HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, VERIFICATION_COOKIE_NAME, requestId, {
         ...baseCookieOptions,
@@ -352,8 +353,8 @@ const setVerificationCookie = ({
  */
 const clearVerificationCookie = (
   baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
-): Effect.Effect<void> =>
-  HttpApp.appendPreResponseHandler((_req, response) =>
+): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> =>
+  HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, VERIFICATION_COOKIE_NAME, "", {
         ...baseCookieOptions,
@@ -370,8 +371,8 @@ const setOAuthRedirectCookie = ({
   readonly provider: AuthProviderType
   readonly redirectTo: `/${string}`
   readonly baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
-}): Effect.Effect<void> =>
-  HttpApp.appendPreResponseHandler((_req, response) =>
+}): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> =>
+  HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, OAUTH_REDIRECT_COOKIE_NAME, redirectTo, {
         ...baseCookieOptions,
@@ -387,8 +388,8 @@ const clearOAuthRedirectCookie = ({
 }: {
   readonly provider: AuthProviderType
   readonly baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
-}): Effect.Effect<void> =>
-  HttpApp.appendPreResponseHandler((_req, response) =>
+}): Effect.Effect<void, never, HttpServerRequest.HttpServerRequest> =>
+  HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, OAUTH_REDIRECT_COOKIE_NAME, "", {
         ...baseCookieOptions,
@@ -405,7 +406,7 @@ const decodeVerificationRequestId = (
     return Effect.fail(new EmailVerificationFlowMissingError({}))
   }
 
-  return Schema.decodeUnknown(EmailVerificationRequestId)(rawRequestId).pipe(
+  return Schema.decodeUnknownEffect(EmailVerificationRequestId)(rawRequestId).pipe(
     Effect.mapError(() => new EmailVerificationFlowMissingError({}))
   )
 }
@@ -585,11 +586,9 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
           })
         }
 
-        return yield* Effect.fail(
-          new EmailVerificationRequiredError({
-            email,
-          })
-        )
+        return yield* new EmailVerificationRequiredError({
+          email,
+        })
       })
 
     const mapLocalLoginError = ({
@@ -857,13 +856,13 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
       )
       .handle("authorize", (_) =>
         Effect.gen(function* () {
-          const { provider } = _.path
+          const { provider } = _.params
           return yield* Effect.gen(function* () {
-            const redirectTo = _.urlParams.redirectTo
+            const redirectTo = _.query.redirectTo
 
             // Local provider doesn't support OAuth flow
             if (provider === "local") {
-              return yield* Effect.fail(new ProviderNotFoundError({ provider }))
+              return yield* new ProviderNotFoundError({ provider })
             }
 
             const loginCallbackUrl = buildOAuthCallbackUrl(
@@ -929,8 +928,8 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
       )
       .handle("callback", (_) =>
         Effect.gen(function* () {
-          const { provider } = _.path
-          const { code, state, error, error_description } = _.urlParams
+          const { provider } = _.params
+          const { code, state, error, error_description } = _.query
           const request = yield* HttpServerRequest.HttpServerRequest
           const redirectTo = isSafeRedirectPath(request.cookies[OAUTH_REDIRECT_COOKIE_NAME])
             ? request.cookies[OAUTH_REDIRECT_COOKIE_NAME]
@@ -955,12 +954,10 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
               })
               .pipe(Effect.mapError((storeError) => mapPersistenceError(provider, storeError)))
 
-            return yield* Effect.fail(
-              new ProviderAuthError({
-                provider,
-                reason: error_description ?? error,
-              })
-            )
+            return yield* new ProviderAuthError({
+              provider,
+              reason: error_description ?? error,
+            })
           }
 
           // Complete OAuth login callback flow
@@ -1004,7 +1001,7 @@ export const AuthApiLive = HttpApiBuilder.group(TaxMaxiApi, "auth", (handlers) =
           })
         })
       )
-      .handle("getOAuthSession", ({ path }) =>
+      .handle("getOAuthSession", ({ params: path }) =>
         Effect.gen(function* () {
           const maybeState = yield* oauthStateStore
             .get(path.id)
@@ -1071,7 +1068,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
       return handlers.handle("cdpCallback", (_) =>
         Effect.gen(function* () {
           const provider: AuthProviderType = "coinbase"
-          const { code, state, error, error_description } = _.urlParams
+          const { code, state, error, error_description } = _.query
           const request = yield* HttpServerRequest.HttpServerRequest
           const redirectTo = isSafeRedirectPath(request.cookies[OAUTH_REDIRECT_COOKIE_NAME])
             ? request.cookies[OAUTH_REDIRECT_COOKIE_NAME]
@@ -1094,7 +1091,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
                 completedAt,
               })
               .pipe(
-                Effect.tapErrorCause((cause) =>
+                Effect.tapCause((cause) =>
                   logCoinbaseCallbackCause({
                     message: "Failed to mark Coinbase OAuth state as failed",
                     state,
@@ -1108,12 +1105,10 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
                 Effect.mapError((storeError) => mapPersistenceError(provider, storeError))
               )
 
-            return yield* Effect.fail(
-              new ProviderAuthError({
-                provider,
-                reason: error_description ?? error,
-              })
-            )
+            return yield* new ProviderAuthError({
+              provider,
+              reason: error_description ?? error,
+            })
           }
 
           const { user, session, providerResult } = yield* completeOAuthLoginWithErrorMapping({
@@ -1122,7 +1117,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
             code,
             state,
           }).pipe(
-            Effect.tapErrorCause((cause) =>
+            Effect.tapCause((cause) =>
               logCoinbaseCallbackCause({
                 message: "Coinbase OAuth login completion failed",
                 state,
@@ -1136,12 +1131,10 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
           )
 
           if (Option.isNone(providerResult.oauthCredentials)) {
-            return yield* Effect.fail(
-              new ProviderAuthError({
-                provider,
-                reason: "Coinbase OAuth callback did not return credential artifacts",
-              })
-            )
+            return yield* new ProviderAuthError({
+              provider,
+              reason: "Coinbase OAuth callback did not return credential artifacts",
+            })
           }
 
           const maybePrincipal = yield* principalRepository
@@ -1149,12 +1142,10 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
             .pipe(Effect.mapError((error) => mapPersistenceError(provider, error)))
 
           if (Option.isNone(maybePrincipal)) {
-            return yield* Effect.fail(
-              new ProviderAuthError({
-                provider,
-                reason: "Missing user principal",
-              })
-            )
+            return yield* new ProviderAuthError({
+              provider,
+              reason: "Missing user principal",
+            })
           }
 
           const principal = maybePrincipal.value
@@ -1167,7 +1158,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
               oauthCredentials: providerResult.oauthCredentials.value,
             })
             .pipe(
-              Effect.tapErrorCause((cause) =>
+              Effect.tapCause((cause) =>
                 logCoinbaseCallbackCause({
                   message: "Failed to persist Coinbase OAuth credentials",
                   state,
@@ -1190,7 +1181,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
               sourceRef,
             })
             .pipe(
-              Effect.tapErrorCause((cause) =>
+              Effect.tapCause((cause) =>
                 logCoinbaseCallbackCause({
                   message: "Failed to load Coinbase source after OAuth callback",
                   state,
@@ -1215,7 +1206,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
                 sourceRef,
               })
               .pipe(
-                Effect.tapErrorCause((cause) =>
+                Effect.tapCause((cause) =>
                   logCoinbaseCallbackCause({
                     message: "Failed to provision Coinbase source after OAuth callback",
                     state,
@@ -1247,7 +1238,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
               completedAt,
             })
             .pipe(
-              Effect.tapErrorCause((cause) =>
+              Effect.tapCause((cause) =>
                 logCoinbaseCallbackCause({
                   message: "Failed to mark Coinbase OAuth state as completed",
                   state,
@@ -1264,7 +1255,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
             )
 
           yield* setSessionCookie(session.id, baseCookieOptions).pipe(
-            Effect.tapErrorCause((cause) =>
+            Effect.tapCause((cause) =>
               logCoinbaseCallbackCause({
                 message: "Failed to set Coinbase OAuth session cookie",
                 state,
@@ -1282,7 +1273,7 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
               provider,
               baseCookieOptions,
             }).pipe(
-              Effect.tapErrorCause((cause) =>
+              Effect.tapCause((cause) =>
                 logCoinbaseCallbackCause({
                   message: "Failed to clear Coinbase OAuth redirect cookie",
                   state,
@@ -1329,10 +1320,10 @@ export const CoinbaseCompatApiLive = HttpApiBuilder.group(
   </body>
 </html>`)
         }).pipe(
-          Effect.tapErrorCause((cause) =>
+          Effect.tapCause((cause) =>
             logCoinbaseCallbackCause({
               message: "Coinbase callback handler failed",
-              state: _.urlParams.state,
+              state: _.query.state,
               step: "handler",
               cause,
             })
@@ -1396,11 +1387,9 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
 
           // Ensure we have a session ID
           if (currentUser.sessionId === undefined) {
-            return yield* Effect.fail(
-              new SessionInvalidError({
-                message: "Session token not available",
-              })
-            )
+            return yield* new SessionInvalidError({
+              message: "Session token not available",
+            })
           }
 
           // Logout using the session ID from CurrentUser (already typed as SessionId)
@@ -1428,13 +1417,13 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             userId: currentUser.userId,
           })
 
-          const maybeUserResult = yield* userRepo.findById(currentUser.userId).pipe(Effect.either)
+          const maybeUserResult = yield* userRepo.findById(currentUser.userId).pipe(Effect.result)
 
-          if (maybeUserResult._tag === "Left") {
+          if (maybeUserResult._tag === "Failure") {
             yield* Effect.logError(
               {
                 userId: currentUser.userId,
-                error: maybeUserResult.left,
+                error: maybeUserResult.failure,
               },
               "auth:failed-to-load-current-user"
             )
@@ -1442,23 +1431,23 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* internalServerResponse("Failed to load current user")
           }
 
-          const maybeUser = maybeUserResult.right
+          const maybeUser = maybeUserResult.success
 
           if (Option.isNone(maybeUser)) {
-            return yield* Effect.fail(new AuthUserNotFoundError({}))
+            return yield* new AuthUserNotFoundError({})
           }
 
           const user = maybeUser.value
 
           const identitiesResult = yield* identityRepo
             .findByUserId(currentUser.userId)
-            .pipe(Effect.either)
+            .pipe(Effect.result)
 
-          if (identitiesResult._tag === "Left") {
+          if (identitiesResult._tag === "Failure") {
             yield* Effect.logError(
               {
                 userId: currentUser.userId,
-                error: identitiesResult.left,
+                error: identitiesResult.failure,
               },
               "auth:failed-to-load-linked-identities"
             )
@@ -1466,7 +1455,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* internalServerResponse("Failed to load linked identities")
           }
 
-          const identitiesChunk = identitiesResult.right
+          const identitiesChunk = identitiesResult.success
 
           const identities = Chunk.toReadonlyArray(identitiesChunk)
 
@@ -1497,13 +1486,13 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             userId: currentUser.userId,
           })
 
-          const maybeUserResult = yield* userRepo.findById(currentUser.userId).pipe(Effect.either)
+          const maybeUserResult = yield* userRepo.findById(currentUser.userId).pipe(Effect.result)
 
-          if (maybeUserResult._tag === "Left") {
+          if (maybeUserResult._tag === "Failure") {
             yield* Effect.logError(
               {
                 userId: currentUser.userId,
-                error: maybeUserResult.left,
+                error: maybeUserResult.failure,
               },
               "auth:failed-to-load-current-user"
             )
@@ -1511,10 +1500,10 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* internalServerResponse("Failed to load current user")
           }
 
-          const maybeUser = maybeUserResult.right
+          const maybeUser = maybeUserResult.success
 
           if (Option.isNone(maybeUser)) {
-            return yield* Effect.fail(new AuthUserNotFoundError({}))
+            return yield* new AuthUserNotFoundError({})
           }
 
           // Build update data - only update fields that were provided
@@ -1542,13 +1531,13 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
 
           const identitiesResult = yield* identityRepo
             .findByUserId(currentUser.userId)
-            .pipe(Effect.either)
+            .pipe(Effect.result)
 
-          if (identitiesResult._tag === "Left") {
+          if (identitiesResult._tag === "Failure") {
             yield* Effect.logError(
               {
                 userId: currentUser.userId,
-                error: identitiesResult.left,
+                error: identitiesResult.failure,
               },
               "auth:failed-to-load-linked-identities"
             )
@@ -1556,7 +1545,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* internalServerResponse("Failed to load linked identities")
           }
 
-          const identitiesChunk = identitiesResult.right
+          const identitiesChunk = identitiesResult.success
 
           const identities = Chunk.toReadonlyArray(identitiesChunk)
 
@@ -1589,11 +1578,9 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
 
           // Ensure we have a session ID
           if (currentUser.sessionId === undefined) {
-            return yield* Effect.fail(
-              new SessionInvalidError({
-                message: "Session token not available",
-              })
-            )
+            return yield* new SessionInvalidError({
+              message: "Session token not available",
+            })
           }
 
           // Validate current session (sessionId is already typed as SessionId)
@@ -1653,24 +1640,22 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
       )
       .handle("linkProvider", (_) =>
         Effect.gen(function* () {
-          const { provider } = _.path
+          const { provider } = _.params
           const currentUser = yield* CurrentUser
 
           // Local provider cannot be linked as an additional identity
           if (provider === "local") {
-            return yield* Effect.fail(new ProviderNotFoundError({ provider }))
+            return yield* new ProviderNotFoundError({ provider })
           }
 
           // Temporary compatibility mode: existing Coinbase OAuth clients are
           // limited to the legacy /cdp/callback login flow.
           if (provider === "coinbase") {
-            return yield* Effect.fail(
-              new ProviderNotFoundError({
-                provider,
-                message:
-                  "Coinbase linking is temporarily unavailable. Only use /authorize/coinbase for now.",
-              })
-            )
+            return yield* new ProviderNotFoundError({
+              provider,
+              message:
+                "Coinbase linking is temporarily unavailable. Only use /authorize/coinbase for now.",
+            })
           }
 
           const linkCallbackUrl = buildOAuthCallbackUrl(
@@ -1690,28 +1675,24 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
       )
       .handle("linkCallback", (_) =>
         Effect.gen(function* () {
-          const { provider } = _.path
-          const { code, state, error, error_description } = _.urlParams
+          const { provider } = _.params
+          const { code, state, error, error_description } = _.query
           const currentUser = yield* CurrentUser
 
           if (provider === "coinbase") {
-            return yield* Effect.fail(
-              new ProviderNotFoundError({
-                provider,
-                message:
-                  "Coinbase linking is temporarily unavailable. Only use /authorize/coinbase for now.",
-              })
-            )
+            return yield* new ProviderNotFoundError({
+              provider,
+              message:
+                "Coinbase linking is temporarily unavailable. Only use /authorize/coinbase for now.",
+            })
           }
 
           // Check for OAuth error
           if (error !== undefined) {
-            return yield* Effect.fail(
-              new ProviderAuthError({
-                provider,
-                reason: error_description ?? error,
-              })
-            )
+            return yield* new ProviderAuthError({
+              provider,
+              reason: error_description ?? error,
+            })
           }
 
           yield* authService.completeLink(currentUser.userId, provider, code, state).pipe(
@@ -1747,7 +1728,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .pipe(Effect.mapError(() => new IdentityLinkedError({ provider })))
 
           if (Option.isNone(maybeUser)) {
-            return yield* Effect.fail(new IdentityLinkedError({ provider }))
+            return yield* new IdentityLinkedError({ provider })
           }
 
           const user = maybeUser.value
@@ -1764,7 +1745,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
       )
       .handle("unlinkIdentity", (_) =>
         Effect.gen(function* () {
-          const { identityId } = _.path
+          const { identityId } = _.params
           const currentUser = yield* CurrentUser
 
           // Get the identity to verify ownership
@@ -1773,14 +1754,14 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .pipe(Effect.mapError(() => new IdentityNotFoundError({ identityId })))
 
           if (Option.isNone(maybeIdentity)) {
-            return yield* Effect.fail(new IdentityNotFoundError({ identityId }))
+            return yield* new IdentityNotFoundError({ identityId })
           }
 
           const identity = maybeIdentity.value
 
           // Verify the identity belongs to the current user (userId is already typed as AuthUserId)
           if (identity.userId !== currentUser.userId) {
-            return yield* Effect.fail(new IdentityNotFoundError({ identityId }))
+            return yield* new IdentityNotFoundError({ identityId })
           }
 
           // Check if this is the last identity - prevent unlinking
@@ -1789,7 +1770,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .pipe(Effect.mapError(() => new CannotUnlinkLastIdentityError({})))
 
           if (Chunk.size(allIdentities) <= 1) {
-            return yield* Effect.fail(new CannotUnlinkLastIdentityError({}))
+            return yield* new CannotUnlinkLastIdentityError({})
           }
 
           // Delete the identity
@@ -1810,7 +1791,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .pipe(Effect.mapError(() => new NoLocalIdentityError({})))
 
           if (Option.isNone(maybeUser)) {
-            return yield* Effect.fail(new NoLocalIdentityError({}))
+            return yield* new NoLocalIdentityError({})
           }
 
           const user = maybeUser.value
@@ -1822,7 +1803,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .pipe(Effect.mapError(() => new NoLocalIdentityError({})))
 
           if (Option.isNone(maybeLocalIdentity)) {
-            return yield* Effect.fail(new NoLocalIdentityError({}))
+            return yield* new NoLocalIdentityError({})
           }
 
           // Get the current password hash to verify
@@ -1831,7 +1812,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .pipe(Effect.mapError(() => new NoLocalIdentityError({})))
 
           if (Option.isNone(maybeHash)) {
-            return yield* Effect.fail(new NoLocalIdentityError({}))
+            return yield* new NoLocalIdentityError({})
           }
 
           // Verify current password
@@ -1841,16 +1822,14 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           )
 
           if (!isValid) {
-            return yield* Effect.fail(new ChangePasswordError({}))
+            return yield* new ChangePasswordError({})
           }
 
           // Validate new password strength (minimum 8 characters from Schema)
           if (newPassword.length < 8) {
-            return yield* Effect.fail(
-              new PasswordWeakError({
-                requirements: ["Password must be at least 8 characters"],
-              })
-            )
+            return yield* new PasswordWeakError({
+              requirements: ["Password must be at least 8 characters"],
+            })
           }
 
           // Hash the new password
@@ -1864,7 +1843,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           // SECURITY: Invalidate all sessions after password change
           // This ensures the user must re-login with the new password
           yield* sessionRepo.deleteByUserId(currentUser.userId).pipe(
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.logWarning(
                 {
                   userId: currentUser.userId,
@@ -1905,13 +1884,11 @@ export const SessionTokenValidatorLive: Layer.Layer<TokenValidator, never, AuthS
 
             // Check for valid token
             if (!tokenValue || tokenValue.trim() === "") {
-              return yield* Effect.fail(
-                new UnauthorizedError({ message: "Bearer token is required" })
-              )
+              return yield* new UnauthorizedError({ message: "Bearer token is required" })
             }
 
             // Parse and validate SessionId format
-            const sessionId = yield* Schema.decodeUnknown(SessionId)(tokenValue).pipe(
+            const sessionId = yield* Schema.decodeUnknownEffect(SessionId)(tokenValue).pipe(
               Effect.mapError(
                 () => new UnauthorizedError({ message: "Invalid session token format" })
               )
@@ -1956,10 +1933,10 @@ export const makeSessionTokenValidator = (
       const tokenValue = Redacted.value(token)
 
       if (!tokenValue || tokenValue.trim() === "") {
-        return yield* Effect.fail(new UnauthorizedError({ message: "Bearer token is required" }))
+        return yield* new UnauthorizedError({ message: "Bearer token is required" })
       }
 
-      const sessionId = yield* Schema.decodeUnknown(SessionId)(tokenValue).pipe(
+      const sessionId = yield* Schema.decodeUnknownEffect(SessionId)(tokenValue).pipe(
         Effect.mapError(() => new UnauthorizedError({ message: "Invalid session token format" }))
       )
 

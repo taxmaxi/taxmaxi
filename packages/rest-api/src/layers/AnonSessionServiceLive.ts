@@ -25,37 +25,43 @@ const ANON_SESSION_SECRET_PLACEHOLDERS = new Set(["<generated-secret>"])
 const ANON_SESSION_SECRET_ERROR_MESSAGE =
   "ANON_SESSION_SECRET must be a high-entropy value with at least 32 non-whitespace characters; generate it with openssl rand -base64 32"
 
-const isValidAnonSessionSecret = (secret: Redacted.Redacted<string>): boolean => {
-  const value = Redacted.value(secret)
+const isValidAnonSessionSecret = (value: string): boolean => {
   if (value.length < MIN_ANON_SESSION_SECRET_LENGTH) return false
   if (new Set(value).size < MIN_ANON_SESSION_SECRET_UNIQUE_CHARACTERS) return false
   if (ANON_SESSION_SECRET_PLACEHOLDERS.has(value.toLowerCase())) return false
   return true
 }
 
-const anonSessionSecretConfig = Config.redacted("ANON_SESSION_SECRET").pipe(
-  Config.map((secret) => Redacted.make(Redacted.value(secret).trim())),
-  Config.validate({
-    message: ANON_SESSION_SECRET_ERROR_MESSAGE,
-    validation: isValidAnonSessionSecret,
-  })
+const AnonSessionSecret = Schema.Trimmed.check(
+  Schema.makeFilter((secret) =>
+    isValidAnonSessionSecret(secret) ? undefined : ANON_SESSION_SECRET_ERROR_MESSAGE
+  )
+)
+
+const anonSessionSecretConfig = Config.string("ANON_SESSION_SECRET").pipe(
+  Config.mapOrFail((value) =>
+    Schema.decodeUnknownEffect(AnonSessionSecret)(value).pipe(
+      Effect.mapError((error) => new Config.ConfigError(error))
+    )
+  ),
+  Config.map(Redacted.make)
 )
 
 const AnonSessionPayload = Schema.Struct({
   kind: Schema.Literal("anon_session"),
-  payerChainType: Schema.Literal("evm", "solana", "bitcoin"),
-  payerWalletAddress: Schema.NonEmptyTrimmedString,
+  payerChainType: Schema.Literals(["evm", "solana", "bitcoin"]),
+  payerWalletAddress: Schema.Trimmed.check(Schema.isNonEmpty()),
   expiresAt: Schema.Number,
 })
 
 const AnonChallengePayload = Schema.Struct({
   kind: Schema.Literal("anon_challenge"),
-  nonce: Schema.NonEmptyTrimmedString,
+  nonce: Schema.Trimmed.check(Schema.isNonEmpty()),
   expiresAt: Schema.Number,
 })
 
 const tokenError = (message: string) => new AnonSessionTokenError({ message })
-const JsonPayload = Schema.parseJson()
+const JsonPayload = Schema.fromJsonString(Schema.Unknown)
 
 const currentTimeMillis = Effect.map(
   Effect.clockWith((clock) => clock.currentTimeMillis),
@@ -99,10 +105,10 @@ const parseToken = (token: string) =>
   Effect.gen(function* () {
     const [payload, signature] = token.split(".", 2)
     if (payload === undefined || signature === undefined || payload === "" || signature === "") {
-      return yield* Effect.fail(tokenError("Invalid anon session token."))
+      return yield* tokenError("Invalid anon session token.")
     }
     const decoded = yield* base64UrlDecode(payload)
-    const parsed = yield* Schema.decodeUnknown(JsonPayload)(decoded).pipe(
+    const parsed = yield* Schema.decodeUnknownEffect(JsonPayload)(decoded).pipe(
       Effect.mapError(() => tokenError("Invalid anon session token."))
     )
     return { payload, signature, parsed }
@@ -113,7 +119,7 @@ const make = Effect.gen(function* () {
 
   const createSignedToken = (payload: unknown): Effect.Effect<string, AnonSessionTokenError> =>
     Effect.gen(function* () {
-      const serialized = yield* Schema.encodeUnknown(JsonPayload)(payload).pipe(
+      const serialized = yield* Schema.encodeUnknownEffect(JsonPayload)(payload).pipe(
         Effect.mapError(() => tokenError("Failed to create anon session token."))
       )
       const encodedPayload = base64UrlEncode(serialized)
@@ -130,7 +136,7 @@ const make = Effect.gen(function* () {
           secret,
         })
       ) {
-        return yield* Effect.fail(tokenError("Invalid anon session token."))
+        return yield* tokenError("Invalid anon session token.")
       }
       return parsedToken.parsed
     })
@@ -149,12 +155,12 @@ const make = Effect.gen(function* () {
   const verifySessionToken: AnonSessionServiceShape["verifySessionToken"] = (token) =>
     Effect.gen(function* () {
       const payload = yield* verifySignedPayload(token)
-      const session = yield* Schema.decodeUnknown(AnonSessionPayload)(payload).pipe(
+      const session = yield* Schema.decodeUnknownEffect(AnonSessionPayload)(payload).pipe(
         Effect.mapError(() => tokenError("Invalid anon session token."))
       )
       const now = yield* currentTimeMillis
       if (session.expiresAt <= now) {
-        return yield* Effect.fail(tokenError("Anon session expired."))
+        return yield* tokenError("Anon session expired.")
       }
       return {
         payerChainType: session.payerChainType,
@@ -178,12 +184,12 @@ const make = Effect.gen(function* () {
   const verifyChallengeToken: AnonSessionServiceShape["verifyChallengeToken"] = (token) =>
     Effect.gen(function* () {
       const payload = yield* verifySignedPayload(token)
-      const challenge = yield* Schema.decodeUnknown(AnonChallengePayload)(payload).pipe(
+      const challenge = yield* Schema.decodeUnknownEffect(AnonChallengePayload)(payload).pipe(
         Effect.mapError(() => tokenError("Invalid anon session challenge."))
       )
       const now = yield* currentTimeMillis
       if (challenge.expiresAt <= now) {
-        return yield* Effect.fail(tokenError("Anon session challenge expired."))
+        return yield* tokenError("Anon session challenge expired.")
       }
       return challenge.nonce
     })

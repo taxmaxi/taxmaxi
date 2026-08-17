@@ -19,11 +19,11 @@ const runPg = context.runPg
 const runPrincipalClaim = <A, E>(effect: Effect.Effect<A, E, PrincipalClaimRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: PrincipalClaimRepositoryLive }))
 
-const ANONYMOUS_PRINCIPAL_ID = PrincipalId.make("00000000-0000-0000-0000-000000001101")
+const ANONYMOUS_PRINCIPAL_ID = PrincipalId.make("00000000-4000-4000-8000-000000001101")
 const USER_ID = "00000000-0000-0000-0000-000000001102"
-const USER_PRINCIPAL_ID = PrincipalId.make("00000000-0000-0000-0000-000000001103")
+const USER_PRINCIPAL_ID = PrincipalId.make("00000000-4000-4000-8000-000000001103")
 const ADDRESS_ID = "00000000-0000-0000-0000-000000001104"
-const SOURCE_ID = SourceId.make("00000000-0000-0000-0000-000000001105")
+const SOURCE_ID = SourceId.make("00000000-4000-4000-8000-000000001105")
 const REQUEST_ID = "00000000-0000-0000-0000-000000001106"
 const WALLET_ADDRESS = "bc1qprincipalclaimlockorder000000000000000000"
 const CLAIM_VALUE_HASH = "claim-lock-order-hash"

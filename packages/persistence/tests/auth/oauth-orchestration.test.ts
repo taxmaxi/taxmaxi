@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import * as Chunk from "effect/Chunk"
 import * as Effect from "effect/Effect"
-import * as Either from "effect/Either"
+import * as Result from "effect/Result"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
@@ -71,10 +71,10 @@ interface Harness {
   // Effect's Either is typed as Either<Right, Left>, so this is Either<Success, Error>
   readonly runWithAuthEither: <A, E>(
     f: (auth: AuthServiceShape) => Effect.Effect<A, E>
-  ) => Promise<Either.Either<A, E>>
+  ) => Promise<Result.Result<A, E>>
 }
 
-const unsupported = <A>(): Effect.Effect<A> => Effect.dieMessage("unsupported in test")
+const unsupported = <A>(): Effect.Effect<A> => Effect.die("unsupported in test")
 
 const makeOAuthProvider = (type: "google" | "coinbase"): AuthProvider => ({
   type,
@@ -147,10 +147,10 @@ const makeLocalProvider = ({
 })
 
 const makeUserRepo = (state: HarnessState): UserRepositoryService => ({
-  findById: (id) => Effect.succeed(Option.fromNullable(state.users.get(id))),
+  findById: (id) => Effect.succeed(Option.fromNullishOr(state.users.get(id))),
   findByEmail: (email) =>
     Effect.succeed(
-      Option.fromNullable(Array.from(state.users.values()).find((user) => user.email === email))
+      Option.fromNullishOr(Array.from(state.users.values()).find((user) => user.email === email))
     ),
   create: (insert) => {
     const timestamp = Timestamp.now()
@@ -179,7 +179,7 @@ const makeUserRepo = (state: HarnessState): UserRepositoryService => ({
   },
   delete: (id) => {
     state.users.delete(id)
-    return Effect.succeed(undefined)
+    return Effect.void
   },
   findPlatformAdmins: () =>
     Effect.succeed(Array.from(state.users.values()).filter((user) => user.role === "admin")),
@@ -206,10 +206,10 @@ const makeEmailVerificationRequestRepo = (
     state.verificationRequests.set(verificationRequest.id, verificationRequest)
     return Effect.succeed(verificationRequest)
   },
-  findById: (id) => Effect.succeed(Option.fromNullable(state.verificationRequests.get(id))),
+  findById: (id) => Effect.succeed(Option.fromNullishOr(state.verificationRequests.get(id))),
   findByUserId: (userId) =>
     Effect.succeed(
-      Option.fromNullable(
+      Option.fromNullishOr(
         Array.from(state.verificationRequests.values())
           .filter((request) => request.userId === userId)
           .sort((left, right) => right.createdAt.epochMillis - left.createdAt.epochMillis)[0]
@@ -237,7 +237,7 @@ const makeEmailVerificationRequestRepo = (
 })
 
 const makeEmailVerificationDeliveryService = (): EmailVerificationDeliveryServiceShape => ({
-  sendVerificationCode: () => Effect.succeed(undefined),
+  sendVerificationCode: () => Effect.void,
 })
 
 const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
@@ -245,7 +245,7 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
   const passwordKey = (provider: string, providerId: string) => `${provider}:${providerId}`
 
   return {
-    findById: (id) => Effect.succeed(Option.fromNullable(state.identities.get(id))),
+    findById: (id) => Effect.succeed(Option.fromNullishOr(state.identities.get(id))),
     findByUserId: (userId) =>
       Effect.succeed(
         Chunk.fromIterable(
@@ -254,7 +254,7 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
       ),
     findByProvider: (provider, providerId) =>
       Effect.succeed(
-        Option.fromNullable(
+        Option.fromNullishOr(
           Array.from(state.identities.values()).find(
             (identity) => identity.provider === provider && identity.providerId === providerId
           )
@@ -262,7 +262,7 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
       ),
     findByUserAndProvider: (userId, provider) =>
       Effect.succeed(
-        Option.fromNullable(
+        Option.fromNullishOr(
           Array.from(state.identities.values()).find(
             (identity) => identity.userId === userId && identity.provider === provider
           )
@@ -300,7 +300,7 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
     },
     delete: (id) => {
       state.identities.delete(id)
-      return Effect.succeed(undefined)
+      return Effect.void
     },
     deleteByUserId: (userId) => {
       const userIdentityIds = Array.from(state.identities.values())
@@ -312,10 +312,10 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
       return Effect.succeed(userIdentityIds.length)
     },
     getPasswordHash: (provider, providerId) =>
-      Effect.succeed(Option.fromNullable(passwordHashes.get(passwordKey(provider, providerId)))),
+      Effect.succeed(Option.fromNullishOr(passwordHashes.get(passwordKey(provider, providerId)))),
     updatePasswordHash: (provider, providerId, newPasswordHash) => {
       passwordHashes.set(passwordKey(provider, providerId), newPasswordHash)
-      return Effect.succeed(undefined)
+      return Effect.void
     },
   }
 }
@@ -323,7 +323,7 @@ const makeIdentityRepo = (state: HarnessState): IdentityRepositoryService => {
 const makePrincipalRepository = (state: HarnessState): PrincipalRepositoryService => ({
   findUserPrincipal: (userId) =>
     Effect.succeed(
-      Option.fromNullable(
+      Option.fromNullishOr(
         Array.from(state.principals.values()).find((principal) => principal.userId === userId)
       )
     ),
@@ -358,7 +358,7 @@ const makeSessionRepo = (): SessionRepositoryService => {
   const sessions = new Map<string, Session>()
 
   return {
-    findById: (id) => Effect.succeed(Option.fromNullable(sessions.get(id))),
+    findById: (id) => Effect.succeed(Option.fromNullishOr(sessions.get(id))),
     findByUserId: (userId) =>
       Effect.succeed(
         Chunk.fromIterable(
@@ -375,7 +375,7 @@ const makeSessionRepo = (): SessionRepositoryService => {
     },
     delete: (id) => {
       sessions.delete(id)
-      return Effect.succeed(undefined)
+      return Effect.void
     },
     deleteExpired: () => {
       const current = Timestamp.now().epochMillis
@@ -420,7 +420,7 @@ const makeOAuthStateStore = (): OAuthStateStoreService => {
   return {
     create: (record) => {
       states.set(record.state, record)
-      return Effect.succeed(undefined)
+      return Effect.void
     },
     consume: (state) => {
       const record = states.get(state)
@@ -450,11 +450,11 @@ const makeOAuthStateStore = (): OAuthStateStoreService => {
         })
       )
     },
-    get: (state) => Effect.succeed(Option.fromNullable(states.get(state))),
+    get: (state) => Effect.succeed(Option.fromNullishOr(states.get(state))),
     markCompleted: ({ state, sessionToken, userId, statusMessage, completedAt }) => {
       const existing = states.get(state)
       if (existing === undefined) {
-        return Effect.succeed(undefined)
+        return Effect.void
       }
 
       states.set(state, {
@@ -465,12 +465,12 @@ const makeOAuthStateStore = (): OAuthStateStoreService => {
         statusMessage,
         completedAt: Option.some(completedAt),
       })
-      return Effect.succeed(undefined)
+      return Effect.void
     },
     markFailed: ({ state, statusMessage, completedAt }) => {
       const existing = states.get(state)
       if (existing === undefined) {
-        return Effect.succeed(undefined)
+        return Effect.void
       }
 
       states.set(state, {
@@ -479,7 +479,7 @@ const makeOAuthStateStore = (): OAuthStateStoreService => {
         statusMessage: Option.some(statusMessage),
         completedAt: Option.some(completedAt),
       })
-      return Effect.succeed(undefined)
+      return Effect.void
     },
     deleteExpired: () => {
       let deleted = 0
@@ -534,7 +534,7 @@ const makeHarness = (providers: ReadonlyArray<AuthProvider>): Harness => {
   )
 
   const run = <A, E>(effect: Effect.Effect<A, E, AuthService>) =>
-    Effect.runPromise(effect.pipe(Effect.provide(AuthServiceLive), Effect.provide(deps)))
+    Effect.runPromise(effect.pipe(Effect.provide(AuthServiceLive.pipe(Layer.provide(deps)))))
 
   return {
     state,
@@ -550,7 +550,7 @@ const makeHarness = (providers: ReadonlyArray<AuthProvider>): Harness => {
         Effect.gen(function* () {
           const auth = yield* AuthService
           return yield* f(auth)
-        }).pipe(Effect.either)
+        }).pipe(Effect.result)
       ),
   }
 }
@@ -586,9 +586,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeOAuthLogin("google", "alice", started.state)
     )
 
-    expect(Either.isLeft(reusedState)).toBe(true)
-    if (Either.isLeft(reusedState)) {
-      expect(reusedState.left._tag).toBe("OAuthStateError")
+    expect(Result.isFailure(reusedState)).toBe(true)
+    if (Result.isFailure(reusedState)) {
+      expect(reusedState.failure._tag).toBe("OAuthStateError")
     }
   })
 
@@ -705,9 +705,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.verifyEmail(verificationRequest.id, "ZZZZZZZZ")
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(EmailVerificationCodeMismatchError)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(EmailVerificationCodeMismatchError)
     }
     expect(harness.state.verificationRequests.has(verificationRequest.id)).toBe(true)
   })
@@ -735,9 +735,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.verifyEmail(verificationRequest.id, verificationRequest.code)
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(EmailVerificationRequestExpiredError)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(EmailVerificationRequestExpiredError)
     }
     expect(harness.state.verificationRequests.has(verificationRequest.id)).toBe(false)
   })
@@ -747,13 +747,13 @@ describe("AuthServiceLive OAuth orchestration", () => {
 
     const result = await harness.runWithAuthEither((auth) =>
       auth.resendEmailVerification(
-        EmailVerificationRequestId.make("00000000-0000-0000-0000-000000000999")
+        EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000999")
       )
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left).toBeInstanceOf(EmailVerificationRequestNotFoundError)
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure).toBeInstanceOf(EmailVerificationRequestNotFoundError)
     }
   })
 
@@ -774,9 +774,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       )
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("UnverifiedEmailError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("UnverifiedEmailError")
     }
   })
 
@@ -787,9 +787,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeOAuthLogin("google", "alice", "missing-state")
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("OAuthStateError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("OAuthStateError")
     }
   })
 
@@ -805,9 +805,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeLink(user.id, "google", "owner-google", loginState.state)
     )
 
-    expect(Either.isLeft(linkWithLoginState)).toBe(true)
-    if (Either.isLeft(linkWithLoginState)) {
-      expect(linkWithLoginState.left._tag).toBe("OAuthStateError")
+    expect(Result.isFailure(linkWithLoginState)).toBe(true)
+    if (Result.isFailure(linkWithLoginState)) {
+      expect(linkWithLoginState.failure._tag).toBe("OAuthStateError")
     }
 
     const linkState = await harness.runWithAuth((auth) => auth.startLink(user.id, "google"))
@@ -815,9 +815,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeOAuthLogin("google", "owner-google", linkState.state)
     )
 
-    expect(Either.isLeft(loginWithLinkState)).toBe(true)
-    if (Either.isLeft(loginWithLinkState)) {
-      expect(loginWithLinkState.left._tag).toBe("OAuthStateError")
+    expect(Result.isFailure(loginWithLinkState)).toBe(true)
+    if (Result.isFailure(loginWithLinkState)) {
+      expect(loginWithLinkState.failure._tag).toBe("OAuthStateError")
     }
   })
 
@@ -836,9 +836,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeLink(secondUser.id, "google", "shared-google", started.state)
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("OAuthStateError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("OAuthStateError")
     }
   })
 
@@ -847,9 +847,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
 
     const result = await harness.runWithAuthEither((auth) => auth.startOAuthLogin("google"))
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("ProviderNotEnabledError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("ProviderNotEnabledError")
     }
   })
 
@@ -861,9 +861,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeOAuthLogin("coinbase", "alice", started.state)
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("OAuthStateError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("OAuthStateError")
     }
   })
 
@@ -887,9 +887,9 @@ describe("AuthServiceLive OAuth orchestration", () => {
       auth.completeLink(secondUser.id, "google", "shared-google", secondLink.state)
     )
 
-    expect(Either.isLeft(result)).toBe(true)
-    if (Either.isLeft(result)) {
-      expect(result.left._tag).toBe("IdentityAlreadyLinkedError")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("IdentityAlreadyLinkedError")
     }
   })
 })

@@ -11,7 +11,7 @@ describe("CoinGeckoPriceServiceLive", () => {
       CoinGeckoClient,
       CoinGeckoClient.of({
         searchCoins: () => Effect.succeed([]),
-        getCoin: () => Effect.dieMessage("not used"),
+        getCoin: () => Effect.die("not used"),
         listMarkets: () =>
           Effect.succeed([
             {
@@ -35,7 +35,7 @@ describe("CoinGeckoPriceServiceLive", () => {
           coinIds: ["bitcoin", "unpriced"],
           currency: "eur",
         })
-      }).pipe(Effect.provide(CoinGeckoPriceServiceLive), Effect.provide(ClientTestLive))
+      }).pipe(Effect.provide(CoinGeckoPriceServiceLive.pipe(Layer.provide(ClientTestLive))))
     )
 
     expect(Array.from(prices.entries())).toEqual([

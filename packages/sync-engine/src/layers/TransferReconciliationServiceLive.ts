@@ -133,7 +133,7 @@ const filterExactAmountCandidates = ({
 }): Effect.Effect<ReadonlyArray<OnchainTransferReconciliationCandidate>, SyncEngineStorageError> =>
   Effect.reduce(
     candidates,
-    [] as ReadonlyArray<OnchainTransferReconciliationCandidate>,
+    () => [] as ReadonlyArray<OnchainTransferReconciliationCandidate>,
     (matches, candidate) =>
       hasExactAmountMatch({
         providerAmount,
@@ -523,12 +523,12 @@ const make = Effect.gen(function* () {
 
         const summary = yield* Effect.reduce(
           providerTransfers,
-          {
+          () => ({
             evaluatedProviderTransfers: 0,
             pending: 0,
             needsReview: 0,
             autoApplied: 0,
-          },
+          }),
           (state, providerTransfer) =>
             reconcileTransferCandidate(providerTransfer).pipe(
               Effect.map((status) =>

@@ -10,9 +10,9 @@ import { AuthUserId } from "../authentication/AuthUserId.ts"
 /**
  * PrincipalId - Durable owner identifier for sync and tax data.
  */
-export const PrincipalId = Schema.UUID.pipe(
+export const PrincipalId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("PrincipalId"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "PrincipalId",
     title: "Principal ID",
     description: "A durable ownership principal identifier",
@@ -27,7 +27,7 @@ export type PrincipalId = typeof PrincipalId.Type
 /**
  * PrincipalKind - Supported ownership principal families.
  */
-export const PrincipalKind = Schema.Literal("user", "anonymous_wallet").annotations({
+export const PrincipalKind = Schema.Literals(["user", "anonymous_wallet"]).annotate({
   identifier: "PrincipalKind",
   title: "Principal Kind",
   description: "The family of ownership principal",

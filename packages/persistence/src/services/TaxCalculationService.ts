@@ -7,7 +7,6 @@
  * @module TaxCalculationService
  */
 
-import { HttpApiSchema } from "@effect/platform"
 import { type CurrencyCode } from "@my/core/currency"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
@@ -23,7 +22,7 @@ export class UnsupportedJurisdictionError extends Schema.TaggedError<Unsupported
   {
     jurisdiction: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return `Unsupported jurisdiction: ${this.jurisdiction}`
@@ -40,7 +39,7 @@ export class TaxCalculationIncompleteDataError extends Schema.TaggedError<TaxCal
     field: Schema.String,
     reason: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 422 })
+  { httpApiStatus: 422 }
 ) {
   override get message(): string {
     return `Tax calculation data is incomplete for source ${this.sourceId} (${this.field}): ${this.reason}`
@@ -58,7 +57,7 @@ export class TaxCalculationUnsupportedCurrencyError extends Schema.TaggedError<T
     expectedCurrency: Schema.String,
     actualCurrency: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 422 })
+  { httpApiStatus: 422 }
 ) {
   override get message(): string {
     return `Tax calculation only supports ${this.expectedCurrency} values for ${this.field}; received ${this.actualCurrency}`
@@ -114,7 +113,7 @@ export interface TaxCalculationServiceShape {
 /**
  * TaxCalculationService - Context tag for sources persistence operations.
  */
-export class TaxCalculationService extends Context.Tag("TaxCalculationService")<
+export class TaxCalculationService extends Context.Service<
   TaxCalculationService,
   TaxCalculationServiceShape
->() {}
+>()("TaxCalculationService") {}

@@ -267,12 +267,10 @@ const make = Effect.gen(function* () {
         )
 
         if (Option.isNone(maybeUser)) {
-          return yield* Effect.fail(
-            new ProviderAuthFailedError({
-              provider: authResult.provider,
-              reason: "User not found for existing identity",
-            })
-          )
+          return yield* new ProviderAuthFailedError({
+            provider: authResult.provider,
+            reason: "User not found for existing identity",
+          })
         }
 
         return maybeUser.value
@@ -302,7 +300,7 @@ const make = Effect.gen(function* () {
 
       // No existing user found - create a new one if auto-provisioning is enabled
       if (!config.autoProvisionUsers) {
-        return yield* Effect.fail(new UserNotFoundError({ email: authResult.email }))
+        return yield* new UserNotFoundError({ email: authResult.email })
       }
 
       // Create new user and identity
@@ -346,12 +344,10 @@ const make = Effect.gen(function* () {
             )
         }
 
-        return yield* Effect.fail(
-          new ProviderAuthFailedError({
-            provider: authResult.provider,
-            reason: `A ${authResult.provider} identity is already linked to this account`,
-          })
-        )
+        return yield* new ProviderAuthFailedError({
+          provider: authResult.provider,
+          reason: `A ${authResult.provider} identity is already linked to this account`,
+        })
       }
 
       const existingIdentityForProviderId = yield* identityRepo
@@ -382,12 +378,10 @@ const make = Effect.gen(function* () {
             )
         }
 
-        return yield* Effect.fail(
-          new ProviderAuthFailedError({
-            provider: authResult.provider,
-            reason: "This provider identity is already linked to another account",
-          })
-        )
+        return yield* new ProviderAuthFailedError({
+          provider: authResult.provider,
+          reason: "This provider identity is already linked to another account",
+        })
       }
 
       const identityId = UserIdentityId.make(crypto.randomUUID())
@@ -479,12 +473,10 @@ const make = Effect.gen(function* () {
       )
 
       if (Option.isNone(maybeCreatedUser)) {
-        return yield* Effect.fail(
-          new ProviderAuthFailedError({
-            provider: authResult.provider,
-            reason: "User not found after identity creation",
-          })
-        )
+        return yield* new ProviderAuthFailedError({
+          provider: authResult.provider,
+          reason: "User not found after identity creation",
+        })
       }
 
       return maybeCreatedUser.value
@@ -558,12 +550,10 @@ const make = Effect.gen(function* () {
       const authorizationUrlOption = provider.getAuthorizationUrl(state, redirectUri)
 
       if (Option.isNone(authorizationUrlOption)) {
-        return yield* Effect.fail(
-          new ProviderAuthFailedError({
-            provider: providerType,
-            reason: "Provider does not support OAuth authorization flow",
-          })
-        )
+        return yield* new ProviderAuthFailedError({
+          provider: providerType,
+          reason: "Provider does not support OAuth authorization flow",
+        })
       }
 
       const authorizationUrl = authorizationUrlOption.value
@@ -671,12 +661,10 @@ const make = Effect.gen(function* () {
           "OAuth state missing or expired"
         )
 
-        return yield* Effect.fail(
-          new OAuthStateError({
-            provider: providerType,
-            reason: "State token not found or expired",
-          })
-        )
+        return yield* new OAuthStateError({
+          provider: providerType,
+          reason: "State token not found or expired",
+        })
       }
 
       const storedState = maybeStoredState.value
@@ -691,31 +679,25 @@ const make = Effect.gen(function* () {
           "OAuth state does not match callback"
         )
 
-        return yield* Effect.fail(
-          new OAuthStateError({
-            provider: providerType,
-            reason: "State token does not match callback provider or intent",
-          })
-        )
+        return yield* new OAuthStateError({
+          provider: providerType,
+          reason: "State token does not match callback provider or intent",
+        })
       }
 
       if (intent === "link") {
         if (Option.isNone(expectedUserId) || Option.isNone(storedState.userId)) {
-          return yield* Effect.fail(
-            new OAuthStateError({
-              provider: providerType,
-              reason: "Link state is missing required user binding",
-            })
-          )
+          return yield* new OAuthStateError({
+            provider: providerType,
+            reason: "Link state is missing required user binding",
+          })
         }
 
         if (storedState.userId.value !== expectedUserId.value) {
-          return yield* Effect.fail(
-            new OAuthStateError({
-              provider: providerType,
-              reason: "Link state does not belong to the authenticated user",
-            })
-          )
+          return yield* new OAuthStateError({
+            provider: providerType,
+            reason: "Link state does not belong to the authenticated user",
+          })
         }
       }
 
@@ -781,7 +763,7 @@ const make = Effect.gen(function* () {
       // Verification cleanup should not block the user-facing flow after the
       // request has already been expired or completed, so failures are logged
       // and treated as best-effort cleanup.
-      Effect.catchAll((cause) =>
+      Effect.catch((cause) =>
         Effect.logError(
           {
             requestId,
@@ -810,7 +792,7 @@ const make = Effect.gen(function* () {
         const authResult = yield* provider.authenticate(request)
 
         if (providerType === "local" && !authResult.emailVerified) {
-          return yield* Effect.fail(new UnverifiedEmailError({ email: authResult.email }))
+          return yield* new UnverifiedEmailError({ email: authResult.email })
         }
 
         // Find or create the user
@@ -830,7 +812,7 @@ const make = Effect.gen(function* () {
         // Validate password strength
         const passwordErrors = validatePassword(password, config.localAuth)
         if (!Chunk.isEmpty(passwordErrors)) {
-          return yield* Effect.fail(new PasswordTooWeakError({ requirements: passwordErrors }))
+          return yield* new PasswordTooWeakError({ requirements: passwordErrors })
         }
 
         // Check if user already exists
@@ -839,7 +821,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(() => new UserAlreadyExistsError({ email })))
 
         if (Option.isSome(existingUser)) {
-          return yield* Effect.fail(new UserAlreadyExistsError({ email }))
+          return yield* new UserAlreadyExistsError({ email })
         }
 
         // Hash the password
@@ -920,7 +902,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError((cause) => authProcessingError("find-email-verification", cause)))
 
         if (Option.isNone(maybeExistingRequest)) {
-          return yield* Effect.fail(new EmailVerificationRequestNotFoundError({ requestId }))
+          return yield* new EmailVerificationRequestNotFoundError({ requestId })
         }
 
         const verificationRequest = yield* createEmailVerificationRequest({
@@ -946,7 +928,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError((cause) => authProcessingError("find-email-verification", cause)))
 
         if (Option.isNone(maybeRequest)) {
-          return yield* Effect.fail(new EmailVerificationRequestNotFoundError({ requestId }))
+          return yield* new EmailVerificationRequestNotFoundError({ requestId })
         }
 
         const request = maybeRequest.value
@@ -962,11 +944,11 @@ const make = Effect.gen(function* () {
             operation: "auth:consume-expired-email-verification-request-failed",
           })
 
-          return yield* Effect.fail(new EmailVerificationRequestExpiredError({ requestId }))
+          return yield* new EmailVerificationRequestExpiredError({ requestId })
         }
 
         if (request.code !== code) {
-          return yield* Effect.fail(new EmailVerificationCodeMismatchError({ requestId }))
+          return yield* new EmailVerificationCodeMismatchError({ requestId })
         }
 
         const maybeUser = yield* userRepo
@@ -976,7 +958,7 @@ const make = Effect.gen(function* () {
           )
 
         if (Option.isNone(maybeUser)) {
-          return yield* Effect.fail(new UserNotFoundError({ email: request.email }))
+          return yield* new UserNotFoundError({ email: request.email })
         }
 
         const user = yield* userRepo.update(request.userId, { emailVerified: true }).pipe(
@@ -1122,7 +1104,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(() => new SessionNotFoundError({ sessionId })))
 
         if (Option.isNone(maybeSession)) {
-          return yield* Effect.fail(new SessionNotFoundError({ sessionId }))
+          return yield* new SessionNotFoundError({ sessionId })
         }
 
         // Delete the session
@@ -1142,7 +1124,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(() => new SessionNotFoundError({ sessionId })))
 
         if (Option.isNone(maybeSession)) {
-          return yield* Effect.fail(new SessionNotFoundError({ sessionId }))
+          return yield* new SessionNotFoundError({ sessionId })
         }
 
         const session = maybeSession.value
@@ -1164,7 +1146,7 @@ const make = Effect.gen(function* () {
                 })
             )
           )
-          return yield* Effect.fail(new SessionExpiredError({ sessionId }))
+          return yield* new SessionExpiredError({ sessionId })
         }
 
         // Get the user
@@ -1173,7 +1155,7 @@ const make = Effect.gen(function* () {
           .pipe(Effect.mapError(() => new SessionNotFoundError({ sessionId })))
 
         if (Option.isNone(maybeUser)) {
-          return yield* Effect.fail(new SessionNotFoundError({ sessionId }))
+          return yield* new SessionNotFoundError({ sessionId })
         }
 
         return { user: maybeUser.value, session } satisfies ValidatedSession
@@ -1196,7 +1178,7 @@ const make = Effect.gen(function* () {
         )
 
         if (Option.isNone(maybeUser)) {
-          return yield* Effect.fail(new UserNotFoundError({ email: providerResult.email }))
+          return yield* new UserNotFoundError({ email: providerResult.email })
         }
 
         // Check if identity already exists (linked to any user)
@@ -1216,13 +1198,11 @@ const make = Effect.gen(function* () {
           const identity = existingIdentity.value
           // Identity is already linked - check if it's to the same user
           if (identity.userId !== userId) {
-            return yield* Effect.fail(
-              new IdentityAlreadyLinkedError({
-                provider: providerResult.provider,
-                providerId: providerResult.providerId,
-                existingUserId: identity.userId,
-              })
-            )
+            return yield* new IdentityAlreadyLinkedError({
+              provider: providerResult.provider,
+              providerId: providerResult.providerId,
+              existingUserId: identity.userId,
+            })
           }
           // Identity is already linked to this user - return it
           return identity

@@ -16,7 +16,7 @@ import { CurrencyCode } from "./CurrencyCode.ts"
  * Most currencies use 2 decimal places, but some use 0 (JPY, KRW),
  * 3 (KWD, BHD, OMR), or 4 (CLF) decimal places.
  */
-export const DecimalPlaces = Schema.Literal(0, 2, 3, 4).annotations({
+export const DecimalPlaces = Schema.Literals([0, 2, 3, 4]).annotate({
   identifier: "DecimalPlaces",
   title: "Decimal Places",
   description: "Number of decimal places for the currency (0, 2, 3, or 4)",
@@ -47,7 +47,7 @@ export class Currency extends Schema.Class<Currency>("Currency")({
   /**
    * Display name of the currency (e.g., "US Dollar")
    */
-  name: Schema.NonEmptyTrimmedString.annotations({
+  name: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Currency Name",
     description: "The display name of the currency",
   }),
@@ -55,7 +55,7 @@ export class Currency extends Schema.Class<Currency>("Currency")({
   /**
    * Currency symbol for display (e.g., "$", "€", "£")
    */
-  symbol: Schema.NonEmptyTrimmedString.annotations({
+  symbol: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Currency Symbol",
     description: "The symbol used to display the currency",
   }),
@@ -68,7 +68,7 @@ export class Currency extends Schema.Class<Currency>("Currency")({
   /**
    * Whether the currency is active for use
    */
-  isActive: Schema.Boolean.annotations({
+  isActive: Schema.Boolean.annotate({
     title: "Is Active",
     description: "Whether the currency is currently active for use",
   }),
