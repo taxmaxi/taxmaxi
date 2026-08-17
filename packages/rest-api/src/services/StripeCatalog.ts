@@ -99,6 +99,7 @@ export const STRIPE_RUNTIME_KEY_PERMISSIONS: ReadonlyArray<StripeRestrictedKeyPe
   { resource: "Checkout Sessions", access: "write" },
   { resource: "Customer Portal", access: "write" },
   { resource: "Prices", access: "read" },
+  { resource: "Products", access: "read" },
   { resource: "Subscriptions", access: "read" },
   { resource: "Invoices", access: "read" },
   { resource: "Charges and Refunds", access: "read" },

@@ -21,6 +21,8 @@ The `rk_test_` prefix does not identify a particular Stripe sandbox. Confirm tha
 
 The API runtime key must belong to the same Stripe environment as the catalog it reads. If the catalog is created with one sandbox's key but `STRIPE_SECRET_KEY` belongs to another sandbox or test environment, `/v1/billing/catalog` will not find the prices.
 
+The runtime key needs `Prices: Read` and `Products: Read` so the API can verify both sides of each catalog entry before showing a price or starting Checkout.
+
 ## Restricted key permissions
 
 Create a separate restricted key for catalog setup with these permissions:
@@ -71,6 +73,8 @@ mise x -- pnpm run stripe:catalog:setup
 ```
 
 Choose `2`, then type `production` when prompted. Any other confirmation cancels without changing Stripe.
+
+When a code change edits an existing catalog definition, deploy the code and run production catalog setup in one maintenance window. Exact runtime validation means billing can be briefly unavailable between those two steps. Run setup immediately after deployment, then verify `/v1/billing/catalog` before ending the window. Do not keep two catalog definitions in application code for rollout compatibility.
 
 ## Verify the result
 
@@ -132,9 +136,13 @@ If the API still reports an unavailable catalog after a successful run, check th
 
 1. `STRIPE_SECRET_KEY` and the catalog setup key belong to the same Stripe environment.
 2. The runtime key has `Prices: Read` permission.
-3. Every expected price is active and has the correct lookup key.
-4. Annual prices recur yearly and top-up prices are one-time prices.
-5. All prices use EUR and have a fixed unit amount.
+3. The runtime key has `Products: Read` permission.
+4. Every expected price is active and has the correct lookup key, exact amount, tax behavior, `per_unit` billing scheme, and no quantity transformation.
+5. Annual prices recur yearly with licensed usage and no trial; top-up prices are one-time prices.
+6. All prices use EUR and have a fixed unit amount.
+7. Every expanded Product is active and has the expected name, description, tax code, and `taxmaxi_catalog_lookup_key` metadata.
+
+The structured `Stripe catalog validation failed` log includes `validationReason`, `lookupKey`, and `priceId` when one specific Price or Product differs. Use those fields to locate the object in Stripe before rerunning setup.
 
 ## After setup
 

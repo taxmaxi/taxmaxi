@@ -23,6 +23,7 @@ interface StripeMockState {
   invoicePayments: Array<unknown>
   paymentRecord: unknown
   priceListFailure: boolean
+  priceListParams: Array<unknown>
   prices: Array<{
     readonly lookup_key?: string | null
     readonly [key: string]: unknown
@@ -33,6 +34,7 @@ interface StripeMockState {
   retrievedRefund: unknown
   listedSubscriptions: Array<unknown> | null
   subscription: unknown
+  webhookFailure: unknown
 }
 
 const stripeMockState = vi.hoisted<StripeMockState>(() => ({
@@ -44,6 +46,7 @@ const stripeMockState = vi.hoisted<StripeMockState>(() => ({
   invoicePayments: [],
   paymentRecord: null,
   priceListFailure: false,
+  priceListParams: [],
   prices: [],
   retrievedPrices: {},
   refunds: [],
@@ -51,6 +54,7 @@ const stripeMockState = vi.hoisted<StripeMockState>(() => ({
   retrievedRefund: null,
   listedSubscriptions: null,
   subscription: null,
+  webhookFailure: null,
 }))
 
 vi.mock("stripe", () => {
@@ -60,17 +64,27 @@ vi.mock("stripe", () => {
     readonly requestId: string | undefined = undefined
     readonly statusCode: number | undefined = undefined
   }
-  class StripeMockInvalidRequestError extends StripeMockError {}
-  class StripeMockConnectionError extends StripeMockError {}
-  class StripeMockApiError extends StripeMockError {}
+  class StripeMockInvalidRequestError extends StripeMockError {
+    override readonly type = "StripeInvalidRequestError"
+  }
+  class StripeMockConnectionError extends StripeMockError {
+    override readonly type = "StripeConnectionError"
+  }
+  class StripeMockApiError extends StripeMockError {
+    override readonly type = "StripeAPIError"
+  }
   class StripeMockAuthenticationError extends StripeMockError {
     override readonly type = "StripeAuthenticationError"
     override readonly code = "api_key_expired"
     override readonly requestId = "req_expired_key"
     override readonly statusCode = 401
   }
-  class StripeMockPermissionError extends StripeMockError {}
-  class StripeMockCardError extends StripeMockError {}
+  class StripeMockPermissionError extends StripeMockError {
+    override readonly type = "StripePermissionError"
+  }
+  class StripeMockCardError extends StripeMockError {
+    override readonly type = "StripeCardError"
+  }
 
   return {
     default: class StripeMock {
@@ -108,19 +122,43 @@ vi.mock("stripe", () => {
       }
       readonly prices = {
         list: ({
+          active,
+          expand,
           lookup_keys: lookupKeys,
-        }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) => {
+          limit,
+        }: {
+          readonly active?: boolean
+          readonly expand?: ReadonlyArray<string>
+          readonly lookup_keys?: ReadonlyArray<string>
+          readonly limit?: number
+        } = {}) => {
+          stripeMockState.priceListParams.push({ active, expand, lookup_keys: lookupKeys, limit })
           if (stripeMockState.priceListFailure) {
-            return Promise.reject(new StripeMockAuthenticationError("Expired API Key provided"))
+            return Promise.reject(
+              new StripeMockAuthenticationError(
+                "Expired API Key provided: rk_live_secret123 sk_test_secret456 whsec_secret789\nretry denied"
+              )
+            )
           }
+          const matchingPrices = stripeMockState.prices.filter(
+            (price) =>
+              (active !== true || price.active !== false) &&
+              (lookupKeys === undefined ||
+                (price.lookup_key !== undefined && lookupKeys.includes(price.lookup_key ?? "")))
+          )
+          const expandProducts = expand?.includes("data.product") === true
           return Promise.resolve({
-            data:
-              lookupKeys === undefined
-                ? stripeMockState.prices
-                : stripeMockState.prices.filter(
-                    (price) =>
-                      price.lookup_key !== undefined && lookupKeys.includes(price.lookup_key ?? "")
-                  ),
+            data: expandProducts
+              ? matchingPrices
+              : matchingPrices.map((price) => {
+                  const product = price.product
+                  return typeof product === "object" &&
+                    product !== null &&
+                    "id" in product &&
+                    typeof product.id === "string"
+                    ? { ...price, product: product.id }
+                    : price
+                }),
           })
         },
         retrieve: (priceId: string) => Promise.resolve(stripeMockState.retrievedPrices[priceId]),
@@ -150,7 +188,10 @@ vi.mock("stripe", () => {
         retrieve: () => Promise.resolve(stripeMockState.retrievedRefund),
       }
       readonly webhooks = {
-        constructEventAsync: () => Promise.resolve(stripeMockState.event),
+        constructEventAsync: () =>
+          stripeMockState.webhookFailure === null
+            ? Promise.resolve(stripeMockState.event)
+            : Promise.reject(stripeMockState.webhookFailure),
       }
     },
   }
@@ -195,7 +236,12 @@ import {
   validateStripeWebhookEvent,
 } from "../src/layers/StripeBillingServiceLive.ts"
 import { StripeBillingService } from "../src/services/StripeBillingService.ts"
-import { TAXMAXI_STRIPE_CATALOG } from "../src/services/StripeCatalog.ts"
+import {
+  STRIPE_CATALOG_PRODUCT_METADATA_KEY,
+  TAXMAXI_STRIPE_CATALOG,
+  TAXMAXI_STRIPE_TAX_CODE,
+  type TaxMaxiStripeCatalogItem,
+} from "../src/services/StripeCatalog.ts"
 
 const TEST_USER_ID = AuthUserId.make("00000000-0000-4000-8000-000000000192")
 const OTHER_USER_ID = AuthUserId.make("00000000-0000-4000-8000-000000000193")
@@ -288,19 +334,45 @@ const loadServiceWithStripe = (billingRepository: BillingRepositoryService) =>
     )
   )
 
-const completeStripeCatalog = () =>
-  TAXMAXI_STRIPE_CATALOG.map((item) => ({
-    id: `price_${item.lookupKey}`,
-    lookup_key: item.lookupKey,
-    product: `prod_${item.lookupKey}`,
-    recurring:
-      item.recurringInterval === null
-        ? null
-        : { interval: item.recurringInterval, interval_count: 1 },
-    unit_amount: item.unitAmount,
-    currency: item.currency,
-    tax_behavior: item.taxBehavior,
-  }))
+const catalogProduct = (item: TaxMaxiStripeCatalogItem, id: string) => ({
+  id,
+  active: true,
+  name: item.name,
+  description: item.description,
+  tax_code: TAXMAXI_STRIPE_TAX_CODE,
+  metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: item.lookupKey },
+})
+
+const catalogPrice = (item: TaxMaxiStripeCatalogItem) => ({
+  id: `price_${item.lookupKey}`,
+  billing_scheme: "per_unit" as const,
+  lookup_key: item.lookupKey,
+  product: catalogProduct(item, `prod_${item.lookupKey}`),
+  recurring:
+    item.recurringInterval === null
+      ? null
+      : {
+          interval: item.recurringInterval,
+          interval_count: 1,
+          usage_type: "licensed",
+          trial_period_days: null,
+        },
+  transform_quantity: null,
+  unit_amount: item.unitAmount,
+  currency: item.currency,
+  tax_behavior: item.taxBehavior,
+})
+
+const catalogPriceByLookupKey = (lookupKey: string, productId?: string) => {
+  const item = TAXMAXI_STRIPE_CATALOG.find((candidate) => candidate.lookupKey === lookupKey)
+  if (item === undefined) throw new Error(`Unknown TaxMaxi Stripe catalog item ${lookupKey}`)
+  const price = catalogPrice(item)
+  return productId === undefined
+    ? price
+    : { ...price, product: { ...price.product, id: productId } }
+}
+
+const completeStripeCatalog = () => TAXMAXI_STRIPE_CATALOG.map(catalogPrice)
 
 describe("StripeBillingServiceLive", () => {
   it("scopes annual billing state to the TaxMaxi annual plan", () => {
@@ -769,20 +841,24 @@ describe("StripeBillingServiceLive", () => {
 
       expect(result).toMatchObject({
         _tag: "Failure",
-        failure: { message: "Could not load Stripe prices: Expired API Key provided" },
+        failure: { message: expect.stringContaining("Expired API Key provided") },
       })
       expect(logMessages).toContainEqual([
         {
           provider: "stripe",
           operation: "Could not load Stripe prices",
-          cause: expect.objectContaining({ message: "Expired API Key provided" }),
           stripeErrorType: "StripeAuthenticationError",
           stripeErrorCode: "api_key_expired",
+          stripeErrorMessage:
+            "Expired API Key provided: [REDACTED_STRIPE_KEY] [REDACTED_STRIPE_KEY] [REDACTED_STRIPE_WEBHOOK_SECRET] retry denied",
           stripeRequestId: "req_expired_key",
           stripeStatusCode: 401,
         },
         "Stripe request failed",
       ])
+      expect(JSON.stringify(logMessages)).not.toContain("rk_live_secret123")
+      expect(JSON.stringify(logMessages)).not.toContain("sk_test_secret456")
+      expect(JSON.stringify(logMessages)).not.toContain("whsec_secret789")
     } finally {
       stripeMockState.priceListFailure = false
     }
@@ -815,6 +891,44 @@ describe("StripeBillingServiceLive", () => {
     }
   })
 
+  it("requests only active prices with expanded Products for catalog and Checkout", async () => {
+    stripeMockState.priceListParams.length = 0
+    stripeMockState.prices = completeStripeCatalog()
+    stripeMockState.listedSubscriptions = []
+    stripeMockState.checkoutParams = []
+    const service = await loadServiceWithStripe({
+      ...billingRepositoryStub,
+      findByUserId: () =>
+        Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      reserveAnnualCheckout: ({ priceId }) =>
+        Effect.succeed({
+          generation: 1,
+          expiresAt: new Date("2026-08-14T11:00:00.000Z"),
+          priceId,
+        }),
+    })
+
+    await Effect.runPromise(service.catalog)
+    await Effect.runPromise(service.createAnnualCheckout(TEST_USER_ID))
+
+    expect(stripeMockState.priceListParams).toEqual([
+      {
+        active: true,
+        expand: ["data.product"],
+        lookup_keys: TAXMAXI_STRIPE_CATALOG.map(({ lookupKey }) => lookupKey),
+        limit: TAXMAXI_STRIPE_CATALOG.length,
+      },
+      {
+        active: true,
+        expand: ["data.product"],
+        lookup_keys: ["taxmaxi_annual_10k_eur"],
+        limit: 1,
+      },
+    ])
+
+    stripeMockState.listedSubscriptions = null
+  })
+
   it("accepts only one complete EUR catalog", () => {
     const prices = [
       "taxmaxi_annual_10k_eur",
@@ -840,10 +954,119 @@ describe("StripeBillingServiceLive", () => {
 
     expect(annualPrice).toBeDefined()
     if (annualPrice === undefined) return
+    const annualRecurring = annualPrice.recurring
+    expect(annualRecurring).not.toBeNull()
+    if (annualRecurring === null) return
 
     expect(isCatalogPriceDefinitionValid(annualPrice)).toBe(true)
     expect(isCatalogPriceDefinitionValid({ ...annualPrice, unit_amount: 1 })).toBe(false)
     expect(isCatalogPriceDefinitionValid({ ...annualPrice, tax_behavior: "exclusive" })).toBe(false)
+    expect(isCatalogPriceDefinitionValid({ ...annualPrice, billing_scheme: "tiered" })).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        transform_quantity: { divide_by: 10, round: "up" },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        recurring: { ...annualRecurring, usage_type: "metered" },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        recurring: { ...annualRecurring, trial_period_days: 14 },
+      })
+    ).toBe(false)
+    expect(isCatalogPriceDefinitionValid({ ...annualPrice, product: annualPrice.product.id })).toBe(
+      false
+    )
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        product: { id: annualPrice.product.id, deleted: true },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        product: { ...annualPrice.product, active: false },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        product: { ...annualPrice.product, name: "Changed product name" },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        product: { ...annualPrice.product, description: "Changed product description" },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        product: { ...annualPrice.product, tax_code: "txcd_wrong" },
+      })
+    ).toBe(false)
+    expect(
+      isCatalogPriceDefinitionValid({
+        ...annualPrice,
+        product: { ...annualPrice.product, metadata: {} },
+      })
+    ).toBe(false)
+  })
+
+  it("logs Stripe signature failures without retaining the header or payload", async () => {
+    const logMessages: Array<unknown> = []
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message)
+    })
+    stripeMockState.webhookFailure = Object.assign(
+      new Error("No signatures found matching the expected signature for payload."),
+      {
+        type: "StripeSignatureVerificationError",
+        header: "t=123,v1=signature-secret",
+        payload: '{"customer_email":"private@example.com"}',
+      }
+    )
+
+    try {
+      const service = await loadServiceWithStripe(billingRepositoryStub)
+      const result = await Effect.runPromise(
+        Effect.result(
+          service.processWebhook({ payload: "{}", signature: "signature-secret" })
+        ).pipe(Effect.withLogger(logger))
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          message:
+            "Invalid Stripe webhook signature: No signatures found matching the expected signature for payload.",
+        },
+      })
+      expect(logMessages).toContainEqual([
+        {
+          provider: "stripe",
+          operation: "Invalid Stripe webhook signature",
+          stripeErrorType: "StripeSignatureVerificationError",
+          stripeErrorCode: undefined,
+          stripeErrorMessage: "No signatures found matching the expected signature for payload.",
+          stripeRequestId: undefined,
+          stripeStatusCode: undefined,
+        },
+        "Stripe request failed",
+      ])
+      expect(JSON.stringify(logMessages)).not.toContain("signature-secret")
+      expect(JSON.stringify(logMessages)).not.toContain("private@example.com")
+    } finally {
+      stripeMockState.webhookFailure = null
+    }
   })
 
   it.each([
@@ -870,6 +1093,40 @@ describe("StripeBillingServiceLive", () => {
     } finally {
       stripeMockState.prices = []
     }
+  })
+
+  it("logs catalog validation failures after Stripe returns prices", async () => {
+    const logMessages: Array<unknown> = []
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message)
+    })
+    const prices = completeStripeCatalog()
+    const firstPrice = prices[0]
+    expect(firstPrice).toBeDefined()
+    if (firstPrice === undefined) return
+    stripeMockState.prices = [{ ...firstPrice, unit_amount: 1 }, ...prices.slice(1)]
+
+    const service = await loadServiceWithStripe(billingRepositoryStub)
+    const result = await Effect.runPromise(
+      Effect.result(service.catalog).pipe(Effect.withLogger(logger))
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: { message: "Stripe catalog prices do not match the TaxMaxi catalog definition" },
+    })
+    expect(logMessages).toContainEqual([
+      {
+        provider: "stripe",
+        operation: "Load billing catalog",
+        validationReason: "unit_amount_mismatch",
+        lookupKey: firstPrice.lookup_key,
+        priceId: firstPrice.id,
+        receivedPriceCount: TAXMAXI_STRIPE_CATALOG.length,
+        expectedPriceCount: TAXMAXI_STRIPE_CATALOG.length,
+      },
+      "Stripe catalog validation failed",
+    ])
   })
 
   it("rejects a catalog price whose cadence contradicts its lookup key", async () => {
@@ -1784,12 +2041,8 @@ describe("StripeBillingServiceLive", () => {
     stripeMockState.checkoutParams = []
     stripeMockState.prices = [
       {
+        ...catalogPriceByLookupKey("taxmaxi_topup_1k_eur"),
         id: "price_top_up",
-        lookup_key: "taxmaxi_topup_1k_eur",
-        product: "prod_top_up",
-        recurring: null,
-        unit_amount: 2_000,
-        currency: "eur",
       },
     ]
     stripeMockState.subscription = {
@@ -1834,12 +2087,8 @@ describe("StripeBillingServiceLive", () => {
       logMessages.push(message)
     })
     const currentPrice = {
+      ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur"),
       id: "price_current_annual",
-      lookup_key: "taxmaxi_annual_10k_eur",
-      product: "prod_annual",
-      recurring: { interval: "year", interval_count: 1 },
-      unit_amount: 15_900,
-      currency: "eur",
     }
     const archivedPrice = {
       ...currentPrice,
@@ -1887,7 +2136,7 @@ describe("StripeBillingServiceLive", () => {
       expect.objectContaining({
         provider: "stripe",
         operation: "Could not create annual Checkout",
-        cause: expect.objectContaining({ message: "Price is inactive" }),
+        stripeErrorMessage: "Price is inactive",
       }),
       "Stripe request failed",
     ])
@@ -1905,12 +2154,8 @@ describe("StripeBillingServiceLive", () => {
     stripeMockState.checkoutParams = []
     stripeMockState.prices = [
       {
+        ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur"),
         id: "price_annual_connection",
-        lookup_key: "taxmaxi_annual_10k_eur",
-        product: "prod_annual",
-        recurring: { interval: "year", interval_count: 1 },
-        unit_amount: 15_900,
-        currency: "eur",
       },
     ]
     stripeMockState.listedSubscriptions = []
@@ -1946,15 +2191,22 @@ describe("StripeBillingServiceLive", () => {
   })
 
   it("rejects unsupported direct Checkout prices before creating a session", async () => {
+    const annualCatalogItem = TAXMAXI_STRIPE_CATALOG.find(
+      ({ lookupKey }) => lookupKey === "taxmaxi_annual_10k_eur"
+    )
+    const topUpCatalogItem = TAXMAXI_STRIPE_CATALOG.find(
+      ({ lookupKey }) => lookupKey === "taxmaxi_topup_1k_eur"
+    )
+    if (annualCatalogItem === undefined || topUpCatalogItem === undefined) {
+      throw new Error("TaxMaxi Stripe Checkout catalog entries are missing")
+    }
+
     stripeMockState.checkoutParams = []
     stripeMockState.prices = [
       {
+        ...catalogPrice(topUpCatalogItem),
         id: "price_top_up_tiered",
-        lookup_key: "taxmaxi_topup_1k_eur",
-        product: "prod_top_up",
-        recurring: null,
         unit_amount: null,
-        currency: "eur",
       },
     ]
     stripeMockState.subscription = {
@@ -1986,16 +2238,43 @@ describe("StripeBillingServiceLive", () => {
 
     stripeMockState.prices = [
       {
+        ...catalogPrice(annualCatalogItem),
         id: "price_annual_usd",
-        lookup_key: "taxmaxi_annual_10k_eur",
-        product: "prod_annual",
-        recurring: { interval: "year", interval_count: 1 },
-        unit_amount: 15_900,
         currency: "usd",
       },
     ]
     stripeMockState.listedSubscriptions = []
     const nonEurAnnual = await Effect.runPromise(
+      Effect.result(service.createAnnualCheckout(TEST_USER_ID))
+    )
+
+    stripeMockState.prices = [{ ...catalogPrice(annualCatalogItem), unit_amount: 1 }]
+    const wrongAmountAnnual = await Effect.runPromise(
+      Effect.result(service.createAnnualCheckout(TEST_USER_ID))
+    )
+
+    stripeMockState.prices = [
+      {
+        ...catalogPrice(topUpCatalogItem),
+        tax_behavior: "exclusive",
+      },
+    ]
+    stripeMockState.listedSubscriptions = null
+    const wrongTaxTopUp = await Effect.runPromise(
+      Effect.result(service.createTopUpCheckout(TEST_USER_ID))
+    )
+
+    stripeMockState.prices = [
+      {
+        ...catalogPrice(annualCatalogItem),
+        product: {
+          ...catalogPrice(annualCatalogItem).product,
+          tax_code: "txcd_wrong",
+        },
+      },
+    ]
+    stripeMockState.listedSubscriptions = []
+    const wrongProductTaxCodeAnnual = await Effect.runPromise(
       Effect.result(service.createAnnualCheckout(TEST_USER_ID))
     )
     stripeMockState.listedSubscriptions = null
@@ -2008,6 +2287,18 @@ describe("StripeBillingServiceLive", () => {
       _tag: "Failure",
       failure: { message: "Stripe Checkout prices must use EUR" },
     })
+    expect(wrongAmountAnnual).toMatchObject({
+      _tag: "Failure",
+      failure: { message: "Stripe Checkout price does not match the TaxMaxi catalog definition" },
+    })
+    expect(wrongTaxTopUp).toMatchObject({
+      _tag: "Failure",
+      failure: { message: "Stripe Checkout price does not match the TaxMaxi catalog definition" },
+    })
+    expect(wrongProductTaxCodeAnnual).toMatchObject({
+      _tag: "Failure",
+      failure: { message: "Stripe Checkout price does not match the TaxMaxi catalog definition" },
+    })
     expect(stripeMockState.checkoutParams).toEqual([])
   })
 
@@ -2015,12 +2306,8 @@ describe("StripeBillingServiceLive", () => {
     stripeMockState.checkoutParams = []
     stripeMockState.prices = [
       {
+        ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur", "prod_replacement_annual"),
         id: "price_replacement_annual",
-        lookup_key: "taxmaxi_annual_10k_eur",
-        product: "prod_replacement_annual",
-        recurring: { interval: "year", interval_count: 1 },
-        unit_amount: 15_900,
-        currency: "eur",
       },
     ]
     stripeMockState.subscription = {
@@ -2735,9 +3022,15 @@ describe("StripeBillingServiceLive", () => {
   })
 
   it("starts without Stripe configuration and keeps local billing status available", async () => {
+    const logMessages: Array<unknown> = []
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message)
+    })
     const service = await loadServiceWithoutStripeConfig()
     const status = await Effect.runPromise(service.status(TEST_USER_ID))
-    const catalog = await Effect.runPromise(Effect.result(service.catalog))
+    const catalog = await Effect.runPromise(
+      Effect.result(service.catalog).pipe(Effect.withLogger(logger))
+    )
     const webhook = await Effect.runPromise(
       Effect.result(service.processWebhook({ payload: "{}", signature: "missing" }))
     )
@@ -2752,6 +3045,14 @@ describe("StripeBillingServiceLive", () => {
       _tag: "Failure",
       failure: { message: "Stripe billing is not configured" },
     })
+    expect(logMessages).toContainEqual([
+      {
+        provider: "stripe",
+        operation: "Could not load Stripe prices",
+        configurationError: "Stripe billing is not configured",
+      },
+      "Stripe request failed",
+    ])
     expect(webhook).toMatchObject({
       _tag: "Failure",
       failure: { message: "Stripe webhook is not configured" },

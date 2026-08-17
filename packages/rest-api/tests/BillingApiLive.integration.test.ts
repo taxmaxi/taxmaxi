@@ -27,16 +27,38 @@ import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/supp
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
+import {
+  STRIPE_CATALOG_PRODUCT_METADATA_KEY,
+  TAXMAXI_STRIPE_CATALOG,
+  TAXMAXI_STRIPE_TAX_CODE,
+} from "../src/services/StripeCatalog.ts"
 import { makeX402PaymentValidatorTestLive } from "./support/X402PaymentValidatorTestLive.ts"
 import { SIWXProofVerifierTestLive } from "./support/SIWXProofVerifierTestLive.ts"
 
 interface StripeHttpMockState {
+  catalogError: Error | null
   checkoutModes: Array<string | undefined>
   prices: Array<{
     readonly id: string
+    readonly billing_scheme: "per_unit"
     readonly lookup_key: string
-    readonly product: string
-    readonly recurring: { readonly interval: string; readonly interval_count: number } | null
+    readonly product:
+      | string
+      | {
+          readonly id: string
+          readonly active: boolean
+          readonly name: string
+          readonly description: string
+          readonly tax_code: string
+          readonly metadata: Readonly<Record<string, string>>
+        }
+    readonly recurring: {
+      readonly interval: string
+      readonly interval_count: number
+      readonly usage_type: "licensed"
+      readonly trial_period_days: null
+    } | null
+    readonly transform_quantity: null
     readonly unit_amount: number
     readonly currency: string
     readonly tax_behavior: "inclusive" | "exclusive"
@@ -47,6 +69,7 @@ interface StripeHttpMockState {
 }
 
 const stripeHttpMockState = vi.hoisted<StripeHttpMockState>(() => ({
+  catalogError: null,
   checkoutModes: [],
   prices: [],
   subscriptions: [],
@@ -76,12 +99,16 @@ vi.mock("stripe", () => ({
     }
     readonly prices = {
       list: ({ lookup_keys: lookupKeys }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) =>
-        Promise.resolve({
-          data:
-            lookupKeys === undefined
-              ? stripeHttpMockState.prices
-              : stripeHttpMockState.prices.filter((price) => lookupKeys.includes(price.lookup_key)),
-        }),
+        stripeHttpMockState.catalogError === null
+          ? Promise.resolve({
+              data:
+                lookupKeys === undefined
+                  ? stripeHttpMockState.prices
+                  : stripeHttpMockState.prices.filter((price) =>
+                      lookupKeys.includes(price.lookup_key)
+                    ),
+            })
+          : Promise.reject(stripeHttpMockState.catalogError),
       retrieve: (priceId: string) =>
         Promise.resolve(stripeHttpMockState.prices.find((price) => price.id === priceId)),
     }
@@ -200,62 +227,104 @@ const HttpLive = HttpRouter.serve(
 
 const execute = (request: HttpClientRequest.HttpClientRequest) => HttpClient.execute(request)
 
-const catalogPrices = () => [
-  {
-    id: "price_individual_annual",
-    lookup_key: "taxmaxi_annual_10k_eur",
-    product: "prod_individual",
-    recurring: { interval: "year", interval_count: 1 },
-    unit_amount: 15_900,
-    currency: "eur",
-    tax_behavior: "inclusive" as const,
-  },
-  {
-    id: "price_individual_topup",
-    lookup_key: "taxmaxi_topup_1k_eur",
-    product: "prod_individual_topup",
-    recurring: null,
-    unit_amount: 2_000,
-    currency: "eur",
-    tax_behavior: "inclusive" as const,
-  },
-  {
-    id: "price_professional_annual",
-    lookup_key: "taxmaxi_professional_annual_100k_eur",
-    product: "prod_professional",
-    recurring: { interval: "year", interval_count: 1 },
-    unit_amount: 159_000,
-    currency: "eur",
-    tax_behavior: "exclusive" as const,
-  },
-  {
-    id: "price_professional_matter",
-    lookup_key: "taxmaxi_professional_matter_annual_10k_eur",
-    product: "prod_professional_matter",
-    recurring: { interval: "year", interval_count: 1 },
-    unit_amount: 14_900,
-    currency: "eur",
-    tax_behavior: "exclusive" as const,
-  },
-  {
-    id: "price_professional_topup",
-    lookup_key: "taxmaxi_professional_topup_20k_eur",
-    product: "prod_professional_topup",
-    recurring: null,
-    unit_amount: 20_000,
-    currency: "eur",
-    tax_behavior: "exclusive" as const,
-  },
-  {
-    id: "price_enterprise_pilot",
-    lookup_key: "taxmaxi_enterprise_pilot_eur",
-    product: "prod_enterprise_pilot",
-    recurring: null,
-    unit_amount: 500_000,
-    currency: "eur",
-    tax_behavior: "exclusive" as const,
-  },
-]
+const catalogPrices = () =>
+  [
+    {
+      id: "price_individual_annual",
+      billing_scheme: "per_unit" as const,
+      lookup_key: "taxmaxi_annual_10k_eur",
+      product: "prod_individual",
+      recurring: {
+        interval: "year",
+        interval_count: 1,
+        usage_type: "licensed" as const,
+        trial_period_days: null,
+      },
+      transform_quantity: null,
+      unit_amount: 15_900,
+      currency: "eur",
+      tax_behavior: "inclusive" as const,
+    },
+    {
+      id: "price_individual_topup",
+      billing_scheme: "per_unit" as const,
+      lookup_key: "taxmaxi_topup_1k_eur",
+      product: "prod_individual_topup",
+      recurring: null,
+      transform_quantity: null,
+      unit_amount: 2_000,
+      currency: "eur",
+      tax_behavior: "inclusive" as const,
+    },
+    {
+      id: "price_professional_annual",
+      billing_scheme: "per_unit" as const,
+      lookup_key: "taxmaxi_professional_annual_100k_eur",
+      product: "prod_professional",
+      recurring: {
+        interval: "year",
+        interval_count: 1,
+        usage_type: "licensed" as const,
+        trial_period_days: null,
+      },
+      transform_quantity: null,
+      unit_amount: 159_000,
+      currency: "eur",
+      tax_behavior: "exclusive" as const,
+    },
+    {
+      id: "price_professional_matter",
+      billing_scheme: "per_unit" as const,
+      lookup_key: "taxmaxi_professional_matter_annual_10k_eur",
+      product: "prod_professional_matter",
+      recurring: {
+        interval: "year",
+        interval_count: 1,
+        usage_type: "licensed" as const,
+        trial_period_days: null,
+      },
+      transform_quantity: null,
+      unit_amount: 14_900,
+      currency: "eur",
+      tax_behavior: "exclusive" as const,
+    },
+    {
+      id: "price_professional_topup",
+      billing_scheme: "per_unit" as const,
+      lookup_key: "taxmaxi_professional_topup_20k_eur",
+      product: "prod_professional_topup",
+      recurring: null,
+      transform_quantity: null,
+      unit_amount: 20_000,
+      currency: "eur",
+      tax_behavior: "exclusive" as const,
+    },
+    {
+      id: "price_enterprise_pilot",
+      billing_scheme: "per_unit" as const,
+      lookup_key: "taxmaxi_enterprise_pilot_eur",
+      product: "prod_enterprise_pilot",
+      recurring: null,
+      transform_quantity: null,
+      unit_amount: 500_000,
+      currency: "eur",
+      tax_behavior: "exclusive" as const,
+    },
+  ].map((price) => {
+    const item = TAXMAXI_STRIPE_CATALOG.find(({ lookupKey }) => lookupKey === price.lookup_key)
+    if (item === undefined) throw new Error(`Unknown TaxMaxi catalog price ${price.lookup_key}`)
+    return {
+      ...price,
+      product: {
+        id: price.product,
+        active: true,
+        name: item.name,
+        description: item.description,
+        tax_code: TAXMAXI_STRIPE_TAX_CODE,
+        metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: item.lookupKey },
+      },
+    }
+  })
 
 const annualSubscription = {
   id: "sub_active",
@@ -417,7 +486,18 @@ describe("BillingApiLive", () => {
 
         stripeHttpMockState.prices = []
         const unavailableCatalog = yield* execute(HttpClientRequest.get("/v1/billing/catalog"))
-        expect(unavailableCatalog.status).toBe(400)
+        expect(unavailableCatalog.status).toBe(500)
+
+        stripeHttpMockState.catalogError = new Error(
+          "Expired API Key provided: rk_live_http_secret"
+        )
+        const providerFailure = yield* execute(HttpClientRequest.get("/v1/billing/catalog"))
+        const providerFailureBody = yield* providerFailure.text
+        stripeHttpMockState.catalogError = null
+        expect(providerFailure.status).toBe(500)
+        expect(providerFailureBody).toContain("Could not load the billing catalog.")
+        expect(providerFailureBody).not.toContain("Expired API Key")
+        expect(providerFailureBody).not.toContain("rk_live_http_secret")
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
   })

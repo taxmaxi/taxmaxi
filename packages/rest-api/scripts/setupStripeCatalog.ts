@@ -31,6 +31,7 @@ export interface StripeCatalogProductRecord {
 export interface StripeCatalogPriceRecord {
   readonly id: string
   readonly active: boolean
+  readonly billingScheme: string
   readonly lookupKey: string | null
   readonly productId: string
   readonly currency: string
@@ -38,6 +39,9 @@ export interface StripeCatalogPriceRecord {
   readonly taxBehavior: string | null
   readonly recurringInterval: string | null
   readonly recurringIntervalCount: number | null
+  readonly recurringUsageType: string | null
+  readonly recurringTrialPeriodDays: number | null
+  readonly transformQuantity: { readonly divideBy: number; readonly round: string } | null
   readonly metadata: Readonly<Record<string, string>>
 }
 
@@ -83,6 +87,7 @@ export interface StripeCatalogSetupResult {
   readonly productsUpdated: number
   readonly pricesCreated: number
   readonly pricesActivated: number
+  readonly pricesMetadataUpdated: number
   readonly pricesArchived: number
   readonly pricesUnchanged: number
 }
@@ -119,11 +124,15 @@ const priceMatches = ({
   readonly spec: TaxMaxiStripeCatalogItem
 }): boolean =>
   price.productId === productId &&
+  price.billingScheme === "per_unit" &&
   price.currency === spec.currency &&
   price.unitAmount === spec.unitAmount &&
   price.taxBehavior === spec.taxBehavior &&
+  price.transformQuantity === null &&
   price.recurringInterval === spec.recurringInterval &&
-  price.recurringIntervalCount === (spec.recurringInterval === null ? null : 1)
+  price.recurringIntervalCount === (spec.recurringInterval === null ? null : 1) &&
+  price.recurringUsageType === (spec.recurringInterval === null ? null : "licensed") &&
+  price.recurringTrialPeriodDays === null
 
 const onlyCandidate = ({
   candidates,
@@ -143,17 +152,23 @@ const onlyCandidate = ({
 const findProduct = ({
   products,
   prices,
-  catalogLookupKeys,
   existingPrice,
   spec,
 }: {
   readonly products: ReadonlyArray<StripeCatalogProductRecord>
   readonly prices: ReadonlyArray<StripeCatalogPriceRecord>
-  readonly catalogLookupKeys: ReadonlySet<string>
   readonly existingPrice: StripeCatalogPriceRecord | undefined
   readonly spec: TaxMaxiStripeCatalogItem
 }): StripeCatalogProductRecord | undefined => {
   let excludedProductId: string | undefined
+
+  const isLinkedToAnotherCatalogItem = (productId: string): boolean =>
+    prices.some((price) => {
+      if (price.productId !== productId) return false
+      const associatedLookupKey =
+        price.lookupKey ?? price.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY]
+      return associatedLookupKey !== undefined && associatedLookupKey !== spec.lookupKey
+    })
 
   if (existingPrice !== undefined) {
     const linkedProduct = products.find(({ id }) => id === existingPrice.productId)
@@ -163,33 +178,21 @@ const findProduct = ({
       )
     }
 
-    const isSharedWithAnotherCatalogItem = prices.some((price) => {
-      if (price.id === existingPrice.id || price.productId !== linkedProduct.id) return false
-      const associatedLookupKey =
-        price.lookupKey ?? price.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY]
-      return (
-        associatedLookupKey !== undefined &&
-        associatedLookupKey !== spec.lookupKey &&
-        catalogLookupKeys.has(associatedLookupKey)
-      )
-    })
-    if (!isSharedWithAnotherCatalogItem) return linkedProduct
+    if (!isLinkedToAnotherCatalogItem(linkedProduct.id)) return linkedProduct
     excludedProductId = linkedProduct.id
   }
 
   const metadataMatch = onlyCandidate({
     candidates: products.filter(
       ({ id, metadata }) =>
-        id !== excludedProductId && metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
+        id !== excludedProductId &&
+        !isLinkedToAnotherCatalogItem(id) &&
+        metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
     ),
     description: `metadata ${STRIPE_CATALOG_PRODUCT_METADATA_KEY}=${spec.lookupKey}`,
   })
   if (metadataMatch !== undefined) return metadataMatch
-
-  return onlyCandidate({
-    candidates: products.filter(({ id, name }) => id !== excludedProductId && name === spec.name),
-    description: `name ${spec.name}`,
-  })
+  return undefined
 }
 
 /** Creates missing catalog objects and replaces immutable price mismatches. */
@@ -202,17 +205,22 @@ export const reconcileStripeCatalog = async ({
   readonly catalog?: ReadonlyArray<TaxMaxiStripeCatalogItem>
   readonly onChange?: (message: string) => void
 }): Promise<StripeCatalogSetupResult> => {
+  const catalogLookupKeys = new Set(catalog.map(({ lookupKey }) => lookupKey))
+  if (catalogLookupKeys.size !== catalog.length) {
+    throw new Error("TaxMaxi Stripe catalog lookup keys must be unique")
+  }
+
   const [loadedProducts, loadedPrices] = await Promise.all([
     client.listProducts(),
     client.listPrices(),
   ])
   const products = [...loadedProducts]
   const prices = [...loadedPrices]
-  const catalogLookupKeys = new Set(catalog.map(({ lookupKey }) => lookupKey))
   let productsCreated = 0
   let productsUpdated = 0
   let pricesCreated = 0
   let pricesActivated = 0
+  let pricesMetadataUpdated = 0
   let pricesArchived = 0
   let pricesUnchanged = 0
 
@@ -222,7 +230,6 @@ export const reconcileStripeCatalog = async ({
     const existingProduct = findProduct({
       products,
       prices,
-      catalogLookupKeys,
       existingPrice,
       spec,
     })
@@ -284,10 +291,21 @@ export const reconcileStripeCatalog = async ({
       onChange(`Created price: ${spec.lookupKey}`)
     }
 
+    if (canonicalPrice.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] !== spec.lookupKey) {
+      canonicalPrice = await client.updatePrice(canonicalPrice.id, {
+        metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: spec.lookupKey },
+      })
+      const index = prices.findIndex(({ id }) => id === canonicalPrice.id)
+      if (index >= 0) prices[index] = canonicalPrice
+      pricesMetadataUpdated += 1
+      onChange(`Updated price metadata: ${spec.lookupKey}`)
+    }
+
     const stalePrices = prices.filter(
       (price) =>
         price.id !== canonicalPrice.id &&
         price.active &&
+        (price.lookupKey === null || price.id === existingPrice?.id) &&
         price.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
     )
     for (const stalePrice of stalePrices) {
@@ -304,6 +322,7 @@ export const reconcileStripeCatalog = async ({
     productsUpdated,
     pricesCreated,
     pricesActivated,
+    pricesMetadataUpdated,
     pricesArchived,
     pricesUnchanged,
   }
@@ -322,6 +341,7 @@ const StripeProductPayloadSchema = Schema.Struct({
 const StripePricePayloadSchema = Schema.Struct({
   id: Schema.String,
   active: Schema.Boolean,
+  billing_scheme: Schema.String,
   lookup_key: Schema.NullOr(Schema.String),
   product: StripeReferenceSchema,
   currency: Schema.String,
@@ -331,6 +351,14 @@ const StripePricePayloadSchema = Schema.Struct({
     Schema.Struct({
       interval: Schema.String,
       interval_count: Schema.Number,
+      usage_type: Schema.String,
+      trial_period_days: Schema.NullOr(Schema.Number),
+    })
+  ),
+  transform_quantity: Schema.NullOr(
+    Schema.Struct({
+      divide_by: Schema.Number,
+      round: Schema.String,
     })
   ),
   metadata: StripeMetadataSchema,
@@ -360,6 +388,7 @@ export const decodeStripePriceRecord = async (
   return {
     id: price.id,
     active: price.active,
+    billingScheme: price.billing_scheme,
     lookupKey: price.lookup_key,
     productId: typeof price.product === "string" ? price.product : price.product.id,
     currency: price.currency,
@@ -367,11 +396,20 @@ export const decodeStripePriceRecord = async (
     taxBehavior: price.tax_behavior,
     recurringInterval: price.recurring?.interval ?? null,
     recurringIntervalCount: price.recurring?.interval_count ?? null,
+    recurringUsageType: price.recurring?.usage_type ?? null,
+    recurringTrialPeriodDays: price.recurring?.trial_period_days ?? null,
+    transformQuantity:
+      price.transform_quantity === null
+        ? null
+        : {
+            divideBy: price.transform_quantity.divide_by,
+            round: price.transform_quantity.round,
+          },
     metadata: price.metadata,
   }
 }
 
-const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
+export const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
   listProducts: async () => {
     const products = await stripe.products.list({ limit: 100 }).autoPagingToArray({ limit: 10_000 })
     return Promise.all(products.map(decodeStripeProductRecord))
@@ -408,6 +446,7 @@ const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
   createPrice: async (input) => {
     const price = await stripe.prices.create(
       {
+        billing_scheme: "per_unit",
         currency: input.currency,
         lookup_key: input.lookupKey,
         nickname: input.lookupKey,
@@ -418,7 +457,13 @@ const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
         metadata: { [STRIPE_CATALOG_PRODUCT_METADATA_KEY]: input.lookupKey },
         ...(input.recurringInterval === null
           ? {}
-          : { recurring: { interval: input.recurringInterval, interval_count: 1 } }),
+          : {
+              recurring: {
+                interval: input.recurringInterval,
+                interval_count: 1,
+                usage_type: "licensed",
+              },
+            }),
       },
       {
         idempotencyKey: stripeCatalogPriceIdempotencyKey(input),
