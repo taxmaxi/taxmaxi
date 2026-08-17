@@ -347,6 +347,8 @@ const make = Effect.gen(function* () {
               reviewerNotes,
               reviewedBy,
               requirePendingReview: true,
+              expectedEvidenceRevision: review.evidenceRevision,
+              expectedProviderAssetRetrievedAt: review.providerAsset.retrievedAt,
               expectedMappingUpdatedAt: review.mapping.updatedAt,
             })
             .pipe(
@@ -371,6 +373,8 @@ const make = Effect.gen(function* () {
               reviewerNotes,
               reviewedBy,
               requirePendingReview: true,
+              expectedEvidenceRevision: review.evidenceRevision,
+              expectedProviderAssetRetrievedAt: review.providerAsset.retrievedAt,
               expectedMappingUpdatedAt: review.mapping.updatedAt,
             })
             .pipe(
@@ -399,6 +403,8 @@ const make = Effect.gen(function* () {
               reviewerNotes,
               reviewedBy,
               requirePendingReview: true,
+              expectedEvidenceRevision: review.evidenceRevision,
+              expectedProviderAssetRetrievedAt: review.providerAsset.retrievedAt,
               expectedMappingUpdatedAt: review.mapping.updatedAt,
             })
             .pipe(

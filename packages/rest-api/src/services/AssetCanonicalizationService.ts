@@ -92,6 +92,8 @@ export interface AssetCanonicalizationServiceShape {
     readonly reviewerNotes: string | null
     readonly reviewedBy?: string
     readonly requirePendingReview?: boolean
+    readonly expectedEvidenceRevision?: string
+    readonly expectedProviderAssetRetrievedAt?: Date
     readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<CanonicalizeEconomicAssetResult, AssetCanonicalizationError>
 
@@ -102,6 +104,8 @@ export interface AssetCanonicalizationServiceShape {
     readonly reviewerNotes: string | null
     readonly reviewedBy?: string
     readonly requirePendingReview?: boolean
+    readonly expectedEvidenceRevision?: string
+    readonly expectedProviderAssetRetrievedAt?: Date
     readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<ApproveProviderAssetResult, AssetCanonicalizationError>
 
@@ -112,6 +116,8 @@ export interface AssetCanonicalizationServiceShape {
     readonly reviewerNotes: string | null
     readonly reviewedBy?: string
     readonly requirePendingReview?: boolean
+    readonly expectedEvidenceRevision?: string
+    readonly expectedProviderAssetRetrievedAt?: Date
     readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<CanonicalizeProviderAssetResult, AssetCanonicalizationError>
 }

@@ -181,6 +181,11 @@ const seedFailedApprovalReplay = async (suffix: string) => {
       })
     )
   )
+  const approvalReview = await runRepository(
+    Effect.flatMap(ProviderAssetRepository, (repository) =>
+      repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+    )
+  ).then(Option.getOrThrow)
   const approval = await runRepository(
     Effect.flatMap(ProviderAssetRepository, (repository) =>
       repository.approveProviderAssetMappingAndRequestReplay({
@@ -195,6 +200,7 @@ const seedFailedApprovalReplay = async (suffix: string) => {
           sourceNotes: "Retry reservation fixture",
         },
         expectedObservedRepresentations: [],
+        expectedEvidenceRevision: approvalReview.evidenceRevision,
         expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
       })
     )
@@ -543,6 +549,11 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         })
       )
+      const approvalReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
 
       const approve = () =>
         runRepository(
@@ -561,6 +572,7 @@ describe("ProviderAssetRepositoryLive", () => {
               reviewedBy: TEST_USER_ID,
               reviewedAt: new Date("2026-08-17T09:00:00.000Z"),
               expectedObservedRepresentations: [],
+              expectedEvidenceRevision: approvalReview.evidenceRevision,
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
           )
@@ -628,6 +640,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved from transfer evidence",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -700,6 +713,11 @@ describe("ProviderAssetRepositoryLive", () => {
           ])
         )
       )
+      const approvalReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
 
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
@@ -715,6 +733,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved for a non-transfer transaction",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: approvalReview.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -808,6 +827,11 @@ describe("ProviderAssetRepositoryLive", () => {
           `)
         })
       )
+      const approvalReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
 
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
@@ -823,6 +847,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved legacy reviewed asset",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: approvalReview.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -859,6 +884,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved before source use was recorded",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -934,6 +960,11 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         )
       )
+      const approvalReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
       const approval = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.approveProviderAssetMappingAndRequestReplay({
@@ -948,6 +979,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Replay replacement fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: approvalReview.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1155,6 +1187,11 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         )
       )
+      const approvalReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
       const approval = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.approveProviderAssetMappingAndRequestReplay({
@@ -1169,6 +1206,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Dispatch read model fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: approvalReview.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1242,6 +1280,11 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         )
       )
+      const approvalReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
       const approval = await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
           repository.approveProviderAssetMappingAndRequestReplay({
@@ -1256,6 +1299,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Advanced dispatch fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: approvalReview.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1539,6 +1583,52 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(rejected).toBe(true)
     })
 
+    it("rejects approval when durable evidence changes after the submitted revision", async () => {
+      const providerAsset = await seedPendingApprovalAsset("approval-evidence-revision", {
+        withProviderTransfer: false,
+      })
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+
+      const staleApproval = await runRepository(
+        Effect.result(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.approveProviderAssetMappingAndRequestReplay({
+              mapping: {
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Submitted before source evidence changed",
+                sourceNotes: "Stale approval regression fixture",
+              },
+              expectedObservedRepresentations: [],
+              expectedEvidenceRevision: providerAsset.evidenceRevision,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            })
+          )
+        )
+      )
+      const currentMapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.id })
+        )
+      )
+
+      expect(staleApproval._tag).toBe("Failure")
+      expect(Option.getOrThrow(currentMapping).mappingStatus).toBe("pending_review")
+    })
+
     it("accepts exact representation evidence observed after approval", async () => {
       const providerAsset = await seedPendingApprovalAsset("exact-approved-use", {
         withProviderTransfer: false,
@@ -1558,6 +1648,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Exact evidence regression fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1595,6 +1686,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Partial evidence regression fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1647,6 +1739,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Mismatched evidence regression fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1685,6 +1778,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved before conflicting source evidence persisted",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -1751,6 +1845,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Concurrency regression fixture",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -2016,6 +2111,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 sourceNotes: "Normalization-first race fixture",
               },
               expectedObservedRepresentations: [],
+              expectedEvidenceRevision: providerAsset.evidenceRevision,
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
           )
@@ -2068,6 +2164,7 @@ describe("ProviderAssetRepositoryLive", () => {
                 sourceNotes: "Approved before active source use",
               },
               expectedObservedRepresentations: [],
+              expectedEvidenceRevision: providerAsset.evidenceRevision,
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
           )
@@ -2165,6 +2262,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Source-first lock ordering",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         ).pipe(Effect.result)
@@ -2233,6 +2331,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved from transfer evidence",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
@@ -2272,6 +2371,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Approved before source use",
             },
             expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )

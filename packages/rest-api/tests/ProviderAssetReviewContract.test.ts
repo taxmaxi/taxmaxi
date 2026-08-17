@@ -1257,13 +1257,20 @@ describe("ProviderAssetReviewService admin contract", () => {
       errorMessage: null,
     }
     let expectedCanonicalAssetId: string | undefined
+    let expectedEvidenceRevision: string | undefined
+    let expectedProviderAssetRetrievedAt: Date | undefined
     let searchedProposalQuery: string | null = null
     let requiredCoinGeckoCoinId: string | undefined
     const canonicalizationForEffect: AssetCanonicalizationServiceShape = {
-      approveProviderAssetMapping: () =>
-        Effect.succeed({ ...approvedReview, replays: [decisionReplay] }),
-      canonicalizeEconomicAssetFromCoinGecko: () =>
-        Effect.succeed({
+      approveProviderAssetMapping: (params) => {
+        expectedEvidenceRevision = params.expectedEvidenceRevision
+        expectedProviderAssetRetrievedAt = params.expectedProviderAssetRetrievedAt
+        return Effect.succeed({ ...approvedReview, replays: [decisionReplay] })
+      },
+      canonicalizeEconomicAssetFromCoinGecko: (params) => {
+        expectedEvidenceRevision = params.expectedEvidenceRevision
+        expectedProviderAssetRetrievedAt = params.expectedProviderAssetRetrievedAt
+        return Effect.succeed({
           providerAsset: approvedReview,
           canonicalAsset: {
             id: canonicalAssetId,
@@ -1272,9 +1279,12 @@ describe("ProviderAssetReviewService admin contract", () => {
             type: "fungible",
           },
           replays: [decisionReplay],
-        }),
+        })
+      },
       canonicalizeProviderAssetFromCoinGecko: (params) => {
         expectedCanonicalAssetId = params.expectedCanonicalAssetId
+        expectedEvidenceRevision = params.expectedEvidenceRevision
+        expectedProviderAssetRetrievedAt = params.expectedProviderAssetRetrievedAt
         return Effect.succeed({
           providerAsset: approvedReview,
           canonicalAsset: {
@@ -1376,6 +1386,8 @@ describe("ProviderAssetReviewService admin contract", () => {
     expect(expectedCanonicalAssetId).toBe(
       effect._tag === "AddRepresentation" ? effect.canonicalAssetId : undefined
     )
+    expect(expectedEvidenceRevision).toBe("evidence-v1")
+    expect(expectedProviderAssetRetrievedAt).toEqual(new Date("2026-08-17T09:00:00.000Z"))
     expect(requiredCoinGeckoCoinId).toBe(
       effect._tag === "UseExistingAsset" || effect._tag === "UseExistingRepresentation"
         ? undefined

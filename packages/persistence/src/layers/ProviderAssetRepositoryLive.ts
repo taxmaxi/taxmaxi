@@ -357,6 +357,7 @@ const make = Effect.gen(function* () {
     ({
       providerAssetRowId,
       expectedObservedRepresentations,
+      expectedEvidenceRevision,
       expectedProviderAssetRetrievedAt,
       expectedMappingUpdatedAt,
     }) =>
@@ -487,7 +488,7 @@ const make = Effect.gen(function* () {
             const [evidence] = yield* tx
               .select({
                 evidenceState: providerAssetReviewProjection.evidenceState,
-                evidenceRevision: providerAssetReviewProjection.evidenceRevision,
+                evidenceRevision: providerAssetEvidenceRevisionExpression(providerAssetRowId),
                 affectedSourceCount: providerAssetReviewProjection.affectedSourceCount,
               })
               .from(schema.providerAssets)
@@ -498,6 +499,18 @@ const make = Effect.gen(function* () {
               return yield* new SyncEngineStorageError({
                 operation: "providerAssetRepository.lockProviderAssetApprovalSnapshot.evidence",
                 cause: "Provider asset evidence disappeared before approval.",
+              })
+            }
+
+            if (evidence.evidenceRevision !== expectedEvidenceRevision) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.lockProviderAssetApprovalSnapshot.evidenceRevision",
+                cause: {
+                  expectedEvidenceRevision,
+                  actualEvidenceRevision: evidence.evidenceRevision,
+                  message: "Provider asset evidence changed before approval.",
+                },
               })
             }
 
@@ -522,6 +535,7 @@ const make = Effect.gen(function* () {
       reviewedBy = null,
       reviewedAt = nowDate(),
       expectedObservedRepresentations,
+      expectedEvidenceRevision,
       expectedProviderAssetRetrievedAt,
       expectedMappingUpdatedAt,
     }) =>
@@ -531,6 +545,7 @@ const make = Effect.gen(function* () {
             const approvalSnapshot = yield* lockProviderAssetApprovalSnapshot({
               providerAssetRowId: mapping.providerAssetRowId,
               expectedObservedRepresentations,
+              expectedEvidenceRevision,
               expectedProviderAssetRetrievedAt,
               ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
             })

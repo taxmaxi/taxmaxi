@@ -190,6 +190,7 @@ export interface ProviderAssetRepositoryShape {
     readonly reviewedBy?: string | null
     readonly reviewedAt?: Date
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedEvidenceRevision: string
     readonly expectedProviderAssetRetrievedAt: Date
     readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
@@ -248,6 +249,7 @@ export interface ProviderAssetRepositoryShape {
   readonly lockProviderAssetApprovalSnapshot: (params: {
     readonly providerAssetRowId: string
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedEvidenceRevision: string
     readonly expectedProviderAssetRetrievedAt: Date
     readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<ProviderAssetReviewRecord, SyncEngineStorageError>

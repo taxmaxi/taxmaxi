@@ -790,12 +790,22 @@ const make = Effect.gen(function* () {
               yield* providerAssetRepository.listProviderAssetObservedRepresentations({
                 providerAssetRowId: providerAsset.id,
               })
+            const approvalReview = yield* providerAssetRepository.findProviderAssetReviewById({
+              providerAssetRowId: providerAsset.id,
+            })
+            if (Option.isNone(approvalReview)) {
+              return yield* toStorageError({
+                operation: "heliusSolanaAssetResolution.approvalReview",
+                cause: "Provider asset review disappeared before automatic approval.",
+              })
+            }
             yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
               mapping: exactMapping.value,
               reviewedBy: null,
               reviewedAt: new Date(),
               expectedObservedRepresentations: observations,
-              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+              expectedEvidenceRevision: approvalReview.value.evidenceRevision,
+              expectedProviderAssetRetrievedAt: approvalReview.value.providerAsset.retrievedAt,
             })
           }
         } else {

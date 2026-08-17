@@ -555,6 +555,8 @@ const make = Effect.gen(function* () {
       reviewerNotes,
       reviewedBy,
       requirePendingReview = false,
+      expectedEvidenceRevision,
+      expectedProviderAssetRetrievedAt,
       expectedMappingUpdatedAt,
     }) =>
       Effect.gen(function* () {
@@ -571,7 +573,10 @@ const make = Effect.gen(function* () {
                 .lockProviderAssetApprovalSnapshot({
                   providerAssetRowId,
                   expectedObservedRepresentations: initialObservedRepresentations,
+                  expectedEvidenceRevision:
+                    expectedEvidenceRevision ?? initialProviderAssetReview.evidenceRevision,
                   expectedProviderAssetRetrievedAt:
+                    expectedProviderAssetRetrievedAt ??
                     initialProviderAssetReview.providerAsset.retrievedAt,
                   ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
@@ -690,7 +695,11 @@ const make = Effect.gen(function* () {
                   reviewedBy: reviewedBy ?? null,
                   reviewedAt: new Date(),
                   expectedObservedRepresentations: observedRepresentations,
-                  expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+                  expectedEvidenceRevision:
+                    expectedEvidenceRevision ?? initialProviderAssetReview.evidenceRevision,
+                  expectedProviderAssetRetrievedAt:
+                    expectedProviderAssetRetrievedAt ??
+                    initialProviderAssetReview.providerAsset.retrievedAt,
                   ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
@@ -876,6 +885,8 @@ const make = Effect.gen(function* () {
       reviewerNotes,
       reviewedBy,
       requirePendingReview = false,
+      expectedEvidenceRevision,
+      expectedProviderAssetRetrievedAt,
       expectedMappingUpdatedAt,
     }) =>
       Effect.gen(function* () {
@@ -913,7 +924,10 @@ const make = Effect.gen(function* () {
                 .lockProviderAssetApprovalSnapshot({
                   providerAssetRowId,
                   expectedObservedRepresentations: initialObservedRepresentations,
+                  expectedEvidenceRevision:
+                    expectedEvidenceRevision ?? initialProviderAssetReview.evidenceRevision,
                   expectedProviderAssetRetrievedAt:
+                    expectedProviderAssetRetrievedAt ??
                     initialProviderAssetReview.providerAsset.retrievedAt,
                   ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
@@ -1117,7 +1131,11 @@ const make = Effect.gen(function* () {
                   reviewedBy: reviewedBy ?? null,
                   reviewedAt: new Date(),
                   expectedObservedRepresentations: observedRepresentations,
-                  expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+                  expectedEvidenceRevision:
+                    expectedEvidenceRevision ?? initialProviderAssetReview.evidenceRevision,
+                  expectedProviderAssetRetrievedAt:
+                    expectedProviderAssetRetrievedAt ??
+                    initialProviderAssetReview.providerAsset.retrievedAt,
                   ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
@@ -1179,6 +1197,8 @@ const make = Effect.gen(function* () {
       reviewerNotes,
       reviewedBy,
       requirePendingReview = false,
+      expectedEvidenceRevision,
+      expectedProviderAssetRetrievedAt,
       expectedMappingUpdatedAt,
     }) =>
       Effect.gen(function* () {
@@ -1212,7 +1232,10 @@ const make = Effect.gen(function* () {
                 .lockProviderAssetApprovalSnapshot({
                   providerAssetRowId,
                   expectedObservedRepresentations: [],
-                  expectedProviderAssetRetrievedAt: initialReview.providerAsset.retrievedAt,
+                  expectedEvidenceRevision:
+                    expectedEvidenceRevision ?? initialReview.evidenceRevision,
+                  expectedProviderAssetRetrievedAt:
+                    expectedProviderAssetRetrievedAt ?? initialReview.providerAsset.retrievedAt,
                   ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
@@ -1264,7 +1287,10 @@ const make = Effect.gen(function* () {
                   reviewedBy: reviewedBy ?? null,
                   reviewedAt: new Date(),
                   expectedObservedRepresentations: [],
-                  expectedProviderAssetRetrievedAt: review.providerAsset.retrievedAt,
+                  expectedEvidenceRevision:
+                    expectedEvidenceRevision ?? initialReview.evidenceRevision,
+                  expectedProviderAssetRetrievedAt:
+                    expectedProviderAssetRetrievedAt ?? initialReview.providerAsset.retrievedAt,
                   ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
