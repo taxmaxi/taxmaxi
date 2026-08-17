@@ -85,7 +85,7 @@ describe("PortfolioRepositoryLive", () => {
         const chainlessLeg = legs[1]
 
         if (spamLeg === undefined || chainlessLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create portfolio leg fixtures")
+          return yield* Effect.die("Failed to create portfolio leg fixtures")
         }
 
         yield* db.insert(schema.fifoLots).values([

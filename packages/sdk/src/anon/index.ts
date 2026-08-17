@@ -15,13 +15,13 @@ const AnonSourceJobsResponse = Schema.Struct({
   jobs: Schema.Array(SourceSyncJobResponse),
 })
 
-export type AnonSourceList = Schema.Schema.Encoded<typeof AnonSourceListResponse>
-export type AnonSourceHandle = Schema.Schema.Encoded<typeof AnonSource>
-export type AnonSourceSyncJob = Schema.Schema.Encoded<typeof SourceSyncJobResponse>
-export type AnonSessionChallenge = Schema.Schema.Encoded<typeof AnonSessionChallengeResponse>
+export type AnonSourceList = Schema.Codec.Encoded<typeof AnonSourceListResponse>
+export type AnonSourceHandle = Schema.Codec.Encoded<typeof AnonSource>
+export type AnonSourceSyncJob = Schema.Codec.Encoded<typeof SourceSyncJobResponse>
+export type AnonSessionChallenge = Schema.Codec.Encoded<typeof AnonSessionChallengeResponse>
 export type AnonSessionCreateInput = AnonSessionCreateRequest
-export type AnonSession = Schema.Schema.Encoded<typeof AnonSessionResponse>
-export type AnonSessionDelete = Schema.Schema.Encoded<typeof AnonSessionDeleteResponse>
+export type AnonSession = Schema.Codec.Encoded<typeof AnonSessionResponse>
+export type AnonSessionDelete = Schema.Codec.Encoded<typeof AnonSessionDeleteResponse>
 
 export type AnonSourceInput = {
   readonly sourceId: string
@@ -84,7 +84,7 @@ export const makeAnonEffectResource = (
       Effect.map(
         Effect.flatMap(client, (resolved) =>
           resolved.anon.getAnonSource({
-            path: { sourceId },
+            params: { sourceId },
           })
         ),
         encodeAnonSource
@@ -93,7 +93,7 @@ export const makeAnonEffectResource = (
       Effect.map(
         Effect.flatMap(client, (resolved) =>
           resolved.anon.listAnonSourceJobs({
-            path: { sourceId },
+            params: { sourceId },
           })
         ),
         encodeAnonSourceJobs
@@ -102,7 +102,7 @@ export const makeAnonEffectResource = (
       Effect.map(
         Effect.flatMap(client, (resolved) =>
           resolved.anon.getAnonSourceJob({
-            path: { sourceId, jobId },
+            params: { sourceId, jobId },
           })
         ),
         encodeSourceSyncJob

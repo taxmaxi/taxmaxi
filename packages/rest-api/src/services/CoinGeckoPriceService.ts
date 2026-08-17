@@ -21,7 +21,7 @@ export interface CoinGeckoPriceServiceShape {
   }) => Effect.Effect<ReadonlyMap<string, CoinGeckoMarketData>, CoinGeckoPriceError>
 }
 
-export class CoinGeckoPriceService extends Context.Tag("CoinGeckoPriceService")<
+export class CoinGeckoPriceService extends Context.Service<
   CoinGeckoPriceService,
   CoinGeckoPriceServiceShape
->() {}
+>()("CoinGeckoPriceService") {}

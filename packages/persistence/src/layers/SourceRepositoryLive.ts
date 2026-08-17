@@ -62,19 +62,19 @@ const make = Effect.gen(function* () {
     switch (row.sourceableType) {
       case "onchain":
         if (row.addressId === null) {
-          return Effect.dieMessage(`Source ${row.id} is onchain but has no addressId`)
+          return Effect.die(`Source ${row.id} is onchain but has no addressId`)
         }
         return Effect.succeed(OnchainSourceRef.make({ addressId: row.addressId }))
 
       case "cex":
         if (row.cexAccountId === null) {
-          return Effect.dieMessage(`Source ${row.id} is cex but has no cexAccountId`)
+          return Effect.die(`Source ${row.id} is cex but has no cexAccountId`)
         }
         return Effect.succeed(CexSourceRef.make({ cexAccountId: row.cexAccountId }))
 
       case "dex":
         if (row.addressId === null) {
-          return Effect.dieMessage(`Source ${row.id} is dex but has no addressId`)
+          return Effect.die(`Source ${row.id} is dex but has no addressId`)
         }
         return Effect.succeed(DexSourceRef.make({ addressId: row.addressId }))
     }
@@ -245,12 +245,10 @@ const make = Effect.gen(function* () {
         .returning({ id: addresses.id })
 
       if (addressRow === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceRepository.createOrReuseOnchainSource.address",
-            cause: "failed to create or reuse address",
-          })
-        )
+        return yield* new PersistenceError({
+          operation: "sourceRepository.createOrReuseOnchainSource.address",
+          cause: "failed to create or reuse address",
+        })
       }
 
       const maybeExistingSource = yield* findOnchainSourceByAddressId({
@@ -293,12 +291,10 @@ const make = Effect.gen(function* () {
       })
 
       if (Option.isNone(maybeConcurrentSource)) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "sourceRepository.createOrReuseOnchainSource.source",
-            cause: "failed to create or reuse onchain source",
-          })
-        )
+        return yield* new PersistenceError({
+          operation: "sourceRepository.createOrReuseOnchainSource.source",
+          cause: "failed to create or reuse onchain source",
+        })
       }
 
       return { source: maybeConcurrentSource.value, created: false }
@@ -334,9 +330,7 @@ const make = Effect.gen(function* () {
       const [created] = yield* db.insert(sources).values(sourceValues).returning(selectSourceFields)
 
       if (!created) {
-        return yield* Effect.fail(
-          new EntityNotFoundError({ entityType: "Source", entityId: source.id })
-        )
+        return yield* new EntityNotFoundError({ entityType: "Source", entityId: source.id })
       }
 
       return yield* rowToSource(created)

@@ -69,7 +69,7 @@ export interface SourceSyncRunServiceShape {
 /**
  * SourceSyncRunService - Context tag for principal-wide source sync orchestration.
  */
-export class SourceSyncRunService extends Context.Tag("SourceSyncRunService")<
+export class SourceSyncRunService extends Context.Service<
   SourceSyncRunService,
   SourceSyncRunServiceShape
->() {}
+>()("SourceSyncRunService") {}

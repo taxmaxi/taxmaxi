@@ -36,7 +36,7 @@ export interface PrincipalRepositoryService {
 /**
  * PrincipalRepository - Context tag for ownership principal persistence.
  */
-export class PrincipalRepository extends Context.Tag("@my/persistence/PrincipalRepository")<
+export class PrincipalRepository extends Context.Service<
   PrincipalRepository,
   PrincipalRepositoryService
->() {}
+>()("@my/persistence/PrincipalRepository") {}

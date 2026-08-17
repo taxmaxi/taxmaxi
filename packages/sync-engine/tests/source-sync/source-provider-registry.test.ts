@@ -46,14 +46,12 @@ const sourceRecord: SourceRawRecord = {
 const CoinbaseSourceSyncProviderTestLive = Layer.succeed(
   CoinbaseSourceSyncProvider,
   CoinbaseSourceSyncProvider.of({
-    fetchRawBatch: () => Effect.dieMessage("Coinbase fetchRawBatch should not be called"),
-    refreshReferenceData: () =>
-      Effect.dieMessage("Coinbase refreshReferenceData should not be called"),
+    fetchRawBatch: () => Effect.die("Coinbase fetchRawBatch should not be called"),
+    refreshReferenceData: () => Effect.die("Coinbase refreshReferenceData should not be called"),
     loadNormalizationLookups: () =>
-      Effect.dieMessage("Coinbase loadNormalizationLookups should not be called"),
-    prepareNormalization: () =>
-      Effect.dieMessage("Coinbase prepareNormalization should not be called"),
-    deriveLegs: () => Effect.dieMessage("Coinbase deriveLegs should not be called"),
+      Effect.die("Coinbase loadNormalizationLookups should not be called"),
+    prepareNormalization: () => Effect.die("Coinbase prepareNormalization should not be called"),
+    deriveLegs: () => Effect.die("Coinbase deriveLegs should not be called"),
   })
 )
 
@@ -93,6 +91,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
       }),
     prepareNormalization: () =>
       Effect.succeed({
+        providerAssetRowIds: [],
         transaction: {
           sourceId: source.id,
           sourceRawRecordId: sourceRecord.id,
@@ -155,7 +154,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
         },
         legDerivationStrategy: "skip",
       }),
-    deriveLegs: () => Effect.dieMessage("Helius deriveLegs should not be called"),
+    deriveLegs: () => Effect.die("Helius deriveLegs should not be called"),
   })
 )
 

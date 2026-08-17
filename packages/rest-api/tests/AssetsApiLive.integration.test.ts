@@ -1,4 +1,4 @@
-import { HttpApiBuilder, HttpClient, HttpClientRequest } from "@effect/platform"
+import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import {
   AuthService,
@@ -24,6 +24,7 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   PendingAssetListResponse,
+  ProviderAssetReviewRow,
   ProviderAssetReviewListResponse,
   UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
@@ -35,8 +36,6 @@ import { eq } from "../../persistence/src/query/index.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
 import {
-  TEST_PRINCIPAL_ID,
-  TEST_SOURCE_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
 } from "../../persistence/tests/support/integration-test-kit.ts"
@@ -50,55 +49,55 @@ const TestPgClientLive = context.TestPgClientLive
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
-const TestConfigProvider = ConfigProvider.fromMap(
-  new Map([["ANON_SESSION_SECRET", "test-anon-session-secret-32-bytes-long"]])
+const TestConfigProvider = ConfigProvider.fromEnvRecord({
+  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
+})
+const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
+  Layer.provide(ConfigProvider.layer(TestConfigProvider))
 )
 const ADMIN_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000099_admin"
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: startSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
   replaySourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: replaySourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: replaySourceSyncJob not implemented"),
   getSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: getSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: getSourceSyncJob not implemented"),
 } satisfies SourceSyncServiceShape)
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
-  startSyncRun: () =>
-    Effect.dieMessage("SourceSyncRunService test stub: startSyncRun not implemented"),
-  getSyncRun: () => Effect.dieMessage("SourceSyncRunService test stub: getSyncRun not implemented"),
+  startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
+  getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
 } satisfies SourceSyncRunServiceShape)
 
 const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
   reconcileTransferCandidates: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
     ),
 } satisfies TransferReconciliationServiceShape)
 
 const AuthServiceTestLive = Layer.succeed(AuthService, {
-  login: () => Effect.dieMessage("AuthService test stub: login not implemented"),
-  register: () => Effect.dieMessage("AuthService test stub: register not implemented"),
+  login: () => Effect.die("AuthService test stub: login not implemented"),
+  register: () => Effect.die("AuthService test stub: register not implemented"),
   startEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: startEmailVerification not implemented"),
+    Effect.die("AuthService test stub: startEmailVerification not implemented"),
   resendEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: resendEmailVerification not implemented"),
-  verifyEmail: () => Effect.dieMessage("AuthService test stub: verifyEmail not implemented"),
-  startOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: startOAuthLogin not implemented"),
-  completeOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: completeOAuthLogin not implemented"),
-  startLink: () => Effect.dieMessage("AuthService test stub: startLink not implemented"),
-  completeLink: () => Effect.dieMessage("AuthService test stub: completeLink not implemented"),
-  logout: () => Effect.dieMessage("AuthService test stub: logout not implemented"),
-  validateSession: () =>
-    Effect.dieMessage("AuthService test stub: validateSession not implemented"),
-  linkIdentity: () => Effect.dieMessage("AuthService test stub: linkIdentity not implemented"),
+    Effect.die("AuthService test stub: resendEmailVerification not implemented"),
+  verifyEmail: () => Effect.die("AuthService test stub: verifyEmail not implemented"),
+  startOAuthLogin: () => Effect.die("AuthService test stub: startOAuthLogin not implemented"),
+  completeOAuthLogin: () => Effect.die("AuthService test stub: completeOAuthLogin not implemented"),
+  startLink: () => Effect.die("AuthService test stub: startLink not implemented"),
+  completeLink: () => Effect.die("AuthService test stub: completeLink not implemented"),
+  logout: () => Effect.die("AuthService test stub: logout not implemented"),
+  validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
+  linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
   getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
@@ -116,28 +115,26 @@ const PersistenceLayer = Layer.mergeAll(
   PasswordHasherTestLive
 ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const HttpLive = HttpApiBuilder.serve().pipe(
-  Layer.provide(TaxMaxiApiLive),
-  Layer.provide(AnonSessionServiceLive),
-  Layer.provide(SIWXProofVerifierTestLive),
-  Layer.provide(X402PaymentValidatorTestLive),
-  Layer.provide(SimpleTokenValidatorLive),
-  Layer.provideMerge(PersistenceLayer),
-  Layer.provideMerge(NodeHttpServer.layerTest),
-  Layer.provide(Layer.setConfigProvider(TestConfigProvider))
-)
+const HttpLive = HttpRouter.serve(
+  TaxMaxiApiLive.pipe(
+    Layer.provide(AnonSessionServiceTestLive),
+    Layer.provide(SIWXProofVerifierTestLive),
+    Layer.provide(X402PaymentValidatorTestLive),
+    Layer.provide(SimpleTokenValidatorLive)
+  )
+).pipe(Layer.provideMerge(PersistenceLayer), Layer.provideMerge(NodeHttpServer.layerTest))
 
-const getJson = <Response, Encoded, Requirements>({
+const getJson = <Response, Requirements>({
   path,
   responseSchema,
 }: {
   readonly path: string
-  readonly responseSchema: Schema.Schema<Response, Encoded, Requirements>
+  readonly responseSchema: Schema.ConstraintDecoder<Response, Requirements>
 }) =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get(path).pipe(HttpClient.execute)
     const body = yield* response.json
-    const decodedBody = yield* Schema.decodeUnknown(responseSchema)(body)
+    const decodedBody = yield* Schema.decodeUnknownEffect(responseSchema)(body)
 
     return {
       status: response.status,
@@ -151,12 +148,12 @@ const getStatus = (path: string) =>
     return response.status
   })
 
-const getAdminJson = <Response, Encoded, Requirements>({
+const getAdminJson = <Response, Requirements>({
   path,
   responseSchema,
 }: {
   readonly path: string
-  readonly responseSchema: Schema.Schema<Response, Encoded, Requirements>
+  readonly responseSchema: Schema.ConstraintDecoder<Response, Requirements>
 }) =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get(path).pipe(
@@ -164,7 +161,7 @@ const getAdminJson = <Response, Encoded, Requirements>({
       HttpClient.execute
     )
     const body = yield* response.json
-    const decodedBody = yield* Schema.decodeUnknown(responseSchema)(body)
+    const decodedBody = yield* Schema.decodeUnknownEffect(responseSchema)(body)
 
     return {
       status: response.status,
@@ -181,14 +178,43 @@ const getAdminStatus = (path: string) =>
     return response.status
   })
 
+const postAdminJson = <Response, Requirements>({
+  path,
+  payload,
+  responseSchema,
+}: {
+  readonly path: string
+  readonly payload: unknown
+  readonly responseSchema: Schema.ConstraintDecoder<Response, Requirements>
+}) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.post(path).pipe(
+      HttpClientRequest.bodyJsonUnsafe(payload),
+      HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+      HttpClient.execute
+    )
+    const body = yield* response.json
+    const decodedBody = yield* Schema.decodeUnknownEffect(responseSchema)(body)
+
+    return { status: response.status, body: decodedBody }
+  })
+
+const postAdminStatus = ({ path, payload }: { readonly path: string; readonly payload: unknown }) =>
+  HttpClientRequest.post(path).pipe(
+    HttpClientRequest.bodyJsonUnsafe(payload),
+    HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+    HttpClient.execute,
+    Effect.map((response) => response.status)
+  )
+
 const encodeTestCursor = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
 
 const decodeTestProviderAssetCursor = Schema.decodeUnknownSync(
-  Schema.parseJson(
+  Schema.fromJsonString(
     Schema.Struct({
       version: Schema.Literal(2),
-      providerAssetRowId: Schema.UUID,
+      providerAssetRowId: Schema.String.check(Schema.isUUID()),
     })
   )
 )
@@ -972,13 +998,15 @@ describe("AssetsApiLive", () => {
 
   it("lists only unresolved reconciliation evidence for admins", async () => {
     const timestamp = new Date("2026-08-13T10:00:00.000Z")
+    const principalId = "00000000-0000-4000-8000-000000000181"
+    const sourceId = "00000000-0000-4000-8000-000000000182"
     const providerAssetRowId = crypto.randomUUID()
     const providerTransferId = crypto.randomUUID()
 
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        yield* seedSyncEngineRepositoryFixture()
+        yield* seedSyncEngineRepositoryFixture({ principalId, sourceId })
         yield* db.insert(schema.providerAssets).values({
           id: providerAssetRowId,
           provider: "admin-reconciliation-test",
@@ -990,22 +1018,22 @@ describe("AssetsApiLive", () => {
         const [transaction] = yield* db
           .insert(schema.transactions)
           .values({
-            sourceId: TEST_SOURCE_ID,
+            sourceId,
             externalId: "admin-reconciliation-transaction",
             timestamp,
             providerTransactionType: "send",
             providerStatus: "completed",
-            principalId: TEST_PRINCIPAL_ID,
+            principalId,
           })
           .returning({ id: schema.transactions.id })
 
         if (transaction === undefined) {
-          return yield* Effect.dieMessage("Failed to seed admin reconciliation transaction")
+          return yield* Effect.die("Failed to seed admin reconciliation transaction")
         }
 
         yield* db.insert(schema.providerTransfers).values({
           id: providerTransferId,
-          sourceId: TEST_SOURCE_ID,
+          sourceId,
           transactionId: transaction.id,
           externalId: "admin-reconciliation-transfer",
           providerAssetId: providerAssetRowId,
@@ -1019,7 +1047,7 @@ describe("AssetsApiLive", () => {
           amount: "12.5",
         })
         yield* db.insert(schema.transferReconciliations).values({
-          principalId: TEST_PRINCIPAL_ID,
+          principalId,
           providerTransferId,
           status: "needs_review",
           matchReason: "multiple_candidate_onchain_receipts",
@@ -1047,6 +1075,162 @@ describe("AssetsApiLive", () => {
     ])
   })
 
+  it("approves an exact provider asset target through the admin route", async () => {
+    const routeUserId = "00000000-0000-4000-8000-000000000141"
+    const routePrincipalId = "00000000-0000-4000-8000-000000000142"
+    const routeSourceId = "00000000-0000-4000-8000-000000000143"
+    const seeded = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const fixture = yield* seedSyncEngineRepositoryFixture({
+          userId: routeUserId,
+          principalId: routePrincipalId,
+          sourceId: routeSourceId,
+        })
+        const [bitcoinAsset] = yield* db
+          .select({ id: schema.assets.id })
+          .from(schema.assets)
+          .where(eq(schema.assets.symbol, "BTC"))
+          .limit(1)
+        const [bitcoinRepresentation] = yield* db
+          .select({ id: schema.assetRepresentations.id })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.blockchainId, fixture.bitcoinBlockchainId))
+          .limit(1)
+
+        if (bitcoinAsset === undefined || bitcoinRepresentation === undefined) {
+          return yield* Effect.die("Missing Bitcoin approval fixture")
+        }
+
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "approval-route-test",
+            providerAssetId: "btc-approval-route",
+            currencyCode: "BTC",
+            name: "Bitcoin",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-15T10:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed approval provider asset")
+        }
+
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+          sourceNotes: "Exact Bitcoin representation observed.",
+        })
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: routeSourceId,
+            externalId: "approval-route-transaction",
+            timestamp: new Date("2026-08-15T10:01:00.000Z"),
+            principalId: routePrincipalId,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.die("Failed to seed approval route transaction")
+        }
+
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: routeSourceId,
+          transactionId: transaction.id,
+          externalId: "approval-route-transfer",
+          providerAssetId: providerAsset.id,
+          timestamp: new Date("2026-08-15T10:01:00.000Z"),
+          direction: "outbound",
+          processingMode: "accounting_and_evidence",
+          fromAccountRef: "approval-route-account",
+          toAddress: "bc1qapprovalroute000000000000000000000000",
+          amount: "0.1",
+          observedBlockchainId: fixture.bitcoinBlockchainId,
+          observedRepresentationType: "native",
+          observedDecimals: 8,
+          metadata: {},
+        })
+
+        return {
+          providerAssetId: providerAsset.id,
+          canonicalAssetId: bitcoinAsset.id,
+          assetRepresentationId: bitcoinRepresentation.id,
+        }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const response = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        payload: {
+          canonicalAssetId: seeded.canonicalAssetId,
+          assetRepresentationId: seeded.assetRepresentationId,
+          reviewerNotes: "Exact identity checked.",
+        },
+        responseSchema: ProviderAssetReviewRow,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      id: seeded.providerAssetId,
+      mappingStatus: "approved",
+      canonicalAssetId: seeded.canonicalAssetId,
+      assetRepresentationId: seeded.assetRepresentationId,
+      reviewerNotes: "Exact identity checked.",
+    })
+
+    const repeated = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        payload: {
+          canonicalAssetId: seeded.canonicalAssetId,
+          assetRepresentationId: seeded.assetRepresentationId,
+          reviewerNotes: "Exact identity checked again.",
+        },
+        responseSchema: ProviderAssetReviewRow,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const conflictingStatus = await Effect.runPromise(
+      postAdminStatus({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        payload: {
+          canonicalAssetId: "00000000-0000-4000-8000-000000000199",
+          assetRepresentationId: null,
+          reviewerNotes: "Conflicting target.",
+        },
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const durableState = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [mapping] = yield* db
+          .select({
+            canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            assetRepresentationId: schema.providerAssetMappings.assetRepresentationId,
+          })
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, seeded.providerAssetId))
+        const jobs = yield* db
+          .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, routeSourceId))
+        return { jobs, mapping }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    expect(repeated.status).toBe(200)
+    expect(conflictingStatus).toBe(400)
+    expect(durableState.mapping).toEqual({
+      canonicalAssetId: seeded.canonicalAssetId,
+      assetRepresentationId: seeded.assetRepresentationId,
+    })
+    expect(durableState.jobs).toEqual([{ mode: "replay", status: "pending" }])
+  })
+
   it.each(["/v1/assets/provider-assets", "/v1/assets/transfer-reconciliations/unresolved"])(
     "keeps the admin review endpoint protected: %s",
     async (path) => {
@@ -1057,4 +1241,23 @@ describe("AssetsApiLive", () => {
       expect(status).toBe(401)
     }
   )
+
+  it("keeps provider asset approval protected", async () => {
+    const status = await Effect.runPromise(
+      HttpClientRequest.post(
+        "/v1/assets/provider-assets/00000000-0000-4000-8000-000000000199/approve"
+      ).pipe(
+        HttpClientRequest.bodyJsonUnsafe({
+          canonicalAssetId: "00000000-0000-4000-8000-000000000198",
+          assetRepresentationId: null,
+        }),
+        HttpClient.execute,
+        Effect.map((response) => response.status),
+        Effect.provide(HttpLive),
+        Effect.scoped
+      )
+    )
+
+    expect(status).toBe(401)
+  })
 })

@@ -48,7 +48,7 @@ export interface CoinbaseReferenceDataServiceShape {
 /**
  * CoinbaseReferenceDataService - Context tag for Coinbase reference-data refresh.
  */
-export class CoinbaseReferenceDataService extends Context.Tag("CoinbaseReferenceDataService")<
+export class CoinbaseReferenceDataService extends Context.Service<
   CoinbaseReferenceDataService,
   CoinbaseReferenceDataServiceShape
->() {}
+>()("CoinbaseReferenceDataService") {}

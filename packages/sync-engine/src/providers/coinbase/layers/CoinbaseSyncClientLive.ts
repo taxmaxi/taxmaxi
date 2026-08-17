@@ -10,7 +10,7 @@
  * @module CoinbaseSyncClientLive
  */
 
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "@effect/platform"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
@@ -303,7 +303,7 @@ const make = Effect.gen(function* () {
         )
       )
 
-      const refreshedToken = yield* Schema.decodeUnknown(CoinbaseTokenResponseSchema)(
+      const refreshedToken = yield* Schema.decodeUnknownEffect(CoinbaseTokenResponseSchema)(
         refreshJson
       ).pipe(
         Effect.mapError(
@@ -496,8 +496,8 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.retry(
         Schedule.recurs(2).pipe(
-          Schedule.whileInput(
-            (error) => error instanceof CoinbaseSyncProviderError && error.retryable
+          Schedule.while(
+            ({ input: error }) => error instanceof CoinbaseSyncProviderError && error.retryable
           )
         )
       )
@@ -532,8 +532,8 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.retry(
         Schedule.recurs(2).pipe(
-          Schedule.whileInput(
-            (error) => error instanceof CoinbaseSyncProviderError && error.retryable
+          Schedule.while(
+            ({ input: error }) => error instanceof CoinbaseSyncProviderError && error.retryable
           )
         )
       )
@@ -545,7 +545,7 @@ const make = Effect.gen(function* () {
 
   /** Decode a Coinbase envelope and extract the pagination cursor. */
   const decodeEnvelope = (json: unknown, endpoint: string) =>
-    Schema.decodeUnknown(CoinbaseEnvelopeSchema)(json).pipe(
+    Schema.decodeUnknownEffect(CoinbaseEnvelopeSchema)(json).pipe(
       Effect.mapError(
         (error) =>
           new CoinbaseSyncPayloadDecodeError({
@@ -567,7 +567,9 @@ const make = Effect.gen(function* () {
 
       const records = yield* Effect.forEach(envelope.data, (accountPayload) =>
         Effect.gen(function* () {
-          const account = yield* Schema.decodeUnknown(CoinbaseAccountSchema)(accountPayload).pipe(
+          const account = yield* Schema.decodeUnknownEffect(CoinbaseAccountSchema)(
+            accountPayload
+          ).pipe(
             Effect.mapError(
               (error) =>
                 new CoinbaseSyncPayloadDecodeError({
@@ -612,7 +614,7 @@ const make = Effect.gen(function* () {
 
       const records = yield* Effect.forEach(envelope.data, (transactionPayload) =>
         Effect.gen(function* () {
-          const transaction = yield* Schema.decodeUnknown(CoinbaseTransactionSchema)(
+          const transaction = yield* Schema.decodeUnknownEffect(CoinbaseTransactionSchema)(
             transactionPayload
           ).pipe(
             Effect.mapError(
@@ -649,7 +651,9 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const endpoint = "/currencies"
       const json = yield* executePublicGetJson({ endpoint })
-      const envelope = yield* Schema.decodeUnknown(CoinbaseFiatCurrencyEnvelopeSchema)(json).pipe(
+      const envelope = yield* Schema.decodeUnknownEffect(CoinbaseFiatCurrencyEnvelopeSchema)(
+        json
+      ).pipe(
         Effect.mapError(
           (error) =>
             new CoinbaseSyncPayloadDecodeError({
@@ -673,11 +677,11 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const endpoint = "/currencies/crypto"
       const json = yield* executePublicGetJson({ endpoint })
-      const envelope = yield* Schema.decodeUnknown(
-        Schema.Union(
+      const envelope = yield* Schema.decodeUnknownEffect(
+        Schema.Union([
           CoinbaseCryptoCurrencyEnvelopeSchema,
-          Schema.Array(CoinbaseCryptoCurrencySchema)
-        )
+          Schema.Array(CoinbaseCryptoCurrencySchema),
+        ])
       )(json).pipe(
         Effect.mapError(
           (error) =>

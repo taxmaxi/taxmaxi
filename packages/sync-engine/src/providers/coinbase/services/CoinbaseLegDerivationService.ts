@@ -70,7 +70,7 @@ export interface CoinbaseLegDerivationServiceShape {
 /**
  * CoinbaseLegDerivationService - Context tag for Coinbase leg derivation.
  */
-export class CoinbaseLegDerivationService extends Context.Tag("CoinbaseLegDerivationService")<
+export class CoinbaseLegDerivationService extends Context.Service<
   CoinbaseLegDerivationService,
   CoinbaseLegDerivationServiceShape
->() {}
+>()("CoinbaseLegDerivationService") {}

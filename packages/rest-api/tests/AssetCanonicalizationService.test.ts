@@ -5,6 +5,8 @@ import {
   deriveNativeAssetDecimals,
   representationIdForProviderObservation,
   selectNativePlatform,
+  validateEconomicAssetType,
+  validateManualRepresentationIdentity,
   validateNativeProviderIdentity,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
 import type { ProviderAssetRecord } from "@my/sync-engine/services"
@@ -69,6 +71,101 @@ describe("AssetCanonicalizationService", () => {
     ).toBe(representationId)
   })
 
+  it("verifies chain, contract, decimals, and representation type from durable evidence", () => {
+    const providerAsset = makeProviderAsset()
+    const observedRepresentations = [
+      {
+        blockchainName: "ethereum",
+        representationType: "token" as const,
+        contractAddress: "0xABCDEF",
+        mintAddress: null,
+        decimals: 6,
+      },
+    ]
+    const matching = Effect.runSync(
+      validateManualRepresentationIdentity({
+        providerAsset,
+        representation: {
+          blockchainName: "Ethereum",
+          representationType: "token",
+          contractAddress: "0xabcdef",
+          mintAddress: null,
+          decimals: 6,
+        },
+        observedRepresentations,
+      }).pipe(Effect.result)
+    )
+    const wrongDecimals = Effect.runSync(
+      validateManualRepresentationIdentity({
+        providerAsset,
+        representation: {
+          blockchainName: "ethereum",
+          representationType: "token",
+          contractAddress: "0xabcdef",
+          mintAddress: null,
+          decimals: 18,
+        },
+        observedRepresentations,
+      }).pipe(Effect.result)
+    )
+
+    expect(matching._tag).toBe("Success")
+    expect(wrongDecimals._tag).toBe("Failure")
+  })
+
+  it.each([
+    ["blockchain", { blockchainName: "solana" }],
+    ["contract", { contractAddress: "0x1234" }],
+    ["representation type", { representationType: "nft" as const }],
+    ["missing representation type", { representationType: null }],
+    ["missing decimals", { decimals: null }],
+  ])("rejects %s evidence that does not prove the selected representation", (_, observed) => {
+    const result = Effect.runSync(
+      validateManualRepresentationIdentity({
+        providerAsset: makeProviderAsset(),
+        representation: {
+          blockchainName: "ethereum",
+          representationType: "token",
+          contractAddress: "0xabcdef",
+          mintAddress: null,
+          decimals: 6,
+        },
+        observedRepresentations: [
+          {
+            blockchainName: "ethereum",
+            representationType: "token",
+            contractAddress: "0xABCDEF",
+            mintAddress: null,
+            decimals: 6,
+            ...observed,
+          },
+        ],
+      }).pipe(Effect.result)
+    )
+
+    expect(result._tag).toBe("Failure")
+  })
+
+  it("rejects a fungible economic asset paired with an NFT representation", () => {
+    const result = Effect.runSync(
+      validateEconomicAssetType({
+        assetType: "fungible",
+        representation: {
+          id: "00000000-0000-4000-8000-000000000003",
+          assetId: "00000000-0000-4000-8000-000000000004",
+          symbol: "NFT",
+          blockchainName: "solana",
+          representationType: "nft",
+          contractAddress: null,
+          mintAddress: "Mint111111111111111111111111111111111111111",
+          decimals: 0,
+        },
+      }).pipe(Effect.result)
+    )
+
+    expect(result._tag).toBe("Failure")
+  })
+
   it("rejects a native asset resolution for an observed Solana token", () => {
     const result = Effect.runSync(
       validateNativeProviderIdentity(
@@ -80,10 +177,10 @@ describe("AssetCanonicalizationService", () => {
           name: "Solana",
           providerType: "spl-token",
         })
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
     )
 
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
   })
 
   it("includes Cardano native platform metadata from CoinGecko", () => {

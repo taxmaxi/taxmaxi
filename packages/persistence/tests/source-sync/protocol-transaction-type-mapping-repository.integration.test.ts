@@ -52,7 +52,7 @@ const insertCandidateWithObservation = ({
         .limit(1)
 
       if (blockchain === undefined) {
-        return yield* Effect.dieMessage(`Missing seeded ${blockchainName} blockchain fixture`)
+        return yield* Effect.die(`Missing seeded ${blockchainName} blockchain fixture`)
       }
 
       const now = new Date("2026-06-01T10:00:00.000Z")
@@ -76,7 +76,7 @@ const insertCandidateWithObservation = ({
         })
 
       if (candidate === undefined) {
-        return yield* Effect.dieMessage("Failed to create protocol candidate fixture")
+        return yield* Effect.die("Failed to create protocol candidate fixture")
       }
 
       const [observation] = yield* db
@@ -99,7 +99,7 @@ const insertCandidateWithObservation = ({
         .returning({ id: schema.protocolCandidateObservations.id })
 
       if (observation === undefined) {
-        return yield* Effect.dieMessage("Failed to create protocol observation fixture")
+        return yield* Effect.die("Failed to create protocol observation fixture")
       }
 
       return {
@@ -369,7 +369,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     )
 
     const approvalResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.approveMapping({
             mappingId: pendingMapping.id,
@@ -380,11 +380,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    expect(approvalResult._tag).toBe("Left")
-    if (approvalResult._tag === "Right") {
+    expect(approvalResult._tag).toBe("Failure")
+    if (approvalResult._tag === "Success") {
       expect.fail("Expected approval without evidence to fail")
     }
-    expect(approvalResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(approvalResult.failure).toBeInstanceOf(SyncEngineStorageError)
   })
 
   it("does not approve a mapping with an unknown transaction type", async () => {
@@ -422,7 +422,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     )
 
     const approvalResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.approveMapping({
             mappingId: pendingMapping.id,
@@ -433,11 +433,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    expect(approvalResult._tag).toBe("Left")
-    if (approvalResult._tag === "Right") {
+    expect(approvalResult._tag).toBe("Failure")
+    if (approvalResult._tag === "Success") {
       expect.fail("Expected approval with unknown transaction type to fail")
     }
-    expect(approvalResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(approvalResult.failure).toBeInstanceOf(SyncEngineStorageError)
   })
 
   it("does not attach evidence from another candidate", async () => {
@@ -453,7 +453,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const evidenceResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.addEvidence({
             mappingId: pendingMapping.id,
@@ -466,11 +466,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    expect(evidenceResult._tag).toBe("Left")
-    if (evidenceResult._tag === "Right") {
+    expect(evidenceResult._tag).toBe("Failure")
+    if (evidenceResult._tag === "Success") {
       expect.fail("Expected unrelated evidence to fail")
     }
-    expect(evidenceResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(evidenceResult.failure).toBeInstanceOf(SyncEngineStorageError)
   })
 
   it("does not attach same-candidate evidence for a different observed subject", async () => {
@@ -510,7 +510,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
           .returning({ id: schema.protocolCandidateObservations.id })
 
         if (observation === undefined) {
-          return yield* Effect.dieMessage("Failed to create protocol observation fixture")
+          return yield* Effect.die("Failed to create protocol observation fixture")
         }
 
         return observation.id
@@ -523,7 +523,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const evidenceResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.addEvidence({
             mappingId: pendingMapping.id,
@@ -547,11 +547,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    expect(evidenceResult._tag).toBe("Left")
-    if (evidenceResult._tag === "Right") {
+    expect(evidenceResult._tag).toBe("Failure")
+    if (evidenceResult._tag === "Success") {
       expect.fail("Expected wrong-subject evidence to fail")
     }
-    expect(evidenceResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(evidenceResult.failure).toBeInstanceOf(SyncEngineStorageError)
     expect(validEvidence.candidateObservationId).toBe(unrelatedObservationId)
   })
 
@@ -567,7 +567,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const creationResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.createPendingMappingFromCandidate({
             candidateId: fixture.candidateId,
@@ -586,11 +586,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    expect(creationResult._tag).toBe("Left")
-    if (creationResult._tag === "Right") {
+    expect(creationResult._tag).toBe("Failure")
+    if (creationResult._tag === "Success") {
       expect.fail("Expected unrelated program mapping to fail")
     }
-    expect(creationResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(creationResult.failure).toBeInstanceOf(SyncEngineStorageError)
   })
 
   it("does not create a protocol-candidate mapping for the protocol slug", async () => {
@@ -605,7 +605,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const creationResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.createPendingMappingFromCandidate({
             candidateId: fixture.candidateId,
@@ -624,11 +624,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       )
     )
 
-    expect(creationResult._tag).toBe("Left")
-    if (creationResult._tag === "Right") {
+    expect(creationResult._tag).toBe("Failure")
+    if (creationResult._tag === "Success") {
       expect.fail("Expected protocol slug mapping to fail")
     }
-    expect(creationResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(creationResult.failure).toBeInstanceOf(SyncEngineStorageError)
   })
 
   it("stores the normalized subject identifier for candidate-backed mappings", async () => {
@@ -799,7 +799,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const secondApprovalResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.approveMapping({
             mappingId: pendingMapping.id,
@@ -827,11 +827,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       })
     )
 
-    expect(secondApprovalResult._tag).toBe("Left")
-    if (secondApprovalResult._tag === "Right") {
+    expect(secondApprovalResult._tag).toBe("Failure")
+    if (secondApprovalResult._tag === "Success") {
       expect.fail("Expected approving an approved mapping to fail")
     }
-    expect(secondApprovalResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(secondApprovalResult.failure).toBeInstanceOf(SyncEngineStorageError)
     expect(row).toMatchObject({
       transactionTypeKey: "swap_crypto_to_crypto",
       mappingStatus: "approved",
@@ -853,7 +853,7 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
     })
 
     const rejectionResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolTransactionTypeMappingRepository, (repository) =>
           repository.rejectMapping({
             mappingId: pendingMapping.id,
@@ -884,11 +884,11 @@ describe("ProtocolTransactionTypeMappingRepositoryLive", () => {
       })
     )
 
-    expect(rejectionResult._tag).toBe("Left")
-    if (rejectionResult._tag === "Right") {
+    expect(rejectionResult._tag).toBe("Failure")
+    if (rejectionResult._tag === "Success") {
       expect.fail("Expected rejecting an approved mapping to fail")
     }
-    expect(rejectionResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(rejectionResult.failure).toBeInstanceOf(SyncEngineStorageError)
     expect(rows.mapping).toMatchObject({
       mappingStatus: "approved",
       reviewerNotes: "Reviewed fixture",

@@ -34,7 +34,6 @@ import type { AuthProvider } from "@my/core/authentication"
  * })
  * ```
  */
-export class GoogleAuthProvider extends Context.Tag("GoogleAuthProvider")<
-  GoogleAuthProvider,
-  AuthProvider
->() {}
+export class GoogleAuthProvider extends Context.Service<GoogleAuthProvider, AuthProvider>()(
+  "GoogleAuthProvider"
+) {}

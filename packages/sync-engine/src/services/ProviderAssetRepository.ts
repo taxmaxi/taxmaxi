@@ -63,6 +63,11 @@ export interface ProviderAssetMappingDraft {
   readonly sourceNotes: string | null
 }
 
+/** Result of an idempotent provider-asset approval. */
+export interface ProviderAssetApprovalResult {
+  readonly mappingChanged: boolean
+}
+
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
  */
@@ -105,6 +110,16 @@ export interface ProviderAssetObservedRepresentationRecord {
   readonly decimals: number | null
 }
 
+/** Representation evidence prepared for a provider-asset source use; null fields are unknown. */
+export interface ProviderAssetSourceUseObservation {
+  readonly providerAssetRowId: string
+  readonly observedBlockchainId: string
+  readonly representationType: "native" | "token" | "nft" | null
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
+}
+
 /**
  * ProviderAssetRepositoryShape - Provider asset persistence and lookup operations.
  */
@@ -125,12 +140,37 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**
-   * Replace a pending mapping only if it is still pending. A concurrent admin
-   * decision wins and is never overwritten.
+   * Approve a reviewed asset mapping and atomically request replay for every
+   * source that uses it. Retrying the same target is a successful no-op.
    */
-  readonly approveProviderAssetMappingIfPending: (params: {
+  readonly approveProviderAssetMappingAndRequestReplay: (params: {
     readonly mapping: ProviderAssetMappingDraft
-  }) => Effect.Effect<boolean, SyncEngineStorageError>
+    readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
+
+  /**
+   * Lock and reload the provider-asset decision snapshot before a caller writes
+   * related canonical rows in the same transaction.
+   */
+  readonly lockProviderAssetApprovalSnapshot: (params: {
+    readonly providerAssetRowId: string
+    readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<ProviderAssetReviewRecord, SyncEngineStorageError>
+
+  /**
+   * Reserve and record that normalization artifacts use this provider asset.
+   * The caller must invoke this after taking the normalized artifact locks and keep the
+   * reservation plus artifact persistence in one transaction. This makes approval either
+   * observe the evidence or win before the evidence is written.
+   * If the asset is already approved, request a replay in the same transaction.
+   */
+  readonly recordProviderAssetSourceUses: (params: {
+    readonly sourceId: string
+    readonly providerAssetRowIds: ReadonlyArray<string>
+    readonly observations: ReadonlyArray<ProviderAssetSourceUseObservation>
+  }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**
    * Seed provider asset mappings keyed by providerAssetRowId only when no row
@@ -208,7 +248,7 @@ export interface ProviderAssetRepositoryShape {
 /**
  * ProviderAssetRepository - Context tag for provider asset persistence.
  */
-export class ProviderAssetRepository extends Context.Tag("ProviderAssetRepository")<
+export class ProviderAssetRepository extends Context.Service<
   ProviderAssetRepository,
   ProviderAssetRepositoryShape
->() {}
+>()("ProviderAssetRepository") {}

@@ -147,7 +147,7 @@ export interface CoinbaseReferenceMappingServiceShape {
 /**
  * CoinbaseReferenceMappingService - Context tag for Coinbase mapping resolution.
  */
-export class CoinbaseReferenceMappingService extends Context.Tag("CoinbaseReferenceMappingService")<
+export class CoinbaseReferenceMappingService extends Context.Service<
   CoinbaseReferenceMappingService,
   CoinbaseReferenceMappingServiceShape
->() {}
+>()("CoinbaseReferenceMappingService") {}

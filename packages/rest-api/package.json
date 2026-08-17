@@ -25,8 +25,7 @@
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
-    "@effect/platform": "0.96.1",
-    "@effect/platform-node": "0.106.0",
+    "@effect/platform-node": "4.0.0-rc.109",
     "@my/core": "workspace:*",
     "@my/persistence": "workspace:*",
     "@my/sync-engine": "workspace:*",
@@ -34,11 +33,11 @@
     "@x402/evm": "2.12.0",
     "@x402/extensions": "2.12.0",
     "@x402/svm": "2.12.0",
-    "effect": "3.21.2",
+    "effect": "4.0.0-rc.109",
     "stripe": "22.5.0"
   },
   "devDependencies": {
-    "@effect/vitest": "0.29.0",
+    "@effect/vitest": "4.0.0-rc.109",
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
     "typescript": "6.0.3"

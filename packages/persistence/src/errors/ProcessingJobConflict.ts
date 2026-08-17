@@ -4,7 +4,8 @@
  * @module ProcessingJobConflict
  */
 
-import * as Either from "effect/Either"
+import * as Cause from "effect/Cause"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 
 const ACTIVE_PROCESSING_JOB_CONSTRAINT = "processing_jobs_active_source_unique"
@@ -16,7 +17,7 @@ const DatabaseErrorSchema = Schema.Struct({
   error: Schema.optional(Schema.Unknown),
 })
 
-const decodeDatabaseError = Schema.decodeUnknownEither(DatabaseErrorSchema)
+const decodeDatabaseError = Schema.decodeUnknownOption(DatabaseErrorSchema)
 
 /**
  * Extract nested SQLSTATE metadata from wrapped database errors.
@@ -27,22 +28,28 @@ const errorMetadata = (
   readonly code?: string
   readonly constraint?: string
 } | null => {
+  if (Cause.isCause(error)) {
+    const causeError = Cause.findErrorOption(error)
+
+    return Option.isSome(causeError) ? errorMetadata(causeError.value) : null
+  }
+
   const decoded = decodeDatabaseError(error)
 
-  if (Either.isLeft(decoded)) {
+  if (Option.isNone(decoded)) {
     return null
   }
 
   const nestedMetadata =
-    errorMetadata(decoded.right.cause) ?? errorMetadata(decoded.right.error) ?? null
+    errorMetadata(decoded.value.cause) ?? errorMetadata(decoded.value.error) ?? null
 
   if (
-    decoded.right.code !== undefined ||
-    decoded.right.constraint !== undefined ||
+    decoded.value.code !== undefined ||
+    decoded.value.constraint !== undefined ||
     nestedMetadata !== null
   ) {
-    const code = decoded.right.code ?? nestedMetadata?.code
-    const constraint = decoded.right.constraint ?? nestedMetadata?.constraint
+    const code = decoded.value.code ?? nestedMetadata?.code
+    const constraint = decoded.value.constraint ?? nestedMetadata?.constraint
 
     return {
       ...(code === undefined ? {} : { code }),

@@ -16,7 +16,7 @@ export class ProviderRawRecord extends Schema.Class<ProviderRawRecord>("Provider
   externalRecordId: Schema.String,
   externalAccountId: Schema.NullOr(Schema.String),
   externalParentId: Schema.NullOr(Schema.String),
-  occurredAt: Schema.DateFromSelf,
+  occurredAt: Schema.Date,
   payload: Schema.Unknown,
 }) {}
 
@@ -30,7 +30,7 @@ export class FetchProviderRawBatchParams extends Schema.Class<FetchProviderRawBa
   sourceId: Schema.String,
   walletAddress: Schema.NullOr(Schema.String),
   cursorPayload: Schema.Unknown,
-  resumeHighWatermark: Schema.NullOr(Schema.DateFromSelf),
+  resumeHighWatermark: Schema.NullOr(Schema.Date),
   resumeCheckpointExternalId: Schema.NullOr(Schema.String),
   pageSize: Schema.Number,
 }) {}
@@ -43,7 +43,7 @@ export class FetchProviderRawBatchResult extends Schema.Class<FetchProviderRawBa
 )({
   records: Schema.Array(ProviderRawRecord),
   cursorPayload: Schema.Unknown,
-  highWatermark: Schema.NullOr(Schema.DateFromSelf),
+  highWatermark: Schema.NullOr(Schema.Date),
   done: Schema.Boolean,
 }) {}
 

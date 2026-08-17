@@ -1,8 +1,7 @@
-import { Command, Options } from "@effect/cli"
-import { FileSystem, Path } from "@effect/platform"
-import { Console, Effect, Layer, Schema } from "effect"
+import { Console, Effect, FileSystem, Layer, Path, Schema } from "effect"
 import * as Config from "effect/Config"
 import * as Option from "effect/Option"
+import { Command, Flag as Options } from "effect/unstable/cli"
 import {
   ProtocolCandidateRepository,
   type ProtocolCandidateImportResult,
@@ -88,7 +87,7 @@ type ImportDexProjectRankingsCandidates<R> = (
   dexProjectRankings: SolanaDuneRankingsFile
 ) => Effect.Effect<ProtocolCandidateImportResult, CrawlerCommandError, R>
 
-const outOption = Options.text("out").pipe(
+const outOption = Options.string("out").pipe(
   Options.optional,
   Options.withDescription("Output directory for generated artifacts")
 )
@@ -97,16 +96,16 @@ const jsonOption = Options.boolean("json").pipe(
   Options.withDescription("Output machine-readable JSON")
 )
 
-const signatureOption = Options.text("signature").pipe(
+const signatureOption = Options.string("signature").pipe(
   Options.withDescription("Transaction signature to sample"),
-  Options.repeated,
-  Options.withDefault<Array<string>>([])
+  Options.atLeast(0),
+  Options.withDefault([])
 )
 
-const programOption = Options.text("program").pipe(
+const programOption = Options.string("program").pipe(
   Options.withDescription("Program id to include when slot-range sampling"),
-  Options.repeated,
-  Options.withDefault<Array<string>>([])
+  Options.atLeast(0),
+  Options.withDefault([])
 )
 
 const fromSlotOption = Options.integer("from-slot").pipe(
@@ -124,15 +123,15 @@ const sampleLimitOption = Options.integer("sample-limit").pipe(
   Options.withDescription("Maximum behavior samples to emit")
 )
 
-const startDateOption = Options.text("start-date").pipe(
+const startDateOption = Options.string("start-date").pipe(
   Options.withDescription("Inclusive UTC start date, YYYY-MM-DD")
 )
 
-const endDateOption = Options.text("end-date").pipe(
+const endDateOption = Options.string("end-date").pipe(
   Options.withDescription("Exclusive UTC end date, YYYY-MM-DD")
 )
 
-const replayFromFileOption = Options.text("from-file").pipe(
+const replayFromFileOption = Options.string("from-file").pipe(
   Options.withDescription(
     "Previously written rankings file to replay instead of calling Dune; uses no Dune credits"
   )
@@ -150,14 +149,14 @@ const windowDaysOption = Options.integer("window-days").pipe(
   )
 )
 
-const dexOutOption = Options.text("out").pipe(
+const dexOutOption = Options.string("out").pipe(
   Options.optional,
   Options.withDescription(
     "Also write the rankings file to this directory; without it only the database is updated"
   )
 )
 
-export const crawlSolanaBehaviorOptions = Options.all({
+export const crawlSolanaBehaviorOptions = {
   out: outOption,
   json: jsonOption,
   signatures: signatureOption,
@@ -165,7 +164,7 @@ export const crawlSolanaBehaviorOptions = Options.all({
   fromSlot: fromSlotOption,
   toSlot: toSlotOption,
   sampleLimit: sampleLimitOption,
-})
+}
 
 const resolveDefaultOutputDirectory = Config.string(SOLANA_REFERENCE_DATA_DIR_ENV_VAR).pipe(
   Config.map((configuredDirectory) => {
@@ -214,7 +213,7 @@ const validateNonNegative = ({ flag, value }: { readonly flag: string; readonly 
     : Effect.void
 
 const encodeJsonBehaviorSummary = (summary: typeof CrawlSolanaBehaviorJsonSummary.Type) =>
-  Schema.encode(Schema.parseJson(CrawlSolanaBehaviorJsonSummary))(summary).pipe(
+  Schema.encodeEffect(Schema.fromJsonString(CrawlSolanaBehaviorJsonSummary))(summary).pipe(
     Effect.mapError(
       () =>
         new CrawlerCommandError({
@@ -224,7 +223,7 @@ const encodeJsonBehaviorSummary = (summary: typeof CrawlSolanaBehaviorJsonSummar
   )
 
 const encodeJsonSummary = (summary: typeof CrawlSolanaJsonSummary.Type) =>
-  Schema.encode(Schema.parseJson(CrawlSolanaJsonSummary))(summary).pipe(
+  Schema.encodeEffect(Schema.fromJsonString(CrawlSolanaJsonSummary))(summary).pipe(
     Effect.mapError(
       () =>
         new CrawlerCommandError({
@@ -234,7 +233,7 @@ const encodeJsonSummary = (summary: typeof CrawlSolanaJsonSummary.Type) =>
   )
 
 const encodeBehaviorSamples = (artifact: SolanaBehaviorSamplesArtifact) =>
-  Schema.encode(Schema.parseJson(SolanaBehaviorSamplesArtifact))(artifact).pipe(
+  Schema.encodeEffect(Schema.fromJsonString(SolanaBehaviorSamplesArtifact))(artifact).pipe(
     Effect.mapError(
       () =>
         new CrawlerCommandError({
@@ -244,7 +243,7 @@ const encodeBehaviorSamples = (artifact: SolanaBehaviorSamplesArtifact) =>
   )
 
 const encodeDexProjectRankings = (rankingsFile: SolanaDuneRankingsFile) =>
-  Schema.encode(Schema.parseJson(SolanaDuneRankingsFile))(rankingsFile).pipe(
+  Schema.encodeEffect(Schema.fromJsonString(SolanaDuneRankingsFile))(rankingsFile).pipe(
     Effect.mapError(
       () =>
         new CrawlerCommandError({
@@ -262,9 +261,7 @@ const logPriorityQueryTimeoutToStderr = ({
     `Dune priority query timed out; halving window ${startDate} to ${endDate} at ${midDate}`
   )
 
-const readDefaultOutputDirectory = Effect.configProviderWith((provider) =>
-  provider.load(resolveDefaultOutputDirectory)
-).pipe(
+const readDefaultOutputDirectory = resolveDefaultOutputDirectory.pipe(
   Effect.mapError(
     () =>
       new CrawlerCommandError({
@@ -466,7 +463,9 @@ const readReplayRankingsFile = (
       )
     )
 
-    return yield* Schema.decodeUnknown(Schema.parseJson(SolanaDuneRankingsFile))(content).pipe(
+    return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SolanaDuneRankingsFile))(
+      content
+    ).pipe(
       Effect.mapError(
         () =>
           new CrawlerCommandError({

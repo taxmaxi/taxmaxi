@@ -1,14 +1,14 @@
-import * as Either from "effect/Either"
+import * as Exit from "effect/Exit"
 import * as Schema from "effect/Schema"
 import { describe, expect, it } from "vitest"
 import { SourceSyncQueuePayload } from "@my/sync-engine/services"
 
 describe("SourceSyncQueuePayload", () => {
   it("decodes valid payloads and rejects missing or invalid mode", () => {
-    const decodePayload = Schema.decodeUnknownEither(SourceSyncQueuePayload)
+    const decodePayload = Schema.decodeUnknownExit(SourceSyncQueuePayload)
 
     expect(
-      Either.isRight(
+      Exit.isSuccess(
         decodePayload({
           jobId: "job-1",
           sourceId: "source-1",
@@ -18,7 +18,7 @@ describe("SourceSyncQueuePayload", () => {
       )
     ).toBe(true)
     expect(
-      Either.isRight(
+      Exit.isSuccess(
         decodePayload({
           jobId: "job-1",
           sourceId: "source-1",
@@ -27,7 +27,7 @@ describe("SourceSyncQueuePayload", () => {
       )
     ).toBe(false)
     expect(
-      Either.isRight(
+      Exit.isSuccess(
         decodePayload({
           jobId: "job-1",
           sourceId: "source-1",

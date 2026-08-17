@@ -8,11 +8,9 @@
  * @module shared/values/MonetaryAmount
  */
 
-import { HttpApiSchema } from "@effect/platform"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
-import type * as ParseResult from "effect/ParseResult"
 import * as Schema from "effect/Schema"
 import { CurrencyCode } from "../../currency/CurrencyCode.ts"
 
@@ -30,7 +28,7 @@ export class CurrencyMismatchError extends Schema.TaggedError<CurrencyMismatchEr
     expected: CurrencyCode,
     actual: CurrencyCode,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return `Currency mismatch: expected ${this.expected}, got ${this.actual}`
@@ -43,7 +41,7 @@ export class CurrencyMismatchError extends Schema.TaggedError<CurrencyMismatchEr
 export class DivisionByZeroError extends Schema.TaggedError<DivisionByZeroError>()(
   "DivisionByZeroError",
   {},
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return "Division by zero"
@@ -67,7 +65,7 @@ export type MonetaryAmountError = CurrencyMismatchError | DivisionByZeroError
  * The encoded form uses a string for the amount to preserve precision.
  */
 export class MonetaryAmount extends Schema.Class<MonetaryAmount>("MonetaryAmount")({
-  amount: Schema.BigDecimal,
+  amount: Schema.BigDecimalFromString,
   currency: CurrencyCode,
 }) {
   /**
@@ -89,14 +87,14 @@ export class MonetaryAmount extends Schema.Class<MonetaryAmount>("MonetaryAmount
 
   /**
    * Create a MonetaryAmount from a string amount and CurrencyCode.
-   * Returns an Effect that may fail with a ParseError if the string is invalid.
+   * Returns an Effect that may fail with a SchemaError if the string is invalid.
    */
   static fromString(
     amountStr: string,
     currency: CurrencyCode
-  ): Effect.Effect<MonetaryAmount, ParseResult.ParseError> {
+  ): Effect.Effect<MonetaryAmount, Schema.SchemaError> {
     return Effect.gen(function* () {
-      const bd = yield* Schema.decodeUnknown(Schema.BigDecimal)(amountStr)
+      const bd = yield* Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(amountStr)
       return MonetaryAmount.fromBigDecimal(bd, currency)
     })
   }
@@ -106,7 +104,7 @@ export class MonetaryAmount extends Schema.Class<MonetaryAmount>("MonetaryAmount
    * This is an unsafe operation that throws if the inputs are invalid.
    */
   static unsafeFromString(amountStr: string, currencyStr: string): MonetaryAmount {
-    const amount = BigDecimal.unsafeFromString(amountStr)
+    const amount = BigDecimal.fromStringUnsafe(amountStr)
     return MonetaryAmount.fromBigDecimal(amount, CurrencyCode.make(currencyStr))
   }
 
@@ -227,7 +225,7 @@ export const multiply = (
  * The result maintains the original currency.
  */
 export const multiplyByNumber = (amount: MonetaryAmount, multiplier: number): MonetaryAmount => {
-  return multiply(amount, BigDecimal.unsafeFromNumber(multiplier))
+  return multiply(amount, BigDecimal.fromNumberUnsafe(multiplier))
 }
 
 /**
@@ -256,7 +254,7 @@ export const divideByNumber = (
   if (divisor === 0) {
     return Effect.fail(new DivisionByZeroError())
   }
-  return divide(amount, BigDecimal.unsafeFromNumber(divisor))
+  return divide(amount, BigDecimal.fromNumberUnsafe(divisor))
 }
 
 /**
@@ -267,7 +265,7 @@ export const unsafeDivide = (
   divisor: BigDecimal.BigDecimal
 ): MonetaryAmount => {
   return MonetaryAmount.fromBigDecimal(
-    BigDecimal.unsafeDivide(amount.amount, divisor),
+    BigDecimal.divideUnsafe(amount.amount, divisor),
     amount.currency
   )
 }
@@ -302,7 +300,7 @@ export const greaterThan = (
   if (a.currency !== b.currency) {
     return Effect.fail(new CurrencyMismatchError({ expected: a.currency, actual: b.currency }))
   }
-  return Effect.succeed(BigDecimal.greaterThan(a.amount, b.amount))
+  return Effect.succeed(BigDecimal.isGreaterThan(a.amount, b.amount))
 }
 
 /**
@@ -316,7 +314,7 @@ export const lessThan = (
   if (a.currency !== b.currency) {
     return Effect.fail(new CurrencyMismatchError({ expected: a.currency, actual: b.currency }))
   }
-  return Effect.succeed(BigDecimal.lessThan(a.amount, b.amount))
+  return Effect.succeed(BigDecimal.isLessThan(a.amount, b.amount))
 }
 
 /**
@@ -330,7 +328,7 @@ export const greaterThanOrEqualTo = (
   if (a.currency !== b.currency) {
     return Effect.fail(new CurrencyMismatchError({ expected: a.currency, actual: b.currency }))
   }
-  return Effect.succeed(BigDecimal.greaterThanOrEqualTo(a.amount, b.amount))
+  return Effect.succeed(BigDecimal.isGreaterThanOrEqualTo(a.amount, b.amount))
 }
 
 /**
@@ -344,7 +342,7 @@ export const lessThanOrEqualTo = (
   if (a.currency !== b.currency) {
     return Effect.fail(new CurrencyMismatchError({ expected: a.currency, actual: b.currency }))
   }
-  return Effect.succeed(BigDecimal.lessThanOrEqualTo(a.amount, b.amount))
+  return Effect.succeed(BigDecimal.isLessThanOrEqualTo(a.amount, b.amount))
 }
 
 /**

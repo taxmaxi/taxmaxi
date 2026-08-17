@@ -5,7 +5,7 @@
  */
 
 import * as Effect from "effect/Effect"
-import * as Either from "effect/Either"
+import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -52,6 +52,7 @@ interface DefaultAssetMapping {
 interface NormalizedAssetReference {
   readonly kind: "native" | "spl"
   readonly mintAddress: string | null
+  readonly observedDecimals: number | null | undefined
   readonly rawProviderPayload: unknown
 }
 
@@ -117,7 +118,7 @@ const DasMetadataSchema = Schema.Struct({
   token_standard: Schema.optional(Schema.String),
 })
 
-const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
+const SolanaTokenDecimalsSchema = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }))
 
 const DasAssetSchema = Schema.Struct({
   id: Schema.String,
@@ -150,8 +151,8 @@ const DasAssetSchema = Schema.Struct({
 })
 
 const DasAssetBatchSchema = Schema.Array(DasAssetSchema)
-const decodeUnknownDasAssetBatch = Schema.decodeUnknown(DasAssetBatchSchema)
-const decodeStoredProviderPayload = Schema.decodeUnknownEither(
+const decodeUnknownDasAssetBatch = Schema.decodeUnknownEffect(DasAssetBatchSchema)
+const decodeStoredProviderPayload = Schema.decodeUnknownExit(
   Schema.Struct({
     source: Schema.optional(Schema.String),
     tokenProgram: Schema.optional(Schema.NullOr(Schema.String)),
@@ -345,6 +346,7 @@ const normalizeReference = (
     return Effect.succeed({
       kind: "native",
       mintAddress: null,
+      observedDecimals: reference.observedDecimals,
       rawProviderPayload: reference.rawProviderPayload,
     })
   }
@@ -363,6 +365,7 @@ const normalizeReference = (
   return Effect.succeed({
     kind: "spl",
     mintAddress,
+    observedDecimals: reference.observedDecimals,
     rawProviderPayload: reference.rawProviderPayload,
   })
 }
@@ -370,31 +373,31 @@ const normalizeReference = (
 const storedTokenProgram = (providerAsset: ProviderAssetRecord): string | null => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
-  if (Either.isLeft(decoded)) {
+  if (Exit.isFailure(decoded)) {
     return null
   }
 
-  return decoded.right.tokenProgram ?? null
+  return decoded.value.tokenProgram ?? null
 }
 
 const storedNftHint = (providerAsset: ProviderAssetRecord): boolean => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
-  if (Either.isLeft(decoded)) {
+  if (Exit.isFailure(decoded)) {
     return providerAsset.providerType === "nft"
   }
 
-  return decoded.right.nftHint ?? providerAsset.providerType === "nft"
+  return decoded.value.nftHint ?? providerAsset.providerType === "nft"
 }
 
 const hasHeliusDasPayload = (providerAsset: ProviderAssetRecord): boolean => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
-  if (Either.isLeft(decoded)) {
+  if (Exit.isFailure(decoded)) {
     return false
   }
 
-  return decoded.right.source === "helius_das_get_asset_batch"
+  return decoded.value.source === "helius_das_get_asset_batch"
 }
 
 const representationTypeFromProviderAsset = (
@@ -403,14 +406,14 @@ const representationTypeFromProviderAsset = (
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
   if (
-    Either.isLeft(decoded) ||
-    decoded.right.source !== "helius_das_get_asset_batch" ||
-    decoded.right.asset === undefined
+    Exit.isFailure(decoded) ||
+    decoded.value.source !== "helius_das_get_asset_batch" ||
+    decoded.value.asset === undefined
   ) {
     return null
   }
 
-  return representationTypeFromDasAsset(decoded.right.asset)
+  return representationTypeFromDasAsset(decoded.value.asset)
 }
 
 const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): boolean =>
@@ -705,17 +708,23 @@ const make = Effect.gen(function* () {
         Option.filter(
           representation,
           (candidate) =>
-            (observedType === null || candidate.representationType === observedType) &&
-            (providerAsset.exponent === null || candidate.decimals === providerAsset.exponent) &&
+            observedType !== null &&
+            candidate.representationType === observedType &&
+            providerAsset.exponent !== null &&
+            candidate.decimals === providerAsset.exponent &&
+            reference.observedDecimals !== null &&
+            (reference.observedDecimals === undefined ||
+              candidate.decimals === reference.observedDecimals) &&
             observations.every(
               (observation) =>
                 observation.blockchainName.toLowerCase() ===
                   candidate.blockchainName.toLowerCase() &&
-                (observation.representationType === null ||
-                  observation.representationType === candidate.representationType) &&
+                observation.representationType !== null &&
+                observation.representationType === candidate.representationType &&
                 observation.contractAddress === candidate.contractAddress &&
                 observation.mintAddress === candidate.mintAddress &&
-                (observation.decimals === null || observation.decimals === candidate.decimals)
+                observation.decimals !== null &&
+                observation.decimals === candidate.decimals
             )
         )
       ),
@@ -777,8 +786,14 @@ const make = Effect.gen(function* () {
               mappings: [exactMapping.value],
             })
           } else if (existingMapping.mappingStatus === "pending_review") {
-            yield* providerAssetRepository.approveProviderAssetMappingIfPending({
+            const observations =
+              yield* providerAssetRepository.listProviderAssetObservedRepresentations({
+                providerAssetRowId: providerAsset.id,
+              })
+            yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
               mapping: exactMapping.value,
+              expectedObservedRepresentations: observations,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
           }
         } else {
@@ -879,6 +894,30 @@ const make = Effect.gen(function* () {
             mintAddress: reference.mintAddress,
             providerAssetRowId: providerAsset.id,
             message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at an invalid network representation ${mapping.assetRepresentationId}.`,
+          })
+        )
+      }
+
+      const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
+      const expectedRepresentationType =
+        reference.kind === "native"
+          ? "native"
+          : providerType === "nft"
+            ? "nft"
+            : providerType === "spl-token" || providerType === "spl-token-2022"
+              ? "token"
+              : null
+      if (
+        expectedRepresentationType === null ||
+        representation.value.representationType !== expectedRepresentationType ||
+        providerAsset.exponent === null ||
+        representation.value.decimals !== providerAsset.exponent
+      ) {
+        return yield* Effect.fail(
+          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+            mintAddress: reference.mintAddress,
+            providerAssetRowId: providerAsset.id,
+            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} conflicts with its exact type or decimals evidence.`,
           })
         )
       }

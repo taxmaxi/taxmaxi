@@ -38,18 +38,20 @@ export interface WorkerHealthServerOptions {
 
 const loadConfig = Effect.gen(function* () {
   return {
-    port: yield* Config.integer("WORKER_HEALTH_PORT").pipe(
-      Config.withDefault(DEFAULT_WORKER_HEALTH_PORT),
-      Config.validate({
-        message: "WORKER_HEALTH_PORT must be between 0 and 65535",
-        validation: (value) => Number.isInteger(value) && value >= 0 && value <= 65535,
-      })
-    ),
+    port: yield* Config.schema(
+      Schema.Int.check(
+        Schema.isBetween(
+          { minimum: 0, maximum: 65_535 },
+          { message: "WORKER_HEALTH_PORT must be between 0 and 65535" }
+        )
+      ),
+      "WORKER_HEALTH_PORT"
+    ).pipe(Config.withDefault(DEFAULT_WORKER_HEALTH_PORT)),
   } satisfies WorkerHealthServerConfig
 })
 
 const closeServer = (server: Server): Effect.Effect<void, WorkerHealthServerError> =>
-  Effect.async<void, WorkerHealthServerError>((resume) => {
+  Effect.callback<void, WorkerHealthServerError>((resume) => {
     let completed = false
     const complete = (effect: Effect.Effect<void, WorkerHealthServerError>) => {
       if (completed) {
@@ -89,7 +91,7 @@ const closeServer = (server: Server): Effect.Effect<void, WorkerHealthServerErro
 const acquireLiveServer = ({
   port,
 }: WorkerHealthServerConfig): Effect.Effect<Server, WorkerHealthServerError> =>
-  Effect.async<Server, WorkerHealthServerError>((resume) => {
+  Effect.callback<Server, WorkerHealthServerError>((resume) => {
     const server = createServer((request, response) => {
       if (request.method === "GET" && request.url === "/health") {
         response.writeHead(200, { "content-type": "text/plain; charset=utf-8" })
@@ -152,14 +154,14 @@ const acquireLiveServer = ({
  * Construct a scoped health server layer.
  */
 export const makeWorkerHealthServerLive = (options: WorkerHealthServerOptions = {}) =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const config = yield* loadConfig
       const acquireServer = options.acquireServer ?? acquireLiveServer
 
       yield* Effect.acquireRelease(acquireServer(config), (server) =>
         closeServer(server).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning(
               { operation: error.operation, cause: error.cause },
               "worker-health:close-failed"

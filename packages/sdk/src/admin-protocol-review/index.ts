@@ -52,7 +52,7 @@ export const makeAdminProtocolReviewEffectResource = (
   listProtocolCandidates: (input) =>
     Effect.flatMap(client, (resolved) =>
       resolved.adminProtocolReview.listProtocolCandidates({
-        urlParams: {
+        query: {
           cursor: input?.cursor ?? undefined,
           limit: input?.limit,
         },
@@ -61,10 +61,10 @@ export const makeAdminProtocolReviewEffectResource = (
   getProtocolCandidate: ({ candidateId, observationCursor, observationLimit }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.adminProtocolReview.getProtocolCandidate({
-        path: {
+        params: {
           candidateId,
         },
-        urlParams: {
+        query: {
           observationCursor: observationCursor ?? undefined,
           observationLimit,
         },

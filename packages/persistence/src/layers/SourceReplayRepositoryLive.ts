@@ -100,17 +100,15 @@ const make = Effect.gen(function* () {
           const crossSourceDependencies = [...crossSourceAllocations, ...crossSourceDisposalMatches]
 
           if (crossSourceDependencies.length > 0) {
-            return yield* Effect.fail(
-              new SourceReplayDependencyError({
-                sourceId,
-                dependentSourceIds: Array.from(
-                  new Set(crossSourceDependencies.map((row) => row.dependentSourceId))
-                ).sort(),
-                affectedPrincipalIds: Array.from(
-                  new Set(crossSourceDependencies.map((row) => row.affectedPrincipalId))
-                ).sort(),
-              })
-            )
+            return yield* new SourceReplayDependencyError({
+              sourceId,
+              dependentSourceIds: Array.from(
+                new Set(crossSourceDependencies.map((row) => row.dependentSourceId))
+              ).sort(),
+              affectedPrincipalIds: Array.from(
+                new Set(crossSourceDependencies.map((row) => row.affectedPrincipalId))
+              ).sort(),
+            })
           }
 
           const inventoryMovementAllocations = yield* tx

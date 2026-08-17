@@ -152,7 +152,7 @@ export interface CoinbaseSyncClientShape {
 /**
  * CoinbaseSyncClient - Context tag for Coinbase sync retrieval.
  */
-export class CoinbaseSyncClient extends Context.Tag("CoinbaseSyncClient")<
+export class CoinbaseSyncClient extends Context.Service<
   CoinbaseSyncClient,
   CoinbaseSyncClientShape
->() {}
+>()("CoinbaseSyncClient") {}

@@ -12,7 +12,8 @@
  * @module AuthApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
+import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import {
   AuthProviderType,
@@ -38,14 +39,14 @@ import { InternalServerError } from "./ApiErrors.ts"
 export class AuthValidationError extends Schema.TaggedError<AuthValidationError>()(
   "AuthValidationError",
   {
-    message: Schema.String.annotations({
+    message: Schema.String.annotate({
       description: "A human-readable description of the validation error",
     }),
-    field: Schema.OptionFromNullOr(Schema.String).annotations({
+    field: Schema.OptionFromNullOr(Schema.String).annotate({
       description: "The field that failed validation, if applicable",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -54,14 +55,14 @@ export class AuthValidationError extends Schema.TaggedError<AuthValidationError>
 export class PasswordWeakError extends Schema.TaggedError<PasswordWeakError>()(
   "PasswordWeakError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Password does not meet requirements")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Password does not meet requirements"))
     ),
-    requirements: Schema.Array(Schema.String).annotations({
+    requirements: Schema.Array(Schema.String).annotate({
       description: "List of password requirements that were not met",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -70,14 +71,14 @@ export class PasswordWeakError extends Schema.TaggedError<PasswordWeakError>()(
 export class OAuthStateInvalidError extends Schema.TaggedError<OAuthStateInvalidError>()(
   "OAuthStateInvalidError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
+    message: Schema.String.pipe(
       Schema.withConstructorDefault(
-        () => "OAuth state mismatch. Please restart the authentication flow."
+        Effect.succeed("OAuth state mismatch. Please restart the authentication flow.")
       )
     ),
     provider: AuthProviderType,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -86,11 +87,13 @@ export class OAuthStateInvalidError extends Schema.TaggedError<OAuthStateInvalid
 export class AuthUnauthorizedError extends Schema.TaggedError<AuthUnauthorizedError>()(
   "AuthUnauthorizedError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Invalid credentials or authentication required")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(
+        Effect.succeed("Invalid credentials or authentication required")
+      )
     ),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {}
 
 /**
@@ -100,11 +103,11 @@ export class EmailVerificationRequiredError extends Schema.TaggedError<EmailVeri
   "EmailVerificationRequiredError",
   {
     email: Email,
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Email verification is required before login")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Email verification is required before login"))
     ),
   },
-  HttpApiSchema.annotations({ status: 403 })
+  { httpApiStatus: 403 }
 ) {}
 
 /**
@@ -113,13 +116,13 @@ export class EmailVerificationRequiredError extends Schema.TaggedError<EmailVeri
 export class EmailVerificationFlowMissingError extends Schema.TaggedError<EmailVerificationFlowMissingError>()(
   "EmailVerificationFlowMissingError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
+    message: Schema.String.pipe(
       Schema.withConstructorDefault(
-        () => "Verification session is missing or expired. Start sign-up or login again."
+        Effect.succeed("Verification session is missing or expired. Start sign-up or login again.")
       )
     ),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -128,11 +131,11 @@ export class EmailVerificationFlowMissingError extends Schema.TaggedError<EmailV
 export class EmailVerificationCodeInvalidError extends Schema.TaggedError<EmailVerificationCodeInvalidError>()(
   "EmailVerificationCodeInvalidError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Verification code is invalid")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Verification code is invalid"))
     ),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -141,11 +144,11 @@ export class EmailVerificationCodeInvalidError extends Schema.TaggedError<EmailV
 export class EmailVerificationCodeExpiredError extends Schema.TaggedError<EmailVerificationCodeExpiredError>()(
   "EmailVerificationCodeExpiredError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Verification code has expired")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Verification code has expired"))
     ),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -155,11 +158,11 @@ export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
   "ProviderAuthError",
   {
     provider: AuthProviderType,
-    reason: Schema.String.annotations({
+    reason: Schema.String.annotate({
       description: "A description of why the authentication failed",
     }),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {
   override get message(): string {
     return `Authentication with ${this.provider} failed: ${this.reason}`
@@ -172,11 +175,11 @@ export class ProviderAuthError extends Schema.TaggedError<ProviderAuthError>()(
 export class SessionInvalidError extends Schema.TaggedError<SessionInvalidError>()(
   "SessionInvalidError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Session is invalid or expired")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Session is invalid or expired"))
     ),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {}
 
 /**
@@ -186,11 +189,13 @@ export class ProviderNotFoundError extends Schema.TaggedError<ProviderNotFoundEr
   "ProviderNotFoundError",
   {
     provider: AuthProviderType,
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Authentication provider not found or not enabled")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(
+        Effect.succeed("Authentication provider not found or not enabled")
+      )
     ),
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 /**
@@ -199,11 +204,9 @@ export class ProviderNotFoundError extends Schema.TaggedError<ProviderNotFoundEr
 export class AuthUserNotFoundError extends Schema.TaggedError<AuthUserNotFoundError>()(
   "AuthUserNotFoundError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "User not found")
-    ),
+    message: Schema.String.pipe(Schema.withConstructorDefault(Effect.succeed("User not found"))),
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 /**
@@ -213,11 +216,11 @@ export class IdentityNotFoundError extends Schema.TaggedError<IdentityNotFoundEr
   "IdentityNotFoundError",
   {
     identityId: UserIdentityId,
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Identity not found")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Identity not found"))
     ),
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 /**
@@ -227,11 +230,11 @@ export class UserExistsError extends Schema.TaggedError<UserExistsError>()(
   "UserExistsError",
   {
     email: Email,
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "A user with this email already exists")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("A user with this email already exists"))
     ),
   },
-  HttpApiSchema.annotations({ status: 409 })
+  { httpApiStatus: 409 }
 ) {}
 
 /**
@@ -241,11 +244,13 @@ export class IdentityLinkedError extends Schema.TaggedError<IdentityLinkedError>
   "IdentityLinkedError",
   {
     provider: AuthProviderType,
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "This identity is already linked to another account")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(
+        Effect.succeed("This identity is already linked to another account")
+      )
     ),
   },
-  HttpApiSchema.annotations({ status: 409 })
+  { httpApiStatus: 409 }
 ) {}
 
 /**
@@ -254,13 +259,15 @@ export class IdentityLinkedError extends Schema.TaggedError<IdentityLinkedError>
 export class CannotUnlinkLastIdentityError extends Schema.TaggedError<CannotUnlinkLastIdentityError>()(
   "CannotUnlinkLastIdentityError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
+    message: Schema.String.pipe(
       Schema.withConstructorDefault(
-        () => "Cannot unlink the last identity. User must have at least one linked provider."
+        Effect.succeed(
+          "Cannot unlink the last identity. User must have at least one linked provider."
+        )
       )
     ),
   },
-  HttpApiSchema.annotations({ status: 409 })
+  { httpApiStatus: 409 }
 ) {}
 
 // =============================================================================
@@ -272,16 +279,16 @@ export class CannotUnlinkLastIdentityError extends Schema.TaggedError<CannotUnli
  */
 export class ProviderMetadata extends Schema.Class<ProviderMetadata>("ProviderMetadata")({
   type: AuthProviderType,
-  name: Schema.String.annotations({
+  name: Schema.String.annotate({
     description: "Display name for the provider",
   }),
-  supportsRegistration: Schema.Boolean.annotations({
+  supportsRegistration: Schema.Boolean.annotate({
     description: "Whether this provider supports user registration",
   }),
-  supportsPasswordLogin: Schema.Boolean.annotations({
+  supportsPasswordLogin: Schema.Boolean.annotate({
     description: "Whether this provider uses password-based authentication",
   }),
-  oauthEnabled: Schema.Boolean.annotations({
+  oauthEnabled: Schema.Boolean.annotate({
     description: "Whether this provider uses OAuth/SAML flow",
   }),
 }) {}
@@ -298,14 +305,11 @@ export class ProvidersResponse extends Schema.Class<ProvidersResponse>("Provider
  */
 export class RegisterRequest extends Schema.Class<RegisterRequest>("RegisterRequest")({
   email: Email,
-  password: Schema.String.pipe(
-    Schema.minLength(8),
-    Schema.annotations({
-      description: "User's password (min 8 characters)",
-      examples: ["kNmGP3sW_ygVLdcNVbxU"],
-    })
-  ),
-  displayName: Schema.optional(Schema.NonEmptyTrimmedString).annotations({
+  password: Schema.String.check(Schema.isMinLength(8)).annotate({
+    description: "User's password (min 8 characters)",
+    examples: ["kNmGP3sW_ygVLdcNVbxU"],
+  }),
+  displayName: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     description: "User's display name",
     examples: ["Max Mustermann"],
   }),
@@ -318,7 +322,7 @@ export class VerificationFlowResponse extends Schema.Class<VerificationFlowRespo
   "VerificationFlowResponse"
 )({
   email: Email,
-  redirectTo: Schema.String.annotations({
+  redirectTo: Schema.String.annotate({
     description: "Frontend route to continue the email verification flow",
     examples: ["/verify-email"],
   }),
@@ -335,7 +339,7 @@ export class VerifyEmailRequest extends Schema.Class<VerifyEmailRequest>("Verify
  * VerifyEmailResponse - Response after successful email verification
  */
 export class VerifyEmailResponse extends Schema.Class<VerifyEmailResponse>("VerifyEmailResponse")({
-  redirectTo: Schema.String.annotations({
+  redirectTo: Schema.String.annotate({
     description: "Frontend route to navigate to after verification succeeds",
     examples: ["/home"],
   }),
@@ -348,7 +352,7 @@ export class LocalLoginCredentials extends Schema.Class<LocalLoginCredentials>(
   "LocalLoginCredentials"
 )({
   email: Email,
-  password: Schema.String.annotations({
+  password: Schema.String.annotate({
     description: "User's password",
   }),
 }) {}
@@ -359,10 +363,10 @@ export class LocalLoginCredentials extends Schema.Class<LocalLoginCredentials>(
 export class OAuthLoginCredentials extends Schema.Class<OAuthLoginCredentials>(
   "OAuthLoginCredentials"
 )({
-  code: Schema.String.annotations({
+  code: Schema.String.annotate({
     description: "Authorization code from OAuth provider",
   }),
-  state: Schema.String.annotations({
+  state: Schema.String.annotate({
     description: "State parameter for CSRF validation",
   }),
 }) {}
@@ -374,7 +378,7 @@ export class OAuthLoginCredentials extends Schema.Class<OAuthLoginCredentials>(
  * - local: LocalLoginCredentials (email/password)
  * - oauth providers: OAuthLoginCredentials (code/state)
  */
-export const LoginRequest = Schema.Union(
+export const LoginRequest = Schema.Union([
   Schema.Struct({
     provider: Schema.Literal("local"),
     credentials: LocalLoginCredentials,
@@ -382,8 +386,8 @@ export const LoginRequest = Schema.Union(
   Schema.Struct({
     provider: OAuthProviderType,
     credentials: OAuthLoginCredentials,
-  })
-).annotations({
+  }),
+]).annotate({
   identifier: "LoginRequest",
   title: "Login Request",
   description:
@@ -396,14 +400,14 @@ export type LoginRequest = typeof LoginRequest.Type
  * LoginResponse - Successful login response
  */
 export class LoginResponse extends Schema.Class<LoginResponse>("LoginResponse")({
-  token: SessionId.annotations({
+  token: SessionId.annotate({
     description: "Session token to use for authenticated requests",
   }),
   user: AuthUser,
-  provider: AuthProviderType.annotations({
+  provider: AuthProviderType.annotate({
     description: "The provider used for authentication",
   }),
-  expiresAt: Schema.DateTimeUtc.annotations({
+  expiresAt: Schema.DateTimeUtc.annotate({
     description: "When the session expires",
   }),
 }) {}
@@ -413,13 +417,13 @@ export class LoginResponse extends Schema.Class<LoginResponse>("LoginResponse")(
  */
 export const AuthUserResponseUser = Schema.Struct({
   ...AuthUser.fields,
-  createdAt: Schema.DateTimeUtc.annotations({
+  createdAt: Schema.DateTimeUtc.annotate({
     description: "When the user account was created, encoded as an ISO 8601 string",
   }),
-  updatedAt: Schema.DateTimeUtc.annotations({
+  updatedAt: Schema.DateTimeUtc.annotate({
     description: "When the user account was last updated, encoded as an ISO 8601 string",
   }),
-}).annotations({
+}).annotate({
   identifier: "AuthUserResponseUser",
   title: "Auth User Response User",
 })
@@ -428,13 +432,13 @@ export type AuthUserResponseUser = typeof AuthUserResponseUser.Type
 
 export const AuthUserResponseIdentity = Schema.Struct({
   ...UserIdentity.fields,
-  providerData: Schema.NullOr(ProviderData).annotations({
+  providerData: Schema.NullOr(ProviderData).annotate({
     description: "Optional JSON data from the auth provider",
   }),
-  createdAt: Schema.DateTimeUtc.annotations({
+  createdAt: Schema.DateTimeUtc.annotate({
     description: "When this identity was linked, encoded as an ISO 8601 string",
   }),
-}).annotations({
+}).annotate({
   identifier: "AuthUserResponseIdentity",
   title: "Auth User Response Identity",
 })
@@ -443,10 +447,10 @@ export type AuthUserResponseIdentity = typeof AuthUserResponseIdentity.Type
 
 export const AuthUserResponse = Schema.Struct({
   user: AuthUserResponseUser,
-  identities: Schema.Array(AuthUserResponseIdentity).annotations({
+  identities: Schema.Array(AuthUserResponseIdentity).annotate({
     description: "All linked authentication provider identities",
   }),
-}).annotations({
+}).annotate({
   identifier: "AuthUserResponse",
   title: "Auth User Response",
   description: "Response containing user details with linked identities",
@@ -458,10 +462,10 @@ export type AuthUserResponse = typeof AuthUserResponse.Type
  * RefreshResponse - Response from session refresh
  */
 export class RefreshResponse extends Schema.Class<RefreshResponse>("RefreshResponse")({
-  token: SessionId.annotations({
+  token: SessionId.annotate({
     description: "New session token",
   }),
-  expiresAt: Schema.DateTimeUtc.annotations({
+  expiresAt: Schema.DateTimeUtc.annotate({
     description: "When the new session expires",
   }),
 }) {}
@@ -472,7 +476,7 @@ export class RefreshResponse extends Schema.Class<RefreshResponse>("RefreshRespo
 export class UpdateProfileRequest extends Schema.Class<UpdateProfileRequest>(
   "UpdateProfileRequest"
 )({
-  displayName: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  displayName: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     description: "The user's display name (optional - only provided fields are updated)",
   }),
 }) {}
@@ -481,16 +485,16 @@ export class UpdateProfileRequest extends Schema.Class<UpdateProfileRequest>(
  * OAuthCallbackParams - Query parameters for OAuth callback
  */
 export const OAuthCallbackParams = Schema.Struct({
-  code: Schema.String.annotations({
+  code: Schema.String.annotate({
     description: "Authorization code from OAuth provider",
   }),
-  state: Schema.String.annotations({
+  state: Schema.String.annotate({
     description: "State parameter for CSRF validation",
   }),
-  error: Schema.optional(Schema.String).annotations({
+  error: Schema.optional(Schema.String).annotate({
     description: "Error code if authorization failed",
   }),
-  error_description: Schema.optional(Schema.String).annotations({
+  error_description: Schema.optional(Schema.String).annotate({
     description: "Human-readable error description",
   }),
 })
@@ -504,7 +508,7 @@ export type OAuthCallbackParams = typeof OAuthCallbackParams.Type
  * OAuthAuthorizeParams - Query parameters for browser-based OAuth authorize flows
  */
 export const OAuthAuthorizeParams = Schema.Struct({
-  redirectTo: Schema.optional(Schema.String).annotations({
+  redirectTo: Schema.optional(Schema.String).annotate({
     description:
       "Optional frontend-relative path to redirect to after browser-based OAuth completion",
   }),
@@ -521,10 +525,10 @@ export type OAuthAuthorizeParams = typeof OAuthAuthorizeParams.Type
 export class AuthorizeRedirectResponse extends Schema.Class<AuthorizeRedirectResponse>(
   "AuthorizeRedirectResponse"
 )({
-  redirectUrl: Schema.String.annotations({
+  redirectUrl: Schema.String.annotate({
     description: "URL to redirect the user to for OAuth authorization",
   }),
-  state: Schema.String.annotations({
+  state: Schema.String.annotate({
     description: "State parameter for CSRF validation",
   }),
 }) {}
@@ -535,10 +539,10 @@ export class AuthorizeRedirectResponse extends Schema.Class<AuthorizeRedirectRes
 export class LinkInitiateResponse extends Schema.Class<LinkInitiateResponse>(
   "LinkInitiateResponse"
 )({
-  redirectUrl: Schema.String.annotations({
+  redirectUrl: Schema.String.annotate({
     description: "URL to redirect the user to for OAuth authorization",
   }),
-  state: Schema.String.annotations({
+  state: Schema.String.annotate({
     description: "State parameter for CSRF validation",
   }),
 }) {}
@@ -546,7 +550,7 @@ export class LinkInitiateResponse extends Schema.Class<LinkInitiateResponse>(
 /**
  * OAuthSessionStatus - Status values for pollable OAuth flow
  */
-export const OAuthSessionStatus = Schema.Literal("pending", "completed", "failed", "expired")
+export const OAuthSessionStatus = Schema.Literals(["pending", "completed", "failed", "expired"])
 
 /**
  * OAuthSessionResponse - Pollable OAuth session resource
@@ -571,156 +575,149 @@ export class OAuthSessionResponse extends Schema.Class<OAuthSessionResponse>(
 /**
  * GET /auth/providers - List enabled authentication providers
  */
-const getProviders = HttpApiEndpoint.get("getProviders", "/providers")
-  .addSuccess(ProvidersResponse)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List authentication providers",
-      description: "Returns a list of enabled authentication providers with their metadata",
-    })
-  )
+const getProviders = HttpApiEndpoint.get("getProviders", "/providers", {
+  success: ProvidersResponse,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "List authentication providers",
+    description: "Returns a list of enabled authentication providers with their metadata",
+  })
+)
 
 /**
  * POST /auth/register - Register a new user (local provider only)
  */
-const register = HttpApiEndpoint.post("register", "/register")
-  .setPayload(RegisterRequest)
-  .addSuccess(VerificationFlowResponse, { status: 201 })
-  .addError(AuthValidationError)
-  .addError(PasswordWeakError)
-  .addError(UserExistsError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Register new user",
-      description:
-        "Create a new local user account, start the email verification flow, and route the user to verification.",
-    })
-  )
+const register = HttpApiEndpoint.post("register", "/register", {
+  payload: Schema.Struct(RegisterRequest.fields),
+  success: VerificationFlowResponse.pipe(HttpApiSchema.status(201)),
+  error: [AuthValidationError, PasswordWeakError, UserExistsError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Register new user",
+    description:
+      "Create a new local user account, start the email verification flow, and route the user to verification.",
+  })
+)
 
 /**
  * POST /auth/verify-email - Verify a local email and create the session
  */
-const verifyEmail = HttpApiEndpoint.post("verifyEmail", "/verify-email")
-  .setPayload(VerifyEmailRequest)
-  .addSuccess(VerifyEmailResponse)
-  .addError(EmailVerificationFlowMissingError)
-  .addError(EmailVerificationCodeInvalidError)
-  .addError(EmailVerificationCodeExpiredError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Verify email",
-      description:
-        "Validate the pending verification code, mark the local user as verified, and create the session.",
-    })
-  )
+const verifyEmail = HttpApiEndpoint.post("verifyEmail", "/verify-email", {
+  payload: Schema.Struct(VerifyEmailRequest.fields),
+  success: VerifyEmailResponse,
+  error: [
+    EmailVerificationFlowMissingError,
+    EmailVerificationCodeInvalidError,
+    EmailVerificationCodeExpiredError,
+    InternalServerError,
+  ],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Verify email",
+    description:
+      "Validate the pending verification code, mark the local user as verified, and create the session.",
+  })
+)
 
 /**
  * POST /auth/resend-verification - Replace the pending verification code
  */
-const resendVerification = HttpApiEndpoint.post("resendVerification", "/resend-verification")
-  .addSuccess(VerificationFlowResponse)
-  .addError(EmailVerificationFlowMissingError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Resend verification code",
-      description:
-        "Replace the pending local email verification code and continue the verification flow.",
-    })
-  )
+const resendVerification = HttpApiEndpoint.post("resendVerification", "/resend-verification", {
+  success: VerificationFlowResponse,
+  error: [EmailVerificationFlowMissingError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Resend verification code",
+    description:
+      "Replace the pending local email verification code and continue the verification flow.",
+  })
+)
 
 /**
  * POST /auth/login - Login with any provider
  */
-const login = HttpApiEndpoint.post("login", "/login")
-  .setPayload(LoginRequest)
-  .addSuccess(LoginResponse)
-  .addError(AuthValidationError)
-  .addError(AuthUnauthorizedError)
-  .addError(EmailVerificationRequiredError)
-  .addError(ProviderAuthError)
-  .addError(ProviderNotFoundError)
-  .addError(OAuthStateInvalidError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Login",
-      description:
-        "Authenticate with any enabled provider. For local provider, provide email/password. For OAuth providers, provide authorization code and state.",
-    })
-  )
+const login = HttpApiEndpoint.post("login", "/login", {
+  payload: LoginRequest,
+  success: LoginResponse,
+  error: [
+    AuthValidationError,
+    AuthUnauthorizedError,
+    EmailVerificationRequiredError,
+    ProviderAuthError,
+    ProviderNotFoundError,
+    OAuthStateInvalidError,
+    InternalServerError,
+  ],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Login",
+    description:
+      "Authenticate with any enabled provider. For local provider, provide email/password. For OAuth providers, provide authorization code and state.",
+  })
+)
 
 /**
  * GET /auth/authorize/:provider - Get OAuth authorization URL
  */
-const authorize = HttpApiEndpoint.get("authorize", "/authorize/:provider")
-  .setPath(Schema.Struct({ provider: AuthProviderType }))
-  .setUrlParams(OAuthAuthorizeParams)
-  .addSuccess(AuthorizeRedirectResponse)
-  .addError(ProviderNotFoundError)
-  .addError(ProviderAuthError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get authorization URL",
-      description:
-        "Get the OAuth/SAML authorization URL for the specified provider. Redirect the user to this URL to initiate the OAuth flow.",
-    })
-  )
+const authorize = HttpApiEndpoint.get("authorize", "/authorize/:provider", {
+  params: Schema.Struct({ provider: AuthProviderType }),
+  query: OAuthAuthorizeParams,
+  success: AuthorizeRedirectResponse,
+  error: [ProviderNotFoundError, ProviderAuthError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get authorization URL",
+    description:
+      "Get the OAuth/SAML authorization URL for the specified provider. Redirect the user to this URL to initiate the OAuth flow.",
+  })
+)
 
 /**
  * GET /auth/callback/:provider - Handle OAuth callback
  */
-const callback = HttpApiEndpoint.get("callback", "/callback/:provider")
-  .setPath(Schema.Struct({ provider: AuthProviderType }))
-  .setUrlParams(OAuthCallbackParams)
-  .addSuccess(LoginResponse)
-  .addError(ProviderNotFoundError)
-  .addError(ProviderAuthError)
-  .addError(OAuthStateInvalidError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "OAuth callback",
-      description:
-        "Handle the OAuth/SAML callback from the provider. Exchanges the authorization code for tokens and creates a session.",
-    })
-  )
+const callback = HttpApiEndpoint.get("callback", "/callback/:provider", {
+  params: Schema.Struct({ provider: AuthProviderType }),
+  query: OAuthCallbackParams,
+  success: LoginResponse,
+  error: [ProviderNotFoundError, ProviderAuthError, OAuthStateInvalidError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "OAuth callback",
+    description:
+      "Handle the OAuth/SAML callback from the provider. Exchanges the authorization code for tokens and creates a session.",
+  })
+)
 
 /**
  * GET /auth/oauth/:id - Poll OAuth flow status
  */
-const getOAuthSession = HttpApiEndpoint.get("getOAuthSession", "/oauth/:id")
-  .setPath(
-    Schema.Struct({
-      id: Schema.String,
-    })
-  )
-  .addSuccess(OAuthSessionResponse)
-  .addError(ProviderAuthError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get OAuth session",
-      description: "Returns current status and completion details for an OAuth session.",
-    })
-  )
+const getOAuthSession = HttpApiEndpoint.get("getOAuthSession", "/oauth/:id", {
+  params: Schema.Struct({
+    id: Schema.String,
+  }),
+  success: OAuthSessionResponse,
+  error: ProviderAuthError,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get OAuth session",
+    description: "Returns current status and completion details for an OAuth session.",
+  })
+)
 
 /**
  * GET /cdp/callback - Handle Coinbase OAuth callback (legacy client compatibility)
  */
-const cdpCallback = HttpApiEndpoint.get("cdpCallback", "/callback")
-  .setUrlParams(OAuthCallbackParams)
-  .addSuccess(LoginResponse)
-  .addError(ProviderNotFoundError)
-  .addError(ProviderAuthError)
-  .addError(OAuthStateInvalidError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Coinbase OAuth callback",
-      description:
-        "Handle Coinbase OAuth callback using the legacy /cdp/callback path for existing OAuth clients.",
-    })
-  )
+const cdpCallback = HttpApiEndpoint.get("cdpCallback", "/callback", {
+  query: OAuthCallbackParams,
+  success: LoginResponse,
+  error: [ProviderNotFoundError, ProviderAuthError, OAuthStateInvalidError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Coinbase OAuth callback",
+    description:
+      "Handle Coinbase OAuth callback using the legacy /cdp/callback path for existing OAuth clients.",
+  })
+)
 
 // =============================================================================
 // Protected API Endpoints
@@ -730,7 +727,7 @@ const cdpCallback = HttpApiEndpoint.get("cdpCallback", "/callback")
  * LogoutResponse - Successful logout response
  */
 export class LogoutResponse extends Schema.Class<LogoutResponse>("LogoutResponse")({
-  success: Schema.Boolean.annotations({
+  success: Schema.Boolean.annotate({
     description: "Whether the logout was successful",
   }),
 }) {}
@@ -738,108 +735,101 @@ export class LogoutResponse extends Schema.Class<LogoutResponse>("LogoutResponse
 /**
  * POST /auth/logout - Logout and invalidate session
  */
-const logout = HttpApiEndpoint.post("logout", "/logout")
-  .addSuccess(LogoutResponse)
-  .addError(SessionInvalidError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Logout",
-      description: "Invalidate the current session and logout the user",
-    })
-  )
+const logout = HttpApiEndpoint.post("logout", "/logout", {
+  success: LogoutResponse,
+  error: SessionInvalidError,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Logout",
+    description: "Invalidate the current session and logout the user",
+  })
+)
 
 /**
  * GET /auth/me - Get current user details
  */
-const me = HttpApiEndpoint.get("me", "/me")
-  .addSuccess(AuthUserResponse)
-  .addError(AuthUserNotFoundError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get current user",
-      description: "Get the authenticated user's details including all linked provider identities",
-    })
-  )
+const me = HttpApiEndpoint.get("me", "/me", {
+  success: AuthUserResponse,
+  error: AuthUserNotFoundError,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get current user",
+    description: "Get the authenticated user's details including all linked provider identities",
+  })
+)
 
 /**
  * PUT /auth/me - Update current user profile
  */
-const updateMe = HttpApiEndpoint.put("updateMe", "/me")
-  .setPayload(UpdateProfileRequest)
-  .addSuccess(AuthUserResponse)
-  .addError(AuthValidationError)
-  .addError(AuthUserNotFoundError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Update current user profile",
-      description: "Update the authenticated user's profile information (display name)",
-    })
-  )
+const updateMe = HttpApiEndpoint.put("updateMe", "/me", {
+  payload: Schema.Struct(UpdateProfileRequest.fields),
+  success: AuthUserResponse,
+  error: [AuthValidationError, AuthUserNotFoundError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Update current user profile",
+    description: "Update the authenticated user's profile information (display name)",
+  })
+)
 
 /**
  * POST /auth/refresh - Refresh session token
  */
-const refresh = HttpApiEndpoint.post("refresh", "/refresh")
-  .addSuccess(RefreshResponse)
-  .addError(SessionInvalidError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Refresh session",
-      description: "Refresh the current session and get a new token with extended expiration",
-    })
-  )
+const refresh = HttpApiEndpoint.post("refresh", "/refresh", {
+  success: RefreshResponse,
+  error: SessionInvalidError,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Refresh session",
+    description: "Refresh the current session and get a new token with extended expiration",
+  })
+)
 
 /**
  * POST /auth/link/:provider - Initiate linking additional provider
  */
-const linkProvider = HttpApiEndpoint.post("linkProvider", "/link/:provider")
-  .setPath(Schema.Struct({ provider: AuthProviderType }))
-  .addSuccess(LinkInitiateResponse)
-  .addError(ProviderNotFoundError)
-  .addError(ProviderAuthError)
-  .addError(IdentityLinkedError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Link provider",
-      description:
-        "Initiate linking an additional authentication provider to the current user account. Returns an OAuth authorization URL.",
-    })
-  )
+const linkProvider = HttpApiEndpoint.post("linkProvider", "/link/:provider", {
+  params: Schema.Struct({ provider: AuthProviderType }),
+  success: LinkInitiateResponse,
+  error: [ProviderNotFoundError, ProviderAuthError, IdentityLinkedError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Link provider",
+    description:
+      "Initiate linking an additional authentication provider to the current user account. Returns an OAuth authorization URL.",
+  })
+)
 
 /**
  * GET /auth/link/callback/:provider - Complete provider linking
  */
-const linkCallback = HttpApiEndpoint.get("linkCallback", "/link/callback/:provider")
-  .setPath(Schema.Struct({ provider: AuthProviderType }))
-  .setUrlParams(OAuthCallbackParams)
-  .addSuccess(AuthUserResponse)
-  .addError(ProviderNotFoundError)
-  .addError(ProviderAuthError)
-  .addError(OAuthStateInvalidError)
-  .addError(IdentityLinkedError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Link provider callback",
-      description:
-        "Complete the provider linking flow after OAuth authorization. Links the provider identity to the current user account.",
-    })
-  )
+const linkCallback = HttpApiEndpoint.get("linkCallback", "/link/callback/:provider", {
+  params: Schema.Struct({ provider: AuthProviderType }),
+  query: OAuthCallbackParams,
+  success: AuthUserResponse,
+  error: [ProviderNotFoundError, ProviderAuthError, OAuthStateInvalidError, IdentityLinkedError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Link provider callback",
+    description:
+      "Complete the provider linking flow after OAuth authorization. Links the provider identity to the current user account.",
+  })
+)
 
 /**
  * DELETE /auth/identities/:identityId - Unlink provider from account
  */
-const unlinkIdentity = HttpApiEndpoint.del("unlinkIdentity", "/identities/:identityId")
-  .setPath(Schema.Struct({ identityId: UserIdentityId }))
-  .addSuccess(HttpApiSchema.NoContent)
-  .addError(IdentityNotFoundError)
-  .addError(CannotUnlinkLastIdentityError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Unlink identity",
-      description:
-        "Remove a linked provider identity from the current user account. Users must maintain at least one linked identity.",
-    })
-  )
+const unlinkIdentity = HttpApiEndpoint.delete("unlinkIdentity", "/identities/:identityId", {
+  params: Schema.Struct({ identityId: UserIdentityId }),
+  success: HttpApiSchema.NoContent,
+  error: [IdentityNotFoundError, CannotUnlinkLastIdentityError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Unlink identity",
+    description:
+      "Remove a linked provider identity from the current user account. Users must maintain at least one linked identity.",
+  })
+)
 
 /**
  * ChangePasswordRequest - Request body for changing password
@@ -847,15 +837,12 @@ const unlinkIdentity = HttpApiEndpoint.del("unlinkIdentity", "/identities/:ident
 export class ChangePasswordRequest extends Schema.Class<ChangePasswordRequest>(
   "ChangePasswordRequest"
 )({
-  currentPassword: Schema.String.annotations({
+  currentPassword: Schema.String.annotate({
     description: "The user's current password for verification",
   }),
-  newPassword: Schema.String.pipe(
-    Schema.minLength(8),
-    Schema.annotations({
-      description: "The new password (min 8 characters)",
-    })
-  ),
+  newPassword: Schema.String.check(Schema.isMinLength(8)).annotate({
+    description: "The new password (min 8 characters)",
+  }),
 }) {}
 
 /**
@@ -864,11 +851,11 @@ export class ChangePasswordRequest extends Schema.Class<ChangePasswordRequest>(
 export class ChangePasswordError extends Schema.TaggedError<ChangePasswordError>()(
   "ChangePasswordError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
-      Schema.withConstructorDefault(() => "Current password is incorrect")
+    message: Schema.String.pipe(
+      Schema.withConstructorDefault(Effect.succeed("Current password is incorrect"))
     ),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {}
 
 /**
@@ -877,32 +864,31 @@ export class ChangePasswordError extends Schema.TaggedError<ChangePasswordError>
 export class NoLocalIdentityError extends Schema.TaggedError<NoLocalIdentityError>()(
   "NoLocalIdentityError",
   {
-    message: Schema.propertySignature(Schema.String).pipe(
+    message: Schema.String.pipe(
       Schema.withConstructorDefault(
-        () =>
+        Effect.succeed(
           "No local identity linked. Password change is only available for accounts with local authentication."
+        )
       )
     ),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
  * POST /auth/change-password - Change user's password
  */
-const changePassword = HttpApiEndpoint.post("changePassword", "/change-password")
-  .setPayload(ChangePasswordRequest)
-  .addSuccess(HttpApiSchema.NoContent)
-  .addError(ChangePasswordError)
-  .addError(NoLocalIdentityError)
-  .addError(PasswordWeakError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Change password",
-      description:
-        "Change the current user's password. Requires the current password for verification. Only available for users with local authentication.",
-    })
-  )
+const changePassword = HttpApiEndpoint.post("changePassword", "/change-password", {
+  payload: Schema.Struct(ChangePasswordRequest.fields),
+  success: HttpApiSchema.NoContent,
+  error: [ChangePasswordError, NoLocalIdentityError, PasswordWeakError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Change password",
+    description:
+      "Change the current user's password. Requires the current password for verification. Only available for users with local authentication.",
+  })
+)
 
 // =============================================================================
 // API Groups
@@ -930,7 +916,7 @@ export class AuthApi extends HttpApiGroup.make("auth")
   .add(callback)
   .add(getOAuthSession)
   .prefix("/auth")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Authentication",
       description:
@@ -964,7 +950,7 @@ export class AuthSessionApi extends HttpApiGroup.make("authSession")
   .add(changePassword)
   .middleware(AuthMiddleware)
   .prefix("/auth")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Authentication (Session)",
       description: "Protected authentication endpoints for session management and identity linking",
@@ -982,7 +968,7 @@ export class AuthSessionApi extends HttpApiGroup.make("authSession")
 export class CoinbaseCompatApi extends HttpApiGroup.make("coinbaseCompat")
   .add(cdpCallback)
   .prefix("/cdp")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Coinbase OAuth Compatibility",
       description:

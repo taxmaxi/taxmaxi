@@ -293,7 +293,7 @@ describe("SourceReplayRepositoryLive", () => {
             .returning({ id: schema.addresses.id })
 
           if (address === undefined) {
-            return yield* Effect.dieMessage("Failed to create dependent replay source address")
+            return yield* Effect.die("Failed to create dependent replay source address")
           }
 
           yield* db.insert(schema.sources).values({
@@ -351,7 +351,7 @@ describe("SourceReplayRepositoryLive", () => {
             .returning({ id: schema.transactionLegs.id })
 
           if (acquisitionLeg === undefined || dependentLeg === undefined) {
-            return yield* Effect.dieMessage("Failed to create cross-source replay legs")
+            return yield* Effect.die("Failed to create cross-source replay legs")
           }
 
           const [lot] = yield* db
@@ -369,7 +369,7 @@ describe("SourceReplayRepositoryLive", () => {
             })
             .returning({ id: schema.fifoLots.id })
           if (lot === undefined) {
-            return yield* Effect.dieMessage("Failed to create cross-source replay lot")
+            return yield* Effect.die("Failed to create cross-source replay lot")
           }
 
           if (dependencyKind === "inventory allocation") {
@@ -391,7 +391,7 @@ describe("SourceReplayRepositoryLive", () => {
               .returning({ id: schema.inventoryMovements.id })
 
             if (movement === undefined) {
-              return yield* Effect.dieMessage("Failed to create cross-source replay allocation")
+              return yield* Effect.die("Failed to create cross-source replay allocation")
             }
 
             yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -415,12 +415,12 @@ describe("SourceReplayRepositoryLive", () => {
       const replayResult = await runReplayRepository(
         Effect.flatMap(SourceReplayRepository, (repository) =>
           repository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
-        ).pipe(Effect.either)
+        ).pipe(Effect.result)
       )
 
       expect(replayResult).toMatchObject({
-        _tag: "Left",
-        left: {
+        _tag: "Failure",
+        failure: {
           _tag: "SourceReplayDependencyError",
           sourceId: TEST_SOURCE_ID,
           dependentSourceIds: [dependentSourceId],

@@ -46,7 +46,7 @@ const CoinbaseAdvancedTradeFillSchema = Schema.Struct({
   product_id: Schema.optional(Schema.String),
   order_id: Schema.optional(Schema.String),
   order_side: Schema.optional(Schema.String),
-  commission: Schema.optional(Schema.Union(Schema.String, CoinbaseMoneySchema)),
+  commission: Schema.optional(Schema.Union([Schema.String, CoinbaseMoneySchema])),
 })
 
 const CoinbaseTransactionSchema = Schema.Struct({
@@ -65,11 +65,11 @@ const CoinbaseTransactionSchema = Schema.Struct({
   advanced_trade_fill: Schema.optional(CoinbaseAdvancedTradeFillSchema),
 })
 
-const CoinbasePayloadSchema = Schema.Union(
+const CoinbasePayloadSchema = Schema.Union([
   CoinbaseTransactionSchema,
   Schema.Struct({ data: CoinbaseTransactionSchema }),
-  Schema.Struct({ transaction: CoinbaseTransactionSchema })
-)
+  Schema.Struct({ transaction: CoinbaseTransactionSchema }),
+])
 
 type CoinbaseMoney = Schema.Schema.Type<typeof CoinbaseMoneySchema>
 type CoinbaseTransaction = Schema.Schema.Type<typeof CoinbaseTransactionSchema>
@@ -118,7 +118,7 @@ const parseTimestamp = (value: string, field: string) =>
  * Parse optional timestamp fields when present.
  */
 const parseOptionalTimestamp = (value: string | undefined) =>
-  Option.match(Option.fromNullable(value), {
+  Option.match(Option.fromNullishOr(value), {
     onNone: () => Effect.succeed<Date | null>(null),
     onSome: (timestamp) => parseTimestamp(timestamp, "provider_updated_at"),
   })
@@ -166,7 +166,7 @@ const toCommissionMoney = (
 }
 
 const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
-  Option.getOrNull(Option.fromNullable(party?.address))
+  Option.getOrNull(Option.fromNullishOr(party?.address))
 
 interface CoinbaseFeeTransferBuildResult {
   readonly transfer: CoinbaseRecordNormalizationResult["feeTransfers"][number] | null
@@ -174,8 +174,8 @@ interface CoinbaseFeeTransferBuildResult {
 }
 
 const partyAccountRef = (party: CoinbaseTransaction["from"]) => {
-  const id = Option.fromNullable(party?.id)
-  const resourcePath = Option.fromNullable(party?.resource_path)
+  const id = Option.fromNullishOr(party?.id)
+  const resourcePath = Option.fromNullishOr(party?.resource_path)
   return Option.getOrNull(Option.orElse(id, () => resourcePath))
 }
 
@@ -354,7 +354,7 @@ const buildFeeTransfer = (params: {
 
     const networkName = params.transaction.network?.network_name ?? params.transaction.network?.name
     const blockchainId = Option.getOrNull(
-      Option.flatMap(Option.fromNullable(networkName), (network) =>
+      Option.flatMap(Option.fromNullishOr(networkName), (network) =>
         params.normalizeParams.resolveBlockchainId(network)
       )
     )
@@ -404,7 +404,7 @@ const buildFeeTransfer = (params: {
  */
 const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
   Effect.gen(function* () {
-    const decodedPayload = yield* Schema.decodeUnknown(CoinbasePayloadSchema)(
+    const decodedPayload = yield* Schema.decodeUnknownEffect(CoinbasePayloadSchema)(
       params.sourceRecord.payload
     ).pipe(
       Effect.mapError(
@@ -428,7 +428,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
 
     const feeTransferResults = yield* Effect.all(
       [
-        Option.fromNullable(transactionPayload.network?.transaction_fee).pipe(
+        Option.fromNullishOr(transactionPayload.network?.transaction_fee).pipe(
           Option.map((money) =>
             buildFeeTransfer({
               normalizeParams: params,

@@ -4,7 +4,7 @@
  * @module CoinGeckoClientLive
  */
 
-import { HttpClient, HttpClientRequest } from "@effect/platform"
+import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -36,8 +36,8 @@ const CoinGeckoCoin = Schema.Struct({
   symbol: Schema.String,
   name: Schema.String,
   asset_platform_id: Schema.NullOr(Schema.String),
-  platforms: Schema.Record({ key: Schema.String, value: Schema.String }),
-  detail_platforms: Schema.Record({ key: Schema.String, value: CoinGeckoDetailPlatform }),
+  platforms: Schema.Record(Schema.String, Schema.String),
+  detail_platforms: Schema.Record(Schema.String, CoinGeckoDetailPlatform),
   image: Schema.optional(
     Schema.Struct({
       thumb: Schema.String,
@@ -60,8 +60,8 @@ const COINGECKO_PUBLIC_API_BASE_URL = "https://api.coingecko.com/api/v3"
 
 const makeError = (message: string) => new CoinGeckoClientError({ message })
 
-const decodeJson = <A, I>(schema: Schema.Schema<A, I, never>, endpoint: string, payload: unknown) =>
-  Schema.decodeUnknown(schema)(payload).pipe(
+const decodeJson = <S extends Schema.Constraint>(schema: S, endpoint: string, payload: unknown) =>
+  Schema.decodeUnknownEffect(schema)(payload).pipe(
     Effect.mapError((error) =>
       makeError(`Failed to decode CoinGecko response for ${endpoint}: ${error.message}`)
     )
@@ -99,8 +99,8 @@ const make = Effect.gen(function* () {
 
       if (response.status < 200 || response.status >= 300) {
         const bodyText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
-        return yield* Effect.fail(
-          makeError(`CoinGecko request failed (${response.status}) ${endpoint}: ${bodyText}`)
+        return yield* makeError(
+          `CoinGecko request failed (${response.status}) ${endpoint}: ${bodyText}`
         )
       }
 

@@ -15,9 +15,9 @@ import { Timestamp } from "../shared/values/Timestamp.ts"
  *
  * Uses Effect's built-in UUID schema with additional branding for type safety.
  */
-export const SourceId = Schema.UUID.pipe(
+export const SourceId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("SourceId"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "SourceId",
     title: "Source ID",
     description: "A unique identifier for a workspace (UUID format)",
@@ -37,7 +37,7 @@ export const isSourceId = Schema.is(SourceId)
 /**
  * SourceableType - Family of source data we ingest from.
  */
-export const SourceableType = Schema.Literal("onchain", "cex", "dex").annotations({
+export const SourceableType = Schema.Literals(["onchain", "cex", "dex"]).annotate({
   identifier: "SourceableType",
   title: "Sourceable Type",
   description: "Source family routing for ingestion and normalization",
@@ -57,21 +57,21 @@ export const isSourceableType = Schema.is(SourceableType)
  * SourceRef - Onchain source linkage.
  */
 export class OnchainSourceRef extends Schema.TaggedClass<OnchainSourceRef>()("onchain", {
-  addressId: Schema.UUID,
+  addressId: Schema.String.check(Schema.isUUID()),
 }) {}
 
 /**
  * SourceRef - Centralized exchange source linkage.
  */
 export class CexSourceRef extends Schema.TaggedClass<CexSourceRef>()("cex", {
-  cexAccountId: Schema.UUID,
+  cexAccountId: Schema.String.check(Schema.isUUID()),
 }) {}
 
 /**
  * SourceRef - Decentralized exchange source linkage.
  */
 export class DexSourceRef extends Schema.TaggedClass<DexSourceRef>()("dex", {
-  addressId: Schema.UUID,
+  addressId: Schema.String.check(Schema.isUUID()),
 }) {}
 
 /**
@@ -82,7 +82,7 @@ export type SourceRef = OnchainSourceRef | CexSourceRef | DexSourceRef
 /**
  * Schema for SourceRef discriminated union.
  */
-export const SourceRefSchema = Schema.Union(OnchainSourceRef, CexSourceRef, DexSourceRef)
+export const SourceRefSchema = Schema.Union([OnchainSourceRef, CexSourceRef, DexSourceRef])
 
 /**
  * Type guard for SourceRef using Schema.is.
@@ -109,7 +109,7 @@ export class Source extends Schema.Class<Source>("Source")({
   /**
    * Display name of the source
    */
-  name: Schema.NonEmptyTrimmedString.annotations({
+  name: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Source Name",
     description: "The display name of the source",
   }),
@@ -117,7 +117,7 @@ export class Source extends Schema.Class<Source>("Source")({
   /**
    * Concrete provider key (for example: helius-solana, etherscan, coinbase, bitcoin-rpc)
    */
-  providerKey: Schema.NullOr(Schema.NonEmptyTrimmedString).annotations({
+  providerKey: Schema.NullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Provider Key",
     description: "Concrete key of the provider",
   }),

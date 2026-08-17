@@ -19,7 +19,9 @@ describe("WalletInput", () => {
 
   it("parses a crypto address with inferred chain type", async () => {
     const parsed = await Effect.runPromise(
-      Schema.decodeUnknown(ValidatedCryptoAddress)("0x742d35Cc6634C0532925a3b844Bc454e4438f44e")
+      Schema.decodeUnknownEffect(ValidatedCryptoAddress)(
+        "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+      )
     )
 
     expect(parsed).toEqual({
@@ -28,13 +30,13 @@ describe("WalletInput", () => {
     })
     expect(parseCryptoAddress("not-an-address")).toBeNull()
     await expect(
-      Effect.runPromise(Schema.decodeUnknown(ValidatedCryptoAddress)("not-an-address"))
+      Effect.runPromise(Schema.decodeUnknownEffect(ValidatedCryptoAddress)("not-an-address"))
     ).rejects.toThrow("Invalid crypto address.")
   })
 
   it("parses ENS separately from direct addresses", async () => {
     const parsed = await Effect.runPromise(
-      Schema.decodeUnknown(ValidatedAddressOrEns)("Vitalik.eth")
+      Schema.decodeUnknownEffect(ValidatedAddressOrEns)("Vitalik.eth")
     )
 
     expect(parsed).toEqual({
@@ -47,7 +49,7 @@ describe("WalletInput", () => {
       chainType: "evm",
     })
     await expect(
-      Effect.runPromise(Schema.decodeUnknown(ValidatedAddressOrEns)("not-an-address"))
+      Effect.runPromise(Schema.decodeUnknownEffect(ValidatedAddressOrEns)("not-an-address"))
     ).rejects.toThrow("Invalid input. Must be a valid crypto address or ENS name.")
   })
 })

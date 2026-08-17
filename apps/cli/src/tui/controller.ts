@@ -5,9 +5,8 @@
  * with a tagged result instead of rejecting, so screens can render
  * loading/error/empty states without try/catch.
  */
-import { FileSystem } from "@effect/platform"
-import { NodeContext } from "@effect/platform-node"
-import { Effect, ManagedRuntime } from "effect"
+import { NodeServices } from "@effect/platform-node"
+import { Effect, FileSystem, ManagedRuntime } from "effect"
 import * as Option from "effect/Option"
 import type {
   ProtocolCandidateReviewDetail,
@@ -54,7 +53,7 @@ import {
 } from "../session.ts"
 import { nowIsoString } from "../time.ts"
 
-const runtime = ManagedRuntime.make(NodeContext.layer)
+const runtime = ManagedRuntime.make(NodeServices.layer)
 
 export type SessionState =
   | { readonly _tag: "missing" }
@@ -151,7 +150,7 @@ export const loadSessionState = (): Promise<SessionState> =>
 
       return { _tag: "valid", session: hydratedSession } as const
     }).pipe(
-      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+      Effect.catch((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     )
   )
 
@@ -162,7 +161,7 @@ export const fetchSources = (session: CliSession): Promise<SourcesResult> =>
   runtime.runPromise(
     listSources({ apiUrl: session.apiUrl, sessionToken: session.sessionToken }).pipe(
       Effect.map((sourceList) => ({ _tag: "ok", sources: sourceList.sources }) as const),
-      Effect.catchAll((error) => Effect.succeed(toControllerError(error)))
+      Effect.catch((error) => Effect.succeed(toControllerError(error)))
     )
   )
 
@@ -177,7 +176,7 @@ const runReport = <A>(
   runtime.runPromise(
     effect.pipe(
       Effect.map((data) => ({ _tag: "ok", data }) as const),
-      Effect.catchAll((error) => Effect.succeed(toControllerError(error)))
+      Effect.catch((error) => Effect.succeed(toControllerError(error)))
     )
   )
 
@@ -289,7 +288,7 @@ export const fetchProtocolCandidates = (
         })
       ),
       Effect.map((data) => ({ _tag: "ok", data }) as const),
-      Effect.catchAll((error) =>
+      Effect.catch((error) =>
         Effect.succeed(
           error.message.startsWith("Admin protocol review")
             ? ({ _tag: "blocked", message: error.message } as const)
@@ -300,7 +299,7 @@ export const fetchProtocolCandidates = (
   )
 
 export const clearLocalSession = (): Promise<void> =>
-  runtime.runPromise(deleteSession().pipe(Effect.catchAll(() => Effect.void)))
+  runtime.runPromise(deleteSession().pipe(Effect.catch(() => Effect.void)))
 
 /**
  * Loads a protocol candidate detail view and the transaction types needed for mapping review.
@@ -358,7 +357,7 @@ export const startCoinbaseConnect = (options?: {
         browserOpened,
       } as const
     }).pipe(
-      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+      Effect.catch((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     ),
     options?.signal !== undefined ? { signal: options.signal } : undefined
   )
@@ -395,7 +394,7 @@ export const completeCoinbaseConnect = (
       yield* saveSession(session)
       return { _tag: "connected", session } as const
     }).pipe(
-      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+      Effect.catch((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     ),
     options?.signal !== undefined ? { signal: options.signal } : undefined
   )
@@ -410,11 +409,11 @@ export const logout = (session: CliSession): Promise<LogoutResult> =>
       yield* logoutSession({
         apiUrl: session.apiUrl,
         sessionToken: session.sessionToken,
-      }).pipe(Effect.catchAll(() => Effect.void))
+      }).pipe(Effect.catch(() => Effect.void))
       yield* deleteSession()
       return { _tag: "loggedOut" } as const
     }).pipe(
-      Effect.catchAll((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
+      Effect.catch((error) => Effect.succeed({ _tag: "error", message: error.message } as const))
     )
   )
 

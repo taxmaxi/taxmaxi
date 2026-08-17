@@ -1,7 +1,7 @@
-import { FetchHttpClient, HttpApiClient } from "@effect/platform"
-import type { HttpApi } from "@effect/platform"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
+import { FetchHttpClient } from "effect/unstable/http"
+import { HttpApiClient } from "effect/unstable/httpapi"
 import {
   makeInternalAssetsEffectResource,
   makeInternalAssetsPromiseResource,
@@ -28,6 +28,7 @@ export type {
   InternalAssetsEffectResource,
   InternalAssetsPromiseResource,
   ProviderAssetReview,
+  ProviderAssetApprovalInput,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
   UnresolvedTransferReconciliation,
@@ -35,10 +36,7 @@ export type {
   UnresolvedTransferReconciliationListInput,
 } from "./assets/index.ts"
 
-export type TaxMaxiInternalEffectClient =
-  typeof TaxMaxiApi extends HttpApi.HttpApi<string, infer Groups, infer ApiError, infer _ApiContext>
-    ? HttpApiClient.Client<Groups, ApiError, never>
-    : never
+export type TaxMaxiInternalEffectClient = HttpApiClient.ForApi<typeof TaxMaxiApi>
 
 export const makeTaxMaxiInternalEffectClient = (
   options: TaxMaxiEffectClientOptions = {}

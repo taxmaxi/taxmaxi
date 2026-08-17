@@ -43,9 +43,9 @@ export class PasswordHasherConfig extends Schema.Class<PasswordHasherConfig>(
    * For argon2: time cost parameter
    */
   workFactor: Schema.Number.pipe(
-    Schema.int(),
-    Schema.between(4, 31),
-    Schema.annotations({
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isBetween({ minimum: 4, maximum: 31 })),
+    Schema.annotate({
       description: "Work factor for hashing algorithm (4-31). Higher = more secure but slower.",
     })
   ),
@@ -62,12 +62,12 @@ export class PasswordHasherConfig extends Schema.Class<PasswordHasherConfig>(
 }
 
 /**
- * PasswordHasherConfig Context.Tag for dependency injection
+ * PasswordHasherConfig Context.Service for dependency injection
  */
-export class PasswordHasherConfigTag extends Context.Tag("PasswordHasherConfig")<
+export class PasswordHasherConfigTag extends Context.Service<
   PasswordHasherConfigTag,
   PasswordHasherConfig
->() {
+>()("PasswordHasherConfig") {
   /**
    * Layer providing default production configuration
    */
@@ -118,7 +118,7 @@ export interface PasswordHasherService {
 }
 
 /**
- * PasswordHasher Context.Tag for dependency injection
+ * PasswordHasher Context.Service for dependency injection
  *
  * Usage:
  * ```typescript
@@ -133,10 +133,9 @@ export interface PasswordHasherService {
  * program.pipe(Effect.provide(BcryptPasswordHasherLive))
  * ```
  */
-export class PasswordHasher extends Context.Tag("PasswordHasher")<
-  PasswordHasher,
-  PasswordHasherService
->() {}
+export class PasswordHasher extends Context.Service<PasswordHasher, PasswordHasherService>()(
+  "PasswordHasher"
+) {}
 
 // =============================================================================
 // Bcrypt Implementation
@@ -162,16 +161,15 @@ export interface BcryptAdapter {
 }
 
 /**
- * BcryptAdapter Context.Tag for dependency injection
+ * BcryptAdapter Context.Service for dependency injection
  *
  * This tag is used to inject the actual bcrypt implementation.
  * In production, provide BcryptjsAdapter which wraps the bcryptjs package.
  * In tests, you can provide a mock implementation.
  */
-export class BcryptAdapterTag extends Context.Tag("BcryptAdapter")<
-  BcryptAdapterTag,
-  BcryptAdapter
->() {}
+export class BcryptAdapterTag extends Context.Service<BcryptAdapterTag, BcryptAdapter>()(
+  "BcryptAdapter"
+) {}
 
 /**
  * BcryptPasswordHasher implementation

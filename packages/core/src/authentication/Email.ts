@@ -27,13 +27,13 @@ const EMAIL_PATTERN =
  * Case-insensitive in practice but stored as provided.
  */
 export const Email = Schema.String.pipe(
-  Schema.annotations({
+  Schema.annotate({
     identifier: "Email",
     title: "Email Address",
     description: "A valid email address",
     examples: ["test@example.com"],
   }),
-  Schema.pattern(EMAIL_PATTERN),
+  Schema.check(Schema.isPattern(EMAIL_PATTERN)),
   Schema.brand("Email")
 )
 

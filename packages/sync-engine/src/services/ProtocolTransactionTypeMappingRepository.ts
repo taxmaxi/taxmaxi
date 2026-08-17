@@ -160,6 +160,7 @@ export interface ProtocolTransactionTypeMappingRepositoryShape {
 /**
  * ProtocolTransactionTypeMappingRepository - Context tag for reviewed protocol mappings.
  */
-export class ProtocolTransactionTypeMappingRepository extends Context.Tag(
-  "ProtocolTransactionTypeMappingRepository"
-)<ProtocolTransactionTypeMappingRepository, ProtocolTransactionTypeMappingRepositoryShape>() {}
+export class ProtocolTransactionTypeMappingRepository extends Context.Service<
+  ProtocolTransactionTypeMappingRepository,
+  ProtocolTransactionTypeMappingRepositoryShape
+>()("ProtocolTransactionTypeMappingRepository") {}

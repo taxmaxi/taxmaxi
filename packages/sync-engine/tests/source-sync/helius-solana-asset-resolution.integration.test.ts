@@ -6,7 +6,11 @@ import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetReposi
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
-import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
+import {
+  TEST_SOURCE_ID,
+  makeIntegrationTestDatabaseContext,
+  seedSyncEngineRepositoryFixture,
+} from "../../../persistence/tests/support/integration-test-kit.ts"
 import { HeliusSolanaAssetResolutionServiceLive } from "../../src/providers/helius-solana/layers/HeliusSolanaAssetResolutionServiceLive.ts"
 import {
   HeliusSolanaAssetResolutionService,
@@ -85,7 +89,7 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
     .limit(1)
 
   if (solanaBlockchain === undefined) {
-    return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+    return yield* Effect.die("Missing seeded Solana blockchain")
   }
 
   yield* db.delete(schema.providerAssetMappings)
@@ -180,10 +184,10 @@ const HeliusSolanaAssetResolutionTestLive = (
         HeliusSolanaSyncClient,
         HeliusSolanaSyncClient.of({
           fetchTransactionsForAddress: () =>
-            Effect.dieMessage("fetchTransactionsForAddress should not be called"),
+            Effect.die("fetchTransactionsForAddress should not be called"),
           fetchAssetBatch,
           fetchTransfersForAddress: () =>
-            Effect.dieMessage("fetchTransfersForAddress should not be called"),
+            Effect.die("fetchTransfersForAddress should not be called"),
         })
       )
     )
@@ -282,7 +286,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         })
       ),
-      () => Effect.dieMessage("DAS should not be called for wrapped SOL default mapping")
+      () => Effect.die("DAS should not be called for wrapped SOL default mapping")
     )
 
     expect(result).toMatchObject({
@@ -299,7 +303,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         service.ensureDefaultMappings()
       ),
-      () => Effect.dieMessage("DAS should not be called while seeding default mappings")
+      () => Effect.die("DAS should not be called while seeding default mappings")
     )
 
     await context.runPg(
@@ -312,7 +316,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (wrappedSolProviderAsset === undefined) {
-          return yield* Effect.dieMessage("Missing wrapped SOL provider asset")
+          return yield* Effect.die("Missing wrapped SOL provider asset")
         }
 
         yield* db
@@ -327,7 +331,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     )
 
     const result = await runAssetService(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
           service.resolveAsset({
             kind: "spl",
@@ -335,14 +339,55 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         )
       ),
-      () => Effect.dieMessage("DAS should not be called for an approved mapping")
+      () => Effect.die("DAS should not be called for an approved mapping")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "HeliusSolanaBrokenApprovedProviderAssetMappingError",
         mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+      })
+    }
+  })
+
+  it("rejects an approved mapping whose stored decimals no longer match", async () => {
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.ensureDefaultMappings()
+      ),
+      () => Effect.die("DAS should not be called while seeding default mappings")
+    )
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({ exponent: 8 })
+          .where(eq(schema.providerAssets.providerAssetId, SOLANA_WRAPPED_NATIVE_MINT))
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.result(
+        Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+          service.resolveAsset({
+            kind: "spl",
+            mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+          })
+        )
+      ),
+      () => Effect.die("DAS should not be called for an approved mapping")
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
+        _tag: "HeliusSolanaBrokenApprovedProviderAssetMappingError",
+        mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
+        message:
+          "Helius Solana provider asset mapping for SOL conflicts with its exact type or decimals evidence.",
       })
     }
   })
@@ -426,7 +471,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         })
       ),
-      () => Effect.dieMessage("DAS should not be called for approved cached mapping")
+      () => Effect.die("DAS should not be called for approved cached mapping")
     )
 
     expect(result).toMatchObject({
@@ -513,7 +558,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -568,7 +613,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     expect(state?.sourceNotes).toContain("exact mint, type, and compatible decimals")
   })
 
-  it("derives an exact known NFT type when DAS type evidence is missing", async () => {
+  it("keeps an exact mint pending when current raw decimals conflict", async () => {
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -579,7 +624,240 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
+        }
+
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Drift Example",
+          symbol: "DRIFT",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 6,
+          type: "token",
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+          observedDecimals: 5,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            symbol: "DRIFT",
+            name: "Drift Example",
+            decimals: 6,
+          }),
+        ])
+    )
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+
+    expect(result).toMatchObject({
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+    expect(state).toMatchObject({
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+  })
+
+  it("requests replay when an exact representation promotes a pending mapping", async () => {
+    const dasAsset = makeDasAsset({
+      mintAddress: UNKNOWN_MINT,
+      symbol: "DRIFT",
+      name: "Drift Example",
+      decimals: 6,
+    })
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
+      ),
+      () => Effect.succeed([dasAsset])
+    )
+    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    expect(pendingState).not.toBeNull()
+    if (pendingState === null) {
+      return
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* seedSyncEngineRepositoryFixture()
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.die("Missing seeded Solana blockchain")
+        }
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Drift Example",
+          symbol: "DRIFT",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 6,
+          type: "token",
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: pendingState.providerAssetRowId,
+          sourceId: TEST_SOURCE_ID,
+        })
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
+      ),
+      () => Effect.succeed([dasAsset])
+    )
+    const jobs = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    expect(result).toMatchObject({
+      kind: "canonical",
+      mappingStatus: "approved",
+      canonicalAssetId: UNKNOWN_ASSET_ID,
+    })
+    expect(jobs).toEqual([{ mode: "replay", status: "pending" }])
+  })
+
+  it("keeps an exact mapping pending when replay scheduling fails", async () => {
+    const dasAsset = makeDasAsset({
+      mintAddress: UNKNOWN_MINT,
+      symbol: "DRIFT",
+      name: "Drift Example",
+      decimals: 6,
+    })
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
+      ),
+      () => Effect.succeed([dasAsset])
+    )
+    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    expect(pendingState).not.toBeNull()
+    if (pendingState === null) {
+      return
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* seedSyncEngineRepositoryFixture()
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.die("Missing seeded Solana blockchain")
+        }
+        yield* db.insert(schema.assets).values({
+          id: UNKNOWN_ASSET_ID,
+          name: "Drift Example",
+          symbol: "DRIFT",
+          type: "fungible",
+        })
+        yield* db.insert(schema.assetRepresentations).values({
+          id: UNKNOWN_REPRESENTATION_ID,
+          assetId: UNKNOWN_ASSET_ID,
+          blockchainId: solanaBlockchain.id,
+          contractAddress: null,
+          mintAddress: UNKNOWN_MINT,
+          decimals: 6,
+          type: "token",
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: pendingState.providerAssetRowId,
+          sourceId: TEST_SOURCE_ID,
+        })
+        yield* db.execute(sql`
+          create function reject_helius_replay_job() returns trigger
+          language plpgsql as $trigger$
+          begin
+            raise exception 'replay scheduling failed';
+          end;
+          $trigger$
+        `)
+        yield* db.execute(sql`
+          create trigger reject_helius_replay_job
+          before insert on processing_jobs
+          for each row execute function reject_helius_replay_job()
+        `)
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.result(
+        Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+          service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
+        )
+      ),
+      () => Effect.succeed([dasAsset])
+    )
+    const state = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const providerAsset = yield* fetchProviderAssetState({ mintAddress: UNKNOWN_MINT })
+        const jobs = yield* db
+          .select({ id: schema.processingJobs.id })
+          .from(schema.processingJobs)
+          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+        return { jobs, providerAsset }
+      })
+    )
+
+    expect(result._tag).toBe("Failure")
+    expect(state.providerAsset).toMatchObject({ mappingStatus: "pending_review" })
+    expect(state.jobs).toHaveLength(0)
+  })
+
+  it("keeps an exact known NFT pending when DAS decimals are missing", async () => {
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [solanaBlockchain] = yield* db
+          .select({ id: schema.blockchains.id })
+          .from(schema.blockchains)
+          .where(eq(schema.blockchains.name, "solana"))
+          .limit(1)
+
+        if (solanaBlockchain === undefined) {
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -607,17 +885,24 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: NFT_MINT,
         })
       ),
-      () => Effect.succeed([])
+      () =>
+        Effect.succeed([
+          {
+            id: NFT_MINT,
+            interface: "V1_PRINT",
+            content: { metadata: { name: "Known NFT", symbol: "KNFT" } },
+          },
+        ])
     )
 
     expect(result).toMatchObject({
-      kind: "canonical",
+      kind: "review_required",
       assetKind: "nft",
       representationTypeObserved: true,
-      decimals: 0,
-      mappingStatus: "approved",
-      canonicalAssetId: NFT_ASSET_ID,
-      assetRepresentationId: NFT_REPRESENTATION_ID,
+      decimals: null,
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
       nftHint: true,
     })
   })
@@ -659,7 +944,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: UNKNOWN_MINT,
         })
       ),
-      () => Effect.dieMessage("Cached DAS metadata should not be refetched")
+      () => Effect.die("Cached DAS metadata should not be refetched")
     )
 
     expect(result).toMatchObject({
@@ -925,7 +1210,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: UNKNOWN_MINT,
         })
       ),
-      () => Effect.dieMessage("Complete cached DAS metadata should not be refetched")
+      () => Effect.die("Complete cached DAS metadata should not be refetched")
     )
 
     expect(result).toMatchObject({
@@ -944,7 +1229,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
             kind: "spl",
             mintAddress: UNKNOWN_MINT,
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       ),
       () =>
         Effect.succeed([
@@ -957,12 +1242,12 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
         ])
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "HeliusSolanaAssetMetadataDecodeError",
       })
-      expect(result.left.message).toContain("Invalid Helius DAS asset batch payload")
+      expect(result.failure.message).toContain("Invalid Helius DAS asset batch payload")
     }
   })
 
@@ -1007,7 +1292,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -1053,7 +1338,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: UNKNOWN_MINT,
         })
       ),
-      () => Effect.dieMessage("DAS should not be called when approved mapping is cached")
+      () => Effect.die("DAS should not be called when approved mapping is cached")
     )
 
     expect(dasCallCount).toBe(1)

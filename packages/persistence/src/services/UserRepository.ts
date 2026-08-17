@@ -130,7 +130,6 @@ export interface UserRepositoryService {
  * })
  * ```
  */
-export class UserRepository extends Context.Tag("UserRepository")<
-  UserRepository,
-  UserRepositoryService
->() {}
+export class UserRepository extends Context.Service<UserRepository, UserRepositoryService>()(
+  "UserRepository"
+) {}

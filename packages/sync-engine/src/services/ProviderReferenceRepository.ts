@@ -121,7 +121,7 @@ export interface ProviderReferenceRepositoryShape {
 /**
  * ProviderReferenceRepository - Context tag for provider reference-data persistence.
  */
-export class ProviderReferenceRepository extends Context.Tag("ProviderReferenceRepository")<
+export class ProviderReferenceRepository extends Context.Service<
   ProviderReferenceRepository,
   ProviderReferenceRepositoryShape
->() {}
+>()("ProviderReferenceRepository") {}

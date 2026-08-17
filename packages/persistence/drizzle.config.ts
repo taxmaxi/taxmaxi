@@ -5,7 +5,7 @@ import * as Redacted from "effect/Redacted"
 
 const drizzleDbConfig = Config.all({
   host: Config.string("PGHOST").pipe(Config.withDefault("localhost")),
-  port: Config.integer("PGPORT").pipe(Config.withDefault(5432)),
+  port: Config.int("PGPORT").pipe(Config.withDefault(5432)),
   user: Config.string("PGUSER").pipe(Config.withDefault("postgres")),
   password: Config.redacted("PGPASSWORD").pipe(Config.withDefault(Redacted.make("postgres"))),
   database: Config.string("PGDATABASE").pipe(Config.withDefault("taxmaxi")),

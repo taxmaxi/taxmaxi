@@ -19,7 +19,8 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
-import { HttpClient, HttpClientRequest } from "@effect/platform"
+import * as HttpClient from "effect/unstable/http/HttpClient"
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
 import {
   type AuthProvider,
   ProviderId,
@@ -251,12 +252,10 @@ const make = Effect.gen(function* () {
                 })
             )
           )
-          return yield* Effect.fail(
-            new ProviderAuthFailedError({
-              provider: "coinbase",
-              reason: `Token exchange failed (${tokenResponse.status}): ${errorBody}`,
-            })
-          )
+          return yield* new ProviderAuthFailedError({
+            provider: "coinbase",
+            reason: `Token exchange failed (${tokenResponse.status}): ${errorBody}`,
+          })
         }
 
         // Parse the token response
@@ -271,7 +270,7 @@ const make = Effect.gen(function* () {
         )
 
         // Decode the token response using Schema
-        const tokens = yield* Schema.decodeUnknown(CoinbaseTokenResponse)(tokenJson).pipe(
+        const tokens = yield* Schema.decodeUnknownEffect(CoinbaseTokenResponse)(tokenJson).pipe(
           Effect.mapError(
             (error) =>
               new ProviderAuthFailedError({
@@ -310,12 +309,10 @@ const make = Effect.gen(function* () {
                 })
             )
           )
-          return yield* Effect.fail(
-            new ProviderAuthFailedError({
-              provider: "coinbase",
-              reason: `Userinfo request failed (${userInfoResponse.status}): ${errorBody}`,
-            })
-          )
+          return yield* new ProviderAuthFailedError({
+            provider: "coinbase",
+            reason: `Userinfo request failed (${userInfoResponse.status}): ${errorBody}`,
+          })
         }
 
         // Parse the userinfo response
@@ -330,7 +327,7 @@ const make = Effect.gen(function* () {
         )
 
         // Decode the userinfo response using Schema
-        const userInfo = yield* Schema.decodeUnknown(CoinbaseUserInfo)(userInfoJson).pipe(
+        const userInfo = yield* Schema.decodeUnknownEffect(CoinbaseUserInfo)(userInfoJson).pipe(
           Effect.mapError(
             (error) =>
               new ProviderAuthFailedError({
@@ -341,12 +338,10 @@ const make = Effect.gen(function* () {
         )
 
         if (userInfo.data.email === undefined || userInfo.data.email.trim() === "") {
-          return yield* Effect.fail(
-            new ProviderAuthFailedError({
-              provider: "coinbase",
-              reason: "Coinbase profile did not include an email address",
-            })
-          )
+          return yield* new ProviderAuthFailedError({
+            provider: "coinbase",
+            reason: "Coinbase profile did not include an email address",
+          })
         }
 
         const expiresAtEpochMillis = yield* Effect.map(

@@ -69,6 +69,7 @@ export interface PrepareHeliusSolanaNormalizationParams {
  * PreparedHeliusSolanaNormalization - Canonical Solana artifacts ready for persistence.
  */
 export interface PreparedHeliusSolanaNormalization {
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext: SourceOnchainContextDraft | null
@@ -190,7 +191,7 @@ export interface HeliusSolanaSourceSyncProviderShape {
 /**
  * HeliusSolanaSourceSyncProvider - Context tag for the Helius Solana provider boundary.
  */
-export class HeliusSolanaSourceSyncProvider extends Context.Tag("HeliusSolanaSourceSyncProvider")<
+export class HeliusSolanaSourceSyncProvider extends Context.Service<
   HeliusSolanaSourceSyncProvider,
   HeliusSolanaSourceSyncProviderShape
->() {}
+>()("HeliusSolanaSourceSyncProvider") {}

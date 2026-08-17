@@ -70,7 +70,7 @@ export class SourceSyncJobRetryableExecutionError extends Schema.TaggedError<Sou
     message: Schema.String,
     attemptNumber: Schema.Number,
     maxAttempts: Schema.Number,
-    nextRetryAt: Schema.DateFromSelf,
+    nextRetryAt: Schema.Date,
   }
 ) {}
 
@@ -93,7 +93,7 @@ export interface SourceSyncJobExecutorShape {
 /**
  * SourceSyncJobExecutor - Context tag for source job execution.
  */
-export class SourceSyncJobExecutor extends Context.Tag("SourceSyncJobExecutor")<
+export class SourceSyncJobExecutor extends Context.Service<
   SourceSyncJobExecutor,
   SourceSyncJobExecutorShape
->() {}
+>()("SourceSyncJobExecutor") {}

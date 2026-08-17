@@ -1,6 +1,6 @@
-import { Command, Options } from "@effect/cli"
 import { Console, DateTime, Effect } from "effect"
 import * as Option from "effect/Option"
+import { Command, Flag as Options } from "effect/unstable/cli"
 import type { TaxCalculation } from "taxmaxi"
 import { startCoinbaseOAuth, validateSessionToken, waitForOAuthCompletion } from "../api/auth.ts"
 import { computeGermanTax, listSources, replaySourceSync, startSourceSync } from "../api/sources.ts"

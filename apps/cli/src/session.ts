@@ -1,6 +1,5 @@
-import { FileSystem, Path } from "@effect/platform"
 import { homedir } from "node:os"
-import { Effect, Schema } from "effect"
+import { Effect, FileSystem, Path, Schema } from "effect"
 import { CliCommandError } from "./errors.ts"
 
 const SESSION_FILE_RELATIVE_PATH = ".config/tax/session.json"
@@ -9,12 +8,12 @@ export const CliSession = Schema.Struct({
   apiUrl: Schema.String,
   sessionToken: Schema.String,
   userId: Schema.String,
-  role: Schema.optional(Schema.Literal("admin", "owner", "member", "viewer")),
+  role: Schema.optional(Schema.Literals(["admin", "owner", "member", "viewer"])),
   connectedAt: Schema.String,
 })
 export type CliSession = typeof CliSession.Type
 
-const CliSessionJson = Schema.parseJson(CliSession)
+const CliSessionJson = Schema.fromJsonString(CliSession)
 
 export const getSessionFilePath = Effect.gen(function* () {
   const path = yield* Path.Path
@@ -27,7 +26,7 @@ export const saveSession = (session: CliSession) =>
     const path = yield* Path.Path
     const sessionFilePath = yield* getSessionFilePath
     const sessionDir = path.dirname(sessionFilePath)
-    const encoded = yield* Schema.encode(CliSessionJson)(session).pipe(
+    const encoded = yield* Schema.encodeEffect(CliSessionJson)(session).pipe(
       Effect.mapError(
         () =>
           new CliCommandError({
@@ -68,7 +67,7 @@ export const readSession = () =>
       )
     )
 
-    return yield* Schema.decodeUnknown(CliSessionJson)(raw).pipe(
+    return yield* Schema.decodeUnknownEffect(CliSessionJson)(raw).pipe(
       Effect.mapError(
         () =>
           new CliCommandError({

@@ -11,36 +11,36 @@ import * as Schema from "effect/Schema"
 /**
  * ActivitySourceKind - Provider family represented by normalized activity facts.
  */
-export const ActivitySourceKind = Schema.Literal("cex", "solana", "evm", "bitcoin", "unknown")
+export const ActivitySourceKind = Schema.Literals(["cex", "solana", "evm", "bitcoin", "unknown"])
 
 export type ActivitySourceKind = typeof ActivitySourceKind.Type
 
 /**
  * ActivityMovementDirection - Principal-relative movement direction.
  */
-export const ActivityMovementDirection = Schema.Literal("inbound", "outbound", "neutral")
+export const ActivityMovementDirection = Schema.Literals(["inbound", "outbound", "neutral"])
 
 export type ActivityMovementDirection = typeof ActivityMovementDirection.Type
 
 /**
  * ActivityMovementRole - Accounting role suggested by normalized facts.
  */
-export const ActivityMovementRole = Schema.Literal(
+export const ActivityMovementRole = Schema.Literals([
   "principal",
   "fee",
   "gas",
   "reward",
   "rent",
   "change",
-  "unknown"
-)
+  "unknown",
+])
 
 export type ActivityMovementRole = typeof ActivityMovementRole.Type
 
 /**
  * ActivityEvidenceKind - Evidence categories classifiers may preserve for review.
  */
-export const ActivityEvidenceKind = Schema.Literal(
+export const ActivityEvidenceKind = Schema.Literals([
   "provider_label",
   "provider_payload",
   "balance_delta",
@@ -51,45 +51,45 @@ export const ActivityEvidenceKind = Schema.Literal(
   "utxo_pattern",
   "cex_row",
   "transfer_row",
-  "review_note"
-)
+  "review_note",
+])
 
 export type ActivityEvidenceKind = typeof ActivityEvidenceKind.Type
 
 /**
  * ActivityInventoryEffect - Source-agnostic inventory effect vocabulary.
  */
-export const ActivityInventoryEffect = Schema.Literal(
+export const ActivityInventoryEffect = Schema.Literals([
   "acquisition",
   "disposal",
   "income",
   "internal_transfer",
   "non_inventory",
-  "unknown"
-)
+  "unknown",
+])
 
 export type ActivityInventoryEffect = typeof ActivityInventoryEffect.Type
 
 /**
  * ActivityTaxTreatment - Source-agnostic tax treatment vocabulary.
  */
-export const ActivityTaxTreatment = Schema.Literal(
+export const ActivityTaxTreatment = Schema.Literals([
   "taxable_by_default",
   "non_taxable_by_default",
-  "requires_additional_rule_logic"
-)
+  "requires_additional_rule_logic",
+])
 
 export type ActivityTaxTreatment = typeof ActivityTaxTreatment.Type
 
 /**
  * ActivityReviewStatus - Review lifecycle values produced by classification.
  */
-export const ActivityReviewStatus = Schema.Literal(
+export const ActivityReviewStatus = Schema.Literals([
   "auto_applied",
   "needs_review",
   "approved",
-  "changed"
-)
+  "changed",
+])
 
 export type ActivityReviewStatus = typeof ActivityReviewStatus.Type
 
@@ -143,7 +143,7 @@ export class ActivityCexFacts extends Schema.Class<ActivityCexFacts>("ActivityCe
 export class ActivityOnchainEntrypointFacts extends Schema.Class<ActivityOnchainEntrypointFacts>(
   "ActivityOnchainEntrypointFacts"
 )({
-  kind: Schema.Literal("program", "instruction", "contract", "selector", "event", "script"),
+  kind: Schema.Literals(["program", "instruction", "contract", "selector", "event", "script"]),
   id: Schema.String,
   name: Schema.NullOr(Schema.String),
   metadata: Schema.Unknown,
@@ -159,7 +159,7 @@ export class ActivityOnchainFacts extends Schema.Class<ActivityOnchainFacts>(
   blockchainId: Schema.NullOr(Schema.String),
   txHash: Schema.NullOr(Schema.String),
   blockNumber: Schema.NullOr(Schema.String),
-  status: Schema.Literal("succeeded", "failed", "unknown"),
+  status: Schema.Literals(["succeeded", "failed", "unknown"]),
   feePayer: Schema.NullOr(Schema.String),
   entrypoints: Schema.Array(ActivityOnchainEntrypointFacts),
   metadata: Schema.Unknown,
@@ -185,7 +185,7 @@ export class ActivityFacts extends Schema.Class<ActivityFacts>("ActivityFacts")(
   providerKey: Schema.String,
   sourceId: Schema.NullOr(Schema.String),
   externalId: Schema.NullOr(Schema.String),
-  occurredAt: Schema.DateFromSelf,
+  occurredAt: Schema.Date,
   providerActivityType: Schema.NullOr(Schema.String),
   movements: Schema.Array(ActivityMovementFacts),
   cex: Schema.NullOr(ActivityCexFacts),
@@ -240,7 +240,7 @@ export interface ActivityClassificationServiceShape {
 /**
  * ActivityClassificationService - Context tag for activity classification.
  */
-export class ActivityClassificationService extends Context.Tag("ActivityClassificationService")<
+export class ActivityClassificationService extends Context.Service<
   ActivityClassificationService,
   ActivityClassificationServiceShape
->() {}
+>()("ActivityClassificationService") {}

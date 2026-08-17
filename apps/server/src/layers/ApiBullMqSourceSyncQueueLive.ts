@@ -5,7 +5,7 @@
  */
 
 import { Queue, type JobsOptions } from "bullmq"
-import { Config, Effect, Layer } from "effect"
+import { Config, Effect, Layer, Schema } from "effect"
 import { Redis } from "ioredis"
 import {
   SOURCE_SYNC_JOB_NAME,
@@ -73,13 +73,10 @@ const positiveConfig = ({
   readonly name: string
   readonly defaultValue: number
 }) =>
-  Config.integer(name).pipe(
-    Config.withDefault(defaultValue),
-    Config.validate({
-      message: `${name} must be greater than zero`,
-      validation: (value) => value > 0,
-    })
-  )
+  Config.schema(
+    Schema.Int.check(Schema.isGreaterThan(0, { message: `${name} must be greater than zero` })),
+    name
+  ).pipe(Config.withDefault(defaultValue))
 
 const nonNegativeConfig = ({
   name,
@@ -88,13 +85,12 @@ const nonNegativeConfig = ({
   readonly name: string
   readonly defaultValue: number
 }) =>
-  Config.integer(name).pipe(
-    Config.withDefault(defaultValue),
-    Config.validate({
-      message: `${name} must be zero or greater`,
-      validation: (value) => value >= 0,
-    })
-  )
+  Config.schema(
+    Schema.Int.check(
+      Schema.isGreaterThanOrEqualTo(0, { message: `${name} must be zero or greater` })
+    ),
+    name
+  ).pipe(Config.withDefault(defaultValue))
 
 const loadConfig = Effect.gen(function* () {
   return {
@@ -102,13 +98,18 @@ const loadConfig = Effect.gen(function* () {
     queuePrefix: yield* Config.string("SOURCE_SYNC_QUEUE_PREFIX").pipe(
       Config.withDefault(DEFAULT_QUEUE_PREFIX)
     ),
-    attempts: yield* Config.integer("SOURCE_SYNC_QUEUE_ATTEMPTS").pipe(
-      Config.orElse(() => Config.integer("SYNC_WORKER_MAX_ATTEMPTS")),
+    attempts: yield* Config.int("SOURCE_SYNC_QUEUE_ATTEMPTS").pipe(
+      Config.orElse(() => Config.int("SYNC_WORKER_MAX_ATTEMPTS")),
       Config.withDefault(DEFAULT_QUEUE_ATTEMPTS),
-      Config.validate({
-        message: "SOURCE_SYNC_QUEUE_ATTEMPTS must be greater than zero",
-        validation: (value) => value > 0,
-      })
+      Config.mapOrFail((value) =>
+        Schema.decodeUnknownEffect(
+          Schema.Int.check(
+            Schema.isGreaterThan(0, {
+              message: "SOURCE_SYNC_QUEUE_ATTEMPTS must be greater than zero",
+            })
+          )
+        )(value).pipe(Effect.mapError((error) => new Config.ConfigError(error)))
+      )
     ),
     backoffDelayMs: yield* positiveConfig({
       name: "SOURCE_SYNC_QUEUE_BACKOFF_DELAY_MS",
@@ -219,7 +220,7 @@ const currentDate = Effect.map(
  * Construct a BullMQ-backed source sync queue producer layer.
  */
 export const makeApiBullMqSourceSyncQueueLive = (options: ApiBullMqSourceSyncQueueOptions = {}) =>
-  Layer.scoped(
+  Layer.effect(
     SourceSyncQueue,
     Effect.gen(function* () {
       const sourceSyncJobRepository = yield* SourceSyncJobRepository
@@ -227,7 +228,7 @@ export const makeApiBullMqSourceSyncQueueLive = (options: ApiBullMqSourceSyncQue
       const acquireQueue = options.acquireQueue ?? acquireLiveQueue
       const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
         queueToClose.close.pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning(
               { operation: error.operation, cause: error.cause },
               "source-sync:queue-close-failed"
@@ -319,9 +320,9 @@ export const makeApiBullMqSourceSyncQueueLive = (options: ApiBullMqSourceSyncQue
           })
         )
 
-      return SourceSyncQueue.of({
+      return {
         enqueueSourceSyncJob,
-      } satisfies SourceSyncQueueShape)
+      } satisfies SourceSyncQueueShape
     })
   )
 

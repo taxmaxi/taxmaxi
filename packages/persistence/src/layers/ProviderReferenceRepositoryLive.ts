@@ -132,7 +132,7 @@ const make = Effect.gen(function* () {
           .limit(1)
           .pipe(wrapSyncEngineSqlError("providerReferenceRepository.findTransactionTypeMapping"))
 
-        return Option.fromNullable(row)
+        return Option.fromNullishOr(row)
       })
 
   const recordPendingTransactionTypeMapping: ProviderReferenceRepositoryShape["recordPendingTransactionTypeMapping"] =

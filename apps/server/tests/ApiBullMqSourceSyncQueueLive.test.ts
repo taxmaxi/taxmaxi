@@ -1,5 +1,4 @@
-import { ConfigProvider, Effect, Layer } from "effect"
-import * as ConfigError from "effect/ConfigError"
+import { Config, ConfigProvider, Effect, Layer, Result } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   makeApiBullMqSourceSyncQueueLive,
@@ -38,7 +37,7 @@ const payload = SourceSyncQueuePayload.make({
 })
 
 const makeConfigProvider = (options: ConfigProviderOptions = {}) =>
-  ConfigProvider.fromMap(makeConfigMap(options))
+  ConfigProvider.fromEnvRecord(Object.fromEntries(makeConfigMap(options)))
 
 const makeConfigMap = ({ overrides = {}, omittedKeys = [] }: ConfigProviderOptions) => {
   const values: Record<string, unknown> = {
@@ -66,27 +65,29 @@ const makeRepositoryLayer = ({
   readonly attachQueueMetadata?: SourceSyncJobRepositoryShape["attachQueueMetadata"]
 }) =>
   Layer.succeed(SourceSyncJobRepository, {
-    findActiveJob: () => Effect.dieMessage("findActiveJob should not be called"),
-    createOrReuseJob: () => Effect.dieMessage("createOrReuseJob should not be called"),
+    findActiveJob: () => Effect.die(new Error("findActiveJob should not be called")),
+    createOrReuseJob: () => Effect.die(new Error("createOrReuseJob should not be called")),
     attachQueueMetadata:
       attachQueueMetadata ??
       ((params) =>
         Effect.sync(() => {
           attached.push(params)
         })),
-    claimJob: () => Effect.dieMessage("claimJob should not be called"),
-    heartbeatJob: () => Effect.dieMessage("heartbeatJob should not be called"),
-    recordRetryableFailure: () => Effect.dieMessage("recordRetryableFailure should not be called"),
-    recoverStaleActiveJob: () => Effect.dieMessage("recoverStaleActiveJob should not be called"),
-    failJob: () => Effect.dieMessage("failJob should not be called"),
-    completeJob: () => Effect.dieMessage("completeJob should not be called"),
-    getJob: () => Effect.dieMessage("getJob should not be called"),
-    getExecutionJob: () => Effect.dieMessage("getExecutionJob should not be called"),
-    listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
+    claimJob: () => Effect.die(new Error("claimJob should not be called")),
+    heartbeatJob: () => Effect.die(new Error("heartbeatJob should not be called")),
+    recordRetryableFailure: () =>
+      Effect.die(new Error("recordRetryableFailure should not be called")),
+    recoverStaleActiveJob: () =>
+      Effect.die(new Error("recoverStaleActiveJob should not be called")),
+    failJob: () => Effect.die(new Error("failJob should not be called")),
+    completeJob: () => Effect.die(new Error("completeJob should not be called")),
+    getJob: () => Effect.die(new Error("getJob should not be called")),
+    getExecutionJob: () => Effect.die(new Error("getExecutionJob should not be called")),
+    listStaleActiveJobs: () => Effect.die(new Error("listStaleActiveJobs should not be called")),
     listRepairableActiveJobs: () =>
-      Effect.dieMessage("listRepairableActiveJobs should not be called"),
+      Effect.die(new Error("listRepairableActiveJobs should not be called")),
     listPendingJobsNeedingDispatch: () =>
-      Effect.dieMessage("listPendingJobsNeedingDispatch should not be called"),
+      Effect.die(new Error("listPendingJobsNeedingDispatch should not be called")),
   } satisfies SourceSyncJobRepositoryShape)
 
 const makeProducerLayer = ({
@@ -132,7 +133,7 @@ const runWithProducer = <A, E>({
             ...(attachQueueMetadata === undefined ? {} : { attachQueueMetadata }),
           })
         ),
-        Effect.withConfigProvider(makeConfigProvider(configOverrides))
+        Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider(configOverrides))
       )
     )
   )
@@ -225,7 +226,7 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
       close: Effect.sync(() => {
         closeCount += 1
       }).pipe(
-        Effect.zipRight(
+        Effect.andThen(
           Effect.fail(
             new SourceSyncQueueError({
               operation: "test.close",
@@ -262,13 +263,13 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
       effect: Effect.gen(function* () {
         const producer = yield* SourceSyncQueue
         yield* producer.enqueueSourceSyncJob(payload)
-      }).pipe(Effect.either),
+      }).pipe(Effect.result),
     })
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("SourceSyncQueueError")
-      expect(result.left.operation).toBe("apiBullMqSourceSyncQueue.enqueue")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("SourceSyncQueueError")
+      expect(result.failure.operation).toBe("apiBullMqSourceSyncQueue.enqueue")
     }
     expect(attached).toHaveLength(0)
   })
@@ -294,13 +295,13 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
       effect: Effect.gen(function* () {
         const producer = yield* SourceSyncQueue
         yield* producer.enqueueSourceSyncJob(payload)
-      }).pipe(Effect.either),
+      }).pipe(Effect.result),
     })
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("SourceSyncQueueError")
-      expect(result.left.operation).toBe("apiBullMqSourceSyncQueue.attachQueueMetadata")
+    expect(Result.isFailure(result)).toBe(true)
+    if (Result.isFailure(result)) {
+      expect(result.failure._tag).toBe("SourceSyncQueueError")
+      expect(result.failure.operation).toBe("apiBullMqSourceSyncQueue.attachQueueMetadata")
     }
   })
 
@@ -308,20 +309,17 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
     const attached: Array<AttachSourceSyncQueueMetadataParams> = []
     const configCases: Array<{
       readonly configOverrides: ConfigProviderOptions
-      readonly expectedError: "invalid" | "missing"
     }> = [
       {
         configOverrides: { overrides: { QUEUE_REDIS_URL: "not-a-url" } },
-        expectedError: "invalid",
       },
       {
         configOverrides: { overrides: { SOURCE_SYNC_QUEUE_ATTEMPTS: "0" } },
-        expectedError: "invalid",
       },
-      { configOverrides: { omittedKeys: ["QUEUE_REDIS_URL"] }, expectedError: "missing" },
+      { configOverrides: { omittedKeys: ["QUEUE_REDIS_URL"] } },
     ]
 
-    for (const { configOverrides, expectedError } of configCases) {
+    for (const { configOverrides } of configCases) {
       let acquiredConfig: ApiBullMqSourceSyncQueueConfig | null = null
 
       const queue: BullMqSourceSyncQueue = {
@@ -342,22 +340,19 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
                   }),
               }).pipe(Layer.provideMerge(makeRepositoryLayer({ attached })))
             ),
-            Effect.withConfigProvider(makeConfigProvider(configOverrides)),
-            Effect.either
+            Effect.provideService(
+              ConfigProvider.ConfigProvider,
+              makeConfigProvider(configOverrides)
+            ),
+            Effect.result
           )
         )
       )
 
-      expect(result._tag).toBe("Left")
+      expect(Result.isFailure(result)).toBe(true)
       expect(acquiredConfig).toBeNull()
-      if (result._tag === "Left") {
-        expect(ConfigError.isConfigError(result.left)).toBe(true)
-        if (expectedError === "invalid" && ConfigError.isConfigError(result.left)) {
-          expect(ConfigError.isInvalidData(result.left)).toBe(true)
-        }
-        if (expectedError === "missing" && ConfigError.isConfigError(result.left)) {
-          expect(ConfigError.isMissingDataOnly(result.left)).toBe(true)
-        }
+      if (Result.isFailure(result)) {
+        expect(result.failure).toBeInstanceOf(Config.ConfigError)
       }
     }
   })
@@ -384,7 +379,8 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
                 }),
             }).pipe(Layer.provideMerge(makeRepositoryLayer({ attached })))
           ),
-          Effect.withConfigProvider(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
             makeConfigProvider({
               overrides: {
                 SOURCE_SYNC_QUEUE_REMOVE_ON_COMPLETE_COUNT: "0",
@@ -392,12 +388,12 @@ describe("ApiBullMqSourceSyncQueueLive", () => {
               },
             })
           ),
-          Effect.either
+          Effect.result
         )
       )
     )
 
-    expect(result._tag).toBe("Right")
+    expect(Result.isSuccess(result)).toBe(true)
     expect(acquiredConfig).toMatchObject({
       removeOnCompleteCount: 0,
       removeOnFailCount: 0,

@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, ne } from "drizzle-orm"
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -6,10 +6,14 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import {
   SourceNormalizationRepository,
+  SourceReplayRepository,
+  SyncEngineTransaction,
   TransferReconciliationRepository,
   TransferReconciliationService,
 } from "@my/sync-engine/services"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
+import { SourceReplayRepositoryLive } from "../../src/layers/SourceReplayRepositoryLive.ts"
+import { SyncEngineTransactionLive } from "../../src/layers/SyncEngineTransactionLive.ts"
 import { TransferReconciliationRepositoryLive } from "../../src/layers/TransferReconciliationRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -35,6 +39,11 @@ const runPg = context.runPg
 const TransferReconciliationTestLayer = TransferReconciliationServiceLive.pipe(
   Layer.provide(TransferReconciliationRepositoryLive)
 )
+const ReplayTransactionTestLayer = Layer.mergeAll(
+  TransferReconciliationRepositoryLive,
+  SyncEngineTransactionLive,
+  SourceReplayRepositoryLive
+)
 
 const runTransferReconciliation = <A, E>(
   effect: Effect.Effect<A, E, TransferReconciliationService>
@@ -44,6 +53,14 @@ const runTransferReconciliationRepository = <A, E>(
   effect: Effect.Effect<A, E, TransferReconciliationRepository>
 ) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: TransferReconciliationRepositoryLive }))
+
+const runReplayTransaction = <A, E>(
+  effect: Effect.Effect<
+    A,
+    E,
+    SourceReplayRepository | TransferReconciliationRepository | SyncEngineTransaction
+  >
+) => Effect.runPromise(context.runWithLayer({ effect, layer: ReplayTransactionTestLayer }))
 
 const runSourceNormalization = <A, E>(effect: Effect.Effect<A, E, SourceNormalizationRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: SourceNormalizationRepositoryLive }))
@@ -86,7 +103,7 @@ const seedApprovedProviderAsset = ({
       .returning({ id: schema.providerAssets.id })
 
     if (providerAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to create provider asset fixture")
+      return yield* Effect.die("Failed to create provider asset fixture")
     }
 
     yield* db.insert(schema.providerAssetMappings).values({
@@ -182,7 +199,7 @@ const seedProviderTransfer = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create provider transfer transaction fixture")
+      return yield* Effect.die("Failed to create provider transfer transaction fixture")
     }
 
     const [providerTransfer] = yield* db
@@ -209,10 +226,88 @@ const seedProviderTransfer = ({
       .returning({ id: schema.providerTransfers.id })
 
     if (providerTransfer === undefined) {
-      return yield* Effect.dieMessage("Failed to create provider transfer fixture")
+      return yield* Effect.die("Failed to create provider transfer fixture")
     }
 
     return providerTransfer.id
+  })
+
+const seedCustodyInventory = ({
+  amount,
+  externalId,
+  providerTransferId,
+  timestamp,
+}: {
+  readonly amount: string
+  readonly externalId: string
+  readonly providerTransferId: string
+  readonly timestamp: Date
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [providerTransfer] = yield* db
+      .select({ transactionId: schema.providerTransfers.transactionId })
+      .from(schema.providerTransfers)
+      .where(eq(schema.providerTransfers.id, providerTransferId))
+      .limit(1)
+    const [openingLeg] = yield* db
+      .insert(schema.transactionLegs)
+      .values({
+        sourceId: TEST_SOURCE_ID,
+        externalId: `${externalId}:opening-leg`,
+        timestamp: new Date("2025-04-01T10:00:00.000Z"),
+        principalId: TEST_PRINCIPAL_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        amount: "0.50000000",
+        kind: "acquisition",
+        provenance: "deterministic",
+        fiatAmount: "25000.00",
+        fiatCurrency: "EUR",
+      })
+      .returning({ id: schema.transactionLegs.id })
+    if (providerTransfer === undefined || openingLeg === undefined) {
+      return yield* Effect.die("Failed to seed custody inventory")
+    }
+    const [openingLot] = yield* db
+      .insert(schema.fifoLots)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+        originalAmount: "0.50000000",
+        remainingAmount: "0.37500000",
+        costBasisPerToken: "50000.000000000000000000",
+        costBasisCurrency: "EUR",
+        sourceLegId: openingLeg.id,
+        sourceLegSequence: 0,
+      })
+      .returning({ id: schema.fifoLots.id })
+    const [movement] = yield* db
+      .insert(schema.inventoryMovements)
+      .values({
+        principalId: TEST_PRINCIPAL_ID,
+        sourceId: TEST_SOURCE_ID,
+        transactionId: providerTransfer.transactionId,
+        providerTransferId,
+        assetId: TEST_BTC_ASSET_ID,
+        timestamp,
+        direction: "outbound",
+        purpose: "principal",
+        taxTreatment: "pending_review",
+        reconciliationStatus: "unmatched",
+        amount,
+      })
+      .returning({ id: schema.inventoryMovements.id })
+    if (openingLot === undefined || movement === undefined) {
+      return yield* Effect.die("Failed to seed custody FIFO rows")
+    }
+    yield* db.insert(schema.inventoryMovementAllocations).values({
+      inventoryMovementId: movement.id,
+      fifoLotId: openingLot.id,
+      matchedAmount: amount,
+    })
+    return { movementId: movement.id }
   })
 
 const seedOnchainReceipt = ({
@@ -260,7 +355,7 @@ const seedOnchainReceipt = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain transaction fixture")
+      return yield* Effect.die("Failed to create onchain transaction fixture")
     }
 
     yield* db.insert(schema.transactionOnchainContext).values({
@@ -315,7 +410,7 @@ const seedOnchainReceipt = ({
       .returning({ id: schema.transfers.id })
 
     if (transfer === undefined) {
-      return yield* Effect.dieMessage("Failed to create onchain transfer fixture")
+      return yield* Effect.die("Failed to create onchain transfer fixture")
     }
 
     return {
@@ -395,7 +490,7 @@ const seedObservedOnchainReceipt = ({
       .returning({ id: schema.providerAssets.id })
 
     if (providerAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to create observed provider asset fixture")
+      return yield* Effect.die("Failed to create observed provider asset fixture")
     }
 
     const [transaction] = yield* db
@@ -419,7 +514,7 @@ const seedObservedOnchainReceipt = ({
       .returning({ id: schema.transactions.id })
 
     if (transaction === undefined) {
-      return yield* Effect.dieMessage("Failed to create observed transaction fixture")
+      return yield* Effect.die("Failed to create observed transaction fixture")
     }
 
     const [providerTransfer] = yield* db
@@ -451,7 +546,7 @@ const seedObservedOnchainReceipt = ({
       .returning({ id: schema.providerTransfers.id })
 
     if (providerTransfer === undefined) {
-      return yield* Effect.dieMessage("Failed to create observed provider transfer fixture")
+      return yield* Effect.die("Failed to create observed provider transfer fixture")
     }
 
     return {
@@ -653,7 +748,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create evidence-only reconciliation")
+          return yield* Effect.die("Failed to create evidence-only reconciliation")
         }
 
         return reconciliation.id
@@ -673,7 +768,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
   })
 
-  it("defers FIFO application for a deterministic owned onchain receipt", async () => {
+  it("approves FIFO application for a deterministic owned onchain receipt", async () => {
     const walletAddress = "bc1qownedwalletdeterministic00000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
 
@@ -729,7 +824,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(summary).toEqual(
       expect.objectContaining({
         evaluatedProviderTransfers: 1,
-        pending: 1,
+        autoApplied: 1,
       })
     )
     expect(reconciliation).toEqual(
@@ -737,11 +832,1972 @@ describe("TransferReconciliationServiceLive", () => {
         providerTransferId,
         canonicalTransferId: receipt.transferId,
         canonicalTransactionId: receipt.transactionId,
-        status: "pending",
-        matchReason: "fifo_application_deferred",
+        status: "auto_applied",
+        matchReason: "deterministic_wallet_receipt_match",
         deterministic: true,
       })
     )
+  })
+
+  it.each([
+    ["approved", "provider"],
+    ["changed", "provider"],
+    ["approved", "canonical"],
+    ["changed", "canonical"],
+  ] as const)(
+    "preserves %s accounting legs on the %s transaction instead of canonicalizing them automatically",
+    async (reviewStatus, reviewedSide) => {
+      const walletAddress = `bc1qownedwalletreviewed${reviewStatus}${reviewedSide}000000000`
+      const timestamp = new Date("2025-04-10T10:30:00.000Z")
+      const providerAssetRowId = await runPg(
+        seedApprovedProviderAsset({ providerAssetId: `btc-provider-reviewed-${reviewStatus}` })
+      )
+      await runPg(seedOwnedOnchainSource({ walletAddress }))
+      const providerTransferId = await runPg(
+        seedProviderTransfer({
+          providerAssetRowId,
+          externalId: `provider-transfer-reviewed-${reviewStatus}`,
+          timestamp,
+          amount: "0.10000000",
+          toAddress: walletAddress,
+          networkHash: `btc-reviewed-${reviewStatus}-hash`,
+        })
+      )
+      const receipt = await runPg(
+        seedOnchainReceipt({
+          externalId: `onchain-receipt-reviewed-${reviewStatus}-${reviewedSide}`,
+          txHash: `btc-reviewed-${reviewStatus}-hash`,
+          timestamp: new Date("2025-04-10T10:35:00.000Z"),
+          amount: "0.10000000",
+          walletAddress,
+          blockchainId: fixture.bitcoinBlockchainId,
+        })
+      )
+
+      const reviewedFixture = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [providerTransfer] = yield* db
+            .select({ transactionId: schema.providerTransfers.transactionId })
+            .from(schema.providerTransfers)
+            .where(eq(schema.providerTransfers.id, providerTransferId))
+            .limit(1)
+          if (providerTransfer === undefined) {
+            return yield* Effect.die("Failed to load reviewed provider transaction")
+          }
+
+          const reviewedTransactionId =
+            reviewedSide === "provider" ? providerTransfer.transactionId : receipt.transactionId
+          const reviewedSourceId = reviewedSide === "provider" ? TEST_SOURCE_ID : ONCHAIN_SOURCE_ID
+
+          yield* db
+            .update(schema.transactions)
+            .set({ transactionType: "sell_fiat" })
+            .where(eq(schema.transactions.id, reviewedTransactionId))
+          yield* db.insert(schema.transactionReviews).values({
+            transactionId: reviewedTransactionId,
+            principalId: TEST_PRINCIPAL_ID,
+            reviewStatus,
+            originalTypeKey: "internal_transfer",
+            currentTypeKey: "sell_fiat",
+            categorizationReason: "User reviewed this send as a taxable gift.",
+            matchedLayer: "manual",
+            needsReview: false,
+            userNotes: "Preserve the reviewed gift accounting.",
+            reviewedAt: new Date("2025-04-10T11:00:00.000Z"),
+          })
+          const [openingLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values({
+              sourceId: reviewedSourceId,
+              externalId: `reviewed-${reviewStatus}-${reviewedSide}:opening`,
+              timestamp: new Date("2025-04-01T10:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.50000000",
+              kind: "acquisition",
+              provenance: "deterministic",
+              fiatAmount: "25000.00",
+              fiatCurrency: "EUR",
+            })
+            .returning({ id: schema.transactionLegs.id })
+          const [giftLeg] = yield* db
+            .insert(schema.transactionLegs)
+            .values({
+              sourceId: reviewedSourceId,
+              transactionId: reviewedTransactionId,
+              externalId: `reviewed-${reviewStatus}-${reviewedSide}:gift`,
+              timestamp,
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.10000000",
+              kind: "disposal",
+              provenance: "manual",
+              derivationRule: "manual_taxable_disposal",
+              fiatAmount: "5000.00",
+              fiatCurrency: "EUR",
+            })
+            .returning({ id: schema.transactionLegs.id })
+          if (openingLeg === undefined || giftLeg === undefined) {
+            return yield* Effect.die("Failed to create reviewed accounting legs")
+          }
+          const [openingLot] = yield* db
+            .insert(schema.fifoLots)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              sourceId: reviewedSourceId,
+              assetId: TEST_BTC_ASSET_ID,
+              acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+              originalAmount: "0.50000000",
+              remainingAmount: "0.40000000",
+              costBasisPerToken: "50000.000000000000000000",
+              costBasisCurrency: "EUR",
+              sourceLegId: openingLeg.id,
+              sourceLegSequence: 0,
+            })
+            .returning({ id: schema.fifoLots.id })
+          if (openingLot === undefined) {
+            return yield* Effect.die("Failed to create reviewed accounting lot")
+          }
+          yield* db.insert(schema.disposalMatches).values({
+            disposalLegId: giftLeg.id,
+            fifoLotId: openingLot.id,
+            matchedAmount: "0.10000000",
+            costBasis: "5000.00000000",
+            proceeds: "5000.00000000",
+            gainLoss: "0.00000000",
+          })
+
+          return { giftLegId: giftLeg.id, transactionId: reviewedTransactionId }
+        })
+      )
+
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+      const canonicalization = await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [transaction] = yield* db
+            .select({ transactionType: schema.transactions.transactionType })
+            .from(schema.transactions)
+            .where(eq(schema.transactions.id, reviewedFixture.transactionId))
+          const [review] = yield* db
+            .select({
+              reviewStatus: schema.transactionReviews.reviewStatus,
+              currentTypeKey: schema.transactionReviews.currentTypeKey,
+              userNotes: schema.transactionReviews.userNotes,
+            })
+            .from(schema.transactionReviews)
+            .where(eq(schema.transactionReviews.transactionId, reviewedFixture.transactionId))
+          const giftLegs = yield* db
+            .select({ id: schema.transactionLegs.id })
+            .from(schema.transactionLegs)
+            .where(eq(schema.transactionLegs.id, reviewedFixture.giftLegId))
+          const internalLegs = yield* db
+            .select({ id: schema.transactionLegs.id })
+            .from(schema.transactionLegs)
+            .where(
+              inArray(schema.transactionLegs.derivationRule, [
+                "internal_transfer_out",
+                "internal_transfer_in",
+              ])
+            )
+          const [reconciliation] = yield* db
+            .select({
+              status: schema.transferReconciliations.status,
+              matchReason: schema.transferReconciliations.matchReason,
+            })
+            .from(schema.transferReconciliations)
+            .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+          return { giftLegs, internalLegs, reconciliation, review, transaction }
+        })
+      )
+
+      expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
+      expect(state.transaction).toEqual({ transactionType: "sell_fiat" })
+      expect(state.review).toEqual({
+        reviewStatus,
+        currentTypeKey: "sell_fiat",
+        userNotes: "Preserve the reviewed gift accounting.",
+      })
+      expect(state.giftLegs).toEqual([{ id: reviewedFixture.giftLegId }])
+      expect(state.internalLegs).toHaveLength(0)
+      expect(state.reconciliation).toMatchObject({
+        status: "needs_review",
+        matchReason: "manual_transaction_review_preserved",
+      })
+    }
+  )
+
+  it("revalidates provider movement facts before applying FIFO effects", async () => {
+    const walletAddress = "bc1qownedwalletstalefacts000000000000000000"
+    const timestamp = new Date("2025-04-10T11:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-stale-facts" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-stale-facts",
+        timestamp,
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: "btc-stale-facts-hash",
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-stale-facts",
+        txHash: "btc-stale-facts-hash",
+        timestamp: new Date("2025-04-10T11:05:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerTransfers)
+          .set({ amount: "0.20000000" })
+          .where(eq(schema.providerTransfers.id, providerTransferId))
+      })
+    )
+    const [preApply] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            amount: schema.providerTransfers.amount,
+            reviewMetadata: schema.transferReconciliations.reviewMetadata,
+            revalidateMovementFacts: sql<boolean>`
+              (${schema.transferReconciliations.reviewMetadata}->>'revalidateMovementFacts')::boolean
+            `,
+          })
+          .from(schema.transferReconciliations)
+          .innerJoin(
+            schema.providerTransfers,
+            eq(schema.providerTransfers.id, schema.transferReconciliations.providerTransferId)
+          )
+          .where(eq(schema.providerTransfers.id, providerTransferId))
+      })
+    )
+    expect(preApply).toMatchObject({ revalidateMovementFacts: true })
+
+    const canonicalization = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        return { internalLegs, reconciliation }
+      })
+    )
+
+    expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
+    expect(state.reconciliation).toMatchObject({
+      status: "needs_review",
+      matchReason: "movement_facts_changed_before_canonicalization",
+    })
+    expect(state.internalLegs).toHaveLength(0)
+  })
+
+  it("moves a first-time match to review when the receipt lot is already consumed", async () => {
+    const walletAddress = "bc1qownedwalletconsumedreceipt000000000000000"
+    const timestamp = new Date("2025-04-10T12:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-consumed-receipt" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-consumed-receipt",
+        timestamp,
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: "btc-consumed-receipt-hash",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-consumed-receipt",
+        txHash: "btc-consumed-receipt-hash",
+        timestamp: new Date("2025-04-10T12:05:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [acquisitionLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "consumed-receipt-acquisition",
+            timestamp: new Date("2025-04-10T12:05:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            transactionId: receipt.transactionId,
+            fiatAmount: "4000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        const [laterTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "consumed-receipt-later-disposal",
+            timestamp: new Date("2025-04-11T12:00:00.000Z"),
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (acquisitionLeg === undefined || laterTransaction === undefined) {
+          return yield* Effect.die("Failed to seed consumed receipt fixture")
+        }
+        const [lot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-10T12:05:00.000Z"),
+            originalAmount: "0.10000000",
+            remainingAmount: "0.00000000",
+            costBasisPerToken: "40000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: acquisitionLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [disposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "consumed-receipt-later-disposal:leg",
+            timestamp: new Date("2025-04-11T12:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "fixture_disposal",
+            transactionId: laterTransaction.id,
+            fiatAmount: "5000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (lot === undefined || disposalLeg === undefined) {
+          return yield* Effect.die("Failed to seed consumed receipt FIFO effects")
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: disposalLeg.id,
+          fifoLotId: lot.id,
+          matchedAmount: "0.10000000",
+          costBasis: "4000.00000000",
+          proceeds: "5000.00000000",
+          gainLoss: "1000.00000000",
+        })
+      })
+    )
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const canonicalization = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const [reconciliation] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+      })
+    )
+
+    expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
+    expect(reconciliation).toMatchObject({
+      status: "needs_review",
+      matchReason: "insufficient_fifo_inventory",
+    })
+  })
+
+  it("rolls back reconciliation-owned FIFO effects when a later receipt makes the match ambiguous", async () => {
+    const walletAddress = "bc1qownedwalletlateambiguity0000000000000000"
+    const timestamp = new Date("2025-04-11T10:30:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-late-ambiguity" })
+    )
+    const unrelatedProviderAssetRowId = await runPg(
+      seedApprovedProviderAsset({
+        providerAssetId: "eur-provider-late-ambiguity",
+        canonicalAssetId: TEST_EUR_ASSET_ID,
+        assetRepresentationId: null,
+        currencyCode: "EUR",
+      })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-late-ambiguity",
+        timestamp,
+        amount: "0.25000000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-late-ambiguity-1",
+        txHash: "btc-late-ambiguity-hash-1",
+        timestamp: new Date("2025-04-11T10:35:00.000Z"),
+        amount: "0.25000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const openingInventory = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, providerTransferId))
+          .limit(1)
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-opening-leg",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "1.00000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "50000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (providerTransfer === undefined || openingLeg === undefined) {
+          return yield* Effect.die("Failed to create late ambiguity inventory")
+        }
+
+        const [openingLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "1.00000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: openingLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [movement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.25000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+
+        if (openingLot === undefined || movement === undefined) {
+          return yield* Effect.die("Failed to create late ambiguity lot and movement")
+        }
+
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: movement.id,
+          fifoLotId: openingLot.id,
+          matchedAmount: "0.25000000",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.75000000" })
+          .where(eq(schema.fifoLots.id, openingLot.id))
+
+        return { openingLotId: openingLot.id, movementId: movement.id }
+      })
+    )
+    const reconcile = () =>
+      runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.reconcileTransferCandidates({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+
+    expect((await reconcile()).autoApplied).toBe(1)
+    expect(
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+    ).toEqual({ canonicalizedPairs: 1 })
+
+    const downstreamUsage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [carriedLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .innerJoin(
+            schema.transactionLegs,
+            eq(schema.transactionLegs.id, schema.fifoLots.sourceLegId)
+          )
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_in"))
+          .limit(1)
+        const [localLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-local-acquisition",
+            timestamp: new Date("2025-04-11T10:36:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.25000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "12500.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        const [disposalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-later-disposal",
+            timestamp: new Date("2025-04-11T10:40:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (
+          carriedLot === undefined ||
+          localLeg === undefined ||
+          disposalTransaction === undefined
+        ) {
+          return yield* Effect.die("Failed to seed late ambiguity downstream usage")
+        }
+
+        const [localLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-11T10:36:00.000Z"),
+            originalAmount: "0.25000000",
+            remainingAmount: "0.25000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: localLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [disposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-later-disposal-leg",
+            timestamp: new Date("2025-04-11T10:40:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            fiatAmount: "6000.00",
+            fiatCurrency: "EUR",
+            transactionId: disposalTransaction.id,
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (localLot === undefined || disposalLeg === undefined) {
+          return yield* Effect.die("Failed to seed late ambiguity downstream FIFO rows")
+        }
+
+        const [duplicateProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: disposalTransaction.id,
+            externalId: "late-ambiguity-duplicate-disposal-transfer",
+            providerAssetId: providerAssetRowId,
+            timestamp: new Date("2025-04-11T10:40:00.000Z"),
+            direction: "outbound",
+            processingMode: "accounting_and_evidence",
+            fromAccountRef: "owned-wallet",
+            toAddress: "duplicate-disposal-destination",
+            amount: "0.10000000",
+            metadata: {},
+          })
+          .returning({ id: schema.providerTransfers.id })
+        if (duplicateProviderTransfer === undefined) {
+          return yield* Effect.die("Failed to seed duplicate disposal provider transfer")
+        }
+        const [duplicateMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: disposalTransaction.id,
+            providerTransferId: duplicateProviderTransfer.id,
+            transactionLegId: null,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-11T10:40:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        if (duplicateMovement === undefined) {
+          return yield* Effect.die("Failed to seed duplicate disposal movement")
+        }
+
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: disposalLeg.id,
+          fifoLotId: carriedLot.id,
+          matchedAmount: "0.10000000",
+          costBasis: "5000.00",
+          proceeds: "6000.00",
+          gainLoss: "1000.00",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.15000000" })
+          .where(eq(schema.fifoLots.id, carriedLot.id))
+
+        const [feeProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: disposalTransaction.id,
+            externalId: "late-ambiguity-fee-transfer",
+            providerAssetId: providerAssetRowId,
+            timestamp: new Date("2025-04-11T10:40:00.000Z"),
+            direction: "outbound",
+            processingMode: "accounting_and_evidence",
+            fromAccountRef: "owned-wallet",
+            toAddress: "fee-destination",
+            amount: "0.10000000",
+            metadata: { role: "fee" },
+          })
+          .returning({ id: schema.providerTransfers.id })
+        if (feeProviderTransfer === undefined) {
+          return yield* Effect.die("Failed to seed downstream fee transfer")
+        }
+        const [feeMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: disposalTransaction.id,
+            providerTransferId: feeProviderTransfer.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-11T10:40:00.000Z"),
+            direction: "outbound",
+            purpose: "fee",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        if (feeMovement === undefined) {
+          return yield* Effect.die("Failed to seed downstream fee movement")
+        }
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: feeMovement.id,
+          fifoLotId: carriedLot.id,
+          matchedAmount: "0.10000000",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.05000000" })
+          .where(eq(schema.fifoLots.id, carriedLot.id))
+
+        const [laterDisposalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-last-disposal",
+            timestamp: new Date("2025-04-11T10:41:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (laterDisposalTransaction === undefined) {
+          return yield* Effect.die("Failed to seed later FIFO disposal")
+        }
+        const [laterDisposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-last-disposal-leg",
+            timestamp: new Date("2025-04-11T10:41:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.20000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            fiatAmount: "12000.00",
+            fiatCurrency: "EUR",
+            transactionId: laterDisposalTransaction.id,
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (laterDisposalLeg === undefined) {
+          return yield* Effect.die("Failed to seed later FIFO disposal leg")
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: laterDisposalLeg.id,
+          fifoLotId: localLot.id,
+          matchedAmount: "0.20000000",
+          costBasis: "10000.00",
+          proceeds: "12000.00",
+          gainLoss: "2000.00",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.05000000" })
+          .where(eq(schema.fifoLots.id, localLot.id))
+
+        const [preArrivalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-pre-arrival-disposal",
+            timestamp: new Date("2025-04-11T10:41:30.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (preArrivalTransaction === undefined) {
+          return yield* Effect.die("Failed to seed pre-arrival disposal")
+        }
+        const [preArrivalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-pre-arrival-disposal-leg",
+            timestamp: new Date("2025-04-11T10:41:30.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            fiatAmount: "3000.00",
+            fiatCurrency: "EUR",
+            transactionId: preArrivalTransaction.id,
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (preArrivalLeg === undefined) {
+          return yield* Effect.die("Failed to seed pre-arrival disposal leg")
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: preArrivalLeg.id,
+          fifoLotId: openingInventory.openingLotId,
+          matchedAmount: "0.05000000",
+          costBasis: "2500.00",
+          proceeds: "3000.00",
+          gainLoss: "500.00",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.70000000" })
+          .where(eq(schema.fifoLots.id, openingInventory.openingLotId))
+
+        const [unrelatedOriginTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-unrelated-origin",
+            timestamp: new Date("2025-04-11T10:39:00.000Z"),
+            transactionType: "internal_transfer",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [unrelatedDestinationTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-unrelated-destination",
+            timestamp: new Date("2025-04-11T10:39:30.000Z"),
+            transactionType: "internal_transfer",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (
+          unrelatedOriginTransaction === undefined ||
+          unrelatedDestinationTransaction === undefined
+        ) {
+          return yield* Effect.die("Failed to seed unrelated internal transfer")
+        }
+        const [unrelatedProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: unrelatedOriginTransaction.id,
+            externalId: "late-ambiguity-unrelated-provider-transfer",
+            providerAssetId: unrelatedProviderAssetRowId,
+            timestamp: new Date("2025-04-11T10:39:00.000Z"),
+            direction: "outbound",
+            processingMode: "accounting_and_evidence",
+            fromAccountRef: "unrelated-account",
+            toAddress: "unrelated-destination",
+            amount: "0.05000000",
+            metadata: {},
+          })
+          .returning({ id: schema.providerTransfers.id })
+        if (unrelatedProviderTransfer === undefined) {
+          return yield* Effect.die("Failed to seed unrelated provider transfer")
+        }
+        const unrelatedMetadata = {
+          reconciliation: {
+            providerTransferId: unrelatedProviderTransfer.id,
+            dispositionSource: "open_lots",
+          },
+        }
+        const unrelatedLegs = yield* db
+          .insert(schema.transactionLegs)
+          .values([
+            {
+              sourceId: ONCHAIN_SOURCE_ID,
+              externalId: "late-ambiguity-unrelated-origin-leg",
+              timestamp: new Date("2025-04-11T10:39:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_EUR_ASSET_ID,
+              amount: "0.05000000",
+              kind: "disposal" as const,
+              provenance: "deterministic" as const,
+              derivationRule: "internal_transfer_out",
+              transactionId: unrelatedOriginTransaction.id,
+              metadata: unrelatedMetadata,
+            },
+            {
+              sourceId: TEST_SOURCE_ID,
+              externalId: "late-ambiguity-unrelated-destination-leg",
+              timestamp: new Date("2025-04-11T10:39:30.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_EUR_ASSET_ID,
+              amount: "0.05000000",
+              kind: "acquisition" as const,
+              provenance: "deterministic" as const,
+              derivationRule: "internal_transfer_in",
+              transactionId: unrelatedDestinationTransaction.id,
+              metadata: unrelatedMetadata,
+            },
+          ])
+          .returning({ id: schema.transactionLegs.id, kind: schema.transactionLegs.kind })
+        const unrelatedDestinationLeg = unrelatedLegs.find(({ kind }) => kind === "acquisition")
+        if (unrelatedDestinationLeg === undefined) {
+          return yield* Effect.die("Failed to seed unrelated destination leg")
+        }
+        const [unrelatedLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_EUR_ASSET_ID,
+            acquiredAt: new Date("2025-04-11T10:39:30.000Z"),
+            originalAmount: "0.05000000",
+            remainingAmount: "0.05000000",
+            costBasisPerToken: "1.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: unrelatedDestinationLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [unrelatedMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: unrelatedOriginTransaction.id,
+            providerTransferId: unrelatedProviderTransfer.id,
+            assetId: TEST_EUR_ASSET_ID,
+            timestamp: new Date("2025-04-11T10:39:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.05000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        if (unrelatedLot === undefined || unrelatedMovement === undefined) {
+          return yield* Effect.die("Failed to seed unrelated FIFO effects")
+        }
+
+        const [downstreamOriginTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-downstream-origin",
+            timestamp: new Date("2025-04-11T10:42:00.000Z"),
+            transactionType: "internal_transfer",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [downstreamDestinationTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-downstream-destination",
+            timestamp: new Date("2025-04-11T10:43:00.000Z"),
+            transactionType: "internal_transfer",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+
+        if (
+          downstreamOriginTransaction === undefined ||
+          downstreamDestinationTransaction === undefined
+        ) {
+          return yield* Effect.die("Failed to seed late ambiguity downstream transfer")
+        }
+
+        const [downstreamProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: downstreamOriginTransaction.id,
+            externalId: "late-ambiguity-downstream-provider-transfer",
+            providerAssetId: providerAssetRowId,
+            timestamp: new Date("2025-04-11T10:42:00.000Z"),
+            direction: "outbound",
+            processingMode: "accounting_and_evidence",
+            fromAccountRef: "owned-wallet",
+            toAddress: "bc1qlateambiguitydownstream000000000000000000",
+            amount: "0.05000000",
+            metadata: {},
+          })
+          .returning({ id: schema.providerTransfers.id })
+        if (downstreamProviderTransfer === undefined) {
+          return yield* Effect.die("Failed to seed downstream provider transfer")
+        }
+        const [downstreamMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            transactionId: downstreamOriginTransaction.id,
+            providerTransferId: downstreamProviderTransfer.id,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-11T10:42:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "non_taxable",
+            reconciliationStatus: "matched",
+            amount: "0.05000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        if (downstreamMovement === undefined) {
+          return yield* Effect.die("Failed to seed downstream custody movement")
+        }
+        const downstreamMetadata = {
+          reconciliation: {
+            providerTransferId: downstreamProviderTransfer.id,
+            dispositionSource: "custody_allocations",
+          },
+        }
+        const [downstreamOriginLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "late-ambiguity-downstream-origin-leg",
+            timestamp: new Date("2025-04-11T10:42:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "internal_transfer_out",
+            transactionId: downstreamOriginTransaction.id,
+            metadata: downstreamMetadata,
+          })
+          .returning({ id: schema.transactionLegs.id })
+        const [downstreamDestinationLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "late-ambiguity-downstream-destination-leg",
+            timestamp: new Date("2025-04-11T10:43:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.05000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            derivationRule: "internal_transfer_in",
+            transactionId: downstreamDestinationTransaction.id,
+            metadata: downstreamMetadata,
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (downstreamOriginLeg === undefined || downstreamDestinationLeg === undefined) {
+          return yield* Effect.die("Failed to seed late ambiguity downstream legs")
+        }
+
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: downstreamOriginLeg.id,
+          fifoLotId: carriedLot.id,
+          matchedAmount: "0.05000000",
+          costBasis: "2500.00",
+          proceeds: "0.00",
+          gainLoss: "-2500.00",
+        })
+        yield* db
+          .update(schema.fifoLots)
+          .set({ remainingAmount: "0.00000000" })
+          .where(eq(schema.fifoLots.id, carriedLot.id))
+        const [downstreamLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "0.05000000",
+            remainingAmount: "0.05000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: downstreamDestinationLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+
+        if (downstreamLot === undefined) {
+          return yield* Effect.die("Failed to seed late ambiguity downstream lot")
+        }
+
+        return {
+          disposalLegId: disposalLeg.id,
+          downstreamLotId: downstreamLot.id,
+          downstreamMovementId: downstreamMovement.id,
+          downstreamOriginTransactionId: downstreamOriginTransaction.id,
+          laterDisposalLegId: laterDisposalLeg.id,
+          laterDisposalTransactionId: laterDisposalTransaction.id,
+          localLotId: localLot.id,
+          feeMovementId: feeMovement.id,
+          duplicateMovementId: duplicateMovement.id,
+          preArrivalLegId: preArrivalLeg.id,
+          unrelatedLegIds: unrelatedLegs.map(({ id }) => id),
+          unrelatedLotId: unrelatedLot.id,
+          unrelatedMovementId: unrelatedMovement.id,
+        }
+      })
+    )
+
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-late-ambiguity-2",
+        txHash: "btc-late-ambiguity-hash-2",
+        timestamp: new Date("2025-04-11T10:38:00.000Z"),
+        amount: "0.25000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+
+    expect((await reconcile()).needsReview).toBe(1)
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        const [openingLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, openingInventory.openingLotId))
+        const [movement] = yield* db
+          .select({
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, openingInventory.movementId))
+        const allocations = yield* db
+          .select({ matchedAmount: schema.inventoryMovementAllocations.matchedAmount })
+          .from(schema.inventoryMovementAllocations)
+          .where(
+            eq(schema.inventoryMovementAllocations.inventoryMovementId, openingInventory.movementId)
+          )
+        const downstreamMatches = yield* db
+          .select({
+            fifoLotId: schema.disposalMatches.fifoLotId,
+            matchedAmount: schema.disposalMatches.matchedAmount,
+          })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.disposalLegId, downstreamUsage.disposalLegId))
+        const [localLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, downstreamUsage.localLotId))
+        const feeAllocations = yield* db
+          .select({
+            fifoLotId: schema.inventoryMovementAllocations.fifoLotId,
+            matchedAmount: schema.inventoryMovementAllocations.matchedAmount,
+          })
+          .from(schema.inventoryMovementAllocations)
+          .where(
+            eq(
+              schema.inventoryMovementAllocations.inventoryMovementId,
+              downstreamUsage.feeMovementId
+            )
+          )
+        const duplicateMovementAllocations = yield* db
+          .select({ id: schema.inventoryMovementAllocations.id })
+          .from(schema.inventoryMovementAllocations)
+          .where(
+            eq(
+              schema.inventoryMovementAllocations.inventoryMovementId,
+              downstreamUsage.duplicateMovementId
+            )
+          )
+        const [downstreamLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, downstreamUsage.downstreamLotId))
+        const [downstreamMovement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, downstreamUsage.downstreamMovementId))
+        const [downstreamMovementReview] = yield* db
+          .select({
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+          })
+          .from(schema.transactionReviews)
+          .where(
+            eq(
+              schema.transactionReviews.transactionId,
+              downstreamUsage.downstreamOriginTransactionId
+            )
+          )
+        const laterDisposalMatches = yield* db
+          .select({ id: schema.disposalMatches.id })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.disposalLegId, downstreamUsage.laterDisposalLegId))
+        const [laterDisposalReview] = yield* db
+          .select({
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+          })
+          .from(schema.transactionReviews)
+          .where(
+            eq(schema.transactionReviews.transactionId, downstreamUsage.laterDisposalTransactionId)
+          )
+        const preArrivalMatches = yield* db
+          .select({ matchedAmount: schema.disposalMatches.matchedAmount })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.disposalLegId, downstreamUsage.preArrivalLegId))
+        const unrelatedLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(inArray(schema.transactionLegs.id, downstreamUsage.unrelatedLegIds))
+        const [unrelatedLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, downstreamUsage.unrelatedLotId))
+        const [unrelatedMovement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, downstreamUsage.unrelatedMovementId))
+
+        return {
+          reconciliation,
+          internalLegs,
+          openingLot,
+          movement,
+          allocations,
+          downstreamMatches,
+          downstreamLot,
+          downstreamMovement,
+          downstreamMovementReview,
+          laterDisposalMatches,
+          laterDisposalReview,
+          localLot,
+          feeAllocations,
+          duplicateMovementAllocations,
+          preArrivalMatches,
+          unrelatedLegs,
+          unrelatedLot,
+          unrelatedMovement,
+        }
+      })
+    )
+
+    expect(state.reconciliation).toEqual({
+      status: "needs_review",
+      canonicalTransferId: null,
+      matchReason: "multiple_candidate_onchain_receipts",
+    })
+    expect(state.internalLegs).toHaveLength(2)
+    expect(state.downstreamLot).toBeUndefined()
+    expect(state.downstreamMovement).toEqual({
+      reconciliationStatus: "unmatched",
+      taxTreatment: "pending_review",
+    })
+    expect(state.downstreamMovementReview).toEqual({
+      matchedLayer: "fifo_inventory",
+      needsReview: true,
+    })
+    expect(state.laterDisposalMatches).toHaveLength(0)
+    expect(state.laterDisposalReview).toEqual({
+      matchedLayer: "fifo_inventory",
+      needsReview: true,
+    })
+    expect(state.openingLot?.remainingAmount).toContain("0.70000000")
+    expect(state.preArrivalMatches).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.05000000") }),
+    ])
+    expect(state.unrelatedLegs).toHaveLength(2)
+    expect(state.unrelatedLot).toEqual({ id: downstreamUsage.unrelatedLotId })
+    expect(state.unrelatedMovement).toEqual({
+      reconciliationStatus: "matched",
+      taxTreatment: "non_taxable",
+    })
+    expect(state.allocations).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.25000000") }),
+    ])
+    expect(state.downstreamMatches).toEqual([
+      expect.objectContaining({
+        fifoLotId: downstreamUsage.localLotId,
+        matchedAmount: expect.stringContaining("0.10000000"),
+      }),
+    ])
+    expect(state.feeAllocations).toEqual([
+      expect.objectContaining({
+        fifoLotId: downstreamUsage.localLotId,
+        matchedAmount: expect.stringContaining("0.10000000"),
+      }),
+    ])
+    expect(state.duplicateMovementAllocations).toHaveLength(0)
+    expect(state.localLot?.remainingAmount).toContain("0.05000000")
+    expect(state.movement).toEqual({
+      taxTreatment: "pending_review",
+      reconciliationStatus: "unmatched",
+    })
+  })
+
+  it("moves both provider transfers to review when they claim one canonical receipt", async () => {
+    const walletAddress = "bc1qownedwalletduplicateclaim00000000000000000"
+    const timestamp = new Date("2025-04-11T12:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-duplicate-claim" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferIds = await Promise.all(
+      ["a", "b"].map((suffix) =>
+        runPg(
+          seedProviderTransfer({
+            providerAssetRowId,
+            externalId: `provider-transfer-duplicate-claim-${suffix}`,
+            timestamp,
+            amount: "0.12500000",
+            toAddress: walletAddress,
+            networkHash: "btc-duplicate-claim-hash",
+          })
+        )
+      )
+    )
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-duplicate-claim",
+        txHash: "btc-duplicate-claim-hash",
+        timestamp: new Date("2025-04-11T12:05:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const applySummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const reconciliations = yield* db
+          .select({
+            providerTransferId: schema.transferReconciliations.providerTransferId,
+            status: schema.transferReconciliations.status,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+          })
+          .from(schema.transferReconciliations)
+          .where(inArray(schema.transferReconciliations.providerTransferId, providerTransferIds))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        return { reconciliations, internalLegs }
+      })
+    )
+
+    expect(applySummary).toEqual({ canonicalizedPairs: 0 })
+    expect(state.reconciliations).toHaveLength(2)
+    expect(state.reconciliations).toEqual(
+      expect.arrayContaining(
+        providerTransferIds.map((providerTransferId) => ({
+          providerTransferId,
+          status: "needs_review",
+          canonicalTransferId: null,
+        }))
+      )
+    )
+    expect(state.internalLegs).toHaveLength(0)
+  })
+
+  it("resumes duplicate-claim rollback after interruption", async () => {
+    const walletAddress = "bc1qownedwalletclaimrecovery000000000000000000"
+    const timestamp = new Date("2025-04-11T12:20:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-claim-recovery" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const firstProviderTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-claim-recovery-a",
+        timestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: "btc-claim-recovery-hash",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-claim-recovery",
+        txHash: "btc-claim-recovery-hash",
+        timestamp: new Date("2025-04-11T12:25:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, firstProviderTransferId))
+          .limit(1)
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "claim-recovery-opening-leg",
+            timestamp: new Date("2025-04-01T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.50000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "25000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (providerTransfer === undefined || openingLeg === undefined) {
+          return yield* Effect.die("Failed to seed duplicate-claim inventory")
+        }
+        const [openingLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
+            originalAmount: "0.50000000",
+            remainingAmount: "0.37500000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: openingLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [movement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransfer.transactionId,
+            providerTransferId: firstProviderTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp,
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.12500000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        if (openingLot === undefined || movement === undefined) {
+          return yield* Effect.die("Failed to seed duplicate-claim FIFO rows")
+        }
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: movement.id,
+          fifoLotId: openingLot.id,
+          matchedAmount: "0.12500000",
+        })
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+
+    const secondProviderTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-claim-recovery-b",
+        timestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: "btc-claim-recovery-hash",
+      })
+    )
+    const upsertAutomaticClaim = (providerTransferId: string) =>
+      runTransferReconciliationRepository(
+        Effect.flatMap(TransferReconciliationRepository, (repository) =>
+          repository.upsertTransferReconciliation({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId,
+            canonicalTransferId: receipt.transferId,
+            canonicalTransactionId: receipt.transactionId,
+            status: "auto_applied",
+            matchReason: "deterministic_wallet_receipt_match",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+        )
+      )
+
+    const conflict = await upsertAutomaticClaim(secondProviderTransferId)
+    expect(conflict.conflictingProviderTransferId).toBe(firstProviderTransferId)
+
+    const interruptedState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [first] = yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, firstProviderTransferId))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        return { first, internalLegs }
+      })
+    )
+    expect(interruptedState.first).toEqual({
+      status: "needs_review",
+      matchReason: "canonical_transfer_claim_conflict_pending_rollback",
+      canonicalTransferId: receipt.transferId,
+    })
+    expect(interruptedState.internalLegs).not.toHaveLength(0)
+
+    await upsertAutomaticClaim(firstProviderTransferId)
+
+    const recoveredState = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const reconciliations = yield* db
+          .select({
+            providerTransferId: schema.transferReconciliations.providerTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+          })
+          .from(schema.transferReconciliations)
+          .where(
+            inArray(schema.transferReconciliations.providerTransferId, [
+              firstProviderTransferId,
+              secondProviderTransferId,
+            ])
+          )
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        return { reconciliations, internalLegs }
+      })
+    )
+    expect(recoveredState.reconciliations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerTransferId: firstProviderTransferId,
+          status: "needs_review",
+          matchReason: "canonical_transfer_claim_conflict",
+          canonicalTransferId: null,
+        }),
+        expect.objectContaining({
+          providerTransferId: secondProviderTransferId,
+          status: "needs_review",
+          canonicalTransferId: null,
+        }),
+      ])
+    )
+    expect(recoveredState.internalLegs).toHaveLength(0)
+  })
+
+  it("keeps an approved canonical claim when a later provider transfer claims it", async () => {
+    const walletAddress = "bc1qownedwalletapprovedclaim000000000000000000"
+    const timestamp = new Date("2025-04-11T12:40:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-approved-claim" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const firstProviderTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-approved-claim-a",
+        timestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: "btc-approved-claim-hash",
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-approved-claim",
+        txHash: "btc-approved-claim-hash",
+        timestamp: new Date("2025-04-11T12:45:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const custodyInventory = await runPg(
+      seedCustodyInventory({
+        amount: "0.12500000",
+        externalId: "approved-claim",
+        providerTransferId: firstProviderTransferId,
+        timestamp,
+      })
+    )
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.reconcileTransferCandidates({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+        })
+      )
+    )
+    expect(
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+          })
+        )
+      )
+    ).toEqual({ canonicalizedPairs: 1 })
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.transferReconciliations)
+          .set({ status: "approved", updatedAt: new Date("2025-04-11T12:46:00.000Z") })
+          .where(eq(schema.transferReconciliations.providerTransferId, firstProviderTransferId))
+      })
+    )
+    const secondProviderTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-approved-claim-b",
+        timestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: "btc-approved-claim-hash",
+      })
+    )
+    await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.upsertTransferReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId: secondProviderTransferId,
+          canonicalTransferId: receipt.transferId,
+          canonicalTransactionId: receipt.transactionId,
+          status: "auto_applied",
+          matchReason: "deterministic_wallet_receipt_match",
+          confidence: "1.0000",
+          deterministic: true,
+          reviewMetadata: {},
+        })
+      )
+    )
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const reconciliations = yield* db
+          .select({
+            providerTransferId: schema.transferReconciliations.providerTransferId,
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+          })
+          .from(schema.transferReconciliations)
+          .where(
+            inArray(schema.transferReconciliations.providerTransferId, [
+              firstProviderTransferId,
+              secondProviderTransferId,
+            ])
+          )
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        const [movement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, custodyInventory.movementId))
+        return { internalLegs, movement, reconciliations }
+      })
+    )
+    expect(state.reconciliations).toEqual(
+      expect.arrayContaining([
+        {
+          providerTransferId: firstProviderTransferId,
+          status: "approved",
+          matchReason: "deterministic_wallet_receipt_match",
+          canonicalTransferId: receipt.transferId,
+        },
+        {
+          providerTransferId: secondProviderTransferId,
+          status: "needs_review",
+          matchReason: "canonical_transfer_already_approved",
+          canonicalTransferId: null,
+        },
+      ])
+    )
+    expect(state.internalLegs).toHaveLength(2)
+    expect(state.movement).toEqual({
+      reconciliationStatus: "matched",
+      taxTreatment: "non_taxable",
+    })
+  })
+
+  it("revalidates the candidate set after locking the destination source", async () => {
+    const walletAddress = "bc1qownedwalletstalesnapshot000000000000000000"
+    const timestamp = new Date("2025-04-11T13:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-stale-snapshot" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-stale-snapshot",
+        timestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: null,
+      })
+    )
+    const search = {
+      principalId: TEST_PRINCIPAL_ID,
+      direction: "outbound" as const,
+      walletAddress,
+      timestampStart: new Date("2025-04-11T12:00:00.000Z"),
+      timestampEnd: new Date("2025-04-11T14:00:00.000Z"),
+      networkName: "bitcoin",
+      networkHash: null,
+    }
+    const firstReceipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-stale-snapshot-1",
+        txHash: "btc-stale-snapshot-hash-1",
+        timestamp: new Date("2025-04-11T13:05:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const initialCandidates = await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.findOnchainTransferCandidates(search)
+      )
+    )
+    expect(initialCandidates).toHaveLength(1)
+    const initialCandidate = initialCandidates[0]
+    if (initialCandidate === undefined) {
+      throw new Error("Missing initial reconciliation candidate")
+    }
+    const candidateFingerprint = JSON.stringify([
+      initialCandidate.transferId,
+      initialCandidate.observedProviderTransferId,
+      initialCandidate.transactionId,
+      initialCandidate.sourceId,
+      initialCandidate.addressId,
+      initialCandidate.blockchainId,
+      initialCandidate.blockchainName,
+      initialCandidate.txHash,
+      initialCandidate.timestamp.toISOString(),
+      initialCandidate.fromAddress,
+      initialCandidate.toAddress,
+      initialCandidate.providerAssetRowId,
+      initialCandidate.providerAssetMappingStatus,
+      initialCandidate.assetId,
+      initialCandidate.assetRepresentationId,
+      initialCandidate.representationType,
+      initialCandidate.contractAddress,
+      initialCandidate.mintAddress,
+      initialCandidate.decimals,
+      initialCandidate.amount,
+    ])
+
+    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseLock = await Effect.runPromise(Deferred.make<void>())
+    const lockDestinationSource = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, ONCHAIN_SOURCE_ID))
+              .for("no key update")
+            yield* Deferred.succeed(lockAcquired, undefined)
+            yield* Deferred.await(releaseLock)
+          })
+        )
+      })
+    )
+    await Effect.runPromise(Deferred.await(lockAcquired))
+
+    const upsert = runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.upsertTransferReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId,
+          canonicalTransferId: firstReceipt.transferId,
+          canonicalTransactionId: firstReceipt.transactionId,
+          status: "auto_applied",
+          matchReason: "single_exact_onchain_receipt",
+          confidence: "1.0000",
+          deterministic: true,
+          reviewMetadata: {},
+          candidateSnapshot: {
+            search,
+            providerAmount: "0.12500000",
+            candidateFingerprints: [candidateFingerprint],
+          },
+        })
+      )
+    )
+    await context.waitForQueryBlockedOnLock({ queryIncludes: 'from "sources"' })
+
+    await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-stale-snapshot-2",
+        txHash: "btc-stale-snapshot-hash-2",
+        timestamp: new Date("2025-04-11T13:06:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+    const [result] = await Promise.all([upsert, lockDestinationSource])
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.providerTransferId, providerTransferId))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        return { internalLegs, reconciliation }
+      })
+    )
+
+    expect(result.candidateSnapshotChanged).toBe(true)
+    expect(state.reconciliation).toEqual({
+      status: "needs_review",
+      canonicalTransferId: null,
+      matchReason: "candidate_set_changed_during_reconciliation",
+    })
+    expect(state.internalLegs).toHaveLength(0)
   })
 
   it("uses an exact hash despite provider address and timestamp drift", async () => {
@@ -820,9 +2876,9 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
-      deterministic: true,
+      status: "needs_review",
+      matchReason: "insufficient_fifo_inventory",
+      deterministic: false,
     })
     expect(canonicalization).toEqual({ canonicalizedPairs: 0 })
   })
@@ -895,8 +2951,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
     })
   })
 
@@ -954,8 +3010,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
       deterministic: true,
     })
   })
@@ -973,7 +3029,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (blockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         return blockchain.id
@@ -1041,7 +3097,7 @@ describe("TransferReconciliationServiceLive", () => {
     })
   })
 
-  it("filters known incompatible assets before deciding candidate ambiguity", async () => {
+  it("keeps exact movement candidates ambiguous before checking economic identity", async () => {
     const walletAddress = "bc1qownedwalletknownasset000000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
@@ -1058,7 +3114,7 @@ describe("TransferReconciliationServiceLive", () => {
         networkHash: null,
       })
     )
-    const matchingReceipt = await runPg(
+    await runPg(
       seedOnchainReceipt({
         externalId: "onchain-receipt-known-asset",
         txHash: "btc-known-asset",
@@ -1105,13 +3161,13 @@ describe("TransferReconciliationServiceLive", () => {
     )
 
     expect(reconciliation).toMatchObject({
-      canonicalTransferId: matchingReceipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      canonicalTransferId: null,
+      status: "needs_review",
+      matchReason: "multiple_candidate_onchain_receipts",
     })
   })
 
-  it("keeps a sole known-asset conflict unresolved without moving inventory", async () => {
+  it("keeps a sole candidate pending when exact representation evidence is missing", async () => {
     const walletAddress = "bc1qownedwalletassetconflict00000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
@@ -1173,14 +3229,14 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(state.reconciliation).toMatchObject({
       canonicalTransferId: null,
-      status: "needs_review",
-      matchReason: "known_asset_candidate_conflict",
+      status: "pending",
+      matchReason: "destination_representation_observation_missing",
       deterministic: false,
     })
     expect(state.inventoryMovements).toEqual([])
   })
 
-  it("prefers a canonical transfer over its observed evidence row", async () => {
+  it("requires exact representation identity on a preferred canonical candidate", async () => {
     const walletAddress = "bc1qownedwalletdedup0000000000000000000000"
     const timestamp = new Date("2025-04-10T10:00:00.000Z")
     const providerAssetRowId = await runPg(
@@ -1200,7 +3256,7 @@ describe("TransferReconciliationServiceLive", () => {
         networkHash: null,
       })
     )
-    const receipt = await runPg(
+    await runPg(
       seedOnchainReceipt({
         externalId: "onchain-shared-dedup",
         txHash: "btc-shared-dedup",
@@ -1248,9 +3304,9 @@ describe("TransferReconciliationServiceLive", () => {
     )
 
     expect(reconciliation).toMatchObject({
-      canonicalTransferId: receipt.transferId,
+      canonicalTransferId: null,
       status: "pending",
-      matchReason: "fifo_application_deferred",
+      matchReason: "destination_representation_observation_missing",
     })
   })
 
@@ -1316,8 +3372,8 @@ describe("TransferReconciliationServiceLive", () => {
 
     expect(reconciliation).toMatchObject({
       canonicalTransferId: receipt.transferId,
-      status: "pending",
-      matchReason: "fifo_application_deferred",
+      status: "auto_applied",
+      matchReason: "deterministic_wallet_receipt_match",
     })
   })
 
@@ -1735,7 +3791,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (blockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         return blockchain.id
@@ -1991,7 +4047,7 @@ describe("TransferReconciliationServiceLive", () => {
     expect(reconciliations[0]).toEqual(
       expect.objectContaining({
         providerTransferId,
-        status: "pending",
+        status: "auto_applied",
         deterministic: true,
       })
     )
@@ -2136,7 +4192,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create reselect reconciliation fixture")
+          return yield* Effect.die("Failed to create reselect reconciliation fixture")
         }
         return reconciliation.id
       })
@@ -2280,7 +4336,7 @@ describe("TransferReconciliationServiceLive", () => {
         const first = rows[0]
         const second = rows[1]
         if (first === undefined || second === undefined) {
-          return yield* Effect.dieMessage("Failed to create reconciliation fixtures")
+          return yield* Effect.die("Failed to create reconciliation fixtures")
         }
 
         return [first.id, second.id] as const
@@ -2298,7 +4354,7 @@ describe("TransferReconciliationServiceLive", () => {
             timestamp: new Date("2025-04-01T10:00:00.000Z"),
             principalId: TEST_PRINCIPAL_ID,
             assetId: TEST_BTC_ASSET_ID,
-            amount: "1.00000000",
+            amount: "0.30000000",
             kind: "acquisition",
             provenance: "deterministic",
             fiatAmount: "50000.00",
@@ -2307,7 +4363,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (leg === undefined) {
-          return yield* Effect.dieMessage("Failed to create acquisition leg fixture")
+          return yield* Effect.die("Failed to create acquisition leg fixture")
         }
 
         const [lot] = yield* db
@@ -2317,14 +4373,48 @@ describe("TransferReconciliationServiceLive", () => {
             sourceId: TEST_SOURCE_ID,
             assetId: TEST_BTC_ASSET_ID,
             acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
-            originalAmount: "1.00000000",
-            remainingAmount: "0.90000000",
+            originalAmount: "0.15000000",
+            remainingAmount: "0.05000000",
             costBasisPerToken: "50000.000000000000000000",
             costBasisCurrency: "EUR",
+            costBasisStatus: "pending_review",
             sourceLegId: leg.id,
             sourceLegSequence: 0,
           })
           .returning({ id: schema.fifoLots.id })
+        const [knownLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "scoped-replay-known-acquisition-leg",
+            timestamp: new Date("2025-04-02T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.15000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: null,
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (knownLeg === undefined) {
+          return yield* Effect.die("Failed to create known acquisition leg fixture")
+        }
+
+        yield* db.insert(schema.fifoLots).values({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          acquiredAt: new Date("2025-04-02T10:00:00.000Z"),
+          originalAmount: "0.15000000",
+          remainingAmount: "0.15000000",
+          costBasisPerToken: "60000.000000000000000000",
+          costBasisCurrency: "EUR",
+          costBasisStatus: "known",
+          sourceLegId: knownLeg.id,
+          sourceLegSequence: 0,
+        })
         const [providerTransfer] = yield* db
           .select({ transactionId: schema.providerTransfers.transactionId })
           .from(schema.providerTransfers)
@@ -2332,7 +4422,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (lot === undefined || providerTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody allocation fixture")
+          return yield* Effect.die("Failed to create custody allocation fixture")
         }
 
         const [movement] = yield* db
@@ -2354,7 +4444,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create inventory movement fixture")
+          return yield* Effect.die("Failed to create inventory movement fixture")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -2382,7 +4472,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (feeLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create origin fee leg fixture")
+          return yield* Effect.die("Failed to create origin fee leg fixture")
         }
 
         // Match the transfer amount so the test proves that amount equality does not make this
@@ -2406,7 +4496,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (feeMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create origin fee movement fixture")
+          return yield* Effect.die("Failed to create origin fee movement fixture")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -2439,7 +4529,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (providerOriginLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create provider-origin lot fixture")
+          return yield* Effect.die("Failed to create provider-origin lot fixture")
         }
 
         return {
@@ -2531,7 +4621,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (reviewedTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to load reviewed disposal fixture")
+          return yield* Effect.die("Failed to load reviewed disposal fixture")
         }
 
         yield* db
@@ -2570,7 +4660,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.providerTransfers.id })
 
         if (redundantProviderTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create redundant principal transfer fixture")
+          return yield* Effect.die("Failed to create redundant principal transfer fixture")
         }
 
         const [redundantPrincipalMovement] = yield* db
@@ -2591,7 +4681,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (redundantPrincipalMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create redundant principal movement fixture")
+          return yield* Effect.die("Failed to create redundant principal movement fixture")
         }
 
         const [localAcquisitionLeg] = yield* db
@@ -2612,7 +4702,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (localAcquisitionLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create destination acquisition fixture")
+          return yield* Effect.die("Failed to create destination acquisition fixture")
         }
 
         const [localLot] = yield* db
@@ -2644,7 +4734,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactions.id })
 
         if (localLot === undefined || laterTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create later disposal fixtures")
+          return yield* Effect.die("Failed to create later disposal fixtures")
         }
 
         const [laterDisposalLeg] = yield* db
@@ -2667,7 +4757,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (laterDisposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create later disposal leg fixture")
+          return yield* Effect.die("Failed to create later disposal leg fixture")
         }
 
         yield* db.insert(schema.disposalMatches).values({
@@ -2699,7 +4789,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (feeLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create fee leg fixture")
+          return yield* Effect.die("Failed to create fee leg fixture")
         }
 
         const [feeMovement] = yield* db
@@ -2721,7 +4811,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (feeMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create fee movement fixture")
+          return yield* Effect.die("Failed to create fee movement fixture")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -2766,7 +4856,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (canonicalTransferTransaction === undefined || canonicalAcquisitionLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical transfer fixtures")
+          return yield* Effect.die("Failed to create canonical transfer fixtures")
         }
 
         const [canonicalTransferLeg] = yield* db
@@ -2804,7 +4894,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (canonicalTransferLeg === undefined || canonicalLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical transfer FIFO fixtures")
+          return yield* Effect.die("Failed to create canonical transfer FIFO fixtures")
         }
 
         const [canonicalMovement] = yield* db
@@ -2826,7 +4916,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (canonicalMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical custody movement fixture")
+          return yield* Effect.die("Failed to create canonical custody movement fixture")
         }
 
         yield* db.insert(schema.disposalMatches).values({
@@ -2937,6 +5027,8 @@ describe("TransferReconciliationServiceLive", () => {
             remainingAmount: schema.fifoLots.remainingAmount,
             costBasisPerToken: schema.fifoLots.costBasisPerToken,
             costBasisCurrency: schema.fifoLots.costBasisCurrency,
+            costBasisStatus: schema.fifoLots.costBasisStatus,
+            sourceLegSequence: schema.fifoLots.sourceLegSequence,
           })
           .from(schema.fifoLots)
           .where(
@@ -2958,16 +5050,68 @@ describe("TransferReconciliationServiceLive", () => {
         remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+        sourceLegSequence: 0,
       }),
       expect.objectContaining({
         acquiredAt: new Date("2025-04-01T10:00:00.000Z"),
         assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
-        originalAmount: expect.stringContaining("0.20000000"),
-        remainingAmount: expect.stringContaining("0.08000000"),
+        originalAmount: expect.stringContaining("0.05000000"),
+        remainingAmount: expect.stringContaining("0.00000000"),
         costBasisPerToken: expect.stringContaining("50000.000000000000000000"),
         costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+        sourceLegSequence: 0,
+      }),
+      expect.objectContaining({
+        acquiredAt: new Date("2025-04-02T10:00:00.000Z"),
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        originalAmount: expect.stringContaining("0.15000000"),
+        remainingAmount: expect.stringContaining("0.10000000"),
+        costBasisPerToken: expect.stringContaining("60000.000000000000000000"),
+        costBasisCurrency: "EUR",
+        costBasisStatus: "known",
+        sourceLegSequence: 1,
       }),
     ])
+
+    const pendingMovedLot = movedLots.find(
+      (lot) => lot.costBasisStatus === "pending_review" && lot.originalAmount.includes("0.05000000")
+    )
+    expect(pendingMovedLot).toBeDefined()
+    if (pendingMovedLot === undefined) {
+      return
+    }
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.fifoLots)
+          .set({ costBasisStatus: "known" })
+          .where(eq(schema.fifoLots.id, pendingMovedLot.id))
+      })
+    )
+    const retrySummary = await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId: secondReconciliationId,
+        })
+      )
+    )
+    const [repairedPendingLot] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ costBasisStatus: schema.fifoLots.costBasisStatus })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, pendingMovedLot.id))
+      })
+    )
+
+    expect(retrySummary).toEqual({ canonicalizedPairs: 1 })
+    expect(repairedPendingLot).toEqual({ costBasisStatus: "pending_review" })
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -3092,13 +5236,7 @@ describe("TransferReconciliationServiceLive", () => {
       reconciliationStatus: "unmatched",
       taxTreatment: "pending_review",
     })
-    expect(state.allocations).toEqual([
-      expect.objectContaining({
-        inventoryMovementId: destinationRecoveryFixture.feeMovementId,
-        fifoLotId: movedLots[0]?.id,
-        matchedAmount: expect.stringContaining("0.02000000"),
-      }),
-    ])
+    expect(state.allocations).toEqual([])
     expect(state.canonicalMovementAllocations).toHaveLength(0)
     expect(state.redundantPrincipalMovement).toEqual({ reconciliationStatus: "unmatched" })
     expect(state.redundantPrincipalMovementAllocations).toHaveLength(0)
@@ -3127,8 +5265,8 @@ describe("TransferReconciliationServiceLive", () => {
           transactionId: firstReceipt.transactionId,
           reviewStatus: "needs_review",
           categorizationReason:
-            "provider_asset_mapping: Keep this unresolved provider review.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
-          matchedLayer: "provider_asset_mapping,transfer_reconciliation",
+            "provider_asset_mapping: Keep this unresolved provider review.\nfifo_inventory: Review required because destination fee inventory is incomplete.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+          matchedLayer: "provider_asset_mapping,fifo_inventory,transfer_reconciliation",
           needsReview: true,
         }),
       ])
@@ -3149,15 +5287,15 @@ describe("TransferReconciliationServiceLive", () => {
       expect.arrayContaining([
         expect.objectContaining({
           fifoLotId: movedLots[0]?.id,
-          matchedAmount: expect.stringContaining("0.08000000"),
+          matchedAmount: expect.stringContaining("0.10000000"),
         }),
         expect.objectContaining({
           fifoLotId: movedLots[1]?.id,
-          matchedAmount: expect.stringContaining("0.07000000"),
+          matchedAmount: expect.stringContaining("0.05000000"),
         }),
         expect.objectContaining({
           disposalLegId: destinationRecoveryFixture.laterDisposalLegId,
-          fifoLotId: movedLots[1]?.id,
+          fifoLotId: movedLots[2]?.id,
           matchedAmount: expect.stringContaining("0.05000000"),
         }),
       ])
@@ -3168,7 +5306,7 @@ describe("TransferReconciliationServiceLive", () => {
       expect.arrayContaining([
         expect.objectContaining({
           sourceId: TEST_SOURCE_ID,
-          remainingAmount: expect.stringContaining("0.70000000"),
+          remainingAmount: expect.stringContaining("0.20000000"),
         }),
         expect.objectContaining({
           sourceId: ONCHAIN_SOURCE_ID,
@@ -3180,7 +5318,7 @@ describe("TransferReconciliationServiceLive", () => {
         }),
         expect.objectContaining({
           sourceId: ONCHAIN_SOURCE_ID,
-          remainingAmount: expect.stringContaining("0.08000000"),
+          remainingAmount: expect.stringContaining("0.10000000"),
         }),
       ])
     )
@@ -3200,7 +5338,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.assetRepresentations.id })
 
         if (representation === undefined) {
-          return yield* Effect.dieMessage("Failed to create replay representation fixture")
+          return yield* Effect.die("Failed to create replay representation fixture")
         }
 
         yield* db
@@ -3241,7 +5379,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (destinationLeg === undefined) {
-          return yield* Effect.dieMessage("Missing replay destination leg")
+          return yield* Effect.die("Missing replay destination leg")
         }
 
         const destinationLots = yield* db
@@ -3260,6 +5398,579 @@ describe("TransferReconciliationServiceLive", () => {
         (lot) => lot.assetRepresentationId === replayRepresentationId
       )
     ).toBe(true)
+  })
+
+  it.each([TEST_SOURCE_ID, ONCHAIN_SOURCE_ID])(
+    "unapplies cross-source reconciliation effects before source replay for %s",
+    async (replaySourceId) => {
+      const walletAddress = "bc1qownedwalletsourcereplayrollback00000000000"
+      const providerTimestamp = new Date("2025-04-14T08:00:00.000Z")
+      const providerAssetRowId = await runPg(
+        seedApprovedProviderAsset({ providerAssetId: "btc-source-replay-rollback" })
+      )
+      await runPg(seedOwnedOnchainSource({ walletAddress }))
+      const providerTransferId = await runPg(
+        seedProviderTransfer({
+          providerAssetRowId,
+          externalId: "provider-transfer-source-replay-rollback",
+          timestamp: providerTimestamp,
+          amount: "0.12500000",
+          toAddress: walletAddress,
+          networkHash: "btc-source-replay-rollback-hash",
+        })
+      )
+      const { movementId } = await runPg(
+        seedCustodyInventory({
+          amount: "0.12500000",
+          externalId: "source-replay-rollback",
+          providerTransferId,
+          timestamp: providerTimestamp,
+        })
+      )
+      const receipt = await runPg(
+        seedOnchainReceipt({
+          externalId: "onchain-receipt-source-replay-rollback",
+          txHash: "btc-source-replay-rollback-hash",
+          timestamp: new Date("2025-04-14T08:05:00.000Z"),
+          amount: "0.12500000",
+          walletAddress,
+          blockchainId: fixture.bitcoinBlockchainId,
+        })
+      )
+      const reconciliationId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [reconciliation] = yield* db
+            .insert(schema.transferReconciliations)
+            .values({
+              principalId: TEST_PRINCIPAL_ID,
+              providerTransferId,
+              canonicalTransferId: receipt.transferId,
+              canonicalTransactionId: receipt.transactionId,
+              status: "approved",
+              matchReason: "admin_approved_fixture",
+              confidence: "1.0000",
+              deterministic: true,
+              reviewMetadata: {},
+            })
+            .returning({ id: schema.transferReconciliations.id })
+          if (reconciliation === undefined) {
+            return yield* Effect.die("Failed to create source replay reconciliation")
+          }
+          return reconciliation.id
+        })
+      )
+
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            reconciliationId,
+          })
+        )
+      )
+      await runTransferReconciliationRepository(
+        Effect.flatMap(TransferReconciliationRepository, (repository) =>
+          repository.rollbackReconciliationsForSourceReplay({ sourceId: replaySourceId })
+        )
+      )
+
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [reconciliation] = yield* db
+            .select({
+              canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+              status: schema.transferReconciliations.status,
+            })
+            .from(schema.transferReconciliations)
+            .where(eq(schema.transferReconciliations.id, reconciliationId))
+          const destinationLegs = yield* db
+            .select({ id: schema.transactionLegs.id })
+            .from(schema.transactionLegs)
+            .where(
+              and(
+                eq(schema.transactionLegs.sourceId, ONCHAIN_SOURCE_ID),
+                eq(schema.transactionLegs.derivationRule, "internal_transfer_in")
+              )
+            )
+          const destinationLots = yield* db
+            .select({ id: schema.fifoLots.id })
+            .from(schema.fifoLots)
+            .where(eq(schema.fifoLots.sourceId, ONCHAIN_SOURCE_ID))
+          const movementAllocations = yield* db
+            .select({ id: schema.inventoryMovementAllocations.id })
+            .from(schema.inventoryMovementAllocations)
+            .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
+          const [movement] = yield* db
+            .select({
+              reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+              taxTreatment: schema.inventoryMovements.taxTreatment,
+            })
+            .from(schema.inventoryMovements)
+            .where(eq(schema.inventoryMovements.id, movementId))
+          return { destinationLegs, destinationLots, movement, movementAllocations, reconciliation }
+        })
+      )
+
+      expect(state.reconciliation).toEqual({ canonicalTransferId: null, status: "needs_review" })
+      expect(state.destinationLegs).toHaveLength(0)
+      expect(state.destinationLots).toHaveLength(0)
+      expect(state.movementAllocations).toHaveLength(1)
+      expect(state.movement).toEqual({
+        reconciliationStatus: "unmatched",
+        taxTreatment: "pending_review",
+      })
+    }
+  )
+
+  it("rolls reconciliation effects back into place when replay reset fails", async () => {
+    const walletAddress = "bc1qownedwalletreplayatomicity0000000000000000"
+    const providerTimestamp = new Date("2025-04-14T08:30:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-source-replay-atomicity" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-source-replay-atomicity",
+        timestamp: providerTimestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: "btc-source-replay-atomicity-hash",
+      })
+    )
+    const { movementId } = await runPg(
+      seedCustodyInventory({
+        amount: "0.12500000",
+        externalId: "source-replay-atomicity",
+        providerTransferId,
+        timestamp: providerTimestamp,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-source-replay-atomicity",
+        txHash: "btc-source-replay-atomicity-hash",
+        timestamp: new Date("2025-04-14T08:35:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const reconciliationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId,
+            canonicalTransferId: receipt.transferId,
+            canonicalTransactionId: receipt.transactionId,
+            status: "approved",
+            matchReason: "admin_approved_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+        if (reconciliation === undefined) {
+          return yield* Effect.die("Failed to create replay atomicity reconciliation")
+        }
+        return reconciliation.id
+      })
+    )
+
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId,
+        })
+      )
+    )
+
+    const dependentSourceId = "00000000-0000-0000-0000-000000000790"
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "bc1qreplayatomicdependency0000000000000000000",
+            type: "bitcoin",
+            name: "Replay atomicity dependent source",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.addresses.id })
+        if (address === undefined) {
+          return yield* Effect.die("Failed to create replay atomicity address")
+        }
+        yield* db.insert(schema.sources).values({
+          id: dependentSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Replay atomicity dependent source",
+          providerKey: "bitcoin-rpc",
+          sourceableType: "onchain",
+          cexAccountId: null,
+          addressId: address.id,
+        })
+        const [originTransaction, dependentTransaction] = yield* db
+          .insert(schema.transactions)
+          .values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-atomicity-dependent-lot-origin",
+              timestamp: new Date("2025-04-01T11:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            {
+              sourceId: dependentSourceId,
+              externalId: "replay-atomicity-dependent-disposal",
+              timestamp: new Date("2025-04-02T11:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+            },
+          ])
+          .returning({ id: schema.transactions.id })
+        if (originTransaction === undefined || dependentTransaction === undefined) {
+          return yield* Effect.die("Failed to create replay atomicity transactions")
+        }
+        const [originLeg, dependentLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values([
+            {
+              transactionId: originTransaction.id,
+              sourceId: TEST_SOURCE_ID,
+              externalId: "replay-atomicity-dependent-lot-origin-leg",
+              timestamp: new Date("2025-04-01T11:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "1.00000000",
+              kind: "acquisition",
+              provenance: "deterministic",
+            },
+            {
+              transactionId: dependentTransaction.id,
+              sourceId: dependentSourceId,
+              externalId: "replay-atomicity-dependent-disposal-leg",
+              timestamp: new Date("2025-04-02T11:00:00.000Z"),
+              principalId: TEST_PRINCIPAL_ID,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.40000000",
+              kind: "disposal",
+              provenance: "deterministic",
+            },
+          ])
+          .returning({ id: schema.transactionLegs.id })
+        if (originLeg === undefined || dependentLeg === undefined) {
+          return yield* Effect.die("Failed to create replay atomicity legs")
+        }
+        const [lot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T11:00:00.000Z"),
+            originalAmount: "1.00000000",
+            remainingAmount: "0.60000000",
+            costBasisPerToken: "10000.00",
+            costBasisCurrency: "EUR",
+            sourceLegId: originLeg.id,
+          })
+          .returning({ id: schema.fifoLots.id })
+        if (lot === undefined) {
+          return yield* Effect.die("Failed to create replay atomicity lot")
+        }
+        yield* db.insert(schema.disposalMatches).values({
+          disposalLegId: dependentLeg.id,
+          fifoLotId: lot.id,
+          matchedAmount: "0.40000000",
+          costBasis: "4000.00",
+          proceeds: "5000.00",
+          gainLoss: "1000.00",
+        })
+      })
+    )
+
+    const replayResult = await runReplayTransaction(
+      Effect.result(
+        Effect.gen(function* () {
+          const reconciliationRepository = yield* TransferReconciliationRepository
+          const replayRepository = yield* SourceReplayRepository
+          const transaction = yield* SyncEngineTransaction
+          yield* transaction.run(
+            Effect.gen(function* () {
+              yield* reconciliationRepository.rollbackReconciliationsForSourceReplay({
+                sourceId: TEST_SOURCE_ID,
+              })
+              yield* replayRepository.resetSourceDerivedState({ sourceId: TEST_SOURCE_ID })
+            })
+          )
+        })
+      )
+    )
+    expect(replayResult).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "SourceReplayDependencyError",
+        sourceId: TEST_SOURCE_ID,
+        dependentSourceIds: [dependentSourceId],
+        affectedPrincipalIds: [TEST_PRINCIPAL_ID],
+      },
+    })
+
+    const state = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.id, reconciliationId))
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        const destinationLots = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceId, ONCHAIN_SOURCE_ID))
+        const movementAllocations = yield* db
+          .select({ id: schema.inventoryMovementAllocations.id })
+          .from(schema.inventoryMovementAllocations)
+          .where(eq(schema.inventoryMovementAllocations.inventoryMovementId, movementId))
+        const [movement] = yield* db
+          .select({
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(eq(schema.inventoryMovements.id, movementId))
+        return { destinationLots, internalLegs, movement, movementAllocations, reconciliation }
+      })
+    )
+
+    expect(state.reconciliation).toEqual({
+      canonicalTransferId: receipt.transferId,
+      status: "approved",
+    })
+    expect(state.internalLegs).toHaveLength(2)
+    expect(state.destinationLots).toHaveLength(1)
+    expect(state.movementAllocations).toHaveLength(0)
+    expect(state.movement).toEqual({
+      reconciliationStatus: "matched",
+      taxTreatment: "non_taxable",
+    })
+  })
+
+  it("locks the replay source before taking the reconciliation snapshot", async () => {
+    const lockAcquired = await Effect.runPromise(Deferred.make<void>())
+    const releaseLock = await Effect.runPromise(Deferred.make<void>())
+    const heldSourceLock = runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx
+              .select({ id: schema.sources.id })
+              .from(schema.sources)
+              .where(eq(schema.sources.id, TEST_SOURCE_ID))
+              .for("update")
+            yield* Deferred.succeed(lockAcquired, undefined)
+            yield* Deferred.await(releaseLock)
+          })
+        )
+      })
+    )
+    await Effect.runPromise(Deferred.await(lockAcquired))
+
+    const rollback = runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.rollbackReconciliationsForSourceReplay({ sourceId: TEST_SOURCE_ID })
+      )
+    )
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+    await Effect.runPromise(Deferred.succeed(releaseLock, undefined))
+    await Promise.all([heldSourceLock, rollback])
+  })
+
+  it("holds replay source locks through the shared rollback transaction", async () => {
+    const walletAddress = "bc1qownedwalletreplaylockset000000000000000000"
+    const providerTimestamp = new Date("2025-04-14T09:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-source-replay-lock-set" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const providerTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-source-replay-lock-set",
+        timestamp: providerTimestamp,
+        amount: "0.12500000",
+        toAddress: walletAddress,
+        networkHash: "btc-source-replay-lock-set-hash",
+      })
+    )
+    await runPg(
+      seedCustodyInventory({
+        amount: "0.12500000",
+        externalId: "source-replay-lock-set",
+        providerTransferId,
+        timestamp: providerTimestamp,
+      })
+    )
+    const receipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-source-replay-lock-set",
+        txHash: "btc-source-replay-lock-set-hash",
+        timestamp: new Date("2025-04-14T09:05:00.000Z"),
+        amount: "0.12500000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
+    const reconciliationId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [reconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId,
+            canonicalTransferId: receipt.transferId,
+            canonicalTransactionId: receipt.transactionId,
+            status: "approved",
+            matchReason: "admin_approved_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+        if (reconciliation === undefined) {
+          return yield* Effect.die("Failed to create replay lock-set reconciliation")
+        }
+        return reconciliation.id
+      })
+    )
+    await runTransferReconciliation(
+      Effect.flatMap(TransferReconciliationService, (service) =>
+        service.applyDeterministicInternalTransferCanonicalization({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          reconciliationId,
+        })
+      )
+    )
+
+    const derivedSourceId = "00000000-0000-0000-0000-000000000791"
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [address] = yield* db
+          .insert(schema.addresses)
+          .values({
+            address: "bc1qreplaylockderived0000000000000000000000",
+            type: "bitcoin",
+            name: "Replay lock derived source",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.addresses.id })
+        if (address === undefined) {
+          return yield* Effect.die("Failed to create replay lock derived address")
+        }
+        yield* db.insert(schema.sources).values({
+          id: derivedSourceId,
+          principalId: TEST_PRINCIPAL_ID,
+          name: "Replay lock derived source",
+          providerKey: "bitcoin-rpc",
+          sourceableType: "onchain",
+          cexAccountId: null,
+          addressId: address.id,
+        })
+        yield* db.insert(schema.transactionLegs).values({
+          sourceId: derivedSourceId,
+          externalId: "source-replay-lock-derived-leg",
+          timestamp: providerTimestamp,
+          principalId: TEST_PRINCIPAL_ID,
+          assetId: TEST_BTC_ASSET_ID,
+          amount: "0.12500000",
+          kind: "acquisition",
+          provenance: "deterministic",
+          derivationRule: "internal_transfer_in",
+          metadata: { reconciliation: { providerTransferId } },
+        })
+      })
+    )
+
+    const rollbackFinished = await Effect.runPromise(Deferred.make<void>())
+    const releaseTransaction = await Effect.runPromise(Deferred.make<void>())
+    const rollbackTransaction = runReplayTransaction(
+      Effect.gen(function* () {
+        const repository = yield* TransferReconciliationRepository
+        const transaction = yield* SyncEngineTransaction
+        yield* transaction.run(
+          Effect.gen(function* () {
+            yield* repository.rollbackReconciliationsForSourceReplay({
+              sourceId: TEST_SOURCE_ID,
+            })
+            yield* Deferred.succeed(rollbackFinished, undefined)
+            yield* Deferred.await(releaseTransaction)
+          })
+        )
+      })
+    )
+    await Effect.runPromise(Deferred.await(rollbackFinished))
+
+    const competingSourceLocks = [TEST_SOURCE_ID, ONCHAIN_SOURCE_ID, derivedSourceId].map(
+      (sourceId) =>
+        runPg(
+          Effect.gen(function* () {
+            const db = yield* drizzle
+            yield* db.transaction((tx) =>
+              tx
+                .select({ id: schema.sources.id })
+                .from(schema.sources)
+                .where(eq(schema.sources.id, sourceId))
+                .for("update")
+            )
+          })
+        )
+    )
+    await context.waitForQueryBlockedOnLock({ queryIncludes: "sources" })
+    let blockedLockCount = 0
+    for (let attempt = 0; attempt < 100 && blockedLockCount < 3; attempt += 1) {
+      const [row] = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db.$client<{ readonly count: string }>`
+            select count(*)::text as count
+            from pg_stat_activity
+            where datname = current_database()
+              and wait_event_type = 'Lock'
+              and query like '%sources%for update%'
+          `
+        })
+      )
+      blockedLockCount = Number(row?.count ?? "0")
+      if (blockedLockCount < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }
+    expect(blockedLockCount).toBeGreaterThanOrEqual(3)
+    await Effect.runPromise(Deferred.succeed(releaseTransaction, undefined))
+    await Promise.all([rollbackTransaction, ...competingSourceLocks])
   })
 
   it("keeps transferred lots unavailable before the destination receipt", async () => {
@@ -3311,7 +6022,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create receipt-gating reconciliation")
+          return yield* Effect.die("Failed to create receipt-gating reconciliation")
         }
 
         const [originLeg] = yield* db
@@ -3336,7 +6047,7 @@ describe("TransferReconciliationServiceLive", () => {
           .limit(1)
 
         if (originLeg === undefined || providerTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create receipt-gating origin fixture")
+          return yield* Effect.die("Failed to create receipt-gating origin fixture")
         }
 
         const [originLot] = yield* db
@@ -3372,7 +6083,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (originLot === undefined || movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create receipt-gating custody fixture")
+          return yield* Effect.die("Failed to create receipt-gating custody fixture")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -3500,7 +6211,7 @@ describe("TransferReconciliationServiceLive", () => {
           .where(eq(schema.transactions.externalId, "destination-disposal-before-receipt"))
 
         if (disposal === undefined) {
-          return yield* Effect.dieMessage("Failed to load receipt-gating disposal")
+          return yield* Effect.die("Failed to load receipt-gating disposal")
         }
 
         const matches = yield* db
@@ -3599,7 +6310,7 @@ describe("TransferReconciliationServiceLive", () => {
           reconciliation === undefined ||
           originAcquisitionLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create downstream transfer fixture")
+          return yield* Effect.die("Failed to create downstream transfer fixture")
         }
 
         const [originLot] = yield* db
@@ -3635,7 +6346,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (originLot === undefined || originMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream custody fixture")
+          return yield* Effect.die("Failed to create downstream custody fixture")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -3689,7 +6400,7 @@ describe("TransferReconciliationServiceLive", () => {
           downstreamOriginTransaction === undefined ||
           downstreamDestinationTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create downstream transactions")
+          return yield* Effect.die("Failed to create downstream transactions")
         }
 
         const [downstreamOriginLeg] = yield* db
@@ -3730,7 +6441,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (downstreamOriginLeg === undefined || downstreamDestinationLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream transfer legs")
+          return yield* Effect.die("Failed to create downstream transfer legs")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -3913,7 +6624,7 @@ describe("TransferReconciliationServiceLive", () => {
           upstreamReconciliation === undefined ||
           upstreamAcquisitionLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create upstream replay fixtures")
+          return yield* Effect.die("Failed to create upstream replay fixtures")
         }
 
         const [upstreamLot] = yield* db
@@ -3949,7 +6660,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (upstreamLot === undefined || upstreamMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create upstream replay inventory")
+          return yield* Effect.die("Failed to create upstream replay inventory")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -3988,7 +6699,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactions.id })
 
         if (localAcquisitionLeg === undefined || reviewedTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create reviewed replay fixtures")
+          return yield* Effect.die("Failed to create reviewed replay fixtures")
         }
 
         const [localLot] = yield* db
@@ -4026,7 +6737,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (localLot === undefined || reviewedDisposalLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create reviewed replay FIFO effects")
+          return yield* Effect.die("Failed to create reviewed replay FIFO effects")
         }
 
         yield* db.insert(schema.transactionReviews).values({
@@ -4070,7 +6781,7 @@ describe("TransferReconciliationServiceLive", () => {
           downstreamProviderTransaction === undefined ||
           downstreamCanonicalTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create downstream replay transactions")
+          return yield* Effect.die("Failed to create downstream replay transactions")
         }
 
         const [downstreamProviderTransfer] = yield* db
@@ -4117,7 +6828,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transfers.id })
 
         if (downstreamProviderTransfer === undefined || downstreamCanonicalTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream replay transfers")
+          return yield* Effect.die("Failed to create downstream replay transfers")
         }
 
         const [downstreamMovement] = yield* db
@@ -4152,7 +6863,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (downstreamMovement === undefined || downstreamReconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create downstream replay reconciliation")
+          return yield* Effect.die("Failed to create downstream replay reconciliation")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -4220,7 +6931,7 @@ describe("TransferReconciliationServiceLive", () => {
           finalProviderTransaction === undefined ||
           finalCanonicalTransaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create final replay transactions")
+          return yield* Effect.die("Failed to create final replay transactions")
         }
 
         const [finalProviderTransfer] = yield* db
@@ -4267,7 +6978,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transfers.id })
 
         if (finalProviderTransfer === undefined || finalCanonicalTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create final replay transfers")
+          return yield* Effect.die("Failed to create final replay transfers")
         }
 
         const [finalMovement] = yield* db
@@ -4302,7 +7013,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (finalMovement === undefined || finalReconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create final replay reconciliation")
+          return yield* Effect.die("Failed to create final replay reconciliation")
         }
 
         yield* db
@@ -4353,7 +7064,12 @@ describe("TransferReconciliationServiceLive", () => {
           .from(schema.disposalMatches)
           .where(eq(schema.disposalMatches.disposalLegId, replayFixture.reviewedDisposalLegId))
         const [downstreamOriginLeg] = yield* db
-          .select({ id: schema.transactionLegs.id })
+          .select({
+            id: schema.transactionLegs.id,
+            dispositionSource: sql<string | null>`
+              ${schema.transactionLegs.metadata}->'reconciliation'->>'dispositionSource'
+            `,
+          })
           .from(schema.transactionLegs)
           .where(
             and(
@@ -4450,39 +7166,35 @@ describe("TransferReconciliationServiceLive", () => {
       })
     )
 
-    expect(state.reviewedMatches).toHaveLength(2)
-    expect(state.reviewedMatches).toEqual(
-      expect.arrayContaining([
-        { matchedAmount: expect.stringContaining("0.05000000") },
-        { matchedAmount: expect.stringContaining("0.05000000") },
-      ])
-    )
-    expect(state.reviewedReview).toBeUndefined()
-    expect(state.downstreamOriginLeg).toBeDefined()
-    expect(state.downstreamMatches).toHaveLength(0)
-    expect(state.downstreamLots).toHaveLength(0)
+    expect(state.reviewedMatches).toHaveLength(0)
+    expect(state.reviewedReview).toBeDefined()
+    expect(state.downstreamOriginLeg).toMatchObject({
+      dispositionSource: "custody_allocations",
+    })
+    expect(state.downstreamMatches).toHaveLength(1)
+    expect(state.downstreamLots).toHaveLength(1)
     expect(state.downstreamMovement).toEqual({
-      reconciliationStatus: "unmatched",
-      taxTreatment: "pending_review",
+      reconciliationStatus: "matched",
+      taxTreatment: "non_taxable",
     })
     expect(state.downstreamReview).toEqual({
-      matchedLayer: "transfer_reconciliation,fifo_inventory",
-      needsReview: true,
+      matchedLayer: "transfer_reconciliation",
+      needsReview: false,
     })
     expect(state.finalOriginLeg).toBeDefined()
-    expect(state.finalMatches).toHaveLength(0)
-    expect(state.finalLots).toHaveLength(0)
+    expect(state.finalMatches).toHaveLength(1)
+    expect(state.finalLots).toHaveLength(1)
     expect(state.finalMovement).toEqual({
-      reconciliationStatus: "unmatched",
-      taxTreatment: "pending_review",
+      reconciliationStatus: "matched",
+      taxTreatment: "non_taxable",
     })
     expect(state.finalReview).toEqual({
-      matchedLayer: "transfer_reconciliation,fifo_inventory",
-      needsReview: true,
+      matchedLayer: "transfer_reconciliation",
+      needsReview: false,
     })
   })
 
-  it("does not mutate same-source lots when transfer inventory is insufficient", async () => {
+  it("commits a funded pair while rolling back an underfunded pair in the same batch", async () => {
     const walletAddress = "bc1qownedwalletpartialinventory0000000000000000"
     const providerAssetRowId = await runPg(
       seedApprovedProviderAsset({
@@ -4511,6 +7223,26 @@ describe("TransferReconciliationServiceLive", () => {
         blockchainId: fixture.bitcoinBlockchainId,
       })
     )
+    const fundedProviderTransferId = await runPg(
+      seedProviderTransfer({
+        providerAssetRowId,
+        externalId: "provider-transfer-funded-in-same-batch",
+        timestamp: new Date("2025-04-14T11:00:00.000Z"),
+        amount: "0.10000000",
+        toAddress: walletAddress,
+        networkHash: "btc-funded-same-batch-hash",
+      })
+    )
+    const fundedReceipt = await runPg(
+      seedOnchainReceipt({
+        externalId: "onchain-receipt-funded-in-same-batch",
+        txHash: "btc-funded-same-batch-hash",
+        timestamp: new Date("2025-04-14T11:05:00.000Z"),
+        amount: "0.10000000",
+        walletAddress,
+        blockchainId: fixture.bitcoinBlockchainId,
+      })
+    )
 
     const partialInventoryFixture = await runPg(
       Effect.gen(function* () {
@@ -4519,6 +7251,11 @@ describe("TransferReconciliationServiceLive", () => {
           .select({ transactionId: schema.providerTransfers.transactionId })
           .from(schema.providerTransfers)
           .where(eq(schema.providerTransfers.id, providerTransferId))
+          .limit(1)
+        const [fundedProviderTransfer] = yield* db
+          .select({ transactionId: schema.providerTransfers.transactionId })
+          .from(schema.providerTransfers)
+          .where(eq(schema.providerTransfers.id, fundedProviderTransferId))
           .limit(1)
         const [reconciliation] = yield* db
           .insert(schema.transferReconciliations)
@@ -4550,12 +7287,45 @@ describe("TransferReconciliationServiceLive", () => {
           })
           .returning({ id: schema.transactionLegs.id })
 
+        const [fundedReconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: fundedProviderTransferId,
+            canonicalTransferId: fundedReceipt.transferId,
+            canonicalTransactionId: fundedReceipt.transactionId,
+            status: "approved",
+            matchReason: "admin_approved_funded_fixture",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+        const [fundedSourceLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "funded-same-batch-acquisition",
+            timestamp: new Date("2025-04-14T10:30:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "5000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
         if (
           providerTransfer === undefined ||
+          fundedProviderTransfer === undefined ||
           reconciliation === undefined ||
-          sourceLeg === undefined
+          sourceLeg === undefined ||
+          fundedReconciliation === undefined ||
+          fundedSourceLeg === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create partial inventory fixture")
+          return yield* Effect.die("Failed to create partial inventory fixture")
         }
 
         const [sourceLot] = yield* db
@@ -4575,13 +7345,55 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (sourceLot === undefined) {
-          return yield* Effect.dieMessage("Failed to create partial source lot")
+          return yield* Effect.die("Failed to create partial source lot")
         }
+
+        const [fundedSourceLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-14T10:30:00.000Z"),
+            originalAmount: "0.10000000",
+            remainingAmount: "0.00000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: fundedSourceLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [fundedMovement] = yield* db
+          .insert(schema.inventoryMovements)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            transactionId: fundedProviderTransfer.transactionId,
+            providerTransferId: fundedProviderTransferId,
+            assetId: TEST_BTC_ASSET_ID,
+            timestamp: new Date("2025-04-14T11:00:00.000Z"),
+            direction: "outbound",
+            purpose: "principal",
+            taxTreatment: "pending_review",
+            reconciliationStatus: "unmatched",
+            amount: "0.10000000",
+          })
+          .returning({ id: schema.inventoryMovements.id })
+        if (fundedSourceLot === undefined || fundedMovement === undefined) {
+          return yield* Effect.die("Failed to create funded same-batch inventory")
+        }
+        yield* db.insert(schema.inventoryMovementAllocations).values({
+          inventoryMovementId: fundedMovement.id,
+          fifoLotId: fundedSourceLot.id,
+          matchedAmount: "0.10000000",
+        })
 
         return {
           originTransactionId: providerTransfer.transactionId,
           reconciliationId: reconciliation.id,
           sourceLotId: sourceLot.id,
+          fundedOriginTransactionId: fundedProviderTransfer.transactionId,
+          fundedReconciliationId: fundedReconciliation.id,
         }
       })
     )
@@ -4591,12 +7403,11 @@ describe("TransferReconciliationServiceLive", () => {
         service.applyDeterministicInternalTransferCanonicalization({
           principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
-          reconciliationId: partialInventoryFixture.reconciliationId,
         })
       )
     )
 
-    expect(summary).toEqual({ canonicalizedPairs: 0 })
+    expect(summary).toEqual({ canonicalizedPairs: 1 })
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -4615,21 +7426,41 @@ describe("TransferReconciliationServiceLive", () => {
             )
           )
 
-        if (originLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to load partial inventory origin leg")
-        }
+        const matches =
+          originLeg === undefined
+            ? []
+            : yield* db
+                .select({ id: schema.disposalMatches.id })
+                .from(schema.disposalMatches)
+                .where(eq(schema.disposalMatches.disposalLegId, originLeg.id))
+        const fundedLegs = yield* db
+          .select({ derivationRule: schema.transactionLegs.derivationRule })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.transactionId, [
+              partialInventoryFixture.fundedOriginTransactionId,
+              fundedReceipt.transactionId,
+            ])
+          )
+        const [failedReconciliation] = yield* db
+          .select({ status: schema.transferReconciliations.status })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.id, partialInventoryFixture.reconciliationId))
 
-        const matches = yield* db
-          .select({ id: schema.disposalMatches.id })
-          .from(schema.disposalMatches)
-          .where(eq(schema.disposalMatches.disposalLegId, originLeg.id))
-
-        return { matches, sourceLot }
+        return { matches, originLeg, sourceLot, fundedLegs, failedReconciliation }
       })
     )
 
     expect(state.sourceLot?.remainingAmount).toContain("0.05000000")
+    expect(state.originLeg).toBeUndefined()
     expect(state.matches).toHaveLength(0)
+    expect(state.failedReconciliation).toEqual({ status: "needs_review" })
+    expect(state.fundedLegs).toEqual(
+      expect.arrayContaining([
+        { derivationRule: "internal_transfer_out" },
+        { derivationRule: "internal_transfer_in" },
+      ])
+    )
   })
 
   it("rolls back canonicalization when custody allocations do not match the transfer amount", async () => {
@@ -4700,7 +7531,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (providerTransfer === undefined || reconciliation === undefined || leg === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody mismatch fixtures")
+          return yield* Effect.die("Failed to create custody mismatch fixtures")
         }
 
         const [lot] = yield* db
@@ -4720,7 +7551,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (lot === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody mismatch lot")
+          return yield* Effect.die("Failed to create custody mismatch lot")
         }
 
         const [movement] = yield* db
@@ -4742,7 +7573,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create custody mismatch movement")
+          return yield* Effect.die("Failed to create custody mismatch movement")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({
@@ -4769,7 +7600,7 @@ describe("TransferReconciliationServiceLive", () => {
           })
         )
       )
-    ).rejects.toThrow("Custody allocations differ from internal transfer amount")
+    ).resolves.toEqual({ canonicalizedPairs: 0 })
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -4790,6 +7621,13 @@ describe("TransferReconciliationServiceLive", () => {
           .select({ remainingAmount: schema.fifoLots.remainingAmount })
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.id, fixtureIds.lotId))
+        const [reconciliation] = yield* db
+          .select({
+            status: schema.transferReconciliations.status,
+            matchReason: schema.transferReconciliations.matchReason,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.id, fixtureIds.reconciliationId))
         return {
           providerTransaction,
           canonicalTransaction,
@@ -4798,6 +7636,7 @@ describe("TransferReconciliationServiceLive", () => {
           matches,
           allocations,
           lot,
+          reconciliation,
         }
       })
     )
@@ -4809,6 +7648,212 @@ describe("TransferReconciliationServiceLive", () => {
     expect(state.matches).toHaveLength(0)
     expect(state.allocations).toHaveLength(1)
     expect(state.lot?.remainingAmount).toContain("0.95000000")
+    expect(state.reconciliation).toEqual({
+      status: "needs_review",
+      matchReason: "custody_allocation_amount_mismatch",
+    })
+  })
+
+  it("preserves reconciliation metadata and rolls back an inbound open-lot transfer", async () => {
+    const walletAddress = "bc1qownedwalletinboundopenlots000000000000000"
+    const timestamp = new Date("2025-04-12T09:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      seedApprovedProviderAsset({ providerAssetId: "btc-provider-inbound-open-lots" })
+    )
+    await runPg(seedOwnedOnchainSource({ walletAddress }))
+    const fixtureIds = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "inbound-open-lots-provider-transaction",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        const [canonicalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "inbound-open-lots-canonical-transaction",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (providerTransaction === undefined || canonicalTransaction === undefined) {
+          return yield* Effect.die("Failed to seed inbound open-lot transactions")
+        }
+        const [inboundProviderTransfer] = yield* db
+          .insert(schema.providerTransfers)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: providerTransaction.id,
+            externalId: "inbound-open-lots-provider-transfer",
+            providerAssetId: providerAssetRowId,
+            timestamp,
+            direction: "inbound",
+            processingMode: "accounting_and_evidence",
+            toAccountRef: "coinbase-account-1",
+            fromAddress: walletAddress,
+            networkName: "bitcoin",
+            networkHash: "inbound-open-lots-hash",
+            amount: "0.10000000",
+            metadata: {},
+          })
+          .returning({ id: schema.providerTransfers.id })
+        const [canonicalTransfer] = yield* db
+          .insert(schema.transfers)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "inbound-open-lots-canonical-transfer",
+            addressId: ONCHAIN_ADDRESS_ID,
+            blockchainId: fixture.bitcoinBlockchainId,
+            txHash: "inbound-open-lots-hash",
+            timestamp,
+            type: "utxo",
+            fromAddress: walletAddress,
+            toAddress: "bc1qinboundopenlotsdestination000000000000000",
+            fromPartyType: "address",
+            toPartyType: "address",
+            assetId: TEST_BTC_ASSET_ID,
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            amount: "0.10000000",
+            metadata: {},
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transfers.id })
+        const [openingLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "inbound-open-lots-opening-leg",
+            timestamp: new Date("2025-04-01T09:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            fiatAmount: "5000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (
+          inboundProviderTransfer === undefined ||
+          canonicalTransfer === undefined ||
+          openingLeg === undefined
+        ) {
+          return yield* Effect.die("Failed to seed inbound open-lot transfer")
+        }
+        const [openingLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-01T09:00:00.000Z"),
+            originalAmount: "0.10000000",
+            remainingAmount: "0.10000000",
+            costBasisPerToken: "50000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: openingLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [reconciliation] = yield* db
+          .insert(schema.transferReconciliations)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            providerTransferId: inboundProviderTransfer.id,
+            canonicalTransferId: canonicalTransfer.id,
+            canonicalTransactionId: canonicalTransaction.id,
+            status: "auto_applied",
+            matchReason: "deterministic_wallet_receipt_match",
+            confidence: "1.0000",
+            deterministic: true,
+            reviewMetadata: {},
+          })
+          .returning({ id: schema.transferReconciliations.id })
+        if (openingLot === undefined || reconciliation === undefined) {
+          return yield* Effect.die("Failed to seed inbound open-lot FIFO state")
+        }
+        return {
+          openingLotId: openingLot.id,
+          providerTransferId: inboundProviderTransfer.id,
+          reconciliationId: reconciliation.id,
+        }
+      })
+    )
+
+    expect(
+      await runTransferReconciliation(
+        Effect.flatMap(TransferReconciliationService, (service) =>
+          service.applyDeterministicInternalTransferCanonicalization({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            reconciliationId: fixtureIds.reconciliationId,
+          })
+        )
+      )
+    ).toEqual({ canonicalizedPairs: 1 })
+    const [metadata] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            providerTransferId: sql<string | null>`
+              ${schema.transactionLegs.metadata}->'reconciliation'->>'providerTransferId'
+            `,
+            custodyProviderTransferId: sql<string | null>`
+              ${schema.transactionLegs.metadata}->'reconciliation'->>'custodyProviderTransferId'
+            `,
+          })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_out"))
+      })
+    )
+    expect(metadata).toEqual({
+      providerTransferId: fixtureIds.providerTransferId,
+      custodyProviderTransferId: null,
+    })
+
+    await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.upsertTransferReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId: fixtureIds.providerTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: null,
+          status: "needs_review",
+          matchReason: "manual_inbound_invalidation",
+          confidence: "0.0000",
+          deterministic: false,
+          reviewMetadata: {},
+        })
+      )
+    )
+    const rolledBack = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        const [openingLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, fixtureIds.openingLotId))
+        return { internalLegs, openingLot }
+      })
+    )
+    expect(rolledBack.internalLegs).toHaveLength(0)
+    expect(rolledBack.openingLot?.remainingAmount).toContain("0.10000000")
   })
 
   it("uses the canonical outbound custody movement and removes the redundant inbound lot", async () => {
@@ -4862,7 +7907,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transactions.id })
 
         if (providerTransaction === undefined || canonicalTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create exact custody transactions")
+          return yield* Effect.die("Failed to create exact custody transactions")
         }
 
         const [inboundProviderTransfer] = yield* db
@@ -4955,6 +8000,9 @@ describe("TransferReconciliationServiceLive", () => {
           })
 
         const canonicalTransfer = canonicalTransfers.find((row) => row.externalId?.endsWith(":1"))
+        const unrelatedCanonicalTransfer = canonicalTransfers.find((row) =>
+          row.externalId?.endsWith(":0")
+        )
         const exactProviderTransfer = outboundProviderTransfers.find((row) =>
           row.externalId?.endsWith(":1")
         )
@@ -4965,11 +8013,68 @@ describe("TransferReconciliationServiceLive", () => {
         if (
           inboundProviderTransfer === undefined ||
           canonicalTransfer === undefined ||
+          unrelatedCanonicalTransfer === undefined ||
           exactProviderTransfer === undefined ||
           unrelatedProviderTransfer === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create exact custody transfer fixtures")
+          return yield* Effect.die("Failed to create exact custody transfer fixtures")
         }
+
+        const [unrelatedCanonicalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: ONCHAIN_SOURCE_ID,
+            externalId: "exact-custody-signature:unrelated-acquisition",
+            timestamp,
+            principalId: TEST_PRINCIPAL_ID,
+            addressId: ONCHAIN_ADDRESS_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.10000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            derivationRule: "fixture_unrelated_acquisition",
+            transactionId: canonicalTransaction.id,
+            sourceTransferId: unrelatedCanonicalTransfer.id,
+            fiatAmount: "1000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+
+        if (unrelatedCanonicalLeg === undefined) {
+          return yield* Effect.die("Failed to create unrelated canonical leg fixture")
+        }
+
+        const [unrelatedCanonicalLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: ONCHAIN_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: timestamp,
+            originalAmount: "0.10000000",
+            remainingAmount: "0.10000000",
+            costBasisPerToken: "10000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: unrelatedCanonicalLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+
+        if (unrelatedCanonicalLot === undefined) {
+          return yield* Effect.die("Failed to create unrelated canonical lot fixture")
+        }
+
+        yield* db.insert(schema.transactionReviews).values({
+          transactionId: providerTransaction.id,
+          principalId: TEST_PRINCIPAL_ID,
+          reviewStatus: "needs_review",
+          originalTypeKey: "receive",
+          currentTypeKey: "receive",
+          categorizationReason: "provider_asset_mapping: Keep this unresolved provider review.",
+          matchedLayer: "provider_asset_mapping",
+          needsReview: true,
+          userNotes: "Keep the unrelated review state",
+        })
 
         const acquisitionLegs = yield* db
           .insert(schema.transactionLegs)
@@ -5054,7 +8159,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (inboundMovement === undefined) {
-          return yield* Effect.dieMessage("Failed to create inbound movement fixture")
+          return yield* Effect.die("Failed to create inbound movement fixture")
         }
 
         yield* db.insert(schema.fifoLots).values({
@@ -5070,6 +8175,76 @@ describe("TransferReconciliationServiceLive", () => {
           sourceProviderTransferId: inboundProviderTransfer.id,
           sourceLegSequence: 0,
         })
+        const [localAcquisitionLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "exact-custody-local-acquisition",
+            timestamp: new Date("2025-04-13T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.15000000",
+            kind: "acquisition",
+            provenance: "deterministic",
+            derivationRule: "fixture_local_acquisition",
+            fiatAmount: "1800.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (localAcquisitionLeg === undefined) {
+          return yield* Effect.die("Failed to create local destination acquisition")
+        }
+        const [localDestinationLot] = yield* db
+          .insert(schema.fifoLots)
+          .values({
+            principalId: TEST_PRINCIPAL_ID,
+            sourceId: TEST_SOURCE_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            acquiredAt: new Date("2025-04-13T10:00:00.000Z"),
+            originalAmount: "0.15000000",
+            remainingAmount: "0.15000000",
+            costBasisPerToken: "12000.000000000000000000",
+            costBasisCurrency: "EUR",
+            sourceLegId: localAcquisitionLeg.id,
+            sourceLegSequence: 0,
+          })
+          .returning({ id: schema.fifoLots.id })
+        const [laterDisposalTransaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: null,
+            externalId: "exact-custody-later-disposal",
+            timestamp: new Date("2025-04-14T10:00:00.000Z"),
+            transactionType: "sell_fiat",
+            providerTransactionType: "sell",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (localDestinationLot === undefined || laterDisposalTransaction === undefined) {
+          return yield* Effect.die("Failed to create destination FIFO rebuild fixture")
+        }
+        const [laterDisposalLeg] = yield* db
+          .insert(schema.transactionLegs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: laterDisposalTransaction.id,
+            externalId: "exact-custody-later-disposal:leg",
+            timestamp: new Date("2025-04-14T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.25000000",
+            kind: "disposal",
+            provenance: "deterministic",
+            derivationRule: "fixture_later_disposal",
+            fiatAmount: "4000.00",
+            fiatCurrency: "EUR",
+          })
+          .returning({ id: schema.transactionLegs.id })
+        if (laterDisposalLeg === undefined) {
+          return yield* Effect.die("Failed to create later destination disposal")
+        }
         const [reconciliation] = yield* db
           .insert(schema.transferReconciliations)
           .values({
@@ -5086,7 +8261,7 @@ describe("TransferReconciliationServiceLive", () => {
           .returning({ id: schema.transferReconciliations.id })
 
         if (reconciliation === undefined) {
-          return yield* Effect.dieMessage("Failed to create exact custody reconciliation")
+          return yield* Effect.die("Failed to create exact custody reconciliation")
         }
 
         return {
@@ -5094,6 +8269,11 @@ describe("TransferReconciliationServiceLive", () => {
           inboundProviderTransferId: inboundProviderTransfer.id,
           exactProviderTransferId: exactProviderTransfer.id,
           unrelatedProviderTransferId: unrelatedProviderTransfer.id,
+          unrelatedCanonicalLegId: unrelatedCanonicalLeg.id,
+          unrelatedCanonicalLotId: unrelatedCanonicalLot.id,
+          laterDisposalLegId: laterDisposalLeg.id,
+          localDestinationLotId: localDestinationLot.id,
+          reviewedTransactionId: providerTransaction.id,
         }
       })
     )
@@ -5119,7 +8299,52 @@ describe("TransferReconciliationServiceLive", () => {
           .select()
           .from(schema.fifoLots)
           .where(eq(schema.fifoLots.sourceProviderTransferId, fixtureIds.inboundProviderTransferId))
-        return { movements, allocations, inboundLots }
+        const [originLeg] = yield* db
+          .select({
+            custodyProviderTransferId: sql<string | null>`
+              ${schema.transactionLegs.metadata}->'reconciliation'->>'custodyProviderTransferId'
+            `,
+          })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.derivationRule, "internal_transfer_out"))
+        const [unrelatedCanonicalLeg] = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.id, fixtureIds.unrelatedCanonicalLegId))
+        const [unrelatedCanonicalLot] = yield* db
+          .select({ id: schema.fifoLots.id })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, fixtureIds.unrelatedCanonicalLotId))
+        const [localDestinationLot] = yield* db
+          .select({ remainingAmount: schema.fifoLots.remainingAmount })
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.id, fixtureIds.localDestinationLotId))
+        const laterDisposalMatches = yield* db
+          .select({ matchedAmount: schema.disposalMatches.matchedAmount })
+          .from(schema.disposalMatches)
+          .where(eq(schema.disposalMatches.disposalLegId, fixtureIds.laterDisposalLegId))
+        const [review] = yield* db
+          .select({
+            reviewStatus: schema.transactionReviews.reviewStatus,
+            currentTypeKey: schema.transactionReviews.currentTypeKey,
+            categorizationReason: schema.transactionReviews.categorizationReason,
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            needsReview: schema.transactionReviews.needsReview,
+            userNotes: schema.transactionReviews.userNotes,
+          })
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, fixtureIds.reviewedTransactionId))
+        return {
+          movements,
+          allocations,
+          inboundLots,
+          laterDisposalMatches,
+          localDestinationLot,
+          originLeg,
+          review,
+          unrelatedCanonicalLeg,
+          unrelatedCanonicalLot,
+        }
       })
     )
 
@@ -5139,5 +8364,118 @@ describe("TransferReconciliationServiceLive", () => {
     )
     expect(state.allocations).toHaveLength(1)
     expect(state.inboundLots).toHaveLength(0)
+    expect(state.laterDisposalMatches).toHaveLength(2)
+    expect(state.localDestinationLot?.remainingAmount).toContain("0.00000000")
+    expect(state.originLeg?.custodyProviderTransferId).toBe(fixtureIds.exactProviderTransferId)
+    expect(state.unrelatedCanonicalLeg).toEqual({ id: fixtureIds.unrelatedCanonicalLegId })
+    expect(state.unrelatedCanonicalLot).toEqual({ id: fixtureIds.unrelatedCanonicalLotId })
+    expect(state.review).toEqual({
+      reviewStatus: "needs_review",
+      currentTypeKey: "receive",
+      categorizationReason:
+        "provider_asset_mapping: Keep this unresolved provider review.\nDeterministic provider transfer reconciled to a principal-owned onchain transfer.",
+      matchedLayer: "provider_asset_mapping,transfer_reconciliation",
+      needsReview: true,
+      userNotes: "Keep the unrelated review state",
+    })
+
+    await runTransferReconciliationRepository(
+      Effect.flatMap(TransferReconciliationRepository, (repository) =>
+        repository.upsertTransferReconciliation({
+          principalId: TEST_PRINCIPAL_ID,
+          providerTransferId: fixtureIds.inboundProviderTransferId,
+          canonicalTransferId: null,
+          canonicalTransactionId: null,
+          status: "needs_review",
+          matchReason: "manual_inbound_invalidation",
+          confidence: "0.0000",
+          deterministic: false,
+          reviewMetadata: {},
+        })
+      )
+    )
+
+    const rolledBack = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [exactMovement] = yield* db
+          .select({
+            id: schema.inventoryMovements.id,
+            reconciliationStatus: schema.inventoryMovements.reconciliationStatus,
+            taxTreatment: schema.inventoryMovements.taxTreatment,
+          })
+          .from(schema.inventoryMovements)
+          .where(
+            eq(schema.inventoryMovements.providerTransferId, fixtureIds.exactProviderTransferId)
+          )
+        const exactAllocations =
+          exactMovement === undefined
+            ? []
+            : yield* db
+                .select({ matchedAmount: schema.inventoryMovementAllocations.matchedAmount })
+                .from(schema.inventoryMovementAllocations)
+                .where(
+                  eq(schema.inventoryMovementAllocations.inventoryMovementId, exactMovement.id)
+                )
+        const internalLegs = yield* db
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(
+            inArray(schema.transactionLegs.derivationRule, [
+              "internal_transfer_out",
+              "internal_transfer_in",
+            ])
+          )
+        const [reconciliation] = yield* db
+          .select({
+            canonicalTransferId: schema.transferReconciliations.canonicalTransferId,
+            status: schema.transferReconciliations.status,
+          })
+          .from(schema.transferReconciliations)
+          .where(eq(schema.transferReconciliations.id, fixtureIds.reconciliationId))
+        const [review] = yield* db
+          .select({
+            currentTypeKey: schema.transactionReviews.currentTypeKey,
+            categorizationReason: schema.transactionReviews.categorizationReason,
+            matchedLayer: schema.transactionReviews.matchedLayer,
+            reviewStatus: schema.transactionReviews.reviewStatus,
+          })
+          .from(schema.transactionReviews)
+          .where(eq(schema.transactionReviews.transactionId, fixtureIds.reviewedTransactionId))
+        const [transaction] = yield* db
+          .select({ transactionType: schema.transactions.transactionType })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.id, fixtureIds.reviewedTransactionId))
+        return {
+          exactAllocations,
+          exactMovement,
+          internalLegs,
+          reconciliation,
+          review,
+          transaction,
+        }
+      })
+    )
+    expect(rolledBack.exactAllocations).toEqual([
+      expect.objectContaining({ matchedAmount: expect.stringContaining("0.10000000") }),
+    ])
+    expect(rolledBack.exactMovement).toEqual(
+      expect.objectContaining({
+        reconciliationStatus: "unmatched",
+        taxTreatment: "pending_review",
+      })
+    )
+    expect(rolledBack.internalLegs).toHaveLength(0)
+    expect(rolledBack.reconciliation).toEqual({
+      canonicalTransferId: null,
+      status: "needs_review",
+    })
+    expect(rolledBack.review).toEqual({
+      currentTypeKey: "receive",
+      categorizationReason: "provider_asset_mapping: Keep this unresolved provider review.",
+      matchedLayer: "provider_asset_mapping",
+      reviewStatus: "needs_review",
+    })
+    expect(rolledBack.transaction).toEqual({ transactionType: null })
   })
 })

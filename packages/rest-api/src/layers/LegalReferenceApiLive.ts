@@ -7,7 +7,7 @@
  * @module LegalReferenceApiLive
  */
 
-import { HttpApiBuilder } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { LegalReferenceService, LegalReferenceServiceLive } from "@my/core/legal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -29,7 +29,7 @@ const DEFAULT_JURISDICTION_CODE = "DE"
  * Map internal service/repository failures to API-level 500 error.
  */
 const mapInternalError = (operation: string) =>
-  Effect.catchAll(() =>
+  Effect.catch(() =>
     Effect.fail(
       new LegalReferenceInternalError({
         message: `Failed to resolve legal references (${operation}).`,

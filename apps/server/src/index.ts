@@ -1,13 +1,13 @@
-import {
-  HttpApiBuilder,
-  HttpApiSwagger,
-  HttpMiddleware,
-  HttpServer,
-  HttpServerRequest,
-} from "@effect/platform"
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
 import { Config, Effect, Layer } from "effect"
 import * as Cause from "effect/Cause"
+import {
+  HttpMiddleware,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http"
+import { HttpApiScalar, OpenApi } from "effect/unstable/httpapi"
 import { createServer } from "node:http"
 import { LoggerLive } from "@my/observability"
 import {
@@ -24,6 +24,7 @@ import {
   TaxMaxiApiLive,
   X402PaymentValidatorLive,
 } from "@my/rest-api"
+import { TaxMaxiApi } from "@my/rest-api/contracts"
 import { ApiBullMqSourceSyncQueueLive } from "./layers/ApiBullMqSourceSyncQueueLive.ts"
 import { TracingLive } from "./layers/TracingLive.ts"
 
@@ -54,7 +55,7 @@ const ApplicationLive = Layer.mergeAll(
 
 const normalizeUrl = (url: string): string => (url.endsWith("/") ? url.slice(0, -1) : url)
 
-const CorsLive = HttpApiBuilder.middleware(
+const CorsLive = Layer.unwrap(
   Effect.gen(function* () {
     const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
     const frontendUrl = yield* Config.string("FRONTEND_URL").pipe(
@@ -62,7 +63,7 @@ const CorsLive = HttpApiBuilder.middleware(
       Config.map(normalizeUrl)
     )
 
-    return HttpMiddleware.cors({
+    return HttpRouter.cors({
       allowedOrigins: environment === "development" ? [DEFAULT_FRONTEND_URL] : [frontendUrl],
       credentials: true,
       exposedHeaders: ["PAYMENT-REQUIRED", "PAYMENT-RESPONSE"],
@@ -70,11 +71,11 @@ const CorsLive = HttpApiBuilder.middleware(
   })
 )
 
-const RequestFailureLoggingLive = HttpApiBuilder.middleware((httpApp) =>
+const requestFailureLogging = HttpMiddleware.make((httpApp) =>
   httpApp.pipe(
-    Effect.tapErrorCause((cause) =>
+    Effect.tapCause((cause) =>
       Effect.gen(function* () {
-        const renderedCause = Cause.pretty(cause, { renderErrorCause: true })
+        const renderedCause = Cause.pretty(cause)
         if (renderedCause.startsWith("SourcePaymentRequiredError:")) {
           return
         }
@@ -94,19 +95,28 @@ const RequestFailureLoggingLive = HttpApiBuilder.middleware((httpApp) =>
   )
 )
 
-const ServerLive = HttpApiBuilder.serve(invalidSessionCookieCleanup).pipe(
-  Layer.provide(CorsLive),
-  Layer.provide(RequestFailureLoggingLive),
-  Layer.provide(HttpApiSwagger.layer()),
-  Layer.provide(HttpApiBuilder.middlewareOpenApi({ path: "/openapi.json" })),
-  Layer.provide(TaxMaxiApiLive),
+const OpenApiLive = HttpRouter.add(
+  "GET",
+  "/openapi.json",
+  HttpServerResponse.jsonUnsafe(OpenApi.fromApi(TaxMaxiApi))
+)
+
+const RoutesLive = Layer.mergeAll(
+  TaxMaxiApiLive,
+  HttpApiScalar.layer(TaxMaxiApi),
+  OpenApiLive,
+  CorsLive
+)
+
+const ServerLive = HttpRouter.serve(RoutesLive, {
+  middleware: (httpApp) => invalidSessionCookieCleanup(requestFailureLogging(httpApp)),
+}).pipe(
   Layer.provide(AnonSessionServiceLive),
   Layer.provide(SIWXProofVerifierLive),
   Layer.provide(X402PaymentValidatorLive),
   Layer.provide(SessionTokenValidatorLive),
   Layer.provide(ApplicationLive),
   Layer.provide(PgClientLive),
-  HttpServer.withLogAddress,
   Layer.provide(NodeHttpServer.layer(createServer, { port }))
 )
 

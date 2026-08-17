@@ -47,7 +47,6 @@ export interface SourceRepositoryShape {
 /**
  * SourceRepository - Context tag for source lookup persistence.
  */
-export class SourceRepository extends Context.Tag("@my/sync-engine/SourceRepository")<
-  SourceRepository,
-  SourceRepositoryShape
->() {}
+export class SourceRepository extends Context.Service<SourceRepository, SourceRepositoryShape>()(
+  "@my/sync-engine/SourceRepository"
+) {}

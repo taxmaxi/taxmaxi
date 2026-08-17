@@ -17,7 +17,7 @@ import { ProviderData } from "./UserIdentity.ts"
  * OAuthCredentials - Provider OAuth tokens captured during callback flows.
  */
 export class OAuthCredentials extends Schema.Class<OAuthCredentials>("OAuthCredentials")({
-  accessToken: Schema.NonEmptyTrimmedString,
+  accessToken: Schema.Trimmed.check(Schema.isNonEmpty()),
   refreshToken: Schema.NullOr(Schema.String),
   expiresAtEpochMillis: Schema.Number,
   scopes: Schema.NullOr(Schema.String),
@@ -57,7 +57,7 @@ export class AuthResult extends Schema.Class<AuthResult>("AuthResult")({
   /**
    * The user's display name from the provider
    */
-  displayName: Schema.NonEmptyTrimmedString.annotations({
+  displayName: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Display Name",
     description: "The user's display name from the provider",
   }),
@@ -67,7 +67,7 @@ export class AuthResult extends Schema.Class<AuthResult>("AuthResult")({
    * For local auth, this may be false until email verification is complete.
    * For OAuth providers, this is typically true.
    */
-  emailVerified: Schema.Boolean.annotations({
+  emailVerified: Schema.Boolean.annotate({
     title: "Email Verified",
     description: "Whether the provider has verified the email address",
   }),
@@ -102,7 +102,7 @@ export class LoginResult extends Schema.Class<LoginResult>("LoginResult")({
   /**
    * The authenticated user's ID
    */
-  userId: Schema.UUID.pipe(Schema.brand("AuthUserId")),
+  userId: Schema.String.check(Schema.isUUID()).pipe(Schema.brand("AuthUserId")),
 
   /**
    * The authenticated user's email
@@ -112,17 +112,17 @@ export class LoginResult extends Schema.Class<LoginResult>("LoginResult")({
   /**
    * The authenticated user's display name
    */
-  displayName: Schema.NonEmptyTrimmedString,
+  displayName: Schema.Trimmed.check(Schema.isNonEmpty()),
 
   /**
    * The created session ID (token)
    */
-  sessionId: Schema.NonEmptyTrimmedString.pipe(Schema.brand("SessionId")),
+  sessionId: Schema.Trimmed.check(Schema.isNonEmpty()).pipe(Schema.brand("SessionId")),
 
   /**
    * When the session expires
    */
-  expiresAt: Schema.Number.annotations({
+  expiresAt: Schema.Number.annotate({
     title: "Expires At",
     description: "Session expiration time in epoch milliseconds",
   }),

@@ -63,7 +63,7 @@ export interface CoinbaseRecordNormalizerShape {
 /**
  * CoinbaseRecordNormalizer - Context tag for Coinbase raw-record normalization.
  */
-export class CoinbaseRecordNormalizer extends Context.Tag("CoinbaseRecordNormalizer")<
+export class CoinbaseRecordNormalizer extends Context.Service<
   CoinbaseRecordNormalizer,
   CoinbaseRecordNormalizerShape
->() {}
+>()("CoinbaseRecordNormalizer") {}

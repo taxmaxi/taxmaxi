@@ -64,16 +64,16 @@ const make = Effect.gen(function* () {
     state: row.state,
     intent: row.intent,
     provider: row.provider,
-    userId: Option.fromNullable(row.userId).pipe(Option.map((id) => AuthUserId.make(id))),
+    userId: Option.fromNullishOr(row.userId).pipe(Option.map((id) => AuthUserId.make(id))),
     redirectUri: row.redirectUri,
     expiresAt: Timestamp.make({ epochMillis: row.expiresAt.getTime() }),
     status: row.status,
-    sessionToken: Option.fromNullable(row.sessionToken),
-    statusMessage: Option.fromNullable(row.statusMessage),
-    completedAt: Option.fromNullable(row.completedAt).pipe(
+    sessionToken: Option.fromNullishOr(row.sessionToken),
+    statusMessage: Option.fromNullishOr(row.statusMessage),
+    completedAt: Option.fromNullishOr(row.completedAt).pipe(
       Option.map((value) => Timestamp.make({ epochMillis: value.getTime() }))
     ),
-    consumedAt: Option.fromNullable(row.consumedAt).pipe(
+    consumedAt: Option.fromNullishOr(row.consumedAt).pipe(
       Option.map((value) => Timestamp.make({ epochMillis: value.getTime() }))
     ),
   })

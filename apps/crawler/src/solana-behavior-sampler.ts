@@ -5,8 +5,8 @@
  */
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
-import * as Either from "effect/Either"
 import * as Layer from "effect/Layer"
+import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 
 const TokenAmountSchema = Schema.Struct({
@@ -15,7 +15,7 @@ const TokenAmountSchema = Schema.Struct({
   uiAmountString: Schema.optional(Schema.String),
 })
 
-const RpcIntegerSchema = Schema.Union(Schema.Number, Schema.BigIntFromSelf)
+const RpcIntegerSchema = Schema.Union([Schema.Number, Schema.BigInt])
 
 const TokenBalanceSchema = Schema.Struct({
   accountIndex: Schema.Number,
@@ -24,12 +24,12 @@ const TokenBalanceSchema = Schema.Struct({
   uiTokenAmount: TokenAmountSchema,
 })
 
-const AccountKeySchema = Schema.Union(
+const AccountKeySchema = Schema.Union([
   Schema.String,
   Schema.Struct({
     pubkey: Schema.String,
-  })
-)
+  }),
+])
 
 const InstructionSchema = Schema.Struct({
   programId: Schema.optional(Schema.String),
@@ -69,7 +69,7 @@ const TransactionPayloadSchema = Schema.Struct({
   meta: Schema.optional(TransactionMetaSchema),
 })
 
-const decodeTransactionPayloadEither = Schema.decodeUnknownEither(TransactionPayloadSchema)
+const decodeTransactionPayloadResult = Schema.decodeUnknownResult(TransactionPayloadSchema)
 
 export const SolanaNativeBalanceDeltaEvidence = Schema.Struct({
   accountIndex: Schema.Number,
@@ -122,7 +122,7 @@ export const SolanaBehaviorSamplingInput = Schema.Struct({
 export type SolanaBehaviorSamplingInput = typeof SolanaBehaviorSamplingInput.Type
 
 export const SolanaBehaviorSampleError = Schema.Struct({
-  scope: Schema.Literal("signature", "slot", "payload"),
+  scope: Schema.Literals(["signature", "slot", "payload"]),
   target: Schema.String,
   message: Schema.String,
 })
@@ -174,10 +174,10 @@ export interface SolanaBehaviorSamplerClientShape {
 }
 
 /** Service tag for the Solana behavior sampler RPC client. */
-export class SolanaBehaviorSamplerClient extends Context.Tag("SolanaBehaviorSamplerClient")<
+export class SolanaBehaviorSamplerClient extends Context.Service<
   SolanaBehaviorSamplerClient,
   SolanaBehaviorSamplerClientShape
->() {}
+>()("SolanaBehaviorSamplerClient") {}
 
 const accountKeyAddress = (accountKey: typeof AccountKeySchema.Type | undefined): string | null => {
   if (accountKey === undefined) {
@@ -362,16 +362,16 @@ export const extractSolanaBehaviorSample = ({
   readonly payload: unknown
   readonly slot: number | null
 }): Effect.Effect<SolanaBehaviorSample, SolanaBehaviorPayloadDecodeError> => {
-  const decoded = decodeTransactionPayloadEither(payload)
+  const decoded = decodeTransactionPayloadResult(payload)
 
   return Effect.gen(function* () {
-    if (Either.isLeft(decoded)) {
+    if (Result.isFailure(decoded)) {
       return yield* Effect.fail(
-        toPayloadDecodeError(`Invalid Solana transaction payload: ${decoded.left.message}`)
+        toPayloadDecodeError(`Invalid Solana transaction payload: ${decoded.failure.message}`)
       )
     }
 
-    const transaction = decoded.right
+    const transaction = decoded.success
     const signature = signatureFromPayload(transaction)
 
     if (signature === null) {
@@ -408,7 +408,7 @@ const FinalizedBlockPayloadSchema = Schema.Struct({
   transactions: Schema.Array(BlockTransactionEntrySchema),
 })
 
-const decodeFinalizedBlockPayloadEither = Schema.decodeUnknownEither(FinalizedBlockPayloadSchema)
+const decodeFinalizedBlockPayloadResult = Schema.decodeUnknownResult(FinalizedBlockPayloadSchema)
 
 const blockTransactions = (
   payload: unknown
@@ -416,16 +416,16 @@ const blockTransactions = (
   ReadonlyArray<typeof TransactionPayloadSchema.Type>,
   SolanaBehaviorPayloadDecodeError
 > => {
-  const decoded = decodeFinalizedBlockPayloadEither(payload)
+  const decoded = decodeFinalizedBlockPayloadResult(payload)
 
-  return Either.isLeft(decoded)
+  return Result.isFailure(decoded)
     ? Effect.fail(
         new SolanaBehaviorPayloadDecodeError({
-          message: `Invalid Solana block payload: ${decoded.left.message}`,
+          message: `Invalid Solana block payload: ${decoded.failure.message}`,
         })
       )
     : Effect.succeed(
-        decoded.right.transactions.map((entry) =>
+        decoded.success.transactions.map((entry) =>
           entry.meta === undefined
             ? { transaction: entry.transaction }
             : { transaction: entry.transaction, meta: entry.meta }
@@ -487,20 +487,20 @@ const collectSlotTransactionSamples = ({
         const transactionPayload = transactionPayloads[index]
         const sampleEither =
           transactionPayload === undefined
-            ? Either.left(
+            ? Result.fail(
                 toPayloadDecodeError(`Missing Solana transaction payload at slot ${slot}`)
               )
-            : yield* Effect.either(
+            : yield* Effect.result(
                 extractSolanaBehaviorSample({ payload: transactionPayload, slot })
               )
-        const nextAccumulator = Either.isLeft(sampleEither)
+        const nextAccumulator = Result.isFailure(sampleEither)
           ? appendError(accumulator, {
               scope: "payload",
               target: String(slot),
-              message: sampleEither.left.message,
+              message: sampleEither.failure.message,
             })
-          : sampleMatchesPrograms(sampleEither.right, programs)
-            ? appendSample(accumulator, sampleEither.right)
+          : sampleMatchesPrograms(sampleEither.success, programs)
+            ? appendSample(accumulator, sampleEither.success)
             : accumulator
 
         return yield* collectSlotTransactionSamples({
@@ -527,29 +527,29 @@ const collectSlotSamples = ({
   readonly remaining: number
 }): Effect.Effect<SolanaBehaviorSamplingAccumulator, never> =>
   Effect.gen(function* () {
-    const blockEither = yield* Effect.either(client.fetchFinalizedBlock({ slot }))
+    const blockEither = yield* Effect.result(client.fetchFinalizedBlock({ slot }))
 
-    if (Either.isLeft(blockEither)) {
+    if (Result.isFailure(blockEither)) {
       return appendError(accumulator, {
         scope: "slot",
         target: String(slot),
-        message: blockEither.left.message,
+        message: blockEither.failure.message,
       })
     }
 
-    const transactionPayloadsEither = yield* Effect.either(blockTransactions(blockEither.right))
+    const transactionPayloadsEither = yield* Effect.result(blockTransactions(blockEither.success))
 
-    if (Either.isLeft(transactionPayloadsEither)) {
+    if (Result.isFailure(transactionPayloadsEither)) {
       return appendError(accumulator, {
         scope: "slot",
         target: String(slot),
-        message: transactionPayloadsEither.left.message,
+        message: transactionPayloadsEither.failure.message,
       })
     }
 
     return yield* collectSlotTransactionSamples({
       accumulator,
-      transactionPayloads: transactionPayloadsEither.right,
+      transactionPayloads: transactionPayloadsEither.success,
       slot,
       programs,
       remaining,
@@ -648,15 +648,15 @@ const collectSignatureSamples = ({
           })
         }
 
-        const payloadEither = yield* Effect.either(
+        const payloadEither = yield* Effect.result(
           client.fetchTransactionBySignature({ signature })
         )
-        if (Either.isLeft(payloadEither)) {
+        if (Result.isFailure(payloadEither)) {
           return yield* collectSignatureSamples({
             accumulator: appendError(accumulator, {
               scope: "signature",
               target: signature,
-              message: payloadEither.left.message,
+              message: payloadEither.failure.message,
             }),
             client,
             signatures,
@@ -665,16 +665,16 @@ const collectSignatureSamples = ({
           })
         }
 
-        const sampleEither = yield* Effect.either(
-          extractSolanaBehaviorSample({ payload: payloadEither.right, slot: null })
+        const sampleEither = yield* Effect.result(
+          extractSolanaBehaviorSample({ payload: payloadEither.success, slot: null })
         )
-        const nextAccumulator = Either.isLeft(sampleEither)
+        const nextAccumulator = Result.isFailure(sampleEither)
           ? appendError(accumulator, {
               scope: "payload",
               target: signature,
-              message: sampleEither.left.message,
+              message: sampleEither.failure.message,
             })
-          : appendSample(accumulator, sampleEither.right)
+          : appendSample(accumulator, sampleEither.success)
 
         return yield* collectSignatureSamples({
           accumulator: nextAccumulator,

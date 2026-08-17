@@ -9,6 +9,7 @@
 
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import * as Effect from "effect/Effect"
 import * as Metric from "effect/Metric"
 import type { SourceSyncJobMode } from "../../services/index.ts"
 
@@ -16,10 +17,9 @@ const sourceSyncJobOutcomeMetric = Metric.frequency("taxmaxi_source_sync_job_out
   description: "Outcome frequencies for source sync and replay jobs.",
 })
 
-const sourceSyncJobDurationMetric = Metric.timer(
-  "taxmaxi_source_sync_job_duration",
-  "Duration of successful source sync and replay jobs."
-)
+const sourceSyncJobDurationMetric = Metric.timer("taxmaxi_source_sync_job_duration", {
+  description: "Duration of successful source sync and replay jobs.",
+})
 
 /**
  * Create a source-sync timestamp using the shared TaxMaxi clock wrapper.
@@ -64,8 +64,8 @@ export const recordSourceSyncJobOutcome = ({
 }) =>
   Metric.update(
     sourceSyncJobOutcomeMetric.pipe(
-      Metric.tagged("provider", provider),
-      Metric.tagged("mode", mode)
+      Metric.withAttributes({ provider }),
+      Metric.withAttributes({ mode })
     ),
     outcome
   )
@@ -80,9 +80,10 @@ export const trackSourceSyncJobDuration = ({
   readonly provider: string
   readonly mode: SourceSyncJobMode
 }) =>
-  Metric.trackDuration(
+  Effect.trackDuration(
     sourceSyncJobDurationMetric.pipe(
-      Metric.tagged("provider", provider),
-      Metric.tagged("mode", mode)
-    )
+      Metric.withAttributes({ provider }),
+      Metric.withAttributes({ mode })
+    ),
+    (duration) => duration
   )

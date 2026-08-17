@@ -4,7 +4,7 @@
  * @module SyncRunsApiLive
  */
 
-import { HttpApiBuilder } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { SourceSyncRunService, type SourceSyncRunDetails } from "@my/sync-engine/services"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
@@ -22,7 +22,7 @@ const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 
 const toDateTimeUtcOrNull = (date: Date | null): DateTime.Utc | null =>
-  date === null ? null : DateTime.unsafeMake(date)
+  date === null ? null : DateTime.makeUnsafe(date)
 
 const toSyncRunResponse = (run: SourceSyncRunDetails): SyncRunResponse =>
   SyncRunResponse.make({
@@ -90,7 +90,7 @@ export const SyncRunsApiLive = HttpApiBuilder.group(TaxMaxiApi, "syncRuns", (han
           return toSyncRunResponse(run)
         })
       )
-      .handle("getSyncRun", ({ path }) =>
+      .handle("getSyncRun", ({ params: path }) =>
         Effect.gen(function* () {
           const { currentUser, principal } = yield* resolvePrincipal
           const run = yield* sourceSyncRunService

@@ -326,7 +326,7 @@ export interface SourceSyncJobRepositoryShape {
 /**
  * SourceSyncJobRepository - Context tag for processing-job persistence.
  */
-export class SourceSyncJobRepository extends Context.Tag("SourceSyncJobRepository")<
+export class SourceSyncJobRepository extends Context.Service<
   SourceSyncJobRepository,
   SourceSyncJobRepositoryShape
->() {}
+>()("SourceSyncJobRepository") {}

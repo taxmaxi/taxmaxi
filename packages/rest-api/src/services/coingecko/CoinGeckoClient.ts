@@ -59,7 +59,6 @@ export interface CoinGeckoClientShape {
   }) => Effect.Effect<ReadonlyArray<CoinGeckoMarket>, CoinGeckoClientError>
 }
 
-export class CoinGeckoClient extends Context.Tag("CoinGeckoClient")<
-  CoinGeckoClient,
-  CoinGeckoClientShape
->() {}
+export class CoinGeckoClient extends Context.Service<CoinGeckoClient, CoinGeckoClientShape>()(
+  "CoinGeckoClient"
+) {}

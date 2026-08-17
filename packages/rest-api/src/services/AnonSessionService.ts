@@ -68,7 +68,7 @@ export interface AnonSessionServiceShape {
 /**
  * AnonSessionService - Context tag for anonymous payer session tokens.
  */
-export class AnonSessionService extends Context.Tag("@my/rest-api/AnonSessionService")<
+export class AnonSessionService extends Context.Service<
   AnonSessionService,
   AnonSessionServiceShape
->() {}
+>()("@my/rest-api/AnonSessionService") {}

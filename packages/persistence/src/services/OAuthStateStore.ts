@@ -157,7 +157,6 @@ export interface OAuthStateStoreService {
 /**
  * OAuthStateStore - Context.Tag for dependency injection
  */
-export class OAuthStateStore extends Context.Tag("OAuthStateStore")<
-  OAuthStateStore,
-  OAuthStateStoreService
->() {}
+export class OAuthStateStore extends Context.Service<OAuthStateStore, OAuthStateStoreService>()(
+  "OAuthStateStore"
+) {}

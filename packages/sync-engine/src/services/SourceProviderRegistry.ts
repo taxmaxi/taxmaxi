@@ -71,6 +71,7 @@ export type SourceProviderModuleError = SourceSyncProviderError | SourceProvider
  */
 export interface SourceProviderPreparedNormalization {
   readonly kind: "prepared"
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
@@ -149,7 +150,7 @@ export interface SourceProviderRegistryShape {
 /**
  * SourceProviderRegistry - Context tag for provider-key module lookup.
  */
-export class SourceProviderRegistry extends Context.Tag("SourceProviderRegistry")<
+export class SourceProviderRegistry extends Context.Service<
   SourceProviderRegistry,
   SourceProviderRegistryShape
->() {}
+>()("SourceProviderRegistry") {}

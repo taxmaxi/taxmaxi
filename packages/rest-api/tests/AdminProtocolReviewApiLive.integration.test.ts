@@ -1,10 +1,5 @@
-import {
-  Headers,
-  HttpApiBuilder,
-  HttpApiClient,
-  HttpClient,
-  HttpClientRequest,
-} from "@effect/platform"
+import { HttpApiClient } from "effect/unstable/httpapi"
+import { Headers, HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import { beforeEach, describe, expect, it } from "@effect/vitest"
 import {
@@ -22,6 +17,7 @@ import {
   type TransferReconciliationServiceShape,
 } from "@my/sync-engine/services"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -44,28 +40,31 @@ const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_rest_api_protocol_review",
 })
 const TestPgClientLive = context.TestPgClientLive
+const TestConfigProvider = ConfigProvider.fromEnvRecord({
+  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
+})
+const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
+  Layer.provide(ConfigProvider.layer(TestConfigProvider))
+)
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
 
 const AuthServiceTestLive = Layer.succeed(AuthService, {
-  login: () => Effect.dieMessage("AuthService test stub: login not implemented"),
-  register: () => Effect.dieMessage("AuthService test stub: register not implemented"),
+  login: () => Effect.die("AuthService test stub: login not implemented"),
+  register: () => Effect.die("AuthService test stub: register not implemented"),
   startEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: startEmailVerification not implemented"),
+    Effect.die("AuthService test stub: startEmailVerification not implemented"),
   resendEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: resendEmailVerification not implemented"),
-  verifyEmail: () => Effect.dieMessage("AuthService test stub: verifyEmail not implemented"),
-  startOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: startOAuthLogin not implemented"),
-  completeOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: completeOAuthLogin not implemented"),
-  startLink: () => Effect.dieMessage("AuthService test stub: startLink not implemented"),
-  completeLink: () => Effect.dieMessage("AuthService test stub: completeLink not implemented"),
-  logout: () => Effect.dieMessage("AuthService test stub: logout not implemented"),
-  validateSession: () =>
-    Effect.dieMessage("AuthService test stub: validateSession not implemented"),
-  linkIdentity: () => Effect.dieMessage("AuthService test stub: linkIdentity not implemented"),
+    Effect.die("AuthService test stub: resendEmailVerification not implemented"),
+  verifyEmail: () => Effect.die("AuthService test stub: verifyEmail not implemented"),
+  startOAuthLogin: () => Effect.die("AuthService test stub: startOAuthLogin not implemented"),
+  completeOAuthLogin: () => Effect.die("AuthService test stub: completeOAuthLogin not implemented"),
+  startLink: () => Effect.die("AuthService test stub: startLink not implemented"),
+  completeLink: () => Effect.die("AuthService test stub: completeLink not implemented"),
+  logout: () => Effect.die("AuthService test stub: logout not implemented"),
+  validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
+  linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
   getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
@@ -75,27 +74,27 @@ const PasswordHasherTestLive = Layer.succeed(PasswordHasher, {
 })
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
-  startSyncRun: () =>
-    Effect.dieMessage("SourceSyncRunService test stub: startSyncRun not implemented"),
-  getSyncRun: () => Effect.dieMessage("SourceSyncRunService test stub: getSyncRun not implemented"),
+  startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
+  getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
 } satisfies SourceSyncRunServiceShape)
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: startSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
   replaySourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: replaySourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: replaySourceSyncJob not implemented"),
   getSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: getSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: getSourceSyncJob not implemented"),
 } satisfies SourceSyncServiceShape)
 
 const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
   reconcileTransferCandidates: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
     ),
 } satisfies TransferReconciliationServiceShape)
@@ -109,15 +108,15 @@ const PersistenceLayer = Layer.mergeAll(
   TransferReconciliationServiceTestLive
 ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const HttpLive = HttpApiBuilder.serve(invalidSessionCookieCleanup).pipe(
-  Layer.provide(TaxMaxiApiLive),
-  Layer.provide(AnonSessionServiceLive),
-  Layer.provide(SIWXProofVerifierTestLive),
-  Layer.provide(X402PaymentValidatorTestLive),
-  Layer.provide(SimpleTokenValidatorLive),
-  Layer.provideMerge(PersistenceLayer),
-  Layer.provideMerge(NodeHttpServer.layerTest)
-)
+const HttpLive = HttpRouter.serve(
+  TaxMaxiApiLive.pipe(
+    Layer.provide(AnonSessionServiceTestLive),
+    Layer.provide(SIWXProofVerifierTestLive),
+    Layer.provide(X402PaymentValidatorTestLive),
+    Layer.provide(SimpleTokenValidatorLive)
+  ),
+  { middleware: invalidSessionCookieCleanup }
+).pipe(Layer.provideMerge(PersistenceLayer), Layer.provideMerge(NodeHttpServer.layerTest))
 
 const makeClient = ({
   role,
@@ -143,7 +142,7 @@ const seedProtocolCandidate = Effect.gen(function* () {
     .where(eq(schema.blockchains.name, "solana"))
 
   if (blockchain === undefined) {
-    return yield* Effect.dieMessage("Missing solana blockchain seed")
+    return yield* Effect.die("Missing solana blockchain seed")
   }
 
   const candidateId = crypto.randomUUID()
@@ -234,7 +233,7 @@ const seedOlderPendingProtocolCandidate = Effect.gen(function* () {
     .where(eq(schema.blockchains.name, "solana"))
 
   if (blockchain === undefined) {
-    return yield* Effect.dieMessage("Missing solana blockchain seed")
+    return yield* Effect.die("Missing solana blockchain seed")
   }
 
   const candidateId = crypto.randomUUID()
@@ -266,7 +265,7 @@ describe("AdminProtocolReviewApiLive", () => {
       const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
 
       const response = yield* client.adminProtocolReview.listProtocolCandidates({
-        urlParams: {},
+        query: {},
       })
 
       expect(response.candidates).toHaveLength(1)
@@ -286,8 +285,8 @@ describe("AdminProtocolReviewApiLive", () => {
       const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
 
       const detail = yield* client.adminProtocolReview.getProtocolCandidate({
-        path: { candidateId },
-        urlParams: {
+        params: { candidateId },
+        query: {
           observationLimit: 1,
         },
       })
@@ -325,7 +324,7 @@ describe("AdminProtocolReviewApiLive", () => {
       const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
 
       const firstPage = yield* client.adminProtocolReview.listProtocolCandidates({
-        urlParams: {
+        query: {
           limit: 1,
         },
       })
@@ -334,7 +333,7 @@ describe("AdminProtocolReviewApiLive", () => {
 
       const cursor = firstPage.page.nextCursor
       if (cursor === null) {
-        return yield* Effect.dieMessage("Expected protocol candidate cursor")
+        return yield* Effect.die("Expected protocol candidate cursor")
       }
 
       yield* db
@@ -343,7 +342,7 @@ describe("AdminProtocolReviewApiLive", () => {
         .where(eq(schema.protocolCandidates.id, candidateId))
 
       const secondPage = yield* client.adminProtocolReview.listProtocolCandidates({
-        urlParams: {
+        query: {
           cursor,
           limit: 1,
         },
@@ -364,8 +363,8 @@ describe("AdminProtocolReviewApiLive", () => {
       const client = yield* makeClient({ userId: crypto.randomUUID(), role: "admin" })
 
       const firstPage = yield* client.adminProtocolReview.getProtocolCandidate({
-        path: { candidateId },
-        urlParams: {
+        params: { candidateId },
+        query: {
           observationLimit: 1,
         },
       })
@@ -374,7 +373,7 @@ describe("AdminProtocolReviewApiLive", () => {
 
       const cursor = firstPage.observationsPage.nextCursor
       if (cursor === null) {
-        return yield* Effect.dieMessage("Expected protocol candidate observation cursor")
+        return yield* Effect.die("Expected protocol candidate observation cursor")
       }
 
       yield* db
@@ -383,8 +382,8 @@ describe("AdminProtocolReviewApiLive", () => {
         .where(eq(schema.protocolCandidateObservations.id, observationId))
 
       const secondPage = yield* client.adminProtocolReview.getProtocolCandidate({
-        path: { candidateId },
-        urlParams: {
+        params: { candidateId },
+        query: {
           observationCursor: cursor,
           observationLimit: 1,
         },
@@ -407,13 +406,13 @@ describe("AdminProtocolReviewApiLive", () => {
 
       const result = yield* client.adminProtocolReview
         .listProtocolCandidates({
-          urlParams: {},
+          query: {},
         })
-        .pipe(Effect.either)
+        .pipe(Effect.result)
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left._tag).toBe("ForbiddenError")
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("ForbiddenError")
       }
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )

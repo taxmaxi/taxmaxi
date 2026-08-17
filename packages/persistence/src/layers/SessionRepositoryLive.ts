@@ -103,13 +103,7 @@ const make = Effect.gen(function* () {
     }).pipe(wrapSqlError("create"))
 
   const deleteSession: SessionRepositoryService["delete"] = (id) =>
-    db
-      .delete(sessions)
-      .where(eq(sessions.id, id))
-      .pipe(
-        Effect.map(() => undefined),
-        wrapSqlError("delete")
-      )
+    db.delete(sessions).where(eq(sessions.id, id)).pipe(Effect.asVoid, wrapSqlError("delete"))
 
   const deleteExpired: SessionRepositoryService["deleteExpired"] = () =>
     Effect.gen(function* () {
@@ -139,7 +133,7 @@ const make = Effect.gen(function* () {
         .returning({ id: sessions.id })
 
       if (updated.length === 0) {
-        return yield* Effect.fail(new EntityNotFoundError({ entityType: "Session", entityId: id }))
+        return yield* new EntityNotFoundError({ entityType: "Session", entityId: id })
       }
 
       const maybeSession = yield* findById(id)

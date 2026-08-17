@@ -57,6 +57,7 @@ export interface PrepareCoinbaseNormalizationParams {
  * PreparedCoinbaseNormalization - Canonical Coinbase artifacts ready for persistence.
  */
 export interface PreparedCoinbaseNormalization {
+  readonly providerAssetRowIds: ReadonlyArray<string>
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
@@ -122,7 +123,7 @@ export interface CoinbaseSourceSyncProviderShape {
 /**
  * CoinbaseSourceSyncProvider - Context tag for the Coinbase provider boundary.
  */
-export class CoinbaseSourceSyncProvider extends Context.Tag("CoinbaseSourceSyncProvider")<
+export class CoinbaseSourceSyncProvider extends Context.Service<
   CoinbaseSourceSyncProvider,
   CoinbaseSourceSyncProviderShape
->() {}
+>()("CoinbaseSourceSyncProvider") {}

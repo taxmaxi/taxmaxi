@@ -4,7 +4,7 @@
  * @module SyncRunsApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { InternalServerError } from "./ApiErrors.ts"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
@@ -14,15 +14,15 @@ export class SyncRunNotFoundError extends Schema.TaggedError<SyncRunNotFoundErro
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("SyncRunItemResponse")({
   sourceId: Schema.String,
   jobId: Schema.NullOr(Schema.String),
   provider: Schema.NullOr(Schema.String),
-  status: Schema.Literal("queued", "running", "completed", "failed"),
-  phase: Schema.NullOr(Schema.Literal("discovering", "classifying", "reconciling", "completed")),
+  status: Schema.Literals(["queued", "running", "completed", "failed"]),
+  phase: Schema.NullOr(Schema.Literals(["discovering", "classifying", "reconciling", "completed"])),
   processedRecords: Schema.NullOr(Schema.Number),
   totalRecords: Schema.NullOr(Schema.Number),
   progressPercent: Schema.NullOr(Schema.Number),
@@ -34,7 +34,7 @@ export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("Sync
 
 export class SyncRunResponse extends Schema.Class<SyncRunResponse>("SyncRunResponse")({
   runId: Schema.String,
-  status: Schema.Literal("queued", "running", "completed", "failed", "partially_failed"),
+  status: Schema.Literals(["queued", "running", "completed", "failed", "partially_failed"]),
   requestedSourceCount: Schema.Number,
   queuedSourceCount: Schema.Number,
   runningSourceCount: Schema.Number,
@@ -46,31 +46,28 @@ export class SyncRunResponse extends Schema.Class<SyncRunResponse>("SyncRunRespo
   items: Schema.Array(SyncRunItemResponse),
 }) {}
 
-const startSyncRun = HttpApiEndpoint.post("startSyncRun", "/sync-runs")
-  .addSuccess(SyncRunResponse)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Start user-wide sync run",
-      description: "Starts source sync jobs for every configured source owned by the user.",
-    })
-  )
+const startSyncRun = HttpApiEndpoint.post("startSyncRun", "/sync-runs", {
+  success: SyncRunResponse,
+  error: InternalServerError,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Start user-wide sync run",
+    description: "Starts source sync jobs for every configured source owned by the user.",
+  })
+)
 
-const getSyncRun = HttpApiEndpoint.get("getSyncRun", "/sync-runs/:runId")
-  .setPath(
-    Schema.Struct({
-      runId: Schema.String,
-    })
-  )
-  .addSuccess(SyncRunResponse)
-  .addError(SyncRunNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get user-wide sync run",
-      description: "Returns aggregate sync status and per-source item summaries.",
-    })
-  )
+const getSyncRun = HttpApiEndpoint.get("getSyncRun", "/sync-runs/:runId", {
+  params: Schema.Struct({
+    runId: Schema.String,
+  }),
+  success: SyncRunResponse,
+  error: [SyncRunNotFoundError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get user-wide sync run",
+    description: "Returns aggregate sync status and per-source item summaries.",
+  })
+)
 
 /**
  * SyncRunsApi - Protected user-wide sync run endpoints.
@@ -80,7 +77,7 @@ export class SyncRunsApi extends HttpApiGroup.make("syncRuns")
   .add(getSyncRun)
   .middleware(AuthMiddleware)
   .prefix("/v1")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Sync runs",
       description: "Endpoints for user-wide source sync orchestration",

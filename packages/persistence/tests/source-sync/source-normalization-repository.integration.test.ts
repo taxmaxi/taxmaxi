@@ -58,9 +58,8 @@ const runTransferReconciliationRepository = <A, E>(
   Effect.runPromise(context.runWithLayer({ effect, layer: TransferReconciliationRepositoryLive }))
 
 const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
-  fetchAccountsPage: () => Effect.dieMessage("CoinbaseSyncClient test stub: fetchAccountsPage"),
-  fetchTransactionsPage: () =>
-    Effect.dieMessage("CoinbaseSyncClient test stub: fetchTransactionsPage"),
+  fetchAccountsPage: () => Effect.die("CoinbaseSyncClient test stub: fetchAccountsPage"),
+  fetchTransactionsPage: () => Effect.die("CoinbaseSyncClient test stub: fetchTransactionsPage"),
   fetchFiatCurrencies: () =>
     Effect.succeed([
       {
@@ -527,7 +526,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       )
     )
     await runRepository(
@@ -579,7 +578,7 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    expect(stalePersistence._tag).toBe("Left")
+    expect(stalePersistence._tag).toBe("Failure")
     expect(adopted).toEqual(first)
     expect(usage).toEqual([
       {
@@ -1080,7 +1079,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .where(eq(schema.cexAccount.id, fixture.cexAccountId))
           .limit(1)
         if (currentAccount === undefined) {
-          return yield* Effect.dieMessage("Missing primary CEX account fixture")
+          return yield* Effect.die("Missing primary CEX account fixture")
         }
         const [secondAccount] = yield* db
           .insert(schema.cexAccount)
@@ -1096,7 +1095,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           })
           .returning({ id: schema.cexAccount.id })
         if (secondAccount === undefined) {
-          return yield* Effect.dieMessage("Failed to create second CEX account fixture")
+          return yield* Effect.die("Failed to create second CEX account fixture")
         }
         yield* db.insert(schema.sources).values({
           id: secondSourceId,
@@ -1611,7 +1610,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.transfers.id })
 
         if (canonicalTransfer === undefined) {
-          return yield* Effect.dieMessage("Failed to create canonical transfer fixture")
+          return yield* Effect.die("Failed to create canonical transfer fixture")
         }
 
         yield* db.insert(schema.transferReconciliations).values({
@@ -2587,7 +2586,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.addresses.id })
 
         if (address === undefined) {
-          return yield* Effect.dieMessage("Failed to create cross-source FIFO address")
+          return yield* Effect.die("Failed to create cross-source FIFO address")
         }
 
         yield* db.insert(schema.sources).values({
@@ -2622,7 +2621,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (originLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create cross-source FIFO origin leg")
+          return yield* Effect.die("Failed to create cross-source FIFO origin leg")
         }
 
         const [lot] = yield* db
@@ -2641,7 +2640,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.fifoLots.id })
 
         if (lot === undefined) {
-          return yield* Effect.dieMessage("Failed to create cross-source FIFO lot")
+          return yield* Effect.die("Failed to create cross-source FIFO lot")
         }
 
         return lot.id
@@ -2783,7 +2782,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (openingLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to seed concurrent FIFO opening leg")
+          return yield* Effect.die("Failed to seed concurrent FIFO opening leg")
         }
 
         yield* db.insert(schema.fifoLots).values({
@@ -3573,7 +3572,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .limit(1)
 
         if (providerAsset === undefined) {
-          return yield* Effect.dieMessage("Missing Coinbase BTC provider asset")
+          return yield* Effect.die("Missing Coinbase BTC provider asset")
         }
 
         yield* db
@@ -4243,7 +4242,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.transactionLegs.id })
 
         if (openingLeg === undefined || feeLeg === undefined) {
-          return yield* Effect.dieMessage("Failed to create replayed fee movement legs")
+          return yield* Effect.die("Failed to create replayed fee movement legs")
         }
 
         const [lot] = yield* db
@@ -4279,7 +4278,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           .returning({ id: schema.inventoryMovements.id })
 
         if (lot === undefined || movement === undefined) {
-          return yield* Effect.dieMessage("Failed to create replayed fee movement allocation")
+          return yield* Effect.die("Failed to create replayed fee movement allocation")
         }
 
         yield* db.insert(schema.inventoryMovementAllocations).values({

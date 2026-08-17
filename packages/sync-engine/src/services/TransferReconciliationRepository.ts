@@ -101,6 +101,23 @@ export interface TransferReconciliationRecordDraft {
   readonly confidence: string
   readonly deterministic: boolean
   readonly reviewMetadata: unknown
+  /** Physical exact-amount candidate set observed before source locks are acquired. */
+  readonly candidateSnapshot?: TransferReconciliationCandidateSnapshot
+}
+
+/** Candidate search and exact matches that must still hold while source rows are locked. */
+export interface TransferReconciliationCandidateSnapshot {
+  readonly search: FindOnchainTransferReconciliationCandidatesParams
+  readonly providerAmount: string
+  readonly candidateFingerprints: ReadonlyArray<string>
+}
+
+/** Outcome of one reconciliation-state write. */
+export interface UpsertTransferReconciliationResult {
+  readonly candidateSnapshotChanged: boolean
+  /** Existing automatic claim that must also be moved to review and rolled back. */
+  readonly conflictingProviderTransferId: string | null
+  readonly status: TransferReconciliationStatus
 }
 
 /**
@@ -179,7 +196,15 @@ export interface TransferReconciliationRepositoryShape {
    */
   readonly upsertTransferReconciliation: (
     params: TransferReconciliationRecordDraft
-  ) => Effect.Effect<void, SyncEngineStorageError>
+  ) => Effect.Effect<UpsertTransferReconciliationResult, SyncEngineStorageError>
+
+  /**
+   * Unapply reconciliation effects connected to a source before its derived rows
+   * are deleted and rebuilt by replay.
+   */
+  readonly rollbackReconciliationsForSourceReplay: (params: {
+    readonly sourceId: string
+  }) => Effect.Effect<void, SyncEngineStorageError>
 
   /**
    * Replace false provider/onchain tax-visible state with canonical internal-transfer
@@ -195,6 +220,7 @@ export interface TransferReconciliationRepositoryShape {
 /**
  * TransferReconciliationRepository - Context tag for reconciliation persistence.
  */
-export class TransferReconciliationRepository extends Context.Tag(
-  "TransferReconciliationRepository"
-)<TransferReconciliationRepository, TransferReconciliationRepositoryShape>() {}
+export class TransferReconciliationRepository extends Context.Service<
+  TransferReconciliationRepository,
+  TransferReconciliationRepositoryShape
+>()("TransferReconciliationRepository") {}

@@ -52,13 +52,11 @@ export const makeX402PaymentValidatorTestLive = ({
       validateAnonymousSourceCreation: ({ paymentHeader }) =>
         Effect.gen(function* () {
           if (Option.isNone(paymentHeader) || paymentHeader.value !== validPaymentHeader) {
-            return yield* Effect.fail(
-              new X402PaymentRequiredError({
-                message: "x402 payment required.",
-                paymentRequired: paymentRequired("Payment required"),
-                paymentRequiredHeader: "encoded-test-payment-requirements",
-              })
-            )
+            return yield* new X402PaymentRequiredError({
+              message: "x402 payment required.",
+              paymentRequired: paymentRequired("Payment required"),
+              paymentRequiredHeader: "encoded-test-payment-requirements",
+            })
           }
 
           return {
@@ -69,13 +67,11 @@ export const makeX402PaymentValidatorTestLive = ({
                 })
 
                 if (failSettlement) {
-                  return yield* Effect.fail(
-                    new X402PaymentSettlementError({
-                      message: "x402 payment settlement failed.",
-                      paymentRequired: paymentRequired("Settlement failed"),
-                      paymentRequiredHeader: "encoded-test-settlement-failure",
-                    })
-                  )
+                  return yield* new X402PaymentSettlementError({
+                    message: "x402 payment settlement failed.",
+                    paymentRequired: paymentRequired("Settlement failed"),
+                    paymentRequiredHeader: "encoded-test-settlement-failure",
+                  })
                 }
 
                 settlementCount += 1

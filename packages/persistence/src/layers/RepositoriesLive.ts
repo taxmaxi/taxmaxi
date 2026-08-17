@@ -14,7 +14,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Chunk from "effect/Chunk"
-import { FetchHttpClient } from "@effect/platform"
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
 import {
   authConfigFromEnv,
   localAuthDefaults,
@@ -61,12 +61,14 @@ import { SourceSyncRunRepositoryLive } from "./SourceSyncRunRepositoryLive.ts"
 import { SourceSyncStateRepositoryLive } from "./SourceSyncStateRepositoryLive.ts"
 import { SyncEngineSourceRepositoryLive } from "./SyncEngineSourceRepositoryLive.ts"
 import { TransferReconciliationRepositoryLive } from "./TransferReconciliationRepositoryLive.ts"
+import { SyncEngineTransactionLive } from "./SyncEngineTransactionLive.ts"
 import { CoinbaseAuthProvider } from "../services/CoinbaseAuthProvider.ts"
 import { CoinbaseConfigTag } from "../services/CoinbaseConfig.ts"
 import { GoogleAuthProvider } from "../services/GoogleAuthProvider.ts"
 import { GoogleConfigTag } from "../services/GoogleConfig.ts"
 import { LocalAuthProvider } from "../services/LocalAuthProvider.ts"
 import { AuthServiceConfig, SessionDurationConfig } from "../services/AuthServiceConfig.ts"
+import { PersistenceError } from "../errors/RepositoryError.ts"
 
 /**
  * RepositoriesLive - Combined layer providing all repository implementations
@@ -127,6 +129,7 @@ export const RepositoriesLive = Layer.mergeAll(
   SourceSyncRunRepositoryLive,
   SourceSyncStateRepositoryLive,
   SyncEngineSourceRepositoryLive,
+  SyncEngineTransactionLive,
   TransferReconciliationRepositoryLive
 )
 
@@ -188,7 +191,7 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
           .join("")
         return `pbkdf2$${rounds}$${saltHex}$${hashHex}`
       },
-      catch: (cause) => cause,
+      catch: (cause) => new PersistenceError({ operation: "passwordHasher.hash", cause }),
     }).pipe(Effect.orDie),
   compare: (password: string, hash: string): Effect.Effect<boolean> =>
     Effect.tryPromise({
@@ -230,7 +233,7 @@ const SimpleBcryptAdapter = Layer.succeed(BcryptAdapterTag, {
 
         return computedHashHex === storedHashHex
       },
-      catch: (cause) => cause,
+      catch: (cause) => new PersistenceError({ operation: "passwordHasher.compare", cause }),
     }).pipe(Effect.orDie),
 })
 
@@ -273,7 +276,7 @@ const GoogleConfigFromAuthConfig = Layer.effect(
     const googleConfig = authConfig.providerConfigs.google
 
     if (Option.isNone(googleConfig)) {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         "Google provider enabled but AUTH_GOOGLE_CLIENT_ID / AUTH_GOOGLE_CLIENT_SECRET / AUTH_GOOGLE_REDIRECT_URI are not configured"
       )
     }
@@ -300,7 +303,7 @@ const CoinbaseConfigFromAuthConfig = Layer.effect(
     const coinbaseConfig = authConfig.providerConfigs.coinbase
 
     if (Option.isNone(coinbaseConfig)) {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         "Coinbase provider enabled but AUTH_COINBASE_CLIENT_ID / AUTH_COINBASE_CLIENT_SECRET / AUTH_COINBASE_REDIRECT_URI are not configured"
       )
     }
@@ -340,7 +343,7 @@ const buildEnabledProvidersFromConfig = (
         }
         case "google": {
           if (Option.isNone(googleProvider)) {
-            return yield* Effect.dieMessage(
+            return yield* Effect.die(
               "Google provider is enabled but GoogleAuthProvider dependency is unavailable"
             )
           }
@@ -349,7 +352,7 @@ const buildEnabledProvidersFromConfig = (
         }
         case "coinbase": {
           if (Option.isNone(coinbaseProvider)) {
-            return yield* Effect.dieMessage(
+            return yield* Effect.die(
               "Coinbase provider is enabled but CoinbaseAuthProvider dependency is unavailable"
             )
           }
@@ -360,7 +363,7 @@ const buildEnabledProvidersFromConfig = (
     }
 
     if (providers.length === 0) {
-      return yield* Effect.dieMessage(
+      return yield* Effect.die(
         "No authentication providers enabled. Set AUTH_ENABLED_PROVIDERS to include at least one provider"
       )
     }

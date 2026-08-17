@@ -7,7 +7,7 @@
  * @module TaxMaxiApi
  */
 
-import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "@effect/platform"
+import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { AuthApi, AuthSessionApi, CoinbaseCompatApi } from "./AuthApi.ts"
 import { BillingApi } from "./BillingApi.ts"
@@ -28,7 +28,7 @@ import { SyncRunsApi } from "./SyncRunsApi.ts"
  * HealthCheckResponse - Response for the health check endpoint
  */
 export class HealthCheckResponse extends Schema.Class<HealthCheckResponse>("HealthCheckResponse")({
-  status: Schema.Literal("ok", "degraded", "unhealthy"),
+  status: Schema.Literals(["ok", "degraded", "unhealthy"]),
   timestamp: Schema.String,
   version: Schema.OptionFromNullOr(Schema.String),
 }) {}
@@ -41,14 +41,14 @@ export class HealthCheckResponse extends Schema.Class<HealthCheckResponse>("Heal
  * Health check endpoint
  * GET /health
  */
-const healthCheck = HttpApiEndpoint.get("healthCheck", "/")
-  .addSuccess(HealthCheckResponse)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Health check",
-      description: "Returns the current health status of the API",
-    })
-  )
+const healthCheck = HttpApiEndpoint.get("healthCheck", "/", {
+  success: HealthCheckResponse,
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Health check",
+    description: "Returns the current health status of the API",
+  })
+)
 
 /**
  * HealthApi - Unprotected health check group
@@ -58,7 +58,7 @@ const healthCheck = HttpApiEndpoint.get("healthCheck", "/")
 export class HealthApi extends HttpApiGroup.make("health")
   .add(healthCheck)
   .prefix("/health")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Health",
       description: "API health and status endpoints",
@@ -92,7 +92,7 @@ export class TaxMaxiApi extends HttpApi.make("TaxMaxiApi")
   .add(PortfolioApi)
   .add(SourcesApi)
   .add(SyncRunsApi)
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "TaxMaxi API",
       description: "Crypto tax reporting API",

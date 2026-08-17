@@ -17,9 +17,9 @@ import * as Schema from "effect/Schema"
  * - Google: sub claim (string)
  * - Coinbase: user ID (string)
  */
-export const ProviderId = Schema.NonEmptyTrimmedString.pipe(
+export const ProviderId = Schema.Trimmed.check(Schema.isNonEmpty()).pipe(
   Schema.brand("ProviderId"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "ProviderId",
     title: "Provider ID",
     description: "A unique identifier for a user within an external auth provider",

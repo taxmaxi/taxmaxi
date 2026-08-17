@@ -88,7 +88,7 @@ export class LegalReferenceRepositoryError extends Schema.TaggedError<LegalRefer
   "LegalReferenceRepositoryError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
   }
 ) {
   override get message(): string {
@@ -139,7 +139,7 @@ export interface LegalReferenceRepositoryShape {
 /**
  * LegalReferenceRepository - Effect tag for legal reference repository access.
  */
-export class LegalReferenceRepository extends Context.Tag("LegalReferenceRepository")<
+export class LegalReferenceRepository extends Context.Service<
   LegalReferenceRepository,
   LegalReferenceRepositoryShape
->() {}
+>()("LegalReferenceRepository") {}

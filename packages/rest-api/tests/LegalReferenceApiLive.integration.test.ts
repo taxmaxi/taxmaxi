@@ -1,4 +1,4 @@
-import { HttpApiBuilder, HttpClient, HttpClientRequest } from "@effect/platform"
+import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { NodeHttpServer } from "@effect/platform-node"
 import {
   AuthService,
@@ -8,6 +8,7 @@ import {
 } from "@my/core/authentication"
 import { LegalReferenceService, LegalReferenceServiceLive } from "@my/core/legal"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
@@ -45,51 +46,54 @@ const TestPgClientLive = context.TestPgClientLive
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
+const TestConfigProvider = ConfigProvider.fromEnvRecord({
+  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
+})
+const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
+  Layer.provide(ConfigProvider.layer(TestConfigProvider))
+)
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: startSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
   replaySourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: replaySourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: replaySourceSyncJob not implemented"),
   getSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: getSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: getSourceSyncJob not implemented"),
 } satisfies SourceSyncServiceShape)
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
-  startSyncRun: () =>
-    Effect.dieMessage("SourceSyncRunService test stub: startSyncRun not implemented"),
-  getSyncRun: () => Effect.dieMessage("SourceSyncRunService test stub: getSyncRun not implemented"),
+  startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
+  getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
 } satisfies SourceSyncRunServiceShape)
 
 const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
   reconcileTransferCandidates: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
     ),
 } satisfies TransferReconciliationServiceShape)
 
 const AuthServiceTestLive = Layer.succeed(AuthService, {
-  login: () => Effect.dieMessage("AuthService test stub: login not implemented"),
-  register: () => Effect.dieMessage("AuthService test stub: register not implemented"),
+  login: () => Effect.die("AuthService test stub: login not implemented"),
+  register: () => Effect.die("AuthService test stub: register not implemented"),
   startEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: startEmailVerification not implemented"),
+    Effect.die("AuthService test stub: startEmailVerification not implemented"),
   resendEmailVerification: () =>
-    Effect.dieMessage("AuthService test stub: resendEmailVerification not implemented"),
-  verifyEmail: () => Effect.dieMessage("AuthService test stub: verifyEmail not implemented"),
-  startOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: startOAuthLogin not implemented"),
-  completeOAuthLogin: () =>
-    Effect.dieMessage("AuthService test stub: completeOAuthLogin not implemented"),
-  startLink: () => Effect.dieMessage("AuthService test stub: startLink not implemented"),
-  completeLink: () => Effect.dieMessage("AuthService test stub: completeLink not implemented"),
-  logout: () => Effect.dieMessage("AuthService test stub: logout not implemented"),
-  validateSession: () =>
-    Effect.dieMessage("AuthService test stub: validateSession not implemented"),
-  linkIdentity: () => Effect.dieMessage("AuthService test stub: linkIdentity not implemented"),
+    Effect.die("AuthService test stub: resendEmailVerification not implemented"),
+  verifyEmail: () => Effect.die("AuthService test stub: verifyEmail not implemented"),
+  startOAuthLogin: () => Effect.die("AuthService test stub: startOAuthLogin not implemented"),
+  completeOAuthLogin: () => Effect.die("AuthService test stub: completeOAuthLogin not implemented"),
+  startLink: () => Effect.die("AuthService test stub: startLink not implemented"),
+  completeLink: () => Effect.die("AuthService test stub: completeLink not implemented"),
+  logout: () => Effect.die("AuthService test stub: logout not implemented"),
+  validateSession: () => Effect.die("AuthService test stub: validateSession not implemented"),
+  linkIdentity: () => Effect.die("AuthService test stub: linkIdentity not implemented"),
   getEnabledProviders: () => Effect.succeed(Chunk.fromIterable(["local", "coinbase"] as const)),
 } satisfies AuthServiceShape)
 
@@ -107,32 +111,31 @@ const PersistenceLayer = Layer.mergeAll(
   PasswordHasherTestLive
 ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const HttpLive = HttpApiBuilder.serve().pipe(
-  Layer.provide(TaxMaxiApiLive),
-  Layer.provide(AnonSessionServiceLive),
-  Layer.provide(SIWXProofVerifierTestLive),
-  Layer.provide(X402PaymentValidatorTestLive),
-  Layer.provide(SimpleTokenValidatorLive),
-  Layer.provideMerge(PersistenceLayer),
-  Layer.provideMerge(NodeHttpServer.layerTest)
-)
+const HttpLive = HttpRouter.serve(
+  TaxMaxiApiLive.pipe(
+    Layer.provide(AnonSessionServiceTestLive),
+    Layer.provide(SIWXProofVerifierTestLive),
+    Layer.provide(X402PaymentValidatorTestLive),
+    Layer.provide(SimpleTokenValidatorLive)
+  )
+).pipe(Layer.provideMerge(PersistenceLayer), Layer.provideMerge(NodeHttpServer.layerTest))
 
-const postJson = <Response, Encoded, Requirements>({
+const postJson = <Response, Requirements>({
   path,
   payload,
   responseSchema,
 }: {
   readonly path: string
   readonly payload: unknown
-  readonly responseSchema: Schema.Schema<Response, Encoded, Requirements>
+  readonly responseSchema: Schema.ConstraintDecoder<Response, Requirements>
 }) =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.post(path).pipe(
-      HttpClientRequest.bodyUnsafeJson(payload),
+      HttpClientRequest.bodyJsonUnsafe(payload),
       HttpClient.execute
     )
     const body = yield* response.json
-    const decodedBody = yield* Schema.decodeUnknown(responseSchema)(body)
+    const decodedBody = yield* Schema.decodeUnknownEffect(responseSchema)(body)
 
     return {
       status: response.status,
@@ -155,8 +158,7 @@ const resolveQuestionViaService = ({
       maxClauses,
     })
   }).pipe(
-    Effect.provide(LegalReferenceServiceLive),
-    Effect.provide(PersistenceLayer),
+    Effect.provide(LegalReferenceServiceLive.pipe(Layer.provide(PersistenceLayer))),
     Effect.scoped
   )
 

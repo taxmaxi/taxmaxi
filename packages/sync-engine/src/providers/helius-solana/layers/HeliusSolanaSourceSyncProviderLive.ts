@@ -9,8 +9,9 @@ import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
-import * as ParseResult from "effect/ParseResult"
 import * as Schema from "effect/Schema"
+import * as SchemaGetter from "effect/SchemaGetter"
+import * as SchemaIssue from "effect/SchemaIssue"
 import {
   ActivityEvidence,
   ActivityFacts,
@@ -101,14 +102,14 @@ const HeliusSolanaFullTransactionEntrySchema = Schema.Struct({
   blockTime: Schema.NullOr(Schema.Number),
 })
 
-const HeliusSolanaAccountKeySchema = Schema.Union(
+const HeliusSolanaAccountKeySchema = Schema.Union([
   Schema.String,
   Schema.Struct({
     pubkey: Schema.String,
     signer: Schema.optional(Schema.Boolean),
     writable: Schema.optional(Schema.Boolean),
-  })
-)
+  }),
+])
 
 const HeliusSolanaInstructionSchema = Schema.Struct({
   programId: Schema.optional(Schema.String),
@@ -122,13 +123,13 @@ const HeliusSolanaInnerInstructionsSchema = Schema.Struct({
 })
 
 const HeliusSolanaCloseAccountParsedInstructionSchema = Schema.Struct({
-  type: Schema.Literal("closeAccount"),
+  type: Schema.Literals(["closeAccount"]),
 })
 
-const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
-const SolanaRawTokenAmountSchema = Schema.String.pipe(
-  Schema.filter((amount) => /^(0|[1-9]\d*)$/.test(amount), {
-    message: () => "Expected canonical unsigned token raw units.",
+const SolanaTokenDecimalsSchema = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }))
+const SolanaRawTokenAmountSchema = Schema.String.check(
+  Schema.isPattern(/^(0|[1-9]\d*)$/, {
+    message: "Expected canonical unsigned token raw units.",
   })
 )
 
@@ -144,23 +145,24 @@ const HeliusSolanaTokenBalanceSchema = Schema.Struct({
   }),
 })
 
-const HeliusSolanaDecimalStringSchema = Schema.transformOrFail(
-  Schema.Union(Schema.String, Schema.Number),
-  Schema.String,
-  {
-    strict: true,
-    decode: (value, _, ast) => {
+const HeliusSolanaDecimalStringSchema = Schema.Union([Schema.String, Schema.Number]).pipe(
+  Schema.decodeTo(Schema.String, {
+    decode: SchemaGetter.transformOrFail((value, options) => {
       const amount = typeof value === "number" ? String(value) : value.trim()
       return Option.match(BigDecimal.fromString(amount), {
         onNone: () =>
           Effect.fail(
-            new ParseResult.Type(ast, value, "Expected a decimal token amount string or number.")
+            new SchemaIssue.InvalidValue(
+              { message: "Expected a decimal token amount string or number." },
+              value,
+              options
+            )
           ),
         onSome: () => Effect.succeed(amount),
       })
-    },
-    encode: (value) => Effect.succeed(value),
-  }
+    }),
+    encode: SchemaGetter.transform((value) => value),
+  })
 )
 
 const HeliusSolanaParsedTokenTransferSchema = Schema.Struct({
@@ -175,11 +177,11 @@ const HeliusSolanaParsedTokenTransferSchema = Schema.Struct({
 const HeliusSolanaWalletTransferSchema = Schema.Struct({
   signature: Schema.String,
   timestamp: Schema.Number,
-  direction: Schema.Literal("in", "out"),
+  direction: Schema.Literals(["in", "out"]),
   counterparty: Schema.String,
   mint: Schema.String,
   symbol: Schema.NullOr(Schema.String),
-  amount: Schema.Union(Schema.Number, Schema.NumberFromString),
+  amount: Schema.Union([Schema.Number, Schema.NumberFromString]),
   amountRaw: SolanaRawTokenAmountSchema,
   decimals: SolanaTokenDecimalsSchema,
 })
@@ -287,13 +289,15 @@ interface MovementContradiction {
   readonly evidence: unknown
 }
 
-const decodeUnknownCursorPayload = Schema.decodeUnknown(HeliusSolanaCursorPayloadSchema)
-const decodeUnknownTransactionsPage = Schema.decodeUnknown(HeliusSolanaTransactionsPageSchema)
-const decodeUnknownFullTransactionEntry = Schema.decodeUnknown(
+const decodeUnknownCursorPayload = Schema.decodeUnknownEffect(HeliusSolanaCursorPayloadSchema)
+const decodeUnknownTransactionsPage = Schema.decodeUnknownEffect(HeliusSolanaTransactionsPageSchema)
+const decodeUnknownFullTransactionEntry = Schema.decodeUnknownEffect(
   HeliusSolanaFullTransactionEntrySchema
 )
-const decodeUnknownRawRecordPayload = Schema.decodeUnknown(HeliusSolanaRawRecordPayloadSchema)
-const decodeUnknownWalletTransfersPage = Schema.decodeUnknown(HeliusSolanaWalletTransfersPageSchema)
+const decodeUnknownRawRecordPayload = Schema.decodeUnknownEffect(HeliusSolanaRawRecordPayloadSchema)
+const decodeUnknownWalletTransfersPage = Schema.decodeUnknownEffect(
+  HeliusSolanaWalletTransfersPageSchema
+)
 const decodeCloseAccountParsedInstruction = Schema.decodeUnknownOption(
   HeliusSolanaCloseAccountParsedInstructionSchema
 )
@@ -1184,6 +1188,41 @@ const collectSplTokenMints = ({
       ...walletTransferEvidence.map((transfer) => transfer.mint),
     ])
   )
+
+const collectObservedSplDecimals = ({
+  payload,
+  walletTransferEvidence,
+}: {
+  readonly payload: HeliusSolanaFullTransactionPayload
+  readonly walletTransferEvidence: ReadonlyArray<HeliusSolanaWalletTransfer>
+}): ReadonlyMap<string, number | null> => {
+  const decimalsByMint = new Map<string, number | null>()
+  const observations = [
+    ...(payload.meta?.preTokenBalances ?? []).map((balance) => ({
+      mintAddress: balance.mint,
+      decimals: balance.uiTokenAmount.decimals,
+    })),
+    ...(payload.meta?.postTokenBalances ?? []).map((balance) => ({
+      mintAddress: balance.mint,
+      decimals: balance.uiTokenAmount.decimals,
+    })),
+    ...walletTransferEvidence.map((transfer) => ({
+      mintAddress: transfer.mint,
+      decimals: transfer.decimals,
+    })),
+  ]
+
+  for (const observation of observations) {
+    const current = decimalsByMint.get(observation.mintAddress)
+    if (current === undefined) {
+      decimalsByMint.set(observation.mintAddress, observation.decimals)
+    } else if (current !== observation.decimals) {
+      decimalsByMint.set(observation.mintAddress, null)
+    }
+  }
+
+  return decimalsByMint
+}
 
 const mapAssetsByMint = (
   requestedMints: ReadonlyArray<string>,
@@ -2657,13 +2696,21 @@ const make = ({
             payload,
             walletTransferEvidence: [...splWalletTransferEvidence, ...ambiguousNativeSolTransfers],
           })
+          const observedDecimalsByMint = collectObservedSplDecimals({
+            payload,
+            walletTransferEvidence: [...splWalletTransferEvidence, ...ambiguousNativeSolTransfers],
+          })
 
           const resolvedTokens = yield* assetResolutionService
             .resolveAssets({
-              assets: tokenMints.map((mintAddress) => ({
-                kind: "spl",
-                mintAddress,
-              })),
+              assets: tokenMints.map((mintAddress) => {
+                const observedDecimals = observedDecimalsByMint.get(mintAddress)
+                return {
+                  kind: "spl",
+                  mintAddress,
+                  ...(observedDecimals === undefined ? {} : { observedDecimals }),
+                }
+              }),
             })
             .pipe(
               Effect.mapError(
@@ -2766,11 +2813,33 @@ const make = ({
             })),
           ]
           const canonicalMovements = [...rawSolMovements, ...joinedCanonicalSplMovements]
+          const conflictingApprovedMovement = canonicalMovements.find(
+            (movement) =>
+              movement.asset.mappingStatus === "approved" &&
+              movement.observedDecimals !== null &&
+              movement.asset.decimals !== null &&
+              movement.observedDecimals !== movement.asset.decimals
+          )
+          if (conflictingApprovedMovement !== undefined) {
+            return yield* Effect.fail(
+              new HeliusSolanaNormalizationReferenceError({
+                message: `Approved Solana asset mapping for ${conflictingApprovedMovement.asset.currencyCode} conflicts with observed type or decimals evidence.`,
+              })
+            )
+          }
           const ambiguousNativeSolMovementSet = new Set(ambiguousNativeSolMovements)
           const providerObservationMovements = [
             ...movements,
             ...supplementalSplEvidenceMovements,
             ...ambiguousNativeSolMovements,
+          ]
+
+          const providerAssetRowIds = [
+            ...new Set(
+              [...canonicalMovements, ...providerObservationMovements].map(
+                (movement) => movement.asset.providerAssetRowId
+              )
+            ),
           ]
 
           const canonicalTransfers = canonicalMovements.flatMap((movement) => {
@@ -2884,6 +2953,7 @@ const make = ({
           })
 
           return {
+            providerAssetRowIds,
             transaction: buildTransactionDraft({
               sourceId: source.id,
               sourceRawRecordId: sourceRecord.id,

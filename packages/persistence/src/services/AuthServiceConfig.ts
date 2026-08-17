@@ -10,6 +10,7 @@
  */
 
 import * as Context from "effect/Context"
+import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import type { Chunk } from "effect"
@@ -41,37 +42,34 @@ export class SessionDurationConfig extends Schema.Class<SessionDurationConfig>(
    * Session duration for local provider in milliseconds
    */
   local: Schema.Number.pipe(
-    Schema.int(),
-    Schema.positive(),
-    Schema.propertySignature,
-    Schema.withConstructorDefault(() => DEFAULT_SESSION_DURATIONS.local)
+    Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+    Schema.optionalKey,
+    Schema.withConstructorDefault(Effect.succeed(DEFAULT_SESSION_DURATIONS.local))
   ),
 
   /**
    * Session duration for Google OAuth in milliseconds
    */
   google: Schema.Number.pipe(
-    Schema.int(),
-    Schema.positive(),
-    Schema.propertySignature,
-    Schema.withConstructorDefault(() => DEFAULT_SESSION_DURATIONS.google)
+    Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+    Schema.optionalKey,
+    Schema.withConstructorDefault(Effect.succeed(DEFAULT_SESSION_DURATIONS.google))
   ),
 
   /**
    * Session duration for Coinbase OAuth in milliseconds
    */
   coinbase: Schema.Number.pipe(
-    Schema.int(),
-    Schema.positive(),
-    Schema.propertySignature,
-    Schema.withConstructorDefault(() => DEFAULT_SESSION_DURATIONS.coinbase)
+    Schema.check(Schema.isInt(), Schema.isGreaterThan(0)),
+    Schema.optionalKey,
+    Schema.withConstructorDefault(Effect.succeed(DEFAULT_SESSION_DURATIONS.coinbase))
   ),
 }) {
   /**
    * Get session duration for a specific provider
    */
   getForProvider(provider: AuthProviderType): number {
-    return this[provider]
+    return this[provider] ?? DEFAULT_SESSION_DURATIONS[provider]
   }
 
   /**
@@ -143,10 +141,9 @@ export interface AuthServiceConfigShape {
  * const ConfigLayer = Layer.succeed(AuthServiceConfig, config)
  * ```
  */
-export class AuthServiceConfig extends Context.Tag("AuthServiceConfig")<
-  AuthServiceConfig,
-  AuthServiceConfigShape
->() {
+export class AuthServiceConfig extends Context.Service<AuthServiceConfig, AuthServiceConfigShape>()(
+  "AuthServiceConfig"
+) {
   /**
    * Create a layer with default configuration
    *

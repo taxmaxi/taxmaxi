@@ -20,9 +20,8 @@
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo"
   },
   "dependencies": {
-    "@effect/platform": "0.96.1",
-    "@effect/platform-node": "0.106.0",
-    "effect": "3.21.2"
+    "@effect/platform-node": "4.0.0-rc.109",
+    "effect": "4.0.0-rc.109"
   },
   "devDependencies": {
     "@my/typescript-config": "workspace:*",

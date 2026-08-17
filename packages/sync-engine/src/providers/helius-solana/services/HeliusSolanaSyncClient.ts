@@ -93,7 +93,7 @@ export interface HeliusSolanaSyncClientShape {
 /**
  * HeliusSolanaSyncClient - Context tag for Helius raw-history retrieval.
  */
-export class HeliusSolanaSyncClient extends Context.Tag("HeliusSolanaSyncClient")<
+export class HeliusSolanaSyncClient extends Context.Service<
   HeliusSolanaSyncClient,
   HeliusSolanaSyncClientShape
->() {}
+>()("HeliusSolanaSyncClient") {}

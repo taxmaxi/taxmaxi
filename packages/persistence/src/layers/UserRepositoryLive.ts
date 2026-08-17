@@ -60,7 +60,7 @@ const make = Effect.gen(function* () {
         .from(identities)
         .where(eq(identities.userId, userId))
         .orderBy(asc(identities.createdAt))
-      return Option.fromNullable(identity).pipe(Option.map((value) => value.provider))
+      return Option.fromNullishOr(identity).pipe(Option.map((value) => value.provider))
     })
 
   const rowToAuthUserWithPrimaryProvider = (
@@ -136,9 +136,7 @@ const make = Effect.gen(function* () {
         .returning(selectAuthUserFields)
 
       if (!created) {
-        return yield* Effect.fail(
-          new EntityNotFoundError({ entityType: "AuthUser", entityId: user.id })
-        )
+        return yield* new EntityNotFoundError({ entityType: "AuthUser", entityId: user.id })
       }
 
       return yield* rowToAuthUserWithPrimaryProvider(created, user.primaryProvider)
@@ -167,7 +165,7 @@ const make = Effect.gen(function* () {
         .returning(selectAuthUserFields)
 
       if (!updated) {
-        return yield* Effect.fail(new EntityNotFoundError({ entityType: "AuthUser", entityId: id }))
+        return yield* new EntityNotFoundError({ entityType: "AuthUser", entityId: id })
       }
 
       return yield* rowToAuthUserWithPrimaryProvider(updated)
@@ -178,7 +176,7 @@ const make = Effect.gen(function* () {
       const [deleted] = yield* db.delete(users).where(eq(users.id, id)).returning({ id: users.id })
 
       if (!deleted) {
-        return yield* Effect.fail(new EntityNotFoundError({ entityType: "AuthUser", entityId: id }))
+        return yield* new EntityNotFoundError({ entityType: "AuthUser", entityId: id })
       }
     }).pipe(wrapSqlError("delete"))
 

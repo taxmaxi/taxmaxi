@@ -12,13 +12,8 @@
  * @module SourceApiLive
  */
 
-import {
-  Headers,
-  HttpApiBuilder,
-  HttpApp,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { Headers, HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { SourceId } from "@my/core/source"
 import * as Effect from "effect/Effect"
 import * as Config from "effect/Config"
@@ -111,7 +106,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
 
       return yield* anonSessionService.verifySessionToken(token).pipe(
         Effect.map(Option.some),
-        Effect.catchAll(() => Effect.succeed(Option.none()))
+        Effect.catch(() => Effect.succeed(Option.none()))
       )
     })
 
@@ -156,7 +151,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       readonly principalId: string
       readonly sourceId: string
     }) =>
-      Schema.decodeUnknown(SourceId)(sourceId).pipe(
+      Schema.decodeUnknownEffect(SourceId)(sourceId).pipe(
         Effect.map((decodedSourceId) => ({ principalId, sourceId: decodedSourceId })),
         Effect.mapError(() => toBadRequestError("Invalid source identifier."))
       )
@@ -238,23 +233,23 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
               paymentHeader,
               payload,
             })
-            .pipe(Effect.either)
+            .pipe(Effect.result)
 
-          if (creationResult._tag === "Left") {
-            switch (creationResult.left._tag) {
+          if (creationResult._tag === "Failure") {
+            switch (creationResult.failure._tag) {
               case "SourceCreationBadRequestError":
-                return yield* Effect.fail(toBadRequestError(creationResult.left.message))
+                return yield* toBadRequestError(creationResult.failure.message)
               case "SourceCreationInternalError":
-                return yield* Effect.fail(toInternalServerError(creationResult.left.message))
+                return yield* toInternalServerError(creationResult.failure.message)
               case "SourceCreationPaymentRequiredError": {
                 const error = new SourcePaymentRequiredError({
-                  message: creationResult.left.message,
-                  paymentRequired: creationResult.left.paymentRequired,
+                  message: creationResult.failure.message,
+                  paymentRequired: creationResult.failure.paymentRequired,
                 })
                 const headers =
-                  creationResult.left.paymentRequiredHeader === undefined
+                  creationResult.failure.paymentRequiredHeader === undefined
                     ? {}
-                    : { "PAYMENT-REQUIRED": creationResult.left.paymentRequiredHeader }
+                    : { "PAYMENT-REQUIRED": creationResult.failure.paymentRequiredHeader }
                 return yield* HttpServerResponse.json(error, { status: 402, headers }).pipe(
                   Effect.orDie
                 )
@@ -262,14 +257,14 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             }
           }
 
-          const result = creationResult.right
+          const result = creationResult.success
 
           if (result.anonPayerSession !== null) {
             const anonSessionToken = yield* anonSessionService
               .createSessionToken(result.anonPayerSession)
               .pipe(Effect.mapError(() => toInternalServerError("Failed to create anon session.")))
 
-            yield* HttpApp.appendPreResponseHandler((_req, response) =>
+            yield* HttpEffect.appendPreResponseHandler((_req, response) =>
               Effect.orDie(
                 HttpServerResponse.setCookie(response, ANON_SESSION_COOKIE_NAME, anonSessionToken, {
                   ...anonSessionCookieOptions,
@@ -308,7 +303,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           return response
         })
       )
-      .handle("startSourceSyncJob", ({ path }) =>
+      .handle("startSourceSyncJob", ({ params: path }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const startParams = {
@@ -321,7 +316,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           return SourceSyncStartResponse.make(started)
         })
       )
-      .handle("replaySourceSyncJob", ({ path }) =>
+      .handle("replaySourceSyncJob", ({ params: path }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const replayParams = {
@@ -347,7 +342,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           return SourceSyncStartResponse.make(replayed)
         })
       )
-      .handle("getSourceSyncJobStatus", ({ path }) =>
+      .handle("getSourceSyncJobStatus", ({ params: path }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const job = yield* sourceSyncService
@@ -370,10 +365,10 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           return SourceSyncJobResponse.make(job)
         })
       )
-      .handle("calculateTaxForSource", ({ path, payload }) =>
+      .handle("calculateTaxForSource", ({ params: path, payload }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
-          const sourceId = yield* Schema.decodeUnknown(SourceId)(path.sourceId).pipe(
+          const sourceId = yield* Schema.decodeUnknownEffect(SourceId)(path.sourceId).pipe(
             Effect.mapError(() => toBadRequestError("Invalid source identifier."))
           )
           const maybeSource = yield* syncEngineSourceRepository
@@ -388,11 +383,9 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
             )
 
           if (Option.isNone(maybeSource)) {
-            return yield* Effect.fail(
-              new SourceNotFoundError({
-                message: sourceNotFoundMessage,
-              })
-            )
+            return yield* new SourceNotFoundError({
+              message: sourceNotFoundMessage,
+            })
           }
 
           const taxes = yield* taxCalculationService
@@ -427,7 +420,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           return TaxCalculationResponse.make(taxes)
         })
       )
-      .handle("getSourceOverview", ({ path }) =>
+      .handle("getSourceOverview", ({ params: path }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
@@ -443,7 +436,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           })
         })
       )
-      .handle("listSourceAssetPnl", ({ path }) =>
+      .handle("listSourceAssetPnl", ({ params: path }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
@@ -462,7 +455,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           })
         })
       )
-      .handle("listSourceTransactions", ({ path, urlParams }) =>
+      .handle("listSourceTransactions", ({ params: path, query: urlParams }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
@@ -489,7 +482,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           })
         })
       )
-      .handle("listSourceTaxEvents", ({ path, urlParams }) =>
+      .handle("listSourceTaxEvents", ({ params: path, query: urlParams }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
@@ -511,7 +504,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           })
         })
       )
-      .handle("listSourceFifoLots", ({ path, urlParams }) =>
+      .handle("listSourceFifoLots", ({ params: path, query: urlParams }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })
@@ -536,7 +529,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
           })
         })
       )
-      .handle("explainSourceDisposal", ({ path }) =>
+      .handle("explainSourceDisposal", ({ params: path }) =>
         Effect.gen(function* () {
           const principal = yield* resolveCurrentUserPrincipal
           const scope = yield* reportScope({ principalId: principal.id, sourceId: path.sourceId })

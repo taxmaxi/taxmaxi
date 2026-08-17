@@ -1,7 +1,7 @@
 /**
  * CurrentUser - Context for the currently authenticated user
  *
- * Provides a Context.Tag for accessing the current authenticated user
+ * Provides a Context.Service for accessing the current authenticated user
  * in Effect programs. This allows request handlers and business logic
  * to access the current user without threading it through every function.
  *
@@ -21,7 +21,7 @@ import type { AuthUser } from "./AuthUser.ts"
 // =============================================================================
 
 /**
- * CurrentUser - Context.Tag for the currently authenticated user
+ * CurrentUser - Context.Service for the currently authenticated user
  *
  * This tag holds the AuthUser that is authenticated for the current
  * request/session context. It's typically set by authentication middleware
@@ -40,10 +40,9 @@ import type { AuthUser } from "./AuthUser.ts"
  * })
  * ```
  */
-export class CurrentUser extends Context.Tag("@my/core/authentication/CurrentUser")<
-  CurrentUser,
-  AuthUser
->() {}
+export class CurrentUser extends Context.Service<CurrentUser, AuthUser>()(
+  "@my/core/authentication/CurrentUser"
+) {}
 
 // =============================================================================
 // Helper Functions

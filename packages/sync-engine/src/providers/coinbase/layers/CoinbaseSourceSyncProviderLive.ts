@@ -124,8 +124,8 @@ const isPositiveAmountSmallerThanRelease = ({
   }
 
   return (
-    BigDecimal.greaterThan(candidate.value, BigDecimal.fromBigInt(0n)) &&
-    BigDecimal.lessThanOrEqualTo(candidate.value, BigDecimal.abs(release.value))
+    BigDecimal.isGreaterThan(candidate.value, BigDecimal.fromBigInt(0n)) &&
+    BigDecimal.isLessThanOrEqualTo(candidate.value, BigDecimal.abs(release.value))
   )
 }
 
@@ -261,7 +261,7 @@ const decodeCoinbaseCursorPayload = (
       return defaultCoinbaseCursorPayload
     }
 
-    const decoded = yield* Schema.decodeUnknown(CoinbaseCursorPayloadSchema)(payload).pipe(
+    const decoded = yield* Schema.decodeUnknownEffect(CoinbaseCursorPayloadSchema)(payload).pipe(
       Effect.mapError((error) =>
         toCursorDecodeError(`Invalid persisted Coinbase cursor payload: ${error.message}`)
       )
@@ -602,7 +602,7 @@ const make = Effect.gen(function* () {
   const decodeCoinbaseNormalizedMetadata = (
     metadata: unknown
   ): Effect.Effect<CoinbaseNormalizedMetadata, CoinbaseRecordNormalizationError> =>
-    Schema.decodeUnknown(CoinbaseNormalizedMetadataSchema)(metadata).pipe(
+    Schema.decodeUnknownEffect(CoinbaseNormalizedMetadataSchema)(metadata).pipe(
       Effect.mapError(
         (cause) =>
           new CoinbaseRecordNormalizationError({
@@ -993,7 +993,7 @@ const make = Effect.gen(function* () {
       })
       .pipe(
         Effect.map((mapping) => ({
-          assetId: Option.fromNullable(mapping.canonicalAssetId),
+          assetId: Option.fromNullishOr(mapping.canonicalAssetId),
           requiresReview: mapping.mappingKind !== "fiat" && mapping.canonicalAssetId === null,
         })),
         Effect.catchTag("CoinbaseProviderAssetMappingNotFoundError", () =>
@@ -1047,9 +1047,24 @@ const make = Effect.gen(function* () {
             )
           ),
         resolveBlockchainId: (networkName) =>
-          Option.fromNullable(lookups.blockchainIdByName.get(networkName.toLowerCase())),
+          Option.fromNullishOr(lookups.blockchainIdByName.get(networkName.toLowerCase())),
       })
-
+      const providerAssetIdsByCurrency = new Map(
+        yield* Effect.forEach(
+          Array.from(
+            new Set([
+              normalized.primaryAssetCurrency.toUpperCase(),
+              ...normalized.unresolvedAssetCurrencies.map((currencyCode) =>
+                currencyCode.toUpperCase()
+              ),
+            ])
+          ),
+          (currencyCode) =>
+            loadProviderAssetIdentity({ currencyCode }).pipe(
+              Effect.map((providerAssetRowId) => [currencyCode, providerAssetRowId] as const)
+            )
+        )
+      )
       const normalizedMetadata = yield* decodeCoinbaseNormalizedMetadata(
         normalized.transaction.metadata
       )
@@ -1086,9 +1101,8 @@ const make = Effect.gen(function* () {
             message: `Missing asset row for resolved Coinbase asset ${assetId}`,
           }).pipe(Effect.map(Option.some)),
       })
-      const primaryProviderAssetId = yield* loadProviderAssetIdentity({
-        currencyCode: normalized.primaryAssetCurrency,
-      })
+      const primaryProviderAssetId =
+        providerAssetIdsByCurrency.get(normalized.primaryAssetCurrency.toUpperCase()) ?? null
       const baseTransactionReview = determineCoinbaseReview({
         providerTransactionType: normalized.transaction.providerTransactionType,
         resolvedTransactionType,
@@ -1107,8 +1121,12 @@ const make = Effect.gen(function* () {
               principalId: source.principalId,
               affectedCurrencies: unresolvedAssetCurrencies,
             })
+      const providerAssetRowIds = Array.from(providerAssetIdsByCurrency.values()).filter(
+        (providerAssetRowId): providerAssetRowId is string => providerAssetRowId !== null
+      )
 
       return {
+        providerAssetRowIds,
         transaction: {
           ...normalized.transaction,
           transactionType: resolvedTransactionType.transactionType,

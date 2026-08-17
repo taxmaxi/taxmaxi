@@ -15,7 +15,7 @@ import {
   type SourceSyncJobProgressSnapshot,
 } from "@my/sync-engine/services"
 
-const ProgressCounterSchema = Schema.Union(Schema.Number, Schema.NumberFromString)
+const ProgressCounterSchema = Schema.Union([Schema.Number, Schema.NumberFromString])
 
 const SourceSyncProgressDetailsSchema = Schema.Struct({
   mode: Schema.optional(SourceSyncJobModeSchema),
@@ -89,7 +89,7 @@ export const wrapSyncEngineStorageError =
 export const decodeSourceSyncJobProgressSnapshot = (
   progressDetails: unknown
 ): Effect.Effect<SourceSyncJobProgressSnapshot | null> =>
-  Schema.decodeUnknown(SourceSyncProgressDetailsSchema)(progressDetails).pipe(
+  Schema.decodeUnknownEffect(SourceSyncProgressDetailsSchema)(progressDetails).pipe(
     Effect.orElseSucceed(() => null),
     Effect.map((details: SourceSyncProgressDetails | null) =>
       details === null

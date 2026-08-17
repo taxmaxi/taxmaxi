@@ -82,7 +82,7 @@ const selectProcessingJob = ({ jobId }: { readonly jobId: string }) =>
         .limit(1)
 
       if (job === undefined) {
-        return yield* Effect.dieMessage(`Missing processing job ${jobId}`)
+        return yield* Effect.die(`Missing processing job ${jobId}`)
       }
 
       return job
@@ -359,13 +359,13 @@ describe("SourceSyncJobRepositoryLive", () => {
             workerId: "worker-2",
             startedAt: new Date("2025-01-02T00:01:00.000Z"),
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       )
     )
 
-    expect(secondClaim._tag).toBe("Left")
-    if (secondClaim._tag === "Left") {
-      expect(secondClaim.left._tag).toBe("SourceSyncJobExecutionRecordConflictError")
+    expect(secondClaim._tag).toBe("Failure")
+    if (secondClaim._tag === "Failure") {
+      expect(secondClaim.failure._tag).toBe("SourceSyncJobExecutionRecordConflictError")
     }
   })
 
@@ -381,11 +381,11 @@ describe("SourceSyncJobRepositoryLive", () => {
             workerId: "worker-2",
             heartbeatAt: new Date("2025-01-02T00:02:00.000Z"),
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       )
     )
 
-    expect(rejectedHeartbeat._tag).toBe("Left")
+    expect(rejectedHeartbeat._tag).toBe("Failure")
 
     await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
@@ -606,13 +606,13 @@ describe("SourceSyncJobRepositoryLive", () => {
             message: "Recovered stale source sync job after timeout.",
             completedAt: new Date("2025-01-02T00:30:00.000Z"),
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       )
     )
 
-    expect(recovery._tag).toBe("Left")
-    if (recovery._tag === "Left") {
-      expect(recovery.left._tag).toBe("SourceSyncJobExecutionRecordConflictError")
+    expect(recovery._tag).toBe("Failure")
+    if (recovery._tag === "Failure") {
+      expect(recovery.failure._tag).toBe("SourceSyncJobExecutionRecordConflictError")
     }
     expect(await selectProcessingJob({ jobId: created.id })).toMatchObject({
       status: "processing",
@@ -948,7 +948,7 @@ describe("SourceSyncJobRepositoryLive", () => {
           .returning({ id: schema.processingJobs.id })
 
         if (job === undefined) {
-          return yield* Effect.dieMessage("Failed to insert processing job without mode")
+          return yield* Effect.die("Failed to insert processing job without mode")
         }
 
         return job.id
@@ -977,7 +977,7 @@ describe("SourceSyncJobRepositoryLive", () => {
           })
           .returning({ id: schema.processingJobs.id })
 
-        if (job === undefined) return yield* Effect.dieMessage("Failed to create active sync job")
+        if (job === undefined) return yield* Effect.die("Failed to create active sync job")
         return job.id
       })
     )

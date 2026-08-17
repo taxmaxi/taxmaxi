@@ -33,7 +33,7 @@
     "www:build-deps": "turbo run build --filter=www^..."
   },
   "devDependencies": {
-    "@effect/language-service": "0.86.2",
+    "@effect/language-service": "0.87.2",
     "@vitest/coverage-v8": "4.1.9",
     "husky": "9.1.7",
     "lint-staged": "17.0.8",

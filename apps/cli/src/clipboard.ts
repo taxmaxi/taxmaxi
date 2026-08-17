@@ -6,8 +6,8 @@
  * tmux/screen), then pipe the text into the platform clipboard tool for
  * terminals that ignore OSC 52.
  */
-import { Command, type CommandExecutor } from "@effect/platform"
-import { Config, Data, Effect } from "effect"
+import { Config, Data, Effect, Stream } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 
 class ClipboardCommandError extends Data.TaggedError("ClipboardCommandError")<{
   readonly command: string
@@ -34,15 +34,19 @@ const writeOsc52 = (text: string): Effect.Effect<void> =>
 const feedInto =
   (text: string) =>
   (command: string, ...args: Array<string>) =>
-    Command.make(command, ...args).pipe(
-      Command.feed(text),
-      Command.exitCode,
-      Effect.filterOrFail(
-        (exitCode) => exitCode === 0,
-        (exitCode) => new ClipboardCommandError({ command, exitCode })
-      ),
-      Effect.asVoid
-    )
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const childProcess = ChildProcess.make(command, args, {
+        stdin: {
+          stream: Stream.succeed(new TextEncoder().encode(text)),
+        },
+      })
+      const exitCode = yield* spawner.exitCode(childProcess)
+
+      if (exitCode !== 0) {
+        return yield* new ClipboardCommandError({ command, exitCode })
+      }
+    })
 
 const nativeCopy = (text: string) => {
   const run = feedInto(text)
@@ -61,9 +65,9 @@ const nativeCopy = (text: string) => {
       return Effect.gen(function* () {
         const wayland = yield* envIsSet("WAYLAND_DISPLAY")
         const x11 = run("xclip", "-selection", "clipboard").pipe(
-          Effect.orElse(() => run("xsel", "--clipboard", "--input"))
+          Effect.catch(() => run("xsel", "--clipboard", "--input"))
         )
-        yield* wayland ? run("wl-copy").pipe(Effect.orElse(() => x11)) : x11
+        yield* wayland ? run("wl-copy").pipe(Effect.catch(() => x11)) : x11
       })
     default:
       return Effect.void
@@ -77,8 +81,8 @@ const nativeCopy = (text: string) => {
  */
 export const writeClipboard = (
   text: string
-): Effect.Effect<void, never, CommandExecutor.CommandExecutor> =>
+): Effect.Effect<void, never, ChildProcessSpawner.ChildProcessSpawner> =>
   writeOsc52(text).pipe(
     Effect.andThen(nativeCopy(text)),
-    Effect.catchAll(() => Effect.void)
+    Effect.catch(() => Effect.void)
   )

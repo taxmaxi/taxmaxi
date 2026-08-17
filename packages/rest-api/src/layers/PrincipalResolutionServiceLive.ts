@@ -34,7 +34,7 @@ export const PrincipalResolutionServiceLive = Layer.effect(
           .pipe(Effect.mapError(() => toResolutionError("Failed to resolve principal.")))
 
         if (Option.isNone(maybePrincipal)) {
-          return yield* Effect.fail(toResolutionError("Missing user principal."))
+          return yield* toResolutionError("Missing user principal.")
         }
 
         return maybePrincipal.value

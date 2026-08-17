@@ -1,4 +1,5 @@
-import { HttpApiBuilder, HttpServer } from "@effect/platform"
+import { Etag, HttpRouter } from "effect/unstable/http"
+import { NodeHttpPlatform, NodeServices } from "@effect/platform-node"
 import {
   HashedPassword,
   LocalAuthConfig,
@@ -8,6 +9,8 @@ import {
   localAuthDefaults,
 } from "@my/core/authentication"
 import * as Chunk from "effect/Chunk"
+import * as ConfigProvider from "effect/ConfigProvider"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
@@ -48,6 +51,12 @@ const TestPgClientLive = context.TestPgClientLive
 const X402PaymentValidatorTestLive = makeX402PaymentValidatorTestLive({
   validPaymentHeader: "valid-test-x402-payment",
 })
+const TestConfigProvider = ConfigProvider.fromEnvRecord({
+  ANON_SESSION_SECRET: "test-anon-session-secret-32-bytes-long",
+})
+const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
+  Layer.provide(ConfigProvider.layer(TestConfigProvider))
+)
 
 const runTestSql = ({ statement }: { readonly statement: string }) =>
   runSqlUnsafe({ statement }).pipe(Effect.provide(TestPgClientLive), Effect.asVoid, Effect.scoped)
@@ -67,26 +76,26 @@ const clearAuthTables = () =>
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: startSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
   replaySourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: replaySourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: replaySourceSyncJob not implemented"),
   getSourceSyncJob: () =>
-    Effect.dieMessage("SourceSyncService test stub: getSourceSyncJob not implemented"),
+    Effect.die("SourceSyncService test stub: getSourceSyncJob not implemented"),
 } satisfies SourceSyncServiceShape)
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
-  startSyncRun: () =>
-    Effect.dieMessage("SourceSyncRunService test stub: startSyncRun not implemented"),
-  getSyncRun: () => Effect.dieMessage("SourceSyncRunService test stub: getSyncRun not implemented"),
+  startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
+  getSyncRun: () => Effect.die("SourceSyncRunService test stub: getSyncRun not implemented"),
 } satisfies SourceSyncRunServiceShape)
 
 const TransferReconciliationServiceTestLive = Layer.succeed(TransferReconciliationService, {
   reconcileTransferCandidates: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: reconcileTransferCandidates not implemented"
     ),
+  rollbackReconciliationsForSourceReplay: () => Effect.void,
   applyDeterministicInternalTransferCanonicalization: () =>
-    Effect.dieMessage(
+    Effect.die(
       "TransferReconciliationService test stub: applyDeterministicInternalTransferCanonicalization not implemented"
     ),
 } satisfies TransferReconciliationServiceShape)
@@ -164,21 +173,21 @@ const makeAuthHandler = () => {
     Layer.provideMerge(InfrastructureLive)
   )
 
-  const { handler, dispose } = HttpApiBuilder.toWebHandler(
+  const { handler, dispose } = HttpRouter.toWebHandler(
     TaxMaxiApiLive.pipe(
-      Layer.provide(AnonSessionServiceLive),
+      Layer.provide(AnonSessionServiceTestLive),
       Layer.provide(SIWXProofVerifierTestLive),
       Layer.provide(X402PaymentValidatorTestLive),
       Layer.provide(SessionTokenValidatorLive),
       Layer.provide(AuthServiceTestLive),
       Layer.provideMerge(InfrastructureLive),
-      Layer.provideMerge(HttpServer.layerContext)
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeHttpPlatform.layer, Etag.layer))
     ),
     { middleware: invalidSessionCookieCleanup }
   )
 
   return {
-    handler,
+    handler: (request: Request) => handler(request, Context.empty()),
     dispose,
     sentVerificationCodes,
   }
@@ -190,7 +199,7 @@ const makeAuthHandlerScoped: Effect.Effect<AuthHandlerRuntime, never, Scope.Scop
     ({ dispose }) =>
       Effect.tryPromise({
         try: () => dispose(),
-        catch: (cause) => cause,
+        catch: (cause) => String(cause),
       }).pipe(Effect.orDie)
   )
 
@@ -257,7 +266,7 @@ const postJson = ({
         })
       )
     },
-    catch: (cause) => cause,
+    catch: (cause) => String(cause),
   }).pipe(Effect.orDie)
 
 const getRequest = ({
@@ -284,13 +293,13 @@ const getRequest = ({
         })
       )
     },
-    catch: (cause) => cause,
+    catch: (cause) => String(cause),
   }).pipe(Effect.orDie)
 
 const jsonBody = <A = unknown>(response: Response) =>
   Effect.tryPromise({
     try: () => response.json() as Promise<A>,
-    catch: (cause) => cause,
+    catch: (cause) => String(cause),
   }).pipe(Effect.orDie)
 
 await Effect.runPromise(context.recreateTestDatabase())

@@ -45,7 +45,7 @@ export interface CoinbaseCredentialRepositoryShape {
 /**
  * CoinbaseCredentialRepository - Context tag for Coinbase credential persistence.
  */
-export class CoinbaseCredentialRepository extends Context.Tag("CoinbaseCredentialRepository")<
+export class CoinbaseCredentialRepository extends Context.Service<
   CoinbaseCredentialRepository,
   CoinbaseCredentialRepositoryShape
->() {}
+>()("CoinbaseCredentialRepository") {}

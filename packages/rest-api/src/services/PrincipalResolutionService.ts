@@ -52,6 +52,7 @@ export interface PrincipalResolutionServiceShape {
 /**
  * PrincipalResolutionService - Context tag for principal resolution.
  */
-export class PrincipalResolutionService extends Context.Tag(
-  "@my/rest-api/PrincipalResolutionService"
-)<PrincipalResolutionService, PrincipalResolutionServiceShape>() {}
+export class PrincipalResolutionService extends Context.Service<
+  PrincipalResolutionService,
+  PrincipalResolutionServiceShape
+>()("@my/rest-api/PrincipalResolutionService") {}

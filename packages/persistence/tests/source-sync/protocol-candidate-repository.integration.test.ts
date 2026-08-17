@@ -474,7 +474,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
           .limit(1)
 
         if (candidate === undefined) {
-          return yield* Effect.dieMessage("Missing imported protocol candidate fixture")
+          return yield* Effect.die("Missing imported protocol candidate fixture")
         }
 
         yield* db.insert(schema.protocolTransactionTypeMappings).values({
@@ -549,7 +549,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
           .limit(1)
 
         if (blockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded solana blockchain fixture")
+          return yield* Effect.die("Missing seeded solana blockchain fixture")
         }
 
         yield* db.insert(schema.protocolTransactionTypeMappings).values({
@@ -775,7 +775,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
 
   it("rejects malformed batches without importing partial rows", async () => {
     const importResult = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(ProtocolCandidateRepository, (repository) =>
           repository.importObservations({
             observations: [
@@ -855,11 +855,11 @@ describe("ProtocolCandidateRepositoryLive", () => {
       })
     )
 
-    expect(importResult._tag).toBe("Left")
-    if (importResult._tag === "Right") {
+    expect(importResult._tag).toBe("Failure")
+    if (importResult._tag === "Success") {
       expect.fail("Expected malformed Dune observation import to fail")
     }
-    expect(importResult.left).toBeInstanceOf(SyncEngineStorageError)
+    expect(importResult.failure).toBeInstanceOf(SyncEngineStorageError)
     expect(rows).toEqual({
       candidateCount: 0,
       observationCount: 0,
@@ -900,7 +900,7 @@ describe("ProtocolCandidateRepositoryLive", () => {
     }
 
     const importResult = await runRepository(
-      Effect.either(importSolanaDuneRankingsFile({ file: rankingsFile, blockchainName: "solana" }))
+      Effect.result(importSolanaDuneRankingsFile({ file: rankingsFile, blockchainName: "solana" }))
     )
 
     const rows = await runPg(
@@ -920,12 +920,12 @@ describe("ProtocolCandidateRepositoryLive", () => {
       })
     )
 
-    expect(importResult._tag).toBe("Left")
-    if (importResult._tag === "Right") {
+    expect(importResult._tag).toBe("Failure")
+    if (importResult._tag === "Success") {
       expect.fail("Expected malformed Solana Dune rankings file import to fail")
     }
-    expect(importResult.left).toBeInstanceOf(SolanaDuneRankingsFileImportError)
-    expect(importResult.left.message).toContain("Invalid period")
+    expect(importResult.failure).toBeInstanceOf(SolanaDuneRankingsFileImportError)
+    expect(importResult.failure.message).toContain("Invalid period")
     expect(rows).toEqual({ candidateCount: 0, observationCount: 0 })
   })
 })

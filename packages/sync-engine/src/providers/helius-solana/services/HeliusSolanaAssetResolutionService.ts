@@ -47,6 +47,8 @@ export type HeliusSolanaAssetKind = "native" | "spl"
 export interface HeliusSolanaAssetReference {
   readonly kind: HeliusSolanaAssetKind
   readonly mintAddress: string | null
+  /** Exact decimals observed on the current raw record; null means conflicting observations. */
+  readonly observedDecimals?: number | null
   readonly rawProviderPayload?: unknown
 }
 
@@ -144,6 +146,7 @@ export interface HeliusSolanaAssetResolutionServiceShape {
 /**
  * HeliusSolanaAssetResolutionService - Context tag for Solana asset mapping resolution.
  */
-export class HeliusSolanaAssetResolutionService extends Context.Tag(
-  "HeliusSolanaAssetResolutionService"
-)<HeliusSolanaAssetResolutionService, HeliusSolanaAssetResolutionServiceShape>() {}
+export class HeliusSolanaAssetResolutionService extends Context.Service<
+  HeliusSolanaAssetResolutionService,
+  HeliusSolanaAssetResolutionServiceShape
+>()("HeliusSolanaAssetResolutionService") {}

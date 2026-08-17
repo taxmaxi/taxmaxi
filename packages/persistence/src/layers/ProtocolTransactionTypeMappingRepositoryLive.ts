@@ -99,7 +99,7 @@ const validateNonEmptyText = ({
 }) =>
   value.trim().length === 0
     ? invalidInput({ operation, field, message: `${field} must not be empty.` })
-    : Effect.succeed(void 0)
+    : Effect.void
 
 const requireRow = <A>({
   row,
@@ -120,7 +120,7 @@ const validateConfidence = ({
 }) => {
   const parsedConfidence = Number(confidence)
   return Number.isFinite(parsedConfidence) && parsedConfidence >= 0 && parsedConfidence <= 1
-    ? Effect.succeed(void 0)
+    ? Effect.void
     : invalidInput({
         operation,
         field: "confidence",
@@ -136,7 +136,7 @@ const validateVersion = ({
   readonly version: number
 }) =>
   Number.isSafeInteger(version) && version > 0
-    ? Effect.succeed(void 0)
+    ? Effect.void
     : invalidInput({
         operation,
         field: "version",
@@ -398,13 +398,11 @@ const make = Effect.gen(function* () {
             const subjectIdentifier = params.subjectIdentifier.trim()
 
             if (!allowedSubjectIdentifiers.includes(subjectIdentifier)) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  candidateId: params.candidateId,
-                  subjectIdentifier,
-                  message: "Protocol mapping subject must belong to the mapped candidate.",
-                })
-              )
+              return yield* storageError(operation, {
+                candidateId: params.candidateId,
+                subjectIdentifier,
+                message: "Protocol mapping subject must belong to the mapped candidate.",
+              })
             }
 
             const now = nowDate()
@@ -506,13 +504,11 @@ const make = Effect.gen(function* () {
             })
 
             if (mapping.candidateId === null || mapping.candidateId !== observation.candidateId) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  mappingId: params.mappingId,
-                  candidateObservationId: params.candidateObservationId,
-                  message: "Protocol mapping evidence must belong to the mapped candidate.",
-                })
-              )
+              return yield* storageError(operation, {
+                mappingId: params.mappingId,
+                candidateObservationId: params.candidateObservationId,
+                message: "Protocol mapping evidence must belong to the mapped candidate.",
+              })
             }
 
             const coveredSubjectIdentifiers = allowedSubjectIdentifiersForCandidate({
@@ -521,14 +517,12 @@ const make = Effect.gen(function* () {
             })
 
             if (!coveredSubjectIdentifiers.includes(mapping.subjectIdentifier)) {
-              return yield* Effect.fail(
-                storageError(operation, {
-                  mappingId: params.mappingId,
-                  candidateObservationId: params.candidateObservationId,
-                  subjectIdentifier: mapping.subjectIdentifier,
-                  message: "Protocol mapping evidence must cover the mapped subject.",
-                })
-              )
+              return yield* storageError(operation, {
+                mappingId: params.mappingId,
+                candidateObservationId: params.candidateObservationId,
+                subjectIdentifier: mapping.subjectIdentifier,
+                message: "Protocol mapping evidence must cover the mapped subject.",
+              })
             }
           }
 
@@ -600,12 +594,10 @@ const make = Effect.gen(function* () {
             .pipe(wrapSyncEngineSqlError(operation))
 
           if ((evidenceCount?.value ?? 0) < 1) {
-            return yield* Effect.fail(
-              storageError(operation, {
-                mappingId: params.mappingId,
-                message: "Cannot approve protocol mapping without evidence.",
-              })
-            )
+            return yield* storageError(operation, {
+              mappingId: params.mappingId,
+              message: "Cannot approve protocol mapping without evidence.",
+            })
           }
 
           const now = nowDate()
