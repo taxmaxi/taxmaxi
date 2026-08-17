@@ -417,7 +417,7 @@ describe("BillingApiLive", () => {
 
         stripeHttpMockState.prices = []
         const unavailableCatalog = yield* execute(HttpClientRequest.get("/v1/billing/catalog"))
-        expect(unavailableCatalog.status).toBe(500)
+        expect(unavailableCatalog.status).toBe(400)
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
   })
