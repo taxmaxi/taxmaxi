@@ -9,7 +9,7 @@ import {
   type TaxMaxiPendingAsset,
 } from "#/lib/assets"
 import { m } from "#/paraglide/messages"
-import { AssetCatalog as AssetCatalogView } from "./asset-catalog"
+import { AssetCatalog as AssetCatalogView } from "#/components/asset-catalog"
 
 function AssetCatalog({
   approvedAssetsUnavailable = false,

@@ -8,7 +8,7 @@ import {
   isTopUpActionDisabled,
   loadBillingPageData,
   refreshBillingStatusAfterCheckout,
-} from "./app_.billing"
+} from "#/routes/app_.billing"
 
 const status = (
   credits: number,

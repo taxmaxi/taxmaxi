@@ -15,7 +15,7 @@ import {
   type BillingStatus,
 } from "taxmaxi"
 
-import { BillingPageContent } from "./app_.billing"
+import { BillingPageContent } from "#/routes/app_.billing"
 
 const catalog: BillingCatalog = {
   prices: [

@@ -5,7 +5,7 @@ import {
   formatSignedCurrency,
   formatTokenAmount,
   formatTokenPrice,
-} from "./dashboard-format"
+} from "#/lib/dashboard-format"
 
 describe("dashboard decimal formatting", () => {
   it("formats token amounts without losing integer precision", () => {

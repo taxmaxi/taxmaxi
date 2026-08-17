@@ -23,8 +23,8 @@ export default defineConfig({
             "apps/crawler/tests/**/*.test.ts",
             "apps/server/tests/**/*.test.ts",
             "apps/worker/tests/**/*.test.ts",
-            "apps/www/src/**/*.test.ts",
-            "apps/www/src/**/*.test.tsx",
+            "apps/www/tests/**/*.test.ts",
+            "apps/www/tests/**/*.test.tsx",
           ],
           exclude: [
             "packages/**/tests/**/*.integration.test.ts",
