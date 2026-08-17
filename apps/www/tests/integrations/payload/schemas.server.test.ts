@@ -39,6 +39,62 @@ describe("Payload response schemas", () => {
     expect(result.success).toBe(true)
   })
 
+  it("decodes expanded relationship nodes and internal document links", () => {
+    const result = LandingPageSchema.safeParse({
+      id: 1,
+      slug: "crypto-tax",
+      pageType: "general",
+      title: "Crypto tax",
+      excerpt: "A guide",
+      content: {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "relationship",
+              relationTo: "news-articles",
+              value: { id: 2, slug: "new-rules", title: "New rules" },
+            },
+            {
+              type: "link",
+              fields: {
+                linkType: "internal",
+                doc: {
+                  relationTo: "tax-law-articles",
+                  value: { id: 3, slug: "staking-income", title: "Staking income" },
+                },
+              },
+              children: [{ type: "text", text: "Read more" }],
+            },
+          ],
+        },
+      },
+      updatedAt: "2026-08-17T10:00:00.000Z",
+    })
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    expect(result.data.content.root.children).toEqual([
+      {
+        type: "relationship",
+        relationTo: "news-articles",
+        value: { id: 2, slug: "new-rules" },
+      },
+      {
+        type: "link",
+        fields: {
+          linkType: "internal",
+          doc: {
+            relationTo: "tax-law-articles",
+            value: { id: 3, slug: "staking-income" },
+          },
+        },
+        children: [{ type: "text", text: "Read more" }],
+      },
+    ])
+  })
+
   it("rejects values outside the Payload content contract", () => {
     const result = NewsArticleSchema.safeParse({
       id: 2,

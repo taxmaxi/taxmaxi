@@ -4,12 +4,25 @@ const CMS_BROWSER_TTL_SECONDS = 60
 const CMS_EDGE_STALE_TIME_MS = 24 * 60 * 60 * 1_000
 const CMS_EDGE_RETENTION_SECONDS = (CMS_ROUTE_STALE_TIME_MS + CMS_EDGE_STALE_TIME_MS) / 1_000
 const CMS_STORED_AT_HEADER = "X-TaxMaxi-CMS-Stored-At"
+const CMS_TRACKING_QUERY_PARAMETERS = new Set([
+  "_gl",
+  "dclid",
+  "fbclid",
+  "gbraid",
+  "gclid",
+  "li_fat_id",
+  "msclkid",
+  "ttclid",
+  "twclid",
+  "wbraid",
+])
 
 export const CMS_CACHE_CONTROL = `public, max-age=${CMS_BROWSER_TTL_SECONDS}, s-maxage=${CMS_ROUTE_STALE_TIME_MS / 1_000}, stale-while-revalidate=${CMS_EDGE_STALE_TIME_MS / 1_000}`
 
 interface CmsEdgeCache {
   match(request: Request): Promise<Response | undefined>
   put(request: Request, response: Response): Promise<void>
+  delete(request: Request): Promise<boolean>
 }
 
 interface CmsEdgeCacheContext {
@@ -33,7 +46,8 @@ export async function withCmsEdgeCache({
     return resolve()
   }
 
-  const cached = await cache.match(request)
+  const cacheRequest = toCacheRequest(request)
+  const cached = await cache.match(cacheRequest)
   const storedAtHeader = cached?.headers.get(CMS_STORED_AT_HEADER)
   const storedAt = storedAtHeader ? Number(storedAtHeader) : Number.NaN
   const age = now() - storedAt
@@ -44,14 +58,31 @@ export async function withCmsEdgeCache({
     }
 
     if (age <= CMS_ROUTE_STALE_TIME_MS + CMS_EDGE_STALE_TIME_MS) {
-      context.waitUntil(resolveAndStore({ request, cache, resolve, now }))
+      context.waitUntil(resolveAndStore({ request: cacheRequest, cache, resolve, now }))
       return toClientResponse(cached)
     }
   }
 
   const response = await resolve()
-  scheduleStore({ request, response, cache, context, now })
+  scheduleStore({ request: cacheRequest, response, cache, context, now })
   return response
+}
+
+function toCacheRequest(request: Request): Request {
+  const url = new URL(request.url)
+
+  for (const parameter of Array.from(url.searchParams.keys())) {
+    const lowercaseParameter = parameter.toLowerCase()
+
+    if (
+      lowercaseParameter.startsWith("utm_") ||
+      CMS_TRACKING_QUERY_PARAMETERS.has(lowercaseParameter)
+    ) {
+      url.searchParams.delete(parameter)
+    }
+  }
+
+  return new Request(url.toString(), request)
 }
 
 async function resolveAndStore({
@@ -66,6 +97,11 @@ async function resolveAndStore({
   readonly now: () => number
 }): Promise<void> {
   const response = await resolve()
+
+  if (response.status === 404) {
+    await cache.delete(request)
+    return
+  }
 
   if (isCmsResponse(response)) {
     await cache.put(request, toStoredResponse(response, now()))

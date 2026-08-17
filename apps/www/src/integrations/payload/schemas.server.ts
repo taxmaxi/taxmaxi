@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import type {
   LexicalNode,
+  PayloadDocumentReference,
   PayloadLandingPage,
   PayloadMedia,
   PayloadNewsArticle,
@@ -21,6 +22,17 @@ const PayloadMediaSchema: z.ZodType<PayloadMedia> = z.object({
   height: NullableNumber,
 })
 
+const PayloadDocumentReferenceSchema: z.ZodType<PayloadDocumentReference> = z.object({
+  id: z.number(),
+  slug: NullableString,
+  url: NullableString,
+})
+
+const PayloadRelationshipReferenceSchema = z.object({
+  relationTo: z.string(),
+  value: z.union([z.number(), PayloadDocumentReferenceSchema]),
+})
+
 const LexicalNodeSchema: z.ZodType<LexicalNode> = z.lazy(() =>
   z.object({
     type: z.string(),
@@ -34,9 +46,12 @@ const LexicalNodeSchema: z.ZodType<LexicalNode> = z.lazy(() =>
       .object({
         url: NullableString,
         newTab: NullableBoolean,
+        linkType: z.enum(["custom", "internal"]).nullable().optional(),
+        doc: PayloadRelationshipReferenceSchema.nullable().optional(),
       })
       .optional(),
-    value: z.union([z.number(), PayloadMediaSchema]).optional(),
+    relationTo: z.string().optional(),
+    value: z.union([z.number(), PayloadMediaSchema, PayloadDocumentReferenceSchema]).optional(),
   })
 )
 
