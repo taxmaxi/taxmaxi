@@ -27,6 +27,17 @@ export interface PayloadMedia {
   readonly height?: number | null
 }
 
+export interface PayloadDocumentReference {
+  readonly id: number
+  readonly slug?: string | null
+  readonly url?: string | null
+}
+
+export interface PayloadRelationshipReference {
+  readonly relationTo: string
+  readonly value: number | PayloadDocumentReference
+}
+
 export interface LexicalNode {
   readonly type: string
   readonly children?: ReadonlyArray<LexicalNode>
@@ -38,8 +49,11 @@ export interface LexicalNode {
   readonly fields?: {
     readonly url?: string | null
     readonly newTab?: boolean | null
+    readonly linkType?: "custom" | "internal" | null
+    readonly doc?: PayloadRelationshipReference | null
   }
-  readonly value?: number | PayloadMedia
+  readonly relationTo?: string
+  readonly value?: number | PayloadMedia | PayloadDocumentReference
 }
 
 export interface LexicalDocument {
@@ -247,6 +261,13 @@ export function getCmsPagePath({
 
   const segment = locale === "de" ? "steuerrecht" : "tax-law"
   return `${localePrefix}/${segment}/${encodedSlug}`
+}
+
+export function getCmsPageKind(collection: string): CmsPageKind | undefined {
+  if (collection === "landing-pages") return "landing"
+  if (collection === "news-articles") return "news-article"
+  if (collection === "tax-law-articles") return "tax-law-article"
+  return undefined
 }
 
 export function getCmsPageUrl({

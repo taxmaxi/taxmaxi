@@ -6,6 +6,7 @@ import type {
   PayloadLocale,
   PayloadMedia,
 } from "#/integrations/payload/content"
+import { getCmsPageKind, getCmsPagePath } from "#/integrations/payload/content"
 import { localizeHref } from "#/paraglide/runtime"
 
 const TEXT_BOLD = 1
@@ -61,7 +62,7 @@ function renderNode(node: LexicalNode, locale: PayloadLocale): ReactNode {
   }
 
   if (node.type === "link" || node.type === "autolink") {
-    const href = safeHref(node.fields?.url ?? node.url, locale)
+    const href = linkHref(node, locale)
     if (!href) return renderChildren(node, locale)
     const newTab = node.fields?.newTab ?? false
     return (
@@ -71,11 +72,28 @@ function renderNode(node: LexicalNode, locale: PayloadLocale): ReactNode {
     )
   }
 
-  if (node.type === "upload" && typeof node.value === "object") {
+  if (node.type === "upload" && isPayloadMedia(node.value)) {
     return renderUpload(node.value)
   }
 
   return renderChildren(node, locale)
+}
+
+function linkHref(node: LexicalNode, locale: PayloadLocale): string | undefined {
+  if (node.fields?.linkType === "internal") {
+    const reference = node.fields.doc
+    const kind = reference ? getCmsPageKind(reference.relationTo) : undefined
+    const document = reference?.value
+
+    if (!kind || typeof document === "number" || !document?.slug) return undefined
+    return getCmsPagePath({ kind, locale, slug: document.slug })
+  }
+
+  return safeHref(node.fields?.url ?? node.url, locale)
+}
+
+function isPayloadMedia(value: LexicalNode["value"]): value is PayloadMedia {
+  return typeof value === "object" && "alt" in value && typeof value.alt === "string"
 }
 
 function renderText(text: string, format: number): ReactNode {

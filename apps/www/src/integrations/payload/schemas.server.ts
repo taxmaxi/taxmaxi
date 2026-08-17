@@ -2,6 +2,7 @@ import { Schema } from "effect"
 
 import type {
   LexicalNode,
+  PayloadDocumentReference,
   PayloadLandingPage,
   PayloadMedia,
   PayloadNewsArticle,
@@ -21,6 +22,17 @@ const PayloadMediaSchema: Schema.Schema<PayloadMedia> = Schema.Struct({
   height: NullableNumber,
 })
 
+const PayloadDocumentReferenceSchema: Schema.Schema<PayloadDocumentReference> = Schema.Struct({
+  id: Schema.Number,
+  slug: NullableString,
+  url: NullableString,
+})
+
+const PayloadRelationshipReferenceSchema = Schema.Struct({
+  relationTo: Schema.String,
+  value: Schema.Union(Schema.Number, PayloadDocumentReferenceSchema),
+})
+
 const LexicalNodeSchema: Schema.Schema<LexicalNode> = Schema.suspend(() =>
   Schema.Struct({
     type: Schema.String,
@@ -34,9 +46,14 @@ const LexicalNodeSchema: Schema.Schema<LexicalNode> = Schema.suspend(() =>
       Schema.Struct({
         url: NullableString,
         newTab: NullableBoolean,
+        linkType: Schema.optional(Schema.NullOr(Schema.Literal("custom", "internal"))),
+        doc: Schema.optional(Schema.NullOr(PayloadRelationshipReferenceSchema)),
       })
     ),
-    value: Schema.optional(Schema.Union(Schema.Number, PayloadMediaSchema)),
+    relationTo: Schema.optional(Schema.String),
+    value: Schema.optional(
+      Schema.Union(Schema.Number, PayloadMediaSchema, PayloadDocumentReferenceSchema)
+    ),
   })
 )
 
