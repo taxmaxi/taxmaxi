@@ -45,8 +45,8 @@ const CoinGeckoClientTestLive = Layer.succeed(
     getCoin: () =>
       Effect.succeed({
         id: "ethereum",
-        symbol: "eth",
-        name: "Ethereum",
+        symbol: "btc",
+        name: "Bitcoin",
         asset_platform_id: null,
         platforms: {},
         detail_platforms: {},
@@ -187,8 +187,16 @@ const seedChainlessPendingProviderAsset = ({
 
 const seedObservedPendingProviderAsset = ({
   providerAssetId,
+  currencyCode = "BTC",
+  name = "Bitcoin",
+  representationType = "native",
+  contractAddress = null,
 }: {
   readonly providerAssetId: string
+  readonly currencyCode?: string
+  readonly name?: string
+  readonly representationType?: "native" | "token"
+  readonly contractAddress?: string | null
 }) =>
   context.runPg(
     Effect.gen(function* () {
@@ -202,8 +210,8 @@ const seedObservedPendingProviderAsset = ({
         .values({
           provider: "coinbase",
           providerAssetId,
-          currencyCode: "BTC",
-          name: "Bitcoin",
+          currencyCode,
+          name,
           exponent: 18,
           providerType: "crypto",
           retrievedAt: new Date("2026-08-16T09:00:00.000Z"),
@@ -243,7 +251,8 @@ const seedObservedPendingProviderAsset = ({
         toAddress: "0x1111111111111111111111111111111111111111",
         amount: "0.1",
         observedBlockchainId: ethereumBlockchain.id,
-        observedRepresentationType: "native",
+        observedRepresentationType: representationType,
+        observedContractAddress: contractAddress,
         observedDecimals: 18,
         metadata: {},
       })
@@ -728,28 +737,118 @@ describe("AssetCanonicalizationServiceLive", () => {
     }
   )
 
-  it("resolves CoinGecko evidence before entering the database transaction", async () => {
-    const providerAssetRowId = await seedObservedPendingProviderAsset({
-      providerAssetId: "coingecko-outside-transaction",
+  it("canonicalizes an economic-only asset selected through a custom CoinGecko search", async () => {
+    const providerAssetRowId = await seedChainlessPendingProviderAsset({
+      providerAssetId: "custom-search-economic-asset",
+      providerType: "crypto",
     })
-    const searchStarted = await Effect.runPromise(Deferred.make<void>())
-    const releaseSearch = await Effect.runPromise(Deferred.make<void>())
-    const transactionEntered = await Effect.runPromise(Deferred.make<void>())
     const coinGeckoClient = CoinGeckoClient.of({
-      searchCoins: () =>
-        Deferred.succeed(searchStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseSearch)),
-          Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
-        ),
-      getCoin: () =>
+      searchCoins: () => Effect.die("Symbol search should not be repeated"),
+      getCoin: ({ coinId }) =>
         Effect.succeed({
-          id: "ethereum",
-          symbol: "eth",
-          name: "Ethereum",
+          id: coinId,
+          symbol: "coin",
+          name: "Custom Coin",
           asset_platform_id: null,
           platforms: {},
           detail_platforms: {},
         }),
+      listMarkets: () => Effect.succeed([]),
+    })
+    const layer = AssetCanonicalizationServiceLive.pipe(
+      Layer.provide(RepositoryLayer),
+      Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
+    )
+
+    const result = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.canonicalizeEconomicAssetFromCoinGecko({
+            providerAssetRowId,
+            coinId: "custom-coin",
+            reviewerNotes: "Selected through custom search.",
+          })
+        ),
+        layer,
+      })
+    )
+
+    expect(result.canonicalAsset).toMatchObject({ name: "Custom Coin", symbol: "COIN" })
+    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+  })
+
+  it("canonicalizes a representation selected through a custom CoinGecko search", async () => {
+    const contractAddress = "0x1111111111111111111111111111111111111111"
+    const providerAssetRowId = await seedObservedPendingProviderAsset({
+      providerAssetId: "custom-search-token-representation",
+      currencyCode: "CUS",
+      name: "Custom Token",
+      representationType: "token",
+      contractAddress,
+    })
+    const coinGeckoClient = CoinGeckoClient.of({
+      searchCoins: () => Effect.die("Symbol search should not be repeated"),
+      getCoin: ({ coinId }) =>
+        Effect.succeed({
+          id: coinId,
+          symbol: "cus",
+          name: "Custom Token",
+          asset_platform_id: "ethereum",
+          platforms: { ethereum: contractAddress },
+          detail_platforms: {
+            ethereum: { contract_address: contractAddress, decimal_place: 18 },
+          },
+        }),
+      listMarkets: () => Effect.succeed([]),
+    })
+    const layer = AssetCanonicalizationServiceLive.pipe(
+      Layer.provide(RepositoryLayer),
+      Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
+    )
+
+    const result = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.canonicalizeProviderAssetFromCoinGecko({
+            providerAssetRowId,
+            coinId: "custom-token",
+            reviewerNotes: "Selected through custom search.",
+          })
+        ),
+        layer,
+      })
+    )
+
+    expect(result.canonicalAsset).toMatchObject({
+      name: "Custom Token",
+      symbol: "CUS",
+      blockchainName: "ethereum",
+      contractAddress,
+    })
+    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+  })
+
+  it("resolves CoinGecko evidence before entering the database transaction", async () => {
+    const providerAssetRowId = await seedObservedPendingProviderAsset({
+      providerAssetId: "coingecko-outside-transaction",
+    })
+    const resolutionStarted = await Effect.runPromise(Deferred.make<void>())
+    const releaseResolution = await Effect.runPromise(Deferred.make<void>())
+    const transactionEntered = await Effect.runPromise(Deferred.make<void>())
+    const coinGeckoClient = CoinGeckoClient.of({
+      searchCoins: () => Effect.die("searchCoins should not be called"),
+      getCoin: () =>
+        Deferred.succeed(resolutionStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseResolution)),
+          Effect.as({
+            id: "ethereum",
+            symbol: "btc",
+            name: "Bitcoin",
+            asset_platform_id: null,
+            platforms: {},
+            detail_platforms: {},
+          })
+        ),
       listMarkets: () => Effect.succeed([]),
     })
     const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
@@ -766,10 +865,10 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
 
-    await Effect.runPromise(Deferred.await(searchStarted))
+    await Effect.runPromise(Deferred.await(resolutionStarted))
     expect(Option.isNone(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
 
-    await Effect.runPromise(Deferred.succeed(releaseSearch, undefined))
+    await Effect.runPromise(Deferred.succeed(releaseResolution, undefined))
     const result = await canonicalization
 
     expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
@@ -820,9 +919,8 @@ describe("AssetCanonicalizationServiceLive", () => {
     })
     const transactionEntered = await Effect.runPromise(Deferred.make<void>())
     const coinGeckoClient = CoinGeckoClient.of({
-      searchCoins: () =>
-        Effect.fail(new CoinGeckoClientError({ message: "CoinGecko unavailable" })),
-      getCoin: () => Effect.die("getCoin should not be called"),
+      searchCoins: () => Effect.die("searchCoins should not be called"),
+      getCoin: () => Effect.fail(new CoinGeckoClientError({ message: "CoinGecko unavailable" })),
       listMarkets: () => Effect.succeed([]),
     })
     const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
@@ -858,23 +956,22 @@ describe("AssetCanonicalizationServiceLive", () => {
       const providerAssetRowId = await seedObservedPendingProviderAsset({
         providerAssetId: `coingecko-stale-${changedEvidence}`,
       })
-      const searchStarted = await Effect.runPromise(Deferred.make<void>())
-      const releaseSearch = await Effect.runPromise(Deferred.make<void>())
+      const resolutionStarted = await Effect.runPromise(Deferred.make<void>())
+      const releaseResolution = await Effect.runPromise(Deferred.make<void>())
       const coinGeckoClient = CoinGeckoClient.of({
-        searchCoins: () =>
-          Deferred.succeed(searchStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseSearch)),
-            Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
-          ),
+        searchCoins: () => Effect.die("searchCoins should not be called"),
         getCoin: () =>
-          Effect.succeed({
-            id: "ethereum",
-            symbol: "eth",
-            name: "Ethereum",
-            asset_platform_id: null,
-            platforms: {},
-            detail_platforms: {},
-          }),
+          Deferred.succeed(resolutionStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseResolution)),
+            Effect.as({
+              id: "ethereum",
+              symbol: "btc",
+              name: "Bitcoin",
+              asset_platform_id: null,
+              platforms: {},
+              detail_platforms: {},
+            })
+          ),
         listMarkets: () => Effect.succeed([]),
       })
       const layer = AssetCanonicalizationServiceLive.pipe(
@@ -895,7 +992,7 @@ describe("AssetCanonicalizationServiceLive", () => {
         })
       )
 
-      await Effect.runPromise(Deferred.await(searchStarted))
+      await Effect.runPromise(Deferred.await(resolutionStarted))
       await context.runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
@@ -912,7 +1009,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           }
         })
       )
-      await Effect.runPromise(Deferred.succeed(releaseSearch, undefined))
+      await Effect.runPromise(Deferred.succeed(releaseResolution, undefined))
       const result = await canonicalization
       const after = await countCanonicalRows()
       const state = await context.runPg(
@@ -1409,23 +1506,22 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
     const before = await countCanonicalRows()
-    const searchStarted = await Effect.runPromise(Deferred.make<void>())
-    const releaseSearch = await Effect.runPromise(Deferred.make<void>())
+    const resolutionStarted = await Effect.runPromise(Deferred.make<void>())
+    const releaseResolution = await Effect.runPromise(Deferred.make<void>())
     const coinGeckoClient = CoinGeckoClient.of({
-      searchCoins: () =>
-        Deferred.succeed(searchStarted, undefined).pipe(
-          Effect.andThen(Deferred.await(releaseSearch)),
-          Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
-        ),
+      searchCoins: () => Effect.die("searchCoins should not be called"),
       getCoin: () =>
-        Effect.succeed({
-          id: "ethereum",
-          symbol: "eth",
-          name: "Ethereum",
-          asset_platform_id: null,
-          platforms: {},
-          detail_platforms: {},
-        }),
+        Deferred.succeed(resolutionStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseResolution)),
+          Effect.as({
+            id: "ethereum",
+            symbol: "btc",
+            name: "Bitcoin",
+            asset_platform_id: null,
+            platforms: {},
+            detail_platforms: {},
+          })
+        ),
       listMarkets: () => Effect.succeed([]),
     })
     const layer = makePublicReviewLayer(coinGeckoClient)
@@ -1455,7 +1551,7 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
 
-    await Effect.runPromise(Deferred.await(searchStarted))
+    await Effect.runPromise(Deferred.await(resolutionStarted))
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -1469,7 +1565,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           .where(eq(schema.providerAssetMappings.providerAssetRowId, fixture.providerAssetRowId))
       })
     )
-    await Effect.runPromise(Deferred.succeed(releaseSearch, undefined))
+    await Effect.runPromise(Deferred.succeed(releaseResolution, undefined))
     const result = await canonicalization
 
     const after = await countCanonicalRows()

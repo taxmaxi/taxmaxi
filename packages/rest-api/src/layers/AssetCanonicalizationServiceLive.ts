@@ -774,21 +774,14 @@ const make = Effect.gen(function* () {
     readonly observedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
   }) =>
     Effect.gen(function* () {
-      const searchCoins = yield* coinGeckoClient
-        .searchCoins({ query: providerAsset.currencyCode })
+      const coin = yield* coinGeckoClient
+        .getCoin({ coinId })
         .pipe(Effect.mapError(mapCoinGeckoError))
-      const selectedCoin = searchCoins.find((candidate) => candidate.id === coinId)
-      if (selectedCoin === undefined) {
-        return yield* makeBadRequest("The selected CoinGecko candidate is not available.")
-      }
-      if (normalize(selectedCoin.symbol) !== normalize(providerAsset.currencyCode)) {
+      if (normalize(coin.symbol) !== normalize(providerAsset.currencyCode)) {
         return yield* makeBadRequest(
           "The selected CoinGecko candidate symbol does not match the provider observation."
         )
       }
-      const coin = yield* coinGeckoClient
-        .getCoin({ coinId: selectedCoin.id })
-        .pipe(Effect.mapError(mapCoinGeckoError))
       const assetPlatforms: ReadonlyArray<CoinGeckoAssetPlatform> = coinGeckoAssetPlatformSnapshot
       const nativePlatforms = assetPlatforms.filter(
         (platform) => platform.native_coin_id === coin.id
@@ -1198,19 +1191,14 @@ const make = Effect.gen(function* () {
           )
         }
 
-        const searchCoins = yield* coinGeckoClient
-          .searchCoins({ query: initialReview.providerAsset.currencyCode })
-          .pipe(Effect.mapError(mapCoinGeckoError))
-        const selected = searchCoins.find((candidate) => candidate.id === coinId)
-        if (
-          selected === undefined ||
-          normalize(selected.symbol) !== normalize(initialReview.providerAsset.currencyCode)
-        ) {
-          return yield* makeBadRequest("The selected CoinGecko candidate is not available.")
-        }
         const coin = yield* coinGeckoClient
           .getCoin({ coinId })
           .pipe(Effect.mapError(mapCoinGeckoError))
+        if (normalize(coin.symbol) !== normalize(initialReview.providerAsset.currencyCode)) {
+          return yield* makeBadRequest(
+            "The selected CoinGecko candidate symbol does not match the provider observation."
+          )
+        }
 
         return yield* syncEngineTransaction
           .run(
