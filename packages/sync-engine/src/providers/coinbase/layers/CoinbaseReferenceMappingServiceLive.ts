@@ -182,15 +182,13 @@ const make = Effect.gen(function* () {
         return reloadedProviderAsset
       }
 
-      return yield* Effect.fail(
-        new SyncEngineStorageError({
-          operation: "coinbaseReferenceMappingService.ensureProviderAssetRecord",
-          cause: {
-            currencyCode: upperCurrencyCode,
-            message: "Coinbase provider asset row could not be persisted.",
-          },
-        })
-      )
+      return yield* new SyncEngineStorageError({
+        operation: "coinbaseReferenceMappingService.ensureProviderAssetRecord",
+        cause: {
+          currencyCode: upperCurrencyCode,
+          message: "Coinbase provider asset row could not be persisted.",
+        },
+      })
     })
 
   const ensurePendingProviderAssetMapping = ({
@@ -232,12 +230,10 @@ const make = Effect.gen(function* () {
         rawSourcePayload,
       })
 
-      return yield* Effect.fail(
-        new CoinbasePendingTransactionTypeMappingError({
-          providerTransactionType,
-          message: `Coinbase transaction type ${providerTransactionType} is missing an approved mapping. A pending_review mapping row was created.`,
-        })
-      )
+      return yield* new CoinbasePendingTransactionTypeMappingError({
+        providerTransactionType,
+        message: `Coinbase transaction type ${providerTransactionType} is missing an approved mapping. A pending_review mapping row was created.`,
+      })
     })
 
   const failPendingTransactionTypeMapping = ({
@@ -267,13 +263,11 @@ const make = Effect.gen(function* () {
         providerType,
       })
 
-      return yield* Effect.fail(
-        new CoinbaseProviderAssetMappingNotFoundError({
-          currencyCode,
-          providerAssetRowId,
-          message: `Coinbase provider asset for ${currencyCode} is missing an approved mapping. A pending_review mapping row was created.`,
-        })
-      )
+      return yield* new CoinbaseProviderAssetMappingNotFoundError({
+        currencyCode,
+        providerAssetRowId,
+        message: `Coinbase provider asset for ${currencyCode} is missing an approved mapping. A pending_review mapping row was created.`,
+      })
     })
 
   const failPendingProviderAssetMapping = ({
@@ -305,13 +299,11 @@ const make = Effect.gen(function* () {
         })
 
         if (Option.isNone(canonicalAsset)) {
-          return yield* Effect.fail(
-            new CoinbaseBrokenApprovedProviderAssetMappingError({
-              currencyCode,
-              providerAssetRowId: persistedMapping.providerAssetRowId,
-              message: `Coinbase provider asset mapping for ${currencyCode} is approved but points at a missing canonical asset ${persistedMapping.canonicalAssetId}.`,
-            })
-          )
+          return yield* new CoinbaseBrokenApprovedProviderAssetMappingError({
+            currencyCode,
+            providerAssetRowId: persistedMapping.providerAssetRowId,
+            message: `Coinbase provider asset mapping for ${currencyCode} is approved but points at a missing canonical asset ${persistedMapping.canonicalAssetId}.`,
+          })
         }
 
         return persistedMapping.canonicalAssetId
@@ -324,13 +316,11 @@ const make = Effect.gen(function* () {
         return null
       }
 
-      return yield* Effect.fail(
-        new CoinbaseBrokenApprovedProviderAssetMappingError({
-          currencyCode,
-          providerAssetRowId: persistedMapping.providerAssetRowId,
-          message: `Coinbase provider asset mapping for ${currencyCode} is approved but has no canonical target configured.`,
-        })
-      )
+      return yield* new CoinbaseBrokenApprovedProviderAssetMappingError({
+        currencyCode,
+        providerAssetRowId: persistedMapping.providerAssetRowId,
+        message: `Coinbase provider asset mapping for ${currencyCode} is approved but has no canonical target configured.`,
+      })
     })
 
   const resolveDefaultCurrencyMapping = ({

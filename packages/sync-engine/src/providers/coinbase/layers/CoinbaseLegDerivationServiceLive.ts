@@ -303,22 +303,18 @@ const deriveMainLegAmounts = (
 
     const paired = metadata.pairedRecord
     if (paired === undefined) {
-      return yield* Effect.fail(
-        new CoinbaseLegDerivationError({
-          message: `${params.transaction.providerTransactionType ?? "unknown"} requires a paired principal record to derive the spread fee`,
-        })
-      )
+      return yield* new CoinbaseLegDerivationError({
+        message: `${params.transaction.providerTransactionType ?? "unknown"} requires a paired principal record to derive the spread fee`,
+      })
     }
 
     const releasedPrincipal = yield* parseAmount(metadata.amount.amount, invalidDecimalError)
     const pairedPrincipal = yield* parseAmount(paired.amount.amount, invalidDecimalError)
     const spread = BigDecimal.subtract(BigDecimal.abs(releasedPrincipal), pairedPrincipal)
     if (BigDecimal.isNegative(spread)) {
-      return yield* Effect.fail(
-        new CoinbaseLegDerivationError({
-          message: `Paired principal ${paired.amount.amount} exceeds released principal ${metadata.amount.amount} for ${params.transaction.providerTransactionType ?? "unknown"}`,
-        })
-      )
+      return yield* new CoinbaseLegDerivationError({
+        message: `Paired principal ${paired.amount.amount} exceeds released principal ${metadata.amount.amount} for ${params.transaction.providerTransactionType ?? "unknown"}`,
+      })
     }
     const amount = formatPlain(spread)
 
@@ -357,11 +353,9 @@ const buildMainLeg = (
     const classification = maybeClassification.value
 
     if (params.primaryAsset === null) {
-      return yield* Effect.fail(
-        new CoinbaseLegDerivationError({
-          message: `No primary asset is available for Coinbase transaction type ${params.transaction.providerTransactionType ?? "unknown"}`,
-        })
-      )
+      return yield* new CoinbaseLegDerivationError({
+        message: `No primary asset is available for Coinbase transaction type ${params.transaction.providerTransactionType ?? "unknown"}`,
+      })
     }
 
     const amounts = yield* deriveMainLegAmounts(params, metadata)

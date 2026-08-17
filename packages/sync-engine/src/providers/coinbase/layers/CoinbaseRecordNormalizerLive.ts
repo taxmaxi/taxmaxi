@@ -103,12 +103,10 @@ const parseTimestamp = (value: string, field: string) =>
     const epochMillis = Date.parse(value)
 
     if (Number.isNaN(epochMillis)) {
-      return yield* Effect.fail(
-        new CoinbaseRecordNormalizationError({
-          message: `Failed to parse ${field}`,
-          cause: value,
-        })
-      )
+      return yield* new CoinbaseRecordNormalizationError({
+        message: `Failed to parse ${field}`,
+        cause: value,
+      })
     }
 
     return new Date(epochMillis)

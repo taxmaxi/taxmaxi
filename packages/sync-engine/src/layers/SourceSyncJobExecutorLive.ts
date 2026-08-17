@@ -295,41 +295,39 @@ const make = Effect.gen(function* () {
       }
 
       yield* syncEngineTransaction.run(
-        Effect.gen(function* () {
-          yield* sourceNormalizationRepository.persistNormalizedArtifacts({
-            ...(replayReservationId === null ? {} : { replayReservationId }),
-            beforePersist: providerAssetRepository
-              .recordProviderAssetSourceUses({
-                sourceId: decision.transaction.sourceId,
-                providerAssetRowIds: decision.providerAssetRowIds,
-                observations: decision.providerTransfers.flatMap((providerTransfer) => {
-                  const providerAssetRowId = providerTransfer.providerAssetId
-                  const observedBlockchainId = providerTransfer.observedBlockchainId
-                  if (providerAssetRowId === null || observedBlockchainId == null) {
-                    return []
-                  }
-                  return [
-                    {
-                      providerAssetRowId,
-                      observedBlockchainId,
-                      representationType: providerTransfer.observedRepresentationType ?? null,
-                      contractAddress: providerTransfer.observedContractAddress ?? null,
-                      mintAddress: providerTransfer.observedMintAddress ?? null,
-                      decimals: providerTransfer.observedDecimals ?? null,
-                    },
-                  ]
-                }),
-              })
-              .pipe(Effect.asVoid),
-            transaction: decision.transaction,
-            venueContext: decision.venueContext,
-            onchainContext: decision.onchainContext,
-            providerTransfers: decision.providerTransfers,
-            feeTransfers: decision.feeTransfers,
-            transactionReview: decision.transactionReview,
-            resolvedTransactionType: decision.resolvedTransactionType,
-            deriveLegs: decision.deriveLegs,
-          })
+        sourceNormalizationRepository.persistNormalizedArtifacts({
+          ...(replayReservationId === null ? {} : { replayReservationId }),
+          beforePersist: providerAssetRepository
+            .recordProviderAssetSourceUses({
+              sourceId: decision.transaction.sourceId,
+              providerAssetRowIds: decision.providerAssetRowIds,
+              observations: decision.providerTransfers.flatMap((providerTransfer) => {
+                const providerAssetRowId = providerTransfer.providerAssetId
+                const observedBlockchainId = providerTransfer.observedBlockchainId
+                if (providerAssetRowId === null || observedBlockchainId == null) {
+                  return []
+                }
+                return [
+                  {
+                    providerAssetRowId,
+                    observedBlockchainId,
+                    representationType: providerTransfer.observedRepresentationType ?? null,
+                    contractAddress: providerTransfer.observedContractAddress ?? null,
+                    mintAddress: providerTransfer.observedMintAddress ?? null,
+                    decimals: providerTransfer.observedDecimals ?? null,
+                  },
+                ]
+              }),
+            })
+            .pipe(Effect.asVoid),
+          transaction: decision.transaction,
+          venueContext: decision.venueContext,
+          onchainContext: decision.onchainContext,
+          providerTransfers: decision.providerTransfers,
+          feeTransfers: decision.feeTransfers,
+          transactionReview: decision.transactionReview,
+          resolvedTransactionType: decision.resolvedTransactionType,
+          deriveLegs: decision.deriveLegs,
         })
       )
 
@@ -1333,15 +1331,13 @@ const make = Effect.gen(function* () {
         "source-sync:retryable-failure"
       )
 
-      return yield* Effect.fail(
-        new SourceSyncJobRetryableExecutionError({
-          jobId,
-          message,
-          attemptNumber,
-          maxAttempts,
-          nextRetryAt,
-        })
-      )
+      return yield* new SourceSyncJobRetryableExecutionError({
+        jobId,
+        message,
+        attemptNumber,
+        maxAttempts,
+        nextRetryAt,
+      })
     }).pipe(
       sourceSyncSpan({
         name: "source-sync.record-retryable-failure",

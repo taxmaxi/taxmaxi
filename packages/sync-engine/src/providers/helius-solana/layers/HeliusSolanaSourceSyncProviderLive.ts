@@ -1315,20 +1315,16 @@ const make = ({
 
           const continuationCursor = page.pagination.nextCursor
           if (continuationCursor === null || continuationCursor === undefined) {
-            return yield* Effect.fail(
-              toProviderFailureError(
-                toPayloadDecodeError(
-                  "Helius Solana wallet transfer evidence pagination had no continuation cursor."
-                )
+            return yield* toProviderFailureError(
+              toPayloadDecodeError(
+                "Helius Solana wallet transfer evidence pagination had no continuation cursor."
               )
             )
           }
           if (visitedCursors.has(continuationCursor)) {
-            return yield* Effect.fail(
-              toProviderFailureError(
-                toPayloadDecodeError(
-                  "Helius Solana wallet transfer evidence pagination repeated a cursor."
-                )
+            return yield* toProviderFailureError(
+              toPayloadDecodeError(
+                "Helius Solana wallet transfer evidence pagination repeated a cursor."
               )
             )
           }
@@ -1396,13 +1392,11 @@ const make = ({
         )
 
         if (walletAddress === null || walletAddress.trim() === "") {
-          return yield* Effect.fail(
-            new SourceSyncProviderFailureError({
-              providerKey: HELIUS_SOLANA_PROVIDER_KEY,
-              message: `Helius Solana source ${sourceId} has no wallet address`,
-              retryable: false,
-            })
-          )
+          return yield* new SourceSyncProviderFailureError({
+            providerKey: HELIUS_SOLANA_PROVIDER_KEY,
+            message: `Helius Solana source ${sourceId} has no wallet address`,
+            retryable: false,
+          })
         }
 
         const page = yield* heliusSyncClient
@@ -2821,11 +2815,9 @@ const make = ({
               movement.observedDecimals !== movement.asset.decimals
           )
           if (conflictingApprovedMovement !== undefined) {
-            return yield* Effect.fail(
-              new HeliusSolanaNormalizationReferenceError({
-                message: `Approved Solana asset mapping for ${conflictingApprovedMovement.asset.currencyCode} conflicts with observed type or decimals evidence.`,
-              })
-            )
+            return yield* new HeliusSolanaNormalizationReferenceError({
+              message: `Approved Solana asset mapping for ${conflictingApprovedMovement.asset.currencyCode} conflicts with observed type or decimals evidence.`,
+            })
           }
           const ambiguousNativeSolMovementSet = new Set(ambiguousNativeSolMovements)
           const providerObservationMovements = [

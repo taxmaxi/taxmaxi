@@ -145,11 +145,9 @@ const parseFilePeriod = (
     const observedWindowEnd = yield* parseUtcDate(end, "period end")
 
     if (observedWindowStart >= observedWindowEnd) {
-      return yield* Effect.fail(
-        new SolanaDuneRankingsFileImportError({
-          message: "Invalid period: start must be before end",
-        })
-      )
+      return yield* new SolanaDuneRankingsFileImportError({
+        message: "Invalid period: start must be before end",
+      })
     }
 
     return { observedWindowStart, observedWindowEnd }
