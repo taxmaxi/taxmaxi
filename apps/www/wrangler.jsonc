@@ -7,8 +7,12 @@
     "TAXMAXI_API_BASE_URL": "https://api.taxmaxi.com",
   },
   "compatibility_date": "2025-09-02",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_ctx_exports"],
   "main": "src/server.ts",
+  "exports": {
+    "default": { "type": "worker", "cache": { "enabled": false } },
+    "CmsPages": { "type": "worker", "cache": { "enabled": true } },
+  },
   "observability": {
     "logs": {
       "enabled": true,

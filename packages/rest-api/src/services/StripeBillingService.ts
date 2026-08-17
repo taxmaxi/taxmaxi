@@ -9,12 +9,14 @@ import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
-export const TAXMAXI_ANNUAL_LOOKUP_KEY = "taxmaxi_annual_10k_eur"
-export const TAXMAXI_TOP_UP_LOOKUP_KEY = "taxmaxi_topup_1k_eur"
-export const TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY = "taxmaxi_professional_annual_100k_eur"
-export const TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY = "taxmaxi_professional_matter_annual_10k_eur"
-export const TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY = "taxmaxi_professional_topup_20k_eur"
-export const TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY = "taxmaxi_enterprise_pilot_eur"
+export {
+  TAXMAXI_ANNUAL_LOOKUP_KEY,
+  TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
+  TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
+  TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
+  TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
+  TAXMAXI_TOP_UP_LOOKUP_KEY,
+} from "./StripeCatalog.ts"
 
 export interface BillingCatalogPrice {
   readonly lookupKey: string
