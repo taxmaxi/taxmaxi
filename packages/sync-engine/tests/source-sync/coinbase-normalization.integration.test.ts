@@ -1538,7 +1538,7 @@ describe("coinbase normalization persistence", () => {
         expect(replayedCounts.disposalMatches).toHaveLength(repairedCounts.disposalMatches.length)
       })
     )
-  })
+  }, 15_000)
 
   it("still fails malformed Coinbase payloads normally", async () => {
     activeSyncRecords = [

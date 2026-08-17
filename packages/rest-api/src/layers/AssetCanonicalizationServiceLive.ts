@@ -16,9 +16,11 @@ import {
   type ProviderAssetReviewRecord,
   type SyncEngineAssetRepresentation,
 } from "@my/sync-engine/services"
+import { CoinbaseProviderAssetEvidenceSchema } from "@my/sync-engine/providers/coinbase"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import {
   AssetCanonicalizationBadRequestError,
   AssetCanonicalizationConflictError,
@@ -31,9 +33,16 @@ import {
 import { CoinGeckoClient, type CoinGeckoCoin } from "../services/coingecko/CoinGeckoClient.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 import {
+  deriveChainType,
+  deriveNativeAssetDecimals,
   nativeAssetSymbolsByCoinGeckoId,
   selectNativePlatform,
   type CoinGeckoAssetPlatform,
+} from "../services/coingecko/CoinGeckoPlatformSelection.ts"
+
+export {
+  deriveChainType,
+  deriveNativeAssetDecimals,
 } from "../services/coingecko/CoinGeckoPlatformSelection.ts"
 
 const COINGECKO_SOURCE_NOTES = "Approved with CoinGecko asset/platform metadata."
@@ -53,25 +62,11 @@ const appendSourceNote = ({
   return existing.includes(note) ? existing : `${existing}\n${note}`
 }
 
-type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
-
 const normalize = (value: string) => value.trim().toLowerCase()
 
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
 const isNonEmptyString = (value: string) => value.trim() !== ""
-
-const nativeAssetDecimalsByCoinGeckoId: Readonly<Record<string, number>> = {
-  bitcoin: 8,
-  ethereum: 18,
-  weth: 18,
-  solana: 9,
-  cardano: 6,
-  binancecoin: 18,
-  wbnb: 18,
-  "avalanche-2": 18,
-  "matic-network": 18,
-}
 
 const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
   if (platform.native_coin_id !== null) {
@@ -83,58 +78,6 @@ const deriveNativeAssetSymbol = (platform: CoinGeckoAssetPlatform) => {
 
   const fallback = platform.shortname ?? platform.name
   return upperSymbol(fallback)
-}
-
-export const deriveChainType = (platform: CoinGeckoAssetPlatform): CoinGeckoChainType => {
-  if (platform.chain_identifier !== null) {
-    return "evm"
-  }
-
-  const haystack = `${platform.id} ${platform.name}`.toLowerCase()
-  if (haystack.includes("solana")) {
-    return "solana"
-  }
-  if (haystack.includes("bitcoin")) {
-    return "bitcoin"
-  }
-  if (haystack.includes("cardano")) {
-    return "cardano"
-  }
-  return "other"
-}
-
-export const deriveNativeAssetDecimals = ({
-  coinId,
-  platform,
-}: {
-  readonly coinId: string
-  readonly platform: CoinGeckoAssetPlatform
-}): number | null => {
-  const coinDecimals = nativeAssetDecimalsByCoinGeckoId[coinId]
-  if (coinDecimals !== undefined) {
-    return coinDecimals
-  }
-
-  if (platform.native_coin_id !== null) {
-    const platformNativeCoinDecimals = nativeAssetDecimalsByCoinGeckoId[platform.native_coin_id]
-    if (platformNativeCoinDecimals !== undefined) {
-      return platformNativeCoinDecimals
-    }
-  }
-
-  const chainType = deriveChainType(platform)
-  switch (chainType) {
-    case "bitcoin":
-      return 8
-    case "cardano":
-      return 6
-    case "evm":
-      return 18
-    case "solana":
-      return 9
-    case "other":
-      return null
-  }
 }
 
 const makeBadRequest = (message: string) => new AssetCanonicalizationBadRequestError({ message })
@@ -340,29 +283,51 @@ export const validateEconomicAssetType = ({
         makeBadRequest("Asset representation type does not match the selected economic asset type.")
       )
 
+const decodeCoinbaseProviderAssetEvidence = Schema.decodeUnknownOption(
+  CoinbaseProviderAssetEvidenceSchema
+)
+
+const providerEconomicAssetType = (
+  providerAssetReview: ProviderAssetReviewRecord
+): Effect.Effect<"fungible" | "nft", AssetCanonicalizationBadRequestError> => {
+  const providerAsset = providerAssetReview.providerAsset
+  const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
+  const coinbaseEvidence = decodeCoinbaseProviderAssetEvidence(providerAsset.rawProviderPayload)
+  const isCryptoCatalogAsset =
+    providerAsset.provider === "coinbase" &&
+    Option.isSome(coinbaseEvidence) &&
+    coinbaseEvidence.value.source === "coinbase_crypto_currency_catalog" &&
+    providerAssetReview.mapping?.mappingKind === "asset"
+  const expectedAssetType =
+    providerType === "nft"
+      ? "nft"
+      : providerType === "crypto" || isCryptoCatalogAsset
+        ? "fungible"
+        : null
+
+  return expectedAssetType === null
+    ? Effect.fail(
+        makeBadRequest("Provider asset type does not prove a fungible or NFT economic asset.")
+      )
+    : Effect.succeed(expectedAssetType)
+}
+
 const validateProviderEconomicAssetType = ({
   assetType,
-  providerAsset,
+  providerAssetReview,
 }: {
   readonly assetType: "fungible" | "nft"
-  readonly providerAsset: ProviderAssetRecord
-}): Effect.Effect<void, AssetCanonicalizationBadRequestError> => {
-  const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
-  const expectedAssetType =
-    providerType === "nft" ? "nft" : providerType === "crypto" ? "fungible" : null
-
-  if (expectedAssetType === null) {
-    return Effect.fail(
-      makeBadRequest("Provider asset type does not prove a fungible or NFT economic asset.")
+  readonly providerAssetReview: ProviderAssetReviewRecord
+}): Effect.Effect<void, AssetCanonicalizationBadRequestError> =>
+  providerEconomicAssetType(providerAssetReview).pipe(
+    Effect.flatMap((expectedAssetType) =>
+      expectedAssetType === assetType
+        ? Effect.void
+        : Effect.fail(
+            makeBadRequest("Provider asset type does not match the selected economic asset type.")
+          )
     )
-  }
-
-  return expectedAssetType === assetType
-    ? Effect.void
-    : Effect.fail(
-        makeBadRequest("Provider asset type does not match the selected economic asset type.")
-      )
-}
+  )
 
 const validateProviderTokenIdentity = ({
   contractAddress,
@@ -544,7 +509,15 @@ const make = Effect.gen(function* () {
       )
     }
 
-    return providerAssetReview.providerAsset.providerType?.trim().toLowerCase() === "fiat"
+    const coinbaseEvidence = decodeCoinbaseProviderAssetEvidence(
+      providerAssetReview.providerAsset.rawProviderPayload
+    )
+    const isFiatCatalogAsset =
+      providerAssetReview.providerAsset.provider === "coinbase" &&
+      Option.isSome(coinbaseEvidence) &&
+      coinbaseEvidence.value.source === "coinbase_fiat_currency_catalog"
+
+    return providerAssetReview.mapping?.mappingKind === "fiat" || isFiatCatalogAsset
       ? Effect.fail(makeBadRequest("Fiat provider assets cannot become assets."))
       : Effect.void
   }
@@ -661,7 +634,7 @@ const make = Effect.gen(function* () {
               if (assetRepresentationId === null) {
                 yield* validateProviderEconomicAssetType({
                   assetType: canonicalAsset.value.type,
-                  providerAsset: providerAssetReview.providerAsset,
+                  providerAssetReview,
                 })
               } else {
                 const representation = yield* assetRepository
@@ -967,7 +940,7 @@ const make = Effect.gen(function* () {
                 observedRepresentations,
               })
               if (expectedCanonicalAssetId !== undefined) {
-                const existingAsset = yield* assetRepository
+                const coinGeckoIdentityOwner = yield* assetRepository
                   .findAssetByCoinGeckoId({
                     coingeckoCoinId: coinId,
                   })
@@ -980,8 +953,36 @@ const make = Effect.gen(function* () {
                     )
                   )
                 if (
-                  Option.isNone(existingAsset) ||
-                  existingAsset.value.id !== expectedCanonicalAssetId
+                  Option.isSome(coinGeckoIdentityOwner) &&
+                  coinGeckoIdentityOwner.value.id !== expectedCanonicalAssetId
+                ) {
+                  return yield* new AssetCanonicalizationConflictError({
+                    message: "CoinGecko now resolves to a different economic asset.",
+                  })
+                }
+
+                const selectedAsset = yield* assetRepository
+                  .findAssetById({
+                    assetId: expectedCanonicalAssetId,
+                    lockForApproval: true,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new AssetCanonicalizationInternalError({
+                          message: "Failed to load the selected economic asset.",
+                        })
+                    )
+                  )
+                if (Option.isNone(selectedAsset)) {
+                  return yield* new AssetCanonicalizationNotFoundError({
+                    message: "Selected economic asset not found.",
+                  })
+                }
+                if (
+                  selectedAsset.value.coingeckoCoinId !== undefined &&
+                  selectedAsset.value.coingeckoCoinId !== null &&
+                  selectedAsset.value.coingeckoCoinId !== coinId
                 ) {
                   return yield* new AssetCanonicalizationConflictError({
                     message: "CoinGecko now resolves to a different economic asset.",
@@ -1064,6 +1065,9 @@ const make = Effect.gen(function* () {
                   blockchain: resolved.blockchain,
                   asset: resolved.asset,
                   representation: resolved.representation,
+                  ...(expectedCanonicalAssetId === undefined
+                    ? {}
+                    : { expectedAssetId: expectedCanonicalAssetId }),
                 })
                 .pipe(
                   Effect.mapError(
@@ -1180,6 +1184,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const initialReview = yield* loadProviderAssetReview({ providerAssetRowId })
         yield* validateApprovableProviderAsset(initialReview)
+        yield* providerEconomicAssetType(initialReview)
         const observedRepresentations = yield* loadObservedRepresentations({ providerAssetRowId })
         if (
           observedRepresentations.length > 0 ||
@@ -1223,6 +1228,7 @@ const make = Effect.gen(function* () {
                   message: "Provider asset has already been reviewed.",
                 })
               }
+              const assetType = yield* providerEconomicAssetType(review)
 
               const canonicalAsset = yield* assetRepository
                 .upsertEconomicAsset({
@@ -1230,7 +1236,7 @@ const make = Effect.gen(function* () {
                   symbol: upperSymbol(coin.symbol),
                   coingeckoCoinId: coin.id,
                   logoUrl: coin.image?.small ?? null,
-                  type: review.providerAsset.providerType === "nft" ? "nft" : "fungible",
+                  type: assetType,
                 })
                 .pipe(
                   Effect.mapError(

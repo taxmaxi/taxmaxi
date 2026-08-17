@@ -21,6 +21,7 @@ import {
   type CoinbaseReferenceDataServiceShape,
 } from "../services/CoinbaseReferenceDataService.ts"
 import { CoinbaseReferenceMappingService } from "../services/CoinbaseReferenceMappingService.ts"
+import { makeCoinbaseProviderAssetEvidence } from "../shared/CoinbaseProviderAssetEvidence.ts"
 
 const COINBASE_PROVIDER = "coinbase"
 
@@ -58,7 +59,10 @@ const make = Effect.gen(function* () {
       providerAssetId: null,
       exponent: null,
       providerType: "fiat" as const,
-      payload: currency.payload,
+      payload: makeCoinbaseProviderAssetEvidence({
+        source: "coinbase_fiat_currency_catalog",
+        providerPayload: currency.payload,
+      }),
     }))
 
   const buildCryptoProviderAssetRows = ({
@@ -84,7 +88,10 @@ const make = Effect.gen(function* () {
       providerAssetId: currency.providerAssetId,
       exponent: currency.exponent,
       providerType: currency.providerType,
-      payload: currency.payload,
+      payload: makeCoinbaseProviderAssetEvidence({
+        source: "coinbase_crypto_currency_catalog",
+        providerPayload: currency.payload,
+      }),
     }))
 
   const fetchCoinbaseFiatCurrencies = () =>

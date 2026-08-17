@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "vitest"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
+import { AssetCatalogRepositoryLive } from "../../src/layers/AssetCatalogRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SyncEngineTransactionLive } from "../../src/layers/SyncEngineTransactionLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
@@ -20,6 +21,7 @@ import {
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
+import { AssetCatalogRepository } from "../../src/services/AssetCatalogRepository.ts"
 import {
   ProviderAssetRepository,
   SourceNormalizationRepository,
@@ -37,6 +39,9 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
+
+const runAssetCatalog = <A, E>(effect: Effect.Effect<A, E, AssetCatalogRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: AssetCatalogRepositoryLive }))
 
 const AtomicNormalizationLayer = Layer.mergeAll(
   ProviderAssetRepositoryLive,
@@ -120,45 +125,95 @@ const seedPendingApprovalAsset = async (
     })
   )
 
-  if (!withProviderTransfer) {
-    return providerAsset
+  if (withProviderTransfer) {
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const timestamp = new Date("2025-04-20T13:00:00.000Z")
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: `approval-${suffix}-transaction`,
+            timestamp,
+            providerTransactionType: "send",
+            providerStatus: "completed",
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (transaction === undefined) {
+          return yield* Effect.die("Expected approval replay transaction")
+        }
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: `approval-${suffix}-transfer`,
+          providerAssetId: providerAsset.id,
+          timestamp,
+          direction: "outbound",
+          processingMode: "accounting_and_evidence",
+          fromAccountRef: "coinbase-account-1",
+          toAddress: "bc1qapprovalreplay000000000000000000000000",
+          amount: "0.25",
+          metadata: { role: "principal" },
+        })
+      })
+    )
+  }
+
+  const review = await runRepository(
+    Effect.flatMap(ProviderAssetRepository, (repository) =>
+      repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+    )
+  )
+
+  return { ...providerAsset, evidenceRevision: Option.getOrThrow(review).evidenceRevision }
+}
+
+const seedFailedApprovalReplay = async (suffix: string) => {
+  const providerAsset = await seedPendingApprovalAsset(suffix, { withProviderTransfer: false })
+  await runRepository(
+    Effect.flatMap(ProviderAssetRepository, (repository) =>
+      repository.recordProviderAssetSourceUses({
+        sourceId: TEST_SOURCE_ID,
+        providerAssetRowIds: [providerAsset.id],
+        observations: [],
+      })
+    )
+  )
+  const approval = await runRepository(
+    Effect.flatMap(ProviderAssetRepository, (repository) =>
+      repository.approveProviderAssetMappingAndRequestReplay({
+        mapping: {
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+          mappingStatus: "approved",
+          reviewerNotes: "Approved for retry reservation",
+          sourceNotes: "Retry reservation fixture",
+        },
+        expectedObservedRepresentations: [],
+        expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+      })
+    )
+  )
+  const jobId = approval.replays[0]?.jobId
+  if (jobId === undefined) {
+    throw new Error("Expected approval replay job")
   }
 
   await runPg(
-    Effect.gen(function* () {
-      const db = yield* drizzle
-      const timestamp = new Date("2025-04-20T13:00:00.000Z")
-      const [transaction] = yield* db
-        .insert(schema.transactions)
-        .values({
-          sourceId: TEST_SOURCE_ID,
-          externalId: `approval-${suffix}-transaction`,
-          timestamp,
-          providerTransactionType: "send",
-          providerStatus: "completed",
-          principalId: TEST_PRINCIPAL_ID,
-        })
-        .returning({ id: schema.transactions.id })
-      if (transaction === undefined) {
-        return yield* Effect.die("Expected approval replay transaction")
-      }
-      yield* db.insert(schema.providerTransfers).values({
-        sourceId: TEST_SOURCE_ID,
-        transactionId: transaction.id,
-        externalId: `approval-${suffix}-transfer`,
-        providerAssetId: providerAsset.id,
-        timestamp,
-        direction: "outbound",
-        processingMode: "accounting_and_evidence",
-        fromAccountRef: "coinbase-account-1",
-        toAddress: "bc1qapprovalreplay000000000000000000000000",
-        amount: "0.25",
-        metadata: { role: "principal" },
-      })
-    })
+    Effect.flatMap(drizzle, (db) =>
+      db
+        .update(schema.processingJobs)
+        .set({ status: "failed" })
+        .where(eq(schema.processingJobs.id, jobId))
+    )
   )
 
-  return providerAsset
+  return { jobId, providerAsset }
 }
 
 describe("ProviderAssetRepositoryLive", () => {
@@ -172,6 +227,115 @@ describe("ProviderAssetRepositoryLive", () => {
           bitcoinBlockchainId: fixture.bitcoinBlockchainId,
         })
       )
+    })
+
+    it("loads a full canonical asset and its representations by CoinGecko id", async () => {
+      const asset = await runAssetCatalog(
+        Effect.flatMap(AssetCatalogRepository, (repository) =>
+          repository.findAssetByCoinGeckoId({ coingeckoCoinId: "bitcoin" })
+        )
+      )
+
+      expect(Option.getOrThrow(asset)).toMatchObject({
+        id: TEST_BTC_ASSET_ID,
+        coingeckoCoinId: "bitcoin",
+        representations: [expect.objectContaining({ id: TEST_BTC_REPRESENTATION_ID })],
+      })
+    })
+
+    it("includes spam representations only for internal ownership searches", async () => {
+      await runPg(
+        Effect.flatMap(drizzle, (db) =>
+          db
+            .update(schema.assetRepresentations)
+            .set({ isSpam: true })
+            .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+        )
+      )
+
+      const [publicAssets, ownershipAssets] = await Promise.all([
+        runAssetCatalog(
+          Effect.flatMap(AssetCatalogRepository, (repository) =>
+            repository.listAssets({ cursor: null, query: "bitcoin", limit: 100 })
+          )
+        ),
+        runAssetCatalog(
+          Effect.flatMap(AssetCatalogRepository, (repository) =>
+            repository.listAssets({
+              cursor: null,
+              query: "bitcoin",
+              limit: 100,
+              includeSpamRepresentations: true,
+            })
+          )
+        ),
+      ])
+
+      expect(publicAssets).toEqual([
+        expect.objectContaining({ id: TEST_BTC_ASSET_ID, representations: [] }),
+      ])
+      expect(ownershipAssets).toEqual([
+        expect.objectContaining({
+          id: TEST_BTC_ASSET_ID,
+          representations: [
+            expect.objectContaining({ id: TEST_BTC_REPRESENTATION_ID, isSpam: true }),
+          ],
+        }),
+      ])
+    })
+
+    it("does not overwrite an approved mapping while seeding a stale missing-mapping result", async () => {
+      const providerAsset = await seedPendingApprovalAsset("stale-missing-mapping", {
+        withProviderTransfer: false,
+      })
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: "Admin approved",
+                sourceNotes: "Keep this decision",
+              },
+            ],
+          })
+        )
+      )
+
+      const inserted = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.seedProviderAssetMappingsIfMissing({
+            mappings: [
+              {
+                providerAssetRowId: providerAsset.id,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: "Stale resolver result",
+              },
+            ],
+          })
+        )
+      )
+      const mapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.id })
+        )
+      )
+
+      expect(inserted).toBe(0)
+      expect(Option.getOrThrow(mapping)).toMatchObject({
+        mappingStatus: "approved",
+        canonicalAssetId: TEST_BTC_ASSET_ID,
+      })
     })
 
     it("upserts provider assets by stable provider asset id and resolves mappings", async () => {
@@ -757,6 +921,418 @@ describe("ProviderAssetRepositoryLive", () => {
       ])
     })
 
+    it("treats replay-link replacement with the current job as idempotent", async () => {
+      const providerAsset = await seedPendingApprovalAsset("idempotent-replay-link", {
+        withProviderTransfer: false,
+      })
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+      const approval = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Approved for replay replacement",
+              sourceNotes: "Replay replacement fixture",
+            },
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      const previousJobId = approval.replays[0]?.jobId
+      if (previousJobId === undefined) {
+        expect.fail("Expected approval replay job")
+      }
+      const nextJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status: "completed" })
+            .where(eq(schema.processingJobs.id, previousJobId))
+          const [nextJob] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "pending",
+              attemptCount: 0,
+              maxAttempts: 3,
+              queueName: "source-sync",
+              queueJobId: "replacement-replay-job",
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (nextJob === undefined) {
+            return yield* Effect.die("Expected replacement replay job")
+          }
+          return nextJob.id
+        })
+      )
+
+      const replacements = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          Effect.all(
+            [
+              repository.replaceProviderAssetReviewReplay({
+                providerAssetRowId: providerAsset.id,
+                sourceId: TEST_SOURCE_ID,
+                previousJobId,
+                nextJobId,
+              }),
+              repository.replaceProviderAssetReviewReplay({
+                providerAssetRowId: providerAsset.id,
+                sourceId: TEST_SOURCE_ID,
+                previousJobId,
+                nextJobId,
+              }),
+            ],
+            { concurrency: 1 }
+          )
+        )
+      )
+      const replay = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewReplay({
+            providerAssetRowId: providerAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            jobId: nextJobId,
+          })
+        )
+      )
+
+      expect(replacements).toEqual([true, true])
+      expect(Option.getOrThrow(replay)).toMatchObject({
+        jobId: nextJobId,
+        dispatchState: "queued",
+        errorMessage: null,
+      })
+    })
+
+    it("creates one replacement job for concurrent failed replay retry reservations", async () => {
+      const { jobId, providerAsset } = await seedFailedApprovalReplay("reserved-replay-retry")
+
+      const reservations = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          Effect.all(
+            [
+              repository.reserveProviderAssetReviewReplayRetry({
+                providerAssetRowId: providerAsset.id,
+                sourceId: TEST_SOURCE_ID,
+                jobId,
+              }),
+              repository.reserveProviderAssetReviewReplayRetry({
+                providerAssetRowId: providerAsset.id,
+                sourceId: TEST_SOURCE_ID,
+                jobId,
+              }),
+            ],
+            { concurrency: "unbounded" }
+          )
+        )
+      )
+
+      const reservedJobIds = reservations.flatMap(
+        Option.match({ onNone: () => [], onSome: (reservation) => [reservation.jobId] })
+      )
+      expect(reservedJobIds).toHaveLength(1)
+      expect(reservedJobIds[0]).not.toBe(jobId)
+
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const jobs = yield* db
+            .select({
+              id: schema.processingJobs.id,
+              mode: schema.processingJobs.mode,
+              status: schema.processingJobs.status,
+              progressDetails: schema.processingJobs.progressDetails,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const [replay] = yield* db
+            .select({ jobId: schema.providerAssetReviewReplays.jobId })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return { jobs, replay }
+        })
+      )
+
+      expect(state.jobs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: jobId, mode: "replay", status: "failed" }),
+          expect.objectContaining({
+            id: reservedJobIds[0],
+            mode: "replay",
+            status: "pending",
+            progressDetails: { mode: "replay", reason: "asset_mapping_retried" },
+          }),
+        ])
+      )
+      expect(state.jobs).toHaveLength(2)
+      expect(state.replay?.jobId).toBe(reservedJobIds[0])
+    })
+
+    it("attaches a failed replay retry behind an active sync job", async () => {
+      const { jobId, providerAsset } = await seedFailedApprovalReplay("retry-behind-active-sync")
+      const activeSyncJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [activeSync] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "sync",
+              status: "processing",
+              attemptCount: 1,
+              maxAttempts: 3,
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (activeSync === undefined) {
+            return yield* Effect.die("Expected active sync job")
+          }
+          return activeSync.id
+        })
+      )
+
+      const reservation = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.reserveProviderAssetReviewReplayRetry({
+            providerAssetRowId: providerAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            jobId,
+          })
+        )
+      )
+      const reservedReplay = Option.getOrThrow(reservation)
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [activeSync] = yield* db
+            .select({ followUpMode: schema.processingJobs.followUpMode })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, activeSyncJobId))
+          const [replay] = yield* db
+            .select({ jobId: schema.providerAssetReviewReplays.jobId })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return { activeSync, replay }
+        })
+      )
+
+      expect(reservedReplay).toMatchObject({
+        jobId: activeSyncJobId,
+        dispatchState: "failed_to_queue",
+      })
+      expect(state.activeSync?.followUpMode).toBe("replay")
+      expect(state.replay?.jobId).toBe(activeSyncJobId)
+    })
+
+    it("derives replay dispatch state from durable queue and job progress", async () => {
+      const providerAsset = await seedPendingApprovalAsset("replay-dispatch-read-model", {
+        withProviderTransfer: false,
+      })
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+      const approval = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Approved for dispatch read model",
+              sourceNotes: "Dispatch read model fixture",
+            },
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      const jobId = approval.replays[0]?.jobId
+      if (jobId === undefined) {
+        expect.fail("Expected approval replay job")
+      }
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.providerAssetReviewReplays)
+            .set({ dispatchState: "queued", errorMessage: null })
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+        })
+      )
+
+      const loadReplay = () =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.findProviderAssetReviewReplay({
+              providerAssetRowId: providerAsset.id,
+              sourceId: TEST_SOURCE_ID,
+              jobId,
+            })
+          )
+        ).then(Option.getOrThrow)
+
+      expect(await loadReplay()).toMatchObject({
+        dispatchState: "failed_to_queue",
+        errorMessage: "Failed to queue replay.",
+      })
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.processingJobs)
+            .set({ queueName: "source-sync", queueJobId: "bullmq-replay-job" })
+            .where(eq(schema.processingJobs.id, jobId))
+        })
+      )
+
+      expect(await loadReplay()).toMatchObject({ dispatchState: "queued", errorMessage: null })
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status: "processing", queueName: null, queueJobId: null })
+            .where(eq(schema.processingJobs.id, jobId))
+        })
+      )
+
+      expect(await loadReplay()).toMatchObject({ dispatchState: "queued", errorMessage: null })
+    })
+
+    it("accepts a dispatch result after the replay link advances to its follow-up", async () => {
+      const providerAsset = await seedPendingApprovalAsset("advanced-replay-dispatch", {
+        withProviderTransfer: false,
+      })
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+      const approval = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Approved for advanced dispatch",
+              sourceNotes: "Advanced dispatch fixture",
+            },
+            expectedObservedRepresentations: [],
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      const completedJobId = approval.replays[0]?.jobId
+      if (completedJobId === undefined) {
+        expect.fail("Expected approval replay job")
+      }
+      const followUpJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.processingJobs)
+            .set({ status: "completed" })
+            .where(eq(schema.processingJobs.id, completedJobId))
+          const [followUpJob] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "pending",
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (followUpJob === undefined) {
+            return yield* Effect.die("Expected follow-up replay job")
+          }
+          yield* db
+            .update(schema.processingJobs)
+            .set({ followUpJobId: followUpJob.id })
+            .where(eq(schema.processingJobs.id, completedJobId))
+          yield* db
+            .update(schema.providerAssetReviewReplays)
+            .set({
+              jobId: followUpJob.id,
+              dispatchState: "failed_to_queue",
+              errorMessage: "Failed to queue replay.",
+            })
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return followUpJob.id
+        })
+      )
+
+      const marked = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.markProviderAssetReviewReplayDispatch({
+            providerAssetRowId: providerAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            jobId: completedJobId,
+            dispatchState: "queued",
+            errorMessage: null,
+          })
+        )
+      )
+      const persistedReplay = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [replay] = yield* db
+            .select({
+              jobId: schema.providerAssetReviewReplays.jobId,
+              dispatchState: schema.providerAssetReviewReplays.dispatchState,
+              errorMessage: schema.providerAssetReviewReplays.errorMessage,
+            })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return replay
+        })
+      )
+
+      expect(marked).toBe(followUpJobId)
+      expect(persistedReplay).toEqual({
+        jobId: followUpJobId,
+        dispatchState: "failed_to_queue",
+        errorMessage: "Failed to queue replay.",
+      })
+    })
+
     it("blocks exact evidence when another observation is incomplete", async () => {
       const providerAsset = await seedPendingApprovalAsset("complete-plus-incomplete-evidence", {
         withProviderTransfer: false,
@@ -844,7 +1420,6 @@ describe("ProviderAssetRepositoryLive", () => {
           repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
         )
       )
-
       expect(Option.getOrThrow(review).evidenceState).toBe("insufficient")
     })
 
@@ -1981,6 +2556,188 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(
         new Set([...firstPage, ...secondPage].map((review) => review.providerAsset.currencyCode))
       ).toEqual(new Set(["ADA", "ETH", "SOL"]))
+    })
+
+    it("excludes dedicated Coinbase fiat rows without hiding legacy crypto reviews", async () => {
+      const entries = [
+        {
+          providerAssetId: "origin-visibility-fiat",
+          currencyCode: "EUR",
+          name: "Origin visibility fiat",
+          payload: {
+            source: "coinbase_fiat_currency_catalog",
+            providerPayload: { id: "EUR" },
+          },
+        },
+        {
+          providerAssetId: "origin-visibility-legacy",
+          currencyCode: "LEG",
+          name: "Origin visibility legacy",
+          payload: { id: "LEG" },
+        },
+      ] as const
+
+      await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: entries.map((entry) => ({
+              ...entry,
+              naturalKey: null,
+              exponent: 8,
+              providerType: "fiat",
+            })),
+          })
+
+          const providerAssets = yield* Effect.forEach(entries, (entry) =>
+            repository
+              .findProviderAssetByProviderAssetId({
+                providerKey: "coinbase",
+                providerAssetId: entry.providerAssetId,
+              })
+              .pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.die("Expected Coinbase origin fixture"),
+                    onSome: Effect.succeed,
+                  })
+                )
+              )
+          )
+
+          yield* repository.upsertProviderAssetMappings({
+            mappings: providerAssets.map((providerAsset) => ({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset" as const,
+              canonicalAssetId: null,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "pending_review" as const,
+              reviewerNotes: null,
+              sourceNotes: "Coinbase origin visibility test",
+            })),
+          })
+        })
+      )
+
+      const reviews = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listProviderAssetReviews({
+            providerKey: "coinbase",
+            mappingStatus: "pending_review",
+            evidenceState: null,
+            query: "origin visibility",
+            cursor: null,
+            limit: 1,
+          })
+        )
+      )
+
+      expect(reviews.map((review) => review.providerAsset.providerAssetId)).toEqual([
+        "origin-visibility-legacy",
+      ])
+    })
+
+    it("treats review search wildcards as literal text", async () => {
+      const providerKey = "literal-wildcard-review-search"
+      const entries = [
+        {
+          providerAssetId: "literal%-review",
+          currencyCode: "PCT",
+          name: "Percent marker",
+        },
+        {
+          providerAssetId: "literal_-review",
+          currencyCode: "UND",
+          name: "Underscore marker",
+        },
+        {
+          providerAssetId: "literal\\-review",
+          currencyCode: "BSL",
+          name: "Backslash marker",
+        },
+        {
+          providerAssetId: "ordinary-review",
+          currencyCode: "ORD",
+          name: "Ordinary search target",
+        },
+        {
+          providerAssetId: "unrelated-review",
+          currencyCode: "DST",
+          name: "Unrelated target",
+        },
+      ] as const
+
+      await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey,
+            entries: entries.map((entry) => ({
+              ...entry,
+              naturalKey: null,
+              exponent: null,
+              providerType: "crypto",
+              payload: { source: "literal wildcard review search test" },
+            })),
+          })
+
+          const providerAssets = yield* Effect.forEach(entries, (entry) =>
+            repository
+              .findProviderAssetByProviderAssetId({
+                providerKey,
+                providerAssetId: entry.providerAssetId,
+              })
+              .pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.die("Expected wildcard search provider asset"),
+                    onSome: Effect.succeed,
+                  })
+                )
+              )
+          )
+
+          yield* repository.upsertProviderAssetMappings({
+            mappings: providerAssets.map((providerAsset) => ({
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset" as const,
+              canonicalAssetId: null,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "pending_review" as const,
+              reviewerNotes: null,
+              sourceNotes: "Literal wildcard review search test",
+            })),
+          })
+        })
+      )
+
+      const search = (query: string) =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository
+              .listProviderAssetReviews({
+                providerKey,
+                mappingStatus: "pending_review",
+                evidenceState: null,
+                query,
+                cursor: null,
+                limit: 10,
+              })
+              .pipe(
+                Effect.map((reviews) =>
+                  reviews.map((review) => review.providerAsset.providerAssetId)
+                )
+              )
+          )
+        )
+
+      expect(await search("%")).toEqual(["literal%-review"])
+      expect(await search("_")).toEqual(["literal_-review"])
+      expect(await search("\\")).toEqual(["literal\\-review"])
+      expect(await search("ordinary")).toEqual(["ordinary-review"])
     })
 
     it("keeps reviewed natural-key mappings preferred when a stable provider asset id arrives later", async () => {

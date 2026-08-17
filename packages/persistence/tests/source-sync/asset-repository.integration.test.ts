@@ -59,10 +59,68 @@ describe("AssetRepositoryLive", () => {
       id: TEST_BTC_ASSET_ID,
       symbol: "BTC",
       type: "fungible",
+      coingeckoCoinId: "bitcoin",
     })
     expect(Option.isNone(missingAsset)).toBe(true)
     expect(blockchains.some((blockchain) => blockchain.name === "base")).toBe(true)
     expect(blockchains.some((blockchain) => blockchain.name === "bitcoin")).toBe(true)
+  })
+
+  it("binds a CoinGecko identity and representation to an explicitly selected asset", async () => {
+    const selectedAssetId = "00000000-0000-4000-8000-00000000a552"
+    await runPg(
+      Effect.flatMap(drizzle, (db) =>
+        db.insert(schema.assets).values({
+          id: selectedAssetId,
+          name: "Wrapped SOL",
+          symbol: "SOL",
+          coingeckoCoinId: null,
+          logoUrl: null,
+          type: "fungible",
+        })
+      )
+    )
+
+    const created = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.upsertEconomicAssetRepresentation({
+          expectedAssetId: selectedAssetId,
+          blockchain: {
+            name: "solana",
+            chainType: "solana",
+            chainId: null,
+            nativeAssetSymbol: "SOL",
+            explorerUrl: null,
+            logoUrl: null,
+            coingeckoPlatformId: "solana",
+          },
+          asset: {
+            name: "Wrapped SOL",
+            symbol: "SOL",
+            coingeckoCoinId: "wrapped-solana",
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress: null,
+            mintAddress: "SelectedAssetMint111111111111111111111111111",
+            decimals: 9,
+            logoUrl: null,
+            type: "token",
+            isSpam: false,
+            metadata: null,
+          },
+        })
+      )
+    )
+    const stored = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findAssetByCoinGeckoId({ coingeckoCoinId: "wrapped-solana" })
+      )
+    )
+
+    expect(created.id).toBe(selectedAssetId)
+    expect(Option.getOrThrow(stored)).toMatchObject({ id: selectedAssetId, symbol: "SOL" })
   })
 
   it("rejects a conflicting economic asset type for an existing CoinGecko id", async () => {

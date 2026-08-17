@@ -22,9 +22,16 @@ import type {
   ProviderAssetResolutionProposal,
   ProviderAssetResolutionProposalSearchResult,
 } from "../services/ProviderAssetReviewService.ts"
-import { CoinGeckoClient, type CoinGeckoCoin } from "../services/coingecko/CoinGeckoClient.ts"
+import {
+  CoinGeckoClient,
+  type CoinGeckoCoin,
+  type CoinGeckoSearchCoin,
+} from "../services/coingecko/CoinGeckoClient.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
-import { selectNativePlatform } from "../services/coingecko/CoinGeckoPlatformSelection.ts"
+import {
+  deriveNativeAssetDecimals,
+  selectNativePlatform,
+} from "../services/coingecko/CoinGeckoPlatformSelection.ts"
 
 const PAGE_SIZE = 100
 
@@ -80,7 +87,25 @@ const observedMatchesRepresentation = ({
         matchesAddress(observed.contractAddress, representation.contractAddress)) ||
       (observed.mintAddress !== null && observed.mintAddress === representation.mintAddress))
 
+const representationsShareOwnedIdentity = ({
+  left,
+  right,
+}: {
+  readonly left: RepresentationIdentity
+  readonly right: RepresentationIdentity
+}) =>
+  normalize(left.blockchainName) === normalize(right.blockchainName) &&
+  ((left.type === "native" && right.type === "native") ||
+    (left.contractAddress !== null &&
+      matchesAddress(left.contractAddress, right.contractAddress)) ||
+    (left.mintAddress !== null && left.mintAddress === right.mintAddress))
+
 type ProposedRepresentation = RepresentationIdentity
+
+interface CoinGeckoCandidateDetail {
+  readonly candidate: CoinGeckoSearchCoin
+  readonly coin: CoinGeckoCoin
+}
 
 const proposedRepresentationsFor = ({
   coin,
@@ -102,7 +127,7 @@ const proposedRepresentationsFor = ({
             type: "native" as const,
             contractAddress: null,
             mintAddress: null,
-            decimals: providerAsset.exponent,
+            decimals: deriveNativeAssetDecimals({ coinId: coin.id, platform: nativePlatform }),
           },
         ]
   const tokens = Object.entries(coin.platforms).flatMap(([platformId, address]) => {
@@ -149,7 +174,9 @@ const evidenceStateFor = ({
   readonly exactProposalCount: number
   readonly proposalCount: number
 }): ProviderAssetResolutionProposalSearchResult["evidenceState"] => {
-  if (reviewEvidenceState === "conflicting") return "conflicting"
+  if (reviewEvidenceState === "conflicting" || reviewEvidenceState === "insufficient") {
+    return reviewEvidenceState
+  }
   if (exactProposalCount === 1) return "exact"
   if (proposalCount === 0) return "insufficient"
   return "ambiguous"
@@ -174,7 +201,13 @@ const make = Effect.gen(function* () {
       )
     )
 
-  const loadMatchingAssets = (query: string) => {
+  const loadMatchingAssets = ({
+    includeSpamRepresentations = false,
+    query,
+  }: {
+    readonly includeSpamRepresentations?: boolean
+    readonly query: string
+  }) => {
     const loop = (
       cursor: { readonly assetId: string } | null,
       pages: ReadonlyArray<ReadonlyArray<AssetCatalogAssetRecord>>
@@ -182,7 +215,7 @@ const make = Effect.gen(function* () {
       ReadonlyArray<ReadonlyArray<AssetCatalogAssetRecord>>,
       ProviderAssetCandidateError
     > =>
-      assetCatalog.listAssets({ cursor, query, limit: PAGE_SIZE }).pipe(
+      assetCatalog.listAssets({ cursor, query, limit: PAGE_SIZE, includeSpamRepresentations }).pipe(
         Effect.mapError(
           () => new ProviderAssetCandidateError({ message: "TaxMaxi asset search failed." })
         ),
@@ -214,9 +247,11 @@ const make = Effect.gen(function* () {
   const searchProposals = ({
     providerAssetRowId,
     query,
+    requiredCoinGeckoCoinId,
   }: {
     readonly providerAssetRowId: string
     readonly query: string | null
+    readonly requiredCoinGeckoCoinId?: string
   }) =>
     Effect.gen(function* () {
       const review = yield* loadReview(providerAssetRowId)
@@ -229,26 +264,129 @@ const make = Effect.gen(function* () {
           )
         )
       const searchQuery = query?.trim() || providerAsset.currencyCode
-      const [assets, searchCoins] = yield* Effect.all([
-        loadMatchingAssets(searchQuery),
-        loadCoinGeckoMatches({ query: searchQuery, symbol: providerAsset.currencyCode }),
+      const ownershipQueries = [
+        ...new Set(
+          observed.flatMap(({ blockchainName, representationType, contractAddress, mintAddress }) =>
+            [
+              contractAddress,
+              mintAddress,
+              ...(representationType === "native" ? [blockchainName] : []),
+            ].filter((address): address is string => address !== null && address.trim() !== "")
+          )
+        ),
+      ]
+      const [textMatchedAssets, ownershipAssetGroups] = yield* Effect.all([
+        loadMatchingAssets({ query: searchQuery }),
+        Effect.forEach(
+          ownershipQueries,
+          (ownershipQuery) =>
+            loadMatchingAssets({
+              query: ownershipQuery,
+              includeSpamRepresentations: true,
+            }),
+          { concurrency: 5 }
+        ),
       ])
-      const coinDetails = yield* Effect.forEach(
-        searchCoins,
-        (candidate) =>
-          coinGecko.getCoin({ coinId: candidate.id }).pipe(
+      const ownershipAssets = ownershipAssetGroups.flat()
+      const coinDetails = yield* requiredCoinGeckoCoinId === undefined
+        ? Effect.gen(function* () {
+            const searchCoins = yield* loadCoinGeckoMatches({
+              query: searchQuery,
+              symbol: providerAsset.currencyCode,
+            }).pipe(Effect.catch(() => Effect.succeed<ReadonlyArray<CoinGeckoSearchCoin>>([])))
+            const groups = yield* Effect.forEach(
+              searchCoins,
+              (candidate) =>
+                coinGecko.getCoin({ coinId: candidate.id }).pipe(
+                  Effect.mapError(
+                    () =>
+                      new ProviderAssetCandidateError({
+                        message: "CoinGecko candidate failed.",
+                      })
+                  ),
+                  Effect.map(
+                    (coin): ReadonlyArray<CoinGeckoCandidateDetail> =>
+                      normalize(coin.symbol) === normalize(providerAsset.currencyCode)
+                        ? [{ candidate, coin }]
+                        : []
+                  ),
+                  Effect.catch(() => Effect.succeed<ReadonlyArray<CoinGeckoCandidateDetail>>([]))
+                ),
+              { concurrency: 5 }
+            )
+            return groups.flat()
+          })
+        : coinGecko.getCoin({ coinId: requiredCoinGeckoCoinId }).pipe(
             Effect.mapError(
               () => new ProviderAssetCandidateError({ message: "CoinGecko candidate failed." })
             ),
-            Effect.map((coin) => ({ candidate, coin }))
+            Effect.map(
+              (coin): ReadonlyArray<CoinGeckoCandidateDetail> =>
+                normalize(coin.symbol) === normalize(providerAsset.currencyCode)
+                  ? [
+                      {
+                        candidate: { id: coin.id, name: coin.name, symbol: coin.symbol },
+                        coin,
+                      },
+                    ]
+                  : []
+            )
+          )
+      const coinDetailsById = new Map(coinDetails.map((detail) => [detail.coin.id, detail]))
+      const identityAssets = yield* Effect.forEach(
+        coinDetails,
+        ({ coin }) =>
+          assetCatalog.findAssetByCoinGeckoId({ coingeckoCoinId: coin.id }).pipe(
+            Effect.mapError(
+              () =>
+                new ProviderAssetCandidateError({
+                  message: "TaxMaxi CoinGecko identity lookup failed.",
+                })
+            ),
+            Effect.map(
+              Option.match({
+                onNone: (): ReadonlyArray<AssetCatalogAssetRecord> => [],
+                onSome: (asset): ReadonlyArray<AssetCatalogAssetRecord> => [asset],
+              })
+            )
           ),
         { concurrency: 5 }
-      )
-      const coinDetailsById = new Map(coinDetails.map((detail) => [detail.coin.id, detail]))
+      ).pipe(Effect.map((groups) => groups.flat()))
+      const proposalAssetsById = new Map<string, AssetCatalogAssetRecord>()
+      for (const asset of [...textMatchedAssets, ...identityAssets]) {
+        proposalAssetsById.set(asset.id, asset)
+      }
+      for (const asset of ownershipAssets) {
+        const visibleRepresentations = asset.representations.filter(
+          (representation) => representation.isSpam !== true
+        )
+        if (visibleRepresentations.length === 0) continue
+
+        const existing = proposalAssetsById.get(asset.id)
+        proposalAssetsById.set(asset.id, {
+          ...asset,
+          representations: [
+            ...(existing?.representations ?? []),
+            ...visibleRepresentations.filter(
+              ({ id }) =>
+                !existing?.representations.some((representation) => representation.id === id)
+            ),
+          ],
+        })
+      }
+      const proposalAssets = [...proposalAssetsById.values()]
+      const identityAssetIds = new Set(identityAssets.map(({ id }) => id))
 
       const proposals: Array<ProviderAssetResolutionProposal> = []
+      const coinIdsResolvedByExistingAssets = new Set(
+        identityAssets.flatMap((asset) =>
+          asset.coingeckoCoinId === null ? [] : [asset.coingeckoCoinId]
+        )
+      )
 
-      for (const asset of assets) {
+      for (const asset of proposalAssets) {
+        const hasCoinGeckoIdentity = identityAssetIds.has(asset.id)
+        const symbolMatches = normalize(asset.symbol) === normalize(providerAsset.currencyCode)
         const matchingRepresentations = asset.representations.filter((representation) =>
           observed.some((observation) =>
             observedMatchesRepresentation({ observed: observation, representation })
@@ -286,7 +424,15 @@ const make = Effect.gen(function* () {
           })
         }
 
-        if (observed.length === 0) {
+        if (observed.length === 0 && (symbolMatches || hasCoinGeckoIdentity)) {
+          const identityCandidate =
+            asset.coingeckoCoinId === null
+              ? undefined
+              : coinDetailsById.get(asset.coingeckoCoinId)?.candidate
+          const strength = evidenceStrengthFor({
+            providerAsset,
+            candidate: identityCandidate ?? asset,
+          })
           proposals.push({
             id: `existing-asset:${asset.id}`,
             effect: { _tag: "UseExistingAsset", canonicalAssetId: asset.id },
@@ -298,33 +444,55 @@ const make = Effect.gen(function* () {
               coinGeckoCoinId: asset.coingeckoCoinId,
             },
             representation: null,
-            evidenceStrength: evidenceStrengthFor({ providerAsset, candidate: asset }),
+            evidenceStrength: strength,
             matchReasons: ["Compatible chainless economic asset."],
             conflicts: [],
-            warnings: [],
+            warnings:
+              strength === "symbol_only"
+                ? ["Symbol-only evidence requires an explicit choice."]
+                : [],
             investigationLinks:
               asset.coingeckoCoinId === null ? [] : [coinGeckoLink(asset.coingeckoCoinId)],
           })
         }
 
-        if (asset.coingeckoCoinId !== null && matchingRepresentations.length === 0) {
-          const detail = coinDetailsById.get(asset.coingeckoCoinId)
-          const proposed =
-            detail?.coin === undefined
-              ? undefined
-              : proposedRepresentationsFor({ coin: detail.coin, providerAsset }).find(
-                  (representation) =>
-                    observed.some((observation) =>
-                      observedMatchesRepresentation({ observed: observation, representation })
-                    )
+        if (matchingRepresentations.length === 0 && (symbolMatches || hasCoinGeckoIdentity)) {
+          const compatibleCoinDetails =
+            asset.coingeckoCoinId === null
+              ? coinDetails.filter(
+                  ({ candidate }) =>
+                    normalize(candidate.symbol) === normalize(asset.symbol) &&
+                    normalize(candidate.name) === normalize(asset.name)
                 )
-          if (proposed !== undefined) {
+              : [coinDetailsById.get(asset.coingeckoCoinId)].filter(
+                  (detail): detail is CoinGeckoCandidateDetail => detail !== undefined
+                )
+
+          for (const detail of compatibleCoinDetails) {
+            const proposed = proposedRepresentationsFor({
+              coin: detail.coin,
+              providerAsset,
+            }).find((representation) =>
+              observed.some((observation) =>
+                observedMatchesRepresentation({ observed: observation, representation })
+              )
+            )
+            if (proposed === undefined) continue
+
+            const representationOwner = ownershipAssets.find(
+              (owner) =>
+                owner.id !== asset.id &&
+                owner.representations.some((representation) =>
+                  representationsShareOwnedIdentity({ left: proposed, right: representation })
+                )
+            )
+            coinIdsResolvedByExistingAssets.add(detail.coin.id)
             proposals.push({
-              id: `add-representation:${asset.id}:${asset.coingeckoCoinId}`,
+              id: `add-representation:${asset.id}:${detail.coin.id}`,
               effect: {
                 _tag: "AddRepresentation",
                 canonicalAssetId: asset.id,
-                selectedCoinGeckoCoinId: asset.coingeckoCoinId,
+                selectedCoinGeckoCoinId: detail.coin.id,
               },
               economicAsset: {
                 _tag: "existing",
@@ -340,19 +508,19 @@ const make = Effect.gen(function* () {
               },
               evidenceStrength: "exact",
               matchReasons: ["CoinGecko representation matches exact observed identity."],
-              conflicts: [],
+              conflicts:
+                representationOwner === undefined
+                  ? []
+                  : [`Representation is already owned by TaxMaxi asset ${representationOwner.id}.`],
               warnings: [],
-              investigationLinks: [coinGeckoLink(asset.coingeckoCoinId)],
+              investigationLinks: [coinGeckoLink(detail.coin.id)],
             })
           }
         }
       }
 
-      const existingCoinIds = new Set(
-        assets.flatMap((asset) => (asset.coingeckoCoinId === null ? [] : [asset.coingeckoCoinId]))
-      )
       for (const { candidate, coin } of coinDetails) {
-        if (existingCoinIds.has(coin.id)) continue
+        if (coinIdsResolvedByExistingAssets.has(coin.id)) continue
         const matchingRepresentation = proposedRepresentationsFor({ coin, providerAsset }).find(
           (representation) =>
             observed.some((observation) =>
@@ -360,6 +528,17 @@ const make = Effect.gen(function* () {
             )
         )
         const strength = evidenceStrengthFor({ providerAsset, candidate })
+        const representationOwner =
+          matchingRepresentation === undefined
+            ? undefined
+            : ownershipAssets.find((asset) =>
+                asset.representations.some((representation) =>
+                  representationsShareOwnedIdentity({
+                    left: matchingRepresentation,
+                    right: representation,
+                  })
+                )
+              )
         if (observed.length === 0) {
           proposals.push({
             id: `create-economic-asset:${coin.id}`,
@@ -404,7 +583,10 @@ const make = Effect.gen(function* () {
             },
             evidenceStrength: "exact",
             matchReasons: ["CoinGecko contract or mint matches the observed identity."],
-            conflicts: [],
+            conflicts:
+              representationOwner === undefined
+                ? []
+                : [`Representation is already owned by TaxMaxi asset ${representationOwner.id}.`],
             warnings: [],
             investigationLinks: [coinGeckoLink(coin.id)],
           })

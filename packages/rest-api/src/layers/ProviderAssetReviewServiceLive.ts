@@ -10,6 +10,7 @@ import {
   type ProviderAssetReviewReplay,
   type ProviderAssetReviewRecord,
 } from "@my/sync-engine/services"
+import { CoinbaseProviderAssetEvidenceSchema } from "@my/sync-engine/providers/coinbase"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -38,6 +39,18 @@ const ProviderImageEvidence = Schema.Struct({
   imageUrl: Schema.optional(Schema.String),
   logoUrl: Schema.optional(Schema.String),
 })
+
+const decodeCoinbaseProviderAssetEvidence = Schema.decodeUnknownOption(
+  CoinbaseProviderAssetEvidenceSchema
+)
+
+const isDedicatedFiatReview = (review: ProviderAssetReviewRecord): boolean => {
+  if (review.mapping?.mappingKind === "fiat") return true
+  if (review.providerAsset.provider !== "coinbase") return false
+
+  const evidence = decodeCoinbaseProviderAssetEvidence(review.providerAsset.rawProviderPayload)
+  return Option.isSome(evidence) && evidence.value.source === "coinbase_fiat_currency_catalog"
+}
 
 const decodeProviderImage = (payload: unknown): string | null => {
   const evidence = Schema.decodeUnknownOption(ProviderImageEvidence)(payload)
@@ -296,7 +309,14 @@ const make = Effect.gen(function* () {
       }
 
       const available = yield* candidates
-        .searchProposals({ providerAssetRowId, query: proposalQuery })
+        .searchProposals({
+          providerAssetRowId,
+          query: proposalQuery,
+          ...(decision.effect._tag === "UseExistingAsset" ||
+          decision.effect._tag === "UseExistingRepresentation"
+            ? {}
+            : { requiredCoinGeckoCoinId: decision.effect.selectedCoinGeckoCoinId }),
+        })
         .pipe(
           Effect.mapError(
             (error) => new ProviderAssetReviewInternalError({ message: error.message })
@@ -420,8 +440,24 @@ const make = Effect.gen(function* () {
           limit: params.limit,
         })
         .pipe(
-          Effect.map((reviews) =>
-            reviews.map((review) => toReviewSummary({ review, investigationLinks: [] }))
+          Effect.flatMap((reviews) =>
+            Effect.forEach(
+              reviews.filter((review) => !isDedicatedFiatReview(review)),
+              (review) =>
+                providerAssets
+                  .listProviderAssetObservedRepresentations({
+                    providerAssetRowId: review.providerAsset.id,
+                  })
+                  .pipe(
+                    Effect.map((observedRepresentations) =>
+                      toReviewSummary({
+                        review,
+                        investigationLinks: investigationLinksFor({ observedRepresentations }),
+                      })
+                    )
+                  ),
+              { concurrency: 5 }
+            )
           ),
           Effect.mapError(
             () => new ProviderAssetReviewInternalError({ message: "Failed to list reviews." })
@@ -430,7 +466,7 @@ const make = Effect.gen(function* () {
     getReview: ({ providerAssetRowId }) =>
       Effect.gen(function* () {
         const review = yield* loadReview(providerAssetRowId)
-        if (review.mapping?.mappingKind === "fiat") {
+        if (isDedicatedFiatReview(review)) {
           return yield* new ProviderAssetReviewNotFoundError({
             message: "Provider asset review not found.",
           })
@@ -485,7 +521,7 @@ const make = Effect.gen(function* () {
     searchProposals: ({ providerAssetRowId, query }) =>
       Effect.gen(function* () {
         const review = yield* loadReview(providerAssetRowId)
-        if (review.mapping?.mappingKind === "fiat") {
+        if (isDedicatedFiatReview(review)) {
           return yield* new ProviderAssetReviewBadRequestError({
             message: "Fiat observations are resolved outside the review workflow.",
           })

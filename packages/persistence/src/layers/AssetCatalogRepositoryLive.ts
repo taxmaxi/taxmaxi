@@ -34,6 +34,7 @@ const representationColumns = {
   decimals: schema.assetRepresentations.decimals,
   logoUrl: schema.assetRepresentations.logoUrl,
   metadata: schema.assetRepresentations.metadata,
+  isSpam: schema.assetRepresentations.isSpam,
 } as const
 
 const pendingAssetColumns = {
@@ -48,7 +49,13 @@ const pendingAssetColumns = {
 const make = Effect.gen(function* () {
   const db = yield* drizzle
 
-  const loadRepresentations = ({ assetIds }: { readonly assetIds: ReadonlyArray<string> }) =>
+  const loadRepresentations = ({
+    assetIds,
+    includeSpamRepresentations = false,
+  }: {
+    readonly assetIds: ReadonlyArray<string>
+    readonly includeSpamRepresentations?: boolean
+  }) =>
     Effect.gen(function* () {
       if (assetIds.length === 0) {
         return new Map<string, ReadonlyArray<AssetCatalogRepresentationRecord>>()
@@ -63,7 +70,7 @@ const make = Effect.gen(function* () {
         )
         .where(
           and(
-            eq(schema.assetRepresentations.isSpam, false),
+            includeSpamRepresentations ? undefined : eq(schema.assetRepresentations.isSpam, false),
             or(...assetIds.map((assetId) => eq(schema.assetRepresentations.assetId, assetId)))
           )
         )
@@ -71,14 +78,22 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("assetCatalogRepository.loadRepresentations"))
       const byAssetId = new Map<string, ReadonlyArray<AssetCatalogRepresentationRecord>>()
 
-      for (const { assetId, ...representation } of rows) {
-        byAssetId.set(assetId, [...(byAssetId.get(assetId) ?? []), representation])
+      for (const { assetId, isSpam, ...representation } of rows) {
+        const catalogRepresentation = includeSpamRepresentations
+          ? { ...representation, isSpam }
+          : representation
+        byAssetId.set(assetId, [...(byAssetId.get(assetId) ?? []), catalogRepresentation])
       }
 
       return byAssetId
     })
 
-  const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({ cursor, limit, query }) =>
+  const listAssets: AssetCatalogRepositoryShape["listAssets"] = ({
+    cursor,
+    includeSpamRepresentations = false,
+    limit,
+    query,
+  }) =>
     Effect.gen(function* () {
       const searchFilters = getAssetCatalogSearchPatterns(query ?? "").map((pattern) =>
         or(
@@ -97,7 +112,9 @@ const make = Effect.gen(function* () {
               .where(
                 and(
                   eq(schema.assetRepresentations.assetId, schema.assets.id),
-                  eq(schema.assetRepresentations.isSpam, false),
+                  includeSpamRepresentations
+                    ? undefined
+                    : eq(schema.assetRepresentations.isSpam, false),
                   or(
                     ilike(schema.assetRepresentations.contractAddress, pattern),
                     ilike(schema.assetRepresentations.mintAddress, pattern),
@@ -124,7 +141,10 @@ const make = Effect.gen(function* () {
         .orderBy(asc(schema.assets.id))
         .limit(limit)
         .pipe(wrapSqlError("assetCatalogRepository.listAssets"))
-      const representations = yield* loadRepresentations({ assetIds: rows.map(({ id }) => id) })
+      const representations = yield* loadRepresentations({
+        assetIds: rows.map(({ id }) => id),
+        includeSpamRepresentations,
+      })
 
       return rows.map((asset) => ({
         ...asset,
@@ -147,6 +167,36 @@ const make = Effect.gen(function* () {
         .where(eq(schema.assets.id, assetId))
         .limit(1)
         .pipe(wrapSqlError("assetCatalogRepository.findAssetById"))
+
+      if (asset === undefined) {
+        return Option.none<AssetCatalogAssetRecord>()
+      }
+
+      const representations = yield* loadRepresentations({ assetIds: [asset.id] })
+
+      return Option.some({
+        ...asset,
+        representations: representations.get(asset.id) ?? [],
+      })
+    })
+
+  const findAssetByCoinGeckoId: AssetCatalogRepositoryShape["findAssetByCoinGeckoId"] = ({
+    coingeckoCoinId,
+  }) =>
+    Effect.gen(function* () {
+      const [asset] = yield* db
+        .select({
+          id: schema.assets.id,
+          name: schema.assets.name,
+          symbol: schema.assets.symbol,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
+          logoUrl: schema.assets.logoUrl,
+          type: schema.assets.type,
+        })
+        .from(schema.assets)
+        .where(eq(schema.assets.coingeckoCoinId, coingeckoCoinId))
+        .limit(1)
+        .pipe(wrapSqlError("assetCatalogRepository.findAssetByCoinGeckoId"))
 
       if (asset === undefined) {
         return Option.none<AssetCatalogAssetRecord>()
@@ -202,6 +252,7 @@ const make = Effect.gen(function* () {
     })
 
   return AssetCatalogRepository.of({
+    findAssetByCoinGeckoId,
     findAssetById,
     listAssets,
     listPendingAssets,

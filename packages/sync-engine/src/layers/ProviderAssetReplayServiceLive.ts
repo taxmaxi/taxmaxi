@@ -71,15 +71,15 @@ const make = Effect.gen(function* () {
               message: "Failed to record replay dispatch state.",
             })
         ),
-        Effect.flatMap((updated) =>
-          updated
-            ? Effect.void
-            : Effect.fail(
+        Effect.flatMap((effectiveJobId) =>
+          effectiveJobId === null
+            ? Effect.fail(
                 new ProviderAssetReplayError({
                   kind: "conflict",
                   message: "Replay was scheduled by another request.",
                 })
               )
+            : Effect.succeed(effectiveJobId)
         )
       )
 
@@ -104,12 +104,12 @@ const make = Effect.gen(function* () {
               dispatchState: "failed_to_queue",
               errorMessage: "Failed to queue replay.",
             }).pipe(
-              Effect.as({
+              Effect.map((effectiveJobId) => ({
                 sourceId: replay.sourceId,
-                jobId: replay.jobId,
+                jobId: effectiveJobId,
                 status: "failed_to_queue" as const,
                 message: "Failed to queue replay.",
-              })
+              }))
             ),
           onSuccess: (job) =>
             Effect.gen(function* () {
@@ -137,12 +137,20 @@ const make = Effect.gen(function* () {
                   })
                 }
               } else {
-                yield* markDispatch({
+                const effectiveJobId = yield* markDispatch({
                   providerAssetRowId,
                   replay,
                   dispatchState: "queued",
                   errorMessage: null,
                 })
+                if (effectiveJobId !== job.jobId) {
+                  const advancedReplay = yield* loadReplay({
+                    providerAssetRowId,
+                    sourceId: replay.sourceId,
+                    jobId: effectiveJobId,
+                  })
+                  return yield* getReplayStatus({ replay: advancedReplay })
+                }
               }
 
               return {
@@ -163,47 +171,62 @@ const make = Effect.gen(function* () {
         )
       )
 
-  return ProviderAssetReplayService.of({
-    scheduleReplays: ({ providerAssetRowId, replays }) =>
-      Effect.forEach(replays, (replay) => dispatchReplay({ providerAssetRowId, replay }), {
-        concurrency: 5,
-      }),
-    getReplay: (params) =>
-      Effect.gen(function* () {
-        const replay = yield* loadReplay(params)
-        if (replay.dispatchState === "failed_to_queue") {
-          return {
-            sourceId: replay.sourceId,
-            jobId: replay.jobId,
-            status: "failed_to_queue" as const,
-            message: replay.errorMessage,
-          }
-        }
-        const status = yield* sourceSync
-          .getSourceSyncJob({
-            principalId: replay.principalId,
-            sourceId: replay.sourceId,
-            jobId: replay.jobId,
-          })
-          .pipe(
-            Effect.mapError(
-              () =>
-                new ProviderAssetReplayError({
-                  kind: "internal",
-                  message: "Failed to load replay job.",
-                })
-            )
-          )
-        return {
+  const getReplayStatus = ({
+    replay,
+  }: {
+    readonly replay: ProviderAssetReviewReplay
+  }): Effect.Effect<ProviderAssetReplayStatus, ProviderAssetReplayError> => {
+    if (replay.dispatchState === "failed_to_queue") {
+      return Effect.succeed({
+        sourceId: replay.sourceId,
+        jobId: replay.jobId,
+        status: "failed_to_queue" as const,
+        message: replay.errorMessage,
+      })
+    }
+
+    return sourceSync
+      .getSourceSyncJob({
+        principalId: replay.principalId,
+        sourceId: replay.sourceId,
+        jobId: replay.jobId,
+      })
+      .pipe(
+        Effect.map((status) => ({
           sourceId: replay.sourceId,
           jobId: replay.jobId,
           status: status.status,
           message: status.message,
-        }
+        })),
+        Effect.mapError(
+          () =>
+            new ProviderAssetReplayError({
+              kind: "internal",
+              message: "Failed to load replay job.",
+            })
+        )
+      )
+  }
+
+  return ProviderAssetReplayService.of({
+    scheduleReplays: ({ providerAssetRowId, replays }) =>
+      Effect.forEach(
+        replays,
+        (replay) =>
+          replay.dispatchState === "failed_to_queue"
+            ? dispatchReplay({ providerAssetRowId, replay })
+            : getReplayStatus({ replay }),
+        { concurrency: 5 }
+      ),
+    getReplay: (params) =>
+      Effect.gen(function* () {
+        const replay = yield* loadReplay(params)
+        return yield* getReplayStatus({ replay })
       }),
     retryReplay: (params) =>
       Effect.gen(function* () {
         const replay = yield* loadReplay(params)
+        let replayToDispatch = replay
         if (replay.dispatchState !== "failed_to_queue") {
           const status = yield* sourceSync
             .getSourceSyncJob({
@@ -226,10 +249,38 @@ const make = Effect.gen(function* () {
               message: "Only failed replays can be retried.",
             })
           }
+          replayToDispatch = yield* providerAssets
+            .reserveProviderAssetReviewReplayRetry({
+              providerAssetRowId: params.providerAssetRowId,
+              sourceId: replay.sourceId,
+              jobId: replay.jobId,
+            })
+            .pipe(
+              Effect.mapError(
+                () =>
+                  new ProviderAssetReplayError({
+                    kind: "internal",
+                    message: "Failed to reserve replay retry.",
+                  })
+              ),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () =>
+                    Effect.fail(
+                      new ProviderAssetReplayError({
+                        kind: "conflict",
+                        message: "Replay was retried by another request.",
+                      })
+                    ),
+                  onSome: Effect.succeed,
+                })
+              )
+            )
         }
+
         return yield* dispatchReplay({
           providerAssetRowId: params.providerAssetRowId,
-          replay,
+          replay: replayToDispatch,
         })
       }),
   })

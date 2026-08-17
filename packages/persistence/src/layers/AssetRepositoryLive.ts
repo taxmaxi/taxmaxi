@@ -34,7 +34,12 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const query = db
-        .select({ id: schema.assets.id, symbol: schema.assets.symbol, type: schema.assets.type })
+        .select({
+          id: schema.assets.id,
+          symbol: schema.assets.symbol,
+          type: schema.assets.type,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
+        })
         .from(schema.assets)
         .where(eq(schema.assets.id, assetId))
       const [asset] = yield* (lockForApproval ? query.for("share") : query)
@@ -230,7 +235,7 @@ const make = Effect.gen(function* () {
   }
 
   const upsertEconomicAssetRepresentation: AssetRepositoryShape["upsertEconomicAssetRepresentation"] =
-    ({ blockchain, asset, representation }) =>
+    ({ blockchain, asset, representation, expectedAssetId }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -363,10 +368,76 @@ const make = Effect.gen(function* () {
                 )
               )
 
+            const expectedAsset =
+              expectedAssetId === undefined
+                ? undefined
+                : (yield* tx
+                    .select({
+                      id: schema.assets.id,
+                      coingeckoCoinId: schema.assets.coingeckoCoinId,
+                      type: schema.assets.type,
+                    })
+                    .from(schema.assets)
+                    .where(eq(schema.assets.id, expectedAssetId))
+                    .for("update")
+                    .limit(1)
+                    .pipe(
+                      wrapSyncEngineSqlError(
+                        "assetRepository.upsertEconomicAssetRepresentation.findExpectedAsset"
+                      )
+                    ))[0]
+
+            if (expectedAssetId !== undefined && expectedAsset === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.upsertEconomicAssetRepresentation.validateExpectedAsset",
+                cause: {
+                  expectedAssetId,
+                  message: "Selected economic asset no longer exists.",
+                },
+              })
+            }
+
+            if (
+              expectedAsset !== undefined &&
+              expectedAsset.coingeckoCoinId !== null &&
+              expectedAsset.coingeckoCoinId !== asset.coingeckoCoinId
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.upsertEconomicAssetRepresentation.validateExpectedAssetIdentity",
+                cause: {
+                  expectedAssetId,
+                  existingCoingeckoCoinId: expectedAsset.coingeckoCoinId,
+                  incomingCoingeckoCoinId: asset.coingeckoCoinId,
+                  message: "Selected economic asset is bound to a different CoinGecko identity.",
+                },
+              })
+            }
+
+            if (
+              expectedAsset !== undefined &&
+              existingAssetByIdentity !== undefined &&
+              existingAssetByIdentity.id !== expectedAsset.id
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.upsertEconomicAssetRepresentation.validateExpectedAssetIdentityOwner",
+                cause: {
+                  expectedAssetId,
+                  existingAssetId: existingAssetByIdentity.id,
+                  incomingCoingeckoCoinId: asset.coingeckoCoinId,
+                  message: "CoinGecko identity belongs to a different economic asset.",
+                },
+              })
+            }
+
+            const selectedAssetByIdentity = expectedAsset ?? existingAssetByIdentity
+
             const representationOwnerConflicts =
               existingRepresentation !== undefined &&
-              ((existingAssetByIdentity !== undefined &&
-                existingAssetByIdentity.id !== existingRepresentation.assetId) ||
+              ((selectedAssetByIdentity !== undefined &&
+                selectedAssetByIdentity.id !== existingRepresentation.assetId) ||
                 (asset.coingeckoCoinId !== null &&
                   existingRepresentation.assetCoingeckoCoinId !== null &&
                   existingRepresentation.assetCoingeckoCoinId !== asset.coingeckoCoinId))
@@ -386,7 +457,7 @@ const make = Effect.gen(function* () {
             }
 
             const existingAsset =
-              existingAssetByIdentity ??
+              selectedAssetByIdentity ??
               (existingRepresentation === undefined
                 ? undefined
                 : { id: existingRepresentation.assetId, type: existingRepresentation.assetType })

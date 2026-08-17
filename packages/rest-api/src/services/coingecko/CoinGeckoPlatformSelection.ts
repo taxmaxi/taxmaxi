@@ -17,6 +17,8 @@ const CoinGeckoAssetPlatform = Schema.Struct({
 /** CoinGecko metadata needed to identify a blockchain platform. */
 export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 
+export type CoinGeckoChainType = "bitcoin" | "cardano" | "evm" | "other" | "solana"
+
 /** Symbols for CoinGecko coins that represent native chain assets. */
 export const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
   bitcoin: "BTC",
@@ -25,6 +27,59 @@ export const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> =
   cardano: "ADA",
   binancecoin: "BNB",
   "avalanche-2": "AVAX",
+}
+
+const nativeAssetDecimalsByCoinGeckoId: Readonly<Record<string, number>> = {
+  bitcoin: 8,
+  ethereum: 18,
+  weth: 18,
+  solana: 9,
+  cardano: 6,
+  binancecoin: 18,
+  wbnb: 18,
+  "avalanche-2": 18,
+  "matic-network": 18,
+}
+
+/** Derive the canonical chain family from CoinGecko platform metadata. */
+export const deriveChainType = (platform: CoinGeckoAssetPlatform): CoinGeckoChainType => {
+  if (platform.chain_identifier !== null) return "evm"
+
+  const haystack = `${platform.id} ${platform.name}`.toLowerCase()
+  if (haystack.includes("solana")) return "solana"
+  if (haystack.includes("bitcoin")) return "bitcoin"
+  if (haystack.includes("cardano")) return "cardano"
+  return "other"
+}
+
+/** Return canonical native decimals when CoinGecko identifies the chain unambiguously. */
+export const deriveNativeAssetDecimals = ({
+  coinId,
+  platform,
+}: {
+  readonly coinId: string
+  readonly platform: CoinGeckoAssetPlatform
+}): number | null => {
+  const coinDecimals = nativeAssetDecimalsByCoinGeckoId[coinId]
+  if (coinDecimals !== undefined) return coinDecimals
+
+  if (platform.native_coin_id !== null) {
+    const platformDecimals = nativeAssetDecimalsByCoinGeckoId[platform.native_coin_id]
+    if (platformDecimals !== undefined) return platformDecimals
+  }
+
+  switch (deriveChainType(platform)) {
+    case "bitcoin":
+      return 8
+    case "cardano":
+      return 6
+    case "evm":
+      return 18
+    case "solana":
+      return 9
+    case "other":
+      return null
+  }
 }
 
 const nativeAssetPlatformOverridesByCoinGeckoId: Readonly<Record<string, CoinGeckoAssetPlatform>> =

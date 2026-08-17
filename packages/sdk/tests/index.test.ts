@@ -307,6 +307,20 @@ const providerAssetDecisionResponseBody = JSON.stringify({
   replays: [],
 })
 
+const failedProviderAssetReplayResponseBody = JSON.stringify({
+  sourceId: "00000000-0000-4000-8000-000000000014",
+  jobId: "00000000-0000-4000-8000-000000000015",
+  status: "failed",
+  message: "Replay processing failed.",
+})
+
+const retriedProviderAssetReplayResponseBody = JSON.stringify({
+  sourceId: "00000000-0000-4000-8000-000000000014",
+  jobId: "00000000-0000-4000-8000-000000000016",
+  status: "queued",
+  message: null,
+})
+
 const emptySourceTransactionsResponseBody = JSON.stringify({
   transactions: [],
   page: { nextCursor: null, hasMore: false },
@@ -869,6 +883,8 @@ describe("TaxMaxi Promise client", () => {
       providerAssetReviewDetailResponseBody,
       providerAssetProposalsResponseBody,
       providerAssetDecisionResponseBody,
+      failedProviderAssetReplayResponseBody,
+      retriedProviderAssetReplayResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
       apiKey: "tm_assets",
@@ -960,6 +976,23 @@ describe("TaxMaxi Promise client", () => {
         reviewerNotes: "Identity checked.",
       })
     ).resolves.toMatchObject({ review: { mapping: { mappingStatus: "approved" } } })
+    await expect(
+      taxmaxi.assets.getProviderAssetReplay({
+        id: providerAssetId,
+        sourceId: "00000000-0000-4000-8000-000000000014",
+        jobId: "00000000-0000-4000-8000-000000000015",
+      })
+    ).resolves.toMatchObject({ status: "failed", message: "Replay processing failed." })
+    await expect(
+      taxmaxi.assets.retryProviderAssetReplay({
+        id: providerAssetId,
+        sourceId: "00000000-0000-4000-8000-000000000014",
+        jobId: "00000000-0000-4000-8000-000000000015",
+      })
+    ).resolves.toMatchObject({
+      jobId: "00000000-0000-4000-8000-000000000016",
+      status: "queued",
+    })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
@@ -992,6 +1025,12 @@ describe("TaxMaxi Promise client", () => {
           reviewerNotes: "Identity checked.",
         }),
         url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/decision",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000014/jobs/00000000-0000-4000-8000-000000000015",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/replays/00000000-0000-4000-8000-000000000014/jobs/00000000-0000-4000-8000-000000000015/retry",
       }),
     ])
   })

@@ -25,6 +25,7 @@ import {
   AssetCatalogListResponse,
   PendingAssetListResponse,
   ProviderAssetDecisionResponse,
+  ProviderAssetReplayResponse,
   ProviderAssetResolutionProposalListResponse,
   ProviderAssetReviewDetailResponse,
   ProviderAssetReviewListResponse,
@@ -76,21 +77,46 @@ const SourceSyncServiceTestLive = Layer.effect(
           if (job === undefined) {
             return yield* Effect.die("Expected a durable replay job before queue dispatch.")
           }
+          yield* db
+            .update(schema.processingJobs)
+            .set({ queueName: "source-sync", queueJobId: job.id })
+            .where(eq(schema.processingJobs.id, job.id))
+            .pipe(Effect.orDie)
           return { sourceId, jobId: job.id, status: "queued", message: null }
         }),
       getSourceSyncJob: ({ sourceId, jobId }) =>
-        Effect.succeed({
-          sourceId,
-          jobId,
-          status: "queued",
-          message: null,
-          phase: null,
-          processedRecords: null,
-          totalRecords: null,
-          progressPercent: null,
-          importedRecords: null,
-          normalizedRecords: null,
-          failedRecords: null,
+        Effect.gen(function* () {
+          const [job] = yield* db
+            .select({
+              status: schema.processingJobs.status,
+              message: schema.processingJobs.errorMessage,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, jobId))
+            .limit(1)
+            .pipe(Effect.orDie)
+          if (job === undefined) {
+            return yield* Effect.die("Expected a visible source sync job.")
+          }
+          const status =
+            job.status === "pending"
+              ? ("queued" as const)
+              : job.status === "processing"
+                ? ("running" as const)
+                : job.status
+          return {
+            sourceId,
+            jobId,
+            status,
+            message: job.message,
+            phase: null,
+            processedRecords: null,
+            totalRecords: null,
+            progressPercent: null,
+            importedRecords: null,
+            normalizedRecords: null,
+            failedRecords: null,
+          }
         }),
     } satisfies SourceSyncServiceShape)
   )
@@ -1245,6 +1271,65 @@ describe("AssetsApiLive", () => {
         },
       },
     })
+    const replay = response.body.replays[0]
+    if (replay === undefined) {
+      throw new Error("Expected the approved decision to schedule one replay.")
+    }
+
+    const nextJobId = await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.processingJobs)
+          .set({ status: "failed", errorMessage: "Replay processing failed." })
+          .where(eq(schema.processingJobs.id, replay.jobId))
+        const [nextJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: routeSourceId,
+            principalId: routePrincipalId,
+            mode: "replay",
+            status: "pending",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (nextJob === undefined) {
+          return yield* Effect.die("Failed to seed retried replay job.")
+        }
+        return nextJob.id
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+    const failedReplay = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/replays/${routeSourceId}/jobs/${replay.jobId}`,
+        responseSchema: ProviderAssetReplayResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const retriedReplay = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/replays/${routeSourceId}/jobs/${replay.jobId}/retry`,
+        payload: {},
+        responseSchema: ProviderAssetReplayResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const persistedRetriedReplay = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/replays/${routeSourceId}/jobs/${nextJobId}`,
+        responseSchema: ProviderAssetReplayResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(failedReplay).toMatchObject({
+      status: 200,
+      body: { jobId: replay.jobId, status: "failed", message: "Replay processing failed." },
+    })
+    expect(retriedReplay).toMatchObject({
+      status: 200,
+      body: { jobId: nextJobId, status: "queued", message: null },
+    })
+    expect(persistedRetriedReplay).toMatchObject({
+      status: 200,
+      body: { jobId: nextJobId, status: "queued", message: null },
+    })
 
     const repeatedStatus = await Effect.runPromise(
       postAdminStatus({
@@ -1293,7 +1378,12 @@ describe("AssetsApiLive", () => {
       canonicalAssetId: seeded.canonicalAssetId,
       assetRepresentationId: seeded.assetRepresentationId,
     })
-    expect(durableState.jobs).toEqual([{ mode: "replay", status: "pending" }])
+    expect(durableState.jobs).toEqual(
+      expect.arrayContaining([
+        { mode: "replay", status: "failed" },
+        { mode: "replay", status: "pending" },
+      ])
+    )
   })
 
   it.each(["/v1/assets/provider-assets", "/v1/assets/transfer-reconciliations/unresolved"])(

@@ -963,9 +963,18 @@ describe("SourceSyncJobRepositoryLive", () => {
   })
 
   it("materializes a durable replay follow-up when an active job completes", async () => {
-    const activeJobId = await runPg(
+    const fixture = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
+        const [prelinkedJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "replay",
+            status: "completed",
+          })
+          .returning({ id: schema.processingJobs.id })
         const [job] = yield* db
           .insert(schema.processingJobs)
           .values({
@@ -976,22 +985,80 @@ describe("SourceSyncJobRepositoryLive", () => {
             followUpMode: "replay",
           })
           .returning({ id: schema.processingJobs.id })
+        const providerAssets = yield* db
+          .insert(schema.providerAssets)
+          .values([
+            {
+              provider: "coinbase",
+              providerAssetId: "follow-up-link-advances",
+              naturalKey: null,
+              currencyCode: "ADVANCE",
+              retrievedAt: new Date("2025-01-02T00:00:00.000Z"),
+            },
+            {
+              provider: "coinbase",
+              providerAssetId: "follow-up-link-cas-winner",
+              naturalKey: null,
+              currencyCode: "CAS",
+              retrievedAt: new Date("2025-01-02T00:00:00.000Z"),
+            },
+          ])
+          .returning({
+            id: schema.providerAssets.id,
+            currencyCode: schema.providerAssets.currencyCode,
+          })
 
-        if (job === undefined) return yield* Effect.die("Failed to create active sync job")
-        return job.id
+        const advancingProviderAsset = providerAssets.find(
+          ({ currencyCode }) => currencyCode === "ADVANCE"
+        )
+        const protectedProviderAsset = providerAssets.find(
+          ({ currencyCode }) => currencyCode === "CAS"
+        )
+        if (
+          job === undefined ||
+          prelinkedJob === undefined ||
+          advancingProviderAsset === undefined ||
+          protectedProviderAsset === undefined
+        ) {
+          return yield* Effect.die("Failed to create replay-link lifecycle fixture")
+        }
+        yield* db.insert(schema.providerAssetReviewReplays).values([
+          {
+            providerAssetRowId: advancingProviderAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            jobId: job.id,
+            dispatchState: "failed_to_queue",
+            errorMessage: "Initial replay dispatch failed",
+          },
+          {
+            providerAssetRowId: protectedProviderAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            jobId: prelinkedJob.id,
+            dispatchState: "queued",
+          },
+        ])
+
+        return {
+          activeJobId: job.id,
+          advancingProviderAssetId: advancingProviderAsset.id,
+          prelinkedJobId: prelinkedJob.id,
+          protectedProviderAssetId: protectedProviderAsset.id,
+        }
       })
     )
 
     await runRepository(
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
-        repository.completeJob({ jobId: activeJobId, state: completedState })
+        repository.completeJob({ jobId: fixture.activeJobId, state: completedState })
       )
     )
 
-    const jobs = await runPg(
+    const state = await runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
-        return yield* db
+        const jobs = yield* db
           .select({
             id: schema.processingJobs.id,
             mode: schema.processingJobs.mode,
@@ -1000,16 +1067,46 @@ describe("SourceSyncJobRepositoryLive", () => {
           })
           .from(schema.processingJobs)
           .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+        const replayLinks = yield* db
+          .select({
+            providerAssetRowId: schema.providerAssetReviewReplays.providerAssetRowId,
+            jobId: schema.providerAssetReviewReplays.jobId,
+            dispatchState: schema.providerAssetReviewReplays.dispatchState,
+            errorMessage: schema.providerAssetReviewReplays.errorMessage,
+          })
+          .from(schema.providerAssetReviewReplays)
+
+        return { jobs, replayLinks }
       })
     )
 
-    const followUpJob = jobs.find((job) => job.mode === "replay")
+    const followUpJob = state.jobs.find((job) => job.mode === "replay" && job.status === "pending")
     expect(followUpJob).toMatchObject({ mode: "replay", status: "pending" })
-    expect(jobs.find((job) => job.id === activeJobId)).toEqual({
-      id: activeJobId,
+    expect(state.jobs.find((job) => job.id === fixture.activeJobId)).toEqual({
+      id: fixture.activeJobId,
       mode: "sync",
       status: "completed",
       followUpJobId: followUpJob?.id,
+    })
+    expect(
+      state.replayLinks.find(
+        ({ providerAssetRowId }) => providerAssetRowId === fixture.advancingProviderAssetId
+      )
+    ).toEqual({
+      providerAssetRowId: fixture.advancingProviderAssetId,
+      jobId: followUpJob?.id,
+      dispatchState: "failed_to_queue",
+      errorMessage: "Failed to queue replay.",
+    })
+    expect(
+      state.replayLinks.find(
+        ({ providerAssetRowId }) => providerAssetRowId === fixture.protectedProviderAssetId
+      )
+    ).toEqual({
+      providerAssetRowId: fixture.protectedProviderAssetId,
+      jobId: fixture.prelinkedJobId,
+      dispatchState: "queued",
+      errorMessage: null,
     })
 
     const visibleJob = await runRepository(
@@ -1017,7 +1114,7 @@ describe("SourceSyncJobRepositoryLive", () => {
         repository.getJob({
           principalId: TEST_PRINCIPAL_ID,
           sourceId: TEST_SOURCE_ID,
-          jobId: activeJobId,
+          jobId: fixture.activeJobId,
         })
       )
     )

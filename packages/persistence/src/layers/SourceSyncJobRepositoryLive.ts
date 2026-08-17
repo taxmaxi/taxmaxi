@@ -149,6 +149,30 @@ const make = Effect.gen(function* () {
           Effect.asVoid,
           wrapSyncEngineSqlError("sourceSyncJobRepository.materializeFollowUpJob.link")
         )
+
+      if (followUpMode === "replay") {
+        yield* executor
+          .update(schema.providerAssetReviewReplays)
+          .set({
+            jobId: followUpJob.id,
+            dispatchState: "failed_to_queue",
+            errorMessage: "Failed to queue replay.",
+            updatedAt: createdAt,
+          })
+          .where(
+            and(
+              eq(schema.providerAssetReviewReplays.jobId, jobId),
+              eq(schema.providerAssetReviewReplays.sourceId, sourceId),
+              eq(schema.providerAssetReviewReplays.principalId, principalId)
+            )
+          )
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError(
+              "sourceSyncJobRepository.materializeFollowUpJob.advanceProviderAssetReviewReplays"
+            )
+          )
+      }
     })
 
   const selectActiveJobFields = {

@@ -11,6 +11,8 @@ import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layer
 import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceDataServiceLive.ts"
 import { CoinbaseReferenceMappingServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceMappingServiceLive.ts"
 import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/layers/CoinbaseSourceSyncProviderLive.ts"
+import { makeCoinbaseProviderAssetEvidence } from "../../src/providers/coinbase/shared/CoinbaseProviderAssetEvidence.ts"
+import { CoinbaseReferenceDataService } from "../../src/providers/coinbase/services/CoinbaseReferenceDataService.ts"
 import { CoinbaseReferenceMappingService } from "../../src/providers/coinbase/services/CoinbaseReferenceMappingService.ts"
 import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
 import { SourceSyncService } from "@my/sync-engine/services"
@@ -338,6 +340,14 @@ const runReferenceMapping = <A, E>(effect: Effect.Effect<A, E, CoinbaseReference
     )
   )
 
+const runReferenceData = <A, E>(effect: Effect.Effect<A, E, CoinbaseReferenceDataService>) =>
+  Effect.runPromise(
+    effect.pipe(
+      Effect.provide(CoinbaseReferenceDataWithDepsLive.pipe(Layer.provideMerge(TestPgClientLive))),
+      Effect.scoped
+    )
+  )
+
 const seedCoinbaseFiatCatalogEntry = ({
   currencyCode,
   name,
@@ -355,7 +365,39 @@ const seedCoinbaseFiatCatalogEntry = ({
       name,
       exponent: 2,
       providerType: "fiat",
-      rawProviderPayload: { source: "coinbase_fiat_currency_catalog" },
+      rawProviderPayload: makeCoinbaseProviderAssetEvidence({
+        source: "coinbase_fiat_currency_catalog",
+        providerPayload: { id: currencyCode, name },
+      }),
+      retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
+    })
+  }).pipe(Effect.provide(TestPgClientLive))
+
+const seedCoinbaseCryptoCatalogEntry = ({
+  currencyCode,
+  providerType,
+}: {
+  readonly currencyCode: string
+  readonly providerType: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.providerAssets).values({
+      provider: "coinbase",
+      providerAssetId: `crypto-${currencyCode.toLowerCase()}`,
+      naturalKey: null,
+      currencyCode,
+      name: `${currencyCode} crypto fixture`,
+      exponent: 8,
+      providerType,
+      rawProviderPayload: makeCoinbaseProviderAssetEvidence({
+        source: "coinbase_crypto_currency_catalog",
+        providerPayload: {
+          asset_id: `crypto-${currencyCode.toLowerCase()}`,
+          code: currencyCode,
+          type: providerType,
+        },
+      }),
       retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
     })
   }).pipe(Effect.provide(TestPgClientLive))
@@ -685,7 +727,9 @@ describe("coinbase reference mappings", () => {
   })
 
   it("resolves supported fiat only from the Coinbase fiat catalog", async () => {
-    await Effect.runPromise(seedCoinbaseFiatCatalogEntry({ currencyCode: "EUR", name: "Euro" }))
+    await runReferenceData(
+      Effect.flatMap(CoinbaseReferenceDataService, (service) => service.refreshReferenceData())
+    )
 
     const eurMapping = await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
@@ -704,6 +748,36 @@ describe("coinbase reference mappings", () => {
       mappingStatus: "approved",
     })
   })
+
+  it.each([
+    { currencyCode: "GBP", providerType: "fiat" },
+    { currencyCode: "USD", providerType: "crypto" },
+  ])(
+    "keeps crypto-catalog $currencyCode with provider type $providerType in asset review",
+    async ({ currencyCode, providerType }) => {
+      await Effect.runPromise(seedCoinbaseCryptoCatalogEntry({ currencyCode, providerType }))
+
+      await expect(
+        runReferenceMapping(
+          Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+            service.resolveCurrency({ currencyCode })
+          )
+        )
+      ).rejects.toMatchObject({ _tag: "CoinbaseProviderAssetMappingNotFoundError" })
+
+      const mapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+        (candidate) => candidate.currencyCode === currencyCode
+      )
+
+      expect(mapping).toMatchObject({
+        mappingKind: "asset",
+        canonicalAssetId: null,
+        assetRepresentationId: null,
+        canonicalFiatCurrency: null,
+        mappingStatus: "pending_review",
+      })
+    }
+  )
 
   it("upgrades an untouched pending mapping when fiat catalog evidence arrives", async () => {
     await expect(
@@ -730,7 +804,10 @@ describe("coinbase reference mappings", () => {
             name: "Euro",
             exponent: 2,
             providerType: "fiat",
-            rawProviderPayload: { source: "coinbase_fiat_currency_catalog" },
+            rawProviderPayload: makeCoinbaseProviderAssetEvidence({
+              source: "coinbase_fiat_currency_catalog",
+              providerPayload: { id: "EUR", name: "Euro" },
+            }),
             retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
           })
           .where(eq(schema.providerAssets.id, pendingMapping.providerAssetRowId))
@@ -829,7 +906,10 @@ describe("coinbase reference mappings", () => {
             name: "Euro",
             exponent: 2,
             providerType: "fiat",
-            rawProviderPayload: { source: "coinbase_fiat_currency_catalog" },
+            rawProviderPayload: makeCoinbaseProviderAssetEvidence({
+              source: "coinbase_fiat_currency_catalog",
+              providerPayload: { id: "EUR", name: "Euro" },
+            }),
             retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
           })
           .where(eq(schema.providerAssets.id, pendingMapping.providerAssetRowId))

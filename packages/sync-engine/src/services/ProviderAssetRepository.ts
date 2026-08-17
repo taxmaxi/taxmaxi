@@ -224,7 +224,14 @@ export interface ProviderAssetRepositoryShape {
     readonly jobId: string
     readonly dispatchState: ProviderAssetReplayDispatchState
     readonly errorMessage: string | null
-  }) => Effect.Effect<boolean, SyncEngineStorageError>
+  }) => Effect.Effect<string | null, SyncEngineStorageError>
+
+  /** Create and link the durable replacement job before retry queue dispatch. */
+  readonly reserveProviderAssetReviewReplayRetry: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Effect.Effect<Option.Option<ProviderAssetReviewReplay>, SyncEngineStorageError>
 
   /** Compare-and-set the replay link after retrying a failed job. */
   readonly replaceProviderAssetReviewReplay: (params: {

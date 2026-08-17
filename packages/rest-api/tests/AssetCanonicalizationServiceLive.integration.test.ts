@@ -148,9 +148,11 @@ const countCanonicalRows = () =>
 const seedChainlessPendingProviderAsset = ({
   providerAssetId,
   providerType,
+  rawProviderPayload = null,
 }: {
   readonly providerAssetId: string
-  readonly providerType: string
+  readonly providerType: string | null
+  readonly rawProviderPayload?: unknown
 }) =>
   context.runPg(
     Effect.gen(function* () {
@@ -164,6 +166,7 @@ const seedChainlessPendingProviderAsset = ({
           name: providerType === "nft" ? "Artwork" : "Coin",
           exponent: providerType === "nft" ? 0 : 8,
           providerType,
+          rawProviderPayload,
           retrievedAt: new Date("2026-08-16T08:00:00.000Z"),
         })
         .returning({ id: schema.providerAssets.id })
@@ -773,9 +776,187 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
 
-    expect(result.canonicalAsset).toMatchObject({ name: "Custom Coin", symbol: "COIN" })
+    expect(result.canonicalAsset).toMatchObject({
+      name: "Custom Coin",
+      symbol: "COIN",
+      type: "fungible",
+    })
     expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
   })
+
+  it("uses trusted Coinbase crypto-catalog evidence when the provider type says fiat", async () => {
+    const providerAssetRowId = await seedChainlessPendingProviderAsset({
+      providerAssetId: "crypto-catalog-mislabeled-fiat",
+      providerType: "fiat",
+      rawProviderPayload: {
+        source: "coinbase_crypto_currency_catalog",
+        providerPayload: { id: "COIN" },
+      },
+    })
+    const coinGeckoClient = CoinGeckoClient.of({
+      searchCoins: () => Effect.die("Symbol search should not be repeated"),
+      getCoin: ({ coinId }) =>
+        Effect.succeed({
+          id: coinId,
+          symbol: "coin",
+          name: "Custom Coin",
+          asset_platform_id: null,
+          platforms: {},
+          detail_platforms: {},
+        }),
+      listMarkets: () => Effect.succeed([]),
+    })
+    const layer = AssetCanonicalizationServiceLive.pipe(
+      Layer.provide(RepositoryLayer),
+      Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
+    )
+
+    const result = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.canonicalizeEconomicAssetFromCoinGecko({
+            providerAssetRowId,
+            coinId: "custom-coin",
+            reviewerNotes: "Trusted crypto catalog row.",
+          })
+        ),
+        layer,
+      })
+    )
+
+    expect(result.canonicalAsset).toMatchObject({ type: "fungible" })
+    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+  })
+
+  it("rejects trusted Coinbase fiat-catalog rows even with an asset mapping", async () => {
+    const providerAssetRowId = await seedChainlessPendingProviderAsset({
+      providerAssetId: "fiat-catalog-conflicting-asset-mapping",
+      providerType: "crypto",
+      rawProviderPayload: {
+        source: "coinbase_fiat_currency_catalog",
+        providerPayload: { id: "EUR" },
+      },
+    })
+    const rowsBefore = await countCanonicalRows()
+
+    const result = await runService(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.canonicalizeEconomicAssetFromCoinGecko({
+          providerAssetRowId,
+          coinId: "must-not-be-created",
+          reviewerNotes: "Conflicting fiat catalog row.",
+        })
+      ).pipe(Effect.result)
+    )
+
+    expect(result).toMatchObject({
+      _tag: "Failure",
+      failure: {
+        _tag: "AssetCanonicalizationBadRequestError",
+        message: "Fiat provider assets cannot become assets.",
+      },
+    })
+    expect(await countCanonicalRows()).toEqual(rowsBefore)
+  })
+
+  it("canonicalizes an economic-only NFT only when the provider type proves it", async () => {
+    const providerAssetRowId = await seedChainlessPendingProviderAsset({
+      providerAssetId: "custom-search-economic-nft",
+      providerType: "nft",
+    })
+    const rowsBefore = await countCanonicalRows()
+    const coinGeckoClient = CoinGeckoClient.of({
+      searchCoins: () => Effect.die("Symbol search should not be repeated"),
+      getCoin: ({ coinId }) =>
+        Effect.succeed({
+          id: coinId,
+          symbol: "art",
+          name: "Custom Artwork",
+          asset_platform_id: null,
+          platforms: {},
+          detail_platforms: {},
+        }),
+      listMarkets: () => Effect.succeed([]),
+    })
+    const layer = AssetCanonicalizationServiceLive.pipe(
+      Layer.provide(RepositoryLayer),
+      Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
+    )
+
+    const result = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.canonicalizeEconomicAssetFromCoinGecko({
+            providerAssetRowId,
+            coinId: "custom-nft",
+            reviewerNotes: "Selected NFT through custom search.",
+          })
+        ),
+        layer,
+      })
+    )
+    const rowsAfter = await countCanonicalRows()
+
+    expect(result.canonicalAsset).toMatchObject({
+      name: "Custom Artwork",
+      symbol: "ART",
+      type: "nft",
+    })
+    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+    expect(rowsAfter).toEqual({
+      assets: rowsBefore.assets + 1,
+      representations: rowsBefore.representations,
+    })
+  })
+
+  it.each([
+    { label: "missing", providerType: null },
+    { label: "unknown", providerType: "unknown" },
+  ] as const)(
+    "rejects a $label provider type before creating an economic-only asset",
+    async ({ label, providerType }) => {
+      const providerAssetRowId = await seedChainlessPendingProviderAsset({
+        providerAssetId: `${label}-economic-asset-type`,
+        providerType,
+      })
+      const rowsBefore = await countCanonicalRows()
+
+      const result = await runService(
+        Effect.flatMap(AssetCanonicalizationService, (service) =>
+          service.canonicalizeEconomicAssetFromCoinGecko({
+            providerAssetRowId,
+            coinId: "must-not-be-created",
+            reviewerNotes: "Provider type must be proven.",
+          })
+        ).pipe(Effect.result)
+      )
+      const rowsAfter = await countCanonicalRows()
+      const reviewState = await context.runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ status: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id })
+            .from(schema.processingJobs)
+          return { jobs, mapping }
+        })
+      )
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
+          _tag: "AssetCanonicalizationBadRequestError",
+          message: "Provider asset type does not prove a fungible or NFT economic asset.",
+        })
+      }
+      expect(reviewState.mapping?.status).toBe("pending_review")
+      expect(reviewState.jobs).toHaveLength(0)
+      expect(rowsAfter).toEqual(rowsBefore)
+    }
+  )
 
   it("canonicalizes a representation selected through a custom CoinGecko search", async () => {
     const contractAddress = "0x1111111111111111111111111111111111111111"

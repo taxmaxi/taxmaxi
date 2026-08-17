@@ -16,6 +16,8 @@ export interface SyncEngineAsset {
   readonly id: string
   readonly symbol: string
   readonly type: "fungible" | "nft"
+  /** Stable external identity when the asset is already bound to CoinGecko. */
+  readonly coingeckoCoinId?: string | null
 }
 
 /** Network representation resolved from exact chain reference data. */
@@ -156,6 +158,8 @@ export interface AssetRepositoryShape {
     readonly blockchain: CanonicalBlockchainDraft
     readonly asset: EconomicAssetDraft
     readonly representation: AssetRepresentationDraft
+    /** Bind the CoinGecko identity and representation to this explicit existing asset. */
+    readonly expectedAssetId?: string
   }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
 }
 

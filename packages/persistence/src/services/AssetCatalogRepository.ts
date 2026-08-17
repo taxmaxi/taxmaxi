@@ -29,6 +29,8 @@ export interface AssetCatalogRepresentationRecord {
   readonly decimals: number
   readonly logoUrl: string | null
   readonly metadata: unknown
+  /** Internal identity searches may include hidden spam representations. */
+  readonly isSpam?: boolean
 }
 
 /**
@@ -63,6 +65,8 @@ export interface AssetCatalogListParams {
   } | null
   readonly query: string | null
   readonly limit: number
+  /** Include hidden representations for internal identity ownership checks. */
+  readonly includeSpamRepresentations?: boolean
 }
 
 /** Search and paging options for public pending asset reads. */
@@ -98,6 +102,13 @@ export interface AssetCatalogRepositoryShape {
    */
   readonly findAssetById: (params: {
     readonly assetId: string
+  }) => Effect.Effect<Option.Option<AssetCatalogAssetRecord>, PersistenceError>
+
+  /**
+   * Find one canonical asset by its stable CoinGecko coin id.
+   */
+  readonly findAssetByCoinGeckoId: (params: {
+    readonly coingeckoCoinId: string
   }) => Effect.Effect<Option.Option<AssetCatalogAssetRecord>, PersistenceError>
 }
 

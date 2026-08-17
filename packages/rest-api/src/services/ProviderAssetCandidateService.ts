@@ -20,6 +20,7 @@ export interface ProviderAssetCandidateServiceShape {
   readonly searchProposals: (params: {
     readonly providerAssetRowId: string
     readonly query: string | null
+    readonly requiredCoinGeckoCoinId?: string
   }) => Effect.Effect<ProviderAssetResolutionProposalSearchResult, ProviderAssetCandidateError>
 }
 

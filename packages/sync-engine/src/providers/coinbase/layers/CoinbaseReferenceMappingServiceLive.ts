@@ -30,17 +30,29 @@ import {
   type CoinbaseResolvedCurrencyMapping,
   type CoinbaseResolvedTransactionTypeMapping,
 } from "../services/CoinbaseReferenceMappingService.ts"
+import {
+  CoinbaseProviderAssetEvidenceSchema,
+  makeCoinbaseProviderAssetEvidence,
+} from "../shared/CoinbaseProviderAssetEvidence.ts"
 
 const COINBASE_PROVIDER = "coinbase"
 
 const deriveCoinbaseNaturalKey = ({ currencyCode }: { readonly currencyCode: string }) =>
   `currency_code:${currencyCode.toUpperCase()}`
 
+const decodeProviderAssetEvidence = Schema.decodeUnknownOption(CoinbaseProviderAssetEvidenceSchema)
+
+const hasDedicatedFiatCatalogEvidence = (payload: unknown): boolean => {
+  const evidence = decodeProviderAssetEvidence(payload)
+
+  return Option.isSome(evidence) && evidence.value.source === "coinbase_fiat_currency_catalog"
+}
+
 const toProviderAssetMappingKind = ({
-  providerType,
+  rawProviderPayload,
 }: {
-  readonly providerType: string | null
-}): "asset" | "fiat" => (providerType?.trim().toLowerCase() === "fiat" ? "fiat" : "asset")
+  readonly rawProviderPayload: unknown
+}): "asset" | "fiat" => (hasDedicatedFiatCatalogEvidence(rawProviderPayload) ? "fiat" : "asset")
 
 const normalizeSide = (side: string | null): string | null =>
   side === null ? null : side.trim().toLowerCase()
@@ -210,7 +222,10 @@ const make = Effect.gen(function* () {
             name: null,
             exponent: null,
             providerType: null,
-            payload: rawSourcePayload,
+            payload: makeCoinbaseProviderAssetEvidence({
+              source: "coinbase_transaction_observation",
+              providerPayload: rawSourcePayload,
+            }),
           },
         ],
       })
@@ -236,14 +251,14 @@ const make = Effect.gen(function* () {
 
   const ensurePendingProviderAssetMapping = ({
     providerAssetRowId,
-    providerType,
+    rawProviderPayload,
   }: {
     readonly providerAssetRowId: string
-    readonly providerType: string | null
+    readonly rawProviderPayload: unknown
   }) => {
-    const mappingKind = toProviderAssetMappingKind({ providerType })
+    const mappingKind = toProviderAssetMappingKind({ rawProviderPayload })
 
-    return providerAssetRepository.upsertProviderAssetMappings({
+    return providerAssetRepository.seedProviderAssetMappingsIfMissing({
       mappings: [
         {
           providerAssetRowId,
@@ -296,16 +311,16 @@ const make = Effect.gen(function* () {
   const failMissingProviderAssetMapping = ({
     currencyCode,
     providerAssetRowId,
-    providerType,
+    rawProviderPayload,
   }: {
     readonly currencyCode: string
     readonly providerAssetRowId: string
-    readonly providerType: string | null
+    readonly rawProviderPayload: unknown
   }) =>
     Effect.gen(function* () {
       yield* ensurePendingProviderAssetMapping({
         providerAssetRowId,
-        providerType,
+        rawProviderPayload,
       })
 
       return yield* Effect.fail(
@@ -540,7 +555,7 @@ const make = Effect.gen(function* () {
         providerAssetRowId: providerAssetRecord.id,
       })
 
-      if (providerAssetRecord.providerType?.trim().toLowerCase() === "fiat") {
+      if (hasDedicatedFiatCatalogEvidence(providerAssetRecord.rawProviderPayload)) {
         const automaticFiatMapping = yield* resolveDedicatedFiatMapping({
           providerAssetRowId: providerAssetRecord.id,
           currencyCode: upperCurrencyCode,
@@ -583,7 +598,7 @@ const make = Effect.gen(function* () {
         return yield* failMissingProviderAssetMapping({
           currencyCode: upperCurrencyCode,
           providerAssetRowId: providerAssetRecord.id,
-          providerType: providerAssetRecord.providerType,
+          rawProviderPayload: providerAssetRecord.rawProviderPayload,
         })
       }
 
