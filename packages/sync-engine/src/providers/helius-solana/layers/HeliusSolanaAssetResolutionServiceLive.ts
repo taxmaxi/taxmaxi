@@ -284,12 +284,10 @@ const decodeDasAsset = (
     const decimals = asset.token_info?.decimals
 
     if (decimals !== undefined && (!Number.isInteger(decimals) || decimals < 0 || decimals > 255)) {
-      return yield* Effect.fail(
-        new HeliusSolanaAssetMetadataDecodeError({
-          message: `Invalid Helius DAS decimals for Solana mint ${asset.id}`,
-          cause: { mintAddress: asset.id, decimals },
-        })
-      )
+      return yield* new HeliusSolanaAssetMetadataDecodeError({
+        message: `Invalid Helius DAS decimals for Solana mint ${asset.id}`,
+        cause: { mintAddress: asset.id, decimals },
+      })
     }
 
     const tokenProgram = normalizeText(asset.token_info?.token_program)
@@ -501,12 +499,10 @@ const make = Effect.gen(function* () {
         return reloaded
       }
 
-      return yield* Effect.fail(
-        makeMissingProviderAssetAfterUpsertError({
-          providerAssetId: entry.providerAssetId,
-          naturalKey: entry.naturalKey,
-        })
-      )
+      return yield* makeMissingProviderAssetAfterUpsertError({
+        providerAssetId: entry.providerAssetId,
+        naturalKey: entry.naturalKey,
+      })
     })
 
   const ensureProviderAssetRecord = (
@@ -809,15 +805,13 @@ const make = Effect.gen(function* () {
         return mapping
       }
 
-      return yield* Effect.fail(
-        toStorageError({
-          operation: "heliusSolanaAssetResolutionService.ensureMappingForProviderAsset",
-          cause: {
-            providerAssetRowId: providerAsset.id,
-            message: "Helius Solana provider asset mapping could not be persisted.",
-          },
-        })
-      )
+      return yield* toStorageError({
+        operation: "heliusSolanaAssetResolutionService.ensureMappingForProviderAsset",
+        cause: {
+          providerAssetRowId: providerAsset.id,
+          message: "Helius Solana provider asset mapping could not be persisted.",
+        },
+      })
     })
 
   const validateApprovedMapping = ({
@@ -839,23 +833,19 @@ const make = Effect.gen(function* () {
       }
 
       if (mapping.canonicalAssetId === null) {
-        return yield* Effect.fail(
-          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
-            mintAddress: reference.mintAddress,
-            providerAssetRowId: providerAsset.id,
-            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} is approved but has no canonical asset target.`,
-          })
-        )
+        return yield* new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+          mintAddress: reference.mintAddress,
+          providerAssetRowId: providerAsset.id,
+          message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} is approved but has no canonical asset target.`,
+        })
       }
 
       if (mapping.assetRepresentationId === null) {
-        return yield* Effect.fail(
-          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
-            mintAddress: reference.mintAddress,
-            providerAssetRowId: providerAsset.id,
-            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} is approved but has no network representation target.`,
-          })
-        )
+        return yield* new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+          mintAddress: reference.mintAddress,
+          providerAssetRowId: providerAsset.id,
+          message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} is approved but has no network representation target.`,
+        })
       }
 
       const canonicalAsset = yield* assetRepository.findAssetById({
@@ -863,13 +853,11 @@ const make = Effect.gen(function* () {
       })
 
       if (Option.isNone(canonicalAsset)) {
-        return yield* Effect.fail(
-          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
-            mintAddress: reference.mintAddress,
-            providerAssetRowId: providerAsset.id,
-            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at missing canonical asset ${mapping.canonicalAssetId}.`,
-          })
-        )
+        return yield* new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+          mintAddress: reference.mintAddress,
+          providerAssetRowId: providerAsset.id,
+          message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at missing canonical asset ${mapping.canonicalAssetId}.`,
+        })
       }
 
       const representation =
@@ -889,13 +877,11 @@ const make = Effect.gen(function* () {
         representation.value.assetId !== mapping.canonicalAssetId ||
         representation.value.id !== mapping.assetRepresentationId
       ) {
-        return yield* Effect.fail(
-          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
-            mintAddress: reference.mintAddress,
-            providerAssetRowId: providerAsset.id,
-            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at an invalid network representation ${mapping.assetRepresentationId}.`,
-          })
-        )
+        return yield* new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+          mintAddress: reference.mintAddress,
+          providerAssetRowId: providerAsset.id,
+          message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} points at an invalid network representation ${mapping.assetRepresentationId}.`,
+        })
       }
 
       const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
@@ -913,13 +899,11 @@ const make = Effect.gen(function* () {
         providerAsset.exponent === null ||
         representation.value.decimals !== providerAsset.exponent
       ) {
-        return yield* Effect.fail(
-          new HeliusSolanaBrokenApprovedProviderAssetMappingError({
-            mintAddress: reference.mintAddress,
-            providerAssetRowId: providerAsset.id,
-            message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} conflicts with its exact type or decimals evidence.`,
-          })
-        )
+        return yield* new HeliusSolanaBrokenApprovedProviderAssetMappingError({
+          mintAddress: reference.mintAddress,
+          providerAssetRowId: providerAsset.id,
+          message: `Helius Solana provider asset mapping for ${providerAsset.currencyCode} conflicts with its exact type or decimals evidence.`,
+        })
       }
     })
 
@@ -1036,12 +1020,10 @@ const make = Effect.gen(function* () {
       }
 
       if (reference.mintAddress === null) {
-        return yield* Effect.fail(
-          toStorageError({
-            operation: "heliusSolanaAssetResolutionService.ensureProviderAssetForReference",
-            cause: "SPL asset reference unexpectedly had no mint address.",
-          })
-        )
+        return yield* toStorageError({
+          operation: "heliusSolanaAssetResolutionService.ensureProviderAssetForReference",
+          cause: "SPL asset reference unexpectedly had no mint address.",
+        })
       }
 
       const dasAsset = dasAssets.get(reference.mintAddress)

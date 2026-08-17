@@ -334,12 +334,10 @@ const make = Effect.gen(function* () {
       const matchedCandidate = exactAmountCandidates[0]
 
       if (matchedCandidate === undefined) {
-        return yield* Effect.fail(
-          toStorageError({
-            operation: "transferReconciliationService.reconcileTransferCandidate",
-            cause: "Expected one matched candidate after filtering by exact amount.",
-          })
-        )
+        return yield* toStorageError({
+          operation: "transferReconciliationService.reconcileTransferCandidate",
+          cause: "Expected one matched candidate after filtering by exact amount.",
+        })
       }
 
       const candidateMetadata = buildCandidateMetadata({ candidates: [matchedCandidate] })

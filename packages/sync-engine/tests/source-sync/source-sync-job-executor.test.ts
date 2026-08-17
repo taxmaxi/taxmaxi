@@ -400,12 +400,10 @@ const makeExecutorLayer = ({
             events.push(`stub:normalize:${source.providerKey}:${sourceRecord.recordType}`)
 
             if (failNormalizeOnce && normalizeAttempts === 1) {
-              return yield* Effect.fail(
-                new SourceProviderRecoverableNormalizationError({
-                  providerKey: "stub-chain",
-                  message: "Paired sibling row is not cached yet.",
-                })
-              )
+              return yield* new SourceProviderRecoverableNormalizationError({
+                providerKey: "stub-chain",
+                message: "Paired sibling row is not cached yet.",
+              })
             }
 
             return { kind: "skipped" } as const
@@ -476,12 +474,10 @@ const makeExecutorLayer = ({
           yield* Effect.sleep(25)
         }
         if (failReplayReset) {
-          return yield* Effect.fail(
-            new SyncEngineStorageError({
-              operation: "sourceReplayRepository.resetSourceDerivedState",
-              cause: "Replay reset failed",
-            })
-          )
+          return yield* new SyncEngineStorageError({
+            operation: "sourceReplayRepository.resetSourceDerivedState",
+            cause: "Replay reset failed",
+          })
         }
       }),
   })
@@ -494,12 +490,10 @@ const makeExecutorLayer = ({
           yield* Effect.sleep(25)
         }
         if (failReplayCreditReservation) {
-          return yield* Effect.fail(
-            new SyncEngineStorageError({
-              operation: "sourceNormalizationRepository.consumeTransactionCredit.exhausted",
-              cause: "Transaction credit balance is exhausted",
-            })
-          )
+          return yield* new SyncEngineStorageError({
+            operation: "sourceNormalizationRepository.consumeTransactionCredit.exhausted",
+            cause: "Transaction credit balance is exhausted",
+          })
         }
         const reservations = transactions.flatMap(({ sourceRawRecordId }) =>
           sourceRawRecordId === null
@@ -547,12 +541,10 @@ const makeExecutorLayer = ({
         }
         events.push(`persist-normalized:${params.transaction.sourceRawRecordId ?? "unknown"}`)
         if (params.transaction.sourceRawRecordId === failReplayPersistenceStorageRawRecordId) {
-          return yield* Effect.fail(
-            new SyncEngineStorageError({
-              operation: "sourceNormalizationRepository.persistNormalizedArtifacts",
-              cause: "Replay persistence failed",
-            })
-          )
+          return yield* new SyncEngineStorageError({
+            operation: "sourceNormalizationRepository.persistNormalizedArtifacts",
+            cause: "Replay persistence failed",
+          })
         }
         if ("deriveLegs" in params) {
           yield* params.deriveLegs({

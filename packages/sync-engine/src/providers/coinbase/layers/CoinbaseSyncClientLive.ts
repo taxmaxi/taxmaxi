@@ -232,12 +232,10 @@ const make = Effect.gen(function* () {
       })
 
       if (sourceCredentials === null) {
-        return yield* Effect.fail(
-          new CoinbaseSyncAuthError({
-            sourceId,
-            message: "Coinbase source not found for sync",
-          })
-        )
+        return yield* new CoinbaseSyncAuthError({
+          sourceId,
+          message: "Coinbase source not found for sync",
+        })
       }
 
       return sourceCredentials
@@ -284,13 +282,11 @@ const make = Effect.gen(function* () {
 
       if (refreshResponse.status !== 200) {
         const bodyText = yield* refreshResponse.text.pipe(Effect.orElseSucceed(() => ""))
-        return yield* Effect.fail(
-          toTokenRefreshFailure({
-            sourceId,
-            status: refreshResponse.status,
-            bodyText,
-          })
-        )
+        return yield* toTokenRefreshFailure({
+          sourceId,
+          status: refreshResponse.status,
+          bodyText,
+        })
       }
 
       const refreshJson = yield* refreshResponse.json.pipe(
@@ -356,12 +352,10 @@ const make = Effect.gen(function* () {
       if (mustRefresh) {
         const refreshToken = sourceCredentials.refreshToken
         if (typeof refreshToken !== "string" || refreshToken.trim() === "") {
-          return yield* Effect.fail(
-            new CoinbaseSyncAuthError({
-              sourceId,
-              message: "Coinbase OAuth credentials cannot be refreshed. Reconnect Coinbase.",
-            })
-          )
+          return yield* new CoinbaseSyncAuthError({
+            sourceId,
+            message: "Coinbase OAuth credentials cannot be refreshed. Reconnect Coinbase.",
+          })
         }
 
         return yield* refreshAccessToken({
@@ -372,12 +366,10 @@ const make = Effect.gen(function* () {
       }
 
       if (sourceCredentials.accessToken === null || sourceCredentials.accessToken.trim() === "") {
-        return yield* Effect.fail(
-          new CoinbaseSyncAuthError({
-            sourceId,
-            message: "Coinbase OAuth credentials missing access token",
-          })
-        )
+        return yield* new CoinbaseSyncAuthError({
+          sourceId,
+          message: "Coinbase OAuth credentials missing access token",
+        })
       }
 
       return sourceCredentials.accessToken
@@ -473,15 +465,13 @@ const make = Effect.gen(function* () {
             ? " Reconnect Coinbase and grant account/transaction read permissions."
             : ""
 
-        return yield* Effect.fail(
-          new CoinbaseSyncProviderError({
-            message:
-              `Coinbase request failed (${response.status}) ${endpoint}: ${bodyText}` +
-              unauthorizedMessage,
-            statusCode: response.status,
-            retryable: COINBASE_RETRYABLE_STATUS_CODES.has(response.status),
-          })
-        )
+        return yield* new CoinbaseSyncProviderError({
+          message:
+            `Coinbase request failed (${response.status}) ${endpoint}: ${bodyText}` +
+            unauthorizedMessage,
+          statusCode: response.status,
+          retryable: COINBASE_RETRYABLE_STATUS_CODES.has(response.status),
+        })
       }
 
       return yield* response.json.pipe(
@@ -511,13 +501,11 @@ const make = Effect.gen(function* () {
 
       if (response.status < 200 || response.status >= 300) {
         const bodyText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
-        return yield* Effect.fail(
-          new CoinbaseSyncProviderError({
-            message: `Coinbase request failed (${response.status}) ${endpoint}: ${bodyText}`,
-            statusCode: response.status,
-            retryable: COINBASE_RETRYABLE_STATUS_CODES.has(response.status),
-          })
-        )
+        return yield* new CoinbaseSyncProviderError({
+          message: `Coinbase request failed (${response.status}) ${endpoint}: ${bodyText}`,
+          statusCode: response.status,
+          retryable: COINBASE_RETRYABLE_STATUS_CODES.has(response.status),
+        })
       }
 
       return yield* response.json.pipe(

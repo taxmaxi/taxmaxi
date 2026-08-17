@@ -184,7 +184,7 @@ const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({ principalId, sourceId: source.id, provider, mode })
 
       if (source.providerKey === null) {
-        return yield* Effect.fail(new UnsupportedProviderError({ provider: "unknown" }))
+        return yield* new UnsupportedProviderError({ provider: "unknown" })
       }
 
       const [activeJob] = yield* sourceSyncJobRepository.findActiveJob({
@@ -330,15 +330,13 @@ const make = Effect.gen(function* () {
     sourceId,
     jobId,
   }) =>
-    Effect.gen(function* () {
-      return yield* sourceSyncJobRepository
-        .getJob({ principalId, sourceId, jobId })
-        .pipe(
-          Effect.catchTag("SourceSyncJobRecordNotVisibleError", () =>
-            Effect.fail(new SourceSyncJobNotFoundError({ sourceId, jobId }))
-          )
+    sourceSyncJobRepository
+      .getJob({ principalId, sourceId, jobId })
+      .pipe(
+        Effect.catchTag("SourceSyncJobRecordNotVisibleError", () =>
+          Effect.fail(new SourceSyncJobNotFoundError({ sourceId, jobId }))
         )
-    })
+      )
 
   const startSourceSyncJob: SourceSyncServiceShape["startSourceSyncJob"] = ({
     principalId,
