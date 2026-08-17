@@ -17,10 +17,10 @@ import * as Schema from "effect/Schema"
  * Typically base64url-encoded random bytes.
  */
 export const SessionId = Schema.String.pipe(
-  Schema.minLength(32),
-  Schema.pattern(/^[A-Za-z0-9_-]+$/),
+  Schema.check(Schema.isMinLength(32)),
+  Schema.check(Schema.isPattern(/^[A-Za-z0-9_-]+$/)),
   Schema.brand("SessionId"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "SessionId",
     title: "Session ID",
     description:

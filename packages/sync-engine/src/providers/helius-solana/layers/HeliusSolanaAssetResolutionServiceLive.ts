@@ -5,7 +5,7 @@
  */
 
 import * as Effect from "effect/Effect"
-import * as Either from "effect/Either"
+import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
@@ -118,7 +118,7 @@ const DasMetadataSchema = Schema.Struct({
   token_standard: Schema.optional(Schema.String),
 })
 
-const SolanaTokenDecimalsSchema = Schema.Int.pipe(Schema.between(0, 255))
+const SolanaTokenDecimalsSchema = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }))
 
 const DasAssetSchema = Schema.Struct({
   id: Schema.String,
@@ -151,8 +151,8 @@ const DasAssetSchema = Schema.Struct({
 })
 
 const DasAssetBatchSchema = Schema.Array(DasAssetSchema)
-const decodeUnknownDasAssetBatch = Schema.decodeUnknown(DasAssetBatchSchema)
-const decodeStoredProviderPayload = Schema.decodeUnknownEither(
+const decodeUnknownDasAssetBatch = Schema.decodeUnknownEffect(DasAssetBatchSchema)
+const decodeStoredProviderPayload = Schema.decodeUnknownExit(
   Schema.Struct({
     source: Schema.optional(Schema.String),
     tokenProgram: Schema.optional(Schema.NullOr(Schema.String)),
@@ -373,31 +373,31 @@ const normalizeReference = (
 const storedTokenProgram = (providerAsset: ProviderAssetRecord): string | null => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
-  if (Either.isLeft(decoded)) {
+  if (Exit.isFailure(decoded)) {
     return null
   }
 
-  return decoded.right.tokenProgram ?? null
+  return decoded.value.tokenProgram ?? null
 }
 
 const storedNftHint = (providerAsset: ProviderAssetRecord): boolean => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
-  if (Either.isLeft(decoded)) {
+  if (Exit.isFailure(decoded)) {
     return providerAsset.providerType === "nft"
   }
 
-  return decoded.right.nftHint ?? providerAsset.providerType === "nft"
+  return decoded.value.nftHint ?? providerAsset.providerType === "nft"
 }
 
 const hasHeliusDasPayload = (providerAsset: ProviderAssetRecord): boolean => {
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
-  if (Either.isLeft(decoded)) {
+  if (Exit.isFailure(decoded)) {
     return false
   }
 
-  return decoded.right.source === "helius_das_get_asset_batch"
+  return decoded.value.source === "helius_das_get_asset_batch"
 }
 
 const representationTypeFromProviderAsset = (
@@ -406,14 +406,14 @@ const representationTypeFromProviderAsset = (
   const decoded = decodeStoredProviderPayload(providerAsset.rawProviderPayload)
 
   if (
-    Either.isLeft(decoded) ||
-    decoded.right.source !== "helius_das_get_asset_batch" ||
-    decoded.right.asset === undefined
+    Exit.isFailure(decoded) ||
+    decoded.value.source !== "helius_das_get_asset_batch" ||
+    decoded.value.asset === undefined
   ) {
     return null
   }
 
-  return representationTypeFromDasAsset(decoded.right.asset)
+  return representationTypeFromDasAsset(decoded.value.asset)
 }
 
 const hasObservedRepresentationType = (providerAsset: ProviderAssetRecord): boolean =>

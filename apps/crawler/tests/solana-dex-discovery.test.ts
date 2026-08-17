@@ -1,4 +1,4 @@
-import { NodeContext } from "@effect/platform-node"
+import { NodeServices } from "@effect/platform-node"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { describe, expect, it } from "vitest"
 import { Effect, Layer, Option, Schema } from "effect"
@@ -119,7 +119,7 @@ const dexDiscoveryClientLive = (overrides?: {
       }
 
       if (overrides?.failSampleQuery === true) {
-        return Effect.dieMessage("sample query should not run")
+        return Effect.die("sample query should not run")
       }
       if (overrides?.sampleRowsForWindow !== undefined) {
         return Effect.succeed(completedRows(overrides.sampleRowsForWindow(parameters)))
@@ -194,9 +194,9 @@ describe("solana dex discovery", () => {
       { kind: "dex-project-sample-transactions", status: "completed" },
     ])
     expect(file.executions[0]?.response).toEqual(completedRows(defaultPriorityRows))
-    await expect(runDiscovery(Schema.decodeUnknown(SolanaDuneRankingsFile)(file))).resolves.toEqual(
-      file
-    )
+    await expect(
+      runDiscovery(Schema.decodeUnknownEffect(SolanaDuneRankingsFile)(file))
+    ).resolves.toEqual(file)
   })
 
   it("skips rows without program ids", async () => {
@@ -667,7 +667,11 @@ describe("solana dex discovery", () => {
       json: true,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(NodeContext.layer, dexDiscoveryClientLive(), protocolCandidateRepositoryLive)
+        Layer.mergeAll(
+          NodeServices.layer,
+          dexDiscoveryClientLive(),
+          protocolCandidateRepositoryLive
+        )
       ),
       Effect.runPromise
     )
@@ -754,7 +758,7 @@ describe("solana dex discovery", () => {
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
-          NodeContext.layer,
+          NodeServices.layer,
           dexDiscoveryClientLive(),
           failingProtocolCandidateRepositoryLive
         )
@@ -764,7 +768,7 @@ describe("solana dex discovery", () => {
 
     expect(result._tag).toBe("Failure")
     const writtenFile = await Effect.runPromise(
-      Schema.decodeUnknown(Schema.parseJson(SolanaDuneRankingsFile))(
+      Schema.decodeUnknownEffect(Schema.fromJsonString(SolanaDuneRankingsFile))(
         await readFile(outputPath, "utf8")
       )
     )
@@ -801,7 +805,11 @@ describe("solana dex discovery", () => {
       json: true,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(NodeContext.layer, dexDiscoveryClientLive(), protocolCandidateRepositoryLive)
+        Layer.mergeAll(
+          NodeServices.layer,
+          dexDiscoveryClientLive(),
+          protocolCandidateRepositoryLive
+        )
       ),
       Effect.runPromise
     )
@@ -829,7 +837,7 @@ describe("solana dex discovery", () => {
       })
     )
     const deadDuneClientLive = SolanaDuneClientTestLive({
-      executeQuery: () => Effect.dieMessage("Dune must not be called during a replay"),
+      executeQuery: () => Effect.die("Dune must not be called during a replay"),
     })
 
     const liveResult = await crawlSolanaProgram({
@@ -841,7 +849,11 @@ describe("solana dex discovery", () => {
       json: true,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(NodeContext.layer, dexDiscoveryClientLive(), protocolCandidateRepositoryLive)
+        Layer.mergeAll(
+          NodeServices.layer,
+          dexDiscoveryClientLive(),
+          protocolCandidateRepositoryLive
+        )
       ),
       Effect.runPromise
     )
@@ -853,7 +865,7 @@ describe("solana dex discovery", () => {
       json: true,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(NodeContext.layer, deadDuneClientLive, protocolCandidateRepositoryLive)
+        Layer.mergeAll(NodeServices.layer, deadDuneClientLive, protocolCandidateRepositoryLive)
       ),
       Effect.runPromise
     )
@@ -898,7 +910,7 @@ describe("solana dex discovery", () => {
       })
     )
     const deadDuneClientLive = SolanaDuneClientTestLive({
-      executeQuery: () => Effect.dieMessage("Dune must not be called during a replay"),
+      executeQuery: () => Effect.die("Dune must not be called during a replay"),
     })
     const replayFile = await runDiscovery(
       buildSolanaDexDiscoveryFile({
@@ -927,7 +939,7 @@ describe("solana dex discovery", () => {
       json: true,
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(NodeContext.layer, deadDuneClientLive, protocolCandidateRepositoryLive)
+        Layer.mergeAll(NodeServices.layer, deadDuneClientLive, protocolCandidateRepositoryLive)
       ),
       Effect.runPromise
     )
@@ -974,13 +986,13 @@ describe("solana dex discovery", () => {
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
-            NodeContext.layer,
+            NodeServices.layer,
             dexDiscoveryClientLive(),
             Layer.succeed(
               ProtocolCandidateRepository,
               ProtocolCandidateRepository.of({
                 ...protocolCandidateReadOnlyStub,
-                importObservations: () => Effect.dieMessage("must not import"),
+                importObservations: () => Effect.die("must not import"),
               })
             )
           )

@@ -19,17 +19,17 @@ import type { TaxMaxiEffectClient } from "../client.ts"
 
 export type Source = SourceList["sources"][number]
 export type SourceCreateInput = SourceCreateRequest
-export type SourceCreate = Schema.Schema.Encoded<typeof SourceCreateResponse>
-export type SourceList = Schema.Schema.Encoded<typeof SourceListResponse>
-export type SourceSyncStart = Schema.Schema.Encoded<typeof SourceSyncStartResponse>
-export type SourceSyncJob = Schema.Schema.Encoded<typeof SourceSyncJobResponse>
-export type TaxCalculation = Schema.Schema.Encoded<typeof TaxCalculationResponse>
-export type SourceOverview = Schema.Schema.Encoded<typeof SourceOverviewResponse>
-export type SourceAssetPnl = Schema.Schema.Encoded<typeof SourceAssetPnlResponse>
-export type SourceTransactions = Schema.Schema.Encoded<typeof SourceTransactionsResponse>
-export type SourceTaxEvents = Schema.Schema.Encoded<typeof SourceTaxEventsResponse>
-export type SourceFifoLots = Schema.Schema.Encoded<typeof SourceFifoLotsResponse>
-export type SourceDisposalExplanation = Schema.Schema.Encoded<
+export type SourceCreate = Schema.Codec.Encoded<typeof SourceCreateResponse>
+export type SourceList = Schema.Codec.Encoded<typeof SourceListResponse>
+export type SourceSyncStart = Schema.Codec.Encoded<typeof SourceSyncStartResponse>
+export type SourceSyncJob = Schema.Codec.Encoded<typeof SourceSyncJobResponse>
+export type TaxCalculation = Schema.Codec.Encoded<typeof TaxCalculationResponse>
+export type SourceOverview = Schema.Codec.Encoded<typeof SourceOverviewResponse>
+export type SourceAssetPnl = Schema.Codec.Encoded<typeof SourceAssetPnlResponse>
+export type SourceTransactions = Schema.Codec.Encoded<typeof SourceTransactionsResponse>
+export type SourceTaxEvents = Schema.Codec.Encoded<typeof SourceTaxEventsResponse>
+export type SourceFifoLots = Schema.Codec.Encoded<typeof SourceFifoLotsResponse>
+export type SourceDisposalExplanation = Schema.Codec.Encoded<
   typeof SourceDisposalExplanationResponse
 >
 
@@ -125,7 +125,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.startSourceSyncJob({
-          path: {
+          params: {
             sourceId,
           },
         })
@@ -136,7 +136,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.replaySourceSyncJob({
-          path: {
+          params: {
             sourceId,
           },
         })
@@ -147,7 +147,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.getSourceSyncJobStatus({
-          path: {
+          params: {
             jobId,
             sourceId,
           },
@@ -159,7 +159,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.calculateTaxForSource({
-          path: {
+          params: {
             sourceId,
           },
           payload: {
@@ -174,7 +174,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.getSourceOverview({
-          path: {
+          params: {
             sourceId,
           },
         })
@@ -185,7 +185,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.listSourceAssetPnl({
-          path: {
+          params: {
             sourceId,
           },
         })
@@ -196,10 +196,10 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.listSourceTransactions({
-          path: {
+          params: {
             sourceId,
           },
-          urlParams: {
+          query: {
             cursor: cursor ?? undefined,
             limit,
           },
@@ -211,10 +211,10 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.listSourceTaxEvents({
-          path: {
+          params: {
             sourceId,
           },
-          urlParams: {
+          query: {
             cursor: cursor ?? undefined,
             limit,
           },
@@ -226,10 +226,10 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.listSourceFifoLots({
-          path: {
+          params: {
             sourceId,
           },
-          urlParams: {
+          query: {
             cursor: cursor ?? undefined,
             limit,
           },
@@ -241,7 +241,7 @@ export const makeSourcesEffectResource = (
     Effect.map(
       Effect.flatMap(client, (resolved) =>
         resolved.sources.explainSourceDisposal({
-          path: {
+          params: {
             legId,
             sourceId,
           },

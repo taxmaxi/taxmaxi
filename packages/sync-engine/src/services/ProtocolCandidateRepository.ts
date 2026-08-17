@@ -180,7 +180,7 @@ export interface ProtocolCandidateRepositoryShape {
 /**
  * ProtocolCandidateRepository - Context tag for protocol candidate persistence.
  */
-export class ProtocolCandidateRepository extends Context.Tag("ProtocolCandidateRepository")<
+export class ProtocolCandidateRepository extends Context.Service<
   ProtocolCandidateRepository,
   ProtocolCandidateRepositoryShape
->() {}
+>()("ProtocolCandidateRepository") {}

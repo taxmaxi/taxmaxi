@@ -237,12 +237,12 @@ const parseCursor = (cursor: string | null) =>
     const timestampPart = parts[0]
     const idPart = parts[1]
     if (parts.length !== 2 || timestampPart === undefined || idPart === undefined) {
-      return yield* Effect.fail(new SourceReportInvalidCursorError({ cursor }))
+      return yield* new SourceReportInvalidCursorError({ cursor })
     }
 
     const timestamp = new Date(timestampPart)
     if (Number.isNaN(timestamp.getTime()) || !isUuid(idPart)) {
-      return yield* Effect.fail(new SourceReportInvalidCursorError({ cursor }))
+      return yield* new SourceReportInvalidCursorError({ cursor })
     }
 
     return Option.some({ timestamp, id: idPart })
@@ -255,7 +255,7 @@ const decodeDecimal = ({
   readonly operation: string
   readonly value: unknown
 }) =>
-  Schema.decodeUnknown(Schema.BigDecimal)(value).pipe(
+  Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(value).pipe(
     Effect.mapError(
       () =>
         new PersistenceError({
@@ -313,17 +313,17 @@ const make = Effect.gen(function* () {
     switch (row.sourceableType) {
       case "onchain":
         if (row.addressId === null) {
-          return Effect.dieMessage(`Source ${row.id} is onchain but has no addressId`)
+          return Effect.die(`Source ${row.id} is onchain but has no addressId`)
         }
         return Effect.succeed(OnchainSourceRef.make({ addressId: row.addressId }))
       case "cex":
         if (row.cexAccountId === null) {
-          return Effect.dieMessage(`Source ${row.id} is cex but has no cexAccountId`)
+          return Effect.die(`Source ${row.id} is cex but has no cexAccountId`)
         }
         return Effect.succeed(CexSourceRef.make({ cexAccountId: row.cexAccountId }))
       case "dex":
         if (row.addressId === null) {
-          return Effect.dieMessage(`Source ${row.id} is dex but has no addressId`)
+          return Effect.die(`Source ${row.id} is dex but has no addressId`)
         }
         return Effect.succeed(DexSourceRef.make({ addressId: row.addressId }))
     }
@@ -352,7 +352,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceReportRepository.loadOwnedSource"))
 
       if (row === undefined) {
-        return yield* Effect.fail(new SourceReportSourceNotFoundError({ sourceId }))
+        return yield* new SourceReportSourceNotFoundError({ sourceId })
       }
 
       return yield* rowToSource(row)
@@ -666,7 +666,7 @@ const make = Effect.gen(function* () {
         })
         if (
           row.costBasisStatus === "pending_review" &&
-          BigDecimal.greaterThan(remainingAmount, zeroDecimal())
+          BigDecimal.isGreaterThan(remainingAmount, zeroDecimal())
         ) {
           accumulator.hasPendingCostBasis = true
         }
@@ -1107,7 +1107,7 @@ const make = Effect.gen(function* () {
   const explainDisposal: SourceReportRepositoryService["explainDisposal"] = (params) =>
     Effect.gen(function* () {
       if (!isUuid(params.legId)) {
-        return yield* Effect.fail(new SourceReportInvalidCursorError({ cursor: params.legId }))
+        return yield* new SourceReportInvalidCursorError({ cursor: params.legId })
       }
 
       yield* loadOwnedSource(params)
@@ -1138,9 +1138,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("sourceReportRepository.explainDisposal.leg"))
 
       if (leg === undefined) {
-        return yield* Effect.fail(
-          new SourceReportSourceNotFoundError({ sourceId: params.sourceId })
-        )
+        return yield* new SourceReportSourceNotFoundError({ sourceId: params.sourceId })
       }
 
       const matches = yield* db

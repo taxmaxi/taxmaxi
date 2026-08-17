@@ -193,7 +193,7 @@ const make = Effect.gen(function* () {
     readonly value: unknown
     readonly operation: string
   }) =>
-    Schema.decodeUnknown(Schema.Union(Schema.String, Schema.Number))(value).pipe(
+    Schema.decodeUnknownEffect(Schema.Union([Schema.String, Schema.Number]))(value).pipe(
       Effect.map(String),
       Effect.mapError(
         () =>
@@ -297,13 +297,11 @@ const make = Effect.gen(function* () {
 
             if (leg?.dispositionSource === "custody_allocations") {
               if (custodyMovement === undefined) {
-                return yield* Effect.fail(
-                  new SyncEngineStorageError({
-                    operation:
-                      "transferReconciliationRepository.reconciliationEffectMutations.clearLegs.restoreCustodyAllocation",
-                    cause: "Converted custody allocation is missing its inventory movement.",
-                  })
-                )
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "transferReconciliationRepository.reconciliationEffectMutations.clearLegs.restoreCustodyAllocation",
+                  cause: "Converted custody allocation is missing its inventory movement.",
+                })
               }
               yield* tx
                 .insert(schema.inventoryMovementAllocations)
@@ -552,19 +550,19 @@ const make = Effect.gen(function* () {
               continue
             }
             const lotRemaining = virtualRemainingByLotId.get(lot.id) ?? BigDecimal.fromBigInt(0n)
-            if (!BigDecimal.greaterThan(lotRemaining, BigDecimal.fromBigInt(0n))) {
+            if (!BigDecimal.isGreaterThan(lotRemaining, BigDecimal.fromBigInt(0n))) {
               continue
             }
-            const matchedAmount = BigDecimal.lessThanOrEqualTo(remainingAmount, lotRemaining)
+            const matchedAmount = BigDecimal.isLessThanOrEqualTo(remainingAmount, lotRemaining)
               ? remainingAmount
               : lotRemaining
             virtualRemainingByLotId.set(lot.id, BigDecimal.subtract(lotRemaining, matchedAmount))
             remainingAmount = BigDecimal.subtract(remainingAmount, matchedAmount)
-            if (!BigDecimal.greaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
+            if (!BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
               break
             }
           }
-          if (BigDecimal.greaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
+          if (BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
             blockedInventoryKeys.add(inventoryKey)
             blockedEffectIds.add(effect.id)
           }
@@ -679,7 +677,7 @@ const make = Effect.gen(function* () {
           let remainingAmount = effectAmount
           const nextAllocations = []
           for (const lot of availableLots) {
-            if (!BigDecimal.greaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
+            if (!BigDecimal.isGreaterThan(remainingAmount, BigDecimal.fromBigInt(0n))) {
               break
             }
             const lotRemaining = yield* decodeBigDecimal({
@@ -691,7 +689,7 @@ const make = Effect.gen(function* () {
               operation:
                 "transferReconciliationRepository.reconciliationEffectMutations.rebuildFifoEffects.lotRemaining",
             })
-            const matchedAmount = BigDecimal.lessThanOrEqualTo(remainingAmount, lotRemaining)
+            const matchedAmount = BigDecimal.isLessThanOrEqualTo(remainingAmount, lotRemaining)
               ? remainingAmount
               : lotRemaining
             nextAllocations.push({
@@ -1301,7 +1299,7 @@ const make = Effect.gen(function* () {
               ({ sourceId }) => sourceId !== null && !lockedSourceIds.has(sourceId)
             )
           ) {
-            return yield* Effect.fail(new ReconciliationSourceSetChanged())
+            return yield* new ReconciliationSourceSetChanged()
           }
 
           if (candidateSnapshot !== undefined) {
@@ -1325,8 +1323,8 @@ const make = Effect.gen(function* () {
               )
 
             if (candidateSnapshotChanged) {
-              const metadata = yield* Schema.decodeUnknown(
-                Schema.Record({ key: Schema.String, value: Schema.Unknown })
+              const metadata = yield* Schema.decodeUnknownEffect(
+                Schema.Record(Schema.String, Schema.Unknown)
               )(reviewMetadata).pipe(Effect.orElseSucceed(() => ({ evidence: reviewMetadata })))
               persistedCanonicalTransferId = null
               persistedCanonicalTransactionId = null
@@ -1400,8 +1398,8 @@ const make = Effect.gen(function* () {
                     )
                   )
               }
-              const metadata = yield* Schema.decodeUnknown(
-                Schema.Record({ key: Schema.String, value: Schema.Unknown })
+              const metadata = yield* Schema.decodeUnknownEffect(
+                Schema.Record(Schema.String, Schema.Unknown)
               )(persistedReviewMetadata).pipe(
                 Effect.orElseSucceed(() => ({ evidence: persistedReviewMetadata }))
               )
@@ -1454,7 +1452,7 @@ const make = Effect.gen(function* () {
 
           const blockedRollback =
             existing?.status === "needs_review"
-              ? yield* Schema.decodeUnknown(
+              ? yield* Schema.decodeUnknownEffect(
                   Schema.Struct({
                     rollback: Schema.Struct({
                       status: Schema.Literal("blocked"),
@@ -2123,7 +2121,7 @@ const make = Effect.gen(function* () {
             )
 
         const loadAffectedSourceIds = (
-          reconciliations: Effect.Effect.Success<ReturnType<typeof loadAffectedReconciliations>>
+          reconciliations: Effect.Success<ReturnType<typeof loadAffectedReconciliations>>
         ) =>
           Effect.gen(function* () {
             if (reconciliations.length === 0) {
@@ -2340,15 +2338,17 @@ const make = Effect.gen(function* () {
                   )
                 )
 
-            type EligibleReconciliationRow = Effect.Effect.Success<
+            type EligibleReconciliationRow = Effect.Success<
               ReturnType<typeof loadEligibleReconciliations>
             >[number]
 
             const stillHasOneExactMovementCandidate = (row: EligibleReconciliationRow) =>
               Effect.gen(function* () {
-                const metadata = yield* Schema.decodeUnknown(AutomaticRevalidationMetadataSchema)(
-                  row.reviewMetadata
-                ).pipe(Effect.orElseSucceed(() => ({ revalidateMovementFacts: undefined })))
+                const metadata = yield* Schema.decodeUnknownEffect(
+                  AutomaticRevalidationMetadataSchema
+                )(row.reviewMetadata).pipe(
+                  Effect.orElseSucceed(() => ({ revalidateMovementFacts: undefined }))
+                )
                 if (
                   row.reconciliationStatus === "approved" ||
                   metadata.revalidateMovementFacts !== true
@@ -2549,13 +2549,11 @@ const make = Effect.gen(function* () {
               )
 
             if (lockedSources.length !== inventorySourceIds.length) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
-                  cause: "Internal transfer sources are not owned by the reconciliation principal",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
+                cause: "Internal transfer sources are not owned by the reconciliation principal",
+              })
             }
 
             // The initial read only discovers which source rows must be locked. Replay or
@@ -2578,14 +2576,12 @@ const make = Effect.gen(function* () {
             )
 
             if (hasUnlockedReconciliationSource) {
-              return yield* Effect.fail(
-                new SyncEngineStorageError({
-                  operation:
-                    "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
-                  cause:
-                    "Internal transfer reconciliation state changed while source locks were acquired",
-                })
-              )
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.lockSourceInventory",
+                cause:
+                  "Internal transfer reconciliation state changed while source locks were acquired",
+              })
             }
 
             const loadDependentUsageCount = (legId: string) =>
@@ -2659,13 +2655,11 @@ const make = Effect.gen(function* () {
                   )
 
                 if (deletedLot === undefined) {
-                  return yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.removeUnusedInboundProviderLot.dependentUsage",
-                      cause: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
-                    })
-                  )
+                  return yield* new SyncEngineStorageError({
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.removeUnusedInboundProviderLot.dependentUsage",
+                    cause: `Cannot remove inbound provider lot ${existingLot.id} because later inventory usage depends on it`,
+                  })
                 }
               })
 
@@ -2994,14 +2988,12 @@ const make = Effect.gen(function* () {
                     if (fiatCurrency === null) {
                       fiatCurrency = match.costBasisCurrency
                     } else if (fiatCurrency !== match.costBasisCurrency) {
-                      return yield* Effect.fail(
-                        new SyncEngineStorageError({
-                          operation:
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCurrency",
-                          cause:
-                            "Internal transfer disposal matches use multiple cost basis currencies",
-                        })
-                      )
+                      return yield* new SyncEngineStorageError({
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.existingCurrency",
+                        cause:
+                          "Internal transfer disposal matches use multiple cost basis currencies",
+                      })
                     }
                   }
 
@@ -3016,13 +3008,11 @@ const make = Effect.gen(function* () {
                 if (custodyAllocations.length > 0) {
                   const custodyMovementId = custodyAllocations[0]?.movementId
                   if (custodyMovementId === undefined) {
-                    return yield* Effect.fail(
-                      new SyncEngineStorageError({
-                        operation:
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyMovementId",
-                        cause: "Custody allocation is missing its movement",
-                      })
-                    )
+                    return yield* new SyncEngineStorageError({
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyMovementId",
+                      cause: "Custody allocation is missing its movement",
+                    })
                   }
 
                   let remainingToMove = yield* decodeBigDecimal({
@@ -3061,13 +3051,11 @@ const make = Effect.gen(function* () {
                     if (fiatCurrency === null) {
                       fiatCurrency = allocation.costBasisCurrency
                     } else if (fiatCurrency !== allocation.costBasisCurrency) {
-                      return yield* Effect.fail(
-                        new SyncEngineStorageError({
-                          operation:
-                            "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyCurrency",
-                          cause: "Custody movement allocations use multiple cost basis currencies",
-                        })
-                      )
+                      return yield* new SyncEngineStorageError({
+                        operation:
+                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyCurrency",
+                        cause: "Custody movement allocations use multiple cost basis currencies",
+                      })
                     }
 
                     allocations.push({
@@ -3084,13 +3072,11 @@ const make = Effect.gen(function* () {
                   }
 
                   if (!BigDecimal.isZero(remainingToMove)) {
-                    return yield* Effect.fail(
-                      new SyncEngineStorageError({
-                        operation:
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyAmountMismatch",
-                        cause: `Custody allocations differ from internal transfer amount by ${BigDecimal.format(remainingToMove)}`,
-                      })
-                    )
+                    return yield* new SyncEngineStorageError({
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.custodyAmountMismatch",
+                      cause: `Custody allocations differ from internal transfer amount by ${BigDecimal.format(remainingToMove)}`,
+                    })
                   }
 
                   yield* Effect.forEach(allocations, (allocation) =>
@@ -3155,7 +3141,7 @@ const make = Effect.gen(function* () {
                 > = []
 
                 for (const lot of availableLots) {
-                  if (!BigDecimal.greaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
+                  if (!BigDecimal.isGreaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
                     break
                   }
 
@@ -3177,7 +3163,7 @@ const make = Effect.gen(function* () {
                     operation:
                       "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.lotCostBasisPerToken",
                   })
-                  const amountToMove = BigDecimal.lessThanOrEqualTo(remainingToMove, lotRemaining)
+                  const amountToMove = BigDecimal.isLessThanOrEqualTo(remainingToMove, lotRemaining)
                     ? remainingToMove
                     : lotRemaining
                   const updatedRemainingAmount = BigDecimal.subtract(lotRemaining, amountToMove)
@@ -3189,13 +3175,11 @@ const make = Effect.gen(function* () {
                   if (fiatCurrency === null) {
                     fiatCurrency = lot.costBasisCurrency
                   } else if (fiatCurrency !== lot.costBasisCurrency) {
-                    return yield* Effect.fail(
-                      new SyncEngineStorageError({
-                        operation:
-                          "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.newCurrency",
-                        cause: "Internal transfer source lots use multiple cost basis currencies",
-                      })
-                    )
+                    return yield* new SyncEngineStorageError({
+                      operation:
+                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.newCurrency",
+                      cause: "Internal transfer source lots use multiple cost basis currencies",
+                    })
                   }
 
                   allocations.push({
@@ -3212,14 +3196,12 @@ const make = Effect.gen(function* () {
                   remainingToMove = BigDecimal.subtract(remainingToMove, amountToMove)
                 }
 
-                if (BigDecimal.greaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
-                  return yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.remainingAmount",
-                      cause: `Insufficient FIFO inventory for internal transfer amount ${BigDecimal.format(remainingToMove)}`,
-                    })
-                  )
+                if (BigDecimal.isGreaterThan(remainingToMove, BigDecimal.fromBigInt(0n))) {
+                  return yield* new SyncEngineStorageError({
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.ensureInternalTransferDisposition.remainingAmount",
+                    cause: `Insufficient FIFO inventory for internal transfer amount ${BigDecimal.format(remainingToMove)}`,
+                  })
                 }
 
                 yield* Effect.forEach(allocations, (allocation) =>
@@ -4091,13 +4073,11 @@ const make = Effect.gen(function* () {
                 type InvalidationPlan = {
                   readonly custodyProviderTransferId: string | null
                   readonly depth: number
-                  readonly destinationLegs: Effect.Effect.Success<
-                    ReturnType<typeof loadPrincipalLegs>
-                  >
+                  readonly destinationLegs: Effect.Success<ReturnType<typeof loadPrincipalLegs>>
                   readonly destinationSourceId: string
                   readonly destinationTimestamp: Date
                   readonly inventoryKey: string
-                  readonly originLegs: Effect.Effect.Success<ReturnType<typeof loadPrincipalLegs>>
+                  readonly originLegs: Effect.Success<ReturnType<typeof loadPrincipalLegs>>
                   readonly originTimestamp: Date
                   readonly originTransactionId: string
                   readonly row: ReconciliationRow
@@ -4325,15 +4305,13 @@ const make = Effect.gen(function* () {
                 }
 
                 if (unrebuildableInventoryKeys.size > 0) {
-                  return yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildDestinationFifoEffects.unrebuildableDownstreamUsage",
-                      cause: {
-                        inventoryKeys: [...unrebuildableInventoryKeys].sort(),
-                      },
-                    })
-                  )
+                  return yield* new SyncEngineStorageError({
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildDestinationFifoEffects.unrebuildableDownstreamUsage",
+                    cause: {
+                      inventoryKeys: [...unrebuildableInventoryKeys].sort(),
+                    },
+                  })
                 }
 
                 const invalidationsInReverseDependencyOrder = [...rebuildableReconciliations].sort(
@@ -4532,19 +4510,17 @@ const make = Effect.gen(function* () {
                   )
 
                 if (manuallyReviewedTransactions.length > 0) {
-                  return yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.applyPair.manualTransactionReview",
-                      cause: {
-                        providerTransferId: row.providerTransferId,
-                        canonicalTransferId,
-                        reviewedTransactions: manuallyReviewedTransactions,
-                        message:
-                          "Automatic canonicalization cannot replace manually reviewed accounting.",
-                      },
-                    })
-                  )
+                  return yield* new SyncEngineStorageError({
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.applyPair.manualTransactionReview",
+                    cause: {
+                      providerTransferId: row.providerTransferId,
+                      canonicalTransferId,
+                      reviewedTransactions: manuallyReviewedTransactions,
+                      message:
+                        "Automatic canonicalization cannot replace manually reviewed accounting.",
+                    },
+                  })
                 }
 
                 const originExternalId = `${originTransaction.externalId ?? originTransaction.id}:internal_transfer_out`
@@ -4618,21 +4594,19 @@ const make = Effect.gen(function* () {
                     })
 
                 if (!originCanBeCleared || !destinationCanBeCleared) {
-                  return yield* Effect.fail(
-                    new SyncEngineStorageError({
-                      operation:
-                        "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildDestinationFifoEffects.unrebuildableDownstreamUsage",
-                      cause: {
-                        providerTransferId: row.providerTransferId,
-                        canonicalTransferId,
-                        canonicalTransactionId,
-                        originAlreadyCanonical,
-                        destinationAlreadyCanonical,
-                        message:
-                          "Dependent downstream usage prevents replacing the existing principal legs.",
-                      },
-                    })
-                  )
+                  return yield* new SyncEngineStorageError({
+                    operation:
+                      "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rebuildDestinationFifoEffects.unrebuildableDownstreamUsage",
+                    cause: {
+                      providerTransferId: row.providerTransferId,
+                      canonicalTransferId,
+                      canonicalTransactionId,
+                      originAlreadyCanonical,
+                      destinationAlreadyCanonical,
+                      message:
+                        "Dependent downstream usage prevents replacing the existing principal legs.",
+                    },
+                  })
                 }
 
                 if (!originAlreadyCanonical) {
@@ -4864,8 +4838,8 @@ const make = Effect.gen(function* () {
               }
 
               if (!(yield* stillHasOneExactMovementCandidate(queued.row))) {
-                const metadata = yield* Schema.decodeUnknown(
-                  Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                const metadata = yield* Schema.decodeUnknownEffect(
+                  Schema.Record(Schema.String, Schema.Unknown)
                 )(queued.row.reviewMetadata).pipe(
                   Effect.orElseSucceed(() => ({ evidence: queued.row.reviewMetadata }))
                 )
@@ -4932,8 +4906,8 @@ const make = Effect.gen(function* () {
                               "transferReconciliationRepository.applyDeterministicInternalTransferCanonicalization.rollbackPairSavepoint"
                             )
                           )
-                        const metadata = yield* Schema.decodeUnknown(
-                          Schema.Record({ key: Schema.String, value: Schema.Unknown })
+                        const metadata = yield* Schema.decodeUnknownEffect(
+                          Schema.Record(Schema.String, Schema.Unknown)
                         )(queued.row.reviewMetadata).pipe(
                           Effect.orElseSucceed(() => ({ evidence: queued.row.reviewMetadata }))
                         )

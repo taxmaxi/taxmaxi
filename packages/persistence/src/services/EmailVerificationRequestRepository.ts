@@ -75,6 +75,7 @@ export interface EmailVerificationRequestRepositoryService {
 /**
  * EmailVerificationRequestRepository - Context.Tag for dependency injection.
  */
-export class EmailVerificationRequestRepository extends Context.Tag(
-  "EmailVerificationRequestRepository"
-)<EmailVerificationRequestRepository, EmailVerificationRequestRepositoryService>() {}
+export class EmailVerificationRequestRepository extends Context.Service<
+  EmailVerificationRequestRepository,
+  EmailVerificationRequestRepositoryService
+>()("EmailVerificationRequestRepository") {}

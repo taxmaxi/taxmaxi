@@ -118,7 +118,7 @@ export interface SessionRepositoryService {
  * })
  * ```
  */
-export class SessionRepository extends Context.Tag("SessionRepository")<
+export class SessionRepository extends Context.Service<
   SessionRepository,
   SessionRepositoryService
->() {}
+>()("SessionRepository") {}

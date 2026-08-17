@@ -106,7 +106,6 @@ export interface SourceSyncServiceShape {
 /**
  * SourceSyncService - Context tag for sync engine orchestration.
  */
-export class SourceSyncService extends Context.Tag("SourceSyncService")<
-  SourceSyncService,
-  SourceSyncServiceShape
->() {}
+export class SourceSyncService extends Context.Service<SourceSyncService, SourceSyncServiceShape>()(
+  "SourceSyncService"
+) {}

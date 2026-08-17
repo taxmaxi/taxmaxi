@@ -131,7 +131,6 @@ export interface SourceRepositoryService {
  * })
  * ```
  */
-export class SourceRepository extends Context.Tag("@my/persistence/SourceRepository")<
-  SourceRepository,
-  SourceRepositoryService
->() {}
+export class SourceRepository extends Context.Service<SourceRepository, SourceRepositoryService>()(
+  "@my/persistence/SourceRepository"
+) {}

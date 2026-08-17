@@ -19,8 +19,8 @@ import { Email } from "./Email.ts"
  * accidental exposure in logs, console output, or error messages.
  */
 export const Password = Schema.String.pipe(
-  Schema.minLength(8),
-  Schema.annotations({
+  Schema.check(Schema.isMinLength(8)),
+  Schema.annotate({
     identifier: "Password",
     title: "Password",
     description: "A password with minimum 8 characters",
@@ -38,7 +38,7 @@ export type Password = typeof Password.Type
  * Use Schema.Redacted to wrap the password, preventing it from being
  * accidentally logged or serialized.
  */
-export const RedactedPassword = Schema.Redacted(Password).annotations({
+export const RedactedPassword = Schema.RedactedFromValue(Password).annotate({
   identifier: "RedactedPassword",
   title: "Redacted Password",
   description: "A password wrapped in Redacted for secure handling",

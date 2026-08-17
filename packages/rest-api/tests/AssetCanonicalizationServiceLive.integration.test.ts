@@ -101,7 +101,7 @@ const seedChainlessPendingProviderAsset = ({
         })
         .returning({ id: schema.providerAssets.id })
       if (providerAsset === undefined) {
-        return yield* Effect.dieMessage("Failed to seed chainless provider asset")
+        return yield* Effect.die("Failed to seed chainless provider asset")
       }
 
       yield* db.insert(schema.providerAssetMappings).values({
@@ -156,7 +156,7 @@ const seedObservedPendingProviderAsset = ({
         providerAsset === undefined ||
         transaction === undefined
       ) {
-        return yield* Effect.dieMessage("Failed to seed observed provider asset")
+        return yield* Effect.die("Failed to seed observed provider asset")
       }
 
       yield* db.insert(schema.providerAssetMappings).values({
@@ -195,8 +195,7 @@ const makeTrackedServiceLayer = ({
   const transactionLayer = Layer.succeed(
     SyncEngineTransaction,
     SyncEngineTransaction.of({
-      run: (effect) =>
-        Deferred.succeed(transactionEntered, undefined).pipe(Effect.zipRight(effect)),
+      run: (effect) => Deferred.succeed(transactionEntered, undefined).pipe(Effect.andThen(effect)),
     })
   )
   const repositoryLayer = Layer.mergeAll(
@@ -270,7 +269,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           .values({ name: "Artwork", symbol: "ART", type: "nft" })
           .returning({ id: schema.assets.id })
         if (asset === undefined) {
-          return yield* Effect.dieMessage("Failed to seed NFT target")
+          return yield* Effect.die("Failed to seed NFT target")
         }
         return asset.id
       })
@@ -343,7 +342,7 @@ describe("AssetCanonicalizationServiceLive", () => {
                   .values({ name: "Artwork", symbol: "ART", type: "nft" })
                   .returning({ id: schema.assets.id })
                 if (asset === undefined) {
-                  return yield* Effect.dieMessage("Failed to seed NFT target")
+                  return yield* Effect.die("Failed to seed NFT target")
                 }
                 return asset.id
               })
@@ -357,7 +356,7 @@ describe("AssetCanonicalizationServiceLive", () => {
             assetRepresentationId: null,
             reviewerNotes: "Mismatched chainless type.",
           })
-        ).pipe(Effect.either)
+        ).pipe(Effect.result)
       )
       const state = await context.runPg(
         Effect.gen(function* () {
@@ -373,9 +372,9 @@ describe("AssetCanonicalizationServiceLive", () => {
         })
       )
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
           _tag: "AssetCanonicalizationBadRequestError",
           message: expectedMessage,
         })
@@ -395,7 +394,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     const coinGeckoClient = CoinGeckoClient.of({
       searchCoins: () =>
         Deferred.succeed(searchStarted, undefined).pipe(
-          Effect.zipRight(Deferred.await(releaseSearch)),
+          Effect.andThen(Deferred.await(releaseSearch)),
           Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
         ),
       getCoin: () =>
@@ -440,7 +439,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     const coinGeckoClient = CoinGeckoClient.of({
       searchCoins: () =>
         Effect.fail(new CoinGeckoClientError({ message: "CoinGecko unavailable" })),
-      getCoin: () => Effect.dieMessage("getCoin should not be called"),
+      getCoin: () => Effect.die("getCoin should not be called"),
       listMarkets: () => Effect.succeed([]),
     })
     const layer = makeTrackedServiceLayer({ coinGeckoClient, transactionEntered })
@@ -452,15 +451,15 @@ describe("AssetCanonicalizationServiceLive", () => {
             providerAssetRowId,
             reviewerNotes: "Provider failure before transaction.",
           })
-        ).pipe(Effect.either),
+        ).pipe(Effect.result),
         layer,
       })
     )
     const after = await countCanonicalRows()
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "AssetCanonicalizationProviderError",
         message: "CoinGecko unavailable",
       })
@@ -480,7 +479,7 @@ describe("AssetCanonicalizationServiceLive", () => {
       const coinGeckoClient = CoinGeckoClient.of({
         searchCoins: () =>
           Deferred.succeed(searchStarted, undefined).pipe(
-            Effect.zipRight(Deferred.await(releaseSearch)),
+            Effect.andThen(Deferred.await(releaseSearch)),
             Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
           ),
         getCoin: () =>
@@ -506,7 +505,7 @@ describe("AssetCanonicalizationServiceLive", () => {
               providerAssetRowId,
               reviewerNotes: "Reject stale provider evidence.",
             })
-          ).pipe(Effect.either),
+          ).pipe(Effect.result),
           layer,
         })
       )
@@ -545,9 +544,9 @@ describe("AssetCanonicalizationServiceLive", () => {
         })
       )
 
-      expect(result._tag).toBe("Left")
-      if (result._tag === "Left") {
-        expect(result.left).toMatchObject({
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toMatchObject({
           _tag: "AssetCanonicalizationInternalError",
           message: "Provider asset evidence changed before canonical approval.",
         })
@@ -575,7 +574,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           })
           .returning({ id: schema.providerAssets.id })
         if (providerAsset === undefined) {
-          return yield* Effect.dieMessage("Failed to seed chainless provider asset")
+          return yield* Effect.die("Failed to seed chainless provider asset")
         }
         yield* db.insert(schema.providerAssetMappings).values({
           providerAssetRowId: providerAsset.id,
@@ -592,13 +591,13 @@ describe("AssetCanonicalizationServiceLive", () => {
           providerAssetRowId,
           reviewerNotes: "Symbol and name only.",
         })
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
     )
     const after = await countCanonicalRows()
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "AssetCanonicalizationBadRequestError",
         message:
           "Provider assets without exact on-chain identity require a reviewed canonical target.",
@@ -649,7 +648,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           providerAsset === undefined ||
           transaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed concurrent rejection fixture")
+          return yield* Effect.die("Failed to seed concurrent rejection fixture")
         }
         yield* db.insert(schema.providerAssetMappings).values({
           providerAssetRowId: providerAsset.id,
@@ -706,7 +705,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           assetRepresentationId: fixture.assetRepresentationId,
           reviewerNotes: "Concurrent rejection test.",
         })
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
     )
     const earlyOutcome = await Promise.race([
       approval.then(() => "completed" as const),
@@ -725,10 +724,10 @@ describe("AssetCanonicalizationServiceLive", () => {
     const [result] = await Promise.all([approval, lockProviderAsset])
 
     expect(earlyOutcome).toBe("blocked")
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("AssetCanonicalizationBadRequestError")
-      expect(result.left.message).toBe(
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("AssetCanonicalizationBadRequestError")
+      expect(result.failure.message).toBe(
         "Provider asset mapping cannot be approved from its current state."
       )
     }
@@ -771,7 +770,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           providerAsset === undefined ||
           transaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed concurrent target update fixture")
+          return yield* Effect.die("Failed to seed concurrent target update fixture")
         }
 
         yield* db.insert(schema.providerAssetMappings).values({
@@ -827,7 +826,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
           reviewerNotes: "Reject a stale canonical representation.",
         })
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
     )
     const earlyOutcome = await Promise.race([
       approval.then(() => "completed" as const),
@@ -848,9 +847,9 @@ describe("AssetCanonicalizationServiceLive", () => {
     )
 
     expect(earlyOutcome).toBe("blocked")
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "AssetCanonicalizationBadRequestError",
         message: "Selected representation does not match the observed on-chain identity.",
       })
@@ -896,7 +895,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           providerAsset === undefined ||
           transaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed approved conflict fixture")
+          return yield* Effect.die("Failed to seed approved conflict fixture")
         }
         yield* db.insert(schema.providerAssetMappings).values({
           providerAssetRowId: providerAsset.id,
@@ -931,7 +930,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           providerAssetRowId: fixture.providerAssetRowId,
           reviewerNotes: "Conflicting CoinGecko target.",
         })
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
     )
     const after = await countCanonicalRows()
     const mapping = await context.runPg(
@@ -945,9 +944,9 @@ describe("AssetCanonicalizationServiceLive", () => {
       })
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "AssetCanonicalizationBadRequestError",
         message: "Provider asset mapping is already approved for a different target.",
       })
@@ -993,7 +992,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           providerAsset === undefined ||
           transaction === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to seed concurrent conflict fixture")
+          return yield* Effect.die("Failed to seed concurrent conflict fixture")
         }
         yield* db.insert(schema.providerAssetMappings).values({
           providerAssetRowId: providerAsset.id,
@@ -1028,7 +1027,7 @@ describe("AssetCanonicalizationServiceLive", () => {
     const coinGeckoClient = CoinGeckoClient.of({
       searchCoins: () =>
         Deferred.succeed(searchStarted, undefined).pipe(
-          Effect.zipRight(Deferred.await(releaseSearch)),
+          Effect.andThen(Deferred.await(releaseSearch)),
           Effect.as([{ id: "ethereum", name: "Bitcoin", symbol: "btc" }])
         ),
       getCoin: () =>
@@ -1053,7 +1052,7 @@ describe("AssetCanonicalizationServiceLive", () => {
             providerAssetRowId: fixture.providerAssetRowId,
             reviewerNotes: "Losing concurrent target.",
           })
-        ).pipe(Effect.either),
+        ).pipe(Effect.result),
         layer,
       })
     )
@@ -1086,9 +1085,9 @@ describe("AssetCanonicalizationServiceLive", () => {
         return row
       })
     )
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "AssetCanonicalizationBadRequestError",
         message: "Provider asset mapping is already approved for a different target.",
       })

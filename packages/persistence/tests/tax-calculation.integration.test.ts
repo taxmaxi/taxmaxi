@@ -59,7 +59,7 @@ const seedTaxFixtures = () =>
       .limit(1)
 
     if (coinbaseCex === undefined) {
-      return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
+      return yield* Effect.die("Missing seeded coinbase CEX fixture")
     }
 
     const [createdAccount] = yield* db
@@ -77,7 +77,7 @@ const seedTaxFixtures = () =>
       .returning({ id: schema.cexAccount.id })
 
     if (createdAccount === undefined) {
-      return yield* Effect.dieMessage("Failed to create cex account fixture")
+      return yield* Effect.die("Failed to create cex account fixture")
     }
 
     const [baseBlockchain] = yield* db
@@ -87,7 +87,7 @@ const seedTaxFixtures = () =>
       .limit(1)
 
     if (baseBlockchain === undefined) {
-      return yield* Effect.dieMessage("Failed to load base blockchain fixture")
+      return yield* Effect.die("Failed to load base blockchain fixture")
     }
 
     const [btcAsset] = yield* db
@@ -100,7 +100,7 @@ const seedTaxFixtures = () =>
       .returning({ id: schema.assets.id })
 
     if (btcAsset === undefined) {
-      return yield* Effect.dieMessage("Failed to create BTC asset fixture")
+      return yield* Effect.die("Failed to create BTC asset fixture")
     }
 
     yield* db.insert(schema.assetRepresentations).values({
@@ -257,7 +257,7 @@ const insertIncompleteIncomeLeg = () =>
       .limit(1)
 
     if (asset === undefined) {
-      return yield* Effect.dieMessage("Failed to load BTC asset fixture")
+      return yield* Effect.die("Failed to load BTC asset fixture")
     }
 
     yield* db.insert(schema.transactionLegs).values({

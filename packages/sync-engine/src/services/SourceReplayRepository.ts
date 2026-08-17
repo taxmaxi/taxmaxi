@@ -41,7 +41,7 @@ export interface SourceReplayRepositoryShape {
 /**
  * SourceReplayRepository - Context tag for replay reset persistence.
  */
-export class SourceReplayRepository extends Context.Tag("SourceReplayRepository")<
+export class SourceReplayRepository extends Context.Service<
   SourceReplayRepository,
   SourceReplayRepositoryShape
->() {}
+>()("SourceReplayRepository") {}

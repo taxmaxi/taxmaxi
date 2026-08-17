@@ -10,7 +10,7 @@ import { schema } from "../src/schema/index.ts"
 import { BillingRepository } from "../src/services/BillingRepository.ts"
 import { makeIntegrationTestDatabaseContext } from "./support/integration-test-kit.ts"
 
-const TEST_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000191")
+const TEST_USER_ID = AuthUserId.make("00000000-4000-4000-8000-000000000191")
 const STRIPE_CUSTOMER_ID = "cus_billing_repository_test"
 const REVERSAL_EVENT_AT = new Date("2026-08-13T12:00:00.000Z")
 

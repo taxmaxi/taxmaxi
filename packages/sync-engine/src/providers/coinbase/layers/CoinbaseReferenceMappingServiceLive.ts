@@ -125,7 +125,7 @@ const make = Effect.gen(function* () {
           "Observed Coinbase transaction type without an approved TaxMaxi mapping. Review required.",
       })
       .pipe(
-        Effect.zipRight(
+        Effect.andThen(
           providerReferenceRepository
             .upsertTransactionTypeCatalog({
               providerKey: COINBASE_PROVIDER,

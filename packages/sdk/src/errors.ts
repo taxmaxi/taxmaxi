@@ -1,8 +1,9 @@
-import { HttpApiSchema, HttpClientError } from "@effect/platform"
 import { AuthValidationError } from "@my/rest-api/contracts"
 import * as Option from "effect/Option"
-import * as ParseResult from "effect/ParseResult"
+import * as Schema from "effect/Schema"
 import type * as SchemaAST from "effect/SchemaAST"
+import { resolveAt } from "effect/SchemaAST"
+import { HttpClientError } from "effect/unstable/http"
 
 export type TaxMaxiFieldError = {
   readonly field?: string
@@ -92,7 +93,7 @@ const getAnnotatedErrorStatus = (error: unknown): number | undefined => {
     return undefined
   }
 
-  return HttpApiSchema.getStatusErrorAST(error.constructor.ast)
+  return resolveAt<number>("httpApiStatus")(error.constructor.ast) ?? 500
 }
 
 const getErrorStatusFromCode = (code: string | undefined): number | undefined => {
@@ -133,8 +134,8 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
   }
 
   if (HttpClientError.isHttpClientError(error)) {
-    if (error instanceof HttpClientError.RequestError) {
-      const causeMessage = getCauseMessage(error.cause)
+    if (error.reason._tag === "TransportError") {
+      const causeMessage = getCauseMessage(error.reason.cause)
 
       return new TaxMaxiError({
         cause: error,
@@ -151,14 +152,14 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
       cause: error,
       code: getErrorCode(error),
       message:
-        error.reason === "StatusCode"
+        error.reason._tag === "StatusCodeError"
           ? "TaxMaxi API request failed."
           : "Received an unexpected response from the TaxMaxi API.",
-      status: error.response.status,
+      status: error.response?.status ?? 0,
     })
   }
 
-  if (ParseResult.isParseError(error)) {
+  if (Schema.isSchemaError(error)) {
     return new TaxMaxiError({
       cause: error,
       code: "ParseError",

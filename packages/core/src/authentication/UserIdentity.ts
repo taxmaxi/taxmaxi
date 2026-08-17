@@ -16,9 +16,9 @@ import { Timestamp } from "../shared/values/Timestamp.ts"
 /**
  * UserIdentityId - Branded UUID string for identity record identification
  */
-export const UserIdentityId = Schema.UUID.pipe(
+export const UserIdentityId = Schema.String.check(Schema.isUUID()).pipe(
   Schema.brand("UserIdentityId"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "UserIdentityId",
     title: "User Identity ID",
     description: "A unique identifier for a user identity record (UUID format)",
@@ -50,8 +50,8 @@ export const ProviderData = Schema.Struct({
   /**
    * Additional metadata as key-value pairs
    */
-  metadata: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
-}).annotations({
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+}).annotate({
   identifier: "ProviderData",
   title: "Provider Data",
   description: "Optional JSON data from the authentication provider",

@@ -4,31 +4,24 @@
  * @module
  */
 
-import { FileSystem } from "@effect/platform"
 import { NodeFileSystem } from "@effect/platform-node"
 import {
   Cause,
   Config,
-  Context,
   Effect,
   Array as EffectArray,
-  Either,
-  FiberRef,
-  FiberRefs,
-  flow,
-  HashMap,
-  HashSet,
-  Inspectable,
+  FileSystem,
+  Formatter,
   Layer,
   Logger,
   Option,
-  Struct,
+  References,
   Tracer,
 } from "effect"
 
 const LOG_DIR = ".logs"
 const LOG_FILE = `${LOG_DIR}/app.log`
-const MAX_FILE_SIZE = 10 * 1024 * 1024
+const MAX_FILE_SIZE = FileSystem.MiB(10)
 
 /**
  * Recursively convert BigInt values to strings so JSON log serialization is safe.
@@ -75,110 +68,103 @@ const convertBigIntToString = (value: unknown, seen?: WeakSet<object>): unknown 
 /**
  * Convert OpenTelemetry trace/span ids into Datadog decimal ids.
  */
-const withDatadogFormat = (span: Tracer.AnySpan): Tracer.AnySpan => {
+const toDatadogSpanIds = (
+  span: Tracer.AnySpan
+): { readonly spanId: string; readonly traceId: string } => {
   const { spanId, traceId } = span
   const traceIdEnd = traceId.slice(traceId.length / 2)
-  return Struct.evolve(span, {
-    traceId: () => BigInt(`0x${traceIdEnd}`).toString(),
-    spanId: () => BigInt(`0x${spanId}`).toString(),
-  })
+  return {
+    traceId: BigInt(`0x${traceIdEnd}`).toString(),
+    spanId: BigInt(`0x${spanId}`).toString(),
+  }
 }
 
 /**
  * Skip anonymous virtual spans added by Effect.fn.
  */
-const filterSpan = (span: Option.Option<Tracer.AnySpan>): Option.Option<Tracer.AnySpan> => {
-  if (span._tag === "Some") {
-    if (span.value._tag === "Span" && span.value.name === "<anonymous>") {
-      return filterSpan(span.value.parent)
-    }
-
-    return span
+const filterSpan = (span: Tracer.AnySpan | undefined): Tracer.AnySpan | undefined => {
+  if (span?._tag === "Span" && span.name === "<anonymous>") {
+    return filterSpan(Option.getOrUndefined(span.parent))
   }
 
-  return Option.none()
+  return span
 }
 
 /**
- * Add Datadog trace/span identifiers from the current Effect span to log annotations.
+ * Read Datadog trace/span identifiers from the current Effect span.
  */
-const withDatadogSpanAnnotations = <Message, Output>(
-  self: Logger.Logger<Message, Output>
-): Logger.Logger<Message, Output> =>
-  Logger.mapInputOptions(self, (options: Logger.Logger.Options<Message>) => {
-    const span = filterSpan(
-      Context.getOption(
-        FiberRefs.getOrDefault(options.context, FiberRef.currentContext),
-        Tracer.ParentSpan
-      )
-    )
+const getDatadogSpanAnnotations = (
+  span: Tracer.AnySpan | undefined
+): Readonly<Record<string, string>> => {
+  const currentSpan = filterSpan(span)
+  if (currentSpan === undefined) {
+    return {}
+  }
 
-    if (span._tag === "None") {
-      return options
-    }
-
-    const { spanId, traceId } = withDatadogFormat(span.value)
-
-    return Struct.evolve(options, {
-      annotations: flow(
-        HashMap.set("dd.trace_id", traceId as unknown),
-        HashMap.set("dd.span_id", spanId as unknown)
-      ),
-    })
-  })
+  const { spanId, traceId } = toDatadogSpanIds(currentSpan)
+  return {
+    "dd.trace_id": traceId,
+    "dd.span_id": spanId,
+  }
+}
 
 /**
  * Create a one-line JSON log entry compatible with Datadog ingestion.
  */
 const formatJsonLogEntry = ({
   logLevel,
-  annotations,
   cause,
   message,
   date,
-}: Logger.Logger.Options<unknown>): string => {
-  const [messages, attributes] = EffectArray.partitionMap(EffectArray.ensure(message), (entry) => {
+  fiber,
+}: Logger.Options<unknown>): string => {
+  const messages: Array<string> = []
+  const attributes: Array<object> = []
+
+  for (const entry of EffectArray.ensure(message)) {
     if (EffectArray.isArray(entry)) {
-      return Either.left(entry.join(" "))
+      messages.push(entry.join(" "))
+      continue
     }
 
     if (entry instanceof Error) {
-      return Either.left(entry.message)
+      messages.push(entry.message)
+      continue
     }
 
     if (typeof entry === "object" && entry !== null) {
-      return Either.right(entry)
+      attributes.push(entry)
+      continue
     }
 
-    return Either.left(`${entry}`)
-  })
+    messages.push(String(entry))
+  }
 
-  const annotationObject = Object.fromEntries(HashMap.entries(annotations))
+  const annotationObject = fiber.getRef(References.CurrentLogAnnotations)
+  const spanAnnotations = getDatadogSpanAnnotations(fiber.currentSpan)
   const attributeObject = Object.assign({}, ...attributes)
 
   const logObject = {
-    level: logLevel.label,
+    level: logLevel.toUpperCase(),
     timestamp: date.toISOString(),
     message: messages.join(" ").trim(),
-    cause: Cause.isEmpty(cause) ? undefined : Cause.pretty(cause, { renderErrorCause: true }),
+    cause: cause.reasons.length === 0 ? undefined : Cause.pretty(cause),
     ...annotationObject,
+    ...spanAnnotations,
     ...attributeObject,
   }
 
-  return Inspectable.stringifyCircular(convertBigIntToString(logObject))
+  return Formatter.formatJson(convertBigIntToString(logObject))
 }
 
-const DatadogJsonLogger = Logger.make(formatJsonLogEntry).pipe(
-  withDatadogSpanAnnotations,
-  Logger.withConsoleLog
-)
+const DatadogJsonLogger = Logger.make(formatJsonLogEntry).pipe(Logger.withConsoleLog)
 
-const FileJsonLogger = Logger.make(formatJsonLogEntry).pipe(withDatadogSpanAnnotations)
+const FileJsonLogger = Logger.make(formatJsonLogEntry)
 
-const PrettyDevLogger = Logger.prettyLogger({
+const PrettyDevLogger = Logger.consolePretty({
   colors: "auto",
   mode: "auto",
-}).pipe(withDatadogSpanAnnotations)
+})
 
 const makeConsoleLogger = Effect.gen(function* () {
   const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
@@ -202,24 +188,34 @@ const makeFileLogger = Effect.gen(function* () {
     }
   }
 
-  return yield* Logger.batched(FileJsonLogger, "500 millis", (messages) =>
-    fs.writeFileString(LOG_FILE, `${messages.join("\n")}\n`, { flag: "a" }).pipe(Effect.orDie)
-  )
+  return yield* Logger.batched(FileJsonLogger, {
+    window: "500 millis",
+    flush: (messages) =>
+      fs.writeFileString(LOG_FILE, `${messages.join("\n")}\n`, { flag: "a" }).pipe(Effect.orDie),
+  })
 })
+
+const combineLoggers = (
+  first: Logger.Logger<unknown, void>,
+  second: Logger.Logger<unknown, void>
+): Logger.Logger<unknown, void> =>
+  Logger.make((options) => {
+    first.log(options)
+    second.log(options)
+  })
 
 /**
  * LoggerLive installs pretty console plus file JSON logging in development, and
  * Datadog-compatible one-line JSON logging in non-development environments.
  */
-export const LoggerLive = Layer.scopedDiscard(
+export const LoggerLive = Logger.layer([
   Effect.gen(function* () {
     const environment = yield* Config.string("ENVIRONMENT").pipe(Config.withDefault("development"))
     const consoleLogger = yield* makeConsoleLogger
-    const combinedLogger =
-      environment === "development"
-        ? Logger.zip(consoleLogger, yield* makeFileLogger)
-        : consoleLogger
+    if (environment !== "development") {
+      return consoleLogger
+    }
 
-    yield* Effect.locallyScoped(FiberRef.currentLoggers, HashSet.make(combinedLogger))
-  })
-).pipe(Layer.provide(NodeFileSystem.layer))
+    return combineLoggers(consoleLogger, yield* makeFileLogger)
+  }),
+]).pipe(Layer.provide(NodeFileSystem.layer))

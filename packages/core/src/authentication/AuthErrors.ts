@@ -13,7 +13,6 @@
  * @module AuthErrors
  */
 
-import { HttpApiSchema } from "@effect/platform"
 import { Chunk } from "effect"
 import * as Schema from "effect/Schema"
 import { AuthProviderType } from "./AuthProviderType.ts"
@@ -39,11 +38,11 @@ import { EmailVerificationRequestId } from "./EmailVerificationRequest.ts"
 export class InvalidCredentialsError extends Schema.TaggedError<InvalidCredentialsError>()(
   "InvalidCredentialsError",
   {
-    email: Email.annotations({
+    email: Email.annotate({
       description: "The email address that was used for authentication",
     }),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {
   override get message(): string {
     return "Invalid email or password"
@@ -65,11 +64,11 @@ export const isInvalidCredentialsError = Schema.is(InvalidCredentialsError)
 export class SessionExpiredError extends Schema.TaggedError<SessionExpiredError>()(
   "SessionExpiredError",
   {
-    sessionId: SessionId.annotations({
+    sessionId: SessionId.annotate({
       description: "The expired session token",
     }),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {
   override get message(): string {
     return "Session has expired"
@@ -91,11 +90,11 @@ export const isSessionExpiredError = Schema.is(SessionExpiredError)
 export class SessionNotFoundError extends Schema.TaggedError<SessionNotFoundError>()(
   "SessionNotFoundError",
   {
-    sessionId: SessionId.annotations({
+    sessionId: SessionId.annotate({
       description: "The invalid session token",
     }),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {
   override get message(): string {
     return "Session not found"
@@ -117,14 +116,14 @@ export const isSessionNotFoundError = Schema.is(SessionNotFoundError)
 export class ProviderAuthFailedError extends Schema.TaggedError<ProviderAuthFailedError>()(
   "ProviderAuthFailedError",
   {
-    provider: AuthProviderType.annotations({
+    provider: AuthProviderType.annotate({
       description: "The authentication provider that failed",
     }),
-    reason: Schema.String.annotations({
+    reason: Schema.String.annotate({
       description: "A description of why the authentication failed",
     }),
   },
-  HttpApiSchema.annotations({ status: 401 })
+  { httpApiStatus: 401 }
 ) {
   override get message(): string {
     return `Authentication with ${this.provider} failed: ${this.reason}`
@@ -151,11 +150,11 @@ export const isProviderAuthFailedError = Schema.is(ProviderAuthFailedError)
 export class UnverifiedEmailError extends Schema.TaggedError<UnverifiedEmailError>()(
   "UnverifiedEmailError",
   {
-    email: Email.annotations({
+    email: Email.annotate({
       description: "The email address that still requires verification",
     }),
   },
-  HttpApiSchema.annotations({ status: 403 })
+  { httpApiStatus: 403 }
 ) {
   override get message(): string {
     return `Email verification is required for ${this.email}`
@@ -181,11 +180,11 @@ export const isUnverifiedEmailError = Schema.is(UnverifiedEmailError)
 export class UserNotFoundError extends Schema.TaggedError<UserNotFoundError>()(
   "UserNotFoundError",
   {
-    email: Email.annotations({
+    email: Email.annotate({
       description: "The email address that was not found",
     }),
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {
   override get message(): string {
     return `User not found: ${this.email}`
@@ -208,11 +207,11 @@ export const isUserNotFoundError = Schema.is(UserNotFoundError)
 export class ProviderNotEnabledError extends Schema.TaggedError<ProviderNotEnabledError>()(
   "ProviderNotEnabledError",
   {
-    provider: AuthProviderType.annotations({
+    provider: AuthProviderType.annotate({
       description: "The authentication provider that is not enabled",
     }),
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {
   override get message(): string {
     return `Authentication provider '${this.provider}' is not enabled`
@@ -239,11 +238,11 @@ export const isProviderNotEnabledError = Schema.is(ProviderNotEnabledError)
 export class UserAlreadyExistsError extends Schema.TaggedError<UserAlreadyExistsError>()(
   "UserAlreadyExistsError",
   {
-    email: Email.annotations({
+    email: Email.annotate({
       description: "The email address that is already registered",
     }),
   },
-  HttpApiSchema.annotations({ status: 409 })
+  { httpApiStatus: 409 }
 ) {
   override get message(): string {
     return `User with email '${this.email}' already exists`
@@ -266,17 +265,17 @@ export const isUserAlreadyExistsError = Schema.is(UserAlreadyExistsError)
 export class IdentityAlreadyLinkedError extends Schema.TaggedError<IdentityAlreadyLinkedError>()(
   "IdentityAlreadyLinkedError",
   {
-    provider: AuthProviderType.annotations({
+    provider: AuthProviderType.annotate({
       description: "The authentication provider",
     }),
-    providerId: ProviderId.annotations({
+    providerId: ProviderId.annotate({
       description: "The external provider's user identifier",
     }),
-    existingUserId: AuthUserId.annotations({
+    existingUserId: AuthUserId.annotate({
       description: "The user ID that the identity is already linked to",
     }),
   },
-  HttpApiSchema.annotations({ status: 409 })
+  { httpApiStatus: 409 }
 ) {
   override get message(): string {
     return `Identity from '${this.provider}' is already linked to another user`
@@ -303,11 +302,11 @@ export const isIdentityAlreadyLinkedError = Schema.is(IdentityAlreadyLinkedError
 export class PasswordTooWeakError extends Schema.TaggedError<PasswordTooWeakError>()(
   "PasswordTooWeakError",
   {
-    requirements: Schema.Chunk(Schema.String).annotations({
+    requirements: Schema.Chunk(Schema.String).annotate({
       description: "List of password requirements that were not met",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return `Password does not meet requirements: ${Chunk.toReadonlyArray(this.requirements).join(", ")}`
@@ -330,11 +329,11 @@ export const isPasswordTooWeakError = Schema.is(PasswordTooWeakError)
 export class EmailVerificationRequestNotFoundError extends Schema.TaggedError<EmailVerificationRequestNotFoundError>()(
   "EmailVerificationRequestNotFoundError",
   {
-    requestId: EmailVerificationRequestId.annotations({
+    requestId: EmailVerificationRequestId.annotate({
       description: "The verification request that could not be found",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return "Email verification request is missing or no longer valid"
@@ -359,11 +358,11 @@ export const isEmailVerificationRequestNotFoundError = Schema.is(
 export class EmailVerificationCodeMismatchError extends Schema.TaggedError<EmailVerificationCodeMismatchError>()(
   "EmailVerificationCodeMismatchError",
   {
-    requestId: EmailVerificationRequestId.annotations({
+    requestId: EmailVerificationRequestId.annotate({
       description: "The verification request the code was checked against",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return "Verification code is invalid"
@@ -385,11 +384,11 @@ export const isEmailVerificationCodeMismatchError = Schema.is(EmailVerificationC
 export class EmailVerificationRequestExpiredError extends Schema.TaggedError<EmailVerificationRequestExpiredError>()(
   "EmailVerificationRequestExpiredError",
   {
-    requestId: EmailVerificationRequestId.annotations({
+    requestId: EmailVerificationRequestId.annotate({
       description: "The expired verification request",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return "Verification code has expired"
@@ -414,14 +413,14 @@ export const isEmailVerificationRequestExpiredError = Schema.is(
 export class OAuthStateError extends Schema.TaggedError<OAuthStateError>()(
   "OAuthStateError",
   {
-    provider: AuthProviderType.annotations({
+    provider: AuthProviderType.annotate({
       description: "The OAuth provider where the state mismatch occurred",
     }),
-    reason: Schema.String.annotations({
+    reason: Schema.String.annotate({
       description: "Detailed reason for OAuth state validation failure",
     }),
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {
   override get message(): string {
     return `OAuth state validation failed for ${this.provider}: ${this.reason}. Please restart the authentication flow.`
@@ -449,17 +448,17 @@ export const isOAuthStateError = Schema.is(OAuthStateError)
 export class SessionCleanupError extends Schema.TaggedError<SessionCleanupError>()(
   "SessionCleanupError",
   {
-    sessionId: SessionId.annotations({
+    sessionId: SessionId.annotate({
       description: "The session that could not be deleted",
     }),
-    operation: Schema.String.annotations({
+    operation: Schema.String.annotate({
       description: "The cleanup operation that failed (e.g., 'expiry', 'refresh')",
     }),
-    cause: Schema.Unknown.annotations({
+    cause: Schema.Unknown.annotate({
       description: "The underlying error that caused the cleanup to fail",
     }),
   },
-  HttpApiSchema.annotations({ status: 500 })
+  { httpApiStatus: 500 }
 ) {
   override get message(): string {
     return `Failed to clean up session during ${this.operation}: ${String(this.cause)}`
@@ -482,14 +481,14 @@ export const isSessionCleanupError = Schema.is(SessionCleanupError)
 export class AuthProcessingError extends Schema.TaggedError<AuthProcessingError>()(
   "AuthProcessingError",
   {
-    operation: Schema.String.annotations({
+    operation: Schema.String.annotate({
       description: "The auth workflow operation that failed",
     }),
-    cause: Schema.Unknown.annotations({
+    cause: Schema.Unknown.annotate({
       description: "The underlying cause of the failure",
     }),
   },
-  HttpApiSchema.annotations({ status: 500 })
+  { httpApiStatus: 500 }
 ) {
   override get message(): string {
     return `Authentication operation failed during ${this.operation}`
@@ -529,15 +528,17 @@ export type AuthError =
 /**
  * HTTP status code mapping for API layer
  *
- * Use this map when configuring HttpApiSchema.annotations in the API package:
+ * Use this map when applying HttpApiSchema.status in the API package:
  * ```typescript
- * import { HttpApiSchema } from "@effect/platform"
+ * import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema"
  * import { InvalidCredentialsError, AUTH_ERROR_STATUS_CODES } from "@my/core/authentication/errors"
  *
  * // In API definition:
- * .addError(InvalidCredentialsError, HttpApiSchema.annotations({
- *   status: AUTH_ERROR_STATUS_CODES.InvalidCredentialsError
- * }))
+ * .addError(
+ *   InvalidCredentialsError.pipe(
+ *     HttpApiSchema.status(AUTH_ERROR_STATUS_CODES.InvalidCredentialsError)
+ *   )
+ * )
  * ```
  */
 export const AUTH_ERROR_STATUS_CODES = {

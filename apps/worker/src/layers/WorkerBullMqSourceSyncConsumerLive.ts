@@ -4,7 +4,7 @@
  * @module WorkerBullMqSourceSyncConsumerLive
  */
 
-import { Config, DateTime, Effect, Layer, Runtime, Schedule, Schema } from "effect"
+import { Config, DateTime, Effect, Exit, Layer, Result, Schedule, Schema } from "effect"
 import { UnrecoverableError, Worker, type Job, type JobsOptions, type Processor } from "bullmq"
 import { Redis } from "ioredis"
 import { randomUUID } from "node:crypto"
@@ -99,13 +99,10 @@ const positiveConfig = ({
   readonly name: string
   readonly defaultValue: number
 }) =>
-  Config.integer(name).pipe(
-    Config.withDefault(defaultValue),
-    Config.validate({
-      message: `${name} must be greater than zero`,
-      validation: (value) => value > 0,
-    })
-  )
+  Config.schema(
+    Schema.Int.check(Schema.isGreaterThan(0, { message: `${name} must be greater than zero` })),
+    name
+  ).pipe(Config.withDefault(defaultValue))
 
 const loadConfig = Effect.gen(function* () {
   return {
@@ -125,17 +122,14 @@ const loadConfig = Effect.gen(function* () {
       name: "SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS",
       defaultValue: DEFAULT_PENDING_DISPATCH_INTERVAL_MS,
     }),
-    workerId: yield* Config.string("WORKER_ID").pipe(
-      Config.withDefault(PROCESS_WORKER_ID),
-      Config.validate({
-        message: "WORKER_ID must not be empty",
-        validation: (value) => value.trim().length > 0,
-      })
-    ),
+    workerId: yield* Config.schema(
+      Schema.Trimmed.check(Schema.isNonEmpty({ message: "WORKER_ID must not be empty" })),
+      "WORKER_ID"
+    ).pipe(Config.withDefault(PROCESS_WORKER_ID)),
   } satisfies WorkerBullMqSourceSyncConsumerConfig
 })
 
-const decodePayload = Schema.decodeUnknown(SourceSyncQueuePayload)
+const decodePayload = Schema.decodeUnknownEffect(SourceSyncQueuePayload)
 
 const hasPositiveFiniteValue = (value: number): boolean => Number.isFinite(value) && value > 0
 
@@ -172,16 +166,16 @@ const resolveBackoffDelayMs = (job: WorkerBullMqSourceSyncJob): number => {
 }
 
 const UnknownErrorMessageSchema = Schema.Struct({
-  message: Schema.NonEmptyTrimmedString,
+  message: Schema.Trimmed.check(Schema.isNonEmpty()),
 })
 
-const decodeUnknownErrorMessage = Schema.decodeUnknownEither(UnknownErrorMessageSchema)
+const decodeUnknownErrorMessage = Schema.decodeUnknownExit(UnknownErrorMessageSchema)
 
 const errorMessage = (error: unknown): string => {
   const decoded = decodeUnknownErrorMessage(error)
 
-  if (decoded._tag === "Right") {
-    return decoded.right.message
+  if (Exit.isSuccess(decoded)) {
+    return decoded.value.message
   }
 
   if (error instanceof Error && error.message.trim() !== "") {
@@ -226,7 +220,7 @@ const processJob = Effect.fn("worker.source-sync.process", {
   const attemptNumber = job.attemptsMade + 1
   const maxAttempts = resolveMaxAttempts(job)
   const nextRetryAt = yield* DateTime.now.pipe(
-    Effect.map(DateTime.add({ millis: resolveBackoffDelayMs(job) })),
+    Effect.map(DateTime.add({ milliseconds: resolveBackoffDelayMs(job) })),
     Effect.map(DateTime.toDateUtc)
   )
 
@@ -339,26 +333,26 @@ const acquireLiveWorker = (
 export const makeWorkerBullMqSourceSyncConsumerLive = (
   options: WorkerBullMqSourceSyncConsumerOptions = {}
 ) =>
-  Layer.scopedDiscard(
+  Layer.effectDiscard(
     Effect.gen(function* () {
       const config = yield* loadConfig
       const startupRepair = yield* WorkerSourceSyncStartupRepair
-      const runtime = yield* Effect.runtime<SourceSyncJobExecutor>()
-      const runPromise = Runtime.runPromise(runtime)
+      const context = yield* Effect.context<SourceSyncJobExecutor>()
+      const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
       const processor: WorkerBullMqSourceSyncProcessor = async (job) => {
-        const result = await runPromise(processJob({ job, config }).pipe(Effect.either))
+        const result = await runPromise(processJob({ job, config }).pipe(Effect.result))
 
-        if (result._tag === "Right") {
+        if (Result.isSuccess(result)) {
           await runPromise(
             startupRepair
               .dispatchFollowUp({
-                jobId: result.right.payload.jobId,
-                sourceId: result.right.payload.sourceId,
-                principalId: result.right.payload.principalId,
+                jobId: result.success.payload.jobId,
+                sourceId: result.success.payload.sourceId,
+                principalId: result.success.payload.principalId,
               })
               .pipe(
-                Effect.catchAll((error) =>
+                Effect.catch((error) =>
                   Effect.logWarning(
                     { operation: error.operation, cause: error.cause },
                     "source-sync-worker:follow-up-dispatch-failed"
@@ -366,10 +360,10 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
                 )
               )
           )
-          return result.right.summary
+          return result.success.summary
         }
 
-        const error = result.left
+        const error = result.failure
 
         if (error._tag === "WorkerBullMqMalformedSourceSyncPayloadError") {
           await runPromise(
@@ -416,10 +410,10 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
       }
 
       const worker = yield* Effect.acquireRelease(
-        startupRepair.repair.pipe(Effect.zipRight(acquireWorker(config, processor))),
+        startupRepair.repair.pipe(Effect.andThen(acquireWorker(config, processor))),
         (workerToClose) =>
           workerToClose.close.pipe(
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               Effect.logWarning(
                 { operation: error.operation, cause: error.cause },
                 "source-sync-worker:worker-close-failed"
@@ -429,7 +423,7 @@ export const makeWorkerBullMqSourceSyncConsumerLive = (
       )
 
       const dispatchPending = startupRepair.dispatchPending.pipe(
-        Effect.catchAll((error) =>
+        Effect.catch((error) =>
           Effect.logWarning(
             { operation: error.operation, cause: error.cause },
             "source-sync-worker:pending-dispatch-failed"

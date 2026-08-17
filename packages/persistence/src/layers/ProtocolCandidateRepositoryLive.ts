@@ -134,28 +134,28 @@ const validateObservation = (observation: ProtocolCandidateObservationDraft) =>
     }
 
     if (!isValidDate(observation.observedWindowStart)) {
-      yield* invalidObservation({
+      return yield* invalidObservation({
         field: "observedWindowStart",
         message: "observedWindowStart must be a valid date.",
       })
     }
 
     if (!isValidDate(observation.observedWindowEnd)) {
-      yield* invalidObservation({
+      return yield* invalidObservation({
         field: "observedWindowEnd",
         message: "observedWindowEnd must be a valid date.",
       })
     }
 
     if (observation.observedWindowStart >= observation.observedWindowEnd) {
-      yield* invalidObservation({
+      return yield* invalidObservation({
         field: "observedWindowEnd",
         message: "observedWindowEnd must be after observedWindowStart.",
       })
     }
 
     if (!isValidDate(observation.retrievedAt)) {
-      yield* invalidObservation({
+      return yield* invalidObservation({
         field: "retrievedAt",
         message: "retrievedAt must be a valid date.",
       })
@@ -304,12 +304,10 @@ const make = Effect.gen(function* () {
                 .pipe(wrapSyncEngineSqlError(importOperation))
 
               if (blockchain === undefined) {
-                return yield* Effect.fail(
-                  storageError(importOperation, {
-                    blockchainName: observation.blockchainName,
-                    message: "Failed to resolve protocol candidate blockchain.",
-                  })
-                )
+                return yield* storageError(importOperation, {
+                  blockchainName: observation.blockchainName,
+                  message: "Failed to resolve protocol candidate blockchain.",
+                })
               }
 
               const candidate = yield* tx
@@ -397,11 +395,9 @@ const make = Effect.gen(function* () {
               Effect.gen(function* () {
                 const candidate = candidates[index]
                 if (candidate === undefined) {
-                  return yield* Effect.fail(
-                    storageError(importOperation, {
-                      message: "Missing imported candidate for observation.",
-                    })
-                  )
+                  return yield* storageError(importOperation, {
+                    message: "Missing imported candidate for observation.",
+                  })
                 }
 
                 const [persistedObservation] = yield* tx
@@ -447,11 +443,9 @@ const make = Effect.gen(function* () {
                   .pipe(wrapSyncEngineSqlError(importOperation))
 
                 if (persistedObservation === undefined) {
-                  return yield* Effect.fail(
-                    storageError(importOperation, {
-                      message: "Failed to upsert protocol candidate observation.",
-                    })
-                  )
+                  return yield* storageError(importOperation, {
+                    message: "Failed to upsert protocol candidate observation.",
+                  })
                 }
 
                 yield* tx

@@ -17,6 +17,7 @@
  */
 import * as Effect from "effect/Effect"
 import * as DateTime from "effect/DateTime"
+import * as Duration from "effect/Duration"
 import * as Schema from "effect/Schema"
 import {
   SolanaDuneQueryConfig,
@@ -42,7 +43,7 @@ export const DEFAULT_SOLANA_DEX_DISCOVERY_WINDOW_DAYS = 7
 export const SOLANA_DEX_PROJECT_PRIORITY_QUERY_ROW_LIMIT = 100
 export const SOLANA_DEX_PROJECT_SAMPLE_TRANSACTIONS_QUERY_ROW_LIMIT = 50
 
-const NumericField = Schema.Union(Schema.Number, Schema.NumberFromString)
+const NumericField = Schema.Union([Schema.Number, Schema.NumberFromString])
 
 const DuneExecutionResultResponse = Schema.Struct({
   state: Schema.String,
@@ -111,12 +112,12 @@ const queryError = ({
   readonly message: string
 }): SolanaDuneError => new SolanaDuneError({ queryId: query.queryId, message })
 
-const decodeRows = <A, I>(
-  schema: Schema.Schema<A, I>,
+const decodeRows = <S extends Schema.Codec<unknown, unknown, never>>(
+  schema: S,
   rows: ReadonlyArray<unknown>,
   query: SolanaDuneQueryConfig
-): Effect.Effect<ReadonlyArray<A>, SolanaDuneError> =>
-  Schema.decodeUnknown(Schema.Array(schema))(rows).pipe(
+): Effect.Effect<ReadonlyArray<S["Type"]>, SolanaDuneError> =>
+  Schema.decodeUnknownEffect(Schema.Array(schema))(rows).pipe(
     Effect.mapError((error) =>
       queryError({
         query,
@@ -129,7 +130,7 @@ const resultRows = (
   response: unknown,
   query: SolanaDuneQueryConfig
 ): Effect.Effect<ReadonlyArray<unknown>, SolanaDuneError> =>
-  Schema.decodeUnknown(DuneExecutionResultResponse)(response).pipe(
+  Schema.decodeUnknownEffect(DuneExecutionResultResponse)(response).pipe(
     Effect.mapError((error) =>
       queryError({
         query,
@@ -172,7 +173,7 @@ const decodeUtcDate = (
   value: string,
   field: string
 ): Effect.Effect<DateTime.Utc, SolanaDuneError> =>
-  Schema.decodeUnknown(Schema.DateTimeUtc)(`${value}T00:00:00.000Z`).pipe(
+  Schema.decodeUnknownEffect(Schema.DateTimeUtcFromString)(`${value}T00:00:00.000Z`).pipe(
     Effect.mapError(() => invalidUtcDate(field))
   )
 
@@ -215,7 +216,7 @@ const windowDayCount = ({
   return Effect.gen(function* () {
     const start = yield* decodeUtcDate(startDate, "startDate")
     const end = yield* decodeUtcDate(endDate, "endDate")
-    return Math.round(DateTime.distance(start, end) / millisPerDay)
+    return Math.round(Duration.toMillis(DateTime.distance(start, end)) / millisPerDay)
   })
 }
 

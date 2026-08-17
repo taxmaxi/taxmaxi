@@ -18,7 +18,7 @@ import * as Schema from "effect/Schema"
  *
  * The wildcard "*" matches any action.
  */
-export const Action = Schema.Literal(
+export const Action = Schema.Literals([
   // Workspace actions
   "workspace:manage_settings",
   "workspace:manage_members",
@@ -39,8 +39,8 @@ export const Action = Schema.Literal(
   "audit_log:read",
 
   // Wildcard (matches any action)
-  "*"
-).annotations({
+  "*",
+]).annotate({
   identifier: "Action",
   title: "Authorization Action",
   description: "An authorization action that can be performed in the system",
@@ -86,13 +86,13 @@ export const ActionValues: readonly Action[] = [
 /**
  * Resource types derived from action prefixes
  */
-export const ResourceType = Schema.Literal(
+export const ResourceType = Schema.Literals([
   "workspace",
   "account",
   "report",
   "audit_log",
-  "*"
-).annotations({
+  "*",
+]).annotate({
   identifier: "ResourceType",
   title: "Resource Type",
   description: "The type of resource being accessed",

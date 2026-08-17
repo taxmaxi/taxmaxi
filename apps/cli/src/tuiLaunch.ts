@@ -36,7 +36,7 @@ const isFfiAvailable = Effect.tryPromise({
   catch: () => new CliCommandError({ message: "Node FFI is not available." }),
 }).pipe(
   Effect.as(true),
-  Effect.catchAll(() => Effect.succeed(false))
+  Effect.catch(() => Effect.succeed(false))
 )
 
 const runTuiInProcess = Effect.gen(function* () {

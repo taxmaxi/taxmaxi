@@ -43,7 +43,7 @@ export interface PortfolioRepositoryShape {
   >
 }
 
-export class PortfolioRepository extends Context.Tag("PortfolioRepository")<
+export class PortfolioRepository extends Context.Service<
   PortfolioRepository,
   PortfolioRepositoryShape
->() {}
+>()("PortfolioRepository") {}

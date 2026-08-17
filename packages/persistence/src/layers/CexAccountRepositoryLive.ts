@@ -54,9 +54,7 @@ const make = Effect.gen(function* () {
           .limit(1)
 
         if (exchange === undefined) {
-          return yield* Effect.fail(
-            new EntityNotFoundError({ entityType: "Cex", entityId: params.cexName })
-          )
+          return yield* new EntityNotFoundError({ entityType: "Cex", entityId: params.cexName })
         }
 
         const credentialsUpdatedAt = new Date()
@@ -89,12 +87,10 @@ const make = Effect.gen(function* () {
             .returning(selectCexAccountFields)
 
           if (updatedExisting === undefined) {
-            return yield* Effect.fail(
-              new EntityNotFoundError({
-                entityType: "CexAccount",
-                entityId: existing.id,
-              })
-            )
+            return yield* new EntityNotFoundError({
+              entityType: "CexAccount",
+              entityId: existing.id,
+            })
           }
 
           return rowToCexAccountRecord(updatedExisting)
@@ -116,12 +112,10 @@ const make = Effect.gen(function* () {
           .returning(selectCexAccountFields)
 
         if (created === undefined) {
-          return yield* Effect.fail(
-            new EntityNotFoundError({
-              entityType: "CexAccount",
-              entityId: `${params.principalId}:${params.cexName}:${params.providerUserId}`,
-            })
-          )
+          return yield* new EntityNotFoundError({
+            entityType: "CexAccount",
+            entityId: `${params.principalId}:${params.cexName}:${params.providerUserId}`,
+          })
         }
 
         return rowToCexAccountRecord(created)

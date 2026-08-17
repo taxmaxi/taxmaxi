@@ -57,12 +57,10 @@ export const SIWXProofVerifierTestLive = Layer.succeed(SIWXProofVerifier, {
   verify: ({ proof, expectedNonce }) =>
     Effect.gen(function* () {
       if (typeof proof !== "string" || proof.trim() === "") {
-        return yield* Effect.fail(
-          new SIWXProofVerificationError({
-            reason: "malformed_proof",
-            message: "Malformed SIWX proof.",
-          })
-        )
+        return yield* new SIWXProofVerificationError({
+          reason: "malformed_proof",
+          message: "Malformed SIWX proof.",
+        })
       }
 
       const message = yield* Effect.try({
@@ -75,42 +73,34 @@ export const SIWXProofVerifierTestLive = Layer.succeed(SIWXProofVerifier, {
       })
 
       if (message.domain !== "api.taxmaxi.com") {
-        return yield* Effect.fail(
-          new SIWXProofVerificationError({
-            reason: "domain_mismatch",
-            message: "Invalid SIWX domain.",
-          })
-        )
+        return yield* new SIWXProofVerificationError({
+          reason: "domain_mismatch",
+          message: "Invalid SIWX domain.",
+        })
       }
 
       if (message.nonce.trim() === "") {
-        return yield* Effect.fail(
-          new SIWXProofVerificationError({
-            reason: "missing_or_invalid_nonce",
-            message: "Invalid SIWX nonce.",
-          })
-        )
+        return yield* new SIWXProofVerificationError({
+          reason: "missing_or_invalid_nonce",
+          message: "Invalid SIWX nonce.",
+        })
       }
 
       if (message.nonce !== expectedNonce) {
-        return yield* Effect.fail(
-          new SIWXProofVerificationError({
-            reason: "missing_or_invalid_nonce",
-            message: "Invalid SIWX nonce.",
-          })
-        )
+        return yield* new SIWXProofVerificationError({
+          reason: "missing_or_invalid_nonce",
+          message: "Invalid SIWX nonce.",
+        })
       }
 
       if (
         message.expirationTime !== undefined &&
         new Date(message.expirationTime).getTime() <= Date.now()
       ) {
-        return yield* Effect.fail(
-          new SIWXProofVerificationError({
-            reason: "expired_proof",
-            message: "Expired SIWX proof.",
-          })
-        )
+        return yield* new SIWXProofVerificationError({
+          reason: "expired_proof",
+          message: "Expired SIWX proof.",
+        })
       }
 
       const chainType = message.chainId.startsWith("eip155:")
@@ -120,12 +110,10 @@ export const SIWXProofVerifierTestLive = Layer.succeed(SIWXProofVerifier, {
           : null
       const parsedWallet = parseCryptoAddress(message.address)
       if (chainType === null || parsedWallet === null || parsedWallet.chainType !== chainType) {
-        return yield* Effect.fail(
-          new SIWXProofVerificationError({
-            reason: "unsupported_chain",
-            message: "Unsupported SIWX wallet address.",
-          })
-        )
+        return yield* new SIWXProofVerificationError({
+          reason: "unsupported_chain",
+          message: "Unsupported SIWX wallet address.",
+        })
       }
 
       return {

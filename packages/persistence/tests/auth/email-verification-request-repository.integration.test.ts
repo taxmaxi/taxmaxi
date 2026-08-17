@@ -20,8 +20,8 @@ const context = makeIntegrationTestDatabaseContext({
 
 await Effect.runPromise(context.recreateTestDatabase())
 
-const TEST_FIRST_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000701")
-const TEST_SECOND_USER_ID = AuthUserId.make("00000000-0000-0000-0000-000000000702")
+const TEST_FIRST_USER_ID = AuthUserId.make("00000000-4000-4000-8000-000000000701")
+const TEST_SECOND_USER_ID = AuthUserId.make("00000000-4000-4000-8000-000000000702")
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, EmailVerificationRequestRepository>) =>
   Effect.runPromise(
@@ -61,9 +61,9 @@ describe("EmailVerificationRequestRepositoryLive", () => {
   })
 
   it("creates, loads, replaces, and consumes verification requests", async () => {
-    const firstRequestId = EmailVerificationRequestId.make("00000000-0000-0000-0000-000000000711")
+    const firstRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000711")
     const replacementRequestId = EmailVerificationRequestId.make(
-      "00000000-0000-0000-0000-000000000712"
+      "00000000-4000-4000-8000-000000000712"
     )
 
     const firstCreated = await runRepository(
@@ -139,8 +139,8 @@ describe("EmailVerificationRequestRepositoryLive", () => {
   })
 
   it("deletes expired verification requests without removing active ones", async () => {
-    const expiredRequestId = EmailVerificationRequestId.make("00000000-0000-0000-0000-000000000721")
-    const activeRequestId = EmailVerificationRequestId.make("00000000-0000-0000-0000-000000000722")
+    const expiredRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000721")
+    const activeRequestId = EmailVerificationRequestId.make("00000000-4000-4000-8000-000000000722")
     const now = Timestamp.now()
 
     await runRepository(

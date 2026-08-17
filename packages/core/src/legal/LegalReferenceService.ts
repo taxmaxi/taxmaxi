@@ -92,10 +92,10 @@ export interface LegalReferenceServiceShape {
 /**
  * LegalReferenceService - Effect tag for legal retrieval and ranking.
  */
-export class LegalReferenceService extends Context.Tag("LegalReferenceService")<
+export class LegalReferenceService extends Context.Service<
   LegalReferenceService,
   LegalReferenceServiceShape
->() {}
+>()("LegalReferenceService") {}
 
 /**
  * Internal type used during ranking to keep stable tie-break order.

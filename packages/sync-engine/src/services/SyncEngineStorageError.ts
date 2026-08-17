@@ -18,10 +18,18 @@ export class SyncEngineStorageError extends Schema.TaggedError<SyncEngineStorage
   "SyncEngineStorageError",
   {
     operation: Schema.String,
-    cause: Schema.Defect,
+    cause: Schema.Unknown,
   }
 ) {
   override get message(): string {
-    return `Sync engine storage error during ${this.operation}: ${String(this.cause)}`
+    const operation: unknown = this.operation
+
+    if (operation === TRANSACTION_CREDIT_EXHAUSTED_OPERATION) {
+      return "Transaction credit balance is exhausted"
+    }
+
+    return typeof operation === "string"
+      ? `Sync engine storage error during ${operation}`
+      : "Sync engine storage error"
   }
 }

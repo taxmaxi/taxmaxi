@@ -3,13 +3,13 @@
  *
  * @module
  */
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform"
 import * as Console from "effect/Console"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import {
   SolanaDuneClient,
   SolanaDuneError,
@@ -81,13 +81,13 @@ export const readSolanaDuneApiKey: Effect.Effect<string, SolanaDuneError> =
   )
 
 const decodeJson =
-  <A, I>(schema: Schema.Schema<A, I>) =>
-  (response: HttpClientResponse.HttpClientResponse): Effect.Effect<A, SolanaDuneError> =>
+  <S extends Schema.Codec<unknown, unknown, never>>(schema: S) =>
+  (response: HttpClientResponse.HttpClientResponse): Effect.Effect<S["Type"], SolanaDuneError> =>
     HttpClientResponse.schemaBodyJson(schema)(response).pipe(
       Effect.mapError(() => toDuneError({ message: "Failed to decode Dune API response" }))
     )
 
-const executeAndDecode = <A, I>({
+const executeAndDecode = <S extends Schema.Codec<unknown, unknown, never>>({
   client,
   request,
   schema,
@@ -95,9 +95,9 @@ const executeAndDecode = <A, I>({
 }: {
   readonly client: HttpClient.HttpClient
   readonly request: HttpClientRequest.HttpClientRequest
-  readonly schema: Schema.Schema<A, I>
+  readonly schema: S
   readonly queryId: number
-}): Effect.Effect<A, SolanaDuneError> =>
+}): Effect.Effect<S["Type"], SolanaDuneError> =>
   executeAndDecodeWithRetries({
     client,
     request,
@@ -106,7 +106,7 @@ const executeAndDecode = <A, I>({
     remainingRateLimitRetries: DUNE_RATE_LIMIT_RETRY_LIMIT,
   })
 
-const executeAndDecodeWithRetries = <A, I>({
+const executeAndDecodeWithRetries = <S extends Schema.Codec<unknown, unknown, never>>({
   client,
   request,
   schema,
@@ -115,10 +115,10 @@ const executeAndDecodeWithRetries = <A, I>({
 }: {
   readonly client: HttpClient.HttpClient
   readonly request: HttpClientRequest.HttpClientRequest
-  readonly schema: Schema.Schema<A, I>
+  readonly schema: S
   readonly queryId: number
   readonly remainingRateLimitRetries: number
-}): Effect.Effect<A, SolanaDuneError> =>
+}): Effect.Effect<S["Type"], SolanaDuneError> =>
   Effect.gen(function* () {
     const response = yield* client.execute(request).pipe(
       Effect.mapError((error) =>
@@ -183,7 +183,7 @@ const executeSavedQuery = ({
     request: authenticatedRequest({
       apiKey,
       request: HttpClientRequest.post(`/query/${params.query.queryId}/execute`).pipe(
-        HttpClientRequest.bodyUnsafeJson({
+        HttpClientRequest.bodyJsonUnsafe({
           query_parameters: params.parameters,
         })
       ),

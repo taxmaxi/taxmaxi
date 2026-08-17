@@ -78,7 +78,7 @@ export class WorkerSourceSyncStartupRepairError extends Schema.TaggedError<Worke
 /**
  * WorkerSourceSyncStartupRepair - Service used to reconcile DB jobs with BullMQ on boot.
  */
-export class WorkerSourceSyncStartupRepair extends Context.Tag("WorkerSourceSyncStartupRepair")<
+export class WorkerSourceSyncStartupRepair extends Context.Service<
   WorkerSourceSyncStartupRepair,
   {
     readonly repair: Effect.Effect<
@@ -93,7 +93,7 @@ export class WorkerSourceSyncStartupRepair extends Context.Tag("WorkerSourceSync
       params: DispatchSourceSyncFollowUpParams
     ) => Effect.Effect<void, WorkerSourceSyncStartupRepairError>
   }
->() {}
+>()("WorkerSourceSyncStartupRepair") {}
 
 /**
  * DispatchSourceSyncFollowUpParams - Completed job identity used to find its linked follow-up.
@@ -138,13 +138,10 @@ const positiveConfig = ({
   readonly name: string
   readonly defaultValue: number
 }) =>
-  Config.integer(name).pipe(
-    Config.withDefault(defaultValue),
-    Config.validate({
-      message: `${name} must be greater than zero`,
-      validation: (value) => value > 0,
-    })
-  )
+  Config.schema(
+    Schema.Int.check(Schema.isGreaterThan(0, { message: `${name} must be greater than zero` })),
+    name
+  ).pipe(Config.withDefault(defaultValue))
 
 const nonNegativeConfig = ({
   name,
@@ -153,13 +150,12 @@ const nonNegativeConfig = ({
   readonly name: string
   readonly defaultValue: number
 }) =>
-  Config.integer(name).pipe(
-    Config.withDefault(defaultValue),
-    Config.validate({
-      message: `${name} must be zero or greater`,
-      validation: (value) => value >= 0,
-    })
-  )
+  Config.schema(
+    Schema.Int.check(
+      Schema.isGreaterThanOrEqualTo(0, { message: `${name} must be zero or greater` })
+    ),
+    name
+  ).pipe(Config.withDefault(defaultValue))
 
 const loadConfig = Effect.gen(function* () {
   return {
@@ -175,13 +171,18 @@ const loadConfig = Effect.gen(function* () {
       name: "SOURCE_SYNC_REPAIR_BATCH_SIZE",
       defaultValue: DEFAULT_REPAIR_BATCH_SIZE,
     }),
-    attempts: yield* Config.integer("SOURCE_SYNC_QUEUE_ATTEMPTS").pipe(
-      Config.orElse(() => Config.integer("SYNC_WORKER_MAX_ATTEMPTS")),
+    attempts: yield* Config.int("SOURCE_SYNC_QUEUE_ATTEMPTS").pipe(
+      Config.orElse(() => Config.int("SYNC_WORKER_MAX_ATTEMPTS")),
       Config.withDefault(DEFAULT_QUEUE_ATTEMPTS),
-      Config.validate({
-        message: "SOURCE_SYNC_QUEUE_ATTEMPTS must be greater than zero",
-        validation: (value) => value > 0,
-      })
+      Config.mapOrFail((value) =>
+        Schema.decodeUnknownEffect(
+          Schema.Int.check(
+            Schema.isGreaterThan(0, {
+              message: "SOURCE_SYNC_QUEUE_ATTEMPTS must be greater than zero",
+            })
+          )
+        )(value).pipe(Effect.mapError((error) => new Config.ConfigError(error)))
+      )
     ),
     backoffDelayMs: yield* positiveConfig({
       name: "SOURCE_SYNC_QUEUE_BACKOFF_DELAY_MS",
@@ -498,7 +499,7 @@ const repairJob = ({
       : recoverStaleProcessingJob({ job, repository, now, staleBefore })
 
   return effect.pipe(
-    Effect.catchAll((cause) => {
+    Effect.catch((cause) => {
       if (cause._tag === "SourceSyncJobExecutionRecordNotFoundError") {
         return Effect.logWarning(
           { jobId: job.id, sourceId: job.sourceId, cause, action: "skip-missing" },
@@ -577,7 +578,7 @@ const emptySummary = {
 export const makeWorkerSourceSyncStartupRepairLive = (
   options: WorkerSourceSyncStartupRepairOptions = {}
 ) =>
-  Layer.scoped(
+  Layer.effect(
     WorkerSourceSyncStartupRepair,
     Effect.gen(function* () {
       const repository = yield* SourceSyncJobRepository
@@ -585,7 +586,7 @@ export const makeWorkerSourceSyncStartupRepairLive = (
       const acquireQueue = options.acquireQueue ?? acquireLiveQueue
       const queue = yield* Effect.acquireRelease(acquireQueue(config), (queueToClose) =>
         queueToClose.close.pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             Effect.logWarning(
               { operation: error.operation, cause: error.cause },
               "source-sync-worker:repair-queue-close-failed"
@@ -601,7 +602,7 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           const currentTime = yield* DateTime.now
           const now = DateTime.toDateUtc(currentTime)
           const staleBefore = currentTime.pipe(
-            DateTime.subtract({ millis: config.staleAfterMs }),
+            DateTime.subtract({ milliseconds: config.staleAfterMs }),
             DateTime.toDateUtc
           )
           const jobs = yield* repository
@@ -637,7 +638,7 @@ export const makeWorkerSourceSyncStartupRepairLive = (
         const currentTime = yield* DateTime.now
         const now = DateTime.toDateUtc(currentTime)
         const staleBefore = currentTime.pipe(
-          DateTime.subtract({ millis: config.staleAfterMs }),
+          DateTime.subtract({ milliseconds: config.staleAfterMs }),
           DateTime.toDateUtc
         )
         const jobs = yield* repository
@@ -744,7 +745,7 @@ export const makeWorkerSourceSyncStartupRepairLive = (
           })
         })
 
-      return WorkerSourceSyncStartupRepair.of({ repair, dispatchPending, dispatchFollowUp })
+      return { repair, dispatchPending, dispatchFollowUp }
     })
   )
 

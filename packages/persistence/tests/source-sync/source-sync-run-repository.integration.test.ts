@@ -38,7 +38,7 @@ const seedSecondSource = () =>
         .limit(1)
 
       if (coinbaseCex === undefined) {
-        return yield* Effect.dieMessage("Missing seeded coinbase CEX fixture")
+        return yield* Effect.die("Missing seeded coinbase CEX fixture")
       }
 
       const [createdAccount] = yield* db
@@ -56,7 +56,7 @@ const seedSecondSource = () =>
         .returning({ id: schema.cexAccount.id })
 
       if (createdAccount === undefined) {
-        return yield* Effect.dieMessage("Failed to create second cex account fixture")
+        return yield* Effect.die("Failed to create second cex account fixture")
       }
 
       yield* db.insert(schema.sources).values({
@@ -105,7 +105,7 @@ const createProcessingJob = ({
         .returning({ id: schema.processingJobs.id })
 
       if (job === undefined) {
-        return yield* Effect.dieMessage("Failed to create processing job fixture")
+        return yield* Effect.die("Failed to create processing job fixture")
       }
 
       return job.id
@@ -249,13 +249,13 @@ describe("SourceSyncRunRepositoryLive", () => {
             sourceId: TEST_SOURCE_ID,
             processingJobId: "00000000-0000-0000-0000-000000009999",
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       )
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("SyncEngineStorageError")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("SyncEngineStorageError")
     }
   })
 

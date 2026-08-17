@@ -149,7 +149,6 @@ export interface AssetRepositoryShape {
 /**
  * AssetRepository - Context tag for asset and blockchain lookup persistence.
  */
-export class AssetRepository extends Context.Tag("AssetRepository")<
-  AssetRepository,
-  AssetRepositoryShape
->() {}
+export class AssetRepository extends Context.Service<AssetRepository, AssetRepositoryShape>()(
+  "AssetRepository"
+) {}

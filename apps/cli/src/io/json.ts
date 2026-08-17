@@ -1,10 +1,10 @@
 import { Console, Effect, Schema } from "effect"
 import { CliCommandError } from "../errors.ts"
 
-const JsonOutput = Schema.parseJson(Schema.Unknown)
+const JsonOutput = Schema.fromJsonString(Schema.Unknown)
 
 export const printJson = (value: unknown) =>
-  Schema.encode(JsonOutput)(value).pipe(
+  Schema.encodeEffect(JsonOutput)(value).pipe(
     Effect.mapError(
       () =>
         new CliCommandError({

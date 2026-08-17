@@ -15,13 +15,13 @@ import { Timestamp } from "../shared/values/Timestamp.ts"
 /**
  * Unique identifier for a persisted email verification request.
  */
-export const EmailVerificationRequestId = Schema.UUID.pipe(
-  Schema.brand("EmailVerificationRequestId")
-).annotations({
-  identifier: "EmailVerificationRequestId",
-  title: "Email Verification Request ID",
-  description: "Unique identifier for an email verification request",
-})
+export const EmailVerificationRequestId = Schema.String.check(Schema.isUUID())
+  .pipe(Schema.brand("EmailVerificationRequestId"))
+  .annotate({
+    identifier: "EmailVerificationRequestId",
+    title: "Email Verification Request ID",
+    description: "Unique identifier for an email verification request",
+  })
 
 /**
  * The EmailVerificationRequestId type.
@@ -36,12 +36,14 @@ export const isEmailVerificationRequestId = Schema.is(EmailVerificationRequestId
 /**
  * One-time verification code sent to the user.
  */
-export const EmailVerificationCode = Schema.NonEmptyTrimmedString.annotations({
-  identifier: "EmailVerificationCode",
-  title: "Email Verification Code",
-  description: "One-time code used to verify a pending local email address",
-  examples: ["ABCD1234"],
-}).pipe(Schema.pattern(/^[A-Z0-9]{8}$/))
+export const EmailVerificationCode = Schema.Trimmed.check(Schema.isNonEmpty())
+  .annotate({
+    identifier: "EmailVerificationCode",
+    title: "Email Verification Code",
+    description: "One-time code used to verify a pending local email address",
+    examples: ["ABCD1234"],
+  })
+  .pipe(Schema.check(Schema.isPattern(/^[A-Z0-9]{8}$/)))
 
 /**
  * The EmailVerificationCode type.

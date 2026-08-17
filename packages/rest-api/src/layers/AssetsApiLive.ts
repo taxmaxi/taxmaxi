@@ -4,7 +4,7 @@
  * @module AssetsApiLive
  */
 
-import { HttpApiBuilder } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   AssetCatalogRepository,
   type AssetCatalogAssetRecord,
@@ -47,39 +47,39 @@ const toInternalServerError = (message: string) =>
 
 const AssetCursorPayload = Schema.Struct({
   version: Schema.Literal(2),
-  assetId: Schema.UUID,
+  assetId: Schema.String.check(Schema.isUUID()),
 })
 
 const ProviderAssetCursorPayload = Schema.Struct({
   version: Schema.Literal(2),
-  providerAssetRowId: Schema.UUID,
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
 })
 
 const TransferReconciliationCursorPayload = Schema.Struct({
   version: Schema.Literal(1),
-  reconciliationId: Schema.UUID,
+  reconciliationId: Schema.String.check(Schema.isUUID()),
 })
 
-const EncodedAssetCursorPayload = Schema.parseJson(AssetCursorPayload)
-const EncodedProviderAssetCursorPayload = Schema.parseJson(ProviderAssetCursorPayload)
-const EncodedTransferReconciliationCursorPayload = Schema.parseJson(
+const EncodedAssetCursorPayload = Schema.fromJsonString(AssetCursorPayload)
+const EncodedProviderAssetCursorPayload = Schema.fromJsonString(ProviderAssetCursorPayload)
+const EncodedTransferReconciliationCursorPayload = Schema.fromJsonString(
   TransferReconciliationCursorPayload
 )
 
 const encodeCursor = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
 
-const decodeCursor = <A>(
+const decodeCursor = <S extends Schema.ConstraintDecoder<unknown, never>>(
   cursor: string,
-  schema: Schema.Schema<A, string>
-): Effect.Effect<A, AssetBadRequestError> =>
+  schema: S
+): Effect.Effect<S["Type"], AssetBadRequestError> =>
   Effect.gen(function* () {
     const decoded = yield* Effect.try({
       try: () => Buffer.from(cursor, "base64url").toString("utf8"),
       catch: () => new AssetBadRequestError({ message: "Invalid asset cursor." }),
     })
 
-    return yield* Schema.decodeUnknown(schema)(decoded).pipe(
+    return yield* Schema.decodeUnknownEffect(schema)(decoded).pipe(
       Effect.mapError(() => new AssetBadRequestError({ message: "Invalid asset cursor." }))
     )
   })
@@ -173,7 +173,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
     const assetCanonicalizationService = yield* AssetCanonicalizationService
 
     return handlers
-      .handle("listAssets", ({ urlParams }) =>
+      .handle("listAssets", ({ query: urlParams }) =>
         Effect.gen(function* () {
           const limit = urlParams.limit ?? defaultAssetLimit
           const cursor = yield* decodeAssetCursor(urlParams.cursor)
@@ -197,7 +197,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("getAsset", ({ path }) =>
+      .handle("getAsset", ({ params: path }) =>
         Effect.gen(function* () {
           const maybeAsset = yield* assetCatalogRepository
             .findAssetById({ assetId: path.assetId })
@@ -209,7 +209,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("listPendingAssets", ({ urlParams }) =>
+      .handle("listPendingAssets", ({ query: urlParams }) =>
         Effect.gen(function* () {
           const limit = urlParams.limit ?? defaultLimit
           const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
@@ -237,7 +237,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("listProviderAssetReviews", ({ urlParams }) =>
+      .handle("listProviderAssetReviews", ({ query: urlParams }) =>
         Effect.gen(function* () {
           const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
           const providerAssets = yield* providerAssetRepository
@@ -265,7 +265,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("listUnresolvedTransferReconciliations", ({ urlParams }) =>
+      .handle("listUnresolvedTransferReconciliations", ({ query: urlParams }) =>
         Effect.gen(function* () {
           const limit = urlParams.limit ?? defaultLimit
           const cursor = yield* decodeTransferReconciliationCursor(urlParams.cursor)
@@ -296,7 +296,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("canonicalizeProviderAsset", ({ path, payload }) =>
+      .handle("canonicalizeProviderAsset", ({ params: path, payload }) =>
         Effect.gen(function* () {
           const result = yield* assetCanonicalizationService
             .canonicalizeProviderAssetFromCoinGecko({
@@ -325,7 +325,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("approveProviderAsset", ({ path, payload }) =>
+      .handle("approveProviderAsset", ({ params: path, payload }) =>
         assetCanonicalizationService
           .approveProviderAssetMapping({
             providerAssetRowId: path.id,

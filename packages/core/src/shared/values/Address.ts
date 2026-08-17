@@ -17,7 +17,7 @@ export class Address extends Schema.Class<Address>("Address")({
   /**
    * Street address line 1 (e.g., "123 Main St")
    */
-  street1: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  street1: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Street Address Line 1",
     description: "Primary street address",
   }),
@@ -25,7 +25,7 @@ export class Address extends Schema.Class<Address>("Address")({
   /**
    * Street address line 2 (e.g., "Suite 100")
    */
-  street2: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  street2: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Street Address Line 2",
     description: "Secondary street address (apartment, suite, etc.)",
   }),
@@ -33,7 +33,7 @@ export class Address extends Schema.Class<Address>("Address")({
   /**
    * City
    */
-  city: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  city: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "City",
     description: "City or locality",
   }),
@@ -41,7 +41,7 @@ export class Address extends Schema.Class<Address>("Address")({
   /**
    * State, province, or region
    */
-  state: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  state: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "State/Province",
     description: "State, province, or region",
   }),
@@ -49,7 +49,7 @@ export class Address extends Schema.Class<Address>("Address")({
   /**
    * Postal or ZIP code
    */
-  postalCode: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  postalCode: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Postal Code",
     description: "Postal or ZIP code",
   }),
@@ -57,7 +57,7 @@ export class Address extends Schema.Class<Address>("Address")({
   /**
    * Country (ISO 3166-1 alpha-2 code)
    */
-  country: Schema.OptionFromNullOr(Schema.NonEmptyTrimmedString).annotations({
+  country: Schema.OptionFromNullOr(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Country",
     description: "Country (ISO 3166-1 alpha-2 code or full name)",
   }),

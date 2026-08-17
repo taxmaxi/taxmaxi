@@ -4,7 +4,7 @@
  * @module PrincipalsApiLive
  */
 
-import { HttpApiBuilder } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   PrincipalClaimRepository,
   PrincipalClaimTransferConflictError,
@@ -50,14 +50,12 @@ const mapClaimTransferError = (
 }
 
 const loadClaimTokenPepper = Effect.gen(function* () {
-  const pepper = yield* Effect.configProviderWith((provider) =>
-    provider
-      .load(claimTokenPepperConfig)
-      .pipe(Effect.mapError(() => toInternalServerError("Missing claim token pepper.")))
+  const pepper = yield* claimTokenPepperConfig.pipe(
+    Effect.mapError(() => toInternalServerError("Missing claim token pepper."))
   )
 
   if (Redacted.value(pepper).trim() === "") {
-    return yield* Effect.fail(toInternalServerError("Missing claim token pepper."))
+    return yield* toInternalServerError("Missing claim token pepper.")
   }
 
   return pepper
@@ -83,19 +81,15 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
           )
 
         if (payload.claimToken === null && payload.siwxProof === null) {
-          return yield* Effect.fail(
-            new PrincipalClaimBadRequestError({
-              message: "Either claimToken or siwxProof is required.",
-            })
-          )
+          return yield* new PrincipalClaimBadRequestError({
+            message: "Either claimToken or siwxProof is required.",
+          })
         }
 
         if (payload.claimToken !== null && payload.siwxProof !== null) {
-          return yield* Effect.fail(
-            new PrincipalClaimBadRequestError({
-              message: "Provide either claimToken or siwxProof, not both.",
-            })
-          )
+          return yield* new PrincipalClaimBadRequestError({
+            message: "Provide either claimToken or siwxProof, not both.",
+          })
         }
 
         if (payload.claimToken !== null) {
@@ -113,15 +107,15 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
             .pipe(Effect.mapError(() => toInternalServerError("Failed to validate claim token.")))
 
           if (Option.isNone(maybeClaim)) {
-            return yield* Effect.fail(
-              new PrincipalClaimNotFoundError({ message: "Valid claim token not found." })
-            )
+            return yield* new PrincipalClaimNotFoundError({
+              message: "Valid claim token not found.",
+            })
           }
 
           if (maybeClaim.value.sourceId === null) {
-            return yield* Effect.fail(
-              new PrincipalClaimBadRequestError({ message: "Claim token is not source-bound." })
-            )
+            return yield* new PrincipalClaimBadRequestError({
+              message: "Claim token is not source-bound.",
+            })
           }
 
           const claimedSourceId = yield* principalClaimRepository
@@ -157,15 +151,15 @@ export const PrincipalsApiLive = HttpApiBuilder.group(TaxMaxiApi, "principals", 
           )
 
         if (Option.isNone(maybeClaim)) {
-          return yield* Effect.fail(
-            new PrincipalClaimNotFoundError({ message: "Valid payer entitlement not found." })
-          )
+          return yield* new PrincipalClaimNotFoundError({
+            message: "Valid payer entitlement not found.",
+          })
         }
 
         if (maybeClaim.value.sourceId === null) {
-          return yield* Effect.fail(
-            new PrincipalClaimBadRequestError({ message: "Payer entitlement is not source-bound." })
-          )
+          return yield* new PrincipalClaimBadRequestError({
+            message: "Payer entitlement is not source-bound.",
+          })
         }
 
         const claimedSourceId = yield* principalClaimRepository

@@ -9,7 +9,7 @@
  * @module SourcesApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 import { ReportReviewReasonCode } from "@my/core/report"
@@ -25,7 +25,7 @@ export class SourceBadRequestError extends Schema.TaggedError<SourceBadRequestEr
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>()(
@@ -33,7 +33,7 @@ export class SourceNotFoundError extends Schema.TaggedError<SourceNotFoundError>
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePaymentRequiredError>()(
@@ -42,7 +42,7 @@ export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePayment
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
   },
-  HttpApiSchema.annotations({ status: 402 })
+  { httpApiStatus: 402 }
 ) {}
 
 // =============================================================================
@@ -61,11 +61,11 @@ export class SourceListResponse extends Schema.Class<SourceListResponse>("Source
  */
 export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("SourceCreateRequest")({
   type: Schema.Literal("onchain"),
-  walletAddress: Schema.NonEmptyTrimmedString,
-  name: Schema.optional(Schema.NonEmptyTrimmedString),
+  walletAddress: Schema.Trimmed.check(Schema.isNonEmpty()),
+  name: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
   sync: Schema.optional(Schema.Boolean),
-  year: Schema.optional(Schema.Int.pipe(Schema.greaterThanOrEqualTo(2020))),
-  jurisdiction: Schema.optional(Schema.NonEmptyTrimmedString),
+  year: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(2020))),
+  jurisdiction: Schema.optional(Schema.Trimmed.check(Schema.isNonEmpty())),
 }) {}
 
 /**
@@ -76,7 +76,7 @@ export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartRespons
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
-  status: Schema.Literal("queued", "running", "completed", "failed"),
+  status: Schema.Literals(["queued", "running", "completed", "failed"]),
   message: Schema.NullOr(Schema.String),
 }) {}
 
@@ -111,8 +111,8 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
-  status: Schema.Literal("queued", "running", "completed", "failed"),
-  phase: Schema.NullOr(Schema.Literal("discovering", "classifying", "reconciling", "completed")),
+  status: Schema.Literals(["queued", "running", "completed", "failed"]),
+  phase: Schema.NullOr(Schema.Literals(["discovering", "classifying", "reconciling", "completed"])),
   processedRecords: Schema.NullOr(Schema.Number),
   totalRecords: Schema.NullOr(Schema.Number),
   progressPercent: Schema.NullOr(Schema.Number),
@@ -130,9 +130,9 @@ const currentTaxYear = new Date().getUTCFullYear()
 export class TaxCalculationRequest extends Schema.Class<TaxCalculationRequest>(
   "TaxCalculationRequest"
 )({
-  year: Schema.Int.pipe(
-    Schema.greaterThanOrEqualTo(1970),
-    Schema.lessThanOrEqualTo(currentTaxYear)
+  year: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(1970),
+    Schema.isLessThanOrEqualTo(currentTaxYear)
   ),
   jurisdiction: Schema.String,
 }) {}
@@ -153,14 +153,14 @@ export class TaxCalculationResponse extends Schema.Class<TaxCalculationResponse>
 
 const SourceReportCursor = Schema.NullOr(Schema.String)
 const SourceReportAmount = Schema.String
-const SourceReportTaxableTreatment = Schema.Literal(
+const SourceReportTaxableTreatment = Schema.Literals([
   "taxable",
   "tax_free",
   "deductible",
   "non_taxable",
   "unknown",
-  "mixed"
-)
+  "mixed",
+])
 
 /**
  * SourceReportPageParams - Stable cursor pagination parameters for report lists.
@@ -168,10 +168,10 @@ const SourceReportTaxableTreatment = Schema.Literal(
 export const SourceReportPageParams = Schema.Struct({
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
-    Schema.NumberFromString.pipe(
-      Schema.int(),
-      Schema.greaterThanOrEqualTo(1),
-      Schema.lessThanOrEqualTo(100)
+    Schema.NumberFromString.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(100)
     )
   ),
 })
@@ -201,8 +201,8 @@ export class SourceReportPageInfo extends Schema.Class<SourceReportPageInfo>(
 export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>(
   "SourceReportSyncStatus"
 )({
-  status: Schema.NullOr(Schema.Literal("pending", "processing", "completed", "failed")),
-  mode: Schema.NullOr(Schema.Literal("sync", "replay")),
+  status: Schema.NullOr(Schema.Literals(["pending", "processing", "completed", "failed"])),
+  mode: Schema.NullOr(Schema.Literals(["sync", "replay"])),
   queuedAt: Schema.NullOr(Schema.String),
   startedAt: Schema.NullOr(Schema.String),
   completedAt: Schema.NullOr(Schema.String),
@@ -228,7 +228,7 @@ export class SourceReportReviewIssue extends Schema.Class<SourceReportReviewIssu
 export class SourceReportReviewSummary extends Schema.Class<SourceReportReviewSummary>(
   "SourceReportReviewSummary"
 )({
-  status: Schema.Literal("ok", "needs_review"),
+  status: Schema.Literals(["ok", "needs_review"]),
   needsReviewCount: Schema.Number,
   blockingIssueCount: Schema.Number,
   issues: Schema.Array(SourceReportReviewIssue),
@@ -274,7 +274,7 @@ export class SourceAssetPnlRow extends Schema.Class<SourceAssetPnlRow>("SourceAs
   disposedAmount: SourceReportAmount,
   openAmount: SourceReportAmount,
   costBasis: Schema.NullOr(SourceReportAmount),
-  costBasisStatus: Schema.Literal("known", "pending_review"),
+  costBasisStatus: Schema.Literals(["known", "pending_review"]),
   proceeds: SourceReportAmount,
   realizedGainLoss: SourceReportAmount,
   currency: Schema.NullOr(Schema.String),
@@ -295,11 +295,11 @@ export class SourceTransactionMovement extends Schema.Class<SourceTransactionMov
 )({
   legId: Schema.String,
   asset: SourceReportAsset,
-  kind: Schema.Literal("acquisition", "disposal", "income", "fee"),
+  kind: Schema.Literals(["acquisition", "disposal", "income", "fee"]),
   amount: SourceReportAmount,
   fiatAmount: Schema.NullOr(SourceReportAmount),
   fiatCurrency: Schema.NullOr(Schema.String),
-  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
+  provenance: Schema.Literals(["deterministic", "rule", "ai", "manual"]),
   derivationRule: Schema.NullOr(Schema.String),
 }) {}
 
@@ -328,7 +328,7 @@ export class SourceTaxEventRow extends Schema.Class<SourceTaxEventRow>("SourceTa
   legId: Schema.String,
   transactionId: Schema.NullOr(Schema.String),
   timestamp: Schema.String,
-  kind: Schema.Literal("acquisition", "disposal", "income", "fee"),
+  kind: Schema.Literals(["acquisition", "disposal", "income", "fee"]),
   asset: SourceReportAsset,
   amount: SourceReportAmount,
   fiatAmount: Schema.NullOr(SourceReportAmount),
@@ -337,7 +337,7 @@ export class SourceTaxEventRow extends Schema.Class<SourceTaxEventRow>("SourceTa
   proceeds: Schema.NullOr(SourceReportAmount),
   gainLoss: Schema.NullOr(SourceReportAmount),
   taxableTreatment: SourceReportTaxableTreatment,
-  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
+  provenance: Schema.Literals(["deterministic", "rule", "ai", "manual"]),
   derivationRule: Schema.NullOr(Schema.String),
 }) {}
 
@@ -366,7 +366,7 @@ export class SourceFifoLotRow extends Schema.Class<SourceFifoLotRow>("SourceFifo
   remainingAmount: SourceReportAmount,
   costBasisPerToken: Schema.NullOr(SourceReportAmount),
   costBasisCurrency: Schema.NullOr(Schema.String),
-  costBasisStatus: Schema.Literal("known", "pending_review"),
+  costBasisStatus: Schema.Literals(["known", "pending_review"]),
   sourceLegId: Schema.NullOr(Schema.String),
   sourceProviderTransferId: Schema.NullOr(Schema.String),
   disposalMatches: Schema.Array(SourceFifoLotDisposalSummary),
@@ -405,7 +405,7 @@ export class SourceDisposalExplanationResponse extends Schema.Class<SourceDispos
   acquiredAt: Schema.NullOr(Schema.String),
   disposedAt: Schema.String,
   taxableTreatment: SourceReportTaxableTreatment,
-  provenance: Schema.Literal("deterministic", "rule", "ai", "manual"),
+  provenance: Schema.Literals(["deterministic", "rule", "ai", "manual"]),
   derivationRule: Schema.NullOr(Schema.String),
   matchedLots: Schema.Array(SourceDisposalMatchedLot),
 }) {}
@@ -417,214 +417,203 @@ export class SourceDisposalExplanationResponse extends Schema.Class<SourceDispos
 /**
  * GET /sources - List all sources for the authenticated user
  */
-const listSources = HttpApiEndpoint.get("listSources", "/sources")
-  .addSuccess(SourceListResponse)
-  .addError(SourceBadRequestError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List sources",
-      description: "Lists all sources for the authenticated user.",
-    })
-  )
+const listSources = HttpApiEndpoint.get("listSources", "/sources", {
+  success: SourceListResponse,
+  error: [SourceBadRequestError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "List sources",
+    description: "Lists all sources for the authenticated user.",
+  })
+)
 
 /**
  * POST /sources - Create or reuse a source for the authenticated user.
  */
-const createSource = HttpApiEndpoint.post("createSource", "/sources")
-  .setPayload(SourceCreateRequest)
-  .addSuccess(SourceCreateResponse)
-  .addError(SourceBadRequestError)
-  .addError(UnauthorizedError)
-  .addError(SourcePaymentRequiredError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Create source",
-      description:
-        "Creates or reuses an onchain source for an authenticated user, or creates an anonymous wallet source when no credentials are present.",
-    })
-  )
+const createSource = HttpApiEndpoint.post("createSource", "/sources", {
+  payload: Schema.Struct(SourceCreateRequest.fields),
+  success: SourceCreateResponse,
+  error: [
+    SourceBadRequestError,
+    UnauthorizedError,
+    SourcePaymentRequiredError,
+    InternalServerError,
+  ],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Create source",
+    description:
+      "Creates or reuses an onchain source for an authenticated user, or creates an anonymous wallet source when no credentials are present.",
+  })
+)
 
 /**
  * POST /sources/:provider/sync - Start a source sync job
  */
-const startSourceSyncJob = HttpApiEndpoint.post("startSourceSyncJob", "/sources/:sourceId/sync")
-  .setPath(
-    Schema.Struct({
-      sourceId: Schema.String,
-    })
-  )
-  .addSuccess(SourceSyncStartResponse)
-  .addError(SourceBadRequestError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Start source sync",
-      description: "Starts sync for the specified source or returns active/completed job",
-    })
-  )
+const startSourceSyncJob = HttpApiEndpoint.post("startSourceSyncJob", "/sources/:sourceId/sync", {
+  params: Schema.Struct({
+    sourceId: Schema.String,
+  }),
+  success: SourceSyncStartResponse,
+  error: [SourceBadRequestError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Start source sync",
+    description: "Starts sync for the specified source or returns active/completed job",
+  })
+)
 
 /**
  * POST /sources/:sourceId/replay - Reset derived source data and replay cached raw rows
  */
-const replaySourceSyncJob = HttpApiEndpoint.post("replaySourceSyncJob", "/sources/:sourceId/replay")
-  .setPath(
-    Schema.Struct({
+const replaySourceSyncJob = HttpApiEndpoint.post(
+  "replaySourceSyncJob",
+  "/sources/:sourceId/replay",
+  {
+    params: Schema.Struct({
       sourceId: Schema.String,
-    })
-  )
-  .addSuccess(SourceSyncStartResponse)
-  .addError(SourceBadRequestError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Replay source normalization",
-      description:
-        "Resets canonical data for the specified source and rebuilds it from cached raw provider records.",
-    })
-  )
+    }),
+    success: SourceSyncStartResponse,
+    error: [SourceBadRequestError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "Replay source normalization",
+    description:
+      "Resets canonical data for the specified source and rebuilds it from cached raw provider records.",
+  })
+)
 
 /**
  * GET /sources/:sourceId/jobs/:jobId - Get status of a source sync job
  */
 const getSourceSyncJobStatus = HttpApiEndpoint.get(
   "getSourceSyncJobStatus",
-  "/sources/:sourceId/jobs/:jobId"
-)
-  .setPath(
-    Schema.Struct({
+  "/sources/:sourceId/jobs/:jobId",
+  {
+    params: Schema.Struct({
       sourceId: Schema.String,
       jobId: Schema.String,
-    })
-  )
-  .addSuccess(SourceSyncJobResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get source sync job status",
-      description: "Returns sync job status and counters for the authenticated user.",
-    })
-  )
+    }),
+    success: SourceSyncJobResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get source sync job status",
+    description: "Returns sync job status and counters for the authenticated user.",
+  })
+)
 
 /**
  * POST /sources/:sourceId/tax - Calculate tax of a source in a given jurisdiction
  */
 const calculateTaxForSource = HttpApiEndpoint.post(
   "calculateTaxForSource",
-  "/sources/:sourceId/tax"
-)
-  .setPath(
-    Schema.Struct({
+  "/sources/:sourceId/tax",
+  {
+    params: Schema.Struct({
       sourceId: Schema.String,
-    })
-  )
-  .setPayload(TaxCalculationRequest)
-  .addSuccess(TaxCalculationResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Calculate tax for source",
-      description: "Calculates jurisdiction-oriented tax from normalized FIFO and income data.",
-    })
-  )
+    }),
+    payload: Schema.Struct(TaxCalculationRequest.fields),
+    success: TaxCalculationResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "Calculate tax for source",
+    description: "Calculates jurisdiction-oriented tax from normalized FIFO and income data.",
+  })
+)
 
-const getSourceOverview = HttpApiEndpoint.get("getSourceOverview", "/sources/:sourceId/overview")
-  .setPath(Schema.Struct({ sourceId: Schema.String }))
-  .addSuccess(SourceOverviewResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get source overview",
-      description: "Returns source metadata, latest sync status, and report counters.",
-    })
-  )
+const getSourceOverview = HttpApiEndpoint.get("getSourceOverview", "/sources/:sourceId/overview", {
+  params: Schema.Struct({ sourceId: Schema.String }),
+  success: SourceOverviewResponse,
+  error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get source overview",
+    description: "Returns source metadata, latest sync status, and report counters.",
+  })
+)
 
 const listSourceAssetPnl = HttpApiEndpoint.get(
   "listSourceAssetPnl",
-  "/sources/:sourceId/assets/pnl"
+  "/sources/:sourceId/assets/pnl",
+  {
+    params: Schema.Struct({ sourceId: Schema.String }),
+    success: SourceAssetPnlResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "List source asset P&L",
+    description: "Returns source-scoped per-asset inventory and realized P&L rows.",
+  })
 )
-  .setPath(Schema.Struct({ sourceId: Schema.String }))
-  .addSuccess(SourceAssetPnlResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List source asset P&L",
-      description: "Returns source-scoped per-asset inventory and realized P&L rows.",
-    })
-  )
 
 const listSourceTransactions = HttpApiEndpoint.get(
   "listSourceTransactions",
-  "/sources/:sourceId/transactions"
+  "/sources/:sourceId/transactions",
+  {
+    params: Schema.Struct({ sourceId: Schema.String }),
+    query: SourceReportPageParams,
+    success: SourceTransactionsResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "List source transactions",
+    description: "Returns paginated source-scoped normalized transaction rows.",
+  })
 )
-  .setPath(Schema.Struct({ sourceId: Schema.String }))
-  .setUrlParams(SourceReportPageParams)
-  .addSuccess(SourceTransactionsResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List source transactions",
-      description: "Returns paginated source-scoped normalized transaction rows.",
-    })
-  )
 
 const listSourceTaxEvents = HttpApiEndpoint.get(
   "listSourceTaxEvents",
-  "/sources/:sourceId/tax-events"
+  "/sources/:sourceId/tax-events",
+  {
+    params: Schema.Struct({ sourceId: Schema.String }),
+    query: SourceReportPageParams,
+    success: SourceTaxEventsResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "List source tax events",
+    description: "Returns paginated tax-visible read projections from canonical rows.",
+  })
 )
-  .setPath(Schema.Struct({ sourceId: Schema.String }))
-  .setUrlParams(SourceReportPageParams)
-  .addSuccess(SourceTaxEventsResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List source tax events",
-      description: "Returns paginated tax-visible read projections from canonical rows.",
-    })
-  )
 
-const listSourceFifoLots = HttpApiEndpoint.get("listSourceFifoLots", "/sources/:sourceId/fifo-lots")
-  .setPath(Schema.Struct({ sourceId: Schema.String }))
-  .setUrlParams(SourceReportPageParams)
-  .addSuccess(SourceFifoLotsResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List source FIFO lots",
-      description: "Returns paginated source-scoped FIFO lots and disposal match summaries.",
-    })
-  )
+const listSourceFifoLots = HttpApiEndpoint.get(
+  "listSourceFifoLots",
+  "/sources/:sourceId/fifo-lots",
+  {
+    params: Schema.Struct({ sourceId: Schema.String }),
+    query: SourceReportPageParams,
+    success: SourceFifoLotsResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "List source FIFO lots",
+    description: "Returns paginated source-scoped FIFO lots and disposal match summaries.",
+  })
+)
 
 const explainSourceDisposal = HttpApiEndpoint.get(
   "explainSourceDisposal",
-  "/sources/:sourceId/disposals/:legId/explanation"
+  "/sources/:sourceId/disposals/:legId/explanation",
+  {
+    params: Schema.Struct({ sourceId: Schema.String, legId: Schema.String }),
+    success: SourceDisposalExplanationResponse,
+    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+  }
+).annotateMerge(
+  OpenApi.annotations({
+    summary: "Explain source disposal",
+    description: "Returns deterministic FIFO derivation details for a disposal leg.",
+  })
 )
-  .setPath(Schema.Struct({ sourceId: Schema.String, legId: Schema.String }))
-  .addSuccess(SourceDisposalExplanationResponse)
-  .addError(SourceBadRequestError)
-  .addError(SourceNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Explain source disposal",
-      description: "Returns deterministic FIFO derivation details for a disposal leg.",
-    })
-  )
 
 // =============================================================================
 // API Groups
@@ -645,10 +634,10 @@ export class SourcesApi extends HttpApiGroup.make("sources")
   .add(listSourceTaxEvents)
   .add(listSourceFifoLots)
   .add(explainSourceDisposal)
-  .middlewareEndpoints(AuthMiddleware)
+  .middleware(AuthMiddleware)
   .add(createSource)
   .prefix("/v1")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Sources",
       description: "Endpoints for syncing sources and calculating their tax",

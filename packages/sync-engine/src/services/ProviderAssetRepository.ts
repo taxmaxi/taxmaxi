@@ -248,7 +248,7 @@ export interface ProviderAssetRepositoryShape {
 /**
  * ProviderAssetRepository - Context tag for provider asset persistence.
  */
-export class ProviderAssetRepository extends Context.Tag("ProviderAssetRepository")<
+export class ProviderAssetRepository extends Context.Service<
   ProviderAssetRepository,
   ProviderAssetRepositoryShape
->() {}
+>()("ProviderAssetRepository") {}

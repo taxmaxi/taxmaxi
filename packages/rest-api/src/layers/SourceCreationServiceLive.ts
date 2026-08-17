@@ -115,7 +115,7 @@ export const SourceCreationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const parsedAddress = parseCryptoAddress(walletAddress)
         if (parsedAddress === null) {
-          return yield* Effect.fail(toBadRequestError("Invalid crypto address."))
+          return yield* toBadRequestError("Invalid crypto address.")
         }
 
         return parsedAddress
@@ -149,7 +149,7 @@ export const SourceCreationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(() => toInternalError("Failed to list anonymous sources.")))
 
-        return Option.fromNullable(
+        return Option.fromNullishOr(
           entitlements.find(
             (entitlement) =>
               entitlement.chainType === chainType &&
@@ -190,13 +190,11 @@ export const SourceCreationServiceLive = Layer.effect(
         )
 
     const loadClaimTokenPepper = Effect.gen(function* () {
-      const pepper = yield* Effect.configProviderWith((provider) =>
-        provider
-          .load(claimTokenPepperConfig)
-          .pipe(Effect.mapError(() => toInternalError("Missing claim token pepper.")))
+      const pepper = yield* claimTokenPepperConfig.pipe(
+        Effect.mapError(() => toInternalError("Missing claim token pepper."))
       )
       if (Redacted.value(pepper).trim() === "") {
-        return yield* Effect.fail(toInternalError("Missing claim token pepper."))
+        return yield* toInternalError("Missing claim token pepper.")
       }
       return pepper
     })
@@ -338,7 +336,7 @@ export const SourceCreationServiceLive = Layer.effect(
             .pipe(Effect.mapError(() => toInternalError("Failed to load anonymous source.")))
 
           if (Option.isNone(maybeSource)) {
-            return yield* Effect.fail(toInternalError("Anonymous source not found."))
+            return yield* toInternalError("Anonymous source not found.")
           }
 
           return {

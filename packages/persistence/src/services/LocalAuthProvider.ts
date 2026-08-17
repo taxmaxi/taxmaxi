@@ -26,7 +26,6 @@ import type { AuthProvider } from "@my/core/authentication"
  * })
  * ```
  */
-export class LocalAuthProvider extends Context.Tag("LocalAuthProvider")<
-  LocalAuthProvider,
-  AuthProvider
->() {}
+export class LocalAuthProvider extends Context.Service<LocalAuthProvider, AuthProvider>()(
+  "LocalAuthProvider"
+) {}

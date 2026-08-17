@@ -10,6 +10,8 @@
 import * as Context from "effect/Context"
 import * as Schema from "effect/Schema"
 
+const NonEmptyTrimmedString = Schema.Trimmed.check(Schema.isNonEmpty())
+
 /**
  * CoinbaseConfig - Configuration for Coinbase OAuth provider
  *
@@ -24,7 +26,7 @@ export class CoinbaseConfig extends Schema.Class<CoinbaseConfig>("CoinbaseConfig
    *
    * Used to identify your application in OAuth flows.
    */
-  clientId: Schema.NonEmptyTrimmedString.annotations({
+  clientId: NonEmptyTrimmedString.annotate({
     title: "Client ID",
     description: "Coinbase OAuth client ID",
   }),
@@ -35,7 +37,7 @@ export class CoinbaseConfig extends Schema.Class<CoinbaseConfig>("CoinbaseConfig
    * Used for server-side token exchange.
    * Must be kept confidential.
    */
-  clientSecret: Schema.Redacted(Schema.NonEmptyTrimmedString).annotations({
+  clientSecret: Schema.Redacted(NonEmptyTrimmedString).annotate({
     title: "Client Secret",
     description: "Coinbase OAuth client secret for server-side authentication",
   }),
@@ -46,7 +48,7 @@ export class CoinbaseConfig extends Schema.Class<CoinbaseConfig>("CoinbaseConfig
    * The URL where Coinbase redirects after authentication.
    * Must be registered in your Coinbase OAuth app settings.
    */
-  redirectUri: Schema.NonEmptyTrimmedString.annotations({
+  redirectUri: NonEmptyTrimmedString.annotate({
     title: "Redirect URI",
     description: "OAuth callback URL registered in Coinbase OAuth app settings",
   }),
@@ -55,7 +57,6 @@ export class CoinbaseConfig extends Schema.Class<CoinbaseConfig>("CoinbaseConfig
 /**
  * CoinbaseConfigTag - Context.Tag for dependency injection
  */
-export class CoinbaseConfigTag extends Context.Tag("CoinbaseConfig")<
-  CoinbaseConfigTag,
-  CoinbaseConfig
->() {}
+export class CoinbaseConfigTag extends Context.Service<CoinbaseConfigTag, CoinbaseConfig>()(
+  "CoinbaseConfig"
+) {}

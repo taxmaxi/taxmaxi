@@ -19,7 +19,7 @@ export const OAUTH_PROVIDER_TYPES = ["google", "coinbase"] as const
 /**
  * OAuthProviderType - Supported OAuth authentication providers
  */
-export const OAuthProviderType = Schema.Literal(...OAUTH_PROVIDER_TYPES).annotations({
+export const OAuthProviderType = Schema.Literals(OAUTH_PROVIDER_TYPES).annotate({
   identifier: "OAuthProviderType",
   title: "OAuth Provider Type",
   description: "The type of OAuth authentication provider used",
@@ -45,10 +45,10 @@ export const isOAuthProviderType = Schema.is(OAuthProviderType)
  *
  * Additional providers can be added as needed.
  */
-export const AuthProviderType = Schema.Literal(
+export const AuthProviderType = Schema.Literals([
   LOCAL_AUTH_PROVIDER,
-  ...OAUTH_PROVIDER_TYPES
-).annotations({
+  ...OAUTH_PROVIDER_TYPES,
+]).annotate({
   identifier: "AuthProviderType",
   title: "Auth Provider Type",
   description: "The type of authentication provider used",

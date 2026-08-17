@@ -28,10 +28,9 @@ export interface SolanaDuneClientShape {
   ) => Effect.Effect<unknown, SolanaDuneError>
 }
 
-export class SolanaDuneClient extends Context.Tag("SolanaDuneClient")<
-  SolanaDuneClient,
-  SolanaDuneClientShape
->() {}
+export class SolanaDuneClient extends Context.Service<SolanaDuneClient, SolanaDuneClientShape>()(
+  "SolanaDuneClient"
+) {}
 
 /** Test layer for injecting deterministic Dune query responses. */
 export const SolanaDuneClientTestLive = (

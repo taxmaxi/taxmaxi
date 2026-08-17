@@ -32,7 +32,7 @@ const make = Effect.gen(function* () {
                 [
                   market.id,
                   {
-                    price: BigDecimal.format(BigDecimal.unsafeFromNumber(market.currentPrice)),
+                    price: BigDecimal.format(BigDecimal.fromNumberUnsafe(market.currentPrice)),
                     logoUrl: market.image,
                   },
                 ] as const,

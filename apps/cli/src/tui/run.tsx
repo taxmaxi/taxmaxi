@@ -54,7 +54,7 @@ export const runTui: Effect.Effect<void, CliCommandError> = Effect.scoped(
     const requestExitFromSignal = () => requestExit()
 
     renderer.setTerminalTitle("TaxMaxi")
-    renderer.once("destroy", () => Deferred.unsafeDone(shutdown, Effect.void))
+    renderer.once("destroy", () => Deferred.doneUnsafe(shutdown, Effect.void))
 
     yield* Effect.addFinalizer(() => Effect.promise(() => disposeController()))
     yield* onSignal("SIGHUP", requestExitFromSignal)

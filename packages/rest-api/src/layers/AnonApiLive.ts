@@ -4,7 +4,8 @@
  * @module AnonApiLive
  */
 
-import { HttpApiBuilder, HttpApp, HttpServerRequest, HttpServerResponse } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpEffect, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { SourceId } from "@my/core/source"
 import { PrincipalClaimRepository } from "@my/persistence/services"
 import * as Config from "effect/Config"
@@ -90,7 +91,7 @@ const setCookie = ({
   readonly maxAge: Duration.Duration
   readonly baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
 }) =>
-  HttpApp.appendPreResponseHandler((_req, response) =>
+  HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, name, value, {
         ...baseCookieOptions,
@@ -106,7 +107,7 @@ const clearCookie = ({
   readonly name: string
   readonly baseCookieOptions: ReturnType<typeof cookieOptionsForEnv>
 }) =>
-  HttpApp.appendPreResponseHandler((_req, response) =>
+  HttpEffect.appendPreResponseHandler((_req, response) =>
     Effect.orDie(
       HttpServerResponse.setCookie(response, name, "", {
         ...baseCookieOptions,
@@ -128,13 +129,13 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
       const token = request.cookies[ANON_SESSION_COOKIE_NAME]
       if (token === undefined || token.trim() === "") {
         yield* clearCookie({ name: ANON_SESSION_COOKIE_NAME, baseCookieOptions })
-        return yield* Effect.fail(new UnauthorizedError({ message: "Anon session required." }))
+        return yield* new UnauthorizedError({ message: "Anon session required." })
       }
       return yield* anonSessionService.verifySessionToken(token).pipe(
-        Effect.catchAll(() =>
+        Effect.catch(() =>
           Effect.gen(function* () {
             yield* clearCookie({ name: ANON_SESSION_COOKIE_NAME, baseCookieOptions })
-            return yield* Effect.fail(new UnauthorizedError({ message: "Anon session required." }))
+            return yield* new UnauthorizedError({ message: "Anon session required." })
           })
         )
       )
@@ -143,7 +144,7 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
     const findSource = (sourceId: string) =>
       Effect.gen(function* () {
         const session = yield* resolveSession
-        const decodedSourceId = yield* Schema.decodeUnknown(SourceId)(sourceId).pipe(
+        const decodedSourceId = yield* Schema.decodeUnknownEffect(SourceId)(sourceId).pipe(
           Effect.mapError(() => new AnonNotFoundError({ message: "Anonymous source not found." }))
         )
         const maybeSource = yield* principalClaimRepository
@@ -155,9 +156,7 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
           .pipe(Effect.mapError(() => toInternalServerError("Failed to load anonymous source.")))
 
         if (Option.isNone(maybeSource)) {
-          return yield* Effect.fail(
-            new AnonNotFoundError({ message: "Anonymous source not found." })
-          )
+          return yield* new AnonNotFoundError({ message: "Anonymous source not found." })
         }
 
         return { session, source: maybeSource.value }
@@ -176,13 +175,13 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
           return AnonSourceListResponse.make({ sources: sources.map(toAnonSource) })
         })
       )
-      .handle("getAnonSource", ({ path }) =>
+      .handle("getAnonSource", ({ params: path }) =>
         Effect.gen(function* () {
           const { source } = yield* findSource(path.sourceId)
           return toAnonSource(source)
         })
       )
-      .handle("listAnonSourceJobs", ({ path }) =>
+      .handle("listAnonSourceJobs", ({ params: path }) =>
         Effect.gen(function* () {
           const { session, source } = yield* findSource(path.sourceId)
           const jobs = yield* principalClaimRepository
@@ -195,7 +194,7 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
           return { jobs: jobs.map(toSyncJobResponse) }
         })
       )
-      .handle("getAnonSourceJob", ({ path }) =>
+      .handle("getAnonSourceJob", ({ params: path }) =>
         Effect.gen(function* () {
           const { session, source } = yield* findSource(path.sourceId)
           const maybeJob = yield* principalClaimRepository
@@ -208,7 +207,7 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
             .pipe(Effect.mapError(() => toInternalServerError("Failed to load anonymous job.")))
 
           if (Option.isNone(maybeJob)) {
-            return yield* Effect.fail(new AnonNotFoundError({ message: "Sync job not found." }))
+            return yield* new AnonNotFoundError({ message: "Sync job not found." })
           }
 
           return toSyncJobResponse(maybeJob.value)
@@ -236,9 +235,7 @@ export const AnonApiLive = HttpApiBuilder.group(TaxMaxiApi, "anon", (handlers) =
           const request = yield* HttpServerRequest.HttpServerRequest
           const challengeToken = request.cookies[ANON_CHALLENGE_COOKIE_NAME]
           if (challengeToken === undefined || challengeToken.trim() === "") {
-            return yield* Effect.fail(
-              new AnonBadRequestError({ message: "SIWX challenge required." })
-            )
+            return yield* new AnonBadRequestError({ message: "SIWX challenge required." })
           }
 
           const expectedNonce = yield* anonSessionService

@@ -34,10 +34,9 @@ const REPORTING_CURRENCY = EUR
 const taxCalculationOutcomeMetric = Metric.frequency("taxmaxi_tax_calculation_outcomes", {
   description: "Outcome frequencies for source-scoped tax calculations.",
 })
-const taxCalculationDurationMetric = Metric.timer(
-  "taxmaxi_tax_calculation_duration",
-  "Duration of successful source-scoped tax calculations."
-)
+const taxCalculationDurationMetric = Metric.timer("taxmaxi_tax_calculation_duration", {
+  description: "Duration of successful source-scoped tax calculations.",
+})
 
 interface DisposalMatchRow {
   readonly disposalLegId: string
@@ -85,12 +84,17 @@ const isTaxFreeDisposal = ({
 }: Pick<DisposalMatchRow, "acquiredAt" | "disposedAt">): boolean =>
   disposedAt.getTime() >= holdingPeriodEnd(acquiredAt).getTime()
 
-const wrapTaxCalculationError =
-  () =>
-  <A, R>(
-    effect: Effect.Effect<A, TaxCalculationServiceError, R>
-  ): Effect.Effect<A, TaxCalculationServiceError, R> =>
-    effect
+const normalizeTaxCalculationError = (error: unknown): TaxCalculationServiceError =>
+  error instanceof SourceNotFoundError ||
+  error instanceof UnsupportedJurisdictionError ||
+  error instanceof TaxCalculationIncompleteDataError ||
+  error instanceof TaxCalculationUnsupportedCurrencyError ||
+  error instanceof PersistenceError
+    ? error
+    : new PersistenceError({
+        operation: "taxCalculationService.calculateTax",
+        cause: error,
+      })
 
 const recordTaxCalculationOutcome = ({
   jurisdiction,
@@ -99,15 +103,10 @@ const recordTaxCalculationOutcome = ({
   readonly jurisdiction: string
   readonly outcome: string
 }) =>
-  Metric.update(
-    taxCalculationOutcomeMetric.pipe(Metric.tagged("jurisdiction", jurisdiction)),
-    outcome
-  )
+  Metric.update(taxCalculationOutcomeMetric.pipe(Metric.withAttributes({ jurisdiction })), outcome)
 
 const trackTaxCalculationDuration = ({ jurisdiction }: { readonly jurisdiction: string }) =>
-  Metric.trackDuration(
-    taxCalculationDurationMetric.pipe(Metric.tagged("jurisdiction", jurisdiction))
-  )
+  Effect.trackDuration(taxCalculationDurationMetric.pipe(Metric.withAttributes({ jurisdiction })))
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
@@ -146,7 +145,7 @@ const make = Effect.gen(function* () {
     readonly value: unknown
     readonly operation: string
   }): Effect.Effect<BigDecimal.BigDecimal, PersistenceError> =>
-    Schema.decodeUnknown(Schema.BigDecimal)(value).pipe(
+    Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(value).pipe(
       Effect.mapError(
         () =>
           new PersistenceError({
@@ -184,24 +183,20 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       if (currency === null) {
-        return yield* Effect.fail(
-          new TaxCalculationIncompleteDataError({
-            sourceId,
-            field,
-            reason: "missing fiat currency",
-          })
-        )
+        return yield* new TaxCalculationIncompleteDataError({
+          sourceId,
+          field,
+          reason: "missing fiat currency",
+        })
       }
 
       if (currency !== REPORTING_CURRENCY) {
-        return yield* Effect.fail(
-          new TaxCalculationUnsupportedCurrencyError({
-            sourceId,
-            field,
-            expectedCurrency: REPORTING_CURRENCY,
-            actualCurrency: currency,
-          })
-        )
+        return yield* new TaxCalculationUnsupportedCurrencyError({
+          sourceId,
+          field,
+          expectedCurrency: REPORTING_CURRENCY,
+          actualCurrency: currency,
+        })
       }
 
       return REPORTING_CURRENCY
@@ -223,7 +218,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSqlError("taxCalculationService.loadSource.select"))
 
       if (source === undefined) {
-        return yield* Effect.fail(new SourceNotFoundError({ sourceId }))
+        return yield* new SourceNotFoundError({ sourceId })
       }
 
       return source
@@ -335,7 +330,7 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
     readonly rows: ReadonlyArray<DisposalMatchRow>
   }) =>
-    Effect.reduce(rows, emptyTotals(), (totals, row) =>
+    Effect.reduce(rows, emptyTotals, (totals, row) =>
       Effect.gen(function* () {
         yield* ensureReportingCurrency({
           sourceId,
@@ -390,7 +385,7 @@ const make = Effect.gen(function* () {
     readonly sourceId: string
     readonly rows: ReadonlyArray<IncomeLegRow>
   }) =>
-    Effect.reduce(rows, zeroAmount(), (incomeTotal, row) =>
+    Effect.reduce(rows, zeroAmount, (incomeTotal, row) =>
       Effect.gen(function* () {
         yield* ensureReportingCurrency({
           sourceId,
@@ -399,13 +394,11 @@ const make = Effect.gen(function* () {
         })
 
         if (row.fiatAmount === null) {
-          return yield* Effect.fail(
-            new TaxCalculationIncompleteDataError({
-              sourceId,
-              field: `income leg ${row.legId} fiat amount`,
-              reason: "missing fiat valuation",
-            })
-          )
+          return yield* new TaxCalculationIncompleteDataError({
+            sourceId,
+            field: `income leg ${row.legId} fiat amount`,
+            reason: "missing fiat valuation",
+          })
         }
 
         const fiatAmount = yield* decodeDecimal({
@@ -424,7 +417,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       if (jurisdiction !== SUPPORTED_JURISDICTION) {
-        return yield* Effect.fail(new UnsupportedJurisdictionError({ jurisdiction }))
+        return yield* new UnsupportedJurisdictionError({ jurisdiction })
       }
 
       yield* loadSource(sourceId)
@@ -492,6 +485,7 @@ const make = Effect.gen(function* () {
         attributes: { sourceId, jurisdiction, year },
       }),
       trackTaxCalculationDuration({ jurisdiction }),
+      Effect.mapError(normalizeTaxCalculationError),
       Effect.tapError((error) =>
         Effect.all(
           [
@@ -511,8 +505,7 @@ const make = Effect.gen(function* () {
           ],
           { discard: true }
         )
-      ),
-      wrapTaxCalculationError()
+      )
     )
 
   return {

@@ -19,7 +19,7 @@ const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `
 
 const getDatabaseConfig = Effect.gen(function* () {
   const host = yield* Config.string("PGHOST").pipe(Config.withDefault("localhost"))
-  const port = yield* Config.integer("PGPORT").pipe(Config.withDefault(5432))
+  const port = yield* Config.int("PGPORT").pipe(Config.withDefault(5432))
   const user = yield* Config.string("PGUSER").pipe(Config.withDefault("postgres"))
   const password = yield* Config.redacted("PGPASSWORD").pipe(
     Config.withDefault(Redacted.make("postgres"))

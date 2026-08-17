@@ -89,7 +89,7 @@ const resetAssetResolutionFixture = Effect.gen(function* () {
     .limit(1)
 
   if (solanaBlockchain === undefined) {
-    return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+    return yield* Effect.die("Missing seeded Solana blockchain")
   }
 
   yield* db.delete(schema.providerAssetMappings)
@@ -184,10 +184,10 @@ const HeliusSolanaAssetResolutionTestLive = (
         HeliusSolanaSyncClient,
         HeliusSolanaSyncClient.of({
           fetchTransactionsForAddress: () =>
-            Effect.dieMessage("fetchTransactionsForAddress should not be called"),
+            Effect.die("fetchTransactionsForAddress should not be called"),
           fetchAssetBatch,
           fetchTransfersForAddress: () =>
-            Effect.dieMessage("fetchTransfersForAddress should not be called"),
+            Effect.die("fetchTransfersForAddress should not be called"),
         })
       )
     )
@@ -286,7 +286,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         })
       ),
-      () => Effect.dieMessage("DAS should not be called for wrapped SOL default mapping")
+      () => Effect.die("DAS should not be called for wrapped SOL default mapping")
     )
 
     expect(result).toMatchObject({
@@ -303,7 +303,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         service.ensureDefaultMappings()
       ),
-      () => Effect.dieMessage("DAS should not be called while seeding default mappings")
+      () => Effect.die("DAS should not be called while seeding default mappings")
     )
 
     await context.runPg(
@@ -316,7 +316,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (wrappedSolProviderAsset === undefined) {
-          return yield* Effect.dieMessage("Missing wrapped SOL provider asset")
+          return yield* Effect.die("Missing wrapped SOL provider asset")
         }
 
         yield* db
@@ -331,7 +331,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     )
 
     const result = await runAssetService(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
           service.resolveAsset({
             kind: "spl",
@@ -339,12 +339,12 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         )
       ),
-      () => Effect.dieMessage("DAS should not be called for an approved mapping")
+      () => Effect.die("DAS should not be called for an approved mapping")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "HeliusSolanaBrokenApprovedProviderAssetMappingError",
         mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
       })
@@ -356,7 +356,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
         service.ensureDefaultMappings()
       ),
-      () => Effect.dieMessage("DAS should not be called while seeding default mappings")
+      () => Effect.die("DAS should not be called while seeding default mappings")
     )
 
     await context.runPg(
@@ -370,7 +370,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     )
 
     const result = await runAssetService(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
           service.resolveAsset({
             kind: "spl",
@@ -378,12 +378,12 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         )
       ),
-      () => Effect.dieMessage("DAS should not be called for an approved mapping")
+      () => Effect.die("DAS should not be called for an approved mapping")
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "HeliusSolanaBrokenApprovedProviderAssetMappingError",
         mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
         message:
@@ -471,7 +471,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           })
         })
       ),
-      () => Effect.dieMessage("DAS should not be called for approved cached mapping")
+      () => Effect.die("DAS should not be called for approved cached mapping")
     )
 
     expect(result).toMatchObject({
@@ -558,7 +558,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -624,7 +624,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -707,7 +707,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .where(eq(schema.blockchains.name, "solana"))
           .limit(1)
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
         yield* db.insert(schema.assets).values({
           id: UNKNOWN_ASSET_ID,
@@ -784,7 +784,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .where(eq(schema.blockchains.name, "solana"))
           .limit(1)
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
         yield* db.insert(schema.assets).values({
           id: UNKNOWN_ASSET_ID,
@@ -822,7 +822,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     )
 
     const result = await runAssetService(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
           service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
         )
@@ -841,7 +841,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       })
     )
 
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
     expect(state.providerAsset).toMatchObject({ mappingStatus: "pending_review" })
     expect(state.jobs).toHaveLength(0)
   })
@@ -857,7 +857,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -944,7 +944,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: UNKNOWN_MINT,
         })
       ),
-      () => Effect.dieMessage("Cached DAS metadata should not be refetched")
+      () => Effect.die("Cached DAS metadata should not be refetched")
     )
 
     expect(result).toMatchObject({
@@ -1210,7 +1210,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: UNKNOWN_MINT,
         })
       ),
-      () => Effect.dieMessage("Complete cached DAS metadata should not be refetched")
+      () => Effect.die("Complete cached DAS metadata should not be refetched")
     )
 
     expect(result).toMatchObject({
@@ -1229,7 +1229,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
             kind: "spl",
             mintAddress: UNKNOWN_MINT,
           })
-          .pipe(Effect.either)
+          .pipe(Effect.result)
       ),
       () =>
         Effect.succeed([
@@ -1242,12 +1242,12 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
         ])
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         _tag: "HeliusSolanaAssetMetadataDecodeError",
       })
-      expect(result.left.message).toContain("Invalid Helius DAS asset batch payload")
+      expect(result.failure.message).toContain("Invalid Helius DAS asset batch payload")
     }
   })
 
@@ -1292,7 +1292,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           .limit(1)
 
         if (solanaBlockchain === undefined) {
-          return yield* Effect.dieMessage("Missing seeded Solana blockchain")
+          return yield* Effect.die("Missing seeded Solana blockchain")
         }
 
         yield* db.insert(schema.assets).values({
@@ -1338,7 +1338,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
           mintAddress: UNKNOWN_MINT,
         })
       ),
-      () => Effect.dieMessage("DAS should not be called when approved mapping is cached")
+      () => Effect.die("DAS should not be called when approved mapping is cached")
     )
 
     expect(dasCallCount).toBe(1)

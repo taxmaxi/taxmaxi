@@ -101,7 +101,7 @@ export interface SourceCreationServiceShape {
 /**
  * SourceCreationService - Context tag for source creation orchestration.
  */
-export class SourceCreationService extends Context.Tag("@my/rest-api/SourceCreationService")<
+export class SourceCreationService extends Context.Service<
   SourceCreationService,
   SourceCreationServiceShape
->() {}
+>()("@my/rest-api/SourceCreationService") {}

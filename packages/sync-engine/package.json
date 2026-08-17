@@ -90,17 +90,15 @@
     "clean": "rm -rf dist .turbo node_modules && rm -f tsconfig.tsbuildinfo && rm -f tsconfig.tests.tsbuildinfo"
   },
   "dependencies": {
-    "@effect/platform": "0.96.1",
     "@my/core": "workspace:*",
-    "effect": "3.21.2",
+    "effect": "4.0.0-rc.109",
     "helius-sdk": "2.2.2"
   },
   "devDependencies": {
-    "@effect/sql": "0.51.1",
-    "@effect/sql-pg": "0.52.1",
+    "@effect/sql-pg": "4.0.0-rc.109",
     "@my/typescript-config": "workspace:*",
     "@types/node": "26.0.1",
-    "drizzle-orm": "1.0.0-beta.13-f728631",
+    "drizzle-orm": "1.0.0-rc.5-169397b",
     "typescript": "6.0.3"
   }
 }

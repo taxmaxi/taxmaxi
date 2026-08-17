@@ -25,18 +25,14 @@ import {
 type RepairFailureKind = "not-found" | "conflict"
 
 const makeConfigProvider = (overrides: Record<string, string> = {}) =>
-  ConfigProvider.fromMap(
-    new Map(
-      Object.entries({
-        QUEUE_REDIS_URL: "redis://localhost:6379",
-        SOURCE_SYNC_QUEUE_PREFIX: "test-prefix",
-        SOURCE_SYNC_REPAIR_STALE_AFTER_MS: "1000",
-        SOURCE_SYNC_REPAIR_BATCH_SIZE: "10",
-        SYNC_WORKER_MAX_ATTEMPTS: "3",
-        ...overrides,
-      })
-    )
-  )
+  ConfigProvider.fromEnvRecord({
+    QUEUE_REDIS_URL: "redis://localhost:6379",
+    SOURCE_SYNC_QUEUE_PREFIX: "test-prefix",
+    SOURCE_SYNC_REPAIR_STALE_AFTER_MS: "1000",
+    SOURCE_SYNC_REPAIR_BATCH_SIZE: "10",
+    SYNC_WORKER_MAX_ATTEMPTS: "3",
+    ...overrides,
+  })
 
 const baseUpdatedAt = new Date("2026-01-01T00:00:00.000Z")
 
@@ -110,8 +106,8 @@ const makeRepositoryLayer = ({
         })
 
   return Layer.succeed(SourceSyncJobRepository, {
-    findActiveJob: () => Effect.dieMessage("findActiveJob should not be called"),
-    createOrReuseJob: () => Effect.dieMessage("createOrReuseJob should not be called"),
+    findActiveJob: () => Effect.die(new Error("findActiveJob should not be called")),
+    createOrReuseJob: () => Effect.die(new Error("createOrReuseJob should not be called")),
     attachQueueMetadata: (params) => {
       if (params.jobId === attachFailureJobId) {
         removeRepairableJob(params.jobId)
@@ -123,9 +119,10 @@ const makeRepositoryLayer = ({
         removeRepairableJob(params.jobId)
       })
     },
-    claimJob: () => Effect.dieMessage("claimJob should not be called"),
-    heartbeatJob: () => Effect.dieMessage("heartbeatJob should not be called"),
-    recordRetryableFailure: () => Effect.dieMessage("recordRetryableFailure should not be called"),
+    claimJob: () => Effect.die(new Error("claimJob should not be called")),
+    heartbeatJob: () => Effect.die(new Error("heartbeatJob should not be called")),
+    recordRetryableFailure: () =>
+      Effect.die(new Error("recordRetryableFailure should not be called")),
     recoverStaleActiveJob: (params) => {
       if (params.jobId === recoverFailureJobId) {
         removeRepairableJob(params.jobId)
@@ -140,17 +137,17 @@ const makeRepositoryLayer = ({
         }
       })
     },
-    failJob: () => Effect.dieMessage("failJob should not be called"),
-    completeJob: () => Effect.dieMessage("completeJob should not be called"),
+    failJob: () => Effect.die(new Error("failJob should not be called")),
+    completeJob: () => Effect.die(new Error("completeJob should not be called")),
     getJob: () =>
       visibleJob === undefined
-        ? Effect.dieMessage("getJob should not be called")
+        ? Effect.die(new Error("getJob should not be called"))
         : Effect.succeed(visibleJob),
     getExecutionJob: () =>
       executionJob === undefined
-        ? Effect.dieMessage("getExecutionJob should not be called")
+        ? Effect.die(new Error("getExecutionJob should not be called"))
         : Effect.succeed(executionJob),
-    listStaleActiveJobs: () => Effect.dieMessage("listStaleActiveJobs should not be called"),
+    listStaleActiveJobs: () => Effect.die(new Error("listStaleActiveJobs should not be called")),
     listRepairableActiveJobs: ({ limit }) => Effect.sync(() => remainingJobs.slice(0, limit)),
     listPendingJobsNeedingDispatch: ({ limit }) =>
       Effect.sync(() => remainingJobs.filter(isPendingDispatchJob).slice(0, limit)),
@@ -229,7 +226,7 @@ const runRepair = ({
             )
           )
         ),
-        Effect.withConfigProvider(makeConfigProvider(configOverrides))
+        Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider(configOverrides))
       )
     )
   )
@@ -256,7 +253,7 @@ const runPendingDispatch = ({
             acquireQueue: () => Effect.succeed(makeQueue(enqueued)),
           }).pipe(Layer.provideMerge(makeRepositoryLayer({ repairableJobs, attached, recovered })))
         ),
-        Effect.withConfigProvider(makeConfigProvider())
+        Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
       )
     )
   )
@@ -315,7 +312,7 @@ const runDispatchFollowUp = ({
             )
           )
         ),
-        Effect.withConfigProvider(makeConfigProvider())
+        Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
       )
     )
   )
@@ -352,7 +349,7 @@ describe("WorkerSourceSyncStartupRepairLive", () => {
               )
             )
           ),
-          Effect.withConfigProvider(makeConfigProvider())
+          Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider())
         )
       )
     )

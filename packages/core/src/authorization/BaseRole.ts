@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema"
  * This determines the user's default permission set in that organization.
  * Functional roles can then be added to grant additional capabilities.
  */
-export const BaseRole = Schema.Literal("owner", "viewer").annotations({
+export const BaseRole = Schema.Literals(["owner", "viewer"]).annotate({
   identifier: "BaseRole",
   title: "Base Role",
   description:

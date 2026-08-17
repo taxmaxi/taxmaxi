@@ -23,9 +23,9 @@ import * as Schema from "effect/Schema"
  * - Hashed passwords are not accidentally treated as plain text
  * - The hash has been produced by a proper hashing service
  */
-export const HashedPassword = Schema.NonEmptyTrimmedString.pipe(
+export const HashedPassword = Schema.Trimmed.check(Schema.isNonEmpty()).pipe(
   Schema.brand("HashedPassword"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "HashedPassword",
     title: "Hashed Password",
     description: "A password that has been securely hashed using bcrypt or similar algorithm",

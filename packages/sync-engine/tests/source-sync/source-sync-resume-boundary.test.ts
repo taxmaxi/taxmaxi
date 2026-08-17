@@ -32,7 +32,7 @@ const runWithProvider = <A, E>(
       CoinbaseSourceSyncProviderLive.pipe(
         Layer.provide(
           Layer.succeed(CoinbaseSyncClient, {
-            fetchAccountsPage: () => Effect.dieMessage("fetchAccountsPage should not be called"),
+            fetchAccountsPage: () => Effect.die("fetchAccountsPage should not be called"),
             fetchTransactionsPage: ({ cursor }) => {
               if (cursor === null) {
                 return Effect.succeed({
@@ -71,117 +71,106 @@ const runWithProvider = <A, E>(
                 })
               }
 
-              return Effect.dieMessage(`Unexpected cursor: ${String(cursor)}`)
+              return Effect.die(`Unexpected cursor: ${String(cursor)}`)
             },
-            fetchFiatCurrencies: () =>
-              Effect.dieMessage("fetchFiatCurrencies should not be called"),
-            fetchCryptoCurrencies: () =>
-              Effect.dieMessage("fetchCryptoCurrencies should not be called"),
+            fetchFiatCurrencies: () => Effect.die("fetchFiatCurrencies should not be called"),
+            fetchCryptoCurrencies: () => Effect.die("fetchCryptoCurrencies should not be called"),
           } satisfies CoinbaseSyncClientShape)
         ),
         Layer.provide(
           Layer.succeed(CoinbaseReferenceDataService, {
-            refreshReferenceData: () =>
-              Effect.dieMessage("refreshReferenceData should not be called"),
+            refreshReferenceData: () => Effect.die("refreshReferenceData should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(CoinbaseReferenceMappingService, {
-            ensureDefaultMappings: () =>
-              Effect.dieMessage("ensureDefaultMappings should not be called"),
-            resolveTransactionType: () =>
-              Effect.dieMessage("resolveTransactionType should not be called"),
-            resolveCurrency: () => Effect.dieMessage("resolveCurrency should not be called"),
-            resolveAssetId: () => Effect.dieMessage("resolveAssetId should not be called"),
+            ensureDefaultMappings: () => Effect.die("ensureDefaultMappings should not be called"),
+            resolveTransactionType: () => Effect.die("resolveTransactionType should not be called"),
+            resolveCurrency: () => Effect.die("resolveCurrency should not be called"),
+            resolveAssetId: () => Effect.die("resolveAssetId should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(CoinbaseRecordNormalizer, {
-            normalize: () => Effect.dieMessage("normalize should not be called"),
+            normalize: () => Effect.die("normalize should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(CoinbaseLegDerivationService, {
-            deriveLegs: () => Effect.dieMessage("deriveLegs should not be called"),
+            deriveLegs: () => Effect.die("deriveLegs should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(AssetRepository, {
-            findAssetById: () => Effect.dieMessage("findAssetById should not be called"),
-            findAssetByCoinGeckoId: () =>
-              Effect.dieMessage("findAssetByCoinGeckoId should not be called"),
-            findRepresentationById: () =>
-              Effect.dieMessage("findRepresentationById should not be called"),
+            findAssetById: () => Effect.die("findAssetById should not be called"),
+            findAssetByCoinGeckoId: () => Effect.die("findAssetByCoinGeckoId should not be called"),
+            findRepresentationById: () => Effect.die("findRepresentationById should not be called"),
             findNativeRepresentationForBlockchain: () =>
-              Effect.dieMessage("findNativeRepresentationForBlockchain should not be called"),
+              Effect.die("findNativeRepresentationForBlockchain should not be called"),
             findRepresentationByBlockchainAndAddress: () =>
-              Effect.dieMessage("findRepresentationByBlockchainAndAddress should not be called"),
-            listBlockchains: () => Effect.dieMessage("listBlockchains should not be called"),
+              Effect.die("findRepresentationByBlockchainAndAddress should not be called"),
+            listBlockchains: () => Effect.die("listBlockchains should not be called"),
             upsertEconomicAssetRepresentation: () =>
-              Effect.dieMessage("upsertEconomicAssetRepresentation should not be called"),
+              Effect.die("upsertEconomicAssetRepresentation should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(ProviderAssetRepository, {
-            upsertProviderAssets: () =>
-              Effect.dieMessage("upsertProviderAssets should not be called"),
+            upsertProviderAssets: () => Effect.die("upsertProviderAssets should not be called"),
             upsertProviderAssetMappings: () =>
-              Effect.dieMessage("upsertProviderAssetMappings should not be called"),
+              Effect.die("upsertProviderAssetMappings should not be called"),
             seedProviderAssetMappingsIfMissing: () =>
-              Effect.dieMessage("seedProviderAssetMappingsIfMissing should not be called"),
+              Effect.die("seedProviderAssetMappingsIfMissing should not be called"),
             approveProviderAssetMappingAndRequestReplay: () =>
-              Effect.dieMessage("approveProviderAssetMappingAndRequestReplay should not be called"),
+              Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
             lockProviderAssetApprovalSnapshot: () =>
-              Effect.dieMessage("lockProviderAssetApprovalSnapshot should not be called"),
+              Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
             recordProviderAssetSourceUses: () =>
-              Effect.dieMessage("recordProviderAssetSourceUses should not be called"),
+              Effect.die("recordProviderAssetSourceUses should not be called"),
             findProviderAssetByProviderAssetId: () =>
-              Effect.dieMessage("findProviderAssetByProviderAssetId should not be called"),
+              Effect.die("findProviderAssetByProviderAssetId should not be called"),
             findProviderAssetByNaturalKey: () =>
-              Effect.dieMessage("findProviderAssetByNaturalKey should not be called"),
+              Effect.die("findProviderAssetByNaturalKey should not be called"),
             findProviderAssetByCurrencyCode: () =>
-              Effect.dieMessage("findProviderAssetByCurrencyCode should not be called"),
+              Effect.die("findProviderAssetByCurrencyCode should not be called"),
             findProviderAssetReviewById: () =>
-              Effect.dieMessage("findProviderAssetReviewById should not be called"),
+              Effect.die("findProviderAssetReviewById should not be called"),
             listProviderAssetReviews: () =>
-              Effect.dieMessage("listProviderAssetReviews should not be called"),
+              Effect.die("listProviderAssetReviews should not be called"),
             listProviderAssetObservedRepresentations: () =>
-              Effect.dieMessage("listProviderAssetObservedRepresentations should not be called"),
+              Effect.die("listProviderAssetObservedRepresentations should not be called"),
             findProviderAssetMapping: () =>
-              Effect.dieMessage("findProviderAssetMapping should not be called"),
+              Effect.die("findProviderAssetMapping should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(ProviderReferenceRepository, {
             upsertTransactionTypeCatalog: () =>
-              Effect.dieMessage("upsertTransactionTypeCatalog should not be called"),
+              Effect.die("upsertTransactionTypeCatalog should not be called"),
             ensureTransactionTypeMappings: () =>
-              Effect.dieMessage("ensureTransactionTypeMappings should not be called"),
+              Effect.die("ensureTransactionTypeMappings should not be called"),
             findTransactionTypeMapping: () =>
-              Effect.dieMessage("findTransactionTypeMapping should not be called"),
+              Effect.die("findTransactionTypeMapping should not be called"),
             recordPendingTransactionTypeMapping: () =>
-              Effect.dieMessage("recordPendingTransactionTypeMapping should not be called"),
+              Effect.die("recordPendingTransactionTypeMapping should not be called"),
           })
         ),
         Layer.provide(
           Layer.succeed(SourceRawRecordRepository, {
-            upsertRawBatch: () => Effect.dieMessage("upsertRawBatch should not be called"),
-            listReplayCandidates: () =>
-              Effect.dieMessage("listReplayCandidates should not be called"),
+            upsertRawBatch: () => Effect.die("upsertRawBatch should not be called"),
+            listReplayCandidates: () => Effect.die("listReplayCandidates should not be called"),
             listAllRawRowsForReplay: () =>
-              Effect.dieMessage("listAllRawRowsForReplay should not be called"),
+              Effect.die("listAllRawRowsForReplay should not be called"),
             listPendingNormalizationRecordIds: () =>
-              Effect.dieMessage("listPendingNormalizationRecordIds should not be called"),
-            listRawRecordsByIds: () =>
-              Effect.dieMessage("listRawRecordsByIds should not be called"),
+              Effect.die("listPendingNormalizationRecordIds should not be called"),
+            listRawRecordsByIds: () => Effect.die("listRawRecordsByIds should not be called"),
             listRawRecordsByOccurredAt: () =>
-              Effect.dieMessage("listRawRecordsByOccurredAt should not be called"),
+              Effect.die("listRawRecordsByOccurredAt should not be called"),
             markRawRecordNormalized: () =>
-              Effect.dieMessage("markRawRecordNormalized should not be called"),
-            markRawRecordFailed: () =>
-              Effect.dieMessage("markRawRecordFailed should not be called"),
+              Effect.die("markRawRecordNormalized should not be called"),
+            markRawRecordFailed: () => Effect.die("markRawRecordFailed should not be called"),
             resetNormalizationStateForSource: () =>
-              Effect.dieMessage("resetNormalizationStateForSource should not be called"),
+              Effect.die("resetNormalizationStateForSource should not be called"),
           })
         )
       )

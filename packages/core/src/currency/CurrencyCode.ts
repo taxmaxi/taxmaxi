@@ -14,9 +14,9 @@ import * as Schema from "effect/Schema"
  * Must be exactly 3 uppercase ASCII letters.
  */
 export const CurrencyCode = Schema.String.pipe(
-  Schema.pattern(/^[A-Z]{3}$/),
+  Schema.check(Schema.isPattern(/^[A-Z]{3}$/)),
   Schema.brand("CurrencyCode"),
-  Schema.annotations({
+  Schema.annotate({
     identifier: "CurrencyCode",
     title: "Currency Code",
     description: "An ISO 4217 currency code (3 uppercase letters)",

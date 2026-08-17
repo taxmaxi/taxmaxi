@@ -1,4 +1,4 @@
-import { ConfigProvider, Effect, Layer, Schema } from "effect"
+import { ConfigProvider, Effect, Layer, Result, Schema } from "effect"
 import { UnrecoverableError } from "bullmq"
 import { describe, expect, it } from "vitest"
 import {
@@ -59,17 +59,13 @@ const summary = ({ jobId, status }: { readonly jobId: string; readonly status: "
   }) satisfies SourceSyncJobSummary
 
 const makeConfigProvider = (overrides: Record<string, string> = {}) =>
-  ConfigProvider.fromMap(
-    new Map(
-      Object.entries({
-        QUEUE_REDIS_URL: "redis://localhost:6379",
-        SOURCE_SYNC_QUEUE_PREFIX: "test-prefix",
-        SYNC_WORKER_CONCURRENCY: "3",
-        WORKER_ID: "worker-test-1",
-        ...overrides,
-      })
-    )
-  )
+  ConfigProvider.fromEnvRecord({
+    QUEUE_REDIS_URL: "redis://localhost:6379",
+    SOURCE_SYNC_QUEUE_PREFIX: "test-prefix",
+    SYNC_WORKER_CONCURRENCY: "3",
+    WORKER_ID: "worker-test-1",
+    ...overrides,
+  })
 
 const makeJob = ({
   data,
@@ -158,7 +154,7 @@ const runWithConsumer = <A>({
             )
           )
         ),
-        Effect.withConfigProvider(makeConfigProvider(configOverrides))
+        Effect.provideService(ConfigProvider.ConfigProvider, makeConfigProvider(configOverrides))
       )
     )
   )
@@ -211,7 +207,7 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         }),
       effect: Effect.gen(function* () {
         if (processor === null) {
-          return yield* Effect.dieMessage("Processor was not acquired")
+          return yield* Effect.die(new Error("Processor was not acquired"))
         }
         const acquiredProcessor = processor
 
@@ -279,7 +275,7 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
           return { close: Effect.void }
         }),
       effect: Effect.gen(function* () {
-        if (processor === null) return yield* Effect.dieMessage("Processor was not acquired")
+        if (processor === null) return yield* Effect.die(new Error("Processor was not acquired"))
         const acquiredProcessor = processor
         yield* Effect.promise(() => acquiredProcessor(makeJob({ data: syncPayload })))
       }),
@@ -312,18 +308,18 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         }),
       effect: Effect.gen(function* () {
         if (processor === null) {
-          return yield* Effect.dieMessage("Processor was not acquired")
+          return yield* Effect.die(new Error("Processor was not acquired"))
         }
         const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
           try: () => acquiredProcessor(makeJob({ data: { jobId: "job-1" } })),
           catch: toPromiseRejectionError,
-        }).pipe(Effect.either)
+        }).pipe(Effect.result)
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left.cause).toBeInstanceOf(UnrecoverableError)
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure.cause).toBeInstanceOf(UnrecoverableError)
         }
       }),
     })
@@ -354,21 +350,21 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         }),
       effect: Effect.gen(function* () {
         if (processor === null) {
-          return yield* Effect.dieMessage("Processor was not acquired")
+          return yield* Effect.die(new Error("Processor was not acquired"))
         }
         const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
           try: () => acquiredProcessor(makeJob({ data: syncPayload })),
           catch: toPromiseRejectionError,
-        }).pipe(Effect.either)
+        }).pipe(Effect.result)
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left.cause).toBeInstanceOf(Error)
-          expect(result.left.cause).not.toBeInstanceOf(UnrecoverableError)
-          if (result.left.cause instanceof Error) {
-            expect(result.left.cause.message).toContain("provider unavailable")
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure.cause).toBeInstanceOf(Error)
+          expect(result.failure.cause).not.toBeInstanceOf(UnrecoverableError)
+          if (result.failure.cause instanceof Error) {
+            expect(result.failure.cause.message).toContain("provider unavailable")
           }
         }
       }),
@@ -391,18 +387,18 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         }),
       effect: Effect.gen(function* () {
         if (processor === null) {
-          return yield* Effect.dieMessage("Processor was not acquired")
+          return yield* Effect.die(new Error("Processor was not acquired"))
         }
         const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
           try: () => acquiredProcessor(makeJob({ data: syncPayload })),
           catch: toPromiseRejectionError,
-        }).pipe(Effect.either)
+        }).pipe(Effect.result)
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left.cause).toBeInstanceOf(UnrecoverableError)
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure.cause).toBeInstanceOf(UnrecoverableError)
         }
       }),
     })
@@ -430,18 +426,18 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
         }),
       effect: Effect.gen(function* () {
         if (processor === null) {
-          return yield* Effect.dieMessage("Processor was not acquired")
+          return yield* Effect.die(new Error("Processor was not acquired"))
         }
         const acquiredProcessor = processor
 
         const result = yield* Effect.tryPromise({
           try: () => acquiredProcessor(makeJob({ data: syncPayload })),
           catch: toPromiseRejectionError,
-        }).pipe(Effect.either)
+        }).pipe(Effect.result)
 
-        expect(result._tag).toBe("Left")
-        if (result._tag === "Left") {
-          expect(result.left.cause).toBeInstanceOf(UnrecoverableError)
+        expect(Result.isFailure(result)).toBe(true)
+        if (Result.isFailure(result)) {
+          expect(result.failure.cause).toBeInstanceOf(UnrecoverableError)
         }
       }),
     })

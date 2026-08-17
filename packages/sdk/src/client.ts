@@ -1,7 +1,7 @@
-import { FetchHttpClient, HttpApiClient, HttpClient, HttpClientRequest } from "@effect/platform"
-import type { HttpApi } from "@effect/platform"
 import { TaxMaxiApi } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { HttpApiClient } from "effect/unstable/httpapi"
 
 export const DEFAULT_BASE_URL = "https://api.taxmaxi.com"
 
@@ -67,10 +67,7 @@ export const makeTaxMaxiHttpClientTransform =
       })
     )
 
-type TaxMaxiApiFullClient =
-  typeof TaxMaxiApi extends HttpApi.HttpApi<string, infer Groups, infer ApiError, infer _ApiContext>
-    ? HttpApiClient.Client<Groups, ApiError, never>
-    : never
+type TaxMaxiApiFullClient = HttpApiClient.ForApi<typeof TaxMaxiApi>
 
 type TaxMaxiPublicGroup =
   | "adminProtocolReview"

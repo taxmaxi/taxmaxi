@@ -10,8 +10,8 @@
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Order from "effect/Order"
-import * as ParseResult from "effect/ParseResult"
 import * as Schema from "effect/Schema"
+import * as SchemaIssue from "effect/SchemaIssue"
 import { LocalDate } from "./LocalDate.ts"
 
 /**
@@ -21,13 +21,13 @@ import { LocalDate } from "./LocalDate.ts"
  * Encoded as ISO 8601 datetime string.
  */
 export class Timestamp extends Schema.Class<Timestamp>("Timestamp")({
-  epochMillis: Schema.Number.pipe(Schema.int()),
+  epochMillis: Schema.Number.pipe(Schema.check(Schema.isInt())),
 }) {
   /**
    * Get the underlying DateTime.Utc instance
    */
   toDateTime(): DateTime.Utc {
-    return DateTime.unsafeMake(this.epochMillis)
+    return DateTime.makeUnsafe(this.epochMillis)
   }
 
   /**
@@ -73,7 +73,7 @@ export const isTimestamp = Schema.is(Timestamp)
  * Create a Timestamp from a DateTime.Utc
  */
 export const fromDateTime = (dateTime: DateTime.Utc): Timestamp => {
-  return Timestamp.make({ epochMillis: dateTime.epochMillis })
+  return Timestamp.make({ epochMillis: dateTime.epochMilliseconds })
 }
 
 /**
@@ -85,21 +85,19 @@ export const fromDate = (date: Date): Timestamp => {
 
 /**
  * Create a Timestamp from an ISO 8601 string
- * Returns an Effect that may fail with ParseError
+ * Returns an Effect that may fail with SchemaError
  */
-export const fromString = (
-  dateString: string
-): Effect.Effect<Timestamp, ParseResult.ParseError> => {
+export const fromString = (dateString: string): Effect.Effect<Timestamp, Schema.SchemaError> => {
   const date = new Date(dateString)
   if (isNaN(date.getTime())) {
     return Effect.fail(
-      new ParseResult.ParseError({
-        issue: new ParseResult.Type(
-          Schema.String.ast,
+      new Schema.SchemaError(
+        new SchemaIssue.InvalidValue(
+          { message: `Invalid ISO 8601 datetime: "${dateString}"` },
           dateString,
-          `Invalid ISO 8601 datetime: "${dateString}"`
-        ),
-      })
+          { reportInput: true }
+        )
+      )
     )
   }
   return Effect.succeed(Timestamp.make({ epochMillis: date.getTime() }))

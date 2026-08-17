@@ -65,7 +65,7 @@ export interface TransferReconciliationServiceShape {
 /**
  * TransferReconciliationService - Context tag for reconciliation orchestration.
  */
-export class TransferReconciliationService extends Context.Tag("TransferReconciliationService")<
+export class TransferReconciliationService extends Context.Service<
   TransferReconciliationService,
   TransferReconciliationServiceShape
->() {}
+>()("TransferReconciliationService") {}

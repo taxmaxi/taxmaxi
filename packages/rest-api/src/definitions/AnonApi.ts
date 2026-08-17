@@ -4,7 +4,7 @@
  * @module AnonApi
  */
 
-import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "@effect/platform"
+import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 import { SourceSyncJobResponse } from "./SourcesApi.ts"
@@ -17,7 +17,7 @@ export class AnonBadRequestError extends Schema.TaggedError<AnonBadRequestError>
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 400 })
+  { httpApiStatus: 400 }
 ) {}
 
 /**
@@ -28,7 +28,7 @@ export class AnonNotFoundError extends Schema.TaggedError<AnonNotFoundError>()(
   {
     message: Schema.String,
   },
-  HttpApiSchema.annotations({ status: 404 })
+  { httpApiStatus: 404 }
 ) {}
 
 /**
@@ -37,7 +37,7 @@ export class AnonNotFoundError extends Schema.TaggedError<AnonNotFoundError>()(
 export class AnonSource extends Schema.Class<AnonSource>("AnonSource")({
   sourceId: Schema.String,
   requestId: Schema.String,
-  chainType: Schema.Literal("evm", "solana", "bitcoin"),
+  chainType: Schema.Literals(["evm", "solana", "bitcoin"]),
   walletAddress: Schema.String,
   year: Schema.Number,
   jurisdiction: Schema.String,
@@ -75,7 +75,7 @@ export class AnonSessionCreateRequest extends Schema.Class<AnonSessionCreateRequ
  * AnonSessionResponse - Active anon payer session subject.
  */
 export class AnonSessionResponse extends Schema.Class<AnonSessionResponse>("AnonSessionResponse")({
-  payerChainType: Schema.Literal("evm", "solana", "bitcoin"),
+  payerChainType: Schema.Literals(["evm", "solana", "bitcoin"]),
   payerWalletAddress: Schema.String,
 }) {}
 
@@ -88,63 +88,69 @@ export class AnonSessionDeleteResponse extends Schema.Class<AnonSessionDeleteRes
   ok: Schema.Boolean,
 }) {}
 
-const listAnonSources = HttpApiEndpoint.get("listAnonSources", "/anon/sources")
-  .addSuccess(AnonSourceListResponse)
-  .addError(UnauthorizedError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "List anonymous paid sources",
-      description: "Lists unclaimed anonymous paid sources for the anon payer session.",
-    })
-  )
+const listAnonSources = HttpApiEndpoint.get("listAnonSources", "/anon/sources", {
+  success: AnonSourceListResponse,
+  error: [UnauthorizedError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "List anonymous paid sources",
+    description: "Lists unclaimed anonymous paid sources for the anon payer session.",
+  })
+)
 
-const getAnonSource = HttpApiEndpoint.get("getAnonSource", "/anon/sources/:sourceId")
-  .setPath(Schema.Struct({ sourceId: Schema.UUID }))
-  .addSuccess(AnonSource)
-  .addError(UnauthorizedError)
-  .addError(AnonNotFoundError)
-  .addError(InternalServerError)
-  .annotateContext(
-    OpenApi.annotations({
-      summary: "Get anonymous paid source",
-      description: "Returns one unclaimed anonymous paid source for the anon payer session.",
-    })
-  )
+const getAnonSource = HttpApiEndpoint.get("getAnonSource", "/anon/sources/:sourceId", {
+  params: Schema.Struct({ sourceId: Schema.String.check(Schema.isUUID()) }),
+  success: AnonSource,
+  error: [UnauthorizedError, AnonNotFoundError, InternalServerError],
+}).annotateMerge(
+  OpenApi.annotations({
+    summary: "Get anonymous paid source",
+    description: "Returns one unclaimed anonymous paid source for the anon payer session.",
+  })
+)
 
-const listAnonSourceJobs = HttpApiEndpoint.get("listAnonSourceJobs", "/anon/sources/:sourceId/jobs")
-  .setPath(Schema.Struct({ sourceId: Schema.UUID }))
-  .addSuccess(Schema.Struct({ jobs: Schema.Array(SourceSyncJobResponse) }))
-  .addError(UnauthorizedError)
-  .addError(AnonNotFoundError)
-  .addError(InternalServerError)
+const listAnonSourceJobs = HttpApiEndpoint.get(
+  "listAnonSourceJobs",
+  "/anon/sources/:sourceId/jobs",
+  {
+    params: Schema.Struct({ sourceId: Schema.String.check(Schema.isUUID()) }),
+    success: Schema.Struct({ jobs: Schema.Array(SourceSyncJobResponse) }),
+    error: [UnauthorizedError, AnonNotFoundError, InternalServerError],
+  }
+)
 
 const getAnonSourceJob = HttpApiEndpoint.get(
   "getAnonSourceJob",
-  "/anon/sources/:sourceId/jobs/:jobId"
+  "/anon/sources/:sourceId/jobs/:jobId",
+  {
+    params: Schema.Struct({
+      sourceId: Schema.String.check(Schema.isUUID()),
+      jobId: Schema.String.check(Schema.isUUID()),
+    }),
+    success: SourceSyncJobResponse,
+    error: [UnauthorizedError, AnonNotFoundError, InternalServerError],
+  }
 )
-  .setPath(Schema.Struct({ sourceId: Schema.UUID, jobId: Schema.UUID }))
-  .addSuccess(SourceSyncJobResponse)
-  .addError(UnauthorizedError)
-  .addError(AnonNotFoundError)
-  .addError(InternalServerError)
 
 const createAnonSessionChallenge = HttpApiEndpoint.post(
   "createAnonSessionChallenge",
-  "/anon/session/challenge"
+  "/anon/session/challenge",
+  {
+    success: AnonSessionChallengeResponse,
+    error: InternalServerError,
+  }
 )
-  .addSuccess(AnonSessionChallengeResponse)
-  .addError(InternalServerError)
 
-const createAnonSession = HttpApiEndpoint.post("createAnonSession", "/anon/session")
-  .setPayload(AnonSessionCreateRequest)
-  .addSuccess(AnonSessionResponse)
-  .addError(AnonBadRequestError)
-  .addError(InternalServerError)
+const createAnonSession = HttpApiEndpoint.post("createAnonSession", "/anon/session", {
+  payload: Schema.Struct(AnonSessionCreateRequest.fields),
+  success: AnonSessionResponse,
+  error: [AnonBadRequestError, InternalServerError],
+})
 
-const deleteAnonSession = HttpApiEndpoint.del("deleteAnonSession", "/anon/session")
-  .addSuccess(AnonSessionDeleteResponse)
-  .addError(InternalServerError)
+const deleteAnonSession = HttpApiEndpoint.delete("deleteAnonSession", "/anon/session", {
+  success: AnonSessionDeleteResponse,
+  error: InternalServerError,
+})
 
 /**
  * AnonApi - Public anonymous payer-session endpoints.
@@ -158,7 +164,7 @@ export class AnonApi extends HttpApiGroup.make("anon")
   .add(createAnonSession)
   .add(deleteAnonSession)
   .prefix("/v1")
-  .annotateContext(
+  .annotateMerge(
     OpenApi.annotations({
       title: "Anonymous payer session",
       description: "Scoped anonymous paid source access.",

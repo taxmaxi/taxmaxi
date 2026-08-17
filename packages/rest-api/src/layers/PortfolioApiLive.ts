@@ -1,6 +1,6 @@
 /** PortfolioApiLive - Current user portfolio handlers. */
 
-import { HttpApiBuilder } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { PortfolioRepository, type PortfolioAssetPosition } from "@my/persistence/services"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
@@ -32,7 +32,7 @@ export const makePortfolioAssetRow = ({
   readonly market: CoinGeckoMarketData | undefined
   readonly currency: string
 }): PortfolioAssetRow => {
-  const amount = BigDecimal.unsafeFromString(position.amount)
+  const amount = BigDecimal.fromStringUnsafe(position.amount)
 
   if (market === undefined) {
     return PortfolioAssetRow.make({
@@ -47,14 +47,14 @@ export const makePortfolioAssetRow = ({
     })
   }
 
-  const currentPrice = BigDecimal.unsafeFromString(market.price)
+  const currentPrice = BigDecimal.fromStringUnsafe(market.price)
   const totalValue = BigDecimal.multiply(amount, currentPrice)
   const canCalculateProfitLoss =
     position.costBasisStatus === "known" &&
     position.costBasis !== null &&
     position.costBasisCurrency?.toLowerCase() === currency
   const profitLoss = canCalculateProfitLoss
-    ? BigDecimal.subtract(totalValue, BigDecimal.unsafeFromString(position.costBasis))
+    ? BigDecimal.subtract(totalValue, BigDecimal.fromStringUnsafe(position.costBasis))
     : null
 
   return PortfolioAssetRow.make({
@@ -75,7 +75,7 @@ export const PortfolioApiLive = HttpApiBuilder.group(TaxMaxiApi, "portfolio", (h
     const priceService = yield* CoinGeckoPriceService
     const principalResolutionService = yield* PrincipalResolutionService
 
-    return handlers.handle("listPortfolioAssets", ({ urlParams }) =>
+    return handlers.handle("listPortfolioAssets", ({ query: urlParams }) =>
       Effect.gen(function* () {
         const { principal } = yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
           Effect.mapError(() => internalError("Failed to resolve the current user."))
@@ -153,7 +153,7 @@ export const makePortfolioSummary = (
     profitLoss === null || costBasis === null || BigDecimal.isZero(costBasis)
       ? null
       : BigDecimal.multiply(
-          BigDecimal.unsafeDivide(profitLoss, costBasis),
+          BigDecimal.divideUnsafe(profitLoss, costBasis),
           BigDecimal.fromBigInt(100n)
         )
 

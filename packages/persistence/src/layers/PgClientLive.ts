@@ -8,13 +8,13 @@
  */
 
 import { PgClient } from "@effect/sql-pg"
-import type { SqlClient } from "@effect/sql/SqlClient"
-import type { SqlError } from "@effect/sql/SqlError"
+import type { SqlClient } from "effect/unstable/sql/SqlClient"
+import type { SqlError } from "effect/unstable/sql/SqlError"
 import * as PgDrizzle from "drizzle-orm/effect-postgres"
 import { migrate } from "drizzle-orm/effect-postgres/migrator"
 import { fileURLToPath } from "node:url"
 import * as Config from "effect/Config"
-import type { ConfigError } from "effect/ConfigError"
+import type { ConfigError } from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
@@ -29,7 +29,7 @@ export const PgClientConfig = Config.all({
     Config.orElse(() =>
       Config.all({
         host: Config.string("PGHOST").pipe(Config.withDefault("localhost")),
-        port: Config.integer("PGPORT").pipe(Config.withDefault(5432)),
+        port: Config.int("PGPORT").pipe(Config.withDefault(5432)),
         user: Config.string("PGUSER").pipe(Config.withDefault("postgres")),
         password: Config.redacted("PGPASSWORD").pipe(Config.withDefault(Redacted.make("postgres"))),
         database: Config.string("PGDATABASE").pipe(Config.withDefault("taxmaxi")),
@@ -42,7 +42,7 @@ export const PgClientConfig = Config.all({
       )
     )
   ),
-  maxConnections: Config.integer("PG_MAX_CONNECTIONS").pipe(Config.withDefault(10)),
+  maxConnections: Config.int("PG_MAX_CONNECTIONS").pipe(Config.withDefault(10)),
   idleTimeout: Config.duration("PG_IDLE_TIMEOUT").pipe(Config.withDefault("60 seconds")),
   connectTimeout: Config.duration("PG_CONNECTION_TIMEOUT").pipe(Config.withDefault("10 seconds")),
 })
@@ -104,7 +104,7 @@ export const PgClientLive: Layer.Layer<
   PgClient.PgClient | SqlClient,
   ConfigError | SqlError,
   never
-> = Layer.unwrapEffect(
+> = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* PgClientConfig
     return PgClient.layer({

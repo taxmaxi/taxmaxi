@@ -1,4 +1,4 @@
-import type { SqlClient } from "@effect/sql/SqlClient"
+import type { SqlClient } from "effect/unstable/sql/SqlClient"
 import { PgClient } from "@effect/sql-pg"
 import { eq } from "drizzle-orm"
 import * as Config from "effect/Config"
@@ -22,7 +22,7 @@ const testDatabaseConfig = Effect.runSync(
   Effect.gen(function* () {
     const workerId = yield* Config.string("VITEST_WORKER_ID").pipe(Config.withDefault("1"))
     const host = yield* Config.string("PGHOST").pipe(Config.withDefault("localhost"))
-    const port = yield* Config.integer("PGPORT").pipe(Config.withDefault(5432))
+    const port = yield* Config.int("PGPORT").pipe(Config.withDefault(5432))
     const user = yield* Config.string("PGUSER").pipe(Config.withDefault("postgres"))
     const password = yield* Config.redacted("PGPASSWORD").pipe(
       Config.withDefault(Redacted.make("postgres"))
@@ -244,7 +244,7 @@ export const makeIntegrationTestDatabaseContext = ({
           yield* Effect.sleep("10 millis")
         }
 
-        return yield* Effect.dieMessage(
+        return yield* Effect.die(
           `Timed out waiting for a database lock wait containing ${queryIncludes}`
         )
       })
@@ -279,7 +279,7 @@ const requireBlockchainId = ({ name }: { readonly name: string }) =>
       .limit(1)
 
     if (blockchain === undefined) {
-      return yield* Effect.dieMessage(`Missing blockchain fixture for ${name}`)
+      return yield* Effect.die(`Missing blockchain fixture for ${name}`)
     }
 
     return blockchain.id
@@ -328,7 +328,7 @@ export const seedSyncEngineRepositoryFixture = ({
       .pipe(
         Effect.flatMap((rows) =>
           rows[0] === undefined
-            ? Effect.dieMessage("Missing seeded coinbase CEX fixture")
+            ? Effect.die("Missing seeded coinbase CEX fixture")
             : Effect.succeed(rows[0].id)
         )
       )
@@ -348,7 +348,7 @@ export const seedSyncEngineRepositoryFixture = ({
       .returning({ id: schema.cexAccount.id })
 
     if (createdAccount === undefined) {
-      return yield* Effect.dieMessage("Failed to create cex account fixture")
+      return yield* Effect.die("Failed to create cex account fixture")
     }
 
     yield* db.insert(schema.sources).values({

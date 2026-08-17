@@ -8,7 +8,7 @@ import { createHelius } from "helius-sdk"
 import type { GetTransactionsForAddressConfigFull } from "helius-sdk/types/types"
 import type { GetTransfersRequest } from "helius-sdk/wallet/types"
 import * as Config from "effect/Config"
-import * as Either from "effect/Either"
+import * as Exit from "effect/Exit"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Redacted from "effect/Redacted"
@@ -27,13 +27,13 @@ const UnknownProviderErrorSchema = Schema.Struct({
   message: Schema.optional(Schema.String),
   status: Schema.optional(Schema.Number),
   statusCode: Schema.optional(Schema.Number),
-  code: Schema.optional(Schema.Union(Schema.Number, Schema.String)),
+  code: Schema.optional(Schema.Union([Schema.Number, Schema.String])),
 })
 
 type UnknownProviderError = Schema.Schema.Type<typeof UnknownProviderErrorSchema>
 
-const decodeUnknownProviderError = Schema.decodeUnknownEither(UnknownProviderErrorSchema)
-const decodeUnknownString = Schema.decodeUnknownEither(Schema.String)
+const decodeUnknownProviderError = Schema.decodeUnknownExit(UnknownProviderErrorSchema)
+const decodeUnknownString = Schema.decodeUnknownExit(Schema.String)
 
 const trimOrNull = (value: string | undefined): string | null => {
   if (value === undefined) {
@@ -82,13 +82,13 @@ const messageFromUnknown = (cause: unknown): string => {
   }
 
   const decodedString = decodeUnknownString(cause)
-  if (Either.isRight(decodedString) && decodedString.right.trim() !== "") {
-    return decodedString.right
+  if (Exit.isSuccess(decodedString) && decodedString.value.trim() !== "") {
+    return decodedString.value
   }
 
   const decoded = decodeUnknownProviderError(cause)
-  if (Either.isRight(decoded)) {
-    const message = trimOrNull(decoded.right.message)
+  if (Exit.isSuccess(decoded)) {
+    const message = trimOrNull(decoded.value.message)
     if (message !== null) {
       return message
     }
@@ -99,8 +99,8 @@ const messageFromUnknown = (cause: unknown): string => {
 
 const statusCodeFromUnknown = (cause: unknown, message: string): number | null => {
   const decoded = decodeUnknownProviderError(cause)
-  if (Either.isRight(decoded)) {
-    const decodedStatus = statusCodeFromDecoded(decoded.right)
+  if (Exit.isSuccess(decoded)) {
+    const decodedStatus = statusCodeFromDecoded(decoded.value)
     if (decodedStatus !== null) {
       return decodedStatus
     }

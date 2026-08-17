@@ -4,7 +4,7 @@
  * @module AdminProtocolReviewApiLive
  */
 
-import { HttpApiBuilder } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   ProtocolCandidateRepository,
   type ProtocolCandidateReviewListRow,
@@ -37,38 +37,38 @@ const toInternalServerError = (message: string) =>
 const invalidCursorError = (cursorName: string) =>
   new ProtocolCandidateInvalidCursorError({ message: `Invalid ${cursorName} cursor.` })
 
-const toDateTimeUtc = (date: Date): DateTime.Utc => DateTime.unsafeMake(date)
+const toDateTimeUtc = (date: Date): DateTime.Utc => DateTime.makeUnsafe(date)
 
 const CandidateCursorPayload = Schema.Struct({
   version: Schema.Literal(1),
-  lastSeenAt: Schema.DateTimeUtc,
-  id: Schema.UUID,
+  lastSeenAt: Schema.DateTimeUtcFromString,
+  id: Schema.String.check(Schema.isUUID()),
 })
 
 const ObservationCursorPayload = Schema.Struct({
   version: Schema.Literal(1),
-  retrievedAt: Schema.DateTimeUtc,
-  id: Schema.UUID,
+  retrievedAt: Schema.DateTimeUtcFromString,
+  id: Schema.String.check(Schema.isUUID()),
 })
 
-const EncodedCandidateCursorPayload = Schema.parseJson(CandidateCursorPayload)
-const EncodedObservationCursorPayload = Schema.parseJson(ObservationCursorPayload)
+const EncodedCandidateCursorPayload = Schema.fromJsonString(CandidateCursorPayload)
+const EncodedObservationCursorPayload = Schema.fromJsonString(ObservationCursorPayload)
 
 const encodePayload = (payload: Record<string, unknown>): string =>
   Buffer.from(JSON.stringify(payload)).toString("base64url")
 
-const decodePayload = <A>(
+const decodePayload = <S extends Schema.ConstraintDecoder<unknown, never>>(
   cursor: string,
-  schema: Schema.Schema<A, string>,
+  schema: S,
   cursorName: string
-): Effect.Effect<A, ProtocolCandidateInvalidCursorError> =>
+): Effect.Effect<S["Type"], ProtocolCandidateInvalidCursorError> =>
   Effect.gen(function* () {
     const decoded = yield* Effect.try({
       try: () => Buffer.from(cursor, "base64url").toString("utf8"),
       catch: () => invalidCursorError(cursorName),
     })
 
-    return yield* Schema.decodeUnknown(schema)(decoded).pipe(
+    return yield* Schema.decodeUnknownEffect(schema)(decoded).pipe(
       Effect.mapError(() => invalidCursorError(cursorName))
     )
   })
@@ -181,7 +181,7 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
       const protocolCandidateRepository = yield* ProtocolCandidateRepository
 
       return handlers
-        .handle("listProtocolCandidates", ({ urlParams }) =>
+        .handle("listProtocolCandidates", ({ query: urlParams }) =>
           Effect.gen(function* () {
             const cursor = yield* decodeCandidateCursor(urlParams.cursor)
             const candidates = yield* protocolCandidateRepository
@@ -207,7 +207,7 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
             })
           })
         )
-        .handle("getProtocolCandidate", ({ path, urlParams }) =>
+        .handle("getProtocolCandidate", ({ params: path, query: urlParams }) =>
           Effect.gen(function* () {
             const observationCursor = yield* decodeObservationCursor(urlParams.observationCursor)
             const detail = yield* protocolCandidateRepository
@@ -221,11 +221,9 @@ export const AdminProtocolReviewApiLive = HttpApiBuilder.group(
               )
 
             if (Option.isNone(detail)) {
-              return yield* Effect.fail(
-                new ProtocolCandidateNotFoundError({
-                  message: "Protocol candidate not found.",
-                })
-              )
+              return yield* new ProtocolCandidateNotFoundError({
+                message: "Protocol candidate not found.",
+              })
             }
             const observationLimit = urlParams.observationLimit ?? defaultObservationLimit
             const visibleObservations = detail.value.observations.slice(0, observationLimit)

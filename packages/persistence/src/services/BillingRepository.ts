@@ -125,7 +125,7 @@ export interface BillingRepositoryService {
 }
 
 /** Stripe billing persistence used by Checkout and webhook handlers. */
-export class BillingRepository extends Context.Tag("BillingRepository")<
+export class BillingRepository extends Context.Service<
   BillingRepository,
   BillingRepositoryService
->() {}
+>()("BillingRepository") {}

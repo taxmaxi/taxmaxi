@@ -40,6 +40,7 @@ export interface EmailVerificationDeliveryServiceShape {
 /**
  * Context tag for verification email delivery.
  */
-export class EmailVerificationDeliveryService extends Context.Tag(
-  "EmailVerificationDeliveryService"
-)<EmailVerificationDeliveryService, EmailVerificationDeliveryServiceShape>() {}
+export class EmailVerificationDeliveryService extends Context.Service<
+  EmailVerificationDeliveryService,
+  EmailVerificationDeliveryServiceShape
+>()("EmailVerificationDeliveryService") {}

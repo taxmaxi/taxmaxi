@@ -70,7 +70,7 @@ describe("provider asset source-use migration", () => {
           reviewedAsset === undefined ||
           unrelatedAsset === undefined
         ) {
-          return yield* Effect.dieMessage("Failed to create migration provider assets")
+          return yield* Effect.die("Failed to create migration provider assets")
         }
 
         yield* db.insert(schema.providerAssetMappings).values(
@@ -105,7 +105,7 @@ describe("provider asset source-use migration", () => {
           ])
           .returning({ id: schema.transactions.id })
         if (transferTransaction === undefined || reviewedTransaction === undefined) {
-          return yield* Effect.dieMessage("Failed to create migration transactions")
+          return yield* Effect.die("Failed to create migration transactions")
         }
 
         yield* db.insert(schema.providerTransfers).values({

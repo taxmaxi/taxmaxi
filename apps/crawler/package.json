@@ -15,13 +15,11 @@
   },
   "dependencies": {
     "@duneanalytics/client-sdk": "0.4.2",
-    "@effect/cli": "0.75.1",
-    "@effect/platform": "0.96.1",
-    "@effect/platform-node": "0.106.0",
+    "@effect/platform-node": "4.0.0-rc.109",
     "@my/persistence": "workspace:*",
     "@my/sync-engine": "workspace:*",
     "@solana/keys": "5.5.1",
-    "effect": "3.21.2",
+    "effect": "4.0.0-rc.109",
     "helius-sdk": "2.2.2"
   },
   "devDependencies": {

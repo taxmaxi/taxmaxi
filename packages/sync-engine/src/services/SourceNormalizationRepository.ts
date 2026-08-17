@@ -411,7 +411,7 @@ export interface SourceNormalizationRepositoryShape {
 /**
  * SourceNormalizationRepository - Context tag for normalized artifact persistence.
  */
-export class SourceNormalizationRepository extends Context.Tag("SourceNormalizationRepository")<
+export class SourceNormalizationRepository extends Context.Service<
   SourceNormalizationRepository,
   SourceNormalizationRepositoryShape
->() {}
+>()("SourceNormalizationRepository") {}

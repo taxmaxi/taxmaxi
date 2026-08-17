@@ -104,7 +104,7 @@ export interface AssetCatalogRepositoryShape {
 /**
  * AssetCatalogRepository - Context tag for public asset catalog persistence.
  */
-export class AssetCatalogRepository extends Context.Tag("AssetCatalogRepository")<
+export class AssetCatalogRepository extends Context.Service<
   AssetCatalogRepository,
   AssetCatalogRepositoryShape
->() {}
+>()("AssetCatalogRepository") {}

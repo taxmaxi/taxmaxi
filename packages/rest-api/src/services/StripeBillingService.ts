@@ -53,7 +53,7 @@ export interface StripeBillingServiceShape {
   }) => Effect.Effect<void, StripeBillingError>
 }
 
-export class StripeBillingService extends Context.Tag("StripeBillingService")<
+export class StripeBillingService extends Context.Service<
   StripeBillingService,
   StripeBillingServiceShape
->() {}
+>()("StripeBillingService") {}

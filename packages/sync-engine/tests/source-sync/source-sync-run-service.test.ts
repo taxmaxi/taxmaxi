@@ -162,7 +162,7 @@ const makeLayer = ({
       Effect.gen(function* () {
         const source = listedSources.find((candidate) => candidate.id === sourceId)
         if (source === undefined) {
-          return yield* Effect.dieMessage(`Missing source ${sourceId}`)
+          return yield* Effect.die(`Missing source ${sourceId}`)
         }
         const item = makeItem({ runId, source, jobId: processingJobId })
         attachedItems.push(item)
@@ -172,7 +172,7 @@ const makeLayer = ({
       Effect.gen(function* () {
         const source = listedSources.find((candidate) => candidate.id === sourceId)
         if (source === undefined) {
-          return yield* Effect.dieMessage(`Missing source ${sourceId}`)
+          return yield* Effect.die(`Missing source ${sourceId}`)
         }
         const item = makeItem({ runId, source, jobId: null, status: "failed", message })
         attachedItems.push(item)
@@ -242,8 +242,8 @@ describe("SourceSyncRunService", () => {
                 message: null,
               }
             }),
-          replaySourceSyncJob: () => Effect.dieMessage("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
         },
       })
     )
@@ -261,9 +261,9 @@ describe("SourceSyncRunService", () => {
         listedSources: [],
         sourceSyncService: {
           startSourceSyncJob: () =>
-            Effect.dieMessage("startSourceSyncJob should not be called for zero sources"),
-          replaySourceSyncJob: () => Effect.dieMessage("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+            Effect.die("startSourceSyncJob should not be called for zero sources"),
+          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
         },
       })
     )
@@ -288,8 +288,8 @@ describe("SourceSyncRunService", () => {
               status: "running",
               message: null,
             }),
-          replaySourceSyncJob: () => Effect.dieMessage("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
         },
       })
     )
@@ -310,8 +310,8 @@ describe("SourceSyncRunService", () => {
                 cause: "queue unavailable",
               })
             ),
-          replaySourceSyncJob: () => Effect.dieMessage("replaySourceSyncJob should not be called"),
-          getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+          replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+          getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
         },
       })
     )
@@ -342,9 +342,9 @@ describe("SourceSyncRunService", () => {
     const layer = makeLayer({
       listedSources: [coinbaseSource],
       sourceSyncService: {
-        startSourceSyncJob: () => Effect.dieMessage("startSourceSyncJob should not be called"),
-        replaySourceSyncJob: () => Effect.dieMessage("replaySourceSyncJob should not be called"),
-        getSourceSyncJob: () => Effect.dieMessage("getSourceSyncJob should not be called"),
+        startSourceSyncJob: () => Effect.die("startSourceSyncJob should not be called"),
+        replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
+        getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),
       },
       repositoryOverrides: {
         getVisibleRun: () => Effect.succeed(Option.some(completedRun)),

@@ -105,7 +105,7 @@ describe("AssetRepositoryLive", () => {
 
     const created = await upsert(null)
     const result = await runRepository(
-      Effect.either(
+      Effect.result(
         Effect.flatMap(AssetRepository, (repository) =>
           repository.upsertEconomicAssetRepresentation({
             blockchain: {
@@ -143,9 +143,9 @@ describe("AssetRepositoryLive", () => {
       )
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left).toMatchObject({
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
         operation: "assetRepository.upsertEconomicAssetRepresentation",
         cause: { operation: `assetRepository.upsertEconomicAssetRepresentation.${operation}` },
       })
@@ -296,7 +296,7 @@ describe("AssetRepositoryLive", () => {
           .limit(1)
 
         if (base === undefined) {
-          return yield* Effect.dieMessage("Missing Base blockchain fixture")
+          return yield* Effect.die("Missing Base blockchain fixture")
         }
 
         yield* db.insert(schema.assets).values({
@@ -645,7 +645,7 @@ describe("AssetRepositoryLive", () => {
             .limit(1)
 
           if (usdc === undefined) {
-            return yield* Effect.dieMessage("Missing seeded USD Coin economic asset")
+            return yield* Effect.die("Missing seeded USD Coin economic asset")
           }
 
           const representations = yield* db

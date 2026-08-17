@@ -17,13 +17,13 @@ export const SolanaDuneQueryConfig = Schema.Struct({
   queryId: Schema.Number,
   queryName: Schema.String,
   version: Schema.Number,
-  kind: Schema.Literal("dex-project-priority", "dex-project-sample-transactions"),
+  kind: Schema.Literals(["dex-project-priority", "dex-project-sample-transactions"]),
 })
 export type SolanaDuneQueryConfig = typeof SolanaDuneQueryConfig.Type
 
 export const SolanaDuneRankingEntry = Schema.Struct({
   /** Subject shape persisted into the protocol candidate review queue. */
-  subjectKind: Schema.Literal("protocol"),
+  subjectKind: Schema.Literals(["protocol"]),
   /** Stable project/protocol identifier from Dune, for example `raydium`. */
   subjectIdentifier: Schema.String,
   /** Protocol/project name reported by the Dune query, for example `jupiter`. */
@@ -57,18 +57,18 @@ export type SolanaDuneRankingEntry = typeof SolanaDuneRankingEntry.Type
  */
 export const SolanaDuneRecordedExecution = Schema.Struct({
   queryId: Schema.Number,
-  kind: Schema.Literal("dex-project-priority", "dex-project-sample-transactions"),
-  parameters: Schema.Record({ key: Schema.String, value: Schema.String }),
-  status: Schema.Literal("completed", "timed_out"),
+  kind: Schema.Literals(["dex-project-priority", "dex-project-sample-transactions"]),
+  parameters: Schema.Record(Schema.String, Schema.String),
+  status: Schema.Literals(["completed", "timed_out"]),
   /** Raw Dune API response for completed executions, null for timed-out ones. */
   response: Schema.Unknown,
 })
 export type SolanaDuneRecordedExecution = typeof SolanaDuneRecordedExecution.Type
 
 export const SolanaDuneRankingsFile = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  chain: Schema.Literal("solana"),
-  onchainDataSource: Schema.Literal("dune"),
+  schemaVersion: Schema.Literals([1]),
+  chain: Schema.Literals(["solana"]),
+  onchainDataSource: Schema.Literals(["dune"]),
   generatedAt: Schema.String,
   /** Inclusive UTC start date of the crawled range, `YYYY-MM-DD`. */
   startDate: Schema.String,
@@ -90,7 +90,7 @@ export class SolanaDuneRankingsFileImportError extends Schema.TaggedError<Solana
   "SolanaDuneRankingsFileImportError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Unknown),
   }
 ) {}
 
@@ -254,7 +254,7 @@ export const decodeDuneObservationsFromSolanaDuneRankingsFile = ({
   ReadonlyArray<ProtocolCandidateObservationDraft>,
   SolanaDuneRankingsFileImportError
 > =>
-  Schema.decodeUnknown(SolanaDuneRankingsFile)(file).pipe(
+  Schema.decodeUnknownEffect(SolanaDuneRankingsFile)(file).pipe(
     Effect.mapError(
       (error) =>
         new SolanaDuneRankingsFileImportError({

@@ -250,7 +250,7 @@ export interface SourceReportRepositoryService {
 /**
  * SourceReportRepository - Context tag for source report read projections.
  */
-export class SourceReportRepository extends Context.Tag("@my/persistence/SourceReportRepository")<
+export class SourceReportRepository extends Context.Service<
   SourceReportRepository,
   SourceReportRepositoryService
->() {}
+>()("@my/persistence/SourceReportRepository") {}

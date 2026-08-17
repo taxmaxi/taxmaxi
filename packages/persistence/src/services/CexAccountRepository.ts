@@ -52,7 +52,7 @@ export interface CexAccountRepositoryService {
 /**
  * CexAccountRepository - Context.Tag for dependency injection.
  */
-export class CexAccountRepository extends Context.Tag("CexAccountRepository")<
+export class CexAccountRepository extends Context.Service<
   CexAccountRepository,
   CexAccountRepositoryService
->() {}
+>()("CexAccountRepository") {}

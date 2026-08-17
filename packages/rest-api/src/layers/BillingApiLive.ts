@@ -4,7 +4,8 @@
  * @module BillingApiLive
  */
 
-import { Headers, HttpApiBuilder, HttpServerRequest } from "@effect/platform"
+import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { Headers, HttpServerRequest } from "effect/unstable/http"
 import * as DateTime from "effect/DateTime"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
@@ -65,7 +66,7 @@ export const BillingApiLive = HttpApiBuilder.group(TaxMaxiApi, "billing", (handl
             currentPeriodEnd:
               status.currentPeriodEnd === null
                 ? null
-                : DateTime.unsafeMake(status.currentPeriodEnd),
+                : DateTime.makeUnsafe(status.currentPeriodEnd),
           })
         })
       )
@@ -101,9 +102,7 @@ export const BillingApiLive = HttpApiBuilder.group(TaxMaxiApi, "billing", (handl
           const request = yield* HttpServerRequest.HttpServerRequest
           const signature = Headers.get(request.headers, "stripe-signature")
           if (Option.isNone(signature)) {
-            return yield* Effect.fail(
-              new BillingBadRequestError({ message: "Missing Stripe signature." })
-            )
+            return yield* new BillingBadRequestError({ message: "Missing Stripe signature." })
           }
           const payload = yield* request.text.pipe(
             Effect.mapError(() => new BillingBadRequestError({ message: "Invalid request body." }))

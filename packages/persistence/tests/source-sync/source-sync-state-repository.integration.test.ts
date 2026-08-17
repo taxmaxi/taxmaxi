@@ -36,7 +36,7 @@ const seedProcessingJob = () =>
       .returning({ id: schema.processingJobs.id })
 
     if (job === undefined) {
-      return yield* Effect.dieMessage("Failed to create processing job fixture")
+      return yield* Effect.die("Failed to create processing job fixture")
     }
 
     return job.id

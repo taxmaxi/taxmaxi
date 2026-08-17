@@ -48,7 +48,7 @@ const make = Effect.gen(function* () {
         .where(eq(schema.principals.userId, userId))
         .limit(1)
 
-      return Option.fromNullable(row).pipe(Option.map(rowToPrincipal))
+      return Option.fromNullishOr(row).pipe(Option.map(rowToPrincipal))
     }).pipe(wrapSqlError("principalRepository.findUserPrincipal"))
 
   const createUserPrincipal: PrincipalRepositoryService["createUserPrincipal"] = (userId) =>
@@ -69,12 +69,10 @@ const make = Effect.gen(function* () {
         .returning(selectPrincipalFields)
 
       if (row === undefined) {
-        return yield* Effect.fail(
-          new PersistenceError({
-            operation: "principalRepository.createUserPrincipal",
-            cause: "failed to create user principal",
-          })
-        )
+        return yield* new PersistenceError({
+          operation: "principalRepository.createUserPrincipal",
+          cause: "failed to create user principal",
+        })
       }
 
       return rowToPrincipal(row)
@@ -95,12 +93,10 @@ const make = Effect.gen(function* () {
           .returning(selectPrincipalFields)
 
         if (row === undefined) {
-          return yield* Effect.fail(
-            new PersistenceError({
-              operation: "principalRepository.createAnonymousWalletPrincipal",
-              cause: "failed to create anonymous wallet principal",
-            })
-          )
+          return yield* new PersistenceError({
+            operation: "principalRepository.createAnonymousWalletPrincipal",
+            cause: "failed to create anonymous wallet principal",
+          })
         }
 
         return rowToPrincipal(row)

@@ -1,6 +1,4 @@
-import * as CliConfig from "@effect/cli/CliConfig"
-import * as Options from "@effect/cli/Options"
-import { NodeContext } from "@effect/platform-node"
+import { NodeServices } from "@effect/platform-node"
 import { describe, expect, it } from "vitest"
 import { ConfigProvider, Effect, Layer, Option, Schema } from "effect"
 import {
@@ -19,35 +17,60 @@ import { readSolanaBehaviorSamplerClientConfig } from "../src/solana-behavior-sa
 import { readSolanaDuneApiKey } from "../src/solana-dune-client-live.ts"
 
 const unusedSamplerClientLive = SolanaBehaviorSamplerClientTestLive({
-  fetchTransactionBySignature: () =>
-    Effect.dieMessage("fetchTransactionBySignature should not run"),
-  fetchFinalizedBlock: () => Effect.dieMessage("fetchFinalizedBlock should not run"),
+  fetchTransactionBySignature: () => Effect.die("fetchTransactionBySignature should not run"),
+  fetchFinalizedBlock: () => Effect.die("fetchFinalizedBlock should not run"),
 })
 
 const runEffect = <A, E>(
-  effect: Effect.Effect<A, E, NodeContext.NodeContext | SolanaBehaviorSamplerClient>
+  effect: Effect.Effect<A, E, NodeServices.NodeServices | SolanaBehaviorSamplerClient>
 ): Promise<A> =>
   effect.pipe(
-    Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive)),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, unusedSamplerClientLive)),
     Effect.runPromise
   )
 
-const parseOptions = (args: ReadonlyArray<string>) =>
-  Options.processCommandLine(crawlSolanaBehaviorOptions, args, CliConfig.defaultConfig).pipe(
-    Effect.flatMap(([validationError, rest, parsed]) =>
-      Option.match(validationError, {
-        onNone: () => Effect.succeed({ rest, parsed }),
-        onSome: Effect.fail,
-      })
-    )
-  )
+const parseOptions = (args: ReadonlyArray<string>) => {
+  const flags: Record<string, Array<string>> = {}
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]
+    if (token === undefined || !token.startsWith("--")) {
+      continue
+    }
+
+    const name = token.slice(2)
+    const next = args[index + 1]
+    const value = next === undefined || next.startsWith("--") ? "true" : next
+    flags[name] = [...(flags[name] ?? []), value]
+    if (value === next) {
+      index += 1
+    }
+  }
+
+  const parsedArgs = { arguments: [], flags }
+  return Effect.gen(function* () {
+    const [, out] = yield* crawlSolanaBehaviorOptions.out.parse(parsedArgs)
+    const [, json] = yield* crawlSolanaBehaviorOptions.json.parse(parsedArgs)
+    const [, signatures] = yield* crawlSolanaBehaviorOptions.signatures.parse(parsedArgs)
+    const [, programs] = yield* crawlSolanaBehaviorOptions.programs.parse(parsedArgs)
+    const [, fromSlot] = yield* crawlSolanaBehaviorOptions.fromSlot.parse(parsedArgs)
+    const [, toSlot] = yield* crawlSolanaBehaviorOptions.toSlot.parse(parsedArgs)
+    const [, sampleLimit] = yield* crawlSolanaBehaviorOptions.sampleLimit.parse(parsedArgs)
+
+    return {
+      rest: parsedArgs.arguments,
+      parsed: { out, json, signatures, programs, fromSlot, toSlot, sampleLimit },
+    }
+  })
+}
 
 describe("solana crawler", () => {
   it("uses a configured Solana RPC URL without requiring a Helius API key", async () => {
     const result = await Effect.runPromise(
       readSolanaBehaviorSamplerClientConfig.pipe(
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(new Map([["SOLANA_RPC_URL", "http://127.0.0.1:8899"]]))
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ SOLANA_RPC_URL: "http://127.0.0.1:8899" })
         )
       )
     )
@@ -61,13 +84,12 @@ describe("solana crawler", () => {
   it("uses the Helius API key with a configured Solana RPC URL when both are provided", async () => {
     const result = await Effect.runPromise(
       readSolanaBehaviorSamplerClientConfig.pipe(
-        Effect.withConfigProvider(
-          ConfigProvider.fromMap(
-            new Map([
-              ["SOLANA_RPC_URL", "https://mainnet.helius-rpc.com/"],
-              ["HELIUS_API_KEY", "helius-key"],
-            ])
-          )
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({
+            SOLANA_RPC_URL: "https://mainnet.helius-rpc.com/",
+            HELIUS_API_KEY: "helius-key",
+          })
         )
       )
     )
@@ -81,7 +103,7 @@ describe("solana crawler", () => {
   it("requires a Helius API key when no Solana RPC URL is configured", async () => {
     const result = await Effect.runPromiseExit(
       readSolanaBehaviorSamplerClientConfig.pipe(
-        Effect.withConfigProvider(ConfigProvider.fromMap(new Map()))
+        Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({}))
       )
     )
 
@@ -94,7 +116,10 @@ describe("solana crawler", () => {
   it("reads a non-empty Dune API key from Effect Config", async () => {
     const result = await Effect.runPromise(
       readSolanaDuneApiKey.pipe(
-        Effect.withConfigProvider(ConfigProvider.fromMap(new Map([["DUNE_API_KEY", " dune-key "]])))
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ DUNE_API_KEY: " dune-key " })
+        )
       )
     )
 
@@ -104,7 +129,10 @@ describe("solana crawler", () => {
   it("requires a non-empty Dune API key", async () => {
     const result = await Effect.runPromiseExit(
       readSolanaDuneApiKey.pipe(
-        Effect.withConfigProvider(ConfigProvider.fromMap(new Map([["DUNE_API_KEY", " "]])))
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ DUNE_API_KEY: " " })
+        )
       )
     )
 
@@ -155,7 +183,7 @@ describe("solana crawler", () => {
         fromSlot: Option.none(),
         toSlot: Option.none(),
         sampleLimit: 100,
-      }).pipe(Effect.provide(Layer.mergeAll(NodeContext.layer, unusedSamplerClientLive)))
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, unusedSamplerClientLive)))
     )
 
     expect(result._tag).toBe("Failure")
@@ -457,10 +485,11 @@ describe("solana crawler", () => {
       toSlot: Option.some(10),
       sampleLimit: 10,
     }).pipe(
-      Effect.withConfigProvider(
-        ConfigProvider.fromMap(new Map([["CRAWLER_SOLANA_REFERENCE_DATA_DIR", outputDirectory]]))
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({ CRAWLER_SOLANA_REFERENCE_DATA_DIR: outputDirectory })
       ),
-      Effect.provide(Layer.mergeAll(NodeContext.layer, samplerClientLive)),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, samplerClientLive)),
       Effect.runPromise
     )
 
@@ -488,7 +517,7 @@ describe("solana crawler", () => {
       },
     ])
     await expect(
-      runEffect(Schema.decodeUnknown(SolanaBehaviorSamplesArtifact)(result.behaviorSamples))
+      runEffect(Schema.decodeUnknownEffect(SolanaBehaviorSamplesArtifact)(result.behaviorSamples))
     ).resolves.toEqual(result.behaviorSamples)
   })
 

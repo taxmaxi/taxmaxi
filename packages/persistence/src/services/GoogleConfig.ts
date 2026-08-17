@@ -10,6 +10,8 @@
 import * as Context from "effect/Context"
 import * as Schema from "effect/Schema"
 
+const NonEmptyTrimmedString = Schema.Trimmed.check(Schema.isNonEmpty())
+
 /**
  * GoogleConfig - Configuration for Google OAuth provider
  *
@@ -25,7 +27,7 @@ export class GoogleConfig extends Schema.Class<GoogleConfig>("GoogleConfig")({
    * Used to identify your application in OAuth flows.
    * Obtained from the Google Cloud Console.
    */
-  clientId: Schema.NonEmptyTrimmedString.annotations({
+  clientId: NonEmptyTrimmedString.annotate({
     title: "Client ID",
     description: "Google OAuth client ID from Google Cloud Console",
   }),
@@ -36,7 +38,7 @@ export class GoogleConfig extends Schema.Class<GoogleConfig>("GoogleConfig")({
    * Used for server-side token exchange.
    * Must be kept confidential.
    */
-  clientSecret: Schema.Redacted(Schema.NonEmptyTrimmedString).annotations({
+  clientSecret: Schema.Redacted(NonEmptyTrimmedString).annotate({
     title: "Client Secret",
     description: "Google OAuth client secret for server-side authentication",
   }),
@@ -47,7 +49,7 @@ export class GoogleConfig extends Schema.Class<GoogleConfig>("GoogleConfig")({
    * The URL where Google redirects after authentication.
    * Must be registered in your Google Cloud Console.
    */
-  redirectUri: Schema.NonEmptyTrimmedString.annotations({
+  redirectUri: NonEmptyTrimmedString.annotate({
     title: "Redirect URI",
     description: "OAuth callback URL registered in Google Cloud Console",
   }),
@@ -66,4 +68,6 @@ export class GoogleConfig extends Schema.Class<GoogleConfig>("GoogleConfig")({
  * })
  * ```
  */
-export class GoogleConfigTag extends Context.Tag("GoogleConfig")<GoogleConfigTag, GoogleConfig>() {}
+export class GoogleConfigTag extends Context.Service<GoogleConfigTag, GoogleConfig>()(
+  "GoogleConfig"
+) {}

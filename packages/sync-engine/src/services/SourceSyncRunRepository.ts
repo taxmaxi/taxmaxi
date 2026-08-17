@@ -189,7 +189,7 @@ export interface SourceSyncRunRepositoryShape {
 /**
  * SourceSyncRunRepository - Context tag for principal-wide sync run persistence.
  */
-export class SourceSyncRunRepository extends Context.Tag("SourceSyncRunRepository")<
+export class SourceSyncRunRepository extends Context.Service<
   SourceSyncRunRepository,
   SourceSyncRunRepositoryShape
->() {}
+>()("SourceSyncRunRepository") {}

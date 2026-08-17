@@ -1,20 +1,22 @@
 import { NodeRuntime } from "@effect/platform-node"
-import { Config, Effect } from "effect"
+import { Config, Effect, Schema } from "effect"
 import { request } from "node:http"
 
 const DEFAULT_WORKER_HEALTH_PORT = 4001
 const HEALTHCHECK_TIMEOUT_MS = 4_000
 
-const healthPort = Config.integer("WORKER_HEALTH_PORT").pipe(
-  Config.withDefault(DEFAULT_WORKER_HEALTH_PORT),
-  Config.validate({
-    message: "WORKER_HEALTH_PORT must be between 0 and 65535",
-    validation: (value) => Number.isInteger(value) && value >= 0 && value <= 65535,
-  })
-)
+const healthPort = Config.schema(
+  Schema.Int.check(
+    Schema.isBetween(
+      { minimum: 0, maximum: 65_535 },
+      { message: "WORKER_HEALTH_PORT must be between 0 and 65535" }
+    )
+  ),
+  "WORKER_HEALTH_PORT"
+).pipe(Config.withDefault(DEFAULT_WORKER_HEALTH_PORT))
 
 const checkHealth = (port: number) =>
-  Effect.async<boolean>((resume) => {
+  Effect.callback<boolean>((resume) => {
     let settled = false
     const complete = (healthy: boolean) => {
       if (settled) {

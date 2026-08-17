@@ -31,7 +31,7 @@ const rowToUserIdentity = (row: SelectedIdentityRow): UserIdentity =>
     userId: AuthUserId.make(row.userId),
     provider: row.provider,
     providerId: ProviderId.make(row.providerId),
-    providerData: Option.fromNullable(row.providerData).pipe(
+    providerData: Option.fromNullishOr(row.providerData).pipe(
       // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- JSONB from DB is typed as unknown but validated on write
       Option.map((data) => ProviderData.make(data as typeof ProviderData.Type))
     ),
@@ -56,7 +56,7 @@ const make = Effect.gen(function* () {
         .select(selectIdentityFields)
         .from(identities)
         .where(eq(identities.id, id))
-      return Option.fromNullable(row).pipe(Option.map(rowToUserIdentity))
+      return Option.fromNullishOr(row).pipe(Option.map(rowToUserIdentity))
     }).pipe(wrapSqlError("findById"))
 
   const findByUserId: IdentityRepositoryService["findByUserId"] = (userId) =>
@@ -74,7 +74,7 @@ const make = Effect.gen(function* () {
         .select(selectIdentityFields)
         .from(identities)
         .where(and(eq(identities.provider, provider), eq(identities.providerId, providerId)))
-      return Option.fromNullable(row).pipe(Option.map(rowToUserIdentity))
+      return Option.fromNullishOr(row).pipe(Option.map(rowToUserIdentity))
     }).pipe(wrapSqlError("findByProvider"))
 
   const findByUserAndProvider: IdentityRepositoryService["findByUserAndProvider"] = (
@@ -86,7 +86,7 @@ const make = Effect.gen(function* () {
         .select(selectIdentityFields)
         .from(identities)
         .where(and(eq(identities.userId, userId), eq(identities.provider, provider)))
-      return Option.fromNullable(row).pipe(Option.map(rowToUserIdentity))
+      return Option.fromNullishOr(row).pipe(Option.map(rowToUserIdentity))
     }).pipe(wrapSqlError("findByUserAndProvider"))
 
   const create: IdentityRepositoryService["create"] = (identity) =>
@@ -132,16 +132,12 @@ const make = Effect.gen(function* () {
           .returning({ id: identities.id })
 
         if (updated.length === 0) {
-          return yield* Effect.fail(
-            new EntityNotFoundError({ entityType: "UserIdentity", entityId: id })
-          )
+          return yield* new EntityNotFoundError({ entityType: "UserIdentity", entityId: id })
         }
       } else {
         const existing = yield* findById(id)
         if (Option.isNone(existing)) {
-          return yield* Effect.fail(
-            new EntityNotFoundError({ entityType: "UserIdentity", entityId: id })
-          )
+          return yield* new EntityNotFoundError({ entityType: "UserIdentity", entityId: id })
         }
       }
 
@@ -154,13 +150,7 @@ const make = Effect.gen(function* () {
     }).pipe(wrapSqlError("update"))
 
   const deleteIdentity: IdentityRepositoryService["delete"] = (id) =>
-    db
-      .delete(identities)
-      .where(eq(identities.id, id))
-      .pipe(
-        Effect.map(() => undefined),
-        wrapSqlError("delete")
-      )
+    db.delete(identities).where(eq(identities.id, id)).pipe(Effect.asVoid, wrapSqlError("delete"))
 
   const deleteByUserId: IdentityRepositoryService["deleteByUserId"] = (userId) =>
     Effect.gen(function* () {
@@ -178,8 +168,8 @@ const make = Effect.gen(function* () {
         .from(identities)
         .where(and(eq(identities.provider, provider), eq(identities.providerId, providerId)))
 
-      return Option.fromNullable(row).pipe(
-        Option.flatMap((result) => Option.fromNullable(result.passwordHash)),
+      return Option.fromNullishOr(row).pipe(
+        Option.flatMap((result) => Option.fromNullishOr(result.passwordHash)),
         Option.map((hash) => HashedPassword.make(hash))
       )
     }).pipe(wrapSqlError("getPasswordHash"))
@@ -197,12 +187,10 @@ const make = Effect.gen(function* () {
         .returning({ id: identities.id })
 
       if (updated.length === 0) {
-        return yield* Effect.fail(
-          new EntityNotFoundError({
-            entityType: "UserIdentity",
-            entityId: `${provider}:${providerId}`,
-          })
-        )
+        return yield* new EntityNotFoundError({
+          entityType: "UserIdentity",
+          entityId: `${provider}:${providerId}`,
+        })
       }
     }).pipe(wrapSqlError("updatePasswordHash"))
 

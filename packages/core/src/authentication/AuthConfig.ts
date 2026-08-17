@@ -15,10 +15,10 @@
  */
 
 import * as Config from "effect/Config"
-import type { ConfigError } from "effect/ConfigError"
+import type { ConfigError } from "effect/Config"
 import * as Context from "effect/Context"
 import * as Duration from "effect/Duration"
-import type { DurationInput } from "effect/Duration"
+import type { Input as DurationInput } from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -39,7 +39,7 @@ export class LocalAuthConfig extends Schema.Class<LocalAuthConfig>("LocalAuthCon
   /**
    * Whether email verification is required for local registration
    */
-  requireEmailVerification: Schema.Boolean.annotations({
+  requireEmailVerification: Schema.Boolean.annotate({
     title: "Require Email Verification",
     description: "Whether new users must verify their email before login",
   }),
@@ -47,7 +47,10 @@ export class LocalAuthConfig extends Schema.Class<LocalAuthConfig>("LocalAuthCon
   /**
    * Minimum password length
    */
-  minPasswordLength: Schema.Number.pipe(Schema.int(), Schema.greaterThan(0)).annotations({
+  minPasswordLength: Schema.Number.pipe(
+    Schema.check(Schema.isInt()),
+    Schema.check(Schema.isGreaterThan(0))
+  ).annotate({
     title: "Minimum Password Length",
     description: "Minimum required password length",
   }),
@@ -55,7 +58,7 @@ export class LocalAuthConfig extends Schema.Class<LocalAuthConfig>("LocalAuthCon
   /**
    * Whether to require uppercase characters in passwords
    */
-  requireUppercase: Schema.Boolean.annotations({
+  requireUppercase: Schema.Boolean.annotate({
     title: "Require Uppercase",
     description: "Whether passwords must contain uppercase characters",
   }),
@@ -63,7 +66,7 @@ export class LocalAuthConfig extends Schema.Class<LocalAuthConfig>("LocalAuthCon
   /**
    * Whether to require numbers in passwords
    */
-  requireNumbers: Schema.Boolean.annotations({
+  requireNumbers: Schema.Boolean.annotate({
     title: "Require Numbers",
     description: "Whether passwords must contain numbers",
   }),
@@ -71,7 +74,7 @@ export class LocalAuthConfig extends Schema.Class<LocalAuthConfig>("LocalAuthCon
   /**
    * Whether to require special characters in passwords
    */
-  requireSpecialChars: Schema.Boolean.annotations({
+  requireSpecialChars: Schema.Boolean.annotate({
     title: "Require Special Characters",
     description: "Whether passwords must contain special characters",
   }),
@@ -84,7 +87,7 @@ export class GoogleAuthConfig extends Schema.Class<GoogleAuthConfig>("GoogleAuth
   /**
    * Google OAuth Client ID
    */
-  clientId: Schema.NonEmptyTrimmedString.annotations({
+  clientId: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Client ID",
     description: "Google OAuth client ID from Google Cloud Console",
   }),
@@ -92,7 +95,7 @@ export class GoogleAuthConfig extends Schema.Class<GoogleAuthConfig>("GoogleAuth
   /**
    * Google OAuth Client Secret
    */
-  clientSecret: Schema.Redacted(Schema.NonEmptyTrimmedString).annotations({
+  clientSecret: Schema.RedactedFromValue(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Client Secret",
     description: "Google OAuth client secret for server-side authentication",
   }),
@@ -100,7 +103,7 @@ export class GoogleAuthConfig extends Schema.Class<GoogleAuthConfig>("GoogleAuth
   /**
    * OAuth redirect URI
    */
-  redirectUri: Schema.NonEmptyTrimmedString.annotations({
+  redirectUri: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Redirect URI",
     description: "OAuth callback URL registered in Google Cloud Console",
   }),
@@ -113,7 +116,7 @@ export class CoinbaseAuthConfig extends Schema.Class<CoinbaseAuthConfig>("Coinba
   /**
    * Coinbase OAuth Client ID
    */
-  clientId: Schema.NonEmptyTrimmedString.annotations({
+  clientId: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Client ID",
     description: "Coinbase OAuth client ID",
   }),
@@ -121,7 +124,7 @@ export class CoinbaseAuthConfig extends Schema.Class<CoinbaseAuthConfig>("Coinba
   /**
    * Coinbase OAuth Client Secret
    */
-  clientSecret: Schema.Redacted(Schema.NonEmptyTrimmedString).annotations({
+  clientSecret: Schema.RedactedFromValue(Schema.Trimmed.check(Schema.isNonEmpty())).annotate({
     title: "Client Secret",
     description: "Coinbase OAuth client secret",
   }),
@@ -129,7 +132,7 @@ export class CoinbaseAuthConfig extends Schema.Class<CoinbaseAuthConfig>("Coinba
   /**
    * OAuth redirect URI
    */
-  redirectUri: Schema.NonEmptyTrimmedString.annotations({
+  redirectUri: Schema.Trimmed.check(Schema.isNonEmpty()).annotate({
     title: "Redirect URI",
     description: "OAuth callback URL registered in Coinbase",
   }),
@@ -203,7 +206,7 @@ export interface AuthConfigData {
 }
 
 /**
- * AuthConfig - Context.Tag for dependency injection
+ * AuthConfig - Context.Service for dependency injection
  *
  * Usage:
  * ```typescript
@@ -217,7 +220,7 @@ export interface AuthConfigData {
  * })
  * ```
  */
-export class AuthConfig extends Context.Tag("AuthConfig")<AuthConfig, AuthConfigData>() {}
+export class AuthConfig extends Context.Service<AuthConfig, AuthConfigData>()("AuthConfig") {}
 
 // =============================================================================
 // Configuration Defaults
@@ -281,7 +284,7 @@ const localAuthConfig: Config.Config<Option.Option<LocalAuthConfig>> = Config.al
   requireEmailVerification: Config.boolean("REQUIRE_EMAIL_VERIFICATION").pipe(
     Config.withDefault(localAuthDefaults.requireEmailVerification)
   ),
-  minPasswordLength: Config.integer("MIN_PASSWORD_LENGTH").pipe(
+  minPasswordLength: Config.int("MIN_PASSWORD_LENGTH").pipe(
     Config.withDefault(localAuthDefaults.minPasswordLength)
   ),
   requireUppercase: Config.boolean("REQUIRE_UPPERCASE").pipe(
@@ -385,11 +388,7 @@ export const authConfig: Config.Config<AuthConfigData> = Config.all({
 /**
  * AuthConfig loaded from environment
  */
-export const authConfigFromEnv: Effect.Effect<AuthConfigData, ConfigError> = Effect.gen(
-  function* () {
-    return yield* authConfig
-  }
-)
+export const authConfigFromEnv: Effect.Effect<AuthConfigData, ConfigError> = authConfig
 
 // =============================================================================
 // Layer

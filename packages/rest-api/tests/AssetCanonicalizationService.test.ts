@@ -93,7 +93,7 @@ describe("AssetCanonicalizationService", () => {
           decimals: 6,
         },
         observedRepresentations,
-      }).pipe(Effect.either)
+      }).pipe(Effect.result)
     )
     const wrongDecimals = Effect.runSync(
       validateManualRepresentationIdentity({
@@ -106,11 +106,11 @@ describe("AssetCanonicalizationService", () => {
           decimals: 18,
         },
         observedRepresentations,
-      }).pipe(Effect.either)
+      }).pipe(Effect.result)
     )
 
-    expect(matching._tag).toBe("Right")
-    expect(wrongDecimals._tag).toBe("Left")
+    expect(matching._tag).toBe("Success")
+    expect(wrongDecimals._tag).toBe("Failure")
   })
 
   it.each([
@@ -140,10 +140,10 @@ describe("AssetCanonicalizationService", () => {
             ...observed,
           },
         ],
-      }).pipe(Effect.either)
+      }).pipe(Effect.result)
     )
 
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
   })
 
   it("rejects a fungible economic asset paired with an NFT representation", () => {
@@ -160,10 +160,10 @@ describe("AssetCanonicalizationService", () => {
           mintAddress: "Mint111111111111111111111111111111111111111",
           decimals: 0,
         },
-      }).pipe(Effect.either)
+      }).pipe(Effect.result)
     )
 
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
   })
 
   it("rejects a native asset resolution for an observed Solana token", () => {
@@ -177,10 +177,10 @@ describe("AssetCanonicalizationService", () => {
           name: "Solana",
           providerType: "spl-token",
         })
-      ).pipe(Effect.either)
+      ).pipe(Effect.result)
     )
 
-    expect(result._tag).toBe("Left")
+    expect(result._tag).toBe("Failure")
   })
 
   it("includes Cardano native platform metadata from CoinGecko", () => {

@@ -1,16 +1,14 @@
-import { FetchHttpClient } from "@effect/platform"
+import { FetchHttpClient } from "effect/unstable/http"
 import { ConfigProvider, Effect } from "effect"
 import * as Layer from "effect/Layer"
 import { describe, expect, it } from "vitest"
 import { CoinGeckoClientLive } from "../src/layers/CoinGeckoClientLive.ts"
 import { CoinGeckoClient } from "../src/services/coingecko/CoinGeckoClient.ts"
 
-const configProvider = ConfigProvider.fromMap(
-  new Map([
-    ["COINGECKO_API_BASE_URL", "https://coingecko.example.test/v3"],
-    ["COINGECKO_API_KEY", "demo-key"],
-  ])
-)
+const configProvider = ConfigProvider.fromEnvRecord({
+  COINGECKO_API_BASE_URL: "https://coingecko.example.test/v3",
+  COINGECKO_API_KEY: "demo-key",
+})
 
 const ClientTestLive = CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.layer))
 
@@ -23,7 +21,7 @@ const runClient = <A>(
     effect.pipe(
       Effect.provide(ClientTestLive),
       Effect.provideService(FetchHttpClient.Fetch, fetch),
-      Effect.withConfigProvider(provider)
+      Effect.provideService(ConfigProvider.ConfigProvider, provider)
     )
   )
 
@@ -48,7 +46,7 @@ describe("CoinGeckoClientLive", () => {
         apiKey = headers.get("x-cg-pro-api-key")
         return Response.json({ coins: [] })
       },
-      ConfigProvider.fromMap(new Map())
+      ConfigProvider.fromEnvRecord({})
     )
 
     expect(requestUrlValue?.origin).toBe("https://api.coingecko.com")
@@ -75,7 +73,7 @@ describe("CoinGeckoClientLive", () => {
         proApiKey = headers.get("x-cg-pro-api-key")
         return Response.json({ coins: [] })
       },
-      ConfigProvider.fromMap(new Map([["COINGECKO_API_KEY", "demo-key"]]))
+      ConfigProvider.fromEnvRecord({ COINGECKO_API_KEY: "demo-key" })
     )
 
     expect(requestUrlValue?.origin).toBe("https://api.coingecko.com")
@@ -176,7 +174,7 @@ describe("CoinGeckoClientLive", () => {
         proApiKey = headers.get("x-cg-pro-api-key")
         return Response.json({ coins: [] })
       },
-      ConfigProvider.fromMap(new Map([["COINGECKO_PRO_API_KEY", "pro-key"]]))
+      ConfigProvider.fromEnvRecord({ COINGECKO_PRO_API_KEY: "pro-key" })
     )
 
     expect(requestUrlValue?.origin).toBe("https://pro-api.coingecko.com")
@@ -187,16 +185,16 @@ describe("CoinGeckoClientLive", () => {
     const result = await runClient(
       Effect.gen(function* () {
         const client = yield* CoinGeckoClient
-        return yield* Effect.either(client.searchCoins({ query: "BTC" }))
+        return yield* Effect.result(client.searchCoins({ query: "BTC" }))
       }),
       async () => new Response("rate limited", { status: 429 })
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("CoinGeckoClientError")
-      expect(result.left.message).toContain("429")
-      expect(result.left.message).toContain("rate limited")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("CoinGeckoClientError")
+      expect(result.failure.message).toContain("429")
+      expect(result.failure.message).toContain("rate limited")
     }
   })
 
@@ -204,15 +202,15 @@ describe("CoinGeckoClientLive", () => {
     const result = await runClient(
       Effect.gen(function* () {
         const client = yield* CoinGeckoClient
-        return yield* Effect.either(client.searchCoins({ query: "BTC" }))
+        return yield* Effect.result(client.searchCoins({ query: "BTC" }))
       }),
       async () => Response.json({ coins: [{ id: 123 }] })
     )
 
-    expect(result._tag).toBe("Left")
-    if (result._tag === "Left") {
-      expect(result.left._tag).toBe("CoinGeckoClientError")
-      expect(result.left.message).toContain("Failed to decode CoinGecko response")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure._tag).toBe("CoinGeckoClientError")
+      expect(result.failure.message).toContain("Failed to decode CoinGecko response")
     }
   })
 })

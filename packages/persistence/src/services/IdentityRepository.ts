@@ -183,7 +183,7 @@ export interface IdentityRepositoryService {
  * })
  * ```
  */
-export class IdentityRepository extends Context.Tag("IdentityRepository")<
+export class IdentityRepository extends Context.Service<
   IdentityRepository,
   IdentityRepositoryService
->() {}
+>()("IdentityRepository") {}
