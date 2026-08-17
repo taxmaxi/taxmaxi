@@ -907,6 +907,44 @@ export const hasFixedUnitAmount = <Price extends Pick<Stripe.Price, "unit_amount
 const StripeReferenceSchema = Schema.Union([Schema.String, Schema.Struct({ id: Schema.String })])
 const NullableStripeReferenceSchema = Schema.NullOr(StripeReferenceSchema)
 const StripeMetadataSchema = Schema.Record(Schema.String, Schema.String)
+const StripeCatalogProductPayloadSchema = Schema.Union([
+  Schema.String,
+  Schema.Struct({ id: Schema.String, deleted: Schema.Literal(true) }),
+  Schema.Struct({
+    id: Schema.String,
+    active: Schema.Boolean,
+    name: Schema.String,
+    description: Schema.NullOr(Schema.String),
+    tax_code: Schema.NullOr(StripeReferenceSchema),
+    metadata: StripeMetadataSchema,
+  }),
+])
+const StripeCatalogPricePayloadSchema = Schema.Struct({
+  id: Schema.String,
+  billing_scheme: Schema.String,
+  lookup_key: Schema.NullOr(Schema.String),
+  currency: Schema.String,
+  unit_amount: Schema.NullOr(Schema.Number),
+  tax_behavior: Schema.NullOr(Schema.String),
+  recurring: Schema.NullOr(
+    Schema.Struct({
+      interval: Schema.String,
+      interval_count: Schema.Number,
+      usage_type: Schema.String,
+      trial_period_days: Schema.NullOr(Schema.Number),
+    })
+  ),
+  transform_quantity: Schema.NullOr(
+    Schema.Struct({
+      divide_by: Schema.Number,
+      round: Schema.String,
+    })
+  ),
+  product: StripeCatalogProductPayloadSchema,
+})
+const StripeCatalogPriceListPayloadSchema = Schema.Struct({
+  data: Schema.Array(StripeCatalogPricePayloadSchema),
+})
 const AnnualCheckoutMetadataSchema = Schema.Struct({
   annual_checkout_generation: Schema.optional(
     Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))
@@ -1159,6 +1197,24 @@ const make = Effect.gen(function* () {
       "Stripe catalog validation failed"
     ).pipe(Effect.andThen(Effect.fail(stripeError(message))))
 
+  const validateStripeCatalogPriceListResponse = <A>({
+    operation,
+    response,
+  }: {
+    readonly operation: string
+    readonly response: A
+  }): Effect.Effect<A, StripeBillingError> =>
+    Schema.decodeUnknownEffect(StripeCatalogPriceListPayloadSchema)(response).pipe(
+      Effect.as(response),
+      Effect.catch(() =>
+        stripeCatalogValidationFailure({
+          operation,
+          validationReason: "response_shape_invalid",
+          message: "Stripe returned an invalid catalog price response",
+        })
+      )
+    )
+
   const stripePromise = <A>(operation: string, run: (client: Stripe) => Promise<A>) =>
     stripeClient.pipe(
       Effect.flatMap((client) =>
@@ -1204,6 +1260,12 @@ const make = Effect.gen(function* () {
         expand: ["data.product"],
       })
     ).pipe(
+      Effect.flatMap((response) =>
+        validateStripeCatalogPriceListResponse({
+          operation: "Load Checkout price",
+          response,
+        })
+      ),
       Effect.flatMap((prices) => {
         const price = prices.data[0]
         if (price === undefined) return Effect.as(Effect.void, undefined)
@@ -1344,6 +1406,12 @@ const make = Effect.gen(function* () {
         expand: ["data.product"],
       })
   ).pipe(
+    Effect.flatMap((response) =>
+      validateStripeCatalogPriceListResponse({
+        operation: "Load billing catalog",
+        response,
+      })
+    ),
     Effect.flatMap((prices) => {
       if (
         !prices.data.every((price) =>

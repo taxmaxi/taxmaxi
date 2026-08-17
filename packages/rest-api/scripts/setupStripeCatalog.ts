@@ -53,6 +53,11 @@ export interface StripeCatalogProductInput {
   readonly metadata: Readonly<Record<string, string>>
 }
 
+export interface StripeCatalogProductCreateInput extends StripeCatalogProductInput {
+  readonly lookupKey: string
+  readonly replacedProductId: string | null
+}
+
 export interface StripeCatalogPriceInput {
   readonly lookupKey: string
   readonly productId: string
@@ -67,7 +72,9 @@ export interface StripeCatalogPriceInput {
 export interface StripeCatalogClient {
   readonly listProducts: () => Promise<ReadonlyArray<StripeCatalogProductRecord>>
   readonly listPrices: () => Promise<ReadonlyArray<StripeCatalogPriceRecord>>
-  readonly createProduct: (input: StripeCatalogProductInput) => Promise<StripeCatalogProductRecord>
+  readonly createProduct: (
+    input: StripeCatalogProductCreateInput
+  ) => Promise<StripeCatalogProductRecord>
   readonly updateProduct: (
     id: string,
     input: StripeCatalogProductInput
@@ -159,7 +166,10 @@ const findProduct = ({
   readonly prices: ReadonlyArray<StripeCatalogPriceRecord>
   readonly existingPrice: StripeCatalogPriceRecord | undefined
   readonly spec: TaxMaxiStripeCatalogItem
-}): StripeCatalogProductRecord | undefined => {
+}): {
+  readonly product: StripeCatalogProductRecord | undefined
+  readonly replacedProductId: string | null
+} => {
   let excludedProductId: string | undefined
 
   const isLinkedToAnotherCatalogItem = (productId: string): boolean =>
@@ -178,7 +188,9 @@ const findProduct = ({
       )
     }
 
-    if (!isLinkedToAnotherCatalogItem(linkedProduct.id)) return linkedProduct
+    if (!isLinkedToAnotherCatalogItem(linkedProduct.id)) {
+      return { product: linkedProduct, replacedProductId: null }
+    }
     excludedProductId = linkedProduct.id
   }
 
@@ -191,8 +203,8 @@ const findProduct = ({
     ),
     description: `metadata ${STRIPE_CATALOG_PRODUCT_METADATA_KEY}=${spec.lookupKey}`,
   })
-  if (metadataMatch !== undefined) return metadataMatch
-  return undefined
+  if (metadataMatch !== undefined) return { product: metadataMatch, replacedProductId: null }
+  return { product: undefined, replacedProductId: excludedProductId ?? null }
 }
 
 /** Creates missing catalog objects and replaces immutable price mismatches. */
@@ -227,16 +239,21 @@ export const reconcileStripeCatalog = async ({
   for (const spec of catalog) {
     const existingPrice = prices.find(({ lookupKey }) => lookupKey === spec.lookupKey)
     const desired = desiredProduct(spec)
-    const existingProduct = findProduct({
+    const productSelection = findProduct({
       products,
       prices,
       existingPrice,
       spec,
     })
+    const existingProduct = productSelection.product
     let product: StripeCatalogProductRecord
 
     if (existingProduct === undefined) {
-      product = await client.createProduct(desired)
+      product = await client.createProduct({
+        ...desired,
+        lookupKey: spec.lookupKey,
+        replacedProductId: productSelection.replacedProductId,
+      })
       products.push(product)
       productsCreated += 1
       onChange(`Created product: ${spec.name}`)
@@ -409,18 +426,28 @@ export const decodeStripePriceRecord = async (
   }
 }
 
+export const loadAllStripeListItems = async <A>(
+  page: Pick<Stripe.ApiListPromise<A>, "autoPagingEach">
+): Promise<ReadonlyArray<A>> => {
+  const items: Array<A> = []
+  await page.autoPagingEach((item) => {
+    items.push(item)
+  })
+  return items
+}
+
 export const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
   listProducts: async () => {
-    const products = await stripe.products.list({ limit: 100 }).autoPagingToArray({ limit: 10_000 })
+    const products = await loadAllStripeListItems(stripe.products.list({ limit: 100 }))
     return Promise.all(products.map(decodeStripeProductRecord))
   },
   listPrices: async () => {
-    const activePrices = await stripe.prices
-      .list({ active: true, limit: 100 })
-      .autoPagingToArray({ limit: 10_000 })
-    const inactivePrices = await stripe.prices
-      .list({ active: false, limit: 100 })
-      .autoPagingToArray({ limit: 10_000 })
+    const activePrices = await loadAllStripeListItems(
+      stripe.prices.list({ active: true, limit: 100 })
+    )
+    const inactivePrices = await loadAllStripeListItems(
+      stripe.prices.list({ active: false, limit: 100 })
+    )
     return Promise.all([...activePrices, ...inactivePrices].map(decodeStripePriceRecord))
   },
   createProduct: async (input) => {
@@ -433,7 +460,7 @@ export const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => 
         metadata: { ...input.metadata },
       },
       {
-        idempotencyKey: `taxmaxi-catalog-product-${input.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY]}`,
+        idempotencyKey: stripeCatalogProductIdempotencyKey(input),
       }
     )
     return decodeStripeProductRecord(product)
@@ -484,6 +511,11 @@ export const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => 
       })
     ),
 })
+
+export const stripeCatalogProductIdempotencyKey = (
+  input: Pick<StripeCatalogProductCreateInput, "lookupKey" | "replacedProductId">
+): string =>
+  ["taxmaxi-catalog-product", input.lookupKey, input.replacedProductId ?? "initial"].join("-")
 
 export const stripeCatalogPriceIdempotencyKey = (input: StripeCatalogPriceInput): string =>
   [

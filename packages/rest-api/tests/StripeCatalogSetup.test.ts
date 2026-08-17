@@ -13,19 +13,20 @@ vi.mock("stripe", () => ({
     readonly products = {
       list: (params: Record<string, unknown>) => {
         stripeSdkMockState.calls.push(["products.list", params])
+        const product = {
+          id: "prod_listed",
+          active: true,
+          name: "Listed product",
+          description: null,
+          tax_code: null,
+          metadata: {},
+        }
         return {
-          autoPagingToArray: (options: Record<string, unknown>) => {
-            stripeSdkMockState.calls.push(["products.autoPagingToArray", options])
-            return Promise.resolve([
-              {
-                id: "prod_listed",
-                active: true,
-                name: "Listed product",
-                description: null,
-                tax_code: null,
-                metadata: {},
-              },
-            ])
+          autoPagingEach: async (
+            handler: (item: typeof product) => boolean | void | Promise<boolean | void>
+          ) => {
+            stripeSdkMockState.calls.push(["products.autoPagingEach"])
+            await handler(product)
           },
         }
       },
@@ -42,24 +43,25 @@ vi.mock("stripe", () => ({
     readonly prices = {
       list: (params: Record<string, unknown>) => {
         stripeSdkMockState.calls.push(["prices.list", params])
+        const price = {
+          id: params.active === false ? "price_inactive" : "price_active",
+          active: params.active !== false,
+          billing_scheme: "per_unit",
+          lookup_key: params.active === false ? "inactive_price" : "active_price",
+          product: "prod_listed",
+          currency: "eur",
+          unit_amount: 1_000,
+          tax_behavior: "inclusive",
+          recurring: null,
+          transform_quantity: null,
+          metadata: {},
+        }
         return {
-          autoPagingToArray: (options: Record<string, unknown>) => {
-            stripeSdkMockState.calls.push(["prices.autoPagingToArray", options])
-            return Promise.resolve([
-              {
-                id: params.active === false ? "price_inactive" : "price_active",
-                active: params.active !== false,
-                billing_scheme: "per_unit",
-                lookup_key: params.active === false ? "inactive_price" : "active_price",
-                product: "prod_listed",
-                currency: "eur",
-                unit_amount: 1_000,
-                tax_behavior: "inclusive",
-                recurring: null,
-                transform_quantity: null,
-                metadata: {},
-              },
-            ])
+          autoPagingEach: async (
+            handler: (item: typeof price) => boolean | void | Promise<boolean | void>
+          ) => {
+            stripeSdkMockState.calls.push(["prices.autoPagingEach"])
+            await handler(price)
           },
         }
       },
@@ -110,15 +112,17 @@ import {
   assertKeyMatchesEnvironment,
   decodeStripePriceRecord,
   decodeStripeProductRecord,
+  loadAllStripeListItems,
   loadStripeCatalogRestrictedKey,
   makeStripeCatalogClient,
   reconcileStripeCatalog,
   runStripeCatalogSetup,
+  stripeCatalogProductIdempotencyKey,
   stripeCatalogPriceIdempotencyKey,
   type StripeCatalogClient,
   type StripeCatalogPriceInput,
   type StripeCatalogPriceRecord,
-  type StripeCatalogProductInput,
+  type StripeCatalogProductCreateInput,
   type StripeCatalogProductRecord,
 } from "../scripts/setupStripeCatalog.ts"
 
@@ -160,6 +164,7 @@ class FakeStripeCatalogClient implements StripeCatalogClient {
   createdPrices = 0
   updatedPrices = 0
   readonly createdPriceInputs: Array<StripeCatalogPriceInput> = []
+  readonly createdProductInputs: Array<StripeCatalogProductCreateInput> = []
   failNextArchive = false
   failAfterNextProductCreation = false
   failAfterNextPriceCreation = false
@@ -171,6 +176,7 @@ class FakeStripeCatalogClient implements StripeCatalogClient {
 
   createProduct: StripeCatalogClient["createProduct"] = (input) => {
     this.createdProducts += 1
+    this.createdProductInputs.push(input)
     const product: StripeCatalogProductRecord = {
       id: `prod_${this.products.length + 1}`,
       active: input.active,
@@ -269,12 +275,14 @@ describe("Stripe catalog setup", () => {
   it("maps the production Stripe SDK calls to the catalog client contract", async () => {
     stripeSdkMockState.calls.length = 0
     const client = makeStripeCatalogClient(new Stripe("rk_test_catalog"))
-    const productInput: StripeCatalogProductInput = {
+    const productInput: StripeCatalogProductCreateInput = {
       active: true,
       name: "TaxMaxi annual",
       description: "Annual tax calculation plan",
       taxCode: "txcd_10000000",
       metadata: { taxmaxi_catalog_lookup_key: "taxmaxi_annual_test" },
+      lookupKey: "taxmaxi_annual_test",
+      replacedProductId: null,
     }
     const priceInput: StripeCatalogPriceInput = {
       lookupKey: "taxmaxi_annual_test",
@@ -315,11 +323,11 @@ describe("Stripe catalog setup", () => {
 
     expect(stripeSdkMockState.calls).toEqual([
       ["products.list", { limit: 100 }],
-      ["products.autoPagingToArray", { limit: 10_000 }],
+      ["products.autoPagingEach"],
       ["prices.list", { active: true, limit: 100 }],
-      ["prices.autoPagingToArray", { limit: 10_000 }],
+      ["prices.autoPagingEach"],
       ["prices.list", { active: false, limit: 100 }],
-      ["prices.autoPagingToArray", { limit: 10_000 }],
+      ["prices.autoPagingEach"],
       [
         "products.create",
         {
@@ -329,7 +337,7 @@ describe("Stripe catalog setup", () => {
           tax_code: productInput.taxCode,
           metadata: productInput.metadata,
         },
-        { idempotencyKey: "taxmaxi-catalog-product-taxmaxi_annual_test" },
+        { idempotencyKey: "taxmaxi-catalog-product-taxmaxi_annual_test-initial" },
       ],
       [
         "products.update",
@@ -693,6 +701,59 @@ describe("Stripe catalog setup", () => {
     expect(rerun.pricesCreated).toBe(1)
   })
 
+  it("recovers when a shared-Product replacement succeeds but its response is lost", async () => {
+    const client = new FakeStripeCatalogClient()
+    const spec = firstCatalogItem()
+    const sharedProduct = productRecord({
+      id: "prod_shared",
+      lookupKey: spec.lookupKey,
+      name: spec.name,
+    })
+    client.products.push(sharedProduct)
+    client.prices.push(
+      {
+        ...priceRecordDefinition(spec),
+        id: "price_current",
+        active: true,
+        lookupKey: spec.lookupKey,
+        productId: sharedProduct.id,
+        currency: spec.currency,
+        unitAmount: spec.unitAmount,
+        taxBehavior: spec.taxBehavior,
+        recurringInterval: spec.recurringInterval,
+        recurringIntervalCount: spec.recurringInterval === null ? null : 1,
+        metadata: { taxmaxi_catalog_lookup_key: spec.lookupKey },
+      },
+      {
+        ...priceRecordDefinition({ recurringInterval: null }),
+        id: "price_other_offer",
+        active: true,
+        lookupKey: "taxmaxi_other_offer",
+        productId: sharedProduct.id,
+        currency: "eur",
+        unitAmount: 9_900,
+        taxBehavior: "exclusive",
+        recurringInterval: null,
+        recurringIntervalCount: null,
+        metadata: { taxmaxi_catalog_lookup_key: "taxmaxi_other_offer" },
+      }
+    )
+    client.failAfterNextProductCreation = true
+
+    await expect(reconcileStripeCatalog({ client, catalog: [spec] })).rejects.toThrow(
+      "accepted product creation failure"
+    )
+    const rerun = await reconcileStripeCatalog({ client, catalog: [spec] })
+
+    expect(client.createdProducts).toBe(1)
+    expect(client.createdProductInputs[0]?.replacedProductId).toBe(sharedProduct.id)
+    expect(rerun.productsCreated).toBe(0)
+    expect(rerun.pricesCreated).toBe(1)
+    expect(client.prices.find(({ lookupKey }) => lookupKey === spec.lookupKey)?.productId).not.toBe(
+      sharedProduct.id
+    )
+  })
+
   it("recovers when Price creation and lookup transfer succeed but the response is lost", async () => {
     const client = new FakeStripeCatalogClient()
     const spec = firstCatalogItem()
@@ -963,6 +1024,7 @@ describe("Stripe catalog setup", () => {
 
     expect(result.productsCreated).toBe(1)
     expect(result.productsUpdated).toBe(0)
+    expect(client.createdProductInputs[0]?.replacedProductId).toBe(sharedProduct.id)
     expect(client.products.find(({ id }) => id === sharedProduct.id)).toEqual(sharedProduct)
     expect(client.prices.find(({ id }) => id === "price_removed_offer")?.active).toBe(true)
     expect(client.prices.find(({ id }) => id === "price_current")?.active).toBe(false)
@@ -1018,6 +1080,10 @@ describe("Stripe catalog setup", () => {
     const secondPrice = client.prices.find(({ lookupKey }) => lookupKey === secondSpec.lookupKey)
     expect(result.productsCreated).toBe(2)
     expect(result.productsUpdated).toBe(0)
+    expect(client.createdProductInputs.map(({ replacedProductId }) => replacedProductId)).toEqual([
+      sharedProduct.id,
+      sharedProduct.id,
+    ])
     expect(firstPrice?.productId).not.toBe(sharedProduct.id)
     expect(secondPrice?.productId).not.toBe(sharedProduct.id)
     expect(firstPrice?.productId).not.toBe(secondPrice?.productId)
@@ -1045,6 +1111,44 @@ describe("Stripe catalog setup", () => {
         replacedPriceId: "price_generation_two",
       })
     )
+  })
+
+  it("uses the replaced Product as the idempotency generation", () => {
+    const initial = { lookupKey: "taxmaxi_example", replacedProductId: null }
+    const firstReplacement = {
+      lookupKey: "taxmaxi_example",
+      replacedProductId: "prod_shared_one",
+    }
+
+    expect(stripeCatalogProductIdempotencyKey(firstReplacement)).toBe(
+      stripeCatalogProductIdempotencyKey({ ...firstReplacement })
+    )
+    expect(stripeCatalogProductIdempotencyKey(initial)).not.toBe(
+      stripeCatalogProductIdempotencyKey(firstReplacement)
+    )
+    expect(stripeCatalogProductIdempotencyKey(firstReplacement)).not.toBe(
+      stripeCatalogProductIdempotencyKey({
+        ...firstReplacement,
+        replacedProductId: "prod_shared_two",
+      })
+    )
+  })
+
+  it("loads Stripe lists beyond the autoPagingToArray cap", async () => {
+    const page = {
+      autoPagingEach: async (
+        handler: (item: number) => boolean | void | Promise<boolean | void>
+      ) => {
+        for (let item = 0; item <= 10_000; item += 1) {
+          if ((await handler(item)) === false) return
+        }
+      },
+    }
+
+    const items = await loadAllStripeListItems(page)
+
+    expect(items).toHaveLength(10_001)
+    expect(items[10_000]).toBe(10_000)
   })
 
   it("activates an inactive exact-match price", async () => {

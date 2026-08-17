@@ -1129,16 +1129,59 @@ describe("StripeBillingServiceLive", () => {
     ])
   })
 
-  it("rejects a catalog price whose cadence contradicts its lookup key", async () => {
+  it("turns malformed Stripe catalog responses into a logged billing failure", async () => {
+    const logMessages: Array<unknown> = []
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message)
+    })
+    const prices = completeStripeCatalog()
+    const firstPrice = prices[0]
+    expect(firstPrice).toBeDefined()
+    if (firstPrice === undefined) return
     stripeMockState.prices = [
       {
+        ...firstPrice,
+        product: { ...firstPrice.product, metadata: null },
+      },
+      ...prices.slice(1),
+    ]
+
+    try {
+      const service = await loadServiceWithStripe(billingRepositoryStub)
+      const result = await Effect.runPromise(
+        Effect.result(service.catalog).pipe(Effect.withLogger(logger))
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { message: "Stripe returned an invalid catalog price response" },
+      })
+      expect(logMessages).toContainEqual([
+        {
+          provider: "stripe",
+          operation: "Load billing catalog",
+          validationReason: "response_shape_invalid",
+          lookupKey: undefined,
+          priceId: undefined,
+          receivedPriceCount: undefined,
+          expectedPriceCount: undefined,
+        },
+        "Stripe catalog validation failed",
+      ])
+    } finally {
+      stripeMockState.prices = []
+    }
+  })
+
+  it("rejects a catalog price whose cadence contradicts its lookup key", async () => {
+    const annualPrice = catalogPriceByLookupKey("taxmaxi_professional_annual_100k_eur")
+    const recurring = annualPrice.recurring
+    if (recurring === null) throw new Error("Professional annual price must be recurring")
+    stripeMockState.prices = [
+      {
+        ...annualPrice,
         id: "price_professional_monthly",
-        lookup_key: "taxmaxi_professional_annual_100k_eur",
-        product: "prod_professional",
-        recurring: { interval: "month", interval_count: 1 },
-        unit_amount: 15_900,
-        currency: "eur",
-        tax_behavior: "exclusive",
+        recurring: { ...recurring, interval: "month" },
       },
     ]
     const service = await loadServiceWithStripe(billingRepositoryStub)
@@ -1152,15 +1195,7 @@ describe("StripeBillingServiceLive", () => {
   })
 
   it("rejects partial and non-EUR Stripe catalogs", async () => {
-    const annualPrice = {
-      id: "price_annual",
-      lookup_key: "taxmaxi_annual_10k_eur",
-      product: "prod_annual",
-      recurring: { interval: "year", interval_count: 1 },
-      unit_amount: 15_900,
-      currency: "eur",
-      tax_behavior: "inclusive",
-    }
+    const annualPrice = catalogPriceByLookupKey("taxmaxi_annual_10k_eur", "prod_annual")
     stripeMockState.prices = [annualPrice]
     const service = await loadServiceWithStripe(billingRepositoryStub)
 
@@ -1725,10 +1760,8 @@ describe("StripeBillingServiceLive", () => {
 
   it("syncs a legacy yearly subscription through the webhook service path", async () => {
     const annualPrice = {
+      ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur", "prod_annual"),
       id: "price_annual",
-      lookup_key: "taxmaxi_annual_10k_eur",
-      product: "prod_annual",
-      recurring: { interval: "year", interval_count: 1 },
     }
     stripeMockState.prices = [annualPrice]
     stripeMockState.subscription = {
@@ -2302,6 +2335,38 @@ describe("StripeBillingServiceLive", () => {
     expect(stripeMockState.checkoutParams).toEqual([])
   })
 
+  it("rejects a malformed direct Checkout price before creating a session", async () => {
+    const annualPrice = catalogPriceByLookupKey("taxmaxi_annual_10k_eur")
+    stripeMockState.checkoutParams = []
+    stripeMockState.prices = [
+      {
+        ...annualPrice,
+        product: { ...annualPrice.product, metadata: null },
+      },
+    ]
+    stripeMockState.listedSubscriptions = []
+
+    try {
+      const service = await loadServiceWithStripe({
+        ...billingRepositoryStub,
+        findByUserId: () =>
+          Effect.succeed(Option.some(billingAccount({ stripeCustomerId: "cus_test" }))),
+      })
+      const result = await Effect.runPromise(
+        Effect.result(service.createAnnualCheckout(TEST_USER_ID))
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { message: "Stripe returned an invalid catalog price response" },
+      })
+      expect(stripeMockState.checkoutParams).toEqual([])
+    } finally {
+      stripeMockState.prices = []
+      stripeMockState.listedSubscriptions = null
+    }
+  })
+
   it("blocks duplicate annual Checkout for a partially tagged archived subscription", async () => {
     stripeMockState.checkoutParams = []
     stripeMockState.prices = [
@@ -2416,13 +2481,8 @@ describe("StripeBillingServiceLive", () => {
 
   it("grants a paid renewal after the annual subscription moves to a new product", async () => {
     const replacementAnnualPrice = {
+      ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur", "prod_replacement_annual"),
       id: "price_replacement_annual",
-      lookup_key: "taxmaxi_annual_10k_eur",
-      product: "prod_replacement_annual",
-      recurring: { interval: "year", interval_count: 1 },
-      unit_amount: 15_900,
-      currency: "eur",
-      tax_behavior: "inclusive",
     }
     stripeMockState.prices = [replacementAnnualPrice]
     stripeMockState.retrievedPrices = { price_replacement_annual: replacementAnnualPrice }
@@ -2527,10 +2587,8 @@ describe("StripeBillingServiceLive", () => {
 
   it("keeps annual grant and refund references aligned through the webhook service path", async () => {
     const annualPrice = {
+      ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur", "prod_annual"),
       id: "price_annual",
-      lookup_key: "taxmaxi_annual_10k_eur",
-      product: "prod_annual",
-      recurring: { interval: "year", interval_count: 1 },
     }
     stripeMockState.prices = [annualPrice]
     stripeMockState.retrievedPrices = { price_annual: annualPrice }
@@ -2851,10 +2909,8 @@ describe("StripeBillingServiceLive", () => {
 
   it("reverses PaymentRecord-funded annual credits from credit note refunds", async () => {
     const annualPrice = {
+      ...catalogPriceByLookupKey("taxmaxi_annual_10k_eur", "prod_annual"),
       id: "price_annual",
-      lookup_key: "taxmaxi_annual_10k_eur",
-      product: "prod_annual",
-      recurring: { interval: "year", interval_count: 1 },
     }
     stripeMockState.prices = [annualPrice]
     stripeMockState.retrievedPrices = { price_annual: annualPrice }
