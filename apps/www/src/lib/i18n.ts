@@ -97,6 +97,10 @@ export const translatedPathnames = [
       en: "/assets/$assetId",
       de: "/assets/$assetId",
     },
+    "/articles/$slug": {
+      en: "/articles/$slug",
+      de: "/artikel/$slug",
+    },
     "/coinbase-sign-in": {
       en: "/coinbase-sign-in",
       de: "/coinbase-sign-in",
@@ -160,6 +164,14 @@ export const translatedPathnames = [
     "/terms": {
       en: "/terms",
       de: "/bedingungen",
+    },
+    "/tax-law/$slug": {
+      en: "/tax-law/$slug",
+      de: "/steuerrecht/$slug",
+    },
+    "/$slug": {
+      en: "/$slug",
+      de: "/$slug",
     },
   }),
 ] satisfies UrlPatterns

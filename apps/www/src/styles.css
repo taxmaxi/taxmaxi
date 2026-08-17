@@ -368,8 +368,106 @@
 
 /* TaxMaxi landing page globals. */
 html:has([data-page="landing"]),
+html:has([data-page="cms-content"]),
 html:has([data-page="landing"]) > body {
   background-color: #1a1f1d;
+}
+
+html:has([data-page="cms-content"]) > body {
+  background-color: #1a1f1d;
+}
+
+.cms-rich-text {
+  font-size: 1.0625rem;
+  line-height: 1.85;
+}
+
+.cms-rich-text > * + * {
+  margin-top: 1.5rem;
+}
+
+.cms-rich-text h2,
+.cms-rich-text h3,
+.cms-rich-text h4,
+.cms-rich-text h5,
+.cms-rich-text h6 {
+  color: var(--marketing-foreground);
+  font-family: var(--font-family-display);
+  font-weight: 600;
+  line-height: 1.2;
+  text-wrap: balance;
+}
+
+.cms-rich-text h2 {
+  font-size: clamp(1.875rem, 4vw, 2.5rem);
+  margin-top: 3.5rem;
+}
+
+.cms-rich-text h3 {
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  margin-top: 3rem;
+}
+
+.cms-rich-text h4,
+.cms-rich-text h5,
+.cms-rich-text h6 {
+  font-size: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.cms-rich-text ul,
+.cms-rich-text ol {
+  padding-left: 1.5rem;
+}
+
+.cms-rich-text ul {
+  list-style: disc;
+}
+
+.cms-rich-text ol {
+  list-style: decimal;
+}
+
+.cms-rich-text li + li {
+  margin-top: 0.65rem;
+}
+
+.cms-rich-text a {
+  color: var(--marketing-foreground);
+  text-decoration: underline;
+  text-decoration-color: var(--marketing-border);
+  text-underline-offset: 0.25rem;
+}
+
+.cms-rich-text a:hover {
+  color: var(--marketing-accent);
+}
+
+.cms-rich-text blockquote {
+  border-left: 0.25rem solid var(--marketing-accent);
+  color: var(--marketing-foreground);
+  font-size: 1.125rem;
+  padding-left: 1.25rem;
+}
+
+.cms-rich-text code {
+  border: 1px solid var(--marketing-border-muted);
+  border-radius: 0.375rem;
+  background: var(--marketing-surface-active);
+  color: var(--marketing-foreground);
+  font-size: 0.9em;
+  padding: 0.125rem 0.375rem;
+}
+
+.cms-rich-text figure {
+  margin-top: 2.5rem;
+}
+
+.cms-rich-text figcaption {
+  color: var(--marketing-muted);
+  font-size: 0.8125rem;
+  margin-top: 0.75rem;
+  text-align: center;
 }
 
 html:has([data-page="app"]),

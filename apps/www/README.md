@@ -1,5 +1,18 @@
 Welcome to your new TanStack Start app!
 
+## Payload CMS
+
+Public landing pages and articles are read from Payload on the server. Set
+`PAYLOAD_API_URL` to the CMS origin. For local development, run Payload on a
+different port from this app, for example:
+
+```sh
+PAYLOAD_API_URL=http://localhost:3001
+```
+
+Published content is cached by the browser for 60 seconds, by shared caches for
+five minutes, and may be served stale for up to one day while it revalidates.
+
 # Getting Started
 
 To run this application:

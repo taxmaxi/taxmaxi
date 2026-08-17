@@ -14,6 +14,7 @@ import StoreDevtools from "../lib/demo-store-devtools"
 import { seo } from "../lib/seo"
 import PostHogProvider from "../integrations/posthog/provider"
 import stylesCss from "../styles.css?url"
+import { getLocale, getTextDirection } from "../paraglide/runtime"
 
 interface MyRouterContext {
   queryClient: QueryClient
@@ -101,7 +102,7 @@ function Providers({ children }: { children: React.ReactNode }): React.ReactNode
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html dir={getTextDirection()} lang={getLocale()} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         <HeadContent />
