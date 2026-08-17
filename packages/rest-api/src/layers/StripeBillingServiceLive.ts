@@ -13,6 +13,7 @@ import type {
 } from "@my/persistence/services"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Config from "effect/Config"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -21,13 +22,14 @@ import * as Schema from "effect/Schema"
 import Stripe from "stripe"
 
 import {
+  STRIPE_CATALOG_PRODUCT_METADATA_KEY,
+  TAXMAXI_STRIPE_CATALOG,
+  TAXMAXI_STRIPE_TAX_CODE,
+} from "../services/StripeCatalog.ts"
+import {
   StripeBillingError,
   StripeBillingService,
   TAXMAXI_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
   TAXMAXI_TOP_UP_LOOKUP_KEY,
   type BillingCatalogPrice,
   type StripeBillingServiceShape,
@@ -36,14 +38,7 @@ import {
 const ANNUAL_CREDITS = 10_000
 const TOP_UP_CREDITS = 1_000
 const INTEGRATION_IDENTIFIER = "taxmaxi_direct_q7m4w2kp"
-const CATALOG_LOOKUP_KEYS = [
-  TAXMAXI_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_TOP_UP_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
-  TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
-] as const
+const CATALOG_LOOKUP_KEYS = TAXMAXI_STRIPE_CATALOG.map(({ lookupKey }) => lookupKey)
 
 export const STRIPE_CHECKOUT_TAX_OPTIONS = {
   automatic_tax: { enabled: true },
@@ -163,10 +158,14 @@ export const createReservedAnnualCheckoutSession = <
   })
 
 export const isDefinitiveAnnualCheckoutCreationFailure = (cause: unknown): boolean =>
-  cause instanceof Stripe.errors.StripeInvalidRequestError ||
-  cause instanceof Stripe.errors.StripeAuthenticationError ||
-  cause instanceof Stripe.errors.StripePermissionError ||
-  cause instanceof Stripe.errors.StripeCardError
+  Option.match(Schema.decodeUnknownOption(StripeErrorLogSchema)(cause), {
+    onNone: () => false,
+    onSome: ({ type }) =>
+      type === "StripeInvalidRequestError" ||
+      type === "StripeAuthenticationError" ||
+      type === "StripePermissionError" ||
+      type === "StripeCardError",
+  })
 
 export const buildTopUpCheckoutParams = ({
   customer,
@@ -195,6 +194,57 @@ export const buildTopUpCheckoutParams = ({
 })
 
 const stripeError = (message: string) => new StripeBillingError({ message })
+
+class StripeRequestError extends Data.TaggedError("StripeRequestError")<{
+  readonly cause: unknown
+}> {}
+
+const StripeErrorLogSchema = Schema.Struct({
+  type: Schema.String,
+  message: Schema.String,
+  code: Schema.optional(Schema.String),
+  requestId: Schema.optional(Schema.String),
+  statusCode: Schema.optional(Schema.Number),
+})
+
+const ErrorLogSchema = Schema.Struct({
+  name: Schema.String,
+  message: Schema.String,
+})
+
+const sanitizeStripeLogMessage = (message: string): string =>
+  message
+    .replace(/\b(?:rk|sk)_(?:live|test)_[A-Za-z0-9_*]+\b/giu, "[REDACTED_STRIPE_KEY]")
+    .replace(/\bwhsec_[A-Za-z0-9]+\b/giu, "[REDACTED_STRIPE_WEBHOOK_SECRET]")
+    .replace(/[\r\n\t]+/gu, " ")
+    .slice(0, 1_000)
+
+const stripeRequestLogAttributes = (cause: unknown) => {
+  const stripeError = Schema.decodeUnknownOption(StripeErrorLogSchema)(cause)
+  if (Option.isSome(stripeError)) {
+    return {
+      provider: "stripe",
+      stripeErrorType: stripeError.value.type,
+      stripeErrorCode: stripeError.value.code,
+      stripeErrorMessage: sanitizeStripeLogMessage(stripeError.value.message),
+      stripeRequestId: stripeError.value.requestId,
+      stripeStatusCode: stripeError.value.statusCode,
+    }
+  }
+
+  const error = Schema.decodeUnknownOption(ErrorLogSchema)(cause)
+  if (Option.isSome(error)) {
+    return {
+      provider: "stripe",
+      errorName: error.value.name,
+      errorMessage: sanitizeStripeLogMessage(error.value.message),
+    }
+  }
+
+  return {
+    provider: "stripe",
+  }
+}
 
 const customerId = (
   customer: string | Stripe.Customer | Stripe.DeletedCustomer | null
@@ -499,19 +549,76 @@ export const isCatalogPriceCadenceValid = ({
     readonly recurring: { readonly interval: string; readonly interval_count: number } | null
   }
 }): boolean => {
-  switch (lookupKey) {
-    case TAXMAXI_ANNUAL_LOOKUP_KEY:
-    case TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY:
-    case TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY:
-      return isValidAnnualPrice(price)
-    case TAXMAXI_TOP_UP_LOOKUP_KEY:
-    case TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY:
-    case TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY:
-      return isValidTopUpPrice(price)
-    default:
-      return false
-  }
+  const catalogItem = TAXMAXI_STRIPE_CATALOG.find((item) => item.lookupKey === lookupKey)
+  if (catalogItem === undefined) return false
+  return catalogItem.recurringInterval === null
+    ? isValidTopUpPrice(price)
+    : isValidAnnualPrice(price)
 }
+
+type CatalogPriceDefinitionInput = {
+  readonly billing_scheme: Stripe.Price.BillingScheme
+  readonly lookup_key: string | null
+  readonly currency: string
+  readonly unit_amount: number | null
+  readonly tax_behavior: Stripe.Price.TaxBehavior | null
+  readonly recurring: {
+    readonly interval: string
+    readonly interval_count: number
+    readonly usage_type: string
+    readonly trial_period_days: number | null
+  } | null
+  readonly transform_quantity: Stripe.Price.TransformQuantity | null
+  readonly product:
+    | string
+    | Pick<Stripe.DeletedProduct, "id" | "deleted">
+    | Pick<Stripe.Product, "active" | "name" | "description" | "tax_code" | "metadata">
+}
+
+export const catalogPriceDefinitionMismatch = (
+  price: CatalogPriceDefinitionInput
+): string | undefined => {
+  const catalogItem = TAXMAXI_STRIPE_CATALOG.find((item) => item.lookupKey === price.lookup_key)
+  if (catalogItem === undefined) return "lookup_key_unknown"
+  if (price.billing_scheme !== "per_unit") return "billing_scheme_mismatch"
+  if (price.transform_quantity !== null) return "transform_quantity_present"
+
+  const product = price.product
+  if (typeof product === "string") return "product_not_expanded"
+  if (!("active" in product)) return "product_deleted"
+  if (!product.active) return "product_inactive"
+  if (product.name !== catalogItem.name) return "product_name_mismatch"
+  if (product.description !== catalogItem.description) return "product_description_mismatch"
+
+  const productTaxCode =
+    typeof product.tax_code === "string" ? product.tax_code : (product.tax_code?.id ?? null)
+  if (productTaxCode !== TAXMAXI_STRIPE_TAX_CODE) return "product_tax_code_mismatch"
+  if (product.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] !== catalogItem.lookupKey) {
+    return "product_metadata_mismatch"
+  }
+  if (price.currency !== catalogItem.currency) return "currency_mismatch"
+  if (price.unit_amount !== catalogItem.unitAmount) return "unit_amount_mismatch"
+  if (price.tax_behavior !== catalogItem.taxBehavior) return "tax_behavior_mismatch"
+  if (!isCatalogPriceCadenceValid({ lookupKey: price.lookup_key, price })) {
+    return "cadence_mismatch"
+  }
+  if (
+    price.recurring?.usage_type !==
+    (catalogItem.recurringInterval === null ? undefined : "licensed")
+  ) {
+    return "recurring_usage_type_mismatch"
+  }
+  if (
+    price.recurring?.trial_period_days !==
+    (catalogItem.recurringInterval === null ? undefined : null)
+  ) {
+    return "recurring_trial_period_mismatch"
+  }
+  return undefined
+}
+
+export const isCatalogPriceDefinitionValid = (price: CatalogPriceDefinitionInput): boolean =>
+  catalogPriceDefinitionMismatch(price) === undefined
 
 export const hasCompleteCatalogLookupKeys = (
   prices: ReadonlyArray<{ readonly lookup_key: string | null }>
@@ -800,6 +907,44 @@ export const hasFixedUnitAmount = <Price extends Pick<Stripe.Price, "unit_amount
 const StripeReferenceSchema = Schema.Union([Schema.String, Schema.Struct({ id: Schema.String })])
 const NullableStripeReferenceSchema = Schema.NullOr(StripeReferenceSchema)
 const StripeMetadataSchema = Schema.Record(Schema.String, Schema.String)
+const StripeCatalogProductPayloadSchema = Schema.Union([
+  Schema.String,
+  Schema.Struct({ id: Schema.String, deleted: Schema.Literal(true) }),
+  Schema.Struct({
+    id: Schema.String,
+    active: Schema.Boolean,
+    name: Schema.String,
+    description: Schema.NullOr(Schema.String),
+    tax_code: Schema.NullOr(StripeReferenceSchema),
+    metadata: StripeMetadataSchema,
+  }),
+])
+const StripeCatalogPricePayloadSchema = Schema.Struct({
+  id: Schema.String,
+  billing_scheme: Schema.String,
+  lookup_key: Schema.NullOr(Schema.String),
+  currency: Schema.String,
+  unit_amount: Schema.NullOr(Schema.Number),
+  tax_behavior: Schema.NullOr(Schema.String),
+  recurring: Schema.NullOr(
+    Schema.Struct({
+      interval: Schema.String,
+      interval_count: Schema.Number,
+      usage_type: Schema.String,
+      trial_period_days: Schema.NullOr(Schema.Number),
+    })
+  ),
+  transform_quantity: Schema.NullOr(
+    Schema.Struct({
+      divide_by: Schema.Number,
+      round: Schema.String,
+    })
+  ),
+  product: StripeCatalogProductPayloadSchema,
+})
+const StripeCatalogPriceListPayloadSchema = Schema.Struct({
+  data: Schema.Array(StripeCatalogPricePayloadSchema),
+})
 const AnnualCheckoutMetadataSchema = Schema.Struct({
   annual_checkout_generation: Schema.optional(
     Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))
@@ -1014,18 +1159,90 @@ const make = Effect.gen(function* () {
     ? Effect.succeed(stripe.value)
     : Effect.fail(stripeError("Stripe billing is not configured"))
 
+  const logStripeRequestFailure = (operation: string, cause: unknown) =>
+    Effect.logError(
+      {
+        ...stripeRequestLogAttributes(cause),
+        operation,
+      },
+      "Stripe request failed"
+    )
+
+  const stripeCatalogValidationFailure = ({
+    operation,
+    validationReason,
+    message,
+    lookupKey,
+    priceId,
+    receivedPriceCount,
+  }: {
+    readonly operation: string
+    readonly validationReason: string
+    readonly message: string
+    readonly lookupKey?: string
+    readonly priceId?: string
+    readonly receivedPriceCount?: number
+  }) =>
+    Effect.logError(
+      {
+        provider: "stripe",
+        operation,
+        validationReason,
+        lookupKey,
+        priceId,
+        receivedPriceCount,
+        expectedPriceCount:
+          receivedPriceCount === undefined ? undefined : CATALOG_LOOKUP_KEYS.length,
+      },
+      "Stripe catalog validation failed"
+    ).pipe(Effect.andThen(Effect.fail(stripeError(message))))
+
+  const validateStripeCatalogPriceListResponse = <A>({
+    operation,
+    response,
+  }: {
+    readonly operation: string
+    readonly response: A
+  }): Effect.Effect<A, StripeBillingError> =>
+    Schema.decodeUnknownEffect(StripeCatalogPriceListPayloadSchema)(response).pipe(
+      Effect.as(response),
+      Effect.catch(() =>
+        stripeCatalogValidationFailure({
+          operation,
+          validationReason: "response_shape_invalid",
+          message: "Stripe returned an invalid catalog price response",
+        })
+      )
+    )
+
   const stripePromise = <A>(operation: string, run: (client: Stripe) => Promise<A>) =>
     stripeClient.pipe(
       Effect.flatMap((client) =>
         Effect.tryPromise({
           try: () => run(client),
-          catch: (cause) =>
-            stripeError(
-              cause instanceof Error
-                ? `${operation}: ${cause.message}`
-                : `${operation}: Stripe request failed`
-            ),
+          catch: (cause) => new StripeRequestError({ cause }),
         })
+      ),
+      Effect.tapError((error) =>
+        error._tag === "StripeRequestError"
+          ? logStripeRequestFailure(operation, error.cause)
+          : Effect.logError(
+              {
+                provider: "stripe",
+                operation,
+                configurationError: error.message,
+              },
+              "Stripe request failed"
+            )
+      ),
+      Effect.mapError((error) =>
+        error._tag === "StripeRequestError"
+          ? stripeError(
+              error.cause instanceof Error
+                ? `${operation}: ${error.cause.message}`
+                : `${operation}: Stripe request failed`
+            )
+          : error
       )
     )
 
@@ -1036,16 +1253,39 @@ const make = Effect.gen(function* () {
 
   const findActivePrice = (lookupKey: string) =>
     stripePromise("Could not load Stripe price", (client) =>
-      client.prices.list({ active: true, lookup_keys: [lookupKey], limit: 1 })
+      client.prices.list({
+        active: true,
+        lookup_keys: [lookupKey],
+        limit: 1,
+        expand: ["data.product"],
+      })
     ).pipe(
+      Effect.flatMap((response) =>
+        validateStripeCatalogPriceListResponse({
+          operation: "Load Checkout price",
+          response,
+        })
+      ),
       Effect.flatMap((prices) => {
         const price = prices.data[0]
         if (price === undefined) return Effect.as(Effect.void, undefined)
         if (lookupKey === TAXMAXI_ANNUAL_LOOKUP_KEY && !isValidAnnualPrice(price)) {
-          return Effect.fail(stripeError("The TaxMaxi annual Stripe price must recur yearly"))
+          return stripeCatalogValidationFailure({
+            operation: "Load Checkout price",
+            validationReason: "annual_cadence_mismatch",
+            message: "The TaxMaxi annual Stripe price must recur yearly",
+            lookupKey,
+            priceId: price.id,
+          })
         }
         if (lookupKey === TAXMAXI_TOP_UP_LOOKUP_KEY && !isValidTopUpPrice(price)) {
-          return Effect.fail(stripeError("The TaxMaxi top-up Stripe price must be one-time"))
+          return stripeCatalogValidationFailure({
+            operation: "Load Checkout price",
+            validationReason: "top_up_cadence_mismatch",
+            message: "The TaxMaxi top-up Stripe price must be one-time",
+            lookupKey,
+            priceId: price.id,
+          })
         }
         return Effect.succeed(price)
       })
@@ -1055,13 +1295,40 @@ const make = Effect.gen(function* () {
     findActivePrice(lookupKey).pipe(
       Effect.flatMap((price) => {
         if (price === undefined) {
-          return Effect.fail(stripeError(`No active Stripe price found for ${lookupKey}`))
+          return stripeCatalogValidationFailure({
+            operation: "Load Checkout price",
+            validationReason: "active_price_missing",
+            message: `No active Stripe price found for ${lookupKey}`,
+            lookupKey,
+          })
         }
         if (price.unit_amount === null) {
-          return Effect.fail(stripeError("Stripe Checkout prices must have a fixed unit amount"))
+          return stripeCatalogValidationFailure({
+            operation: "Load Checkout price",
+            validationReason: "unit_amount_missing",
+            message: "Stripe Checkout prices must have a fixed unit amount",
+            lookupKey,
+            priceId: price.id,
+          })
         }
         if (!isSupportedCatalogCurrency(price.currency)) {
-          return Effect.fail(stripeError("Stripe Checkout prices must use EUR"))
+          return stripeCatalogValidationFailure({
+            operation: "Load Checkout price",
+            validationReason: "currency_mismatch",
+            message: "Stripe Checkout prices must use EUR",
+            lookupKey,
+            priceId: price.id,
+          })
+        }
+        const definitionMismatch = catalogPriceDefinitionMismatch(price)
+        if (definitionMismatch !== undefined) {
+          return stripeCatalogValidationFailure({
+            operation: "Load Checkout price",
+            validationReason: definitionMismatch,
+            message: "Stripe Checkout price does not match the TaxMaxi catalog definition",
+            lookupKey,
+            priceId: price.id,
+          })
         }
         return Effect.succeed<Stripe.Price>(price)
       })
@@ -1132,29 +1399,69 @@ const make = Effect.gen(function* () {
   const catalog: StripeBillingServiceShape["catalog"] = stripePromise(
     "Could not load Stripe prices",
     (client) =>
-      client.prices.list({ active: true, lookup_keys: [...CATALOG_LOOKUP_KEYS], limit: 10 })
+      client.prices.list({
+        active: true,
+        lookup_keys: [...CATALOG_LOOKUP_KEYS],
+        limit: CATALOG_LOOKUP_KEYS.length,
+        expand: ["data.product"],
+      })
   ).pipe(
+    Effect.flatMap((response) =>
+      validateStripeCatalogPriceListResponse({
+        operation: "Load billing catalog",
+        response,
+      })
+    ),
     Effect.flatMap((prices) => {
       if (
         !prices.data.every((price) =>
           isCatalogPriceCadenceValid({ lookupKey: price.lookup_key, price })
         )
       ) {
-        return Effect.fail(
-          stripeError("Stripe catalog price cadence does not match its lookup key")
-        )
+        return stripeCatalogValidationFailure({
+          operation: "Load billing catalog",
+          validationReason: "cadence_mismatch",
+          message: "Stripe catalog price cadence does not match its lookup key",
+          receivedPriceCount: prices.data.length,
+        })
       }
       const fixedPrices = prices.data.filter(hasFixedUnitAmount)
       if (fixedPrices.length !== prices.data.length) {
-        return Effect.fail(stripeError("Stripe catalog prices must have a fixed unit amount"))
+        return stripeCatalogValidationFailure({
+          operation: "Load billing catalog",
+          validationReason: "unit_amount_missing",
+          message: "Stripe catalog prices must have a fixed unit amount",
+          receivedPriceCount: prices.data.length,
+        })
       }
       if (!fixedPrices.every((price) => isSupportedCatalogCurrency(price.currency))) {
-        return Effect.fail(stripeError("Stripe catalog prices must use EUR"))
+        return stripeCatalogValidationFailure({
+          operation: "Load billing catalog",
+          validationReason: "currency_mismatch",
+          message: "Stripe catalog prices must use EUR",
+          receivedPriceCount: prices.data.length,
+        })
       }
       if (!hasCompleteCatalogLookupKeys(fixedPrices)) {
-        return Effect.fail(
-          stripeError("Stripe catalog must include every supported lookup key exactly once")
-        )
+        return stripeCatalogValidationFailure({
+          operation: "Load billing catalog",
+          validationReason: "lookup_keys_incomplete",
+          message: "Stripe catalog must include every supported lookup key exactly once",
+          receivedPriceCount: prices.data.length,
+        })
+      }
+      const invalidPrice = fixedPrices.find(
+        (price) => catalogPriceDefinitionMismatch(price) !== undefined
+      )
+      if (invalidPrice !== undefined) {
+        return stripeCatalogValidationFailure({
+          operation: "Load billing catalog",
+          validationReason: catalogPriceDefinitionMismatch(invalidPrice) ?? "definition_mismatch",
+          message: "Stripe catalog prices do not match the TaxMaxi catalog definition",
+          ...(invalidPrice.lookup_key === null ? {} : { lookupKey: invalidPrice.lookup_key }),
+          priceId: invalidPrice.id,
+          receivedPriceCount: prices.data.length,
+        })
       }
       return Effect.succeed(
         fixedPrices.map(
@@ -1225,17 +1532,18 @@ const make = Effect.gen(function* () {
             Effect.flatMap((client) =>
               Effect.tryPromise({
                 try: () => client.checkout.sessions.create(params, { idempotencyKey }),
-                catch: (cause) => ({
-                  cause,
-                  error: stripeError(
-                    cause instanceof Error
-                      ? `Could not create annual Checkout: ${cause.message}`
-                      : "Could not create annual Checkout: Stripe request failed"
-                  ),
-                }),
+                catch: (cause) => new StripeRequestError({ cause }),
               }).pipe(
-                Effect.catch(({ cause, error }) =>
-                  isDefinitiveAnnualCheckoutCreationFailure(cause)
+                Effect.tapError((error) =>
+                  logStripeRequestFailure("Could not create annual Checkout", error.cause)
+                ),
+                Effect.catch((error) => {
+                  const checkoutError = stripeError(
+                    error.cause instanceof Error
+                      ? `Could not create annual Checkout: ${error.cause.message}`
+                      : "Could not create annual Checkout: Stripe request failed"
+                  )
+                  return isDefinitiveAnnualCheckoutCreationFailure(error.cause)
                     ? billingRepository
                         .clearAnnualCheckoutReservation({
                           userId,
@@ -1245,10 +1553,10 @@ const make = Effect.gen(function* () {
                           Effect.mapError(() =>
                             stripeError("Could not clear failed annual Checkout reservation")
                           ),
-                          Effect.andThen(Effect.fail(error))
+                          Effect.andThen(Effect.fail(checkoutError))
                         )
-                    : Effect.fail(error)
-                )
+                    : Effect.fail(checkoutError)
+                })
               )
             )
           ),
