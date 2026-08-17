@@ -10,6 +10,7 @@ import {
 import * as ConfigProvider from "effect/ConfigProvider"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Logger from "effect/Logger"
 import * as Option from "effect/Option"
 import { describe, expect, it, vi } from "vitest"
 
@@ -21,6 +22,7 @@ interface StripeMockState {
   event: unknown
   invoicePayments: Array<unknown>
   paymentRecord: unknown
+  priceListFailure: boolean
   prices: Array<{
     readonly lookup_key?: string | null
     readonly [key: string]: unknown
@@ -41,6 +43,7 @@ const stripeMockState = vi.hoisted<StripeMockState>(() => ({
   event: null,
   invoicePayments: [],
   paymentRecord: null,
+  priceListFailure: false,
   prices: [],
   retrievedPrices: {},
   refunds: [],
@@ -51,16 +54,28 @@ const stripeMockState = vi.hoisted<StripeMockState>(() => ({
 }))
 
 vi.mock("stripe", () => {
-  class StripeMockInvalidRequestError extends Error {}
-  class StripeMockConnectionError extends Error {}
-  class StripeMockApiError extends Error {}
-  class StripeMockAuthenticationError extends Error {}
-  class StripeMockPermissionError extends Error {}
-  class StripeMockCardError extends Error {}
+  class StripeMockError extends Error {
+    readonly type: string = "StripeError"
+    readonly code: string | undefined = undefined
+    readonly requestId: string | undefined = undefined
+    readonly statusCode: number | undefined = undefined
+  }
+  class StripeMockInvalidRequestError extends StripeMockError {}
+  class StripeMockConnectionError extends StripeMockError {}
+  class StripeMockApiError extends StripeMockError {}
+  class StripeMockAuthenticationError extends StripeMockError {
+    override readonly type = "StripeAuthenticationError"
+    override readonly code = "api_key_expired"
+    override readonly requestId = "req_expired_key"
+    override readonly statusCode = 401
+  }
+  class StripeMockPermissionError extends StripeMockError {}
+  class StripeMockCardError extends StripeMockError {}
 
   return {
     default: class StripeMock {
       static readonly errors = {
+        StripeError: StripeMockError,
         StripeAPIError: StripeMockApiError,
         StripeAuthenticationError: StripeMockAuthenticationError,
         StripeCardError: StripeMockCardError,
@@ -94,8 +109,11 @@ vi.mock("stripe", () => {
       readonly prices = {
         list: ({
           lookup_keys: lookupKeys,
-        }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) =>
-          Promise.resolve({
+        }: { readonly lookup_keys?: ReadonlyArray<string> } = {}) => {
+          if (stripeMockState.priceListFailure) {
+            return Promise.reject(new StripeMockAuthenticationError("Expired API Key provided"))
+          }
+          return Promise.resolve({
             data:
               lookupKeys === undefined
                 ? stripeMockState.prices
@@ -103,7 +121,8 @@ vi.mock("stripe", () => {
                     (price) =>
                       price.lookup_key !== undefined && lookupKeys.includes(price.lookup_key ?? "")
                   ),
-          }),
+          })
+        },
         retrieve: (priceId: string) => Promise.resolve(stripeMockState.retrievedPrices[priceId]),
       }
       readonly subscriptions = {
@@ -717,6 +736,40 @@ describe("StripeBillingServiceLive", () => {
   it("rejects Stripe catalog prices without a fixed unit amount", () => {
     expect(hasFixedUnitAmount({ unit_amount: 1_000 })).toBe(true)
     expect(hasFixedUnitAmount({ unit_amount: null })).toBe(false)
+  })
+
+  it("logs Stripe catalog request failures before returning a typed error", async () => {
+    const logMessages: Array<unknown> = []
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message)
+    })
+    stripeMockState.priceListFailure = true
+
+    try {
+      const service = await loadServiceWithStripe(billingRepositoryStub)
+      const result = await Effect.runPromise(
+        Effect.result(service.catalog).pipe(Effect.withLogger(logger))
+      )
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { message: "Could not load Stripe prices: Expired API Key provided" },
+      })
+      expect(logMessages).toContainEqual([
+        {
+          provider: "stripe",
+          operation: "Could not load Stripe prices",
+          cause: expect.objectContaining({ message: "Expired API Key provided" }),
+          stripeErrorType: "StripeAuthenticationError",
+          stripeErrorCode: "api_key_expired",
+          stripeRequestId: "req_expired_key",
+          stripeStatusCode: 401,
+        },
+        "Stripe request failed",
+      ])
+    } finally {
+      stripeMockState.priceListFailure = false
+    }
   })
 
   it("validates the cadence promised by every Stripe catalog lookup key", () => {

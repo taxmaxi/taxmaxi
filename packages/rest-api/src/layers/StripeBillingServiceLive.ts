@@ -13,6 +13,7 @@ import type {
 } from "@my/persistence/services"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Config from "effect/Config"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -20,14 +21,11 @@ import * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
 import Stripe from "stripe"
 
+import { TAXMAXI_STRIPE_CATALOG } from "../services/StripeCatalog.ts"
 import {
   StripeBillingError,
   StripeBillingService,
   TAXMAXI_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
   TAXMAXI_TOP_UP_LOOKUP_KEY,
   type BillingCatalogPrice,
   type StripeBillingServiceShape,
@@ -36,14 +34,7 @@ import {
 const ANNUAL_CREDITS = 10_000
 const TOP_UP_CREDITS = 1_000
 const INTEGRATION_IDENTIFIER = "taxmaxi_direct_q7m4w2kp"
-const CATALOG_LOOKUP_KEYS = [
-  TAXMAXI_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_TOP_UP_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY,
-  TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY,
-  TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY,
-] as const
+const CATALOG_LOOKUP_KEYS = TAXMAXI_STRIPE_CATALOG.map(({ lookupKey }) => lookupKey)
 
 export const STRIPE_CHECKOUT_TAX_OPTIONS = {
   automatic_tax: { enabled: true },
@@ -195,6 +186,28 @@ export const buildTopUpCheckoutParams = ({
 })
 
 const stripeError = (message: string) => new StripeBillingError({ message })
+
+class StripeRequestError extends Data.TaggedError("StripeRequestError")<{
+  readonly cause: unknown
+}> {}
+
+const stripeRequestLogAttributes = (cause: unknown) => {
+  if (cause instanceof Stripe.errors.StripeError) {
+    return {
+      provider: "stripe",
+      cause,
+      stripeErrorType: cause.type,
+      stripeErrorCode: cause.code,
+      stripeRequestId: cause.requestId,
+      stripeStatusCode: cause.statusCode,
+    }
+  }
+
+  return {
+    provider: "stripe",
+    cause,
+  }
+}
 
 const customerId = (
   customer: string | Stripe.Customer | Stripe.DeletedCustomer | null
@@ -499,18 +512,11 @@ export const isCatalogPriceCadenceValid = ({
     readonly recurring: { readonly interval: string; readonly interval_count: number } | null
   }
 }): boolean => {
-  switch (lookupKey) {
-    case TAXMAXI_ANNUAL_LOOKUP_KEY:
-    case TAXMAXI_PROFESSIONAL_ANNUAL_LOOKUP_KEY:
-    case TAXMAXI_PROFESSIONAL_MATTER_LOOKUP_KEY:
-      return isValidAnnualPrice(price)
-    case TAXMAXI_TOP_UP_LOOKUP_KEY:
-    case TAXMAXI_PROFESSIONAL_TOP_UP_LOOKUP_KEY:
-    case TAXMAXI_ENTERPRISE_PILOT_LOOKUP_KEY:
-      return isValidTopUpPrice(price)
-    default:
-      return false
-  }
+  const catalogItem = TAXMAXI_STRIPE_CATALOG.find((item) => item.lookupKey === lookupKey)
+  if (catalogItem === undefined) return false
+  return catalogItem.recurringInterval === null
+    ? isValidTopUpPrice(price)
+    : isValidAnnualPrice(price)
 }
 
 export const hasCompleteCatalogLookupKeys = (
@@ -1019,13 +1025,25 @@ const make = Effect.gen(function* () {
       Effect.flatMap((client) =>
         Effect.tryPromise({
           try: () => run(client),
-          catch: (cause) =>
+          catch: (cause) => new StripeRequestError({ cause }),
+        }).pipe(
+          Effect.tapError((error) =>
+            Effect.logError(
+              {
+                ...stripeRequestLogAttributes(error.cause),
+                operation,
+              },
+              "Stripe request failed"
+            )
+          ),
+          Effect.mapError((error) =>
             stripeError(
-              cause instanceof Error
-                ? `${operation}: ${cause.message}`
+              error.cause instanceof Error
+                ? `${operation}: ${error.cause.message}`
                 : `${operation}: Stripe request failed`
-            ),
-        })
+            )
+          )
+        )
       )
     )
 
@@ -1132,7 +1150,11 @@ const make = Effect.gen(function* () {
   const catalog: StripeBillingServiceShape["catalog"] = stripePromise(
     "Could not load Stripe prices",
     (client) =>
-      client.prices.list({ active: true, lookup_keys: [...CATALOG_LOOKUP_KEYS], limit: 10 })
+      client.prices.list({
+        active: true,
+        lookup_keys: [...CATALOG_LOOKUP_KEYS],
+        limit: CATALOG_LOOKUP_KEYS.length,
+      })
   ).pipe(
     Effect.flatMap((prices) => {
       if (
