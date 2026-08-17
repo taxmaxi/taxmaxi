@@ -62,6 +62,14 @@ export interface EconomicAssetDraft {
   readonly type: "fungible" | "nft"
 }
 
+/** Persisted chain-independent economic asset. */
+export interface EconomicAssetRecord {
+  readonly id: string
+  readonly name: string
+  readonly symbol: string
+  readonly type: "fungible" | "nft"
+}
+
 /**
  * AssetRepresentationDraft - Concrete native asset, contract, or mint on one blockchain.
  */
@@ -135,6 +143,11 @@ export interface AssetRepositoryShape {
     ReadonlyArray<SyncEngineBlockchain>,
     SyncEngineStorageError
   >
+
+  /** Create or refresh an economic asset without inventing a network representation. */
+  readonly upsertEconomicAsset: (
+    asset: EconomicAssetDraft
+  ) => Effect.Effect<EconomicAssetRecord, SyncEngineStorageError>
 
   /**
    * Create or refresh an economic asset and one network representation as one durable operation.

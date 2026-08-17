@@ -338,6 +338,28 @@ const runReferenceMapping = <A, E>(effect: Effect.Effect<A, E, CoinbaseReference
     )
   )
 
+const seedCoinbaseFiatCatalogEntry = ({
+  currencyCode,
+  name,
+}: {
+  readonly currencyCode: string
+  readonly name: string
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    yield* db.insert(schema.providerAssets).values({
+      provider: "coinbase",
+      providerAssetId: null,
+      naturalKey: `currency_code:${currencyCode}`,
+      currencyCode,
+      name,
+      exponent: 2,
+      providerType: "fiat",
+      rawProviderPayload: { source: "coinbase_fiat_currency_catalog" },
+      retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
+    })
+  }).pipe(Effect.provide(TestPgClientLive))
+
 const seedCanonicalAsset = ({
   id,
   symbol,
@@ -662,10 +684,8 @@ describe("coinbase reference mappings", () => {
     })
   })
 
-  it("resolves EUR as fiat without requiring a canonical asset row", async () => {
-    await runReferenceMapping(
-      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
-    )
+  it("resolves supported fiat only from the Coinbase fiat catalog", async () => {
+    await Effect.runPromise(seedCoinbaseFiatCatalogEntry({ currencyCode: "EUR", name: "Euro" }))
 
     const eurMapping = await runReferenceMapping(
       Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
@@ -683,6 +703,20 @@ describe("coinbase reference mappings", () => {
       canonicalFiatCurrency: "EUR",
       mappingStatus: "approved",
     })
+  })
+
+  it("rejects an unsupported Coinbase fiat catalog entry", async () => {
+    await Effect.runPromise(
+      seedCoinbaseFiatCatalogEntry({ currencyCode: "ZZZ", name: "Unsupported Currency" })
+    )
+
+    await expect(
+      runReferenceMapping(
+        Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+          service.resolveCurrency({ currencyCode: "ZZZ" })
+        )
+      )
+    ).rejects.toMatchObject({ _tag: "SyncEngineStorageError" })
   })
 
   it("does not pair a grouped unstaking row with an ungrouped candidate", async () => {

@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../persistence/src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
-import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { SyncEngineTransactionLive } from "../../persistence/src/layers/SyncEngineTransactionLive.ts"
 import { and, eq } from "../../persistence/src/query/index.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
@@ -31,12 +30,7 @@ import {
   type CoinGeckoClientShape,
 } from "../src/services/coingecko/CoinGeckoClient.ts"
 import { ProviderAssetReplayServiceLive } from "@my/sync-engine/layers"
-import {
-  SourceSyncJobNotFoundError,
-  SourceSyncJobRepository,
-  SourceSyncService,
-  SyncEngineTransaction,
-} from "@my/sync-engine/services"
+import { SourceSyncService, SyncEngineTransaction } from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_asset_canonicalization_service",
@@ -66,40 +60,33 @@ const RepositoryLayer = Layer.mergeAll(
   ProviderAssetRepositoryLive,
   SyncEngineTransactionLive
 ).pipe(Layer.provide(context.TestPgClientLive))
-const SourceSyncJobRepositoryTestLive = RepositoriesLive.pipe(
-  Layer.provide(context.TestPgClientLive)
-)
-const SourceSyncServiceFromRepositoryLive = Layer.effect(
-  SourceSyncService,
-  Effect.map(SourceSyncJobRepository, (jobs) =>
-    SourceSyncService.of({
-      startSourceSyncJob: () => Effect.die("Unexpected startSourceSyncJob call"),
-      replaySourceSyncJob: ({ principalId, sourceId }) =>
-        jobs.createOrReuseJob({ principalId, sourceId, mode: "replay", maxAttempts: 3 }).pipe(
-          Effect.map((job) => ({
-            sourceId,
-            jobId: job.id,
-            status: "queued" as const,
-            message: null,
-          }))
-        ),
-      getSourceSyncJob: ({ principalId, sourceId, jobId }) =>
-        jobs
-          .getJob({ principalId, sourceId, jobId })
-          .pipe(
-            Effect.mapError((error) =>
-              error._tag === "SourceSyncJobRecordNotVisibleError"
-                ? new SourceSyncJobNotFoundError({ sourceId, jobId })
-                : error
-            )
-          ),
-    })
-  )
-).pipe(Layer.provide(SourceSyncJobRepositoryTestLive))
 const ServiceLayer = AssetCanonicalizationServiceLive.pipe(
   Layer.provide(RepositoryLayer),
   Layer.provide(CoinGeckoClientTestLive)
 )
+
+const SourceSyncServiceTestLive = Layer.effect(
+  SourceSyncService,
+  Effect.map(drizzle, (db) =>
+    SourceSyncService.of({
+      startSourceSyncJob: () => Effect.die("Unexpected startSourceSyncJob call"),
+      replaySourceSyncJob: ({ sourceId }) =>
+        Effect.gen(function* () {
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id, status: schema.processingJobs.status })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, sourceId))
+            .pipe(Effect.orDie)
+          const job = jobs.find(({ status }) => status === "pending" || status === "processing")
+          if (job === undefined) {
+            return yield* Effect.die("Expected a durable replay job before queue dispatch.")
+          }
+          return { sourceId, jobId: job.id, status: "queued", message: null }
+        }),
+      getSourceSyncJob: () => Effect.die("Unexpected getSourceSyncJob call"),
+    })
+  )
+).pipe(Layer.provide(context.TestPgClientLive))
 
 const makePublicReviewLayer = (coinGeckoClient: CoinGeckoClientShape) =>
   ProviderAssetReviewServiceLive.pipe(
@@ -107,39 +94,38 @@ const makePublicReviewLayer = (coinGeckoClient: CoinGeckoClientShape) =>
     Layer.provide(ProviderAssetReplayServiceLive),
     Layer.provide(
       Layer.succeed(ProviderAssetCandidateService, {
-        listCandidates: () => Effect.succeed([]),
+        searchProposals: () =>
+          Effect.succeed({
+            evidenceState: "exact",
+            recommendedProposalId: "create-ethereum",
+            proposals: [
+              {
+                id: "create-ethereum",
+                effect: {
+                  _tag: "CreateAssetWithRepresentation",
+                  selectedCoinGeckoCoinId: "ethereum",
+                },
+                economicAsset: {
+                  _tag: "proposed",
+                  coinGeckoCoinId: "ethereum",
+                  name: "Ethereum",
+                  symbol: "ETH",
+                },
+                representation: null,
+                evidenceStrength: "exact",
+                matchReasons: ["Exact reviewed network identity."],
+                conflicts: [],
+                warnings: [],
+                investigationLinks: [],
+              },
+            ],
+          }),
       })
     ),
-    Layer.provide(
-      Layer.succeed(
-        SourceSyncService,
-        SourceSyncService.of({
-          startSourceSyncJob: () => Effect.die("Unexpected startSourceSyncJob call"),
-          replaySourceSyncJob: () => Effect.die("Unexpected replaySourceSyncJob call"),
-          getSourceSyncJob: () => Effect.die("Unexpected getSourceSyncJob call"),
-        })
-      )
-    ),
+    Layer.provide(SourceSyncServiceTestLive),
     Layer.provide(RepositoryLayer),
     Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
   )
-
-const ReplayPublicReviewLayer = ProviderAssetReviewServiceLive.pipe(
-  Layer.provide(ProviderAssetReplayServiceLive),
-  Layer.provide(
-    Layer.succeed(AssetCanonicalizationService, {
-      approveProviderAssetMapping: () => Effect.die("Unexpected approval call"),
-      canonicalizeProviderAssetFromCoinGecko: () => Effect.die("Unexpected canonicalization call"),
-    })
-  ),
-  Layer.provide(
-    Layer.succeed(ProviderAssetCandidateService, {
-      listCandidates: () => Effect.die("Unexpected candidate call"),
-    })
-  ),
-  Layer.provide(SourceSyncServiceFromRepositoryLive),
-  Layer.provide(RepositoryLayer)
-)
 
 const runService = <A, E>(effect: Effect.Effect<A, E, AssetCanonicalizationService>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ServiceLayer }))
@@ -429,19 +415,59 @@ describe("AssetCanonicalizationServiceLive", () => {
 
     const result = await Effect.runPromise(
       context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
-          service.decide({
+        effect: Effect.gen(function* () {
+          const service = yield* ProviderAssetReviewService
+          const review = yield* service.getReview({ providerAssetRowId })
+          return yield* service.decide({
             providerAssetRowId,
-            decision: { _tag: "CreateFromCoinGecko", coinId: "ethereum" },
+            decision: {
+              _tag: "Resolve",
+              proposalId: "create-ethereum",
+              effect: {
+                _tag: "CreateAssetWithRepresentation",
+                selectedCoinGeckoCoinId: "ethereum",
+              },
+            },
+            reviewRevision: review.reviewRevision,
             reviewerNotes: "Use reviewed Polygon contract evidence.",
             reviewedBy: TEST_USER_ID,
           })
-        ),
+        }),
         layer,
       })
     )
 
-    expect(result.canonicalAsset).toMatchObject({
+    expect(result.resolutionEffect).toEqual({
+      _tag: "CreateAssetWithRepresentation",
+      selectedCoinGeckoCoinId: "ethereum",
+    })
+
+    const firstCanonicalAsset = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            assetId: schema.providerAssetMappings.canonicalAssetId,
+            representationId: schema.providerAssetMappings.assetRepresentationId,
+            blockchainName: schema.blockchains.name,
+            representationType: schema.assetRepresentations.type,
+            contractAddress: schema.assetRepresentations.contractAddress,
+          })
+          .from(schema.providerAssetMappings)
+          .innerJoin(
+            schema.assetRepresentations,
+            eq(schema.assetRepresentations.id, schema.providerAssetMappings.assetRepresentationId)
+          )
+          .innerJoin(
+            schema.blockchains,
+            eq(schema.blockchains.id, schema.assetRepresentations.blockchainId)
+          )
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+        return row
+      })
+    )
+
+    expect(firstCanonicalAsset).toMatchObject({
       blockchainName: "polygon-pos",
       representationType: "token",
       contractAddress: "0x1111111111111111111111111111111111111111",
@@ -511,187 +537,67 @@ describe("AssetCanonicalizationServiceLive", () => {
     )
     const secondResult = await Effect.runPromise(
       context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
-          service.decide({
+        effect: Effect.gen(function* () {
+          const service = yield* ProviderAssetReviewService
+          const review = yield* service.getReview({
             providerAssetRowId: secondProviderAssetRowId,
-            decision: { _tag: "CreateFromCoinGecko", coinId: "ethereum" },
+          })
+          return yield* service.decide({
+            providerAssetRowId: secondProviderAssetRowId,
+            decision: {
+              _tag: "Resolve",
+              proposalId: "create-ethereum",
+              effect: {
+                _tag: "CreateAssetWithRepresentation",
+                selectedCoinGeckoCoinId: "ethereum",
+              },
+            },
+            reviewRevision: review.reviewRevision,
             reviewerNotes: "Add reviewed Arbitrum representation.",
             reviewedBy: TEST_USER_ID,
           })
-        ),
+        }),
         layer,
       })
     )
 
-    expect(secondResult.canonicalAsset).toMatchObject({
-      id: result.canonicalAsset?.id,
+    expect(secondResult.resolutionEffect).toEqual({
+      _tag: "CreateAssetWithRepresentation",
+      selectedCoinGeckoCoinId: "ethereum",
+    })
+
+    const secondCanonicalAsset = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({
+            assetId: schema.providerAssetMappings.canonicalAssetId,
+            representationId: schema.providerAssetMappings.assetRepresentationId,
+            blockchainName: schema.blockchains.name,
+            representationType: schema.assetRepresentations.type,
+            contractAddress: schema.assetRepresentations.contractAddress,
+          })
+          .from(schema.providerAssetMappings)
+          .innerJoin(
+            schema.assetRepresentations,
+            eq(schema.assetRepresentations.id, schema.providerAssetMappings.assetRepresentationId)
+          )
+          .innerJoin(
+            schema.blockchains,
+            eq(schema.blockchains.id, schema.assetRepresentations.blockchainId)
+          )
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, secondProviderAssetRowId))
+        return row
+      })
+    )
+
+    expect(secondCanonicalAsset).toMatchObject({
+      assetId: firstCanonicalAsset?.assetId,
       blockchainName: "arbitrum-one",
       representationType: "token",
       contractAddress: "0x3333333333333333333333333333333333333333",
     })
-    expect(secondResult.canonicalAsset?.representationId).not.toBe(
-      result.canonicalAsset?.representationId
-    )
-  })
-
-  it("keeps a stable public replay link through a failed follow-up and retry", async () => {
-    const fixture = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [providerAsset] = yield* db
-          .insert(schema.providerAssets)
-          .values({
-            provider: "coinbase",
-            providerAssetId: "eur-follow-up-replay",
-            currencyCode: "EUR",
-            name: "Euro",
-            exponent: 2,
-            providerType: "fiat",
-            retrievedAt: new Date("2026-08-17T11:00:00.000Z"),
-          })
-          .returning({ id: schema.providerAssets.id })
-        if (providerAsset === undefined) {
-          return yield* Effect.die("Failed to seed replay provider asset")
-        }
-        yield* db.insert(schema.providerAssetMappings).values({
-          providerAssetRowId: providerAsset.id,
-          mappingKind: "fiat",
-          mappingStatus: "pending_review",
-        })
-        yield* db.insert(schema.providerAssetSourceUses).values({
-          providerAssetRowId: providerAsset.id,
-          sourceId: TEST_SOURCE_ID,
-        })
-        const [activeJob] = yield* db
-          .insert(schema.processingJobs)
-          .values({
-            sourceId: TEST_SOURCE_ID,
-            principalId: TEST_PRINCIPAL_ID,
-            mode: "sync",
-            status: "processing",
-          })
-          .returning({ id: schema.processingJobs.id })
-        if (activeJob === undefined) {
-          return yield* Effect.die("Failed to seed active sync job")
-        }
-        return { activeJobId: activeJob.id, providerAssetRowId: providerAsset.id }
-      })
-    )
-
-    const approval = await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
-          service.decide({
-            providerAssetRowId: fixture.providerAssetRowId,
-            decision: { _tag: "ApproveAsFiat" },
-            reviewerNotes: "Reviewed EUR evidence.",
-            reviewedBy: TEST_USER_ID,
-          })
-        ),
-        layer: ReplayPublicReviewLayer,
-      })
-    )
-    expect(approval.replays).toEqual([
-      {
-        sourceId: TEST_SOURCE_ID,
-        principalId: TEST_PRINCIPAL_ID,
-        jobId: fixture.activeJobId,
-      },
-    ])
-
-    await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(SourceSyncJobRepository, (jobs) =>
-          jobs.completeJob({
-            jobId: fixture.activeJobId,
-            state: {
-              phase: "completed",
-              processedRecords: 1,
-              totalRecords: 1,
-              importedRecords: 1,
-              normalizedRecords: 1,
-              failedRecords: 0,
-              cursorPayload: null,
-              highWatermark: null,
-              checkpointExternalId: null,
-              checkpointRawRecordId: null,
-            },
-          })
-        ),
-        layer: SourceSyncJobRepositoryTestLive,
-      })
-    )
-    const followUpJobId = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const [job] = yield* db
-          .select({ id: schema.processingJobs.id })
-          .from(schema.processingJobs)
-          .where(
-            and(
-              eq(schema.processingJobs.sourceId, TEST_SOURCE_ID),
-              eq(schema.processingJobs.mode, "replay")
-            )
-          )
-        if (job === undefined) {
-          return yield* Effect.die("Follow-up replay job was not created")
-        }
-        return job.id
-      })
-    )
-    await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(SourceSyncJobRepository, (jobs) =>
-          Effect.gen(function* () {
-            yield* jobs.claimJob({
-              jobId: followUpJobId,
-              workerId: "provider-asset-review-test-worker",
-              startedAt: new Date("2026-08-17T11:01:00.000Z"),
-            })
-            yield* jobs.failJob({
-              jobId: followUpJobId,
-              message: "Replay failed.",
-              completedAt: new Date("2026-08-17T11:02:00.000Z"),
-            })
-          })
-        ),
-        layer: SourceSyncJobRepositoryTestLive,
-      })
-    )
-
-    const failedStatus = await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
-          service.getReplay({
-            providerAssetRowId: fixture.providerAssetRowId,
-            sourceId: TEST_SOURCE_ID,
-            jobId: fixture.activeJobId,
-          })
-        ),
-        layer: ReplayPublicReviewLayer,
-      })
-    )
-    const retried = await Effect.runPromise(
-      context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
-          service.retryReplay({
-            providerAssetRowId: fixture.providerAssetRowId,
-            sourceId: TEST_SOURCE_ID,
-            jobId: fixture.activeJobId,
-          })
-        ),
-        layer: ReplayPublicReviewLayer,
-      })
-    )
-
-    expect(failedStatus).toMatchObject({
-      jobId: fixture.activeJobId,
-      status: "failed",
-      message: "Replay failed.",
-    })
-    expect(retried).toMatchObject({ sourceId: TEST_SOURCE_ID, status: "queued" })
-    expect(retried.jobId).not.toBe(fixture.activeJobId)
-    expect(retried.jobId).not.toBe(followUpJobId)
+    expect(secondCanonicalAsset?.representationId).not.toBe(firstCanonicalAsset?.representationId)
   })
 
   it("approves a chainless NFT provider asset to an NFT target", async () => {
@@ -1487,14 +1393,26 @@ describe("AssetCanonicalizationServiceLive", () => {
     const layer = makePublicReviewLayer(coinGeckoClient)
     const canonicalization = Effect.runPromise(
       context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
-          service.decide({
+        effect: Effect.gen(function* () {
+          const service = yield* ProviderAssetReviewService
+          const review = yield* service.getReview({
             providerAssetRowId: fixture.providerAssetRowId,
-            decision: { _tag: "CreateFromCoinGecko", coinId: "ethereum" },
+          })
+          return yield* service.decide({
+            providerAssetRowId: fixture.providerAssetRowId,
+            decision: {
+              _tag: "Resolve",
+              proposalId: "create-ethereum",
+              effect: {
+                _tag: "CreateAssetWithRepresentation",
+                selectedCoinGeckoCoinId: "ethereum",
+              },
+            },
+            reviewRevision: review.reviewRevision,
             reviewerNotes: "Losing concurrent target.",
             reviewedBy: TEST_USER_ID,
           })
-        ).pipe(Effect.result),
+        }).pipe(Effect.result),
         layer,
       })
     )
@@ -1531,7 +1449,12 @@ describe("AssetCanonicalizationServiceLive", () => {
     if (result._tag === "Failure") {
       expect(result.failure).toMatchObject({
         _tag: "ProviderAssetReviewConflictError",
-        message: "Provider asset has already been reviewed.",
+        message: "Provider asset changed while applying the decision.",
+        latestDecision: {
+          mappingStatus: "approved",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: fixture.bitcoinRepresentationId,
+        },
       })
     }
     expect(after).toEqual(before)

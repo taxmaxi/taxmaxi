@@ -17,8 +17,6 @@ import {
 import { toTaxMaxiError } from "./errors.ts"
 
 export type {
-  AssetCanonicalization,
-  AssetCanonicalizationInput,
   AssetCatalogAsset,
   AssetCatalogDetailInput,
   AssetCatalogList,
@@ -27,10 +25,16 @@ export type {
   AssetsPromiseResource,
   InternalAssetsEffectResource,
   InternalAssetsPromiseResource,
+  ProviderAssetDecisionInput,
+  ProviderAssetDecisionResult,
   ProviderAssetReview,
-  ProviderAssetApprovalInput,
+  ProviderAssetReviewDetail,
   ProviderAssetReviewList,
   ProviderAssetReviewListInput,
+  ProviderAssetProposalSearchInput,
+  ProviderAssetResolutionProposalList,
+  ProviderAssetReplayInput,
+  ProviderAssetReplayStatus,
   UnresolvedTransferReconciliation,
   UnresolvedTransferReconciliationList,
   UnresolvedTransferReconciliationListInput,

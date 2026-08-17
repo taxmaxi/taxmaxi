@@ -11,9 +11,8 @@ import {
   type PendingAssetCatalogRecord,
 } from "@my/persistence/services"
 import {
-  ProviderAssetRepository,
   TransferReconciliationRepository,
-  type ProviderAssetReviewRecord,
+  type ProviderAssetReplayStatus,
   type UnresolvedTransferReconciliationRecord,
 } from "@my/sync-engine/services"
 import * as Effect from "effect/Effect"
@@ -25,29 +24,27 @@ import {
   AssetCatalogListResponse,
   AssetBadRequestError,
   AssetConflictError,
-  AssetCanonicalizationEvidenceResponse,
-  AssetCanonicalizationResponse,
   AssetNotFoundError,
   AssetRepresentationResponse,
-  CanonicalAssetRepresentationResponse,
-  CanonicalAssetResponse,
   PendingAssetListResponse,
   PendingAssetResponse,
-  ProviderAssetCandidateListResponse,
-  ProviderAssetCandidateResponse,
   ProviderAssetDecisionResponse,
   ProviderAssetReplayResponse,
+  ProviderAssetResolutionProposalListResponse,
+  ProviderAssetResolutionProposalResponse,
+  ProviderAssetReviewDetailResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
   UnresolvedTransferReconciliationListResponse,
   UnresolvedTransferReconciliationRow,
 } from "../definitions/AssetsApi.ts"
 import { CurrentUser } from "../definitions/AuthMiddleware.ts"
-import { SourceSyncJobResponse, SourceSyncStartResponse } from "../definitions/SourcesApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
 import {
   ProviderAssetReviewService,
   type ProviderAssetReviewError,
+  type ProviderAssetReviewDetail,
+  type ProviderAssetReviewSummary,
 } from "../services/ProviderAssetReviewService.ts"
 
 const defaultLimit = 50
@@ -61,8 +58,14 @@ const AssetCursorPayload = Schema.Struct({
   assetId: Schema.String.check(Schema.isUUID()),
 })
 
-const ProviderAssetCursorPayload = Schema.Struct({
+const PendingAssetCursorPayload = Schema.Struct({
   version: Schema.Literal(2),
+  providerAssetRowId: Schema.String.check(Schema.isUUID()),
+})
+
+const ProviderAssetReviewCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  discoveredAt: Schema.DateFromString,
   providerAssetRowId: Schema.String.check(Schema.isUUID()),
 })
 
@@ -72,7 +75,10 @@ const TransferReconciliationCursorPayload = Schema.Struct({
 })
 
 const EncodedAssetCursorPayload = Schema.fromJsonString(AssetCursorPayload)
-const EncodedProviderAssetCursorPayload = Schema.fromJsonString(ProviderAssetCursorPayload)
+const EncodedPendingAssetCursorPayload = Schema.fromJsonString(PendingAssetCursorPayload)
+const EncodedProviderAssetReviewCursorPayload = Schema.fromJsonString(
+  ProviderAssetReviewCursorPayload
+)
 const EncodedTransferReconciliationCursorPayload = Schema.fromJsonString(
   TransferReconciliationCursorPayload
 )
@@ -101,7 +107,12 @@ const decodeAssetCursor = (cursor: string | undefined) =>
 const decodeProviderAssetCursor = (cursor: string | undefined) =>
   cursor === undefined
     ? Effect.succeed(null)
-    : decodeCursor(cursor, EncodedProviderAssetCursorPayload)
+    : decodeCursor(cursor, EncodedPendingAssetCursorPayload)
+
+const decodeProviderAssetReviewCursor = (cursor: string | undefined) =>
+  cursor === undefined
+    ? Effect.succeed(null)
+    : decodeCursor(cursor, EncodedProviderAssetReviewCursorPayload)
 
 const decodeTransferReconciliationCursor = (cursor: string | undefined) =>
   cursor === undefined
@@ -120,45 +131,55 @@ const providerAssetCursorFor = (providerAssetRowId: string): string =>
     providerAssetRowId,
   })
 
+const providerAssetReviewCursorFor = (review: ProviderAssetReviewSummary): string =>
+  encodeCursor({
+    version: 1,
+    discoveredAt: review.discoveredAt.toISOString(),
+    providerAssetRowId: review.id,
+  })
+
 const transferReconciliationCursorFor = (reconciliationId: string): string =>
   encodeCursor({
     version: 1,
     reconciliationId,
   })
 
-const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
-  ProviderAssetReviewRow.make({
-    id: row.providerAsset.id,
-    provider: row.providerAsset.provider,
-    providerAssetId: row.providerAsset.providerAssetId,
-    naturalKey: row.providerAsset.naturalKey,
-    currencyCode: row.providerAsset.currencyCode,
-    name: row.providerAsset.name,
-    exponent: row.providerAsset.exponent,
-    providerType: row.providerAsset.providerType,
-    rawProviderPayload: row.providerAsset.rawProviderPayload,
-    discoveredAt: row.providerAsset.discoveredAt.toISOString(),
-    retrievedAt: row.providerAsset.retrievedAt.toISOString(),
-    mappingKind: row.mapping?.mappingKind ?? null,
-    canonicalAssetId: row.mapping?.canonicalAssetId ?? null,
-    assetRepresentationId: row.mapping?.assetRepresentationId ?? null,
-    canonicalFiatCurrency: row.mapping?.canonicalFiatCurrency ?? null,
-    mappingStatus: row.mapping?.mappingStatus ?? null,
-    reviewerNotes: row.mapping?.reviewerNotes ?? null,
-    sourceNotes: row.mapping?.sourceNotes ?? null,
-    reviewedBy: row.mapping?.reviewedBy ?? null,
-    reviewedAt: row.mapping?.reviewedAt?.toISOString() ?? null,
-  })
+const toProviderAssetReviewFields = (row: ProviderAssetReviewSummary) => ({
+  ...row,
+  discoveredAt: row.discoveredAt.toISOString(),
+})
 
-const toReplayResponse = (replay: { readonly sourceId: string; readonly jobId: string }) =>
-  ProviderAssetReplayResponse.make({ ...replay, status: "queued" })
+const toProviderAssetReviewRow = (row: ProviderAssetReviewSummary) =>
+  ProviderAssetReviewRow.make(toProviderAssetReviewFields(row))
+
+const toReplayResponse = (replay: ProviderAssetReplayStatus) =>
+  ProviderAssetReplayResponse.make(replay)
+
+const toProviderAssetReviewDetail = (review: ProviderAssetReviewDetail) =>
+  ProviderAssetReviewDetailResponse.make({
+    ...toProviderAssetReviewFields(review),
+    rawEvidence: review.rawEvidence,
+    observedRepresentations: review.observedRepresentations,
+    mapping:
+      review.mapping === null
+        ? null
+        : {
+            ...review.mapping,
+            reviewedAt: review.mapping.reviewedAt?.toISOString() ?? null,
+            updatedAt: review.mapping.updatedAt.toISOString(),
+          },
+    replays: review.replays.map(toReplayResponse),
+  })
 
 const mapReviewError = (error: ProviderAssetReviewError) => {
   switch (error._tag) {
     case "ProviderAssetReviewBadRequestError":
       return new AssetBadRequestError({ message: error.message })
     case "ProviderAssetReviewConflictError":
-      return new AssetConflictError({ message: error.message })
+      return new AssetConflictError({
+        message: error.message,
+        latestDecision: error.latestDecision,
+      })
     case "ProviderAssetReviewNotFoundError":
       return new AssetNotFoundError({ message: error.message })
     case "ProviderAssetReviewInternalError":
@@ -200,7 +221,6 @@ const toAssetCatalogAssetResponse = (row: AssetCatalogAssetRecord) =>
 export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handlers) =>
   Effect.gen(function* () {
     const assetCatalogRepository = yield* AssetCatalogRepository
-    const providerAssetRepository = yield* ProviderAssetRepository
     const transferReconciliationRepository = yield* TransferReconciliationRepository
     const providerAssetReviewService = yield* ProviderAssetReviewService
 
@@ -271,15 +291,17 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       )
       .handle("listProviderAssetReviews", ({ query: urlParams }) =>
         Effect.gen(function* () {
-          const cursor = yield* decodeProviderAssetCursor(urlParams.cursor)
-          const providerAssets = yield* providerAssetRepository
-            .listProviderAssetReviews({
-              providerKey: urlParams.provider ?? null,
-              mappingStatus: urlParams.status ?? "pending_review",
+          const cursor = yield* decodeProviderAssetReviewCursor(urlParams.cursor)
+          const providerAssets = yield* providerAssetReviewService
+            .listReviews({
+              provider: urlParams.provider ?? null,
+              status: urlParams.status ?? "pending_review",
+              evidenceState: urlParams.evidence ?? null,
+              query: urlParams.q ?? null,
               cursor,
               limit: (urlParams.limit ?? defaultLimit) + 1,
             })
-            .pipe(Effect.mapError(() => toInternalServerError("Failed to list provider assets.")))
+            .pipe(Effect.mapError(mapReviewError))
           const limit = urlParams.limit ?? defaultLimit
           const visibleProviderAssets = providerAssets.slice(0, limit)
           const lastProviderAsset = visibleProviderAssets.at(-1)
@@ -290,10 +312,56 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             page: {
               nextCursor:
                 hasMore && lastProviderAsset !== undefined
-                  ? providerAssetCursorFor(lastProviderAsset.providerAsset.id)
+                  ? providerAssetReviewCursorFor(lastProviderAsset)
                   : null,
               hasMore,
             },
+          })
+        })
+      )
+      .handle("getProviderAssetReview", ({ params: path }) =>
+        providerAssetReviewService
+          .getReview({ providerAssetRowId: path.id })
+          .pipe(Effect.map(toProviderAssetReviewDetail), Effect.mapError(mapReviewError))
+      )
+      .handle("searchProviderAssetResolutionProposals", ({ params: path, query }) =>
+        providerAssetReviewService
+          .searchProposals({
+            providerAssetRowId: path.id,
+            query: query.q ?? null,
+          })
+          .pipe(
+            Effect.map((result) =>
+              ProviderAssetResolutionProposalListResponse.make({
+                ...result,
+                proposals: result.proposals.map((proposal) =>
+                  ProviderAssetResolutionProposalResponse.make(proposal)
+                ),
+              })
+            ),
+            Effect.mapError(mapReviewError)
+          )
+      )
+      .handle("decideProviderAssetReview", ({ params: path, payload }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* providerAssetReviewService
+            .decide({
+              providerAssetRowId: path.id,
+              decision: payload.decision,
+              reviewRevision: payload.reviewRevision,
+              reviewerNotes: payload.reviewerNotes ?? null,
+              reviewedBy: currentUser.userId,
+            })
+            .pipe(Effect.mapError(mapReviewError))
+          const review = yield* providerAssetReviewService
+            .getReview({ providerAssetRowId: path.id })
+            .pipe(Effect.mapError(mapReviewError))
+
+          return ProviderAssetDecisionResponse.make({
+            review: toProviderAssetReviewDetail(review),
+            resolutionEffect: result.resolutionEffect,
+            replays: result.replays.map(toReplayResponse),
           })
         })
       )
@@ -328,117 +396,6 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
           })
         })
       )
-      .handle("canonicalizeProviderAsset", ({ params: path, payload }) =>
-        Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
-          const result = yield* providerAssetReviewService
-            .decide({
-              providerAssetRowId: path.id,
-              decision: { _tag: "CreateFromCoinGecko", coinId: payload.coinId },
-              reviewerNotes: payload.reviewerNotes ?? null,
-              reviewedBy: currentUser.userId,
-            })
-            .pipe(Effect.mapError(mapReviewError))
-
-          if (result.canonicalAsset === null || result.evidence === null) {
-            return yield* toInternalServerError("Canonical asset result was incomplete.")
-          }
-
-          return AssetCanonicalizationResponse.make({
-            providerAsset: toProviderAssetReviewRow(result.providerAsset),
-            canonicalAsset: CanonicalAssetResponse.make({
-              id: result.canonicalAsset.id,
-              name: result.canonicalAsset.name,
-              symbol: result.canonicalAsset.symbol,
-              type: result.canonicalAsset.type,
-            }),
-            representation: CanonicalAssetRepresentationResponse.make({
-              id: result.canonicalAsset.representationId,
-              blockchainId: result.canonicalAsset.blockchainId,
-              blockchainName: result.canonicalAsset.blockchainName,
-              type: result.canonicalAsset.representationType,
-              contractAddress: result.canonicalAsset.contractAddress,
-              mintAddress: result.canonicalAsset.mintAddress,
-              decimals: result.canonicalAsset.decimals,
-            }),
-            evidence: AssetCanonicalizationEvidenceResponse.make({
-              source: "coingecko",
-              economicAsset: {
-                coinId: result.evidence.coinId,
-                name: result.evidence.coinName,
-                symbol: result.evidence.coinSymbol,
-              },
-              representation: {
-                platformId: result.evidence.platformId,
-                platformName: result.evidence.platformName,
-                contractAddress: result.evidence.contractAddress,
-              },
-            }),
-            replays: result.replays.map(toReplayResponse),
-          })
-        })
-      )
-      .handle("approveProviderAsset", ({ params: path, payload }) =>
-        Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
-          const result = yield* providerAssetReviewService.decide({
-            providerAssetRowId: path.id,
-            decision: {
-              _tag: "MapToExisting",
-              canonicalAssetId: payload.canonicalAssetId,
-              assetRepresentationId: payload.assetRepresentationId,
-            },
-            reviewerNotes: payload.reviewerNotes ?? null,
-            reviewedBy: currentUser.userId,
-          })
-          return ProviderAssetDecisionResponse.make({
-            providerAsset: toProviderAssetReviewRow(result.providerAsset),
-            replays: result.replays.map(toReplayResponse),
-          })
-        }).pipe(Effect.mapError(mapReviewError))
-      )
-      .handle("listProviderAssetCandidates", ({ params: path }) =>
-        providerAssetReviewService.listCandidates({ providerAssetRowId: path.id }).pipe(
-          Effect.map((candidates) =>
-            ProviderAssetCandidateListResponse.make({
-              candidates: candidates.map((candidate) =>
-                ProviderAssetCandidateResponse.make(candidate)
-              ),
-            })
-          ),
-          Effect.mapError(mapReviewError)
-        )
-      )
-      .handle("approveProviderAssetAsFiat", ({ params: path, payload }) =>
-        Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
-          const result = yield* providerAssetReviewService.decide({
-            providerAssetRowId: path.id,
-            decision: { _tag: "ApproveAsFiat" },
-            reviewerNotes: payload.reviewerNotes ?? null,
-            reviewedBy: currentUser.userId,
-          })
-          return ProviderAssetDecisionResponse.make({
-            providerAsset: toProviderAssetReviewRow(result.providerAsset),
-            replays: result.replays.map(toReplayResponse),
-          })
-        }).pipe(Effect.mapError(mapReviewError))
-      )
-      .handle("rejectProviderAsset", ({ params: path, payload }) =>
-        Effect.gen(function* () {
-          const currentUser = yield* CurrentUser
-          const result = yield* providerAssetReviewService.decide({
-            providerAssetRowId: path.id,
-            decision: { _tag: "Reject", reason: payload.reason },
-            reviewerNotes: null,
-            reviewedBy: currentUser.userId,
-          })
-          return ProviderAssetDecisionResponse.make({
-            providerAsset: toProviderAssetReviewRow(result.providerAsset),
-            replays: [],
-          })
-        }).pipe(Effect.mapError(mapReviewError))
-      )
       .handle("getProviderAssetReplay", ({ params: path }) =>
         providerAssetReviewService
           .getReplay({
@@ -446,10 +403,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             sourceId: path.sourceId,
             jobId: path.jobId,
           })
-          .pipe(
-            Effect.map((replay) => SourceSyncJobResponse.make(replay)),
-            Effect.mapError(mapReviewError)
-          )
+          .pipe(Effect.map(toReplayResponse), Effect.mapError(mapReviewError))
       )
       .handle("retryProviderAssetReplay", ({ params: path }) =>
         providerAssetReviewService
@@ -458,10 +412,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             sourceId: path.sourceId,
             jobId: path.jobId,
           })
-          .pipe(
-            Effect.map((replay) => SourceSyncStartResponse.make(replay)),
-            Effect.mapError(mapReviewError)
-          )
+          .pipe(Effect.map(toReplayResponse), Effect.mapError(mapReviewError))
       )
   })
 )

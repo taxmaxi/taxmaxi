@@ -455,12 +455,4 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
     mappingStatus: "approved",
     sourceNotes: "Direct Coinbase currency mapping.",
   },
-  {
-    currencyCode: "EUR",
-    mappingKind: "fiat",
-    canonicalAssetCoinGeckoId: null,
-    canonicalFiatCurrency: "EUR",
-    mappingStatus: "approved",
-    sourceNotes: "Fiat currency mapping used for native amounts and fiat-denominated fees.",
-  },
 ]

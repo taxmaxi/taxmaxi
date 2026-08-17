@@ -7,7 +7,15 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import type { SourceSyncJobDetails, SourceSyncJobSummary } from "./SourceSyncModels.ts"
+import type { ProviderAssetReviewReplay } from "./ProviderAssetRepository.ts"
+
+/** Per-source replay state exposed by the admin review contract. */
+export interface ProviderAssetReplayStatus {
+  readonly sourceId: string
+  readonly jobId: string
+  readonly status: "queued" | "running" | "completed" | "failed" | "failed_to_queue"
+  readonly message: string | null
+}
 
 /** Failure category exposed by provider-asset replay operations. */
 export const ProviderAssetReplayErrorKind = Schema.Union([
@@ -35,13 +43,18 @@ export interface ProviderAssetReplayParams {
 
 /** Sync-engine operations for reading and retrying decision-triggered replays. */
 export interface ProviderAssetReplayServiceShape {
+  readonly scheduleReplays: (params: {
+    readonly providerAssetRowId: string
+    readonly replays: ReadonlyArray<ProviderAssetReviewReplay>
+  }) => Effect.Effect<ReadonlyArray<ProviderAssetReplayStatus>, ProviderAssetReplayError>
+
   readonly getReplay: (
     params: ProviderAssetReplayParams
-  ) => Effect.Effect<SourceSyncJobDetails, ProviderAssetReplayError>
+  ) => Effect.Effect<ProviderAssetReplayStatus, ProviderAssetReplayError>
 
   readonly retryReplay: (
     params: ProviderAssetReplayParams
-  ) => Effect.Effect<SourceSyncJobSummary, ProviderAssetReplayError>
+  ) => Effect.Effect<ProviderAssetReplayStatus, ProviderAssetReplayError>
 }
 
 /** Context tag for provider-asset replay orchestration. */

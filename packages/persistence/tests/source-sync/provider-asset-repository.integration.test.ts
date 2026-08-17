@@ -1719,6 +1719,8 @@ describe("ProviderAssetRepositoryLive", () => {
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
+            evidenceState: null,
+            query: null,
             cursor: null,
             limit: 2,
           })
@@ -1737,7 +1739,10 @@ describe("ProviderAssetRepositoryLive", () => {
           repository.listProviderAssetReviews({
             providerKey: "coinbase",
             mappingStatus: "pending_review",
+            evidenceState: null,
+            query: null,
             cursor: {
+              discoveredAt: lastFirstPageRow.providerAsset.discoveredAt,
               providerAssetRowId: lastFirstPageRow.providerAsset.id,
             },
             limit: 2,

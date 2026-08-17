@@ -158,6 +158,10 @@ const makeProviderLayer = ({
             Effect.die("rejectProviderAssetMapping should not be called"),
           findProviderAssetReviewReplay: () =>
             Effect.die("findProviderAssetReviewReplay should not be called"),
+          listProviderAssetReviewReplays: () =>
+            Effect.die("listProviderAssetReviewReplays should not be called"),
+          markProviderAssetReviewReplayDispatch: () =>
+            Effect.die("markProviderAssetReviewReplayDispatch should not be called"),
           replaceProviderAssetReviewReplay: () =>
             Effect.die("replaceProviderAssetReviewReplay should not be called"),
           lockProviderAssetApprovalSnapshot: () =>
@@ -184,6 +188,7 @@ const makeProviderLayer = ({
           findNativeRepresentationForBlockchain: () => Effect.succeed(Option.none()),
           findRepresentationByBlockchainAndAddress: () => Effect.succeed(Option.none()),
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
+          upsertEconomicAsset: () => Effect.die("upsertEconomicAsset should not be called"),
           upsertEconomicAssetRepresentation: () =>
             Effect.die("upsertEconomicAssetRepresentation should not be called"),
         })

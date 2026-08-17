@@ -28,6 +28,21 @@ export const ProviderAssetMappingStatusSchema = Schema.Literals([
 
 export type ProviderAssetMappingStatus = typeof ProviderAssetMappingStatusSchema.Type
 
+/** Evidence quality exposed by the provider-asset review queue. */
+export const ProviderAssetEvidenceStateSchema = Schema.Literals([
+  "exact",
+  "ambiguous",
+  "conflicting",
+  "insufficient",
+])
+
+export type ProviderAssetEvidenceState = typeof ProviderAssetEvidenceStateSchema.Type
+
+/** Queue-dispatch state that cannot be inferred from the processing job alone. */
+export const ProviderAssetReplayDispatchStateSchema = Schema.Literals(["queued", "failed_to_queue"])
+
+export type ProviderAssetReplayDispatchState = typeof ProviderAssetReplayDispatchStateSchema.Type
+
 /**
  * ProviderAssetCatalogEntry - Durable provider asset catalog row.
  */
@@ -98,6 +113,7 @@ export interface ProviderAssetReviewMapping extends ProviderAssetMappingState {
   readonly sourceNotes: string | null
   readonly reviewedBy: string | null
   readonly reviewedAt: Date | null
+  readonly updatedAt: Date
 }
 
 /** Durable replay job linked to a provider-asset review decision. */
@@ -105,6 +121,8 @@ export interface ProviderAssetReviewReplay {
   readonly sourceId: string
   readonly principalId: string
   readonly jobId: string
+  readonly dispatchState: ProviderAssetReplayDispatchState
+  readonly errorMessage: string | null
 }
 
 /**
@@ -118,6 +136,8 @@ export type ResolvedProviderAssetMapping = ProviderAssetMappingState
 export interface ProviderAssetReviewRecord {
   readonly providerAsset: ProviderAssetRecord
   readonly mapping: ProviderAssetReviewMapping | null
+  readonly evidenceState: ProviderAssetEvidenceState
+  readonly affectedSourceCount: number
 }
 
 /** Exact on-chain identity observed on a movement using one provider asset. */
@@ -168,6 +188,7 @@ export interface ProviderAssetRepositoryShape {
     readonly reviewedAt?: Date
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
+    readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
 
   /** Reject one pending mapping without scheduling replay work. */
@@ -177,6 +198,7 @@ export interface ProviderAssetRepositoryShape {
     readonly reviewedBy: string | null
     readonly reviewedAt: Date
     readonly expectedProviderAssetRetrievedAt: Date
+    readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<boolean, SyncEngineStorageError>
 
   /** Resolve the exact replay linked to one provider-asset decision. */
@@ -185,6 +207,20 @@ export interface ProviderAssetRepositoryShape {
     readonly sourceId: string
     readonly jobId: string
   }) => Effect.Effect<Option.Option<ProviderAssetReviewReplay>, SyncEngineStorageError>
+
+  /** List every replay linked to one completed provider-asset decision. */
+  readonly listProviderAssetReviewReplays: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<ReadonlyArray<ProviderAssetReviewReplay>, SyncEngineStorageError>
+
+  /** Record whether the durable replay job reached the queue. */
+  readonly markProviderAssetReviewReplayDispatch: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceId: string
+    readonly jobId: string
+    readonly dispatchState: ProviderAssetReplayDispatchState
+    readonly errorMessage: string | null
+  }) => Effect.Effect<boolean, SyncEngineStorageError>
 
   /** Compare-and-set the replay link after retrying a failed job. */
   readonly replaceProviderAssetReviewReplay: (params: {
@@ -202,6 +238,7 @@ export interface ProviderAssetRepositoryShape {
     readonly providerAssetRowId: string
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
+    readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<ProviderAssetReviewRecord, SyncEngineStorageError>
 
   /**
@@ -267,8 +304,11 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly listProviderAssetReviews: (params: {
     readonly providerKey: string | null
-    readonly mappingStatus: ProviderAssetMappingStatus
+    readonly mappingStatus: ProviderAssetMappingStatus | null
+    readonly evidenceState: ProviderAssetEvidenceState | null
+    readonly query: string | null
     readonly cursor: {
+      readonly discoveredAt: Date
       readonly providerAssetRowId: string
     } | null
     readonly limit: number

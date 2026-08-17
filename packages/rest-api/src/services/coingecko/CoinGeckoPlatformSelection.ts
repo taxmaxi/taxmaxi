@@ -17,7 +17,8 @@ const CoinGeckoAssetPlatform = Schema.Struct({
 /** CoinGecko metadata needed to identify a blockchain platform. */
 export type CoinGeckoAssetPlatform = typeof CoinGeckoAssetPlatform.Type
 
-const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
+/** Symbols for CoinGecko coins that represent native chain assets. */
+export const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
   bitcoin: "BTC",
   ethereum: "ETH",
   solana: "SOL",

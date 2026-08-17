@@ -173,6 +173,50 @@ const make = Effect.gen(function* () {
       .from(schema.blockchains)
       .pipe(wrapSyncEngineSqlError("assetRepository.listBlockchains"))
 
+  const upsertEconomicAsset: AssetRepositoryShape["upsertEconomicAsset"] = (asset) => {
+    if (asset.coingeckoCoinId === null) {
+      return Effect.fail(
+        new SyncEngineStorageError({
+          operation: "assetRepository.upsertEconomicAsset",
+          cause: "A chainless reviewed asset requires an explicit CoinGecko coin id.",
+        })
+      )
+    }
+
+    const now = new Date()
+    return db
+      .insert(schema.assets)
+      .values({ ...asset, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({
+        target: schema.assets.coingeckoCoinId,
+        set: {
+          name: asset.name,
+          symbol: asset.symbol,
+          ...(asset.logoUrl === null ? {} : { logoUrl: asset.logoUrl }),
+          updatedAt: now,
+        },
+      })
+      .returning({
+        id: schema.assets.id,
+        name: schema.assets.name,
+        symbol: schema.assets.symbol,
+        type: schema.assets.type,
+      })
+      .pipe(
+        Effect.flatMap(([persisted]) =>
+          persisted === undefined
+            ? Effect.fail(
+                new SyncEngineStorageError({
+                  operation: "assetRepository.upsertEconomicAsset",
+                  cause: "Economic asset missing after upsert.",
+                })
+              )
+            : Effect.succeed(persisted)
+        ),
+        wrapSyncEngineSqlError("assetRepository.upsertEconomicAsset")
+      )
+  }
+
   const upsertEconomicAssetRepresentation: AssetRepositoryShape["upsertEconomicAssetRepresentation"] =
     ({ blockchain, asset, representation }) =>
       db
@@ -601,6 +645,7 @@ const make = Effect.gen(function* () {
     findNativeRepresentationForBlockchain,
     findRepresentationByBlockchainAndAddress,
     listBlockchains,
+    upsertEconomicAsset,
     upsertEconomicAssetRepresentation,
   } satisfies AssetRepositoryShape)
 })

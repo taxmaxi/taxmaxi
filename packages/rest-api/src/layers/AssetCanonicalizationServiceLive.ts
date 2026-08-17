@@ -31,6 +31,7 @@ import {
 import { CoinGeckoClient, type CoinGeckoCoin } from "../services/coingecko/CoinGeckoClient.ts"
 import { coinGeckoAssetPlatformSnapshot } from "../services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 import {
+  nativeAssetSymbolsByCoinGeckoId,
   selectNativePlatform,
   type CoinGeckoAssetPlatform,
 } from "../services/coingecko/CoinGeckoPlatformSelection.ts"
@@ -59,15 +60,6 @@ const normalize = (value: string) => value.trim().toLowerCase()
 const upperSymbol = (value: string) => value.trim().toUpperCase()
 
 const isNonEmptyString = (value: string) => value.trim() !== ""
-
-const nativeAssetSymbolsByCoinGeckoId: Readonly<Record<string, string>> = {
-  bitcoin: "BTC",
-  ethereum: "ETH",
-  solana: "SOL",
-  cardano: "ADA",
-  binancecoin: "BNB",
-  "avalanche-2": "AVAX",
-}
 
 const nativeAssetDecimalsByCoinGeckoId: Readonly<Record<string, number>> = {
   bitcoin: 8,
@@ -590,6 +582,7 @@ const make = Effect.gen(function* () {
       reviewerNotes,
       reviewedBy,
       requirePendingReview = false,
+      expectedMappingUpdatedAt,
     }) =>
       Effect.gen(function* () {
         const initialProviderAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
@@ -607,6 +600,7 @@ const make = Effect.gen(function* () {
                   expectedObservedRepresentations: initialObservedRepresentations,
                   expectedProviderAssetRetrievedAt:
                     initialProviderAssetReview.providerAsset.retrievedAt,
+                  ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
                   Effect.mapError(
@@ -724,6 +718,7 @@ const make = Effect.gen(function* () {
                   reviewedAt: new Date(),
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+                  ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
                   Effect.catch(() =>
@@ -908,7 +903,14 @@ const make = Effect.gen(function* () {
     })
 
   const canonicalizeProviderAssetFromCoinGecko: AssetCanonicalizationServiceShape["canonicalizeProviderAssetFromCoinGecko"] =
-    ({ providerAssetRowId, coinId, reviewerNotes, reviewedBy, requirePendingReview = false }) =>
+    ({
+      providerAssetRowId,
+      coinId,
+      reviewerNotes,
+      reviewedBy,
+      requirePendingReview = false,
+      expectedMappingUpdatedAt,
+    }) =>
       Effect.gen(function* () {
         const initialProviderAssetReview = yield* loadProviderAssetReview({ providerAssetRowId })
         yield* validateApprovableProviderAsset(initialProviderAssetReview)
@@ -946,6 +948,7 @@ const make = Effect.gen(function* () {
                   expectedObservedRepresentations: initialObservedRepresentations,
                   expectedProviderAssetRetrievedAt:
                     initialProviderAssetReview.providerAsset.retrievedAt,
+                  ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
                   Effect.mapError(
@@ -1095,6 +1098,7 @@ const make = Effect.gen(function* () {
                   reviewedAt: new Date(),
                   expectedObservedRepresentations: observedRepresentations,
                   expectedProviderAssetRetrievedAt: providerAssetReview.providerAsset.retrievedAt,
+                  ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
                 })
                 .pipe(
                   Effect.catch(() =>
@@ -1148,8 +1152,131 @@ const make = Effect.gen(function* () {
           )
       })
 
+  const canonicalizeEconomicAssetFromCoinGecko: AssetCanonicalizationServiceShape["canonicalizeEconomicAssetFromCoinGecko"] =
+    ({
+      providerAssetRowId,
+      coinId,
+      reviewerNotes,
+      reviewedBy,
+      requirePendingReview = false,
+      expectedMappingUpdatedAt,
+    }) =>
+      Effect.gen(function* () {
+        const initialReview = yield* loadProviderAssetReview({ providerAssetRowId })
+        yield* validateApprovableProviderAsset(initialReview)
+        const observedRepresentations = yield* loadObservedRepresentations({ providerAssetRowId })
+        if (
+          observedRepresentations.length > 0 ||
+          isNativeOnchainObservation(initialReview.providerAsset) ||
+          observedProviderTokenId(initialReview.providerAsset) !== null
+        ) {
+          return yield* makeBadRequest(
+            "An observation with network evidence cannot create an economic-only asset."
+          )
+        }
+
+        const searchCoins = yield* coinGeckoClient
+          .searchCoins({ query: initialReview.providerAsset.currencyCode })
+          .pipe(Effect.mapError(mapCoinGeckoError))
+        const selected = searchCoins.find((candidate) => candidate.id === coinId)
+        if (
+          selected === undefined ||
+          normalize(selected.symbol) !== normalize(initialReview.providerAsset.currencyCode)
+        ) {
+          return yield* makeBadRequest("The selected CoinGecko candidate is not available.")
+        }
+        const coin = yield* coinGeckoClient
+          .getCoin({ coinId })
+          .pipe(Effect.mapError(mapCoinGeckoError))
+
+        return yield* syncEngineTransaction
+          .run(
+            Effect.gen(function* () {
+              const review = yield* providerAssetRepository
+                .lockProviderAssetApprovalSnapshot({
+                  providerAssetRowId,
+                  expectedObservedRepresentations: [],
+                  expectedProviderAssetRetrievedAt: initialReview.providerAsset.retrievedAt,
+                  ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
+                })
+                .pipe(
+                  Effect.mapError(
+                    () =>
+                      new AssetCanonicalizationConflictError({
+                        message: "Provider asset evidence changed before approval.",
+                      })
+                  )
+                )
+              if (requirePendingReview && review.mapping?.mappingStatus !== "pending_review") {
+                return yield* new AssetCanonicalizationConflictError({
+                  message: "Provider asset has already been reviewed.",
+                })
+              }
+
+              const canonicalAsset = yield* assetRepository
+                .upsertEconomicAsset({
+                  name: coin.name,
+                  symbol: upperSymbol(coin.symbol),
+                  coingeckoCoinId: coin.id,
+                  logoUrl: coin.image?.small ?? null,
+                  type: review.providerAsset.providerType === "nft" ? "nft" : "fungible",
+                })
+                .pipe(
+                  Effect.mapError(
+                    () =>
+                      new AssetCanonicalizationInternalError({
+                        message: "Failed to persist economic asset.",
+                      })
+                  )
+                )
+              const approval = yield* providerAssetRepository
+                .approveProviderAssetMappingAndRequestReplay({
+                  mapping: {
+                    providerAssetRowId,
+                    mappingKind: "asset",
+                    canonicalAssetId: canonicalAsset.id,
+                    assetRepresentationId: null,
+                    canonicalFiatCurrency: null,
+                    mappingStatus: "approved",
+                    reviewerNotes,
+                    sourceNotes: appendSourceNote({
+                      existing: review.mapping?.sourceNotes,
+                      note: COINGECKO_SOURCE_NOTES,
+                    }),
+                  },
+                  reviewedBy: reviewedBy ?? null,
+                  reviewedAt: new Date(),
+                  expectedObservedRepresentations: [],
+                  expectedProviderAssetRetrievedAt: review.providerAsset.retrievedAt,
+                  ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
+                })
+                .pipe(
+                  Effect.mapError(
+                    () =>
+                      new AssetCanonicalizationConflictError({
+                        message: "Provider asset changed before approval.",
+                      })
+                  )
+                )
+              const providerAsset = yield* loadApprovedProviderAsset({ providerAssetRowId })
+
+              return { providerAsset, canonicalAsset, replays: approval.replays }
+            })
+          )
+          .pipe(
+            Effect.catchTag(
+              "SyncEngineStorageError",
+              () =>
+                new AssetCanonicalizationInternalError({
+                  message: "Failed to commit economic asset approval.",
+                })
+            )
+          )
+      })
+
   return AssetCanonicalizationService.of({
     approveProviderAssetMapping,
+    canonicalizeEconomicAssetFromCoinGecko,
     canonicalizeProviderAssetFromCoinGecko,
   } satisfies AssetCanonicalizationServiceShape)
 })

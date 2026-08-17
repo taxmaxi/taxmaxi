@@ -4,9 +4,11 @@
  * @module CoinbaseReferenceMappingServiceLive
  */
 
+import { CurrencyCode, getCurrencyByCode } from "@my/core/currency"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
 import {
   ProviderAssetRepository,
@@ -102,6 +104,45 @@ const make = Effect.gen(function* () {
         currencyCode,
       })
       .pipe(Effect.map(Option.getOrNull))
+
+  const resolveDedicatedFiatMapping = ({
+    providerAssetRowId,
+    currencyCode,
+  }: {
+    readonly providerAssetRowId: string
+    readonly currencyCode: string
+  }): Effect.Effect<ProviderAssetMappingDraft, SyncEngineStorageError> =>
+    Schema.decodeUnknownEffect(CurrencyCode)(currencyCode).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SyncEngineStorageError({
+            operation: "coinbaseReferenceMappingService.resolveDedicatedFiatMapping.decode",
+            cause,
+          })
+      ),
+      Effect.flatMap((code) => {
+        const currency = getCurrencyByCode(code)
+        if (currency === undefined) {
+          return Effect.fail(
+            new SyncEngineStorageError({
+              operation: "coinbaseReferenceMappingService.resolveDedicatedFiatMapping.support",
+              cause: `Coinbase fiat currency ${code} is not supported by TaxMaxi.`,
+            })
+          )
+        }
+
+        return Effect.succeed({
+          providerAssetRowId,
+          mappingKind: "fiat",
+          canonicalAssetId: null,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: currency.code,
+          mappingStatus: "approved",
+          reviewerNotes: null,
+          sourceNotes: "Automatically resolved from the Coinbase fiat currency catalog.",
+        })
+      })
+    )
 
   const ensurePendingTransactionType = ({
     providerTransactionType,
@@ -495,9 +536,40 @@ const make = Effect.gen(function* () {
         currencyCode: upperCurrencyCode,
         rawSourcePayload: rawSourcePayload ?? { currencyCode: upperCurrencyCode },
       })
-      const persistedMapping = yield* loadProviderAssetMapping({
+      let persistedMapping = yield* loadProviderAssetMapping({
         providerAssetRowId: providerAssetRecord.id,
       })
+
+      if (providerAssetRecord.providerType?.trim().toLowerCase() === "fiat") {
+        const automaticFiatMapping = yield* resolveDedicatedFiatMapping({
+          providerAssetRowId: providerAssetRecord.id,
+          currencyCode: upperCurrencyCode,
+        })
+        if (persistedMapping === null) {
+          yield* providerAssetRepository.seedProviderAssetMappingsIfMissing({
+            mappings: [automaticFiatMapping],
+          })
+          persistedMapping = yield* loadProviderAssetMapping({
+            providerAssetRowId: providerAssetRecord.id,
+          })
+        }
+        if (
+          persistedMapping === null ||
+          persistedMapping.mappingStatus !== "approved" ||
+          persistedMapping.mappingKind !== "fiat" ||
+          persistedMapping.canonicalFiatCurrency !== automaticFiatMapping.canonicalFiatCurrency ||
+          persistedMapping.canonicalAssetId !== null ||
+          persistedMapping.assetRepresentationId !== null
+        ) {
+          return yield* Effect.fail(
+            new CoinbaseBrokenApprovedProviderAssetMappingError({
+              currencyCode: upperCurrencyCode,
+              providerAssetRowId: providerAssetRecord.id,
+              message: `Coinbase fiat evidence for ${upperCurrencyCode} conflicts with its persisted provider mapping.`,
+            })
+          )
+        }
+      }
 
       if (persistedMapping === null) {
         return yield* failMissingProviderAssetMapping({

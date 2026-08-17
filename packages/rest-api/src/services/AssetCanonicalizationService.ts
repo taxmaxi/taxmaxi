@@ -6,6 +6,7 @@
 
 import type {
   EconomicAssetRepresentationRecord,
+  EconomicAssetRecord,
   ProviderAssetReviewReplay,
   ProviderAssetReviewRecord,
 } from "@my/sync-engine/services"
@@ -77,7 +78,23 @@ export interface ApproveProviderAssetResult extends ProviderAssetReviewRecord {
   readonly replays: ReadonlyArray<ProviderAssetReviewReplay>
 }
 
+/** Chainless CoinGecko-backed economic asset approval result. */
+export interface CanonicalizeEconomicAssetResult {
+  readonly providerAsset: ProviderAssetReviewRecord
+  readonly canonicalAsset: EconomicAssetRecord
+  readonly replays: ReadonlyArray<ProviderAssetReviewReplay>
+}
+
 export interface AssetCanonicalizationServiceShape {
+  readonly canonicalizeEconomicAssetFromCoinGecko: (params: {
+    readonly providerAssetRowId: string
+    readonly coinId: string
+    readonly reviewerNotes: string | null
+    readonly reviewedBy?: string
+    readonly requirePendingReview?: boolean
+    readonly expectedMappingUpdatedAt?: Date
+  }) => Effect.Effect<CanonicalizeEconomicAssetResult, AssetCanonicalizationError>
+
   readonly approveProviderAssetMapping: (params: {
     readonly providerAssetRowId: string
     readonly canonicalAssetId: string
@@ -85,6 +102,7 @@ export interface AssetCanonicalizationServiceShape {
     readonly reviewerNotes: string | null
     readonly reviewedBy?: string
     readonly requirePendingReview?: boolean
+    readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<ApproveProviderAssetResult, AssetCanonicalizationError>
 
   readonly canonicalizeProviderAssetFromCoinGecko: (params: {
@@ -93,6 +111,7 @@ export interface AssetCanonicalizationServiceShape {
     readonly reviewerNotes: string | null
     readonly reviewedBy?: string
     readonly requirePendingReview?: boolean
+    readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<CanonicalizeProviderAssetResult, AssetCanonicalizationError>
 }
 

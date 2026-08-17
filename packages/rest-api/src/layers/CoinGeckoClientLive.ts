@@ -56,6 +56,7 @@ const CoinGeckoMarket = Schema.Struct({
 const CoinGeckoMarketsResponse = Schema.Array(CoinGeckoMarket)
 
 const COINGECKO_PRO_API_BASE_URL = "https://pro-api.coingecko.com/api/v3"
+const COINGECKO_REQUEST_TIMEOUT = "15 seconds"
 const COINGECKO_PUBLIC_API_BASE_URL = "https://api.coingecko.com/api/v3"
 
 const makeError = (message: string) => new CoinGeckoClientError({ message })
@@ -89,13 +90,15 @@ const make = Effect.gen(function* () {
         onSome: (apiKey) =>
           baseRequest.pipe(HttpClientRequest.setHeader("x-cg-pro-api-key", apiKey)),
       })
-      const response = yield* httpClient
-        .execute(request)
-        .pipe(
-          Effect.mapError((error) =>
-            makeError(`CoinGecko request failed for ${endpoint}: ${error.message}`)
-          )
-        )
+      const response = yield* httpClient.execute(request).pipe(
+        Effect.mapError((error) =>
+          makeError(`CoinGecko request failed for ${endpoint}: ${error.message}`)
+        ),
+        Effect.timeoutOrElse({
+          duration: COINGECKO_REQUEST_TIMEOUT,
+          orElse: () => Effect.fail(makeError(`CoinGecko request timed out for ${endpoint}.`)),
+        })
+      )
 
       if (response.status < 200 || response.status >= 300) {
         const bodyText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))

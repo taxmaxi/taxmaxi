@@ -110,6 +110,7 @@ const runWithProvider = <A, E>(
             findRepresentationByBlockchainAndAddress: () =>
               Effect.die("findRepresentationByBlockchainAndAddress should not be called"),
             listBlockchains: () => Effect.die("listBlockchains should not be called"),
+            upsertEconomicAsset: () => Effect.die("upsertEconomicAsset should not be called"),
             upsertEconomicAssetRepresentation: () =>
               Effect.die("upsertEconomicAssetRepresentation should not be called"),
           })
@@ -127,6 +128,10 @@ const runWithProvider = <A, E>(
               Effect.die("rejectProviderAssetMapping should not be called"),
             findProviderAssetReviewReplay: () =>
               Effect.die("findProviderAssetReviewReplay should not be called"),
+            listProviderAssetReviewReplays: () =>
+              Effect.die("listProviderAssetReviewReplays should not be called"),
+            markProviderAssetReviewReplayDispatch: () =>
+              Effect.die("markProviderAssetReviewReplayDispatch should not be called"),
             replaceProviderAssetReviewReplay: () =>
               Effect.die("replaceProviderAssetReviewReplay should not be called"),
             lockProviderAssetApprovalSnapshot: () =>

@@ -224,78 +224,84 @@ const assetCatalogListResponseBody = JSON.stringify({
 
 const assetCatalogAssetResponseBody = JSON.stringify(assetCatalogAssetResponse)
 
-const assetCanonicalizationResponseBody = JSON.stringify({
-  providerAsset: {
-    id: "00000000-0000-4000-8000-000000000009",
-    provider: "coinbase",
-    providerAssetId: "63062039-7afb-56ff-8e19-5e3215dc404a",
-    naturalKey: null,
-    currencyCode: "ADA",
-    name: "Cardano",
-    exponent: 6,
-    providerType: "crypto",
-    rawProviderPayload: {},
-    discoveredAt: "2026-08-17T08:00:00.000Z",
-    retrievedAt: "2026-08-17T08:00:00.000Z",
+const providerAssetReviewDetail = {
+  id: "00000000-0000-4000-8000-000000000009",
+  provider: "coinbase",
+  providerAssetId: "63062039-7afb-56ff-8e19-5e3215dc404a",
+  naturalKey: null,
+  symbol: "ADA",
+  name: "Cardano",
+  assetType: "crypto",
+  source: { _tag: "cex", name: "coinbase" },
+  imageUrl: null,
+  evidenceState: "exact",
+  affectedSourceCount: 1,
+  discoveredAt: "2026-08-17T08:00:00.000Z",
+  reviewRevision: "2026-08-17T08:00:00.000Z",
+  investigationLinks: [],
+  rawEvidence: {},
+  observedRepresentations: [],
+  mapping: {
+    providerAssetRowId: "00000000-0000-4000-8000-000000000009",
     mappingKind: "asset",
-    canonicalAssetId: "00000000-0000-4000-8000-000000000010",
-    assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+    canonicalAssetId: null,
+    assetRepresentationId: null,
     canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    reviewerNotes: "Looks correct.",
-    sourceNotes: "Approved with CoinGecko asset/platform metadata.",
-    reviewedBy: "00000000-0000-4000-8000-000000000013",
-    reviewedAt: "2026-08-17T09:00:00.000Z",
-  },
-  canonicalAsset: {
-    id: "00000000-0000-4000-8000-000000000010",
-    name: "Cardano",
-    symbol: "ADA",
-    type: "fungible",
-  },
-  representation: {
-    id: "00000000-0000-4000-8000-000000000012",
-    blockchainId: "00000000-0000-4000-8000-000000000011",
-    blockchainName: "cardano",
-    type: "native",
-    decimals: 6,
-    contractAddress: null,
-    mintAddress: null,
-  },
-  evidence: {
-    source: "coingecko",
-    economicAsset: { coinId: "cardano", name: "Cardano", symbol: "ADA" },
-    representation: {
-      platformId: "cardano",
-      platformName: "Cardano",
-      contractAddress: null,
-    },
+    mappingStatus: "pending_review",
+    reviewerNotes: null,
+    sourceNotes: "Observed during sync.",
+    reviewedBy: null,
+    reviewedAt: null,
+    updatedAt: "2026-08-17T08:00:00.000Z",
   },
   replays: [],
+} as const
+
+const providerAssetReviewDetailResponseBody = JSON.stringify(providerAssetReviewDetail)
+
+const providerAssetProposalsResponseBody = JSON.stringify({
+  evidenceState: "exact",
+  recommendedProposalId: "existing-cardano",
+  proposals: [
+    {
+      id: "existing-cardano",
+      effect: {
+        _tag: "UseExistingAsset",
+        canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+      },
+      economicAsset: {
+        _tag: "existing",
+        id: "00000000-0000-4000-8000-000000000010",
+        name: "Cardano",
+        symbol: "ADA",
+        coinGeckoCoinId: "cardano",
+      },
+      representation: null,
+      evidenceStrength: "exact",
+      matchReasons: ["Exact economic asset match."],
+      conflicts: [],
+      warnings: [],
+      investigationLinks: [],
+    },
+  ],
 })
 
-const approvedProviderAssetResponseBody = JSON.stringify({
-  providerAsset: {
-    id: "00000000-0000-4000-8000-000000000009",
-    provider: "coinbase",
-    providerAssetId: "63062039-7afb-56ff-8e19-5e3215dc404a",
-    naturalKey: null,
-    currencyCode: "ADA",
-    name: "Cardano",
-    exponent: 6,
-    providerType: "crypto",
-    rawProviderPayload: {},
-    discoveredAt: "2026-08-17T08:00:00.000Z",
-    retrievedAt: "2026-08-17T08:00:00.000Z",
-    mappingKind: "asset",
+const providerAssetDecisionResponseBody = JSON.stringify({
+  review: {
+    ...providerAssetReviewDetail,
+    mapping: {
+      ...providerAssetReviewDetail.mapping,
+      canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+      mappingStatus: "approved",
+      reviewerNotes: "Identity checked.",
+      reviewedBy: "00000000-0000-4000-8000-000000000013",
+      reviewedAt: "2026-08-17T09:00:00.000Z",
+      updatedAt: "2026-08-17T09:00:00.000Z",
+    },
+  },
+  resolutionEffect: {
+    _tag: "UseExistingAsset",
     canonicalAssetId: "00000000-0000-4000-8000-000000000010",
-    assetRepresentationId: "00000000-0000-4000-8000-000000000012",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    reviewerNotes: "Identity checked.",
-    sourceNotes: "Approved from exact representation evidence.",
-    reviewedBy: "00000000-0000-4000-8000-000000000013",
-    reviewedAt: "2026-08-17T09:00:00.000Z",
   },
   replays: [],
 })
@@ -859,8 +865,9 @@ describe("TaxMaxi Promise client", () => {
       emptyProviderAssetReviewsResponseBody,
       unresolvedTransferReconciliationsResponseBody,
       unresolvedTransferReconciliationsResponseBody,
-      assetCanonicalizationResponseBody,
-      approvedProviderAssetResponseBody,
+      providerAssetReviewDetailResponseBody,
+      providerAssetProposalsResponseBody,
+      providerAssetDecisionResponseBody,
     ]
     const taxmaxi = new TaxMaxiInternal({
       apiKey: "tm_assets",
@@ -886,8 +893,10 @@ describe("TaxMaxi Promise client", () => {
 
     await expect(
       taxmaxi.assets.listProviderAssetReviews({
+        query: "ada",
         provider: "coinbase",
         status: "pending_review",
+        evidence: "exact",
         cursor: "00000000-0000-4000-8000-000000000008",
         limit: 25,
       })
@@ -923,29 +932,36 @@ describe("TaxMaxi Promise client", () => {
       reconciliations: [{ providerAmount: "1.25" }],
     })
     await expect(
-      taxmaxi.assets.canonicalizeProviderAsset({
-        id: providerAssetId,
-        coinId: "cardano",
-        reviewerNotes: "Looks correct.",
-      })
+      taxmaxi.assets.getProviderAssetReview({ id: providerAssetId })
     ).resolves.toMatchObject({
-      providerAsset: {
-        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
-        mappingStatus: "approved",
-      },
+      symbol: "ADA",
+      reviewRevision: "2026-08-17T08:00:00.000Z",
     })
     await expect(
-      taxmaxi.assets.approveProviderAsset({
+      taxmaxi.assets.searchProviderAssetResolutionProposals({
         id: providerAssetId,
-        canonicalAssetId: "00000000-0000-4000-8000-000000000011",
-        assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+        query: "cardano",
+      })
+    ).resolves.toMatchObject({ recommendedProposalId: "existing-cardano" })
+    await expect(
+      taxmaxi.assets.decideProviderAssetReview({
+        id: providerAssetId,
+        reviewRevision: "2026-08-17T08:00:00.000Z",
+        decision: {
+          _tag: "Resolve",
+          proposalId: "existing-cardano",
+          effect: {
+            _tag: "UseExistingAsset",
+            canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+          },
+        },
         reviewerNotes: "Identity checked.",
       })
-    ).resolves.toMatchObject({ providerAsset: { mappingStatus: "approved" } })
+    ).resolves.toMatchObject({ review: { mapping: { mappingStatus: "approved" } } })
 
     expect(capturedRequests).toEqual([
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets?provider=coinbase&status=pending_review&cursor=00000000-0000-4000-8000-000000000008&limit=25",
+        url: "https://sdk.example.test/v1/assets/provider-assets?q=ada&provider=coinbase&status=pending_review&evidence=exact&cursor=00000000-0000-4000-8000-000000000008&limit=25",
       }),
       expect.objectContaining({
         url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=pending&cursor=opaque-cursor&limit=25",
@@ -954,15 +970,25 @@ describe("TaxMaxi Promise client", () => {
         url: "https://sdk.example.test/v1/assets/transfer-reconciliations/unresolved?status=needs_review&limit=10",
       }),
       expect.objectContaining({
-        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/canonicalize",
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009",
+      }),
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/proposals?q=cardano",
       }),
       expect.objectContaining({
         body: JSON.stringify({
-          canonicalAssetId: "00000000-0000-4000-8000-000000000011",
-          assetRepresentationId: "00000000-0000-4000-8000-000000000012",
+          reviewRevision: "2026-08-17T08:00:00.000Z",
+          decision: {
+            _tag: "Resolve",
+            proposalId: "existing-cardano",
+            effect: {
+              _tag: "UseExistingAsset",
+              canonicalAssetId: "00000000-0000-4000-8000-000000000010",
+            },
+          },
           reviewerNotes: "Identity checked.",
         }),
-        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/approve",
+        url: "https://sdk.example.test/v1/assets/provider-assets/00000000-0000-4000-8000-000000000009/decision",
       }),
     ])
   })

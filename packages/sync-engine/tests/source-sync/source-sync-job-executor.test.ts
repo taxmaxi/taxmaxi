@@ -613,6 +613,10 @@ const makeExecutorLayer = ({
     rejectProviderAssetMapping: () => Effect.die("rejectProviderAssetMapping should not be called"),
     findProviderAssetReviewReplay: () =>
       Effect.die("findProviderAssetReviewReplay should not be called"),
+    listProviderAssetReviewReplays: () =>
+      Effect.die("listProviderAssetReviewReplays should not be called"),
+    markProviderAssetReviewReplayDispatch: () =>
+      Effect.die("markProviderAssetReviewReplayDispatch should not be called"),
     replaceProviderAssetReviewReplay: () =>
       Effect.die("replaceProviderAssetReviewReplay should not be called"),
     lockProviderAssetApprovalSnapshot: () =>

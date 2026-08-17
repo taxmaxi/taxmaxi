@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from "drizzle-orm"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -233,7 +233,12 @@ const make = Effect.gen(function* () {
       })
 
   const lockProviderAssetApprovalSnapshot: ProviderAssetRepositoryShape["lockProviderAssetApprovalSnapshot"] =
-    ({ providerAssetRowId, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
+    ({
+      providerAssetRowId,
+      expectedObservedRepresentations,
+      expectedProviderAssetRetrievedAt,
+      expectedMappingUpdatedAt,
+    }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -281,6 +286,17 @@ const make = Effect.gen(function* () {
               .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
               .for("update")
               .limit(1)
+
+            if (
+              expectedMappingUpdatedAt !== undefined &&
+              (mapping === undefined ||
+                mapping.updatedAt.getTime() !== expectedMappingUpdatedAt.getTime())
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.lockProviderAssetApprovalSnapshot.mapping",
+                cause: "Provider asset decision revision changed before approval.",
+              })
+            }
 
             if (lockedObservationSources.length !== observationSourceIdsBeforeLock.length) {
               return yield* new SyncEngineStorageError({
@@ -347,7 +363,22 @@ const make = Effect.gen(function* () {
               })
             }
 
-            return { providerAsset, mapping: mapping ?? null }
+            const evidenceState =
+              currentObservations.length > 1
+                ? ("conflicting" as const)
+                : currentObservations.length === 1
+                  ? ("exact" as const)
+                  : providerAsset.name !== null &&
+                      (providerAsset.providerAssetId !== null || providerAsset.naturalKey !== null)
+                    ? ("ambiguous" as const)
+                    : ("insufficient" as const)
+
+            return {
+              providerAsset,
+              mapping: mapping ?? null,
+              evidenceState,
+              affectedSourceCount: lockedObservationSources.length,
+            }
           })
         )
         .pipe(
@@ -365,6 +396,7 @@ const make = Effect.gen(function* () {
       reviewedAt = nowDate(),
       expectedObservedRepresentations,
       expectedProviderAssetRetrievedAt,
+      expectedMappingUpdatedAt,
     }) =>
       db
         .transaction((tx) =>
@@ -373,6 +405,7 @@ const make = Effect.gen(function* () {
               providerAssetRowId: mapping.providerAssetRowId,
               expectedObservedRepresentations,
               expectedProviderAssetRetrievedAt,
+              ...(expectedMappingUpdatedAt === undefined ? {} : { expectedMappingUpdatedAt }),
             })
             const currentMapping = approvalSnapshot.mapping
             const sameApprovedTarget =
@@ -388,6 +421,8 @@ const make = Effect.gen(function* () {
                   sourceId: schema.providerAssetReviewReplays.sourceId,
                   principalId: schema.providerAssetReviewReplays.principalId,
                   jobId: schema.providerAssetReviewReplays.jobId,
+                  dispatchState: schema.providerAssetReviewReplays.dispatchState,
+                  errorMessage: schema.providerAssetReviewReplays.errorMessage,
                 })
                 .from(schema.providerAssetReviewReplays)
                 .where(
@@ -546,7 +581,13 @@ const make = Effect.gen(function* () {
 
                 const jobId = yield* requestReplay(3)
 
-                return { sourceId, principalId, jobId }
+                return {
+                  sourceId,
+                  principalId,
+                  jobId,
+                  dispatchState: "failed_to_queue" as const,
+                  errorMessage: null,
+                }
               })
             )
 
@@ -594,6 +635,7 @@ const make = Effect.gen(function* () {
     reviewedBy,
     reviewedAt,
     expectedProviderAssetRetrievedAt,
+    expectedMappingUpdatedAt,
   }) =>
     db
       .transaction((tx) =>
@@ -612,6 +654,24 @@ const make = Effect.gen(function* () {
             return yield* new SyncEngineStorageError({
               operation: "providerAssetRepository.rejectProviderAssetMapping.evidence",
               cause: "Provider asset metadata changed before rejection.",
+            })
+          }
+
+          const [mapping] = yield* tx
+            .select({ updatedAt: schema.providerAssetMappings.updatedAt })
+            .from(schema.providerAssetMappings)
+            .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+            .for("update")
+            .limit(1)
+
+          if (
+            expectedMappingUpdatedAt !== undefined &&
+            (mapping === undefined ||
+              mapping.updatedAt.getTime() !== expectedMappingUpdatedAt.getTime())
+          ) {
+            return yield* new SyncEngineStorageError({
+              operation: "providerAssetRepository.rejectProviderAssetMapping.revision",
+              cause: "Provider asset decision revision changed before rejection.",
             })
           }
 
@@ -647,6 +707,8 @@ const make = Effect.gen(function* () {
           sourceId: schema.providerAssetReviewReplays.sourceId,
           principalId: schema.providerAssetReviewReplays.principalId,
           jobId: schema.providerAssetReviewReplays.jobId,
+          dispatchState: schema.providerAssetReviewReplays.dispatchState,
+          errorMessage: schema.providerAssetReviewReplays.errorMessage,
         })
         .from(schema.providerAssetReviewReplays)
         .where(
@@ -662,11 +724,51 @@ const make = Effect.gen(function* () {
           wrapSyncEngineStorageError("providerAssetRepository.findProviderAssetReviewReplay")
         )
 
+  const listProviderAssetReviewReplays: ProviderAssetRepositoryShape["listProviderAssetReviewReplays"] =
+    ({ providerAssetRowId }) =>
+      db
+        .select({
+          sourceId: schema.providerAssetReviewReplays.sourceId,
+          principalId: schema.providerAssetReviewReplays.principalId,
+          jobId: schema.providerAssetReviewReplays.jobId,
+          dispatchState: schema.providerAssetReviewReplays.dispatchState,
+          errorMessage: schema.providerAssetReviewReplays.errorMessage,
+        })
+        .from(schema.providerAssetReviewReplays)
+        .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAssetRowId))
+        .orderBy(asc(schema.providerAssetReviewReplays.sourceId))
+        .pipe(wrapSyncEngineStorageError("providerAssetRepository.listProviderAssetReviewReplays"))
+
+  const markProviderAssetReviewReplayDispatch: ProviderAssetRepositoryShape["markProviderAssetReviewReplayDispatch"] =
+    ({ providerAssetRowId, sourceId, jobId, dispatchState, errorMessage }) =>
+      db
+        .update(schema.providerAssetReviewReplays)
+        .set({ dispatchState, errorMessage, updatedAt: nowDate() })
+        .where(
+          and(
+            eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAssetRowId),
+            eq(schema.providerAssetReviewReplays.sourceId, sourceId),
+            eq(schema.providerAssetReviewReplays.jobId, jobId)
+          )
+        )
+        .returning({ id: schema.providerAssetReviewReplays.id })
+        .pipe(
+          Effect.map((rows) => rows.length === 1),
+          wrapSyncEngineStorageError(
+            "providerAssetRepository.markProviderAssetReviewReplayDispatch"
+          )
+        )
+
   const replaceProviderAssetReviewReplay: ProviderAssetRepositoryShape["replaceProviderAssetReviewReplay"] =
     ({ providerAssetRowId, sourceId, previousJobId, nextJobId }) =>
       db
         .update(schema.providerAssetReviewReplays)
-        .set({ jobId: nextJobId, updatedAt: nowDate() })
+        .set({
+          jobId: nextJobId,
+          dispatchState: "queued",
+          errorMessage: null,
+          updatedAt: nowDate(),
+        })
         .where(
           and(
             eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAssetRowId),
@@ -1022,7 +1124,70 @@ const make = Effect.gen(function* () {
       sourceNotes: schema.providerAssetMappings.sourceNotes,
       reviewedBy: schema.providerAssetMappings.reviewedBy,
       reviewedAt: schema.providerAssetMappings.reviewedAt,
+      updatedAt: schema.providerAssetMappings.updatedAt,
     },
+    evidenceState: sql<"ambiguous" | "conflicting" | "exact" | "insufficient">`case
+      when (
+        select count(*) from (
+          select distinct
+            pt.observed_blockchain_id,
+            pt.observed_representation_type,
+            lower(pt.observed_contract_address),
+            pt.observed_mint_address,
+            pt.observed_decimals
+          from provider_transfers pt
+          where pt.provider_asset_id = ${schema.providerAssets.id}
+            and pt.observed_blockchain_id is not null
+            and pt.observed_representation_type is not null
+            and pt.observed_decimals is not null
+            and (
+              (
+                pt.observed_representation_type = 'native'
+                and pt.observed_contract_address is null
+                and pt.observed_mint_address is null
+              )
+              or (
+                pt.observed_representation_type in ('token', 'nft')
+                and num_nonnulls(pt.observed_contract_address, pt.observed_mint_address) = 1
+              )
+            )
+        ) observed
+      ) > 1 then 'conflicting'
+      when exists (
+        select 1 from provider_transfers pt
+        where pt.provider_asset_id = ${schema.providerAssets.id}
+          and pt.observed_blockchain_id is not null
+          and pt.observed_representation_type is not null
+          and pt.observed_decimals is not null
+          and (
+            (
+              pt.observed_representation_type = 'native'
+              and pt.observed_contract_address is null
+              and pt.observed_mint_address is null
+            )
+            or (
+              pt.observed_representation_type in ('token', 'nft')
+              and num_nonnulls(pt.observed_contract_address, pt.observed_mint_address) = 1
+            )
+          )
+      ) then 'exact'
+      when ${schema.providerAssets.name} is not null
+        and (${schema.providerAssets.providerAssetId} is not null or ${schema.providerAssets.naturalKey} is not null)
+        then 'ambiguous'
+      else 'insufficient'
+    end`,
+    affectedSourceCount: sql<number>`(
+      select count(distinct affected.source_id)::int
+      from (
+        select pasu.source_id
+        from provider_asset_source_uses pasu
+        where pasu.provider_asset_row_id = ${schema.providerAssets.id}
+        union
+        select pt.source_id
+        from provider_transfers pt
+        where pt.provider_asset_id = ${schema.providerAssets.id}
+      ) affected
+    )`.mapWith(Number),
   } as const
 
   const findProviderAssetReviewById: ProviderAssetRepositoryShape["findProviderAssetReviewById"] =
@@ -1045,15 +1210,54 @@ const make = Effect.gen(function* () {
   const listProviderAssetReviews: ProviderAssetRepositoryShape["listProviderAssetReviews"] = ({
     providerKey,
     mappingStatus,
+    evidenceState,
+    query,
     cursor,
     limit,
   }) =>
     Effect.gen(function* () {
+      const evidenceExpression = providerAssetReviewProjection.evidenceState
+      const cursorDiscoveredAtExpression =
+        sql<number>`floor(extract(epoch from ${schema.providerAssets.discoveredAt}) * 1000)`.mapWith(
+          Number
+        )
+      const cursorDiscoveredAt = cursor?.discoveredAt.getTime()
       const cursorPredicate =
-        cursor === null ? undefined : gt(schema.providerAssets.id, cursor.providerAssetRowId)
+        cursor === null
+          ? undefined
+          : or(
+              gt(cursorDiscoveredAtExpression, cursorDiscoveredAt ?? 0),
+              and(
+                eq(cursorDiscoveredAtExpression, cursorDiscoveredAt ?? 0),
+                gt(schema.providerAssets.id, cursor.providerAssetRowId)
+              )
+            )
+      const searchPattern = query === null || query.trim() === "" ? null : `%${query.trim()}%`
       const predicates = [
-        eq(schema.providerAssetMappings.mappingStatus, mappingStatus),
+        eq(schema.providerAssetMappings.mappingKind, "asset"),
+        ...(mappingStatus === null
+          ? []
+          : [eq(schema.providerAssetMappings.mappingStatus, mappingStatus)]),
         ...(providerKey === null ? [] : [eq(schema.providerAssets.provider, providerKey)]),
+        ...(evidenceState === null ? [] : [eq(evidenceExpression, evidenceState)]),
+        ...(searchPattern === null
+          ? []
+          : [
+              or(
+                ilike(schema.providerAssets.currencyCode, searchPattern),
+                ilike(schema.providerAssets.name, searchPattern),
+                ilike(schema.providerAssets.providerAssetId, searchPattern),
+                ilike(schema.providerAssets.naturalKey, searchPattern),
+                sql<boolean>`exists (
+                  select 1 from provider_transfers pt
+                  where pt.provider_asset_id = ${schema.providerAssets.id}
+                    and (
+                      pt.observed_contract_address ilike ${searchPattern}
+                      or pt.observed_mint_address ilike ${searchPattern}
+                    )
+                )`
+              ),
+            ]),
         ...(cursorPredicate === undefined ? [] : [cursorPredicate]),
       ]
 
@@ -1065,7 +1269,7 @@ const make = Effect.gen(function* () {
           eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
         )
         .where(and(...predicates))
-        .orderBy(asc(schema.providerAssets.id))
+        .orderBy(asc(cursorDiscoveredAtExpression), asc(schema.providerAssets.id))
         .limit(limit)
         .pipe(wrapSyncEngineSqlError("providerAssetRepository.listProviderAssetReviews"))
     })
@@ -1136,6 +1340,8 @@ const make = Effect.gen(function* () {
     approveProviderAssetMappingAndRequestReplay,
     rejectProviderAssetMapping,
     findProviderAssetReviewReplay,
+    listProviderAssetReviewReplays,
+    markProviderAssetReviewReplayDispatch,
     replaceProviderAssetReviewReplay,
     lockProviderAssetApprovalSnapshot,
     recordProviderAssetSourceUses,

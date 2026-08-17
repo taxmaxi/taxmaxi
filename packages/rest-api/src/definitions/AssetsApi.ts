@@ -4,11 +4,16 @@
  * @module AssetsApi
  */
 
+import {
+  ProviderAssetEvidenceStateSchema,
+  ProviderAssetMappingKindSchema,
+  ProviderAssetMappingStatusSchema,
+} from "@my/sync-engine/services"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
+import { ProviderAssetLatestDecisionSchema } from "../services/ProviderAssetReviewService.ts"
 import { AdminAuthMiddleware } from "./AuthMiddleware.ts"
 import { InternalServerError } from "./ApiErrors.ts"
-import { SourceSyncJobResponse, SourceSyncStartResponse } from "./SourcesApi.ts"
 
 export class AssetBadRequestError extends Schema.TaggedError<AssetBadRequestError>()(
   "AssetBadRequestError",
@@ -28,7 +33,10 @@ export class AssetNotFoundError extends Schema.TaggedError<AssetNotFoundError>()
 
 export class AssetConflictError extends Schema.TaggedError<AssetConflictError>()(
   "AssetConflictError",
-  { message: Schema.String },
+  {
+    message: Schema.String,
+    latestDecision: Schema.optional(Schema.NullOr(ProviderAssetLatestDecisionSchema)),
+  },
   { httpApiStatus: 409 }
 ) {}
 
@@ -39,6 +47,13 @@ const AssetCatalogSearchQuery = Schema.String.check(
   Schema.isMaxLength(ASSET_CATALOG_SEARCH_QUERY_MAX_LENGTH)
 )
 
+const ProviderAssetInvestigationLinkSchema = Schema.Struct({
+  _tag: Schema.Literals(["chain_explorer", "market_data", "market_registry", "provider_page"]),
+  label: Schema.String,
+  source: Schema.String,
+  url: Schema.String.check(Schema.isPattern(/^https?:\/\//)),
+})
+
 export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>(
   "ProviderAssetReviewRow"
 )({
@@ -46,22 +61,60 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   provider: Schema.String,
   providerAssetId: Schema.NullOr(Schema.String),
   naturalKey: Schema.NullOr(Schema.String),
-  currencyCode: Schema.String,
+  symbol: Schema.String,
   name: Schema.NullOr(Schema.String),
-  exponent: Schema.NullOr(Schema.Number),
-  providerType: Schema.NullOr(Schema.String),
-  rawProviderPayload: Schema.Unknown,
+  assetType: Schema.NullOr(Schema.String),
+  source: Schema.Struct({
+    _tag: Schema.Literals(["cex", "chain"]),
+    name: Schema.String,
+  }),
+  imageUrl: Schema.NullOr(Schema.String),
+  evidenceState: ProviderAssetEvidenceStateSchema,
+  affectedSourceCount: Schema.Number,
   discoveredAt: Schema.String,
-  retrievedAt: Schema.String,
-  mappingKind: Schema.NullOr(Schema.Literals(["asset", "fiat"])),
+  reviewRevision: Schema.String,
+  investigationLinks: Schema.Array(ProviderAssetInvestigationLinkSchema),
+}) {}
+
+const ProviderAssetReviewMappingSchema = Schema.Struct({
+  providerAssetRowId: Schema.String,
+  mappingKind: ProviderAssetMappingKindSchema,
   canonicalAssetId: Schema.NullOr(Schema.String),
   assetRepresentationId: Schema.NullOr(Schema.String),
   canonicalFiatCurrency: Schema.NullOr(Schema.String),
-  mappingStatus: Schema.NullOr(Schema.Literals(["approved", "pending_review", "rejected"])),
+  mappingStatus: ProviderAssetMappingStatusSchema,
   reviewerNotes: Schema.NullOr(Schema.String),
   sourceNotes: Schema.NullOr(Schema.String),
   reviewedBy: Schema.NullOr(Schema.String),
   reviewedAt: Schema.NullOr(Schema.String),
+  updatedAt: Schema.String,
+})
+
+const ProviderAssetObservedRepresentationSchema = Schema.Struct({
+  blockchainName: Schema.String,
+  representationType: Schema.NullOr(Schema.Literals(["native", "token", "nft"])),
+  contractAddress: Schema.NullOr(Schema.String),
+  mintAddress: Schema.NullOr(Schema.String),
+  decimals: Schema.NullOr(Schema.Number),
+})
+
+export class ProviderAssetReplayResponse extends Schema.Class<ProviderAssetReplayResponse>(
+  "ProviderAssetReplayResponse"
+)({
+  sourceId: Schema.String.check(Schema.isUUID()),
+  jobId: Schema.String.check(Schema.isUUID()),
+  status: Schema.Literals(["queued", "running", "completed", "failed", "failed_to_queue"]),
+  message: Schema.NullOr(Schema.String),
+}) {}
+
+export class ProviderAssetReviewDetailResponse extends Schema.Class<ProviderAssetReviewDetailResponse>(
+  "ProviderAssetReviewDetailResponse"
+)({
+  ...ProviderAssetReviewRow.fields,
+  rawEvidence: Schema.Unknown,
+  observedRepresentations: Schema.Array(ProviderAssetObservedRepresentationSchema),
+  mapping: Schema.NullOr(ProviderAssetReviewMappingSchema),
+  replays: Schema.Array(ProviderAssetReplayResponse),
 }) {}
 
 export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetReviewListResponse>(
@@ -72,6 +125,102 @@ export class ProviderAssetReviewListResponse extends Schema.Class<ProviderAssetR
     nextCursor: Schema.NullOr(Schema.String),
     hasMore: Schema.Boolean,
   }),
+}) {}
+
+const ProviderAssetResolutionEffectSchema = Schema.Union([
+  Schema.TaggedStruct("UseExistingAsset", {
+    canonicalAssetId: Schema.String.check(Schema.isUUID()),
+  }),
+  Schema.TaggedStruct("UseExistingRepresentation", {
+    canonicalAssetId: Schema.String.check(Schema.isUUID()),
+    assetRepresentationId: Schema.String.check(Schema.isUUID()),
+  }),
+  Schema.TaggedStruct("AddRepresentation", {
+    canonicalAssetId: Schema.String.check(Schema.isUUID()),
+    selectedCoinGeckoCoinId: Schema.String.check(Schema.isNonEmpty()),
+  }),
+  Schema.TaggedStruct("CreateEconomicAsset", {
+    selectedCoinGeckoCoinId: Schema.String.check(Schema.isNonEmpty()),
+  }),
+  Schema.TaggedStruct("CreateAssetWithRepresentation", {
+    selectedCoinGeckoCoinId: Schema.String.check(Schema.isNonEmpty()),
+  }),
+])
+
+const ProviderAssetProposalEconomicAssetSchema = Schema.Union([
+  Schema.TaggedStruct("existing", {
+    id: Schema.String.check(Schema.isUUID()),
+    name: Schema.String,
+    symbol: Schema.String,
+    coinGeckoCoinId: Schema.NullOr(Schema.String),
+  }),
+  Schema.TaggedStruct("proposed", {
+    coinGeckoCoinId: Schema.String,
+    name: Schema.String,
+    symbol: Schema.String,
+  }),
+])
+
+const ProviderAssetProposalRepresentationSchema = Schema.Union([
+  Schema.TaggedStruct("existing", {
+    id: Schema.String.check(Schema.isUUID()),
+    blockchainName: Schema.String,
+    representationType: Schema.Literals(["native", "token", "nft"]),
+    contractAddress: Schema.NullOr(Schema.String),
+    mintAddress: Schema.NullOr(Schema.String),
+    decimals: Schema.Number,
+  }),
+  Schema.TaggedStruct("proposed", {
+    blockchainName: Schema.String,
+    representationType: Schema.Literals(["native", "token", "nft"]),
+    contractAddress: Schema.NullOr(Schema.String),
+    mintAddress: Schema.NullOr(Schema.String),
+    decimals: Schema.NullOr(Schema.Number),
+  }),
+])
+
+export class ProviderAssetResolutionProposalResponse extends Schema.Class<ProviderAssetResolutionProposalResponse>(
+  "ProviderAssetResolutionProposalResponse"
+)({
+  id: Schema.String,
+  effect: ProviderAssetResolutionEffectSchema,
+  economicAsset: ProviderAssetProposalEconomicAssetSchema,
+  representation: Schema.NullOr(ProviderAssetProposalRepresentationSchema),
+  evidenceStrength: Schema.Literals(["exact", "name_and_symbol", "symbol_only"]),
+  matchReasons: Schema.Array(Schema.String),
+  conflicts: Schema.Array(Schema.String),
+  warnings: Schema.Array(Schema.String),
+  investigationLinks: Schema.Array(ProviderAssetInvestigationLinkSchema),
+}) {}
+
+export class ProviderAssetResolutionProposalListResponse extends Schema.Class<ProviderAssetResolutionProposalListResponse>(
+  "ProviderAssetResolutionProposalListResponse"
+)({
+  evidenceState: ProviderAssetEvidenceStateSchema,
+  recommendedProposalId: Schema.NullOr(Schema.String),
+  proposals: Schema.Array(ProviderAssetResolutionProposalResponse),
+}) {}
+
+export class ProviderAssetDecisionRequest extends Schema.Class<ProviderAssetDecisionRequest>(
+  "ProviderAssetDecisionRequest"
+)({
+  reviewRevision: Schema.String.check(Schema.isNonEmpty()),
+  decision: Schema.Union([
+    Schema.TaggedStruct("Resolve", {
+      proposalId: Schema.String.check(Schema.isNonEmpty()),
+      effect: ProviderAssetResolutionEffectSchema,
+    }),
+    Schema.TaggedStruct("Reject", {}),
+  ]),
+  reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
+}) {}
+
+export class ProviderAssetDecisionResponse extends Schema.Class<ProviderAssetDecisionResponse>(
+  "ProviderAssetDecisionResponse"
+)({
+  review: ProviderAssetReviewDetailResponse,
+  resolutionEffect: Schema.NullOr(ProviderAssetResolutionEffectSchema),
+  replays: Schema.Array(ProviderAssetReplayResponse),
 }) {}
 
 export class UnresolvedTransferReconciliationRow extends Schema.Class<UnresolvedTransferReconciliationRow>(
@@ -168,113 +317,11 @@ export class AssetCatalogListResponse extends Schema.Class<AssetCatalogListRespo
   }),
 }) {}
 
-export class AssetCanonicalizationRequest extends Schema.Class<AssetCanonicalizationRequest>(
-  "AssetCanonicalizationRequest"
-)({
-  coinId: Schema.String.check(Schema.isNonEmpty()),
-  reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
-}) {}
-
-export class ProviderAssetApprovalRequest extends Schema.Class<ProviderAssetApprovalRequest>(
-  "ProviderAssetApprovalRequest"
-)({
-  canonicalAssetId: Schema.String.check(Schema.isUUID()),
-  assetRepresentationId: Schema.NullOr(Schema.String.check(Schema.isUUID())),
-  reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)),
-}) {}
-
-export class CanonicalAssetResponse extends Schema.Class<CanonicalAssetResponse>(
-  "CanonicalAssetResponse"
-)({
-  id: Schema.String,
-  name: Schema.String,
-  symbol: Schema.String,
-  type: Schema.Literals(["fungible", "nft"]),
-}) {}
-
-export class CanonicalAssetRepresentationResponse extends Schema.Class<CanonicalAssetRepresentationResponse>(
-  "CanonicalAssetRepresentationResponse"
-)({
-  id: Schema.String,
-  blockchainId: Schema.String,
-  blockchainName: Schema.String,
-  type: Schema.Literals(["native", "token", "nft"]),
-  contractAddress: Schema.NullOr(Schema.String),
-  mintAddress: Schema.NullOr(Schema.String),
-  decimals: Schema.Number,
-}) {}
-
-export class AssetCanonicalizationEvidenceResponse extends Schema.Class<AssetCanonicalizationEvidenceResponse>(
-  "AssetCanonicalizationEvidenceResponse"
-)({
-  source: Schema.Literal("coingecko"),
-  economicAsset: Schema.Struct({
-    coinId: Schema.String,
-    name: Schema.String,
-    symbol: Schema.String,
-  }),
-  representation: Schema.Struct({
-    platformId: Schema.String,
-    platformName: Schema.String,
-    contractAddress: Schema.NullOr(Schema.String),
-  }),
-}) {}
-
-export class ProviderAssetReplayResponse extends Schema.Class<ProviderAssetReplayResponse>(
-  "ProviderAssetReplayResponse"
-)({
-  sourceId: Schema.String.check(Schema.isUUID()),
-  jobId: Schema.String.check(Schema.isUUID()),
-  status: Schema.Literal("queued"),
-}) {}
-
-export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicalizationResponse>(
-  "AssetCanonicalizationResponse"
-)({
-  providerAsset: ProviderAssetReviewRow,
-  canonicalAsset: CanonicalAssetResponse,
-  representation: CanonicalAssetRepresentationResponse,
-  evidence: AssetCanonicalizationEvidenceResponse,
-  replays: Schema.Array(ProviderAssetReplayResponse),
-}) {}
-
-export class ProviderAssetDecisionResponse extends Schema.Class<ProviderAssetDecisionResponse>(
-  "ProviderAssetDecisionResponse"
-)({
-  providerAsset: ProviderAssetReviewRow,
-  replays: Schema.Array(ProviderAssetReplayResponse),
-}) {}
-
-export class ProviderAssetCandidateResponse extends Schema.Class<ProviderAssetCandidateResponse>(
-  "ProviderAssetCandidateResponse"
-)({
-  economicAsset: Schema.Struct({
-    coinId: Schema.String,
-    name: Schema.String,
-    symbol: Schema.String,
-  }),
-  representationEvidence: Schema.Array(
-    Schema.Struct({
-      platformId: Schema.String,
-      platformName: Schema.NullOr(Schema.String),
-      contractAddress: Schema.NullOr(Schema.String),
-      kind: Schema.Literals(["native", "token"]),
-    })
-  ),
-  matchStrength: Schema.Literals(["exact_name_and_symbol", "symbol_only"]),
-}) {}
-
-export class ProviderAssetCandidateListResponse extends Schema.Class<ProviderAssetCandidateListResponse>(
-  "ProviderAssetCandidateListResponse"
-)({ candidates: Schema.Array(ProviderAssetCandidateResponse) }) {}
-
-export class RejectProviderAssetRequest extends Schema.Class<RejectProviderAssetRequest>(
-  "RejectProviderAssetRequest"
-)({ reason: Schema.String.check(Schema.isNonEmpty()) }) {}
-
 const ProviderAssetReviewQuery = Schema.Struct({
+  q: Schema.optional(AssetCatalogSearchQuery),
   provider: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.Literals(["pending_review", "approved", "rejected"])),
+  status: Schema.optional(ProviderAssetMappingStatusSchema),
+  evidence: Schema.optional(ProviderAssetEvidenceStateSchema),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.check(
@@ -364,13 +411,70 @@ const listProviderAssetReviews = HttpApiEndpoint.get(
   {
     query: ProviderAssetReviewQuery,
     success: ProviderAssetReviewListResponse,
-    error: [AssetBadRequestError, InternalServerError],
+    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
   }
 )
   .annotateMerge(
     OpenApi.annotations({
       summary: "List provider asset review rows",
       description: "Lists provider assets by mapping review status.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const ProviderAssetReviewPath = Schema.Struct({
+  id: Schema.String.check(Schema.isUUID()),
+})
+
+const getProviderAssetReview = HttpApiEndpoint.get(
+  "getProviderAssetReview",
+  "/assets/provider-assets/:id",
+  {
+    params: ProviderAssetReviewPath,
+    success: ProviderAssetReviewDetailResponse,
+    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
+  }
+)
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Get provider asset review",
+      description: "Returns the complete evidence, current decision, and replay state.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const searchProviderAssetResolutionProposals = HttpApiEndpoint.get(
+  "searchProviderAssetResolutionProposals",
+  "/assets/provider-assets/:id/proposals",
+  {
+    params: ProviderAssetReviewPath,
+    query: Schema.Struct({ q: Schema.optional(AssetCatalogSearchQuery) }),
+    success: ProviderAssetResolutionProposalListResponse,
+    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
+  }
+)
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Search provider asset resolution proposals",
+      description: "Returns evidence-backed canonical asset choices and an exact recommendation.",
+    })
+  )
+  .middleware(AdminAuthMiddleware)
+
+const decideProviderAssetReview = HttpApiEndpoint.post(
+  "decideProviderAssetReview",
+  "/assets/provider-assets/:id/decision",
+  {
+    params: ProviderAssetReviewPath,
+    payload: Schema.Struct(ProviderAssetDecisionRequest.fields),
+    success: ProviderAssetDecisionResponse,
+    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
+  }
+)
+  .annotateMerge(
+    OpenApi.annotations({
+      summary: "Decide provider asset review",
+      description: "Applies one revision-checked resolution or rejection and schedules replays.",
     })
   )
   .middleware(AdminAuthMiddleware)
@@ -393,80 +497,6 @@ const listUnresolvedTransferReconciliations = HttpApiEndpoint.get(
   )
   .middleware(AdminAuthMiddleware)
 
-const canonicalizeProviderAsset = HttpApiEndpoint.post(
-  "canonicalizeProviderAsset",
-  "/assets/provider-assets/:id/canonicalize",
-  {
-    params: Schema.Struct({
-      id: Schema.String.check(Schema.isUUID()),
-    }),
-    payload: Schema.Struct(AssetCanonicalizationRequest.fields),
-    success: AssetCanonicalizationResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
-  }
-)
-  .annotateMerge(
-    OpenApi.annotations({
-      summary: "Canonicalize provider asset",
-      description:
-        "Creates or refreshes a canonical asset and approves the provider asset mapping.",
-    })
-  )
-  .middleware(AdminAuthMiddleware)
-
-const approveProviderAsset = HttpApiEndpoint.post(
-  "approveProviderAsset",
-  "/assets/provider-assets/:id/approve",
-  {
-    params: Schema.Struct({
-      id: Schema.String.check(Schema.isUUID()),
-    }),
-    payload: Schema.Struct(ProviderAssetApprovalRequest.fields),
-    success: ProviderAssetDecisionResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
-  }
-)
-  .annotateMerge(
-    OpenApi.annotations({
-      summary: "Approve provider asset mapping",
-      description:
-        "Approves an exact provider-asset target and requests replay for affected sources.",
-    })
-  )
-  .middleware(AdminAuthMiddleware)
-
-const listProviderAssetCandidates = HttpApiEndpoint.get(
-  "listProviderAssetCandidates",
-  "/assets/provider-assets/:id/candidates",
-  {
-    params: Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
-    success: ProviderAssetCandidateListResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
-  }
-).middleware(AdminAuthMiddleware)
-
-const approveProviderAssetAsFiat = HttpApiEndpoint.post(
-  "approveProviderAssetAsFiat",
-  "/assets/provider-assets/:id/approve-fiat",
-  {
-    params: Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
-    payload: Schema.Struct({ reviewerNotes: Schema.optional(Schema.NullOr(Schema.String)) }),
-    success: ProviderAssetDecisionResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
-  }
-).middleware(AdminAuthMiddleware)
-
-const rejectProviderAsset = HttpApiEndpoint.post(
-  "rejectProviderAsset",
-  "/assets/provider-assets/:id/reject",
-  {
-    params: Schema.Struct({ id: Schema.String.check(Schema.isUUID()) }),
-    payload: Schema.Struct(RejectProviderAssetRequest.fields),
-    success: ProviderAssetDecisionResponse,
-    error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
-  }
-).middleware(AdminAuthMiddleware)
-
 const ProviderAssetReplayPath = Schema.Struct({
   id: Schema.String.check(Schema.isUUID()),
   sourceId: Schema.String.check(Schema.isUUID()),
@@ -478,7 +508,7 @@ const getProviderAssetReplay = HttpApiEndpoint.get(
   "/assets/provider-assets/:id/replays/:sourceId/jobs/:jobId",
   {
     params: ProviderAssetReplayPath,
-    success: SourceSyncJobResponse,
+    success: ProviderAssetReplayResponse,
     error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
   }
 ).middleware(AdminAuthMiddleware)
@@ -488,7 +518,7 @@ const retryProviderAssetReplay = HttpApiEndpoint.post(
   "/assets/provider-assets/:id/replays/:sourceId/jobs/:jobId/retry",
   {
     params: ProviderAssetReplayPath,
-    success: SourceSyncStartResponse,
+    success: ProviderAssetReplayResponse,
     error: [AssetBadRequestError, AssetNotFoundError, AssetConflictError, InternalServerError],
   }
 ).middleware(AdminAuthMiddleware)
@@ -498,14 +528,12 @@ export class AssetsApi extends HttpApiGroup.make("assets")
   .add(getAsset)
   .add(listPendingAssets)
   .add(listProviderAssetReviews)
-  .add(listProviderAssetCandidates)
+  .add(getProviderAssetReview)
+  .add(searchProviderAssetResolutionProposals)
+  .add(decideProviderAssetReview)
   .add(listUnresolvedTransferReconciliations)
-  .add(approveProviderAsset)
-  .add(approveProviderAssetAsFiat)
-  .add(rejectProviderAsset)
   .add(getProviderAssetReplay)
   .add(retryProviderAssetReplay)
-  .add(canonicalizeProviderAsset)
   .prefix("/v1")
   .annotateMerge(
     OpenApi.annotations({

@@ -25,6 +25,8 @@ import {
   AssetCatalogListResponse,
   PendingAssetListResponse,
   ProviderAssetDecisionResponse,
+  ProviderAssetResolutionProposalListResponse,
+  ProviderAssetReviewDetailResponse,
   ProviderAssetReviewListResponse,
   UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
@@ -57,14 +59,42 @@ const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
 )
 const ADMIN_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000099_admin"
 
-const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
-  startSourceSyncJob: () =>
-    Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
-  replaySourceSyncJob: () =>
-    Effect.die("SourceSyncService test stub: replaySourceSyncJob not implemented"),
-  getSourceSyncJob: () =>
-    Effect.die("SourceSyncService test stub: getSourceSyncJob not implemented"),
-} satisfies SourceSyncServiceShape)
+const SourceSyncServiceTestLive = Layer.effect(
+  SourceSyncService,
+  Effect.map(drizzle, (db) =>
+    SourceSyncService.of({
+      startSourceSyncJob: () =>
+        Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
+      replaySourceSyncJob: ({ sourceId }) =>
+        Effect.gen(function* () {
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id, status: schema.processingJobs.status })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, sourceId))
+            .pipe(Effect.orDie)
+          const job = jobs.find(({ status }) => status === "pending" || status === "processing")
+          if (job === undefined) {
+            return yield* Effect.die("Expected a durable replay job before queue dispatch.")
+          }
+          return { sourceId, jobId: job.id, status: "queued", message: null }
+        }),
+      getSourceSyncJob: ({ sourceId, jobId }) =>
+        Effect.succeed({
+          sourceId,
+          jobId,
+          status: "queued",
+          message: null,
+          phase: null,
+          processedRecords: null,
+          totalRecords: null,
+          progressPercent: null,
+          importedRecords: null,
+          normalizedRecords: null,
+          failedRecords: null,
+        }),
+    } satisfies SourceSyncServiceShape)
+  )
+)
 
 const SourceSyncRunServiceTestLive = Layer.succeed(SourceSyncRunService, {
   startSyncRun: () => Effect.die("SourceSyncRunService test stub: startSyncRun not implemented"),
@@ -213,7 +243,8 @@ const encodeTestCursor = (payload: Record<string, unknown>): string =>
 const decodeTestProviderAssetCursor = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
-      version: Schema.Literal(2),
+      version: Schema.Literal(1),
+      discoveredAt: Schema.DateFromString,
       providerAssetRowId: Schema.String.check(Schema.isUUID()),
     })
   )
@@ -979,9 +1010,10 @@ describe("AssetsApiLive", () => {
     }
     expect(
       decodeTestProviderAssetCursor(Buffer.from(cursor, "base64url").toString("utf8"))
-    ).toEqual({
-      version: 2,
+    ).toMatchObject({
+      version: 1,
       providerAssetRowId: firstProviderAsset.id,
+      discoveredAt: expect.any(Date),
     })
 
     const secondPage = await Effect.runPromise(
@@ -1075,7 +1107,7 @@ describe("AssetsApiLive", () => {
     ])
   })
 
-  it("approves an exact provider asset target through the admin route", async () => {
+  it("applies one revision-checked provider asset decision through the admin route", async () => {
     const routeUserId = "00000000-0000-4000-8000-000000000099"
     const routePrincipalId = "00000000-0000-4000-8000-000000000142"
     const routeSourceId = "00000000-0000-4000-8000-000000000143"
@@ -1162,46 +1194,77 @@ describe("AssetsApiLive", () => {
       }).pipe(Effect.provide(TestPgClientLive))
     )
 
+    const review = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}`,
+        responseSchema: ProviderAssetReviewDetailResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const proposalSearch = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/proposals`,
+        responseSchema: ProviderAssetResolutionProposalListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const proposal = proposalSearch.body.proposals.find(
+      ({ effect }) =>
+        effect._tag === "UseExistingRepresentation" &&
+        effect.canonicalAssetId === seeded.canonicalAssetId &&
+        effect.assetRepresentationId === seeded.assetRepresentationId
+    )
+    if (proposal === undefined) {
+      throw new Error("Expected an exact existing representation proposal.")
+    }
+    const decisionPayload = {
+      reviewRevision: review.body.reviewRevision,
+      decision: {
+        _tag: "Resolve" as const,
+        proposalId: proposal.id,
+        effect: proposal.effect,
+      },
+      reviewerNotes: "Exact identity checked.",
+    }
     const response = await Effect.runPromise(
       postAdminJson({
-        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
-        payload: {
-          canonicalAssetId: seeded.canonicalAssetId,
-          assetRepresentationId: seeded.assetRepresentationId,
-          reviewerNotes: "Exact identity checked.",
-        },
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/decision`,
+        payload: decisionPayload,
         responseSchema: ProviderAssetDecisionResponse,
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({
-      providerAsset: {
+      review: {
         id: seeded.providerAssetId,
-        mappingStatus: "approved",
-        canonicalAssetId: seeded.canonicalAssetId,
-        assetRepresentationId: seeded.assetRepresentationId,
-        reviewerNotes: "Exact identity checked.",
-        reviewedBy: routeUserId,
+        mapping: {
+          mappingStatus: "approved",
+          canonicalAssetId: seeded.canonicalAssetId,
+          assetRepresentationId: seeded.assetRepresentationId,
+          reviewerNotes: "Exact identity checked.",
+          reviewedBy: routeUserId,
+        },
       },
     })
 
     const repeatedStatus = await Effect.runPromise(
       postAdminStatus({
-        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
-        payload: {
-          canonicalAssetId: seeded.canonicalAssetId,
-          assetRepresentationId: seeded.assetRepresentationId,
-          reviewerNotes: "Exact identity checked again.",
-        },
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/decision`,
+        payload: { ...decisionPayload, reviewerNotes: "Exact identity checked again." },
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
     const conflictingStatus = await Effect.runPromise(
       postAdminStatus({
-        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
+        path: `/v1/assets/provider-assets/${seeded.providerAssetId}/decision`,
         payload: {
-          canonicalAssetId: "00000000-0000-4000-8000-000000000199",
-          assetRepresentationId: null,
+          ...decisionPayload,
+          decision: {
+            _tag: "Resolve",
+            proposalId: "stale-conflicting-target",
+            effect: {
+              _tag: "UseExistingAsset",
+              canonicalAssetId: "00000000-0000-4000-8000-000000000199",
+            },
+          },
           reviewerNotes: "Conflicting target.",
         },
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
@@ -1244,14 +1307,15 @@ describe("AssetsApiLive", () => {
     }
   )
 
-  it("keeps provider asset approval protected", async () => {
+  it("keeps provider asset decisions protected", async () => {
     const status = await Effect.runPromise(
       HttpClientRequest.post(
-        "/v1/assets/provider-assets/00000000-0000-4000-8000-000000000199/approve"
+        "/v1/assets/provider-assets/00000000-0000-4000-8000-000000000199/decision"
       ).pipe(
         HttpClientRequest.bodyJsonUnsafe({
-          canonicalAssetId: "00000000-0000-4000-8000-000000000198",
-          assetRepresentationId: null,
+          reviewRevision: "2026-08-17T08:00:00.000Z",
+          decision: { _tag: "Reject" },
+          reviewerNotes: "Unsupported.",
         }),
         HttpClient.execute,
         Effect.map((response) => response.status),
