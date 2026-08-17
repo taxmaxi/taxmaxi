@@ -179,9 +179,9 @@ Select only needed columns. Do not use `SELECT *`.
 3. Keep functions small and composable.
 4. Use `Effect.logInfo` and `Effect.logError` for logging. Always pass structured data as the first argument and a static message string as the second, for example `Effect.logInfo({ sourceId, jobId, count }, "Batch processed")`.
 5. In Effect flows, use `Effect.fail` / `Effect.try` error mapping. Avoid throwing raw `Error` manually.
-6. For external or unknown payloads such as OAuth metadata, HTTP bodies, JSONB, provider payloads, and query params, decode with `effect/Schema` instead of manual `typeof` parsing or `as` casts.
+6. For external or unknown payloads such as OAuth metadata, HTTP bodies, JSONB, provider payloads, and query params, use the schema library established by that package instead of manual `typeof` parsing or `as` casts. Effect-based packages use `effect/Schema`; `apps/www` uses Zod.
 7. Only commit when explicitly requested by the user.
-8. Environment variables must be loaded using Effect Config instead of `process.env` directly.
+8. In Effect-based packages, load environment variables with Effect Config instead of `process.env` directly. `apps/www` uses its generated Cloudflare environment types and must not add Effect only for configuration loading.
 9. Keep `.env` files local. They are intentionally present for this working copy but must not be committed.
 
 ## Agent skills
