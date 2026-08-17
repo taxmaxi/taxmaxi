@@ -137,6 +137,7 @@ export interface ProviderAssetReviewRecord {
   readonly providerAsset: ProviderAssetRecord
   readonly mapping: ProviderAssetReviewMapping | null
   readonly evidenceState: ProviderAssetEvidenceState
+  readonly evidenceRevision: string
   readonly affectedSourceCount: number
 }
 
@@ -176,6 +177,8 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly upsertProviderAssetMappings: (params: {
     readonly mappings: ReadonlyArray<ProviderAssetMappingDraft>
+    /** Only replace untouched pending rows; never insert or overwrite reviewed rows. */
+    readonly replaceUntouchedPendingOnly?: boolean
   }) => Effect.Effect<number, SyncEngineStorageError>
 
   /**
@@ -197,6 +200,7 @@ export interface ProviderAssetRepositoryShape {
     readonly reviewerNotes: string
     readonly reviewedBy: string | null
     readonly reviewedAt: Date
+    readonly expectedEvidenceRevision: string
     readonly expectedProviderAssetRetrievedAt: Date
     readonly expectedMappingUpdatedAt?: Date
   }) => Effect.Effect<boolean, SyncEngineStorageError>

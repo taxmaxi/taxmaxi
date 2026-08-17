@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { AssetConflictError } from "@my/rest-api/contracts"
 import * as Effect from "effect/Effect"
 import {
   DEFAULT_BASE_URL,
@@ -947,6 +948,7 @@ describe("TaxMaxi Promise client", () => {
       taxmaxi.assets.decideProviderAssetReview({
         id: providerAssetId,
         reviewRevision: "2026-08-17T08:00:00.000Z",
+        proposalQuery: "cardano",
         decision: {
           _tag: "Resolve",
           proposalId: "existing-cardano",
@@ -978,6 +980,7 @@ describe("TaxMaxi Promise client", () => {
       expect.objectContaining({
         body: JSON.stringify({
           reviewRevision: "2026-08-17T08:00:00.000Z",
+          proposalQuery: "cardano",
           decision: {
             _tag: "Resolve",
             proposalId: "existing-cardano",
@@ -1063,6 +1066,29 @@ describe("TaxMaxi Promise client", () => {
     expect(error.message).toBe("Anon session required.")
     expect(error.status).toBe(401)
     expect(isTaxMaxiUnauthorizedError(error)).toBe(true)
+  })
+
+  it("preserves the latest provider-asset decision in Promise SDK conflicts", () => {
+    const latestDecision: AssetConflictError["latestDecision"] = {
+      providerAssetRowId: "00000000-0000-4000-8000-000000000001",
+      mappingKind: "asset",
+      canonicalAssetId: "00000000-0000-4000-8000-000000000002",
+      assetRepresentationId: null,
+      canonicalFiatCurrency: null,
+      mappingStatus: "approved",
+      reviewerNotes: "Reviewed by another administrator.",
+      sourceNotes: null,
+      reviewedBy: "reviewer@example.test",
+      reviewedAt: "2026-08-17T09:30:00.000Z",
+      updatedAt: "2026-08-17T09:30:00.000Z",
+    }
+    const error = toTaxMaxiError(
+      new AssetConflictError({ message: "Review changed.", latestDecision })
+    )
+
+    expect(error).toBeInstanceOf(TaxMaxiError)
+    expect(error.code).toBe("AssetConflictError")
+    expect(error.latestDecision).toEqual(latestDecision)
   })
 
   it("recognizes wrapped UnauthorizedError codes even if status was mis-normalized", () => {

@@ -70,6 +70,16 @@ const make = Effect.gen(function* () {
               kind: "internal",
               message: "Failed to record replay dispatch state.",
             })
+        ),
+        Effect.flatMap((updated) =>
+          updated
+            ? Effect.void
+            : Effect.fail(
+                new ProviderAssetReplayError({
+                  kind: "conflict",
+                  message: "Replay was scheduled by another request.",
+                })
+              )
         )
       )
 
@@ -81,65 +91,68 @@ const make = Effect.gen(function* () {
     readonly replay: ProviderAssetReviewReplay
   }): Effect.Effect<ProviderAssetReplayStatus, ProviderAssetReplayError> =>
     sourceSync
-      .replaySourceSyncJob({ principalId: replay.principalId, sourceId: replay.sourceId })
+      .replaySourceSyncJob({
+        principalId: replay.principalId,
+        sourceId: replay.sourceId,
+      })
       .pipe(
-        Effect.flatMap((job) =>
-          Effect.gen(function* () {
-            if (job.jobId !== replay.jobId) {
-              const replaced = yield* providerAssets
-                .replaceProviderAssetReviewReplay({
-                  providerAssetRowId,
-                  sourceId: replay.sourceId,
-                  previousJobId: replay.jobId,
-                  nextJobId: job.jobId,
-                })
-                .pipe(
-                  Effect.mapError(
-                    () =>
-                      new ProviderAssetReplayError({
-                        kind: "internal",
-                        message: "Failed to record replay job.",
-                      })
+        Effect.matchEffect({
+          onFailure: () =>
+            markDispatch({
+              providerAssetRowId,
+              replay,
+              dispatchState: "failed_to_queue",
+              errorMessage: "Failed to queue replay.",
+            }).pipe(
+              Effect.as({
+                sourceId: replay.sourceId,
+                jobId: replay.jobId,
+                status: "failed_to_queue" as const,
+                message: "Failed to queue replay.",
+              })
+            ),
+          onSuccess: (job) =>
+            Effect.gen(function* () {
+              if (job.jobId !== replay.jobId) {
+                const replaced = yield* providerAssets
+                  .replaceProviderAssetReviewReplay({
+                    providerAssetRowId,
+                    sourceId: replay.sourceId,
+                    previousJobId: replay.jobId,
+                    nextJobId: job.jobId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new ProviderAssetReplayError({
+                          kind: "internal",
+                          message: "Failed to record replay job.",
+                        })
+                    )
                   )
-                )
-              if (!replaced) {
-                return yield* new ProviderAssetReplayError({
-                  kind: "conflict",
-                  message: "Replay was scheduled by another request.",
+                if (!replaced) {
+                  return yield* new ProviderAssetReplayError({
+                    kind: "conflict",
+                    message: "Replay was scheduled by another request.",
+                  })
+                }
+              } else {
+                yield* markDispatch({
+                  providerAssetRowId,
+                  replay,
+                  dispatchState: "queued",
+                  errorMessage: null,
                 })
               }
-            } else {
-              yield* markDispatch({
-                providerAssetRowId,
-                replay,
-                dispatchState: "queued",
-                errorMessage: null,
-              })
-            }
 
-            return {
-              sourceId: replay.sourceId,
-              jobId: job.jobId,
-              status: job.status,
-              message: job.message,
-            }
-          })
-        ),
-        Effect.catchTag("SourceSyncQueueError", () =>
-          markDispatch({
-            providerAssetRowId,
-            replay,
-            dispatchState: "failed_to_queue",
-            errorMessage: "Failed to queue replay.",
-          }).pipe(
-            Effect.as({
-              sourceId: replay.sourceId,
-              jobId: replay.jobId,
-              status: "failed_to_queue" as const,
-              message: "Failed to queue replay.",
-            })
-          )
-        ),
+              return {
+                sourceId: replay.sourceId,
+                jobId: job.jobId,
+                status: job.status,
+                message: job.message,
+              }
+            }),
+        }),
         Effect.mapError((error) =>
           error instanceof ProviderAssetReplayError
             ? error

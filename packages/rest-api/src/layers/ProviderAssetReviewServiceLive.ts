@@ -71,8 +71,9 @@ const investigationLinksFor = ({
 const reviewRevisionFor = (review: {
   readonly providerAsset: { readonly retrievedAt: Date }
   readonly mapping: { readonly updatedAt: Date } | null
+  readonly evidenceRevision: string
 }): string =>
-  `${review.providerAsset.retrievedAt.toISOString()}:${review.mapping?.updatedAt.toISOString() ?? "unmapped"}`
+  `${review.providerAsset.retrievedAt.toISOString()}:${review.mapping?.updatedAt.toISOString() ?? "unmapped"}:${review.evidenceRevision}`
 
 const latestDecisionFor = (
   mapping: ProviderAssetReviewRecord["mapping"]
@@ -246,6 +247,7 @@ const make = Effect.gen(function* () {
   const decide: ProviderAssetReviewServiceShape["decide"] = ({
     providerAssetRowId,
     decision,
+    proposalQuery = null,
     reviewRevision,
     reviewerNotes,
     reviewedBy,
@@ -277,6 +279,7 @@ const make = Effect.gen(function* () {
             reviewedAt: new Date(),
             expectedProviderAssetRetrievedAt: review.providerAsset.retrievedAt,
             expectedMappingUpdatedAt: review.mapping.updatedAt,
+            expectedEvidenceRevision: review.evidenceRevision,
           })
           .pipe(Effect.catch(() => recoverRejectionError({ providerAssetRowId, reviewRevision })))
         if (!updated) {
@@ -293,7 +296,7 @@ const make = Effect.gen(function* () {
       }
 
       const available = yield* candidates
-        .searchProposals({ providerAssetRowId, query: null })
+        .searchProposals({ providerAssetRowId, query: proposalQuery })
         .pipe(
           Effect.mapError(
             (error) => new ProviderAssetReviewInternalError({ message: error.message })
@@ -370,6 +373,9 @@ const make = Effect.gen(function* () {
             .canonicalizeProviderAssetFromCoinGecko({
               providerAssetRowId,
               coinId: decision.effect.selectedCoinGeckoCoinId,
+              ...(decision.effect._tag === "AddRepresentation"
+                ? { expectedCanonicalAssetId: decision.effect.canonicalAssetId }
+                : {}),
               reviewerNotes,
               reviewedBy,
               requirePendingReview: true,
@@ -380,15 +386,6 @@ const make = Effect.gen(function* () {
                 recoverDecisionError({ providerAssetRowId, reviewRevision, error })
               )
             )
-          if (
-            decision.effect._tag === "AddRepresentation" &&
-            result.canonicalAsset.id !== decision.effect.canonicalAssetId
-          ) {
-            return yield* new ProviderAssetReviewConflictError({
-              message: "CoinGecko now resolves to a different economic asset.",
-              latestDecision: latestDecisionFor(review.mapping),
-            })
-          }
           const replayStatuses = yield* scheduleDecisionReplays({
             providerAssetRowId,
             pendingReplays: result.replays,

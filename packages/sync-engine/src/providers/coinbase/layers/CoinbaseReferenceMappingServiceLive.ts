@@ -552,6 +552,14 @@ const make = Effect.gen(function* () {
           persistedMapping = yield* loadProviderAssetMapping({
             providerAssetRowId: providerAssetRecord.id,
           })
+        } else if (persistedMapping.mappingStatus === "pending_review") {
+          yield* providerAssetRepository.upsertProviderAssetMappings({
+            mappings: [automaticFiatMapping],
+            replaceUntouchedPendingOnly: true,
+          })
+          persistedMapping = yield* loadProviderAssetMapping({
+            providerAssetRowId: providerAssetRecord.id,
+          })
         }
         if (
           persistedMapping === null ||

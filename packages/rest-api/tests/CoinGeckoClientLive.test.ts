@@ -1,7 +1,7 @@
 import { FetchHttpClient } from "effect/unstable/http"
 import { ConfigProvider, Effect } from "effect"
 import * as Layer from "effect/Layer"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { CoinGeckoClientLive } from "../src/layers/CoinGeckoClientLive.ts"
 import { CoinGeckoClient } from "../src/services/coingecko/CoinGeckoClient.ts"
 
@@ -195,6 +195,45 @@ describe("CoinGeckoClientLive", () => {
       expect(result.failure._tag).toBe("CoinGeckoClientError")
       expect(result.failure.message).toContain("429")
       expect(result.failure.message).toContain("rate limited")
+    }
+  })
+
+  it.each([
+    ["JSON", 200],
+    ["error", 429],
+  ] as const)("times out while reading a stalled %s response body", async (_kind, status) => {
+    vi.useFakeTimers()
+    let markFetchStarted: (() => void) | undefined
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve
+    })
+
+    try {
+      const resultPromise = runClient(
+        Effect.gen(function* () {
+          const client = yield* CoinGeckoClient
+          return yield* Effect.result(client.searchCoins({ query: "BTC" }))
+        }),
+        async () => {
+          markFetchStarted?.()
+          return new Response(new ReadableStream<Uint8Array>({ start: () => undefined }), {
+            headers: { "Content-Type": "application/json" },
+            status,
+          })
+        }
+      )
+
+      await fetchStarted
+      await vi.advanceTimersByTimeAsync(15_001)
+      const result = await resultPromise
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("CoinGeckoClientError")
+        expect(result.failure.message).toBe("CoinGecko request timed out for /search?query=BTC.")
+      }
+    } finally {
+      vi.useRealTimers()
     }
   })
 

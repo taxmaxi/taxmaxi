@@ -90,27 +90,32 @@ const make = Effect.gen(function* () {
         onSome: (apiKey) =>
           baseRequest.pipe(HttpClientRequest.setHeader("x-cg-pro-api-key", apiKey)),
       })
-      const response = yield* httpClient.execute(request).pipe(
-        Effect.mapError((error) =>
-          makeError(`CoinGecko request failed for ${endpoint}: ${error.message}`)
-        ),
+      return yield* Effect.gen(function* () {
+        const response = yield* httpClient
+          .execute(request)
+          .pipe(
+            Effect.mapError((error) =>
+              makeError(`CoinGecko request failed for ${endpoint}: ${error.message}`)
+            )
+          )
+
+        if (response.status < 200 || response.status >= 300) {
+          const bodyText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
+          return yield* makeError(
+            `CoinGecko request failed (${response.status}) ${endpoint}: ${bodyText}`
+          )
+        }
+
+        return yield* response.json.pipe(
+          Effect.mapError((error) =>
+            makeError(`Failed to parse CoinGecko JSON for ${endpoint}: ${String(error)}`)
+          )
+        )
+      }).pipe(
         Effect.timeoutOrElse({
           duration: COINGECKO_REQUEST_TIMEOUT,
           orElse: () => Effect.fail(makeError(`CoinGecko request timed out for ${endpoint}.`)),
         })
-      )
-
-      if (response.status < 200 || response.status >= 300) {
-        const bodyText = yield* response.text.pipe(Effect.orElseSucceed(() => ""))
-        return yield* makeError(
-          `CoinGecko request failed (${response.status}) ${endpoint}: ${bodyText}`
-        )
-      }
-
-      return yield* response.json.pipe(
-        Effect.mapError((error) =>
-          makeError(`Failed to parse CoinGecko JSON for ${endpoint}: ${String(error)}`)
-        )
       )
     })
 

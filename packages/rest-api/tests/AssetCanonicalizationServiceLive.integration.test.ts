@@ -776,6 +776,44 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(Option.isSome(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
   })
 
+  it("rejects a changed AddRepresentation target before canonical writes", async () => {
+    const providerAssetRowId = await seedObservedPendingProviderAsset({
+      providerAssetId: "changed-add-representation-target",
+    })
+    const before = await countCanonicalRows()
+    const result = await runService(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.canonicalizeProviderAssetFromCoinGecko({
+          providerAssetRowId,
+          coinId: "ethereum",
+          expectedCanonicalAssetId: TEST_BTC_ASSET_ID,
+          reviewerNotes: "Add the reviewed representation.",
+        })
+      ).pipe(Effect.result)
+    )
+    const after = await countCanonicalRows()
+    const mapping = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [row] = yield* db
+          .select({ status: schema.providerAssetMappings.mappingStatus })
+          .from(schema.providerAssetMappings)
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+        return row
+      })
+    )
+
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
+        _tag: "AssetCanonicalizationConflictError",
+        message: "CoinGecko now resolves to a different economic asset.",
+      })
+    }
+    expect(after).toEqual(before)
+    expect(mapping?.status).toBe("pending_review")
+  })
+
   it("does not enter the database transaction when CoinGecko resolution fails", async () => {
     const providerAssetRowId = await seedObservedPendingProviderAsset({
       providerAssetId: "coingecko-failure-before-transaction",

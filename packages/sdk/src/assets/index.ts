@@ -321,11 +321,11 @@ export const makeInternalAssetsEffectResource = (
         query: { q: query ?? undefined },
       })
     ),
-  decideProviderAssetReview: ({ id, decision, reviewRevision, reviewerNotes }) =>
+  decideProviderAssetReview: ({ id, decision, proposalQuery, reviewRevision, reviewerNotes }) =>
     Effect.flatMap(client, (resolved) =>
       resolved.assets.decideProviderAssetReview({
         params: { id },
-        payload: { decision, reviewRevision, reviewerNotes },
+        payload: { decision, proposalQuery, reviewRevision, reviewerNotes },
       })
     ),
   getProviderAssetReplay: ({ id, sourceId, jobId }) =>

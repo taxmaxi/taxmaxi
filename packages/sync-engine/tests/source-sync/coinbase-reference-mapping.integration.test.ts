@@ -705,6 +705,158 @@ describe("coinbase reference mappings", () => {
     })
   })
 
+  it("upgrades an untouched pending mapping when fiat catalog evidence arrives", async () => {
+    await expect(
+      runReferenceMapping(
+        Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+          service.resolveCurrency({ currencyCode: "EUR" })
+        )
+      )
+    ).rejects.toMatchObject({ _tag: "CoinbaseProviderAssetMappingNotFoundError" })
+
+    const pendingMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "EUR"
+    )
+    if (pendingMapping === undefined) {
+      expect.fail("Expected pending EUR provider asset mapping")
+    }
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssets)
+          .set({
+            name: "Euro",
+            exponent: 2,
+            providerType: "fiat",
+            rawProviderPayload: { source: "coinbase_fiat_currency_catalog" },
+            retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
+          })
+          .where(eq(schema.providerAssets.id, pendingMapping.providerAssetRowId))
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const resolved = await runReferenceMapping(
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+        service.resolveCurrency({ currencyCode: "EUR" })
+      )
+    )
+    const persisted = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "EUR"
+    )
+
+    expect(resolved).toMatchObject({
+      mappingKind: "fiat",
+      canonicalFiatCurrency: "EUR",
+      mappingStatus: "approved",
+    })
+    expect(persisted).toMatchObject({
+      mappingKind: "fiat",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+      canonicalFiatCurrency: "EUR",
+      mappingStatus: "approved",
+      reviewerNotes: null,
+      sourceNotes: "Automatically resolved from the Coinbase fiat currency catalog.",
+    })
+  })
+
+  it.each([
+    {
+      name: "approved admin mapping",
+      mappingKind: "asset" as const,
+      canonicalAssetId: BTC_ASSET_ID,
+      canonicalFiatCurrency: null,
+      mappingStatus: "approved" as const,
+    },
+    {
+      name: "rejected admin mapping",
+      mappingKind: "asset" as const,
+      canonicalAssetId: null,
+      canonicalFiatCurrency: null,
+      mappingStatus: "rejected" as const,
+    },
+    {
+      name: "conflicting pending mapping",
+      mappingKind: "fiat" as const,
+      canonicalAssetId: null,
+      canonicalFiatCurrency: "USD",
+      mappingStatus: "pending_review" as const,
+    },
+  ])("does not overwrite a $name when fiat catalog evidence arrives", async (existing) => {
+    await Effect.runPromise(
+      seedCanonicalAsset({
+        id: BTC_ASSET_ID,
+        symbol: "BTC",
+        contractAddress: `coinbase-fiat-protection-${existing.mappingStatus}`,
+      })
+    )
+    await expect(
+      runReferenceMapping(
+        Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+          service.resolveCurrency({ currencyCode: "EUR" })
+        )
+      )
+    ).rejects.toMatchObject({ _tag: "CoinbaseProviderAssetMappingNotFoundError" })
+
+    const pendingMapping = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "EUR"
+    )
+    if (pendingMapping === undefined) {
+      expect.fail("Expected pending EUR provider asset mapping")
+    }
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingKind: existing.mappingKind,
+            canonicalAssetId: existing.canonicalAssetId,
+            canonicalFiatCurrency: existing.canonicalFiatCurrency,
+            mappingStatus: existing.mappingStatus,
+            reviewerNotes: "Admin decision must be preserved",
+            sourceNotes: "Admin decision",
+          })
+          .where(
+            eq(schema.providerAssetMappings.providerAssetRowId, pendingMapping.providerAssetRowId)
+          )
+        yield* db
+          .update(schema.providerAssets)
+          .set({
+            name: "Euro",
+            exponent: 2,
+            providerType: "fiat",
+            rawProviderPayload: { source: "coinbase_fiat_currency_catalog" },
+            retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
+          })
+          .where(eq(schema.providerAssets.id, pendingMapping.providerAssetRowId))
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    await expect(
+      runReferenceMapping(
+        Effect.flatMap(CoinbaseReferenceMappingService, (service) =>
+          service.resolveCurrency({ currencyCode: "EUR" })
+        )
+      )
+    ).rejects.toMatchObject({ _tag: "CoinbaseBrokenApprovedProviderAssetMappingError" })
+
+    const persisted = (await Effect.runPromise(fetchProviderAssetMappingRows())).find(
+      (mapping) => mapping.currencyCode === "EUR"
+    )
+    expect(persisted).toMatchObject({
+      mappingKind: existing.mappingKind,
+      canonicalAssetId: existing.canonicalAssetId,
+      canonicalFiatCurrency: existing.canonicalFiatCurrency,
+      mappingStatus: existing.mappingStatus,
+      reviewerNotes: "Admin decision must be preserved",
+      sourceNotes: "Admin decision",
+    })
+  })
+
   it("rejects an unsupported Coinbase fiat catalog entry", async () => {
     await Effect.runPromise(
       seedCoinbaseFiatCatalogEntry({ currencyCode: "ZZZ", name: "Unsupported Currency" })

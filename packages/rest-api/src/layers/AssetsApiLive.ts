@@ -349,6 +349,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
             .decide({
               providerAssetRowId: path.id,
               decision: payload.decision,
+              proposalQuery: payload.proposalQuery ?? null,
               reviewRevision: payload.reviewRevision,
               reviewerNotes: payload.reviewerNotes ?? null,
               reviewedBy: currentUser.userId,

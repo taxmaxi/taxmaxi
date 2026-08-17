@@ -205,6 +205,7 @@ export class ProviderAssetDecisionRequest extends Schema.Class<ProviderAssetDeci
   "ProviderAssetDecisionRequest"
 )({
   reviewRevision: Schema.String.check(Schema.isNonEmpty()),
+  proposalQuery: Schema.optional(Schema.NullOr(AssetCatalogSearchQuery)),
   decision: Schema.Union([
     Schema.TaggedStruct("Resolve", {
       proposalId: Schema.String.check(Schema.isNonEmpty()),

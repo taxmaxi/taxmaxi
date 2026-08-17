@@ -718,23 +718,250 @@ describe("ProviderAssetRepositoryLive", () => {
           })
         )
       )
-      const jobs = await runPg(
+      const state = await runPg(
         Effect.gen(function* () {
           const db = yield* drizzle
-          return yield* db
+          const jobs = yield* db
             .select({
+              id: schema.processingJobs.id,
               followUpMode: schema.processingJobs.followUpMode,
               mode: schema.processingJobs.mode,
               status: schema.processingJobs.status,
             })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const replays = yield* db
+            .select({
+              dispatchState: schema.providerAssetReviewReplays.dispatchState,
+              jobId: schema.providerAssetReviewReplays.jobId,
+              sourceId: schema.providerAssetReviewReplays.sourceId,
+            })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+
+          return { jobs, replays }
         })
       )
 
       expect(recorded).toBe(1)
       expect(recordedAgain).toBe(0)
-      expect(jobs).toEqual([{ followUpMode: null, mode: "replay", status: "pending" }])
+      expect(state.jobs).toEqual([
+        expect.objectContaining({ followUpMode: null, mode: "replay", status: "pending" }),
+      ])
+      expect(state.replays).toEqual([
+        {
+          dispatchState: "queued",
+          jobId: state.jobs[0]?.id,
+          sourceId: TEST_SOURCE_ID,
+        },
+      ])
+    })
+
+    it("blocks exact evidence when another observation is incomplete", async () => {
+      const providerAsset = await seedPendingApprovalAsset("complete-plus-incomplete-evidence", {
+        withProviderTransfer: false,
+      })
+      const observation = await loadBitcoinObservation()
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const transactions = yield* db
+            .insert(schema.transactions)
+            .values([
+              {
+                sourceId: TEST_SOURCE_ID,
+                externalId: "complete-evidence-transaction",
+                timestamp: new Date("2025-04-20T14:00:00.000Z"),
+                providerTransactionType: "send",
+                providerStatus: "completed",
+                principalId: TEST_PRINCIPAL_ID,
+              },
+              {
+                sourceId: TEST_SOURCE_ID,
+                externalId: "incomplete-evidence-transaction",
+                timestamp: new Date("2025-04-20T14:01:00.000Z"),
+                providerTransactionType: "send",
+                providerStatus: "completed",
+                principalId: TEST_PRINCIPAL_ID,
+              },
+            ])
+            .returning({ id: schema.transactions.id, externalId: schema.transactions.externalId })
+          const transactionByExternalId = new Map(
+            transactions.map((transaction) => [transaction.externalId, transaction.id])
+          )
+          const completeTransactionId = transactionByExternalId.get("complete-evidence-transaction")
+          const incompleteTransactionId = transactionByExternalId.get(
+            "incomplete-evidence-transaction"
+          )
+          if (completeTransactionId === undefined || incompleteTransactionId === undefined) {
+            return yield* Effect.die("Expected evidence transactions")
+          }
+
+          yield* db.insert(schema.providerTransfers).values([
+            {
+              sourceId: TEST_SOURCE_ID,
+              transactionId: completeTransactionId,
+              externalId: "complete-evidence-transfer",
+              providerAssetId: providerAsset.id,
+              timestamp: new Date("2025-04-20T14:00:00.000Z"),
+              direction: "outbound",
+              processingMode: "evidence_only",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "bc1qcompleteevidence000000000000000000000",
+              observedBlockchainId: observation.observedBlockchainId,
+              observedRepresentationType: observation.representationType,
+              observedContractAddress: observation.contractAddress,
+              observedMintAddress: observation.mintAddress,
+              observedDecimals: observation.decimals,
+              amount: "0.25",
+              metadata: { role: "principal" },
+            },
+            {
+              sourceId: TEST_SOURCE_ID,
+              transactionId: incompleteTransactionId,
+              externalId: "incomplete-evidence-transfer",
+              providerAssetId: providerAsset.id,
+              timestamp: new Date("2025-04-20T14:01:00.000Z"),
+              direction: "outbound",
+              processingMode: "evidence_only",
+              fromAccountRef: "coinbase-account-1",
+              toAddress: "0x0000000000000000000000000000000000000001",
+              observedBlockchainId: observation.observedBlockchainId,
+              observedRepresentationType: null,
+              observedContractAddress: "0x0000000000000000000000000000000000000001",
+              observedMintAddress: null,
+              observedDecimals: null,
+              amount: "0.25",
+              metadata: { role: "principal" },
+            },
+          ])
+        })
+      )
+
+      const review = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      )
+
+      expect(Option.getOrThrow(review).evidenceState).toBe("insufficient")
+    })
+
+    it("revises evidence for new sources and observations before rejection", async () => {
+      const providerAsset = await seedPendingApprovalAsset("rejection-evidence-revision", {
+        withProviderTransfer: false,
+      })
+      const observation = await loadBitcoinObservation()
+      const initialReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordProviderAssetSourceUses({
+            sourceId: TEST_SOURCE_ID,
+            providerAssetRowIds: [providerAsset.id],
+            observations: [],
+          })
+        )
+      )
+      const sourceReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
+
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [transaction] = yield* db
+            .insert(schema.transactions)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              externalId: "rejection-revision-transaction",
+              timestamp: new Date("2025-04-20T14:02:00.000Z"),
+              providerTransactionType: "send",
+              providerStatus: "completed",
+              principalId: TEST_PRINCIPAL_ID,
+            })
+            .returning({ id: schema.transactions.id })
+          if (transaction === undefined) {
+            return yield* Effect.die("Expected rejection revision transaction")
+          }
+          yield* db.insert(schema.providerTransfers).values({
+            sourceId: TEST_SOURCE_ID,
+            transactionId: transaction.id,
+            externalId: "rejection-revision-transfer",
+            providerAssetId: providerAsset.id,
+            timestamp: new Date("2025-04-20T14:02:00.000Z"),
+            direction: "outbound",
+            processingMode: "evidence_only",
+            fromAccountRef: "coinbase-account-1",
+            toAddress: "bc1qrejectionrevision00000000000000000000",
+            observedBlockchainId: observation.observedBlockchainId,
+            observedRepresentationType: observation.representationType,
+            observedContractAddress: observation.contractAddress,
+            observedMintAddress: observation.mintAddress,
+            observedDecimals: observation.decimals,
+            amount: "0.25",
+            metadata: { role: "principal" },
+          })
+        })
+      )
+      const evidenceReview = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewById({ providerAssetRowId: providerAsset.id })
+        )
+      ).then(Option.getOrThrow)
+
+      expect(sourceReview.evidenceRevision).not.toBe(initialReview.evidenceRevision)
+      expect(evidenceReview.evidenceRevision).not.toBe(sourceReview.evidenceRevision)
+      const staleRejection = await runRepository(
+        Effect.result(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.rejectProviderAssetMapping({
+              providerAssetRowId: providerAsset.id,
+              reviewerNotes: "Evidence is not enough",
+              reviewedBy: TEST_USER_ID,
+              reviewedAt: new Date("2026-08-17T10:00:00.000Z"),
+              expectedEvidenceRevision: sourceReview.evidenceRevision,
+              expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+              ...(sourceReview.mapping === null
+                ? {}
+                : { expectedMappingUpdatedAt: sourceReview.mapping.updatedAt }),
+            })
+          )
+        )
+      )
+      const currentMapping = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetMapping({ providerAssetRowId: providerAsset.id })
+        )
+      )
+
+      expect(staleRejection._tag).toBe("Failure")
+      expect(Option.getOrThrow(currentMapping).mappingStatus).toBe("pending_review")
+
+      const rejected = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.rejectProviderAssetMapping({
+            providerAssetRowId: providerAsset.id,
+            reviewerNotes: "Evidence is not enough",
+            reviewedBy: TEST_USER_ID,
+            reviewedAt: new Date("2026-08-17T10:01:00.000Z"),
+            expectedEvidenceRevision: evidenceReview.evidenceRevision,
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            ...(evidenceReview.mapping === null
+              ? {}
+              : { expectedMappingUpdatedAt: evidenceReview.mapping.updatedAt }),
+          })
+        )
+      )
+
+      expect(rejected).toBe(true)
     })
 
     it("accepts exact representation evidence observed after approval", async () => {

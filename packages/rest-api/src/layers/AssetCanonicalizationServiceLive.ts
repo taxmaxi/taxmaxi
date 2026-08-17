@@ -906,6 +906,7 @@ const make = Effect.gen(function* () {
     ({
       providerAssetRowId,
       coinId,
+      expectedCanonicalAssetId,
       reviewerNotes,
       reviewedBy,
       requirePendingReview = false,
@@ -972,6 +973,28 @@ const make = Effect.gen(function* () {
                 providerAsset: providerAssetReview.providerAsset,
                 observedRepresentations,
               })
+              if (expectedCanonicalAssetId !== undefined) {
+                const existingAsset = yield* assetRepository
+                  .findAssetByCoinGeckoId({
+                    coingeckoCoinId: coinId,
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      () =>
+                        new AssetCanonicalizationInternalError({
+                          message: "Failed to validate the selected economic asset.",
+                        })
+                    )
+                  )
+                if (
+                  Option.isNone(existingAsset) ||
+                  existingAsset.value.id !== expectedCanonicalAssetId
+                ) {
+                  return yield* new AssetCanonicalizationConflictError({
+                    message: "CoinGecko now resolves to a different economic asset.",
+                  })
+                }
+              }
               const existingMapping = providerAssetReview.mapping
               if (existingMapping?.mappingStatus === "approved") {
                 const existingAsset = yield* assetRepository

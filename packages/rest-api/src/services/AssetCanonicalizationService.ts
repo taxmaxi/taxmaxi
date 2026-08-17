@@ -108,6 +108,7 @@ export interface AssetCanonicalizationServiceShape {
   readonly canonicalizeProviderAssetFromCoinGecko: (params: {
     readonly providerAssetRowId: string
     readonly coinId: string
+    readonly expectedCanonicalAssetId?: string
     readonly reviewerNotes: string | null
     readonly reviewedBy?: string
     readonly requirePendingReview?: boolean

@@ -65,6 +65,53 @@ describe("AssetRepositoryLive", () => {
     expect(blockchains.some((blockchain) => blockchain.name === "bitcoin")).toBe(true)
   })
 
+  it("rejects a conflicting economic asset type for an existing CoinGecko id", async () => {
+    const upsert = (type: "fungible" | "nft") =>
+      runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.upsertEconomicAsset({
+            name: "Immutable Coin",
+            symbol: "IMM",
+            coingeckoCoinId: "immutable-coin",
+            logoUrl: null,
+            type,
+          })
+        )
+      )
+
+    const created = await upsert("fungible")
+    const result = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        Effect.result(
+          repository.upsertEconomicAsset({
+            name: "Immutable Coin",
+            symbol: "IMM",
+            coingeckoCoinId: "immutable-coin",
+            logoUrl: null,
+            type: "nft",
+          })
+        )
+      )
+    )
+    const stored = await runRepository(
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.findAssetByCoinGeckoId({ coingeckoCoinId: "immutable-coin" })
+      )
+    )
+
+    expect(created.type).toBe("fungible")
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toMatchObject({
+        operation: "assetRepository.upsertEconomicAsset",
+        cause: {
+          operation: "assetRepository.upsertEconomicAsset.validateEconomicAssetType",
+        },
+      })
+    }
+    expect(Option.getOrNull(stored)).toMatchObject({ id: created.id, type: "fungible" })
+  })
+
   it.each([
     ["economic asset type", "asset-type", "validateEconomicAssetType"],
     ["representation type", "representation-type", "validateRepresentationIdentity"],

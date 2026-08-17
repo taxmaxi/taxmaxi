@@ -58,6 +58,7 @@ const review: ProviderAssetReviewRecord = {
     updatedAt: new Date("2026-08-17T09:00:00.000Z"),
   },
   evidenceState: "exact",
+  evidenceRevision: "evidence-v1",
   affectedSourceCount: 1,
 }
 
@@ -229,7 +230,7 @@ describe("ProviderAssetReviewService admin contract", () => {
       id: PROVIDER_ASSET_ID,
       evidenceState: "exact",
       affectedSourceCount: 1,
-      reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z",
+      reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
     })
     expect(result.detail.observedRepresentations).toEqual([
       expect.objectContaining({ mintAddress: "So11111111111111111111111111111111111111112" }),
@@ -400,6 +401,8 @@ describe("ProviderAssetReviewService admin contract", () => {
       dispatchState: "failed_to_queue" as const,
       errorMessage: null,
     }
+    let expectedCanonicalAssetId: string | undefined
+    let searchedProposalQuery: string | null = null
     const canonicalizationForEffect: AssetCanonicalizationServiceShape = {
       approveProviderAssetMapping: () =>
         Effect.succeed({ ...approvedReview, replays: [decisionReplay] }),
@@ -414,8 +417,9 @@ describe("ProviderAssetReviewService admin contract", () => {
           },
           replays: [decisionReplay],
         }),
-      canonicalizeProviderAssetFromCoinGecko: () =>
-        Effect.succeed({
+      canonicalizeProviderAssetFromCoinGecko: (params) => {
+        expectedCanonicalAssetId = params.expectedCanonicalAssetId
+        return Effect.succeed({
           providerAsset: approvedReview,
           canonicalAsset: {
             id: canonicalAssetId,
@@ -440,11 +444,13 @@ describe("ProviderAssetReviewService admin contract", () => {
             contractAddress: "So11111111111111111111111111111111111111112",
           },
           replays: [decisionReplay],
-        }),
+        })
+      },
     }
     const proposalsForEffect: ProviderAssetCandidateServiceShape = {
-      searchProposals: () =>
-        Effect.succeed({
+      searchProposals: ({ query }) => {
+        searchedProposalQuery = query
+        return Effect.succeed({
           evidenceState: "exact",
           recommendedProposalId: "proposal",
           proposals: [
@@ -466,7 +472,8 @@ describe("ProviderAssetReviewService admin contract", () => {
               investigationLinks: [],
             },
           ],
-        }),
+        })
+      },
     }
 
     const result = await Effect.runPromise(
@@ -474,7 +481,8 @@ describe("ProviderAssetReviewService admin contract", () => {
         service.decide({
           providerAssetRowId: PROVIDER_ASSET_ID,
           decision: { _tag: "Resolve", proposalId: "proposal", effect },
-          reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z",
+          proposalQuery: "wrapped sol",
+          reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
           reviewerNotes: null,
           reviewedBy: "00000000-0000-4000-8000-000000000012",
         })
@@ -507,6 +515,10 @@ describe("ProviderAssetReviewService admin contract", () => {
     )
 
     expect(result.resolutionEffect).toEqual(effect)
+    expect(searchedProposalQuery).toBe("wrapped sol")
+    expect(expectedCanonicalAssetId).toBe(
+      effect._tag === "AddRepresentation" ? effect.canonicalAssetId : undefined
+    )
     expect(result.replays).toEqual([
       expect.objectContaining({ sourceId: SOURCE_ID, status: "failed_to_queue" }),
     ])
@@ -515,11 +527,13 @@ describe("ProviderAssetReviewService admin contract", () => {
   it("persists an attributed rejection without scheduling replays", async () => {
     let persistedReviewerNotes: string | null = null
     let persistedReviewedBy: string | null = null
+    let expectedEvidenceRevision: string | null = null
     const rejectingRepository: ProviderAssetRepositoryShape = {
       ...repository,
       rejectProviderAssetMapping: (params) => {
         persistedReviewerNotes = params.reviewerNotes
         persistedReviewedBy = params.reviewedBy
+        expectedEvidenceRevision = params.expectedEvidenceRevision
         return Effect.succeed(true)
       },
     }
@@ -528,7 +542,7 @@ describe("ProviderAssetReviewService admin contract", () => {
         service.decide({
           providerAssetRowId: PROVIDER_ASSET_ID,
           decision: { _tag: "Reject" },
-          reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z",
+          reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
           reviewerNotes: "  Unsupported representation.  ",
           reviewedBy: "00000000-0000-4000-8000-000000000012",
         })
@@ -555,6 +569,7 @@ describe("ProviderAssetReviewService admin contract", () => {
     expect(result).toEqual({ resolutionEffect: null, replays: [] })
     expect(persistedReviewerNotes).toBe("Unsupported representation.")
     expect(persistedReviewedBy).toBe("00000000-0000-4000-8000-000000000012")
+    expect(expectedEvidenceRevision).toBe("evidence-v1")
 
     const failingRepository: ProviderAssetRepositoryShape = {
       ...repository,
@@ -570,7 +585,7 @@ describe("ProviderAssetReviewService admin contract", () => {
       service.decide({
         providerAssetRowId: PROVIDER_ASSET_ID,
         decision: { _tag: "Reject" },
-        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z",
+        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
         reviewerNotes: "Unsupported representation.",
         reviewedBy: "00000000-0000-4000-8000-000000000012",
       })
@@ -666,7 +681,7 @@ describe("ProviderAssetReviewService admin contract", () => {
             canonicalAssetId: "00000000-0000-4000-8000-000000000010",
           },
         },
-        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z",
+        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
         reviewerNotes: null,
         reviewedBy: "00000000-0000-4000-8000-000000000012",
       })
@@ -703,6 +718,52 @@ describe("ProviderAssetReviewService admin contract", () => {
     })
   })
 
+  it("rejects a decision when source evidence changed at the same row timestamps", async () => {
+    let rejectionAttempted = false
+    const changedEvidenceRepository: ProviderAssetRepositoryShape = {
+      ...repository,
+      findProviderAssetReviewById: () =>
+        Effect.succeed(Option.some({ ...review, evidenceRevision: "evidence-v2" })),
+      rejectProviderAssetMapping: () => {
+        rejectionAttempted = true
+        return Effect.succeed(true)
+      },
+    }
+    const decision = Effect.flatMap(ProviderAssetReviewService, (service) =>
+      service.decide({
+        providerAssetRowId: PROVIDER_ASSET_ID,
+        decision: { _tag: "Reject" },
+        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
+        reviewerNotes: "Evidence is stale.",
+        reviewedBy: "00000000-0000-4000-8000-000000000012",
+      })
+    )
+
+    await expect(
+      Effect.runPromise(
+        decision.pipe(
+          Effect.provide(
+            ProviderAssetReviewServiceLive.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  Layer.succeed(ProviderAssetRepository, changedEvidenceRepository),
+                  Layer.succeed(AssetCanonicalizationService, canonicalization),
+                  Layer.succeed(ProviderAssetCandidateService, candidates),
+                  Layer.succeed(ProviderAssetReplayService, {
+                    scheduleReplays: unexpected,
+                    getReplay: unexpected,
+                    retryReplay: unexpected,
+                  })
+                )
+              )
+            )
+          )
+        )
+      )
+    ).rejects.toMatchObject({ _tag: "ProviderAssetReviewConflictError" })
+    expect(rejectionAttempted).toBe(false)
+  })
+
   it("rejects stale revisions with the latest completed decision and requires rejection notes", async () => {
     const stale = Effect.flatMap(ProviderAssetReviewService, (service) =>
       service.decide({
@@ -717,7 +778,7 @@ describe("ProviderAssetReviewService admin contract", () => {
       service.decide({
         providerAssetRowId: PROVIDER_ASSET_ID,
         decision: { _tag: "Reject" },
-        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z",
+        reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
         reviewerNotes: " ",
         reviewedBy: "00000000-0000-4000-8000-000000000012",
       })

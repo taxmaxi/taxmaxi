@@ -1,4 +1,4 @@
-import { AuthValidationError } from "@my/rest-api/contracts"
+import { AssetConflictError, AuthValidationError } from "@my/rest-api/contracts"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import type * as SchemaAST from "effect/SchemaAST"
@@ -10,16 +10,20 @@ export type TaxMaxiFieldError = {
   readonly message: string
 }
 
+export type TaxMaxiLatestDecision = NonNullable<AssetConflictError["latestDecision"]>
+
 export class TaxMaxiError extends Error {
   readonly status: number
   readonly code: string | undefined
   readonly requestId: string | undefined
   readonly fieldErrors: ReadonlyArray<TaxMaxiFieldError>
+  readonly latestDecision: TaxMaxiLatestDecision | null | undefined
 
   constructor({
     cause,
     code,
     fieldErrors = [],
+    latestDecision,
     message,
     requestId,
     status,
@@ -27,6 +31,7 @@ export class TaxMaxiError extends Error {
     readonly cause?: unknown
     readonly code?: string | undefined
     readonly fieldErrors?: ReadonlyArray<TaxMaxiFieldError>
+    readonly latestDecision?: TaxMaxiLatestDecision | null | undefined
     readonly message: string
     readonly requestId?: string | undefined
     readonly status: number
@@ -37,6 +42,7 @@ export class TaxMaxiError extends Error {
     this.code = code
     this.requestId = requestId
     this.fieldErrors = fieldErrors
+    this.latestDecision = latestDecision
   }
 }
 
@@ -202,6 +208,7 @@ export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
       cause: error,
       code,
       fieldErrors: getFieldErrors(error),
+      latestDecision: error instanceof AssetConflictError ? error.latestDecision : undefined,
       message: getStringProperty(error, "message") ?? "TaxMaxi API request failed.",
       requestId: getStringProperty(error, "requestId"),
       status: getAnnotatedErrorStatus(error) ?? getErrorStatusFromCode(code) ?? 500,

@@ -4,7 +4,19 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, ilike, inArray, or, sql } from "drizzle-orm"
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  ilike,
+  inArray,
+  isNull,
+  or,
+  sql,
+  type SQLWrapper,
+} from "drizzle-orm"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -25,6 +37,12 @@ import { schema } from "../schema/index.ts"
 
 class ApprovalObservationSourceSetChanged extends Data.TaggedError(
   "ApprovalObservationSourceSetChanged"
+)<{
+  readonly sourceIds: ReadonlyArray<string>
+}> {}
+
+class RejectionEvidenceSourceSetChanged extends Data.TaggedError(
+  "RejectionEvidenceSourceSetChanged"
 )<{
   readonly sourceIds: ReadonlyArray<string>
 }> {}
@@ -53,6 +71,42 @@ const observationSnapshotsMatch = ({
     expectedKeys.every((key, index) => key === currentKeys[index])
   )
 }
+
+const providerAssetEvidenceRevisionExpression = (providerAssetRowId: string | SQLWrapper) =>
+  sql<string>`md5(
+    coalesce((
+      select string_agg(observed.evidence_key, E'\n' order by observed.evidence_key)
+      from (
+        select distinct jsonb_build_array(
+          pt.observed_blockchain_id,
+          pt.observed_representation_type,
+          lower(trim(pt.observed_contract_address)),
+          pt.observed_mint_address,
+          pt.observed_decimals
+        )::text as evidence_key
+        from provider_transfers pt
+        where pt.provider_asset_id = ${providerAssetRowId}
+          and num_nonnulls(
+            pt.observed_blockchain_id,
+            pt.observed_representation_type,
+            pt.observed_contract_address,
+            pt.observed_mint_address,
+            pt.observed_decimals
+          ) > 0
+      ) observed
+    ), '') || E'\n--sources--\n' || coalesce((
+      select string_agg(affected.source_id::text, E'\n' order by affected.source_id)
+      from (
+        select pasu.source_id
+        from provider_asset_source_uses pasu
+        where pasu.provider_asset_row_id = ${providerAssetRowId}
+        union
+        select pt.source_id
+        from provider_transfers pt
+        where pt.provider_asset_id = ${providerAssetRowId}
+      ) affected
+    ), '')
+  )`
 
 const makeMissingIdentityError = ({
   providerKey,
@@ -154,13 +208,51 @@ const make = Effect.gen(function* () {
       .pipe(wrapSyncEngineStorageError("providerAssetRepository.upsertProviderAssets"))
 
   const upsertProviderAssetMappings: ProviderAssetRepositoryShape["upsertProviderAssetMappings"] =
-    ({ mappings }) =>
+    ({ mappings, replaceUntouchedPendingOnly = false }) =>
       Effect.gen(function* () {
         if (mappings.length === 0) {
           return 0
         }
 
         const now = nowDate()
+
+        if (replaceUntouchedPendingOnly) {
+          const updated = yield* Effect.forEach(mappings, (mapping) =>
+            db
+              .update(schema.providerAssetMappings)
+              .set({
+                mappingKind: mapping.mappingKind,
+                canonicalAssetId: mapping.canonicalAssetId,
+                assetRepresentationId: mapping.assetRepresentationId,
+                canonicalFiatCurrency: mapping.canonicalFiatCurrency,
+                mappingStatus: mapping.mappingStatus,
+                reviewerNotes: mapping.reviewerNotes,
+                sourceNotes: mapping.sourceNotes,
+                updatedAt: now,
+              })
+              .where(
+                and(
+                  eq(schema.providerAssetMappings.providerAssetRowId, mapping.providerAssetRowId),
+                  eq(schema.providerAssetMappings.mappingStatus, "pending_review"),
+                  isNull(schema.providerAssetMappings.canonicalAssetId),
+                  isNull(schema.providerAssetMappings.assetRepresentationId),
+                  isNull(schema.providerAssetMappings.canonicalFiatCurrency),
+                  isNull(schema.providerAssetMappings.reviewerNotes),
+                  isNull(schema.providerAssetMappings.reviewedBy),
+                  isNull(schema.providerAssetMappings.reviewedAt)
+                )
+              )
+              .returning({ id: schema.providerAssetMappings.id })
+              .pipe(
+                Effect.map((rows) => rows.length),
+                wrapSyncEngineStorageError(
+                  "providerAssetRepository.upsertProviderAssetMappings.replaceUntouchedPending"
+                )
+              )
+          )
+
+          return updated.reduce((count, value) => count + value, 0)
+        }
 
         yield* db
           .insert(schema.providerAssetMappings)
@@ -363,21 +455,27 @@ const make = Effect.gen(function* () {
               })
             }
 
-            const evidenceState =
-              currentObservations.length > 1
-                ? ("conflicting" as const)
-                : currentObservations.length === 1
-                  ? ("exact" as const)
-                  : providerAsset.name !== null &&
-                      (providerAsset.providerAssetId !== null || providerAsset.naturalKey !== null)
-                    ? ("ambiguous" as const)
-                    : ("insufficient" as const)
+            const [evidence] = yield* tx
+              .select({
+                evidenceState: providerAssetReviewProjection.evidenceState,
+                evidenceRevision: providerAssetReviewProjection.evidenceRevision,
+                affectedSourceCount: providerAssetReviewProjection.affectedSourceCount,
+              })
+              .from(schema.providerAssets)
+              .where(eq(schema.providerAssets.id, providerAssetRowId))
+              .limit(1)
+
+            if (evidence === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.lockProviderAssetApprovalSnapshot.evidence",
+                cause: "Provider asset evidence disappeared before approval.",
+              })
+            }
 
             return {
               providerAsset,
               mapping: mapping ?? null,
-              evidenceState,
-              affectedSourceCount: lockedObservationSources.length,
+              ...evidence,
             }
           })
         )
@@ -634,12 +732,42 @@ const make = Effect.gen(function* () {
     reviewerNotes,
     reviewedBy,
     reviewedAt,
+    expectedEvidenceRevision,
     expectedProviderAssetRetrievedAt,
     expectedMappingUpdatedAt,
   }) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
+          const loadAffectedSourceIds = () =>
+            Effect.gen(function* () {
+              const recordedSourceIds = yield* tx
+                .select({ sourceId: schema.providerAssetSourceUses.sourceId })
+                .from(schema.providerAssetSourceUses)
+                .where(eq(schema.providerAssetSourceUses.providerAssetRowId, providerAssetRowId))
+              const observedSourceIds = yield* tx
+                .selectDistinct({ sourceId: schema.providerTransfers.sourceId })
+                .from(schema.providerTransfers)
+                .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+
+              return [
+                ...new Set(
+                  [...recordedSourceIds, ...observedSourceIds].map(({ sourceId }) => sourceId)
+                ),
+              ].sort()
+            })
+
+          const affectedSourceIdsBeforeLock = yield* loadAffectedSourceIds()
+          const lockedAffectedSources =
+            affectedSourceIdsBeforeLock.length === 0
+              ? []
+              : yield* tx
+                  .select({ sourceId: schema.sources.id })
+                  .from(schema.sources)
+                  .where(inArray(schema.sources.id, affectedSourceIdsBeforeLock))
+                  .orderBy(asc(schema.sources.id))
+                  .for("update")
+
           const [providerAsset] = yield* tx
             .select({ retrievedAt: schema.providerAssets.retrievedAt })
             .from(schema.providerAssets)
@@ -675,6 +803,39 @@ const make = Effect.gen(function* () {
             })
           }
 
+          if (lockedAffectedSources.length !== affectedSourceIdsBeforeLock.length) {
+            return yield* new SyncEngineStorageError({
+              operation: "providerAssetRepository.rejectProviderAssetMapping.lockSources",
+              cause: "A provider asset evidence source changed before rejection.",
+            })
+          }
+
+          const lockedSourceIds = new Set(lockedAffectedSources.map(({ sourceId }) => sourceId))
+          const newlyAffectedSourceIds = (yield* loadAffectedSourceIds()).filter(
+            (sourceId) => !lockedSourceIds.has(sourceId)
+          )
+
+          if (newlyAffectedSourceIds.length > 0) {
+            return yield* new RejectionEvidenceSourceSetChanged({
+              sourceIds: newlyAffectedSourceIds,
+            })
+          }
+
+          const [evidence] = yield* tx
+            .select({
+              evidenceRevision: providerAssetEvidenceRevisionExpression(providerAssetRowId),
+            })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.id, providerAssetRowId))
+            .limit(1)
+
+          if (evidence?.evidenceRevision !== expectedEvidenceRevision) {
+            return yield* new SyncEngineStorageError({
+              operation: "providerAssetRepository.rejectProviderAssetMapping.evidenceRevision",
+              cause: "Provider asset evidence changed before rejection.",
+            })
+          }
+
           const [rejected] = yield* tx
             .update(schema.providerAssetMappings)
             .set({
@@ -698,7 +859,13 @@ const make = Effect.gen(function* () {
           return rejected !== undefined
         })
       )
-      .pipe(wrapSyncEngineStorageError("providerAssetRepository.rejectProviderAssetMapping"))
+      .pipe(
+        Effect.retry({
+          times: 2,
+          while: (error) => error instanceof RejectionEvidenceSourceSetChanged,
+        }),
+        wrapSyncEngineStorageError("providerAssetRepository.rejectProviderAssetMapping")
+      )
 
   const findProviderAssetReviewReplay: ProviderAssetRepositoryShape["findProviderAssetReviewReplay"] =
     ({ providerAssetRowId, sourceId, jobId }) =>
@@ -920,7 +1087,7 @@ const make = Effect.gen(function* () {
             ) {
               const requestReplay = (
                 attemptsRemaining: number
-              ): Effect.Effect<void, SyncEngineStorageError> =>
+              ): Effect.Effect<string, SyncEngineStorageError> =>
                 Effect.gen(function* () {
                   const [activeJob] = yield* tx
                     .update(schema.processingJobs)
@@ -939,7 +1106,7 @@ const make = Effect.gen(function* () {
                       )
                     )
                   if (activeJob !== undefined) {
-                    return
+                    return activeJob.id
                   }
 
                   const [createdJob] = yield* tx
@@ -966,7 +1133,7 @@ const make = Effect.gen(function* () {
                       )
                     )
                   if (createdJob !== undefined) {
-                    return
+                    return createdJob.id
                   }
 
                   if (attemptsRemaining > 1) {
@@ -984,7 +1151,47 @@ const make = Effect.gen(function* () {
                   })
                 })
 
-              yield* requestReplay(3)
+              const jobId = yield* requestReplay(3)
+              const approvedProviderAssetRowIds = mappings.flatMap(
+                ({ mappingStatus, providerAssetRowId }) =>
+                  mappingStatus === "approved" &&
+                  newlyRecordedProviderAssetRowIds.has(providerAssetRowId)
+                    ? [providerAssetRowId]
+                    : []
+              )
+
+              yield* tx
+                .insert(schema.providerAssetReviewReplays)
+                .values(
+                  approvedProviderAssetRowIds.map((providerAssetRowId) => ({
+                    providerAssetRowId,
+                    sourceId,
+                    principalId: source.principalId,
+                    jobId,
+                    dispatchState: "queued" as const,
+                    errorMessage: null,
+                    createdAt: now,
+                    updatedAt: now,
+                  }))
+                )
+                .onConflictDoUpdate({
+                  target: [
+                    schema.providerAssetReviewReplays.providerAssetRowId,
+                    schema.providerAssetReviewReplays.sourceId,
+                  ],
+                  set: {
+                    principalId: source.principalId,
+                    jobId,
+                    dispatchState: "queued",
+                    errorMessage: null,
+                    updatedAt: now,
+                  },
+                })
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "providerAssetRepository.recordProviderAssetSourceUses.linkReplays"
+                  )
+                )
             }
 
             return rows.length
@@ -1156,6 +1363,33 @@ const make = Effect.gen(function* () {
       when exists (
         select 1 from provider_transfers pt
         where pt.provider_asset_id = ${schema.providerAssets.id}
+          and num_nonnulls(
+            pt.observed_blockchain_id,
+            pt.observed_representation_type,
+            pt.observed_contract_address,
+            pt.observed_mint_address,
+            pt.observed_decimals
+          ) > 0
+          and not (
+            pt.observed_blockchain_id is not null
+            and pt.observed_representation_type is not null
+            and pt.observed_decimals is not null
+            and (
+              (
+                pt.observed_representation_type = 'native'
+                and pt.observed_contract_address is null
+                and pt.observed_mint_address is null
+              )
+              or (
+                pt.observed_representation_type in ('token', 'nft')
+                and num_nonnulls(pt.observed_contract_address, pt.observed_mint_address) = 1
+              )
+            )
+          )
+      ) then 'insufficient'
+      when exists (
+        select 1 from provider_transfers pt
+        where pt.provider_asset_id = ${schema.providerAssets.id}
           and pt.observed_blockchain_id is not null
           and pt.observed_representation_type is not null
           and pt.observed_decimals is not null
@@ -1176,6 +1410,7 @@ const make = Effect.gen(function* () {
         then 'ambiguous'
       else 'insufficient'
     end`,
+    evidenceRevision: providerAssetEvidenceRevisionExpression(schema.providerAssets.id),
     affectedSourceCount: sql<number>`(
       select count(distinct affected.source_id)::int
       from (

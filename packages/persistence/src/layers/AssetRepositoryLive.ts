@@ -211,7 +211,19 @@ const make = Effect.gen(function* () {
                   cause: "Economic asset missing after upsert.",
                 })
               )
-            : Effect.succeed(persisted)
+            : persisted.type !== asset.type
+              ? Effect.fail(
+                  new SyncEngineStorageError({
+                    operation: "assetRepository.upsertEconomicAsset.validateEconomicAssetType",
+                    cause: {
+                      assetId: persisted.id,
+                      existingType: persisted.type,
+                      incomingType: asset.type,
+                      message: "Economic asset type cannot change after the identity is created.",
+                    },
+                  })
+                )
+              : Effect.succeed(persisted)
         ),
         wrapSyncEngineSqlError("assetRepository.upsertEconomicAsset")
       )

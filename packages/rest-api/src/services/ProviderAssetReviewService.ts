@@ -226,6 +226,7 @@ export interface ProviderAssetReviewServiceShape {
   readonly decide: (params: {
     readonly providerAssetRowId: string
     readonly decision: ProviderAssetDecision
+    readonly proposalQuery?: string | null
     readonly reviewRevision: string
     readonly reviewerNotes: string | null
     readonly reviewedBy: string

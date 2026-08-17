@@ -3,8 +3,11 @@ import { ProviderAssetReplayServiceLive } from "@my/sync-engine/layers"
 import {
   ProviderAssetReplayService,
   ProviderAssetRepository,
+  SourceNotFoundError,
   SourceSyncQueueError,
   SourceSyncService,
+  SyncEngineStorageError,
+  UnsupportedProviderError,
   type ProviderAssetRepositoryShape,
   type ProviderAssetReviewReplay,
   type SourceSyncServiceShape,
@@ -24,24 +27,131 @@ const SECOND_JOB_ID = "00000000-0000-4000-8000-000000000008"
 
 const unexpected = () => Effect.die("Unexpected test call")
 
+const dispatchFailures = [
+  {
+    name: "queue failure",
+    error: new SourceSyncQueueError({ operation: "test.replay", cause: "queue unavailable" }),
+  },
+  {
+    name: "deleted source",
+    error: new SourceNotFoundError({ sourceId: SOURCE_ID }),
+  },
+  {
+    name: "unsupported provider",
+    error: new UnsupportedProviderError({ provider: "unsupported" }),
+  },
+  {
+    name: "storage failure",
+    error: new SyncEngineStorageError({ operation: "test.replay", cause: "storage unavailable" }),
+  },
+] as const
+
 describe("ProviderAssetReplayService", () => {
-  it("returns independent statuses when one source fails to queue", async () => {
-    const failedReplay: ProviderAssetReviewReplay = {
+  it.each(dispatchFailures)(
+    "returns independent statuses when one source has a $name",
+    async ({ error }) => {
+      const failedReplay: ProviderAssetReviewReplay = {
+        sourceId: SOURCE_ID,
+        principalId: PRINCIPAL_ID,
+        jobId: JOB_ID,
+        dispatchState: "queued",
+        errorMessage: null,
+      }
+      const queuedReplay: ProviderAssetReviewReplay = {
+        sourceId: SECOND_SOURCE_ID,
+        principalId: SECOND_PRINCIPAL_ID,
+        jobId: SECOND_JOB_ID,
+        dispatchState: "queued",
+        errorMessage: null,
+      }
+      const dispatchStates = new Map<string, "queued" | "failed_to_queue">()
+
+      const repository: ProviderAssetRepositoryShape = {
+        upsertProviderAssets: unexpected,
+        upsertProviderAssetMappings: unexpected,
+        approveProviderAssetMappingAndRequestReplay: unexpected,
+        rejectProviderAssetMapping: unexpected,
+        findProviderAssetReviewReplay: unexpected,
+        listProviderAssetReviewReplays: unexpected,
+        replaceProviderAssetReviewReplay: unexpected,
+        markProviderAssetReviewReplayDispatch: ({ sourceId, dispatchState }) =>
+          Effect.sync(() => {
+            dispatchStates.set(sourceId, dispatchState)
+            return true
+          }),
+        lockProviderAssetApprovalSnapshot: unexpected,
+        recordProviderAssetSourceUses: unexpected,
+        seedProviderAssetMappingsIfMissing: unexpected,
+        findProviderAssetByProviderAssetId: unexpected,
+        findProviderAssetByNaturalKey: unexpected,
+        findProviderAssetByCurrencyCode: unexpected,
+        findProviderAssetReviewById: unexpected,
+        listProviderAssetReviews: unexpected,
+        listProviderAssetObservedRepresentations: unexpected,
+        findProviderAssetMapping: unexpected,
+      }
+      const sourceSync: SourceSyncServiceShape = {
+        startSourceSyncJob: unexpected,
+        replaySourceSyncJob: ({ sourceId }) =>
+          sourceId === SOURCE_ID
+            ? Effect.fail(error)
+            : Effect.succeed({
+                sourceId: SECOND_SOURCE_ID,
+                jobId: SECOND_JOB_ID,
+                status: "queued",
+                message: null,
+              }),
+        getSourceSyncJob: unexpected,
+      }
+      const layer = ProviderAssetReplayServiceLive.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ProviderAssetRepository, repository),
+            Layer.succeed(SourceSyncService, sourceSync)
+          )
+        )
+      )
+
+      const result = await Effect.runPromise(
+        Effect.flatMap(ProviderAssetReplayService, (service) =>
+          service.scheduleReplays({
+            providerAssetRowId: PROVIDER_ASSET_ID,
+            replays: [failedReplay, queuedReplay],
+          })
+        ).pipe(Effect.provide(layer))
+      )
+
+      expect(result).toEqual([
+        {
+          sourceId: SOURCE_ID,
+          jobId: JOB_ID,
+          status: "failed_to_queue",
+          message: "Failed to queue replay.",
+        },
+        {
+          sourceId: SECOND_SOURCE_ID,
+          jobId: SECOND_JOB_ID,
+          status: "queued",
+          message: null,
+        },
+      ])
+      expect(dispatchStates).toEqual(
+        new Map([
+          [SOURCE_ID, "failed_to_queue"],
+          [SECOND_SOURCE_ID, "queued"],
+        ])
+      )
+    }
+  )
+
+  it("returns a conflict when the replay dispatch compare-and-set misses", async () => {
+    const replay: ProviderAssetReviewReplay = {
       sourceId: SOURCE_ID,
       principalId: PRINCIPAL_ID,
       jobId: JOB_ID,
       dispatchState: "queued",
       errorMessage: null,
     }
-    const queuedReplay: ProviderAssetReviewReplay = {
-      sourceId: SECOND_SOURCE_ID,
-      principalId: SECOND_PRINCIPAL_ID,
-      jobId: SECOND_JOB_ID,
-      dispatchState: "queued",
-      errorMessage: null,
-    }
-    const dispatchStates = new Map<string, "queued" | "failed_to_queue">()
-
     const repository: ProviderAssetRepositoryShape = {
       upsertProviderAssets: unexpected,
       upsertProviderAssetMappings: unexpected,
@@ -50,11 +160,7 @@ describe("ProviderAssetReplayService", () => {
       findProviderAssetReviewReplay: unexpected,
       listProviderAssetReviewReplays: unexpected,
       replaceProviderAssetReviewReplay: unexpected,
-      markProviderAssetReviewReplayDispatch: ({ sourceId, dispatchState }) =>
-        Effect.sync(() => {
-          dispatchStates.set(sourceId, dispatchState)
-          return true
-        }),
+      markProviderAssetReviewReplayDispatch: () => Effect.succeed(false),
       lockProviderAssetApprovalSnapshot: unexpected,
       recordProviderAssetSourceUses: unexpected,
       seedProviderAssetMappingsIfMissing: unexpected,
@@ -68,17 +174,13 @@ describe("ProviderAssetReplayService", () => {
     }
     const sourceSync: SourceSyncServiceShape = {
       startSourceSyncJob: unexpected,
-      replaySourceSyncJob: ({ sourceId }) =>
-        sourceId === SOURCE_ID
-          ? Effect.fail(
-              new SourceSyncQueueError({ operation: "test.replay", cause: "queue unavailable" })
-            )
-          : Effect.succeed({
-              sourceId: SECOND_SOURCE_ID,
-              jobId: SECOND_JOB_ID,
-              status: "queued",
-              message: null,
-            }),
+      replaySourceSyncJob: () =>
+        Effect.succeed({
+          sourceId: SOURCE_ID,
+          jobId: JOB_ID,
+          status: "queued",
+          message: null,
+        }),
       getSourceSyncJob: unexpected,
     }
     const layer = ProviderAssetReplayServiceLive.pipe(
@@ -90,35 +192,14 @@ describe("ProviderAssetReplayService", () => {
       )
     )
 
-    const result = await Effect.runPromise(
-      Effect.flatMap(ProviderAssetReplayService, (service) =>
-        service.scheduleReplays({
-          providerAssetRowId: PROVIDER_ASSET_ID,
-          replays: [failedReplay, queuedReplay],
-        })
-      ).pipe(Effect.provide(layer))
-    )
+    const result = Effect.flatMap(ProviderAssetReplayService, (service) =>
+      service.scheduleReplays({ providerAssetRowId: PROVIDER_ASSET_ID, replays: [replay] })
+    ).pipe(Effect.provide(layer), Effect.runPromise)
 
-    expect(result).toEqual([
-      {
-        sourceId: SOURCE_ID,
-        jobId: JOB_ID,
-        status: "failed_to_queue",
-        message: "Failed to queue replay.",
-      },
-      {
-        sourceId: SECOND_SOURCE_ID,
-        jobId: SECOND_JOB_ID,
-        status: "queued",
-        message: null,
-      },
-    ])
-    expect(dispatchStates).toEqual(
-      new Map([
-        [SOURCE_ID, "failed_to_queue"],
-        [SECOND_SOURCE_ID, "queued"],
-      ])
-    )
+    await expect(result).rejects.toMatchObject({
+      _tag: "ProviderAssetReplayError",
+      kind: "conflict",
+    })
   })
 
   it("keeps a durable failed-to-queue link and retries it", async () => {
