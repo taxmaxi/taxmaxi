@@ -1,4 +1,4 @@
-import { Config, Effect, Schema } from "effect"
+import { z } from "zod"
 
 import {
   createPayloadCollectionUrl,
@@ -28,62 +28,57 @@ import {
 const PAYLOAD_REQUEST_TIMEOUT_MS = 5_000
 const TAXMAXI_ORIGIN = "https://www.taxmaxi.com"
 
-class PayloadClientError extends Schema.TaggedError<PayloadClientError>()("PayloadClientError", {
-  message: Schema.String,
-}) {}
+class PayloadClientError extends Error {}
 
-const payloadApiBaseUrl = Effect.gen(function* () {
-  const configuredUrl = yield* Config.string("PAYLOAD_API_URL")
+function payloadApiBaseUrl(): URL {
+  const configuredUrl = process.env.PAYLOAD_API_URL
 
-  return yield* Effect.try({
-    try: () => new URL(configuredUrl),
-    catch: () =>
-      new PayloadClientError({
-        message: "PAYLOAD_API_URL must be an absolute URL",
-      }),
-  })
-})
+  if (!configuredUrl) {
+    throw new PayloadClientError("PAYLOAD_API_URL is required")
+  }
 
-const requestPayload = <A, I>(url: URL, schema: Schema.Schema<A, I>) =>
-  Effect.gen(function* () {
-    const response = yield* Effect.tryPromise({
-      try: () =>
-        fetch(url, {
-          cache: "no-store",
-          headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(PAYLOAD_REQUEST_TIMEOUT_MS),
-        }),
-      catch: (error) =>
-        new PayloadClientError({
-          message: `Payload request failed: ${String(error)}`,
-        }),
+  try {
+    return new URL(configuredUrl)
+  } catch {
+    throw new PayloadClientError("PAYLOAD_API_URL must be an absolute URL")
+  }
+}
+
+async function requestPayload<A>(url: URL, schema: z.ZodType<A>): Promise<A> {
+  let response: Response
+
+  try {
+    response = await fetch(url, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(PAYLOAD_REQUEST_TIMEOUT_MS),
     })
+  } catch (error) {
+    throw new PayloadClientError(`Payload request failed: ${String(error)}`)
+  }
 
-    if (!response.ok) {
-      return yield* Effect.fail(
-        new PayloadClientError({
-          message: `Payload returned HTTP ${response.status}`,
-        })
-      )
-    }
+  if (!response.ok) {
+    throw new PayloadClientError(`Payload returned HTTP ${response.status}`)
+  }
 
-    const body = yield* Effect.tryPromise({
-      try: () => response.json(),
-      catch: (error) =>
-        new PayloadClientError({
-          message: `Payload returned invalid JSON: ${String(error)}`,
-        }),
-    })
+  let body: unknown
 
-    return yield* Schema.decodeUnknown(schema)(body).pipe(
-      Effect.mapError(
-        (error) =>
-          new PayloadClientError({
-            message: `Payload response did not match the content contract: ${String(error)}`,
-          })
-      )
+  try {
+    body = await response.json()
+  } catch (error) {
+    throw new PayloadClientError(`Payload returned invalid JSON: ${String(error)}`)
+  }
+
+  const result = schema.safeParse(body)
+
+  if (!result.success) {
+    throw new PayloadClientError(
+      `Payload response did not match the content contract: ${result.error.message}`
     )
-  })
+  }
+
+  return result.data
+}
 
 function otherLocale(locale: PayloadLocale): PayloadLocale {
   return locale === "en" ? "de" : "en"
@@ -349,32 +344,28 @@ export async function findLandingPage({
   readonly locale: PayloadLocale
   readonly slug: string
 }): Promise<CmsContentPage | null> {
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const baseUrl = yield* payloadApiBaseUrl
-      const response = yield* requestPayload(
-        createPayloadCollectionUrl({ baseUrl, collection: "landing-pages", locale, slug }),
-        LandingPagesResponseSchema
-      )
-      const doc = response.docs[0]
-
-      if (!doc) {
-        return null
-      }
-
-      const alternate = yield* requestPayload(
-        createPayloadDocumentUrl({
-          baseUrl,
-          collection: "landing-pages",
-          id: doc.id,
-          locale: otherLocale(locale),
-        }),
-        LandingPageSchema
-      ).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
-
-      return toLandingPage({ alternate, baseUrl, doc, locale })
-    })
+  const baseUrl = payloadApiBaseUrl()
+  const response = await requestPayload(
+    createPayloadCollectionUrl({ baseUrl, collection: "landing-pages", locale, slug }),
+    LandingPagesResponseSchema
   )
+  const doc = response.docs[0]
+
+  if (!doc) {
+    return null
+  }
+
+  const alternate = await requestPayload(
+    createPayloadDocumentUrl({
+      baseUrl,
+      collection: "landing-pages",
+      id: doc.id,
+      locale: otherLocale(locale),
+    }),
+    LandingPageSchema
+  ).catch(() => undefined)
+
+  return toLandingPage({ alternate, baseUrl, doc, locale })
 }
 
 export async function findNewsArticle({
@@ -384,32 +375,28 @@ export async function findNewsArticle({
   readonly locale: PayloadLocale
   readonly slug: string
 }): Promise<CmsContentPage | null> {
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const baseUrl = yield* payloadApiBaseUrl
-      const response = yield* requestPayload(
-        createPayloadCollectionUrl({ baseUrl, collection: "news-articles", locale, slug }),
-        NewsArticlesResponseSchema
-      )
-      const doc = response.docs[0]
-
-      if (!doc) {
-        return null
-      }
-
-      const alternate = yield* requestPayload(
-        createPayloadDocumentUrl({
-          baseUrl,
-          collection: "news-articles",
-          id: doc.id,
-          locale: otherLocale(locale),
-        }),
-        NewsArticleSchema
-      ).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
-
-      return toNewsArticle({ alternate, baseUrl, doc, locale })
-    })
+  const baseUrl = payloadApiBaseUrl()
+  const response = await requestPayload(
+    createPayloadCollectionUrl({ baseUrl, collection: "news-articles", locale, slug }),
+    NewsArticlesResponseSchema
   )
+  const doc = response.docs[0]
+
+  if (!doc) {
+    return null
+  }
+
+  const alternate = await requestPayload(
+    createPayloadDocumentUrl({
+      baseUrl,
+      collection: "news-articles",
+      id: doc.id,
+      locale: otherLocale(locale),
+    }),
+    NewsArticleSchema
+  ).catch(() => undefined)
+
+  return toNewsArticle({ alternate, baseUrl, doc, locale })
 }
 
 export async function findTaxLawArticle({
@@ -419,30 +406,26 @@ export async function findTaxLawArticle({
   readonly locale: PayloadLocale
   readonly slug: string
 }): Promise<CmsContentPage | null> {
-  return Effect.runPromise(
-    Effect.gen(function* () {
-      const baseUrl = yield* payloadApiBaseUrl
-      const response = yield* requestPayload(
-        createPayloadCollectionUrl({ baseUrl, collection: "tax-law-articles", locale, slug }),
-        TaxLawArticlesResponseSchema
-      )
-      const doc = response.docs[0]
-
-      if (!doc) {
-        return null
-      }
-
-      const alternate = yield* requestPayload(
-        createPayloadDocumentUrl({
-          baseUrl,
-          collection: "tax-law-articles",
-          id: doc.id,
-          locale: otherLocale(locale),
-        }),
-        TaxLawArticleSchema
-      ).pipe(Effect.catchAll(() => Effect.succeed(undefined)))
-
-      return toTaxLawArticle({ alternate, baseUrl, doc, locale })
-    })
+  const baseUrl = payloadApiBaseUrl()
+  const response = await requestPayload(
+    createPayloadCollectionUrl({ baseUrl, collection: "tax-law-articles", locale, slug }),
+    TaxLawArticlesResponseSchema
   )
+  const doc = response.docs[0]
+
+  if (!doc) {
+    return null
+  }
+
+  const alternate = await requestPayload(
+    createPayloadDocumentUrl({
+      baseUrl,
+      collection: "tax-law-articles",
+      id: doc.id,
+      locale: otherLocale(locale),
+    }),
+    TaxLawArticleSchema
+  ).catch(() => undefined)
+
+  return toTaxLawArticle({ alternate, baseUrl, doc, locale })
 }

@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { setResponseHeader } from "@tanstack/react-start/server"
-import { Schema } from "effect"
+import { z } from "zod"
 
 import { findLandingPage, findNewsArticle, findTaxLawArticle } from "./client.server"
 import {
@@ -11,12 +11,10 @@ import {
 } from "./cache-policy.server"
 import { payloadLocales } from "./content"
 
-const contentPageInput = Schema.standardSchemaV1(
-  Schema.Struct({
-    locale: Schema.Literal(...payloadLocales),
-    slug: Schema.Trim.pipe(Schema.nonEmptyString(), Schema.maxLength(200)),
-  })
-)
+const contentPageInput = z.object({
+  locale: z.enum(payloadLocales),
+  slug: z.string().trim().min(1).max(200),
+})
 
 function setCmsCacheHeaders() {
   setResponseHeader("Cache-Control", CMS_BROWSER_CACHE_CONTROL)
