@@ -294,6 +294,10 @@ export function formatCmsDate(value: string, locale: PayloadLocale): string {
 }
 
 function nodeToPlainText(node: LexicalNode): string {
+  if (node.type === "linebreak") {
+    return " "
+  }
+
   if (node.text !== undefined) {
     return node.text
   }

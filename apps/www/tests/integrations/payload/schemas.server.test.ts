@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 
-import { LandingPageSchema } from "./schemas.server"
+import { LandingPageSchema } from "#/integrations/payload/schemas.server"
 
 describe("LandingPageSchema", () => {
   it("decodes expanded relationship nodes and internal document links", () => {

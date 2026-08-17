@@ -2,6 +2,10 @@ import { seo } from "#/lib/seo"
 
 import { getCmsPageUrl, lexicalToPlainText, type CmsContentPage } from "./content"
 
+function serializeJsonLd(value: object): string {
+  return JSON.stringify(value).replaceAll("<", "\\u003c")
+}
+
 export function createCmsPageHead(page: CmsContentPage) {
   const canonicalUrl = page.seo.canonicalUrl ?? getCmsPageUrl(page)
   const socialImage = page.socialImage ?? page.image
@@ -11,7 +15,7 @@ export function createCmsPageHead(page: CmsContentPage) {
   if (page.faqs.length > 0) {
     scripts.push({
       type: "application/ld+json",
-      children: JSON.stringify({
+      children: serializeJsonLd({
         "@context": "https://schema.org",
         "@type": "FAQPage",
         mainEntity: page.faqs.map((faq) => ({
@@ -29,7 +33,7 @@ export function createCmsPageHead(page: CmsContentPage) {
   if (page.kind !== "landing") {
     scripts.push({
       type: "application/ld+json",
-      children: JSON.stringify({
+      children: serializeJsonLd({
         "@context": "https://schema.org",
         "@type": "Article",
         headline: page.title,

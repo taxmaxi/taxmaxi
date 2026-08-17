@@ -8,7 +8,7 @@ import {
   lexicalToPlainText,
   toPayloadLocale,
   type LexicalDocument,
-} from "./content"
+} from "#/integrations/payload/content"
 
 describe("Payload content integration", () => {
   it("maps Paraglide locales to Payload locales", () => {
@@ -60,6 +60,26 @@ describe("Payload content integration", () => {
     }
 
     expect(lexicalToPlainText(document)).toBe("Hold assets for one year.")
+  })
+
+  it("preserves word boundaries across Lexical line breaks", () => {
+    const document: LexicalDocument = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", text: "first" },
+              { type: "linebreak" },
+              { type: "text", text: "second" },
+            ],
+          },
+        ],
+      },
+    }
+
+    expect(lexicalToPlainText(document)).toBe("first second")
   })
 
   it("formats CMS dates in UTC for stable server and client output", () => {

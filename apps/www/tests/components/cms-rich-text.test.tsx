@@ -3,12 +3,82 @@
 import { cleanup, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it } from "vitest"
 
+import { CmsRichText } from "#/components/cms-rich-text"
 import type { LexicalDocument } from "#/integrations/payload/content"
-import { CmsRichText } from "./cms-rich-text"
 
 afterEach(cleanup)
 
 describe("CmsRichText", () => {
+  it.each([
+    ["left", "text-left"],
+    ["center", "text-center"],
+    ["right", "text-right"],
+    ["justify", "text-justify"],
+    ["start", "text-start"],
+    ["end", "text-end"],
+  ] as const)("renders %s paragraph alignment with a safe class", (format, className) => {
+    const document: LexicalDocument = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            format,
+            children: [{ type: "text", text: "Aligned paragraph" }],
+          },
+        ],
+      },
+    }
+
+    render(<CmsRichText document={document} locale="en" />)
+
+    expect(screen.getByText("Aligned paragraph").getAttribute("class")).toBe(className)
+  })
+
+  it("preserves heading tags and their block alignment", () => {
+    const document: LexicalDocument = {
+      root: {
+        type: "root",
+        children: [
+          {
+            type: "heading",
+            tag: "h4",
+            format: "right",
+            children: [{ type: "text", text: "Aligned heading" }],
+          },
+        ],
+      },
+    }
+
+    render(<CmsRichText document={document} locale="en" />)
+
+    expect(
+      screen.getByRole("heading", { level: 4, name: "Aligned heading" }).getAttribute("class")
+    ).toBe("text-right")
+  })
+
+  it.each(["unsafe-class", 2] as const)(
+    "ignores unsupported block alignment format %s",
+    (format) => {
+      const document: LexicalDocument = {
+        root: {
+          type: "root",
+          children: [
+            {
+              type: "paragraph",
+              format,
+              children: [{ type: "text", text: "Unaligned paragraph" }],
+            },
+          ],
+        },
+      }
+
+      render(<CmsRichText document={document} locale="en" />)
+
+      expect(screen.getByText("Unaligned paragraph").getAttribute("class")).toBeNull()
+    }
+  )
+
   it("localizes root-relative links while preserving fragments and external URLs", () => {
     const document: LexicalDocument = {
       root: {

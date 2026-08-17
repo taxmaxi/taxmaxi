@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { CMS_CACHE_CONTROL, withCmsEdgeCache } from "./edge-cache.server"
+import { CMS_CACHE_CONTROL, withCmsEdgeCache } from "#/integrations/payload/edge-cache.server"
 
 describe("CMS edge cache", () => {
   it("stores CMS responses and serves a fresh response without resolving again", async () => {

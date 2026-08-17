@@ -42,14 +42,17 @@ function renderNode(node: LexicalNode, locale: PayloadLocale): ReactNode {
 
   if (node.type === "heading") {
     const children = renderChildren(node, locale)
-    if (node.tag === "h3") return <h3>{children}</h3>
-    if (node.tag === "h4") return <h4>{children}</h4>
-    if (node.tag === "h5") return <h5>{children}</h5>
-    if (node.tag === "h6") return <h6>{children}</h6>
-    return <h2>{children}</h2>
+    const className = blockAlignmentClass(node.format)
+    if (node.tag === "h3") return <h3 className={className}>{children}</h3>
+    if (node.tag === "h4") return <h4 className={className}>{children}</h4>
+    if (node.tag === "h5") return <h5 className={className}>{children}</h5>
+    if (node.tag === "h6") return <h6 className={className}>{children}</h6>
+    return <h2 className={className}>{children}</h2>
   }
 
-  if (node.type === "paragraph") return <p>{renderChildren(node, locale)}</p>
+  if (node.type === "paragraph") {
+    return <p className={blockAlignmentClass(node.format)}>{renderChildren(node, locale)}</p>
+  }
   if (node.type === "quote") return <blockquote>{renderChildren(node, locale)}</blockquote>
   if (node.type === "listitem") return <li>{renderChildren(node, locale)}</li>
 
@@ -77,6 +80,25 @@ function renderNode(node: LexicalNode, locale: PayloadLocale): ReactNode {
   }
 
   return renderChildren(node, locale)
+}
+
+function blockAlignmentClass(format: LexicalNode["format"]): string | undefined {
+  switch (format) {
+    case "left":
+      return "text-left"
+    case "center":
+      return "text-center"
+    case "right":
+      return "text-right"
+    case "justify":
+      return "text-justify"
+    case "start":
+      return "text-start"
+    case "end":
+      return "text-end"
+    default:
+      return undefined
+  }
 }
 
 function linkHref(node: LexicalNode, locale: PayloadLocale): string | undefined {
