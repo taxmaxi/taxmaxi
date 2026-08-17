@@ -4,7 +4,7 @@ import { QueryClient } from "@tanstack/react-query"
 import { TaxMaxi } from "taxmaxi"
 import { describe, expect, it, vi } from "vitest"
 
-import { queries } from "./queries"
+import { queries } from "#/integrations/taxmaxi/queries"
 
 const getRequestUrl = (input: RequestInfo | URL): string => {
   if (typeof input === "string") {

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { BillingCatalog } from "taxmaxi"
 
 import { loadPublicBillingCatalog } from "#/routes/index"
-import { PricingSection, STRIPE_PRICE_LOOKUP_KEYS } from "./pricing-section"
+import { PricingSection, STRIPE_PRICE_LOOKUP_KEYS } from "#/components/pricing-section"
 
 const catalog: BillingCatalog = {
   prices: [

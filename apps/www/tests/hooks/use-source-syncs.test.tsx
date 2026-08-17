@@ -4,7 +4,7 @@ import { act, renderHook } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { SourceSyncJob } from "taxmaxi"
 
-import { useSourceSyncs } from "./use-source-syncs"
+import { useSourceSyncs } from "#/hooks/use-source-syncs"
 
 const source = {
   id: "source-1",
