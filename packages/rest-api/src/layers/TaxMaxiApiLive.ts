@@ -7,6 +7,7 @@
  */
 
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { ProviderAssetReplayServiceLive } from "@my/sync-engine/layers"
 import { FetchHttpClient } from "effect/unstable/http"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -28,6 +29,8 @@ import { PortfolioApiLive } from "./PortfolioApiLive.ts"
 import { CoinGeckoPriceServiceLive } from "./CoinGeckoPriceServiceLive.ts"
 import { CoinGeckoClientLive } from "./CoinGeckoClientLive.ts"
 import { AssetCanonicalizationServiceLive } from "./AssetCanonicalizationServiceLive.ts"
+import { ProviderAssetCandidateServiceLive } from "./ProviderAssetCandidateServiceLive.ts"
+import { ProviderAssetReviewServiceLive } from "./ProviderAssetReviewServiceLive.ts"
 import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import { BillingApiLive } from "./BillingApiLive.ts"
@@ -72,7 +75,15 @@ const CoreApiGroup = Layer.mergeAll(
   LegalReferenceApiLive,
   AnonApiLive,
   PrincipalsApiLive,
-  AssetsApiLive.pipe(Layer.provide(AssetCanonicalizationServiceLive)),
+  AssetsApiLive.pipe(
+    Layer.provide(
+      ProviderAssetReviewServiceLive.pipe(
+        Layer.provide(AssetCanonicalizationServiceLive),
+        Layer.provide(ProviderAssetCandidateServiceLive),
+        Layer.provide(ProviderAssetReplayServiceLive)
+      )
+    )
+  ),
   PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive,

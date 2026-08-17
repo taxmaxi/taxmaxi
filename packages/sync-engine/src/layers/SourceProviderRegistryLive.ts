@@ -7,6 +7,7 @@
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import {
+  COINBASE_PROVIDER_KEY,
   CoinbaseSourceSyncProvider,
   type CoinbaseRecoverableNormalizationError,
   type CoinbaseSourceSyncProviderShape,
@@ -30,7 +31,6 @@ import {
 import { UnsupportedSyncProviderError } from "../shared/SourceProviderRawBatch.ts"
 import { SyncEngineStorageError } from "../services/SyncEngineStorageError.ts"
 
-const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_TRANSACTION_RECORD_TYPE = "coinbase_transaction"
 
 const toReferenceDataError = (

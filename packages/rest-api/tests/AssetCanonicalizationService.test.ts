@@ -4,11 +4,11 @@ import {
   deriveChainType,
   deriveNativeAssetDecimals,
   representationIdForProviderObservation,
-  selectNativePlatform,
   validateEconomicAssetType,
   validateManualRepresentationIdentity,
   validateNativeProviderIdentity,
 } from "../src/layers/AssetCanonicalizationServiceLive.ts"
+import { selectNativePlatform } from "../src/services/coingecko/CoinGeckoPlatformSelection.ts"
 import type { ProviderAssetRecord } from "@my/sync-engine/services"
 import { coinGeckoAssetPlatformSnapshot } from "../src/services/coingecko/CoinGeckoAssetPlatformSnapshot.ts"
 

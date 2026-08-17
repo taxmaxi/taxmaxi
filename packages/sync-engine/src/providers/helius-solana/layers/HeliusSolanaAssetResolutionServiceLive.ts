@@ -792,6 +792,8 @@ const make = Effect.gen(function* () {
               })
             yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
               mapping: exactMapping.value,
+              reviewedBy: null,
+              reviewedAt: new Date(),
               expectedObservedRepresentations: observations,
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })

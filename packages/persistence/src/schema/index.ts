@@ -22,6 +22,7 @@ import * as protocolCandidates from "./ProtocolCandidatesTable.ts"
 import * as protocolMappingEvidence from "./ProtocolMappingEvidenceTable.ts"
 import * as protocolTransactionTypeMappings from "./ProtocolTransactionTypeMappingsTable.ts"
 import * as providerAssetMappings from "./ProviderAssetMappingsTable.ts"
+import * as providerAssetReviewReplays from "./ProviderAssetReviewReplaysTable.ts"
 import * as providerAssetSourceUses from "./ProviderAssetSourceUsesTable.ts"
 import * as providerAssets from "./ProviderAssetsTable.ts"
 import * as providerTransfers from "./ProviderTransfersTable.ts"
@@ -70,6 +71,7 @@ export const schema = {
   ...protocolMappingEvidence,
   ...protocolTransactionTypeMappings,
   ...providerAssetMappings,
+  ...providerAssetReviewReplays,
   ...providerAssetSourceUses,
   ...providerAssets,
   ...providerTransfers,
@@ -161,6 +163,10 @@ export type {
   ProviderAssetMappingInsert,
   ProviderAssetMappingRow,
 } from "./ProviderAssetMappingsTable.ts"
+export type {
+  ProviderAssetReviewReplay,
+  ProviderAssetReviewReplayInsert,
+} from "./ProviderAssetReviewReplaysTable.ts"
 export type {
   ProviderAssetSourceUse,
   ProviderAssetSourceUseInsert,

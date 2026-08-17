@@ -123,6 +123,12 @@ const runWithProvider = <A, E>(
               Effect.die("seedProviderAssetMappingsIfMissing should not be called"),
             approveProviderAssetMappingAndRequestReplay: () =>
               Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
+            rejectProviderAssetMapping: () =>
+              Effect.die("rejectProviderAssetMapping should not be called"),
+            findProviderAssetReviewReplay: () =>
+              Effect.die("findProviderAssetReviewReplay should not be called"),
+            replaceProviderAssetReviewReplay: () =>
+              Effect.die("replaceProviderAssetReviewReplay should not be called"),
             lockProviderAssetApprovalSnapshot: () =>
               Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
             recordProviderAssetSourceUses: () =>

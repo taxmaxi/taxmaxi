@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../persistence/src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { ProviderAssetRepositoryLive } from "../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
+import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
 import { SyncEngineTransactionLive } from "../../persistence/src/layers/SyncEngineTransactionLive.ts"
 import { and, eq } from "../../persistence/src/query/index.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
@@ -14,18 +15,28 @@ import {
   TEST_BTC_REPRESENTATION_ID,
   TEST_PRINCIPAL_ID,
   TEST_SOURCE_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
 } from "../../persistence/tests/support/integration-test-kit.ts"
 import { AssetCanonicalizationServiceLive } from "../src/layers/AssetCanonicalizationServiceLive.ts"
+import { ProviderAssetReviewServiceLive } from "../src/layers/ProviderAssetReviewServiceLive.ts"
 import { AssetCanonicalizationService } from "../src/services/AssetCanonicalizationService.ts"
+import { ProviderAssetCandidateService } from "../src/services/ProviderAssetCandidateService.ts"
+import { ProviderAssetReviewService } from "../src/services/ProviderAssetReviewService.ts"
 import {
   CoinGeckoClient,
   CoinGeckoClientError,
   type CoinGeckoClientShape,
 } from "../src/services/coingecko/CoinGeckoClient.ts"
-import { SyncEngineTransaction } from "@my/sync-engine/services"
+import { ProviderAssetReplayServiceLive } from "@my/sync-engine/layers"
+import {
+  SourceSyncJobNotFoundError,
+  SourceSyncJobRepository,
+  SourceSyncService,
+  SyncEngineTransaction,
+} from "@my/sync-engine/services"
 
 const context = makeIntegrationTestDatabaseContext({
   databaseNamePrefix: "taxmaxi_asset_canonicalization_service",
@@ -55,9 +66,79 @@ const RepositoryLayer = Layer.mergeAll(
   ProviderAssetRepositoryLive,
   SyncEngineTransactionLive
 ).pipe(Layer.provide(context.TestPgClientLive))
+const SourceSyncJobRepositoryTestLive = RepositoriesLive.pipe(
+  Layer.provide(context.TestPgClientLive)
+)
+const SourceSyncServiceFromRepositoryLive = Layer.effect(
+  SourceSyncService,
+  Effect.map(SourceSyncJobRepository, (jobs) =>
+    SourceSyncService.of({
+      startSourceSyncJob: () => Effect.die("Unexpected startSourceSyncJob call"),
+      replaySourceSyncJob: ({ principalId, sourceId }) =>
+        jobs.createOrReuseJob({ principalId, sourceId, mode: "replay", maxAttempts: 3 }).pipe(
+          Effect.map((job) => ({
+            sourceId,
+            jobId: job.id,
+            status: "queued" as const,
+            message: null,
+          }))
+        ),
+      getSourceSyncJob: ({ principalId, sourceId, jobId }) =>
+        jobs
+          .getJob({ principalId, sourceId, jobId })
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === "SourceSyncJobRecordNotVisibleError"
+                ? new SourceSyncJobNotFoundError({ sourceId, jobId })
+                : error
+            )
+          ),
+    })
+  )
+).pipe(Layer.provide(SourceSyncJobRepositoryTestLive))
 const ServiceLayer = AssetCanonicalizationServiceLive.pipe(
   Layer.provide(RepositoryLayer),
   Layer.provide(CoinGeckoClientTestLive)
+)
+
+const makePublicReviewLayer = (coinGeckoClient: CoinGeckoClientShape) =>
+  ProviderAssetReviewServiceLive.pipe(
+    Layer.provide(AssetCanonicalizationServiceLive),
+    Layer.provide(ProviderAssetReplayServiceLive),
+    Layer.provide(
+      Layer.succeed(ProviderAssetCandidateService, {
+        listCandidates: () => Effect.succeed([]),
+      })
+    ),
+    Layer.provide(
+      Layer.succeed(
+        SourceSyncService,
+        SourceSyncService.of({
+          startSourceSyncJob: () => Effect.die("Unexpected startSourceSyncJob call"),
+          replaySourceSyncJob: () => Effect.die("Unexpected replaySourceSyncJob call"),
+          getSourceSyncJob: () => Effect.die("Unexpected getSourceSyncJob call"),
+        })
+      )
+    ),
+    Layer.provide(RepositoryLayer),
+    Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
+  )
+
+const ReplayPublicReviewLayer = ProviderAssetReviewServiceLive.pipe(
+  Layer.provide(ProviderAssetReplayServiceLive),
+  Layer.provide(
+    Layer.succeed(AssetCanonicalizationService, {
+      approveProviderAssetMapping: () => Effect.die("Unexpected approval call"),
+      canonicalizeProviderAssetFromCoinGecko: () => Effect.die("Unexpected canonicalization call"),
+    })
+  ),
+  Layer.provide(
+    Layer.succeed(ProviderAssetCandidateService, {
+      listCandidates: () => Effect.die("Unexpected candidate call"),
+    })
+  ),
+  Layer.provide(SourceSyncServiceFromRepositoryLive),
+  Layer.provide(RepositoryLayer)
 )
 
 const runService = <A, E>(effect: Effect.Effect<A, E, AssetCanonicalizationService>) =>
@@ -256,6 +337,363 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
   })
 
+  it("uses exact token evidence before a coin's native platform", async () => {
+    const providerAssetRowId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .insert(schema.blockchains)
+          .values({
+            name: "polygon-pos",
+            chainType: "evm",
+            chainId: 137,
+            nativeAssetSymbol: "POL",
+            coingeckoPlatformId: "polygon-pos",
+          })
+          .returning({ id: schema.blockchains.id })
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "ethereum-on-polygon",
+            currencyCode: "ETH",
+            name: "Ethereum",
+            exponent: 18,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-17T09:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "ethereum-on-polygon-transaction",
+            timestamp: new Date("2026-08-17T09:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (blockchain === undefined || providerAsset === undefined || transaction === undefined) {
+          return yield* Effect.die("Failed to seed token evidence fixture")
+        }
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: "ethereum-on-polygon-transfer",
+          providerAssetId: providerAsset.id,
+          timestamp: new Date("2026-08-17T09:00:00.000Z"),
+          direction: "inbound",
+          processingMode: "accounting_and_evidence",
+          fromAddress: "0x2222222222222222222222222222222222222222",
+          toAccountRef: "coinbase-account-1",
+          amount: "1",
+          observedBlockchainId: blockchain.id,
+          observedRepresentationType: "token",
+          observedContractAddress: "0x1111111111111111111111111111111111111111",
+          observedDecimals: 18,
+          metadata: {},
+        })
+        return providerAsset.id
+      })
+    )
+    const coinGeckoClient = CoinGeckoClient.of({
+      searchCoins: () => Effect.succeed([{ id: "ethereum", name: "Ethereum", symbol: "eth" }]),
+      getCoin: () =>
+        Effect.succeed({
+          id: "ethereum",
+          symbol: "eth",
+          name: "Ethereum",
+          asset_platform_id: null,
+          platforms: {
+            "arbitrum-one": "0x3333333333333333333333333333333333333333",
+            "polygon-pos": "0x1111111111111111111111111111111111111111",
+          },
+          detail_platforms: {
+            "arbitrum-one": {
+              contract_address: "0x3333333333333333333333333333333333333333",
+              decimal_place: 18,
+            },
+            "polygon-pos": {
+              contract_address: "0x1111111111111111111111111111111111111111",
+              decimal_place: 18,
+            },
+          },
+        }),
+      listMarkets: () => Effect.succeed([]),
+    })
+    const layer = makePublicReviewLayer(coinGeckoClient)
+
+    const result = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
+          service.decide({
+            providerAssetRowId,
+            decision: { _tag: "CreateFromCoinGecko", coinId: "ethereum" },
+            reviewerNotes: "Use reviewed Polygon contract evidence.",
+            reviewedBy: TEST_USER_ID,
+          })
+        ),
+        layer,
+      })
+    )
+
+    expect(result.canonicalAsset).toMatchObject({
+      blockchainName: "polygon-pos",
+      representationType: "token",
+      contractAddress: "0x1111111111111111111111111111111111111111",
+    })
+
+    const secondProviderAssetRowId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [blockchain] = yield* db
+          .insert(schema.blockchains)
+          .values({
+            name: "arbitrum-one",
+            chainType: "evm",
+            chainId: 42_161,
+            nativeAssetSymbol: "ETH",
+            coingeckoPlatformId: "arbitrum-one",
+          })
+          .returning({ id: schema.blockchains.id })
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "ethereum-on-arbitrum",
+            currencyCode: "ETH",
+            name: "Ethereum",
+            exponent: 18,
+            providerType: "crypto",
+            retrievedAt: new Date("2026-08-17T10:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        const [transaction] = yield* db
+          .insert(schema.transactions)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            externalId: "ethereum-on-arbitrum-transaction",
+            timestamp: new Date("2026-08-17T10:00:00.000Z"),
+            principalId: TEST_PRINCIPAL_ID,
+          })
+          .returning({ id: schema.transactions.id })
+        if (blockchain === undefined || providerAsset === undefined || transaction === undefined) {
+          return yield* Effect.die("Failed to seed existing economic asset fixture")
+        }
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "pending_review",
+        })
+        yield* db.insert(schema.providerTransfers).values({
+          sourceId: TEST_SOURCE_ID,
+          transactionId: transaction.id,
+          externalId: "ethereum-on-arbitrum-transfer",
+          providerAssetId: providerAsset.id,
+          timestamp: new Date("2026-08-17T10:00:00.000Z"),
+          direction: "inbound",
+          processingMode: "accounting_and_evidence",
+          fromAddress: "0x4444444444444444444444444444444444444444",
+          toAccountRef: "coinbase-account-1",
+          amount: "1",
+          observedBlockchainId: blockchain.id,
+          observedRepresentationType: "token",
+          observedContractAddress: "0x3333333333333333333333333333333333333333",
+          observedDecimals: 18,
+          metadata: {},
+        })
+        return providerAsset.id
+      })
+    )
+    const secondResult = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
+          service.decide({
+            providerAssetRowId: secondProviderAssetRowId,
+            decision: { _tag: "CreateFromCoinGecko", coinId: "ethereum" },
+            reviewerNotes: "Add reviewed Arbitrum representation.",
+            reviewedBy: TEST_USER_ID,
+          })
+        ),
+        layer,
+      })
+    )
+
+    expect(secondResult.canonicalAsset).toMatchObject({
+      id: result.canonicalAsset?.id,
+      blockchainName: "arbitrum-one",
+      representationType: "token",
+      contractAddress: "0x3333333333333333333333333333333333333333",
+    })
+    expect(secondResult.canonicalAsset?.representationId).not.toBe(
+      result.canonicalAsset?.representationId
+    )
+  })
+
+  it("keeps a stable public replay link through a failed follow-up and retry", async () => {
+    const fixture = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "eur-follow-up-replay",
+            currencyCode: "EUR",
+            name: "Euro",
+            exponent: 2,
+            providerType: "fiat",
+            retrievedAt: new Date("2026-08-17T11:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed replay provider asset")
+        }
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "fiat",
+          mappingStatus: "pending_review",
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+        })
+        const [activeJob] = yield* db
+          .insert(schema.processingJobs)
+          .values({
+            sourceId: TEST_SOURCE_ID,
+            principalId: TEST_PRINCIPAL_ID,
+            mode: "sync",
+            status: "processing",
+          })
+          .returning({ id: schema.processingJobs.id })
+        if (activeJob === undefined) {
+          return yield* Effect.die("Failed to seed active sync job")
+        }
+        return { activeJobId: activeJob.id, providerAssetRowId: providerAsset.id }
+      })
+    )
+
+    const approval = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
+          service.decide({
+            providerAssetRowId: fixture.providerAssetRowId,
+            decision: { _tag: "ApproveAsFiat" },
+            reviewerNotes: "Reviewed EUR evidence.",
+            reviewedBy: TEST_USER_ID,
+          })
+        ),
+        layer: ReplayPublicReviewLayer,
+      })
+    )
+    expect(approval.replays).toEqual([
+      {
+        sourceId: TEST_SOURCE_ID,
+        principalId: TEST_PRINCIPAL_ID,
+        jobId: fixture.activeJobId,
+      },
+    ])
+
+    await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(SourceSyncJobRepository, (jobs) =>
+          jobs.completeJob({
+            jobId: fixture.activeJobId,
+            state: {
+              phase: "completed",
+              processedRecords: 1,
+              totalRecords: 1,
+              importedRecords: 1,
+              normalizedRecords: 1,
+              failedRecords: 0,
+              cursorPayload: null,
+              highWatermark: null,
+              checkpointExternalId: null,
+              checkpointRawRecordId: null,
+            },
+          })
+        ),
+        layer: SourceSyncJobRepositoryTestLive,
+      })
+    )
+    const followUpJobId = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [job] = yield* db
+          .select({ id: schema.processingJobs.id })
+          .from(schema.processingJobs)
+          .where(
+            and(
+              eq(schema.processingJobs.sourceId, TEST_SOURCE_ID),
+              eq(schema.processingJobs.mode, "replay")
+            )
+          )
+        if (job === undefined) {
+          return yield* Effect.die("Follow-up replay job was not created")
+        }
+        return job.id
+      })
+    )
+    await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(SourceSyncJobRepository, (jobs) =>
+          Effect.gen(function* () {
+            yield* jobs.claimJob({
+              jobId: followUpJobId,
+              workerId: "provider-asset-review-test-worker",
+              startedAt: new Date("2026-08-17T11:01:00.000Z"),
+            })
+            yield* jobs.failJob({
+              jobId: followUpJobId,
+              message: "Replay failed.",
+              completedAt: new Date("2026-08-17T11:02:00.000Z"),
+            })
+          })
+        ),
+        layer: SourceSyncJobRepositoryTestLive,
+      })
+    )
+
+    const failedStatus = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
+          service.getReplay({
+            providerAssetRowId: fixture.providerAssetRowId,
+            sourceId: TEST_SOURCE_ID,
+            jobId: fixture.activeJobId,
+          })
+        ),
+        layer: ReplayPublicReviewLayer,
+      })
+    )
+    const retried = await Effect.runPromise(
+      context.runWithLayer({
+        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
+          service.retryReplay({
+            providerAssetRowId: fixture.providerAssetRowId,
+            sourceId: TEST_SOURCE_ID,
+            jobId: fixture.activeJobId,
+          })
+        ),
+        layer: ReplayPublicReviewLayer,
+      })
+    )
+
+    expect(failedStatus).toMatchObject({
+      jobId: fixture.activeJobId,
+      status: "failed",
+      message: "Replay failed.",
+    })
+    expect(retried).toMatchObject({ sourceId: TEST_SOURCE_ID, status: "queued" })
+    expect(retried.jobId).not.toBe(fixture.activeJobId)
+    expect(retried.jobId).not.toBe(followUpJobId)
+  })
+
   it("approves a chainless NFT provider asset to an NFT target", async () => {
     const providerAssetRowId = await seedChainlessPendingProviderAsset({
       providerAssetId: "chainless-nft-approval",
@@ -414,6 +852,7 @@ describe("AssetCanonicalizationServiceLive", () => {
         effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
           service.canonicalizeProviderAssetFromCoinGecko({
             providerAssetRowId,
+            coinId: "ethereum",
             reviewerNotes: "Resolve external evidence first.",
           })
         ),
@@ -449,6 +888,7 @@ describe("AssetCanonicalizationServiceLive", () => {
         effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
           service.canonicalizeProviderAssetFromCoinGecko({
             providerAssetRowId,
+            coinId: "ethereum",
             reviewerNotes: "Provider failure before transaction.",
           })
         ).pipe(Effect.result),
@@ -503,6 +943,7 @@ describe("AssetCanonicalizationServiceLive", () => {
           effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
             service.canonicalizeProviderAssetFromCoinGecko({
               providerAssetRowId,
+              coinId: "ethereum",
               reviewerNotes: "Reject stale provider evidence.",
             })
           ).pipe(Effect.result),
@@ -589,6 +1030,7 @@ describe("AssetCanonicalizationServiceLive", () => {
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.canonicalizeProviderAssetFromCoinGecko({
           providerAssetRowId,
+          coinId: "ethereum",
           reviewerNotes: "Symbol and name only.",
         })
       ).pipe(Effect.result)
@@ -928,6 +1370,7 @@ describe("AssetCanonicalizationServiceLive", () => {
       Effect.flatMap(AssetCanonicalizationService, (service) =>
         service.canonicalizeProviderAssetFromCoinGecko({
           providerAssetRowId: fixture.providerAssetRowId,
+          coinId: "ethereum",
           reviewerNotes: "Conflicting CoinGecko target.",
         })
       ).pipe(Effect.result)
@@ -1041,16 +1484,15 @@ describe("AssetCanonicalizationServiceLive", () => {
         }),
       listMarkets: () => Effect.succeed([]),
     })
-    const layer = AssetCanonicalizationServiceLive.pipe(
-      Layer.provide(RepositoryLayer),
-      Layer.provide(Layer.succeed(CoinGeckoClient, coinGeckoClient))
-    )
+    const layer = makePublicReviewLayer(coinGeckoClient)
     const canonicalization = Effect.runPromise(
       context.runWithLayer({
-        effect: Effect.flatMap(AssetCanonicalizationService, (service) =>
-          service.canonicalizeProviderAssetFromCoinGecko({
+        effect: Effect.flatMap(ProviderAssetReviewService, (service) =>
+          service.decide({
             providerAssetRowId: fixture.providerAssetRowId,
+            decision: { _tag: "CreateFromCoinGecko", coinId: "ethereum" },
             reviewerNotes: "Losing concurrent target.",
+            reviewedBy: TEST_USER_ID,
           })
         ).pipe(Effect.result),
         layer,
@@ -1088,8 +1530,8 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
       expect(result.failure).toMatchObject({
-        _tag: "AssetCanonicalizationBadRequestError",
-        message: "Provider asset mapping is already approved for a different target.",
+        _tag: "ProviderAssetReviewConflictError",
+        message: "Provider asset has already been reviewed.",
       })
     }
     expect(after).toEqual(before)

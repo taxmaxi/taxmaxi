@@ -34,6 +34,7 @@ import {
   type CoinbaseResolvedTransactionTypeMapping,
 } from "../services/CoinbaseReferenceMappingService.ts"
 import {
+  COINBASE_PROVIDER_KEY,
   CoinbaseSourceSyncProvider,
   type CoinbaseSourceSyncProviderShape,
   type CoinbaseNormalizationLookups,
@@ -49,7 +50,6 @@ import {
 } from "../services/CoinbaseSyncClient.ts"
 import { isNegativeAmount } from "../shared/CoinbaseDecimal.ts"
 
-const COINBASE_PROVIDER_KEY = "coinbase"
 const COINBASE_RECORD_TYPE_ACCOUNT = "coinbase_account"
 const COINBASE_RECORD_TYPE_TRANSACTION = "coinbase_transaction"
 const PROVIDER_ASSET_REVIEW_LAYER = "provider_asset_mapping"

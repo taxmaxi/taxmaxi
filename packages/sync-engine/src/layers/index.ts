@@ -1,5 +1,6 @@
 export * from "./ActivityClassificationServiceLive.ts"
 export * from "./SourceSyncServiceLive.ts"
+export * from "./ProviderAssetReplayServiceLive.ts"
 export * from "./SourceSyncJobExecutorLive.ts"
 export * from "./SourceSyncRunServiceLive.ts"
 export * from "./SourceProviderRegistryLive.ts"

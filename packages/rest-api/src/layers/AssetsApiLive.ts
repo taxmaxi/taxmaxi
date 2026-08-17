@@ -24,23 +24,34 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   AssetBadRequestError,
+  AssetConflictError,
   AssetCanonicalizationEvidenceResponse,
   AssetCanonicalizationResponse,
   AssetNotFoundError,
   AssetRepresentationResponse,
+  CanonicalAssetRepresentationResponse,
   CanonicalAssetResponse,
   PendingAssetListResponse,
   PendingAssetResponse,
+  ProviderAssetCandidateListResponse,
+  ProviderAssetCandidateResponse,
+  ProviderAssetDecisionResponse,
+  ProviderAssetReplayResponse,
   ProviderAssetReviewListResponse,
   ProviderAssetReviewRow,
   UnresolvedTransferReconciliationListResponse,
   UnresolvedTransferReconciliationRow,
 } from "../definitions/AssetsApi.ts"
+import { CurrentUser } from "../definitions/AuthMiddleware.ts"
+import { SourceSyncJobResponse, SourceSyncStartResponse } from "../definitions/SourcesApi.ts"
 import { TaxMaxiApi } from "../definitions/TaxMaxiApi.ts"
-import { AssetCanonicalizationService } from "../services/AssetCanonicalizationService.ts"
+import {
+  ProviderAssetReviewService,
+  type ProviderAssetReviewError,
+} from "../services/ProviderAssetReviewService.ts"
 
 const defaultLimit = 50
-const defaultAssetLimit = 500
+const defaultAssetLimit = 50
 
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
@@ -125,6 +136,9 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     name: row.providerAsset.name,
     exponent: row.providerAsset.exponent,
     providerType: row.providerAsset.providerType,
+    rawProviderPayload: row.providerAsset.rawProviderPayload,
+    discoveredAt: row.providerAsset.discoveredAt.toISOString(),
+    retrievedAt: row.providerAsset.retrievedAt.toISOString(),
     mappingKind: row.mapping?.mappingKind ?? null,
     canonicalAssetId: row.mapping?.canonicalAssetId ?? null,
     assetRepresentationId: row.mapping?.assetRepresentationId ?? null,
@@ -132,7 +146,25 @@ const toProviderAssetReviewRow = (row: ProviderAssetReviewRecord) =>
     mappingStatus: row.mapping?.mappingStatus ?? null,
     reviewerNotes: row.mapping?.reviewerNotes ?? null,
     sourceNotes: row.mapping?.sourceNotes ?? null,
+    reviewedBy: row.mapping?.reviewedBy ?? null,
+    reviewedAt: row.mapping?.reviewedAt?.toISOString() ?? null,
   })
+
+const toReplayResponse = (replay: { readonly sourceId: string; readonly jobId: string }) =>
+  ProviderAssetReplayResponse.make({ ...replay, status: "queued" })
+
+const mapReviewError = (error: ProviderAssetReviewError) => {
+  switch (error._tag) {
+    case "ProviderAssetReviewBadRequestError":
+      return new AssetBadRequestError({ message: error.message })
+    case "ProviderAssetReviewConflictError":
+      return new AssetConflictError({ message: error.message })
+    case "ProviderAssetReviewNotFoundError":
+      return new AssetNotFoundError({ message: error.message })
+    case "ProviderAssetReviewInternalError":
+      return toInternalServerError(error.message)
+  }
+}
 
 const toPendingAssetResponse = (row: PendingAssetCatalogRecord) =>
   PendingAssetResponse.make({
@@ -170,7 +202,7 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
     const assetCatalogRepository = yield* AssetCatalogRepository
     const providerAssetRepository = yield* ProviderAssetRepository
     const transferReconciliationRepository = yield* TransferReconciliationRepository
-    const assetCanonicalizationService = yield* AssetCanonicalizationService
+    const providerAssetReviewService = yield* ProviderAssetReviewService
 
     return handlers
       .handle("listAssets", ({ query: urlParams }) =>
@@ -298,55 +330,137 @@ export const AssetsApiLive = HttpApiBuilder.group(TaxMaxiApi, "assets", (handler
       )
       .handle("canonicalizeProviderAsset", ({ params: path, payload }) =>
         Effect.gen(function* () {
-          const result = yield* assetCanonicalizationService
-            .canonicalizeProviderAssetFromCoinGecko({
+          const currentUser = yield* CurrentUser
+          const result = yield* providerAssetReviewService
+            .decide({
               providerAssetRowId: path.id,
+              decision: { _tag: "CreateFromCoinGecko", coinId: payload.coinId },
               reviewerNotes: payload.reviewerNotes ?? null,
+              reviewedBy: currentUser.userId,
             })
-            .pipe(
-              Effect.mapError((error) => {
-                switch (error._tag) {
-                  case "AssetCanonicalizationBadRequestError":
-                    return new AssetBadRequestError({ message: error.message })
-                  case "AssetCanonicalizationProviderError":
-                    return toInternalServerError(error.message)
-                  case "AssetCanonicalizationNotFoundError":
-                    return new AssetNotFoundError({ message: error.message })
-                  case "AssetCanonicalizationInternalError":
-                    return toInternalServerError(error.message)
-                }
-              })
-            )
+            .pipe(Effect.mapError(mapReviewError))
+
+          if (result.canonicalAsset === null || result.evidence === null) {
+            return yield* toInternalServerError("Canonical asset result was incomplete.")
+          }
 
           return AssetCanonicalizationResponse.make({
             providerAsset: toProviderAssetReviewRow(result.providerAsset),
-            canonicalAsset: CanonicalAssetResponse.make(result.canonicalAsset),
-            evidence: AssetCanonicalizationEvidenceResponse.make(result.evidence),
+            canonicalAsset: CanonicalAssetResponse.make({
+              id: result.canonicalAsset.id,
+              name: result.canonicalAsset.name,
+              symbol: result.canonicalAsset.symbol,
+              type: result.canonicalAsset.type,
+            }),
+            representation: CanonicalAssetRepresentationResponse.make({
+              id: result.canonicalAsset.representationId,
+              blockchainId: result.canonicalAsset.blockchainId,
+              blockchainName: result.canonicalAsset.blockchainName,
+              type: result.canonicalAsset.representationType,
+              contractAddress: result.canonicalAsset.contractAddress,
+              mintAddress: result.canonicalAsset.mintAddress,
+              decimals: result.canonicalAsset.decimals,
+            }),
+            evidence: AssetCanonicalizationEvidenceResponse.make({
+              source: "coingecko",
+              economicAsset: {
+                coinId: result.evidence.coinId,
+                name: result.evidence.coinName,
+                symbol: result.evidence.coinSymbol,
+              },
+              representation: {
+                platformId: result.evidence.platformId,
+                platformName: result.evidence.platformName,
+                contractAddress: result.evidence.contractAddress,
+              },
+            }),
+            replays: result.replays.map(toReplayResponse),
           })
         })
       )
       .handle("approveProviderAsset", ({ params: path, payload }) =>
-        assetCanonicalizationService
-          .approveProviderAssetMapping({
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* providerAssetReviewService.decide({
             providerAssetRowId: path.id,
-            canonicalAssetId: payload.canonicalAssetId,
-            assetRepresentationId: payload.assetRepresentationId,
+            decision: {
+              _tag: "MapToExisting",
+              canonicalAssetId: payload.canonicalAssetId,
+              assetRepresentationId: payload.assetRepresentationId,
+            },
             reviewerNotes: payload.reviewerNotes ?? null,
+            reviewedBy: currentUser.userId,
+          })
+          return ProviderAssetDecisionResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            replays: result.replays.map(toReplayResponse),
+          })
+        }).pipe(Effect.mapError(mapReviewError))
+      )
+      .handle("listProviderAssetCandidates", ({ params: path }) =>
+        providerAssetReviewService.listCandidates({ providerAssetRowId: path.id }).pipe(
+          Effect.map((candidates) =>
+            ProviderAssetCandidateListResponse.make({
+              candidates: candidates.map((candidate) =>
+                ProviderAssetCandidateResponse.make(candidate)
+              ),
+            })
+          ),
+          Effect.mapError(mapReviewError)
+        )
+      )
+      .handle("approveProviderAssetAsFiat", ({ params: path, payload }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* providerAssetReviewService.decide({
+            providerAssetRowId: path.id,
+            decision: { _tag: "ApproveAsFiat" },
+            reviewerNotes: payload.reviewerNotes ?? null,
+            reviewedBy: currentUser.userId,
+          })
+          return ProviderAssetDecisionResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            replays: result.replays.map(toReplayResponse),
+          })
+        }).pipe(Effect.mapError(mapReviewError))
+      )
+      .handle("rejectProviderAsset", ({ params: path, payload }) =>
+        Effect.gen(function* () {
+          const currentUser = yield* CurrentUser
+          const result = yield* providerAssetReviewService.decide({
+            providerAssetRowId: path.id,
+            decision: { _tag: "Reject", reason: payload.reason },
+            reviewerNotes: null,
+            reviewedBy: currentUser.userId,
+          })
+          return ProviderAssetDecisionResponse.make({
+            providerAsset: toProviderAssetReviewRow(result.providerAsset),
+            replays: [],
+          })
+        }).pipe(Effect.mapError(mapReviewError))
+      )
+      .handle("getProviderAssetReplay", ({ params: path }) =>
+        providerAssetReviewService
+          .getReplay({
+            providerAssetRowId: path.id,
+            sourceId: path.sourceId,
+            jobId: path.jobId,
           })
           .pipe(
-            Effect.map(toProviderAssetReviewRow),
-            Effect.mapError((error) => {
-              switch (error._tag) {
-                case "AssetCanonicalizationBadRequestError":
-                  return new AssetBadRequestError({ message: error.message })
-                case "AssetCanonicalizationProviderError":
-                  return toInternalServerError(error.message)
-                case "AssetCanonicalizationNotFoundError":
-                  return new AssetNotFoundError({ message: error.message })
-                case "AssetCanonicalizationInternalError":
-                  return toInternalServerError(error.message)
-              }
-            })
+            Effect.map((replay) => SourceSyncJobResponse.make(replay)),
+            Effect.mapError(mapReviewError)
+          )
+      )
+      .handle("retryProviderAssetReplay", ({ params: path }) =>
+        providerAssetReviewService
+          .retryReplay({
+            providerAssetRowId: path.id,
+            sourceId: path.sourceId,
+            jobId: path.jobId,
+          })
+          .pipe(
+            Effect.map((replay) => SourceSyncStartResponse.make(replay)),
+            Effect.mapError(mapReviewError)
           )
       )
   })

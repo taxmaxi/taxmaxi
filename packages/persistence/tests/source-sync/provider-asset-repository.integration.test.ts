@@ -15,6 +15,7 @@ import {
   TEST_EUR_REPRESENTATION_ID,
   TEST_PRINCIPAL_ID,
   TEST_SOURCE_ID,
+  TEST_USER_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -393,6 +394,8 @@ describe("ProviderAssetRepositoryLive", () => {
                 reviewerNotes: "Approved",
                 sourceNotes: "Approved from transfer evidence",
               },
+              reviewedBy: TEST_USER_ID,
+              reviewedAt: new Date("2026-08-17T09:00:00.000Z"),
               expectedObservedRepresentations: [],
               expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
             })
@@ -407,6 +410,8 @@ describe("ProviderAssetRepositoryLive", () => {
             .select({
               status: schema.providerAssetMappings.mappingStatus,
               canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+              reviewedBy: schema.providerAssetMappings.reviewedBy,
+              reviewedAt: schema.providerAssetMappings.reviewedAt,
             })
             .from(schema.providerAssetMappings)
             .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAsset.id))
@@ -418,8 +423,12 @@ describe("ProviderAssetRepositoryLive", () => {
             })
             .from(schema.processingJobs)
             .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const replays = yield* db
+            .select({ sourceId: schema.providerAssetReviewReplays.sourceId })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
 
-          return { jobs, mapping }
+          return { jobs, mapping, replays }
         })
       )
 
@@ -431,8 +440,11 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(state.mapping).toEqual({
         status: "approved",
         canonicalAssetId: TEST_BTC_ASSET_ID,
+        reviewedBy: TEST_USER_ID,
+        reviewedAt: new Date("2026-08-17T09:00:00.000Z"),
       })
       expect(state.jobs).toEqual([{ mode: "sync", status: "pending", followUpMode: "replay" }])
+      expect(state.replays).toEqual([{ sourceId: TEST_SOURCE_ID }])
     })
 
     it("creates a replay job when approval has no active owner", async () => {

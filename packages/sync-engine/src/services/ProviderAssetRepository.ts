@@ -7,17 +7,26 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
  * ProviderAssetMappingKind - Target mapping kind for a provider asset.
  */
-export type ProviderAssetMappingKind = "asset" | "fiat"
+export const ProviderAssetMappingKindSchema = Schema.Literals(["asset", "fiat"])
+
+export type ProviderAssetMappingKind = typeof ProviderAssetMappingKindSchema.Type
 
 /**
  * ProviderAssetMappingStatus - Review lifecycle for provider asset mappings.
  */
-export type ProviderAssetMappingStatus = "approved" | "pending_review" | "rejected"
+export const ProviderAssetMappingStatusSchema = Schema.Literals([
+  "approved",
+  "pending_review",
+  "rejected",
+])
+
+export type ProviderAssetMappingStatus = typeof ProviderAssetMappingStatusSchema.Type
 
 /**
  * ProviderAssetCatalogEntry - Durable provider asset catalog row.
@@ -66,6 +75,7 @@ export interface ProviderAssetMappingDraft {
 /** Result of an idempotent provider-asset approval. */
 export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
+  readonly replays: ReadonlyArray<ProviderAssetReviewReplay>
 }
 
 /**
@@ -86,6 +96,15 @@ export interface ProviderAssetMappingState {
 export interface ProviderAssetReviewMapping extends ProviderAssetMappingState {
   readonly reviewerNotes: string | null
   readonly sourceNotes: string | null
+  readonly reviewedBy: string | null
+  readonly reviewedAt: Date | null
+}
+
+/** Durable replay job linked to a provider-asset review decision. */
+export interface ProviderAssetReviewReplay {
+  readonly sourceId: string
+  readonly principalId: string
+  readonly jobId: string
 }
 
 /**
@@ -145,9 +164,35 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly approveProviderAssetMappingAndRequestReplay: (params: {
     readonly mapping: ProviderAssetMappingDraft
+    readonly reviewedBy?: string | null
+    readonly reviewedAt?: Date
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
+
+  /** Reject one pending mapping without scheduling replay work. */
+  readonly rejectProviderAssetMapping: (params: {
+    readonly providerAssetRowId: string
+    readonly reviewerNotes: string
+    readonly reviewedBy: string | null
+    readonly reviewedAt: Date
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<boolean, SyncEngineStorageError>
+
+  /** Resolve the exact replay linked to one provider-asset decision. */
+  readonly findProviderAssetReviewReplay: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceId: string
+    readonly jobId: string
+  }) => Effect.Effect<Option.Option<ProviderAssetReviewReplay>, SyncEngineStorageError>
+
+  /** Compare-and-set the replay link after retrying a failed job. */
+  readonly replaceProviderAssetReviewReplay: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceId: string
+    readonly previousJobId: string
+    readonly nextJobId: string
+  }) => Effect.Effect<boolean, SyncEngineStorageError>
 
   /**
    * Lock and reload the provider-asset decision snapshot before a caller writes

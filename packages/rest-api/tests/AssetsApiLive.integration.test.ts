@@ -24,7 +24,7 @@ import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
   PendingAssetListResponse,
-  ProviderAssetReviewRow,
+  ProviderAssetDecisionResponse,
   ProviderAssetReviewListResponse,
   UnresolvedTransferReconciliationListResponse,
 } from "../src/definitions/AssetsApi.ts"
@@ -1076,7 +1076,7 @@ describe("AssetsApiLive", () => {
   })
 
   it("approves an exact provider asset target through the admin route", async () => {
-    const routeUserId = "00000000-0000-4000-8000-000000000141"
+    const routeUserId = "00000000-0000-4000-8000-000000000099"
     const routePrincipalId = "00000000-0000-4000-8000-000000000142"
     const routeSourceId = "00000000-0000-4000-8000-000000000143"
     const seeded = await Effect.runPromise(
@@ -1170,28 +1170,30 @@ describe("AssetsApiLive", () => {
           assetRepresentationId: seeded.assetRepresentationId,
           reviewerNotes: "Exact identity checked.",
         },
-        responseSchema: ProviderAssetReviewRow,
+        responseSchema: ProviderAssetDecisionResponse,
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
 
     expect(response.status).toBe(200)
     expect(response.body).toMatchObject({
-      id: seeded.providerAssetId,
-      mappingStatus: "approved",
-      canonicalAssetId: seeded.canonicalAssetId,
-      assetRepresentationId: seeded.assetRepresentationId,
-      reviewerNotes: "Exact identity checked.",
+      providerAsset: {
+        id: seeded.providerAssetId,
+        mappingStatus: "approved",
+        canonicalAssetId: seeded.canonicalAssetId,
+        assetRepresentationId: seeded.assetRepresentationId,
+        reviewerNotes: "Exact identity checked.",
+        reviewedBy: routeUserId,
+      },
     })
 
-    const repeated = await Effect.runPromise(
-      postAdminJson({
+    const repeatedStatus = await Effect.runPromise(
+      postAdminStatus({
         path: `/v1/assets/provider-assets/${seeded.providerAssetId}/approve`,
         payload: {
           canonicalAssetId: seeded.canonicalAssetId,
           assetRepresentationId: seeded.assetRepresentationId,
           reviewerNotes: "Exact identity checked again.",
         },
-        responseSchema: ProviderAssetReviewRow,
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
     )
     const conflictingStatus = await Effect.runPromise(
@@ -1222,8 +1224,8 @@ describe("AssetsApiLive", () => {
       }).pipe(Effect.provide(TestPgClientLive))
     )
 
-    expect(repeated.status).toBe(200)
-    expect(conflictingStatus).toBe(400)
+    expect(repeatedStatus).toBe(409)
+    expect(conflictingStatus).toBe(409)
     expect(durableState.mapping).toEqual({
       canonicalAssetId: seeded.canonicalAssetId,
       assetRepresentationId: seeded.assetRepresentationId,

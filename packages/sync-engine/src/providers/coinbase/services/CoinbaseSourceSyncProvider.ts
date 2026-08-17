@@ -37,6 +37,9 @@ import type {
   CoinbaseResolvedTransactionTypeMapping,
 } from "./CoinbaseReferenceMappingService.ts"
 
+/** Concrete provider key for Coinbase custody ingestion. */
+export const COINBASE_PROVIDER_KEY = "coinbase"
+
 /**
  * CoinbaseNormalizationLookups - Provider-side lookup data reused across normalization.
  */

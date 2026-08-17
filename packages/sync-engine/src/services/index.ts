@@ -1,6 +1,7 @@
 export * from "./ActivityClassificationService.ts"
 export * from "./AssetRepository.ts"
 export * from "./ProviderAssetRepository.ts"
+export * from "./ProviderAssetReplayService.ts"
 export * from "./ProviderReferenceRepository.ts"
 export * from "./ProtocolCandidateRepository.ts"
 export * from "./ProtocolTransactionTypeMappingRepository.ts"
