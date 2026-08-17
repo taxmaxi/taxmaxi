@@ -47,10 +47,10 @@ vi.mock("stripe", () => ({
             stripeSdkMockState.calls.push(["prices.autoPagingToArray", options])
             return Promise.resolve([
               {
-                id: "price_listed",
-                active: true,
+                id: params.active === false ? "price_inactive" : "price_active",
+                active: params.active !== false,
                 billing_scheme: "per_unit",
-                lookup_key: "listed_price",
+                lookup_key: params.active === false ? "inactive_price" : "active_price",
                 product: "prod_listed",
                 currency: "eur",
                 unit_amount: 1_000,
@@ -298,7 +298,7 @@ describe("Stripe catalog setup", () => {
     }
 
     await client.listProducts()
-    await client.listPrices()
+    const listedPrices = await client.listPrices()
     await client.createProduct(productInput)
     await client.updateProduct("prod_created", productInput)
     await client.createPrice(priceInput)
@@ -308,10 +308,17 @@ describe("Stripe catalog setup", () => {
       metadata: { taxmaxi_catalog_lookup_key: priceInput.lookupKey },
     })
 
+    expect(listedPrices.map(({ id, active }) => ({ id, active }))).toEqual([
+      { id: "price_active", active: true },
+      { id: "price_inactive", active: false },
+    ])
+
     expect(stripeSdkMockState.calls).toEqual([
       ["products.list", { limit: 100 }],
       ["products.autoPagingToArray", { limit: 10_000 }],
-      ["prices.list", { limit: 100 }],
+      ["prices.list", { active: true, limit: 100 }],
+      ["prices.autoPagingToArray", { limit: 10_000 }],
+      ["prices.list", { active: false, limit: 100 }],
       ["prices.autoPagingToArray", { limit: 10_000 }],
       [
         "products.create",

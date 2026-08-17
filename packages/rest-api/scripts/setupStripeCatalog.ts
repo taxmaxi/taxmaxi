@@ -415,8 +415,13 @@ export const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => 
     return Promise.all(products.map(decodeStripeProductRecord))
   },
   listPrices: async () => {
-    const prices = await stripe.prices.list({ limit: 100 }).autoPagingToArray({ limit: 10_000 })
-    return Promise.all(prices.map(decodeStripePriceRecord))
+    const activePrices = await stripe.prices
+      .list({ active: true, limit: 100 })
+      .autoPagingToArray({ limit: 10_000 })
+    const inactivePrices = await stripe.prices
+      .list({ active: false, limit: 100 })
+      .autoPagingToArray({ limit: 10_000 })
+    return Promise.all([...activePrices, ...inactivePrices].map(decodeStripePriceRecord))
   },
   createProduct: async (input) => {
     const product = await stripe.products.create(
