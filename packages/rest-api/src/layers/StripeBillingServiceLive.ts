@@ -519,6 +519,23 @@ export const isCatalogPriceCadenceValid = ({
     : isValidAnnualPrice(price)
 }
 
+export const isCatalogPriceDefinitionValid = (price: {
+  readonly lookup_key: string | null
+  readonly currency: string
+  readonly unit_amount: number | null
+  readonly tax_behavior: Stripe.Price.TaxBehavior | null
+  readonly recurring: { readonly interval: string; readonly interval_count: number } | null
+}): boolean => {
+  const catalogItem = TAXMAXI_STRIPE_CATALOG.find((item) => item.lookupKey === price.lookup_key)
+  return (
+    catalogItem !== undefined &&
+    price.currency === catalogItem.currency &&
+    price.unit_amount === catalogItem.unitAmount &&
+    price.tax_behavior === catalogItem.taxBehavior &&
+    isCatalogPriceCadenceValid({ lookupKey: price.lookup_key, price })
+  )
+}
+
 export const hasCompleteCatalogLookupKeys = (
   prices: ReadonlyArray<{ readonly lookup_key: string | null }>
 ): boolean =>
@@ -1020,6 +1037,15 @@ const make = Effect.gen(function* () {
     ? Effect.succeed(stripe.value)
     : Effect.fail(stripeError("Stripe billing is not configured"))
 
+  const logStripeRequestFailure = (operation: string, cause: unknown) =>
+    Effect.logError(
+      {
+        ...stripeRequestLogAttributes(cause),
+        operation,
+      },
+      "Stripe request failed"
+    )
+
   const stripePromise = <A>(operation: string, run: (client: Stripe) => Promise<A>) =>
     stripeClient.pipe(
       Effect.flatMap((client) =>
@@ -1027,15 +1053,7 @@ const make = Effect.gen(function* () {
           try: () => run(client),
           catch: (cause) => new StripeRequestError({ cause }),
         }).pipe(
-          Effect.tapError((error) =>
-            Effect.logError(
-              {
-                ...stripeRequestLogAttributes(error.cause),
-                operation,
-              },
-              "Stripe request failed"
-            )
-          ),
+          Effect.tapError((error) => logStripeRequestFailure(operation, error.cause)),
           Effect.mapError((error) =>
             stripeError(
               error.cause instanceof Error
@@ -1178,6 +1196,11 @@ const make = Effect.gen(function* () {
           stripeError("Stripe catalog must include every supported lookup key exactly once")
         )
       }
+      if (!fixedPrices.every(isCatalogPriceDefinitionValid)) {
+        return Effect.fail(
+          stripeError("Stripe catalog prices do not match the TaxMaxi catalog definition")
+        )
+      }
       return Effect.succeed(
         fixedPrices.map(
           (price): BillingCatalogPrice => ({
@@ -1247,17 +1270,18 @@ const make = Effect.gen(function* () {
             Effect.flatMap((client) =>
               Effect.tryPromise({
                 try: () => client.checkout.sessions.create(params, { idempotencyKey }),
-                catch: (cause) => ({
-                  cause,
-                  error: stripeError(
-                    cause instanceof Error
-                      ? `Could not create annual Checkout: ${cause.message}`
-                      : "Could not create annual Checkout: Stripe request failed"
-                  ),
-                }),
+                catch: (cause) => new StripeRequestError({ cause }),
               }).pipe(
-                Effect.catch(({ cause, error }) =>
-                  isDefinitiveAnnualCheckoutCreationFailure(cause)
+                Effect.tapError((error) =>
+                  logStripeRequestFailure("Could not create annual Checkout", error.cause)
+                ),
+                Effect.catch((error) => {
+                  const checkoutError = stripeError(
+                    error.cause instanceof Error
+                      ? `Could not create annual Checkout: ${error.cause.message}`
+                      : "Could not create annual Checkout: Stripe request failed"
+                  )
+                  return isDefinitiveAnnualCheckoutCreationFailure(error.cause)
                     ? billingRepository
                         .clearAnnualCheckoutReservation({
                           userId,
@@ -1267,10 +1291,10 @@ const make = Effect.gen(function* () {
                           Effect.mapError(() =>
                             stripeError("Could not clear failed annual Checkout reservation")
                           ),
-                          Effect.andThen(Effect.fail(error))
+                          Effect.andThen(Effect.fail(checkoutError))
                         )
-                    : Effect.fail(error)
-                )
+                    : Effect.fail(checkoutError)
+                })
               )
             )
           ),

@@ -174,6 +174,7 @@ import {
   hasCompleteCatalogLookupKeys,
   hasFixedUnitAmount,
   invoicePaymentReference,
+  isCatalogPriceDefinitionValid,
   isCatalogPriceCadenceValid,
   isAnnualInvoiceEligible,
   isAnnualInvoiceLineEligible,
@@ -194,6 +195,7 @@ import {
   validateStripeWebhookEvent,
 } from "../src/layers/StripeBillingServiceLive.ts"
 import { StripeBillingService } from "../src/services/StripeBillingService.ts"
+import { TAXMAXI_STRIPE_CATALOG } from "../src/services/StripeCatalog.ts"
 
 const TEST_USER_ID = AuthUserId.make("00000000-0000-4000-8000-000000000192")
 const OTHER_USER_ID = AuthUserId.make("00000000-0000-4000-8000-000000000193")
@@ -285,6 +287,20 @@ const loadServiceWithStripe = (billingRepository: BillingRepositoryService) =>
       )
     )
   )
+
+const completeStripeCatalog = () =>
+  TAXMAXI_STRIPE_CATALOG.map((item) => ({
+    id: `price_${item.lookupKey}`,
+    lookup_key: item.lookupKey,
+    product: `prod_${item.lookupKey}`,
+    recurring:
+      item.recurringInterval === null
+        ? null
+        : { interval: item.recurringInterval, interval_count: 1 },
+    unit_amount: item.unitAmount,
+    currency: item.currency,
+    tax_behavior: item.taxBehavior,
+  }))
 
 describe("StripeBillingServiceLive", () => {
   it("scopes annual billing state to the TaxMaxi annual plan", () => {
@@ -817,6 +833,43 @@ describe("StripeBillingServiceLive", () => {
     expect(isSupportedCatalogCurrency("eur")).toBe(true)
     expect(isSupportedCatalogCurrency("usd")).toBe(false)
     expect(isSupportedCatalogCurrency("jpy")).toBe(false)
+  })
+
+  it("validates every Stripe catalog price against its complete catalog definition", () => {
+    const [annualPrice] = completeStripeCatalog()
+
+    expect(annualPrice).toBeDefined()
+    if (annualPrice === undefined) return
+
+    expect(isCatalogPriceDefinitionValid(annualPrice)).toBe(true)
+    expect(isCatalogPriceDefinitionValid({ ...annualPrice, unit_amount: 1 })).toBe(false)
+    expect(isCatalogPriceDefinitionValid({ ...annualPrice, tax_behavior: "exclusive" })).toBe(false)
+  })
+
+  it.each([
+    ["amount", { unit_amount: 1 }],
+    ["tax behavior", { tax_behavior: "exclusive" as const }],
+  ])("rejects a complete Stripe catalog with the wrong %s", async (_, override) => {
+    const prices = completeStripeCatalog()
+    const firstPrice = prices[0]
+
+    expect(firstPrice).toBeDefined()
+    if (firstPrice === undefined) return
+
+    stripeMockState.prices = [{ ...firstPrice, ...override }, ...prices.slice(1)]
+    try {
+      const service = await loadServiceWithStripe(billingRepositoryStub)
+      const result = await Effect.runPromise(Effect.result(service.catalog))
+
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: {
+          message: "Stripe catalog prices do not match the TaxMaxi catalog definition",
+        },
+      })
+    } finally {
+      stripeMockState.prices = []
+    }
   })
 
   it("rejects a catalog price whose cadence contradicts its lookup key", async () => {
@@ -1776,6 +1829,10 @@ describe("StripeBillingServiceLive", () => {
   })
 
   it("clears a definitive failed annual Checkout reservation before retrying", async () => {
+    const logMessages: Array<unknown> = []
+    const logger = Logger.make<unknown, void>(({ message }) => {
+      logMessages.push(message)
+    })
     const currentPrice = {
       id: "price_current_annual",
       lookup_key: "taxmaxi_annual_10k_eur",
@@ -1815,7 +1872,9 @@ describe("StripeBillingServiceLive", () => {
         }),
     })
 
-    const first = await Effect.runPromise(Effect.result(service.createAnnualCheckout(TEST_USER_ID)))
+    const first = await Effect.runPromise(
+      Effect.result(service.createAnnualCheckout(TEST_USER_ID)).pipe(Effect.withLogger(logger))
+    )
     stripeMockState.checkoutFailure = null
     const retryUrl = await Effect.runPromise(service.createAnnualCheckout(TEST_USER_ID))
     stripeMockState.listedSubscriptions = null
@@ -1824,6 +1883,14 @@ describe("StripeBillingServiceLive", () => {
       _tag: "Failure",
       failure: { message: "Could not create annual Checkout: Price is inactive" },
     })
+    expect(logMessages).toContainEqual([
+      expect.objectContaining({
+        provider: "stripe",
+        operation: "Could not create annual Checkout",
+        cause: expect.objectContaining({ message: "Price is inactive" }),
+      }),
+      "Stripe request failed",
+    ])
     expect(cleared).toEqual([1])
     expect(retryUrl).toBe("https://checkout.stripe.test/session")
     expect(stripeMockState.checkoutParams).toHaveLength(2)

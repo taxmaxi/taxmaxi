@@ -57,6 +57,7 @@ export interface StripeCatalogPriceInput {
   readonly taxBehavior: "inclusive" | "exclusive"
   readonly recurringInterval: "year" | null
   readonly transferLookupKey: boolean
+  readonly replacedPriceId: string | null
 }
 
 export interface StripeCatalogClient {
@@ -141,13 +142,19 @@ const onlyCandidate = ({
 
 const findProduct = ({
   products,
+  prices,
+  catalogLookupKeys,
   existingPrice,
   spec,
 }: {
   readonly products: ReadonlyArray<StripeCatalogProductRecord>
+  readonly prices: ReadonlyArray<StripeCatalogPriceRecord>
+  readonly catalogLookupKeys: ReadonlySet<string>
   readonly existingPrice: StripeCatalogPriceRecord | undefined
   readonly spec: TaxMaxiStripeCatalogItem
 }): StripeCatalogProductRecord | undefined => {
+  let excludedProductId: string | undefined
+
   if (existingPrice !== undefined) {
     const linkedProduct = products.find(({ id }) => id === existingPrice.productId)
     if (linkedProduct === undefined) {
@@ -155,19 +162,32 @@ const findProduct = ({
         `Price ${existingPrice.id} points to product ${existingPrice.productId}, which could not be loaded`
       )
     }
-    return linkedProduct
+
+    const isSharedWithAnotherCatalogItem = prices.some((price) => {
+      if (price.id === existingPrice.id || price.productId !== linkedProduct.id) return false
+      const associatedLookupKey =
+        price.lookupKey ?? price.metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY]
+      return (
+        associatedLookupKey !== undefined &&
+        associatedLookupKey !== spec.lookupKey &&
+        catalogLookupKeys.has(associatedLookupKey)
+      )
+    })
+    if (!isSharedWithAnotherCatalogItem) return linkedProduct
+    excludedProductId = linkedProduct.id
   }
 
   const metadataMatch = onlyCandidate({
     candidates: products.filter(
-      ({ metadata }) => metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
+      ({ id, metadata }) =>
+        id !== excludedProductId && metadata[STRIPE_CATALOG_PRODUCT_METADATA_KEY] === spec.lookupKey
     ),
     description: `metadata ${STRIPE_CATALOG_PRODUCT_METADATA_KEY}=${spec.lookupKey}`,
   })
   if (metadataMatch !== undefined) return metadataMatch
 
   return onlyCandidate({
-    candidates: products.filter(({ name }) => name === spec.name),
+    candidates: products.filter(({ id, name }) => id !== excludedProductId && name === spec.name),
     description: `name ${spec.name}`,
   })
 }
@@ -188,6 +208,7 @@ export const reconcileStripeCatalog = async ({
   ])
   const products = [...loadedProducts]
   const prices = [...loadedPrices]
+  const catalogLookupKeys = new Set(catalog.map(({ lookupKey }) => lookupKey))
   let productsCreated = 0
   let productsUpdated = 0
   let pricesCreated = 0
@@ -198,7 +219,13 @@ export const reconcileStripeCatalog = async ({
   for (const spec of catalog) {
     const existingPrice = prices.find(({ lookupKey }) => lookupKey === spec.lookupKey)
     const desired = desiredProduct(spec)
-    const existingProduct = findProduct({ products, existingPrice, spec })
+    const existingProduct = findProduct({
+      products,
+      prices,
+      catalogLookupKeys,
+      existingPrice,
+      spec,
+    })
     let product: StripeCatalogProductRecord
 
     if (existingProduct === undefined) {
@@ -250,6 +277,7 @@ export const reconcileStripeCatalog = async ({
         taxBehavior: spec.taxBehavior,
         recurringInterval: spec.recurringInterval,
         transferLookupKey: existingPrice !== undefined,
+        replacedPriceId: existingPrice?.id ?? null,
       })
       prices.push(canonicalPrice)
       pricesCreated += 1
@@ -393,14 +421,7 @@ const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
           : { recurring: { interval: input.recurringInterval, interval_count: 1 } }),
       },
       {
-        idempotencyKey: [
-          "taxmaxi-catalog-price",
-          input.lookupKey,
-          input.productId,
-          input.unitAmount,
-          input.taxBehavior,
-          input.recurringInterval ?? "once",
-        ].join("-"),
+        idempotencyKey: stripeCatalogPriceIdempotencyKey(input),
       }
     )
     return decodeStripePriceRecord(price)
@@ -413,6 +434,18 @@ const makeStripeCatalogClient = (stripe: Stripe): StripeCatalogClient => ({
       })
     ),
 })
+
+export const stripeCatalogPriceIdempotencyKey = (input: StripeCatalogPriceInput): string =>
+  [
+    "taxmaxi-catalog-price",
+    input.lookupKey,
+    input.productId,
+    input.currency,
+    input.unitAmount,
+    input.taxBehavior,
+    input.recurringInterval ?? "once",
+    input.replacedPriceId ?? "initial",
+  ].join("-")
 
 export const assertKeyMatchesEnvironment = (
   environment: StripeEnvironment,

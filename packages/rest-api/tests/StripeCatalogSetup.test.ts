@@ -12,7 +12,9 @@ import {
   loadStripeCatalogRestrictedKey,
   reconcileStripeCatalog,
   runStripeCatalogSetup,
+  stripeCatalogPriceIdempotencyKey,
   type StripeCatalogClient,
+  type StripeCatalogPriceInput,
   type StripeCatalogPriceRecord,
   type StripeCatalogProductRecord,
 } from "../scripts/setupStripeCatalog.ts"
@@ -47,6 +49,7 @@ class FakeStripeCatalogClient implements StripeCatalogClient {
   updatedProducts = 0
   createdPrices = 0
   updatedPrices = 0
+  readonly createdPriceInputs: Array<StripeCatalogPriceInput> = []
   failNextArchive = false
 
   listProducts = () => Promise.resolve(this.products)
@@ -84,6 +87,7 @@ class FakeStripeCatalogClient implements StripeCatalogClient {
 
   createPrice: StripeCatalogClient["createPrice"] = (input) => {
     this.createdPrices += 1
+    this.createdPriceInputs.push(input)
     if (input.transferLookupKey) {
       for (let index = 0; index < this.prices.length; index += 1) {
         const price = this.prices[index]
@@ -216,6 +220,8 @@ describe("Stripe catalog setup", () => {
     expect(client.prices.find((price) => price.lookupKey === spec.lookupKey)?.unitAmount).toBe(
       spec.unitAmount
     )
+    expect(client.createdPriceInputs).toHaveLength(1)
+    expect(client.createdPriceInputs[0]?.replacedPriceId).toBe("price_old")
     expect(client.products[0]).toEqual({
       id: product.id,
       active: true,
@@ -262,6 +268,83 @@ describe("Stripe catalog setup", () => {
       )
     ).toHaveLength(1)
     expect(client.prices.find(({ id }) => id === "price_old")?.active).toBe(false)
+  })
+
+  it("keeps catalog items on separate products when existing prices share one", async () => {
+    const client = new FakeStripeCatalogClient()
+    const catalog = TAXMAXI_STRIPE_CATALOG.slice(0, 2)
+    const firstSpec = catalog[0]
+    const secondSpec = catalog[1]
+    if (firstSpec === undefined || secondSpec === undefined) {
+      throw new Error("TaxMaxi Stripe catalog needs at least two items")
+    }
+
+    const sharedProduct = productRecord({
+      id: "prod_shared",
+      lookupKey: firstSpec.lookupKey,
+      name: firstSpec.name,
+    })
+    client.products.push(sharedProduct)
+    client.prices.push(
+      {
+        id: "price_first",
+        active: true,
+        lookupKey: firstSpec.lookupKey,
+        productId: sharedProduct.id,
+        currency: firstSpec.currency,
+        unitAmount: firstSpec.unitAmount,
+        taxBehavior: firstSpec.taxBehavior,
+        recurringInterval: firstSpec.recurringInterval,
+        recurringIntervalCount: firstSpec.recurringInterval === null ? null : 1,
+        metadata: {},
+      },
+      {
+        id: "price_second",
+        active: true,
+        lookupKey: secondSpec.lookupKey,
+        productId: sharedProduct.id,
+        currency: secondSpec.currency,
+        unitAmount: secondSpec.unitAmount,
+        taxBehavior: secondSpec.taxBehavior,
+        recurringInterval: secondSpec.recurringInterval,
+        recurringIntervalCount: secondSpec.recurringInterval === null ? null : 1,
+        metadata: {},
+      }
+    )
+
+    const result = await reconcileStripeCatalog({ client, catalog })
+
+    const firstPrice = client.prices.find(({ lookupKey }) => lookupKey === firstSpec.lookupKey)
+    const secondPrice = client.prices.find(({ lookupKey }) => lookupKey === secondSpec.lookupKey)
+    expect(result.productsCreated).toBe(2)
+    expect(result.productsUpdated).toBe(0)
+    expect(firstPrice?.productId).not.toBe(sharedProduct.id)
+    expect(secondPrice?.productId).not.toBe(sharedProduct.id)
+    expect(firstPrice?.productId).not.toBe(secondPrice?.productId)
+    expect(client.products.find(({ id }) => id === sharedProduct.id)).toEqual(sharedProduct)
+  })
+
+  it("uses the replaced price as the idempotency generation", () => {
+    const input: StripeCatalogPriceInput = {
+      lookupKey: "taxmaxi_example",
+      productId: "prod_example",
+      currency: "eur",
+      unitAmount: 12_500,
+      taxBehavior: "inclusive",
+      recurringInterval: "year",
+      transferLookupKey: true,
+      replacedPriceId: "price_generation_one",
+    }
+
+    expect(stripeCatalogPriceIdempotencyKey(input)).toBe(
+      stripeCatalogPriceIdempotencyKey({ ...input })
+    )
+    expect(stripeCatalogPriceIdempotencyKey(input)).not.toBe(
+      stripeCatalogPriceIdempotencyKey({
+        ...input,
+        replacedPriceId: "price_generation_two",
+      })
+    )
   })
 
   it("activates an inactive exact-match price", async () => {
