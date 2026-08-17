@@ -3,8 +3,13 @@ import { setResponseHeader } from "@tanstack/react-start/server"
 import { Schema } from "effect"
 
 import { findLandingPage, findNewsArticle, findTaxLawArticle } from "./client.server"
+import {
+  CLOUDFLARE_CACHE_CONTROL_HEADER,
+  CMS_BROWSER_CACHE_CONTROL,
+  CMS_CACHE_TAG,
+  CMS_EDGE_CACHE_CONTROL,
+} from "./cache-policy.server"
 import { payloadLocales } from "./content"
-import { CMS_CACHE_CONTROL } from "./edge-cache.server"
 
 const contentPageInput = Schema.standardSchemaV1(
   Schema.Struct({
@@ -14,7 +19,9 @@ const contentPageInput = Schema.standardSchemaV1(
 )
 
 function setCmsCacheHeaders() {
-  setResponseHeader("Cache-Control", CMS_CACHE_CONTROL)
+  setResponseHeader("Cache-Control", CMS_BROWSER_CACHE_CONTROL)
+  setResponseHeader(CLOUDFLARE_CACHE_CONTROL_HEADER, CMS_EDGE_CACHE_CONTROL)
+  setResponseHeader("Cache-Tag", CMS_CACHE_TAG)
 }
 
 export const getLandingPage = createServerFn({ method: "GET" })
