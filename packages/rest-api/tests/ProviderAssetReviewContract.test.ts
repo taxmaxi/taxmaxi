@@ -931,7 +931,7 @@ describe("ProviderAssetReviewService admin contract", () => {
       symbol: "SOL",
       coingeckoCoinId: "wrapped-solana",
       logoUrl: null,
-      type: "fungible" as const,
+      type: "nft" as const,
       representations: [],
     }
     const owner = {
@@ -988,7 +988,10 @@ describe("ProviderAssetReviewService admin contract", () => {
     const result = await runCandidateSearch({ catalog, client })
     const add = result.proposals.find(({ effect }) => effect._tag === "AddRepresentation")
 
-    expect(add?.conflicts).toEqual([expect.stringContaining(owner.id)])
+    expect(add?.conflicts).toEqual([
+      expect.stringContaining(`TaxMaxi asset ${identityAsset.id} is nft`),
+      expect.stringContaining(owner.id),
+    ])
     expect(result.recommendedProposalId).toContain("existing-representation")
   })
 
@@ -1045,6 +1048,85 @@ describe("ProviderAssetReviewService admin contract", () => {
       `add-representation:${compatibleAsset.id}:wrapped-solana`
     )
   })
+
+  it.each([
+    {
+      assetType: "fungible" as const,
+      providerType: "nft",
+      representationType: "nft" as const,
+    },
+    {
+      assetType: "nft" as const,
+      providerType: "spl-token",
+      representationType: "token" as const,
+    },
+  ])(
+    "conflicts AddRepresentation when a $representationType representation targets a $assetType asset",
+    async ({ assetType, providerType, representationType }) => {
+      const incompatibleAsset = {
+        id: "00000000-0000-4000-8000-000000000036",
+        name: "Wrapped SOL",
+        symbol: "SOL",
+        coingeckoCoinId: "wrapped-solana",
+        logoUrl: null,
+        type: assetType,
+        representations: [],
+      }
+      const candidateRepository: ProviderAssetRepositoryShape = {
+        ...repository,
+        findProviderAssetReviewById: () =>
+          Effect.succeed(
+            Option.some({
+              ...review,
+              providerAsset: { ...review.providerAsset, providerType },
+            })
+          ),
+        listProviderAssetObservedRepresentations: () =>
+          Effect.succeed([
+            {
+              blockchainName: "solana",
+              representationType,
+              contractAddress: null,
+              mintAddress: "So11111111111111111111111111111111111111112",
+              decimals: 9,
+            },
+          ]),
+      }
+      const catalog: AssetCatalogRepositoryShape = {
+        ...assetCatalog,
+        listAssets: () => Effect.succeed([]),
+        findAssetByCoinGeckoId: () => Effect.succeed(Option.some(incompatibleAsset)),
+      }
+      const client = CoinGeckoClient.of({
+        searchCoins: () =>
+          Effect.succeed([{ id: "wrapped-solana", name: "Wrapped SOL", symbol: "sol" }]),
+        getCoin: () =>
+          Effect.succeed({
+            id: "wrapped-solana",
+            symbol: "sol",
+            name: "Wrapped SOL",
+            asset_platform_id: "solana",
+            platforms: { solana: "So11111111111111111111111111111111111111112" },
+            detail_platforms: {
+              solana: {
+                contract_address: "So11111111111111111111111111111111111111112",
+                decimal_place: 9,
+              },
+            },
+          }),
+        listMarkets: unexpected,
+      })
+
+      const result = await runCandidateSearch({ candidateRepository, catalog, client })
+      const add = result.proposals.find(({ effect }) => effect._tag === "AddRepresentation")
+
+      expect(add?.conflicts).toEqual([
+        expect.stringContaining(`TaxMaxi asset ${incompatibleAsset.id} is ${assetType}`),
+      ])
+      expect(result.recommendedProposalId).toBeNull()
+      expect(result.evidenceState).not.toBe("exact")
+    }
+  )
 
   it("uses spam representations for ownership conflicts without proposing them", async () => {
     const spamOwner = {

@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from "vitest"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { AssetCatalogRepositoryLive } from "../../src/layers/AssetCatalogRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
+import { SourceSyncJobRepositoryLive } from "../../src/layers/SourceSyncJobRepositoryLive.ts"
 import { SyncEngineTransactionLive } from "../../src/layers/SyncEngineTransactionLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import { schema } from "../../src/schema/index.ts"
@@ -25,6 +26,7 @@ import { AssetCatalogRepository } from "../../src/services/AssetCatalogRepositor
 import {
   ProviderAssetRepository,
   SourceNormalizationRepository,
+  SourceSyncJobRepository,
   SyncEngineStorageError,
   SyncEngineTransaction,
 } from "@my/sync-engine/services"
@@ -42,6 +44,9 @@ const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository
 
 const runAssetCatalog = <A, E>(effect: Effect.Effect<A, E, AssetCatalogRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: AssetCatalogRepositoryLive }))
+
+const runSourceSyncJobRepository = <A, E>(effect: Effect.Effect<A, E, SourceSyncJobRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: SourceSyncJobRepositoryLive }))
 
 const AtomicNormalizationLayer = Layer.mergeAll(
   ProviderAssetRepositoryLive,
@@ -661,6 +666,124 @@ describe("ProviderAssetRepositoryLive", () => {
 
       expect(result.mappingChanged).toBe(true)
       expect(jobs).toEqual([{ mode: "replay", status: "pending", followUpMode: null }])
+    })
+
+    it("schedules approval replay work behind an active replay", async () => {
+      const providerAsset = await seedPendingApprovalAsset("active-replay-follow-up")
+      const activeReplayJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [activeReplay] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "processing",
+              attemptCount: 1,
+              maxAttempts: 3,
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (activeReplay === undefined) {
+            return yield* Effect.die("Expected active replay job")
+          }
+          return activeReplay.id
+        })
+      )
+
+      const approval = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.approveProviderAssetMappingAndRequestReplay({
+            mapping: {
+              providerAssetRowId: providerAsset.id,
+              mappingKind: "asset",
+              canonicalAssetId: TEST_BTC_ASSET_ID,
+              assetRepresentationId: null,
+              canonicalFiatCurrency: null,
+              mappingStatus: "approved",
+              reviewerNotes: "Approved while replay was processing",
+              sourceNotes: "Active replay follow-up fixture",
+            },
+            expectedObservedRepresentations: [],
+            expectedEvidenceRevision: providerAsset.evidenceRevision,
+            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+          })
+        )
+      )
+      const beforeCompletion = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [activeReplay] = yield* db
+            .select({ followUpMode: schema.processingJobs.followUpMode })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, activeReplayJobId))
+          const [reviewReplay] = yield* db
+            .select({ jobId: schema.providerAssetReviewReplays.jobId })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return { activeReplay, reviewReplay }
+        })
+      )
+
+      expect(approval.replays).toEqual([
+        expect.objectContaining({ jobId: activeReplayJobId, sourceId: TEST_SOURCE_ID }),
+      ])
+      expect(beforeCompletion.activeReplay?.followUpMode).toBe("replay")
+      expect(beforeCompletion.reviewReplay?.jobId).toBe(activeReplayJobId)
+
+      await runSourceSyncJobRepository(
+        Effect.flatMap(SourceSyncJobRepository, (repository) =>
+          repository.completeJob({
+            jobId: activeReplayJobId,
+            state: {
+              phase: "completed",
+              processedRecords: 1,
+              totalRecords: 1,
+              importedRecords: 1,
+              normalizedRecords: 1,
+              failedRecords: 0,
+              cursorPayload: { page: "done" },
+              highWatermark: new Date("2025-04-20T13:00:00.000Z"),
+              checkpointExternalId: "active-replay-follow-up",
+              checkpointRawRecordId: null,
+            },
+          })
+        )
+      )
+      const afterCompletion = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const jobs = yield* db
+            .select({
+              id: schema.processingJobs.id,
+              mode: schema.processingJobs.mode,
+              status: schema.processingJobs.status,
+              followUpJobId: schema.processingJobs.followUpJobId,
+            })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
+          const [reviewReplay] = yield* db
+            .select({
+              jobId: schema.providerAssetReviewReplays.jobId,
+              dispatchState: schema.providerAssetReviewReplays.dispatchState,
+            })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return { jobs, reviewReplay }
+        })
+      )
+
+      const followUpReplay = afterCompletion.jobs.find(({ id }) => id !== activeReplayJobId)
+      expect(afterCompletion.jobs.find(({ id }) => id === activeReplayJobId)).toMatchObject({
+        mode: "replay",
+        status: "completed",
+        followUpJobId: followUpReplay?.id,
+      })
+      expect(followUpReplay).toMatchObject({ mode: "replay", status: "pending" })
+      expect(afterCompletion.reviewReplay).toEqual({
+        jobId: followUpReplay?.id,
+        dispatchState: "failed_to_queue",
+      })
     })
 
     it("replays provider sources even when the asset has no provider-transfer row", async () => {

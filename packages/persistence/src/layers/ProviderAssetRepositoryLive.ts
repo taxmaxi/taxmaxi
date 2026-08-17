@@ -659,7 +659,7 @@ const make = Effect.gen(function* () {
                 ): Effect.Effect<string, SyncEngineStorageError> =>
                   Effect.gen(function* () {
                     const [activeJob] = yield* tx
-                      .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
+                      .select({ id: schema.processingJobs.id })
                       .from(schema.processingJobs)
                       .where(
                         and(
@@ -677,17 +677,15 @@ const make = Effect.gen(function* () {
                       )
 
                     if (activeJob !== undefined) {
-                      if (activeJob.mode !== "replay") {
-                        yield* tx
-                          .update(schema.processingJobs)
-                          .set({ followUpMode: "replay", updatedAt: now })
-                          .where(eq(schema.processingJobs.id, activeJob.id))
-                          .pipe(
-                            wrapSyncEngineSqlError(
-                              "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.attachFollowUp"
-                            )
+                      yield* tx
+                        .update(schema.processingJobs)
+                        .set({ followUpMode: "replay", updatedAt: now })
+                        .where(eq(schema.processingJobs.id, activeJob.id))
+                        .pipe(
+                          wrapSyncEngineSqlError(
+                            "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.attachFollowUp"
                           )
-                      }
+                        )
                       return activeJob.id
                     }
 

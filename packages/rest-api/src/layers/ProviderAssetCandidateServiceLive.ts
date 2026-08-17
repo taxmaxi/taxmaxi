@@ -100,6 +100,10 @@ const representationsShareOwnedIdentity = ({
       matchesAddress(left.contractAddress, right.contractAddress)) ||
     (left.mintAddress !== null && left.mintAddress === right.mintAddress))
 
+const economicAssetTypeForRepresentation = (
+  representation: RepresentationIdentity
+): AssetCatalogAssetRecord["type"] => (representation.type === "nft" ? "nft" : "fungible")
+
 type ProposedRepresentation = RepresentationIdentity
 
 interface CoinGeckoCandidateDetail {
@@ -486,6 +490,17 @@ const make = Effect.gen(function* () {
                   representationsShareOwnedIdentity({ left: proposed, right: representation })
                 )
             )
+            const expectedAssetType = economicAssetTypeForRepresentation(proposed)
+            const conflicts = [
+              ...(asset.type === expectedAssetType
+                ? []
+                : [
+                    `Representation type ${proposed.type} requires a ${expectedAssetType} economic asset, but TaxMaxi asset ${asset.id} is ${asset.type}.`,
+                  ]),
+              ...(representationOwner === undefined
+                ? []
+                : [`Representation is already owned by TaxMaxi asset ${representationOwner.id}.`]),
+            ]
             coinIdsResolvedByExistingAssets.add(detail.coin.id)
             proposals.push({
               id: `add-representation:${asset.id}:${detail.coin.id}`,
@@ -508,10 +523,7 @@ const make = Effect.gen(function* () {
               },
               evidenceStrength: "exact",
               matchReasons: ["CoinGecko representation matches exact observed identity."],
-              conflicts:
-                representationOwner === undefined
-                  ? []
-                  : [`Representation is already owned by TaxMaxi asset ${representationOwner.id}.`],
+              conflicts,
               warnings: [],
               investigationLinks: [coinGeckoLink(detail.coin.id)],
             })
