@@ -384,11 +384,9 @@ const make = Effect.gen(function* () {
   > =>
     Effect.gen(function* () {
       if (!hasSuccessfulProviderStatus(providerStatus)) {
-        return yield* Effect.fail(
-          new CoinbaseRecordNormalizationError({
-            message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found 0`,
-          })
-        )
+        return yield* new CoinbaseRecordNormalizationError({
+          message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found 0`,
+        })
       }
 
       const siblingRecords = yield* sourceRawRecordRepository.listRawRecordsByOccurredAt({
@@ -582,11 +580,9 @@ const make = Effect.gen(function* () {
       const [paired] = eligibleCandidates
 
       if (paired === undefined) {
-        return yield* Effect.fail(
-          new CoinbaseRecordNormalizationError({
-            message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
-          })
-        )
+        return yield* new CoinbaseRecordNormalizationError({
+          message: `Expected one unambiguous paired principal row for ${providerTransactionType ?? "unknown"} near ${sourceRecord.occurredAt.toISOString()}, found ${candidates.length}`,
+        })
       }
 
       return {

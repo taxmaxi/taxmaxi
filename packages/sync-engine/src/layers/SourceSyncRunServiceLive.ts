@@ -119,56 +119,54 @@ const make = Effect.gen(function* () {
       yield* Effect.forEach(
         sources,
         (source) =>
-          Effect.gen(function* () {
-            yield* sourceSyncService
-              .startSourceSyncJob({
-                principalId,
-                sourceId: source.id,
-              })
-              .pipe(
-                Effect.flatMap((started) =>
-                  sourceSyncRunRepository.attachRunItem({
-                    runId: run.id,
-                    sourceId: source.id,
-                    processingJobId: started.jobId,
-                  })
-                ),
-                Effect.catchTags({
-                  SourceNotFoundError: (error) =>
-                    recordRunItemDispatchFailure({
-                      runId: run.id,
-                      principalId,
-                      sourceId: source.id,
-                      errorTag: error._tag,
-                      message: sourceStartFailureMessage(error),
-                    }),
-                  SourceSyncJobNotFoundError: (error) =>
-                    recordRunItemDispatchFailure({
-                      runId: run.id,
-                      principalId,
-                      sourceId: source.id,
-                      errorTag: error._tag,
-                      message: sourceStartFailureMessage(error),
-                    }),
-                  SourceSyncQueueError: (error) =>
-                    recordRunItemDispatchFailure({
-                      runId: run.id,
-                      principalId,
-                      sourceId: source.id,
-                      errorTag: error._tag,
-                      message: sourceStartFailureMessage(error),
-                    }),
-                  UnsupportedProviderError: (error) =>
-                    recordRunItemDispatchFailure({
-                      runId: run.id,
-                      principalId,
-                      sourceId: source.id,
-                      errorTag: error._tag,
-                      message: sourceStartFailureMessage(error),
-                    }),
+          sourceSyncService
+            .startSourceSyncJob({
+              principalId,
+              sourceId: source.id,
+            })
+            .pipe(
+              Effect.flatMap((started) =>
+                sourceSyncRunRepository.attachRunItem({
+                  runId: run.id,
+                  sourceId: source.id,
+                  processingJobId: started.jobId,
                 })
-              )
-          }),
+              ),
+              Effect.catchTags({
+                SourceNotFoundError: (error) =>
+                  recordRunItemDispatchFailure({
+                    runId: run.id,
+                    principalId,
+                    sourceId: source.id,
+                    errorTag: error._tag,
+                    message: sourceStartFailureMessage(error),
+                  }),
+                SourceSyncJobNotFoundError: (error) =>
+                  recordRunItemDispatchFailure({
+                    runId: run.id,
+                    principalId,
+                    sourceId: source.id,
+                    errorTag: error._tag,
+                    message: sourceStartFailureMessage(error),
+                  }),
+                SourceSyncQueueError: (error) =>
+                  recordRunItemDispatchFailure({
+                    runId: run.id,
+                    principalId,
+                    sourceId: source.id,
+                    errorTag: error._tag,
+                    message: sourceStartFailureMessage(error),
+                  }),
+                UnsupportedProviderError: (error) =>
+                  recordRunItemDispatchFailure({
+                    runId: run.id,
+                    principalId,
+                    sourceId: source.id,
+                    errorTag: error._tag,
+                    message: sourceStartFailureMessage(error),
+                  }),
+              })
+            ),
         { concurrency: 4 }
       )
 
