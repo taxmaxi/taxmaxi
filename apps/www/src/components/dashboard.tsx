@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { useRouteContext } from "@tanstack/react-router"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
@@ -25,7 +25,7 @@ import {
   type TaxYear,
 } from "#/lib/dashboard-types"
 import { queries } from "#/integrations/taxmaxi/queries"
-import { TransactionsTable } from "./transactions-table"
+import { TRANSACTION_PAGE_SIZE, TransactionsTable } from "./transactions-table"
 import { SourceSyncIsland } from "./source-sync-island"
 
 type DashboardSummary = {
@@ -61,6 +61,7 @@ export function Dashboard({
 
   const [accountScope, setAccountScope] = useState<AccountScope>(ALL_ACCOUNTS)
   const [taxYear] = useState<TaxYear>(2025)
+  const [transactionCursors, setTransactionCursors] = useState<ReadonlyArray<string | null>>([null])
 
   const accountsById = useMemo(
     () => new Map(accounts.map((account) => [account.id, account])),
@@ -87,12 +88,40 @@ export function Dashboard({
   })
   const activeHoldings = portfolioQuery.data?.assets ?? []
   const isSwitchingPortfolio = portfolioQuery.isFetching && portfolioQuery.isPlaceholderData
+  const transactionCursor = transactionCursors.at(-1) ?? null
+  const transactionQuery = useQuery(
+    queries.transactionList(taxmaxi, {
+      cursor: transactionCursor,
+      limit: TRANSACTION_PAGE_SIZE,
+    })
+  )
 
   useEffect(() => {
-    if (isTaxMaxiUnauthorizedError(portfolioQuery.error)) {
+    if (
+      isTaxMaxiUnauthorizedError(portfolioQuery.error) ||
+      isTaxMaxiUnauthorizedError(transactionQuery.error)
+    ) {
       void onUnauthorized?.()
     }
-  }, [onUnauthorized, portfolioQuery.error])
+  }, [onUnauthorized, portfolioQuery.error, transactionQuery.error])
+
+  const goToNextTransactionPage = () => {
+    const nextCursor = transactionQuery.data?.page.nextCursor
+    if (nextCursor === null || nextCursor === undefined) return
+    setTransactionCursors((current) => [...current, nextCursor])
+  }
+
+  const goToPreviousTransactionPage = () => {
+    setTransactionCursors((current) => (current.length > 1 ? current.slice(0, -1) : current))
+  }
+
+  const handleSourceSyncCompleted = useCallback(
+    async (sourceId: AccountId) => {
+      setTransactionCursors([null])
+      await onSourceSyncCompleted?.(sourceId)
+    },
+    [onSourceSyncCompleted]
+  )
 
   const summary = useMemo<DashboardSummary>(() => {
     const taxSummaries = taxYearAccountSummaries.filter(
@@ -149,7 +178,7 @@ export function Dashboard({
     useSourceSyncs({
       accountsById,
       getSourceSyncJob,
-      onCompleted: onSourceSyncCompleted,
+      onCompleted: handleSourceSyncCompleted,
       onUnauthorized,
       startSourceSync,
     })
@@ -183,7 +212,17 @@ export function Dashboard({
               />
             </TabsContent>
             <TabsContent value="transactions">
-              <TransactionsTable />
+              <TransactionsTable
+                error={transactionQuery.isError}
+                hasNextPage={transactionQuery.data?.page.hasMore ?? false}
+                loading={transactionQuery.isFetching}
+                onNextPage={goToNextTransactionPage}
+                onPreviousPage={goToPreviousTransactionPage}
+                onRetry={() => void transactionQuery.refetch()}
+                pageIndex={transactionCursors.length - 1}
+                totalCount={transactionQuery.data?.totalCount ?? 0}
+                transactions={transactionQuery.data?.transactions ?? []}
+              />
             </TabsContent>
             <TabsContent value="taxes"></TabsContent>
           </Tabs>

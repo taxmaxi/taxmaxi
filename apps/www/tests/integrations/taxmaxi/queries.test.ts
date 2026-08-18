@@ -144,3 +144,35 @@ describe("asset catalog infinite queries", () => {
     }
   )
 })
+
+describe("transaction list queries", () => {
+  it("shows a loading state instead of labeling the previous page as the requested page", () => {
+    const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://transactions.example.test" })
+
+    expect(queries.transactionList(taxmaxi).placeholderData).toBeUndefined()
+  })
+
+  it("forwards the selected transaction cursor", async () => {
+    const requestedUrls: Array<string> = []
+    const taxmaxi = new TaxMaxi({
+      apiKey: "",
+      baseUrl: "https://transactions.example.test",
+      fetch: async (input) => {
+        requestedUrls.push(getRequestUrl(input))
+        return Response.json(
+          { transactions: [], totalCount: 0, page: { hasMore: false, nextCursor: null } },
+          { status: 200 }
+        )
+      },
+    })
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+
+    await queryClient.fetchQuery(
+      queries.transactionList(taxmaxi, { cursor: "transaction-page-2", limit: 7 })
+    )
+
+    expect(requestedUrls).toEqual([
+      "https://transactions.example.test/v1/transactions?cursor=transaction-page-2&limit=7",
+    ])
+  })
+})

@@ -8,6 +8,7 @@
  * @module SourceNormalizationRepositoryLive
  */
 
+import { createHash } from "node:crypto"
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -88,6 +89,31 @@ const hasCompletedProviderStatus = (providerStatus: string | null): boolean =>
 
 const hasFailedProviderStatus = (providerStatus: string | null): boolean =>
   providerStatus?.toLowerCase() === "failed"
+
+const stableTransactionId = ({
+  externalId,
+  sourceId,
+  sourceRawRecordId,
+}: Pick<SourceTransactionDraft, "externalId" | "sourceId" | "sourceRawRecordId">):
+  | string
+  | null => {
+  if (externalId === null && sourceRawRecordId === null) {
+    return null
+  }
+
+  const identity =
+    sourceRawRecordId === null ? `external:${externalId}` : `raw:${sourceRawRecordId}`
+  const digest = createHash("sha256")
+    .update("taxmaxi:canonical-transaction")
+    .update("\0")
+    .update(sourceId)
+    .update("\0")
+    .update(identity)
+    .digest("hex")
+  const variant = ((Number.parseInt(digest.slice(16, 17), 16) & 0x3) | 0x8).toString(16)
+
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-8${digest.slice(13, 16)}-${variant}${digest.slice(17, 20)}-${digest.slice(20, 32)}`
+}
 
 const ProviderTransferMetadataSchema = Schema.Struct({
   role: Schema.optional(Schema.Literals(["principal", "fee", "rent"])),
@@ -410,32 +436,60 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const now = nowDate()
-      const [persisted] = yield* executor
-        .insert(schema.transactions)
-        .values({
-          ...transaction,
-          createdAt: now,
-          updatedAt: now,
+      const deterministicTransactionId = stableTransactionId(transaction)
+      if (deterministicTransactionId === null) {
+        return yield* toSyncEngineStorageError({
+          operation: "sourceNormalizationRepository.upsertTransaction.identity",
+          error: "Transaction is missing a stable source identity",
         })
-        .onConflictDoUpdate({
-          target: [schema.transactions.sourceId, schema.transactions.externalId],
-          targetWhere: sql`${schema.transactions.externalId} is not null`,
-          set: {
-            sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
-            externalGroupId: sql.raw("excluded.external_group_id"),
-            timestamp: sql.raw("excluded.timestamp"),
-            transactionType: sql.raw("excluded.transaction_type"),
-            providerTransactionType: sql.raw("excluded.provider_transaction_type"),
-            providerStatus: sql.raw("excluded.provider_status"),
-            providerResourcePath: sql.raw("excluded.provider_resource_path"),
-            providerDescription: sql.raw("excluded.provider_description"),
-            providerCreatedAt: sql.raw("excluded.provider_created_at"),
-            providerUpdatedAt: sql.raw("excluded.provider_updated_at"),
-            metadata: sql.raw("excluded.metadata"),
-            principalId: sql.raw("excluded.principal_id"),
-            updatedAt: now,
-          },
-        })
+      }
+      const [existingExternalTransaction] =
+        transaction.externalId === null
+          ? []
+          : yield* executor
+              .select({ id: schema.transactions.id })
+              .from(schema.transactions)
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, transaction.sourceId),
+                  eq(schema.transactions.externalId, transaction.externalId)
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.upsertTransaction.findExternal"
+                )
+              )
+      const transactionId = existingExternalTransaction?.id ?? deterministicTransactionId
+
+      const conflictSet = {
+        externalId: sql.raw("excluded.external_id"),
+        sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
+        externalGroupId: sql.raw("excluded.external_group_id"),
+        timestamp: sql.raw("excluded.timestamp"),
+        transactionType: sql.raw("excluded.transaction_type"),
+        providerTransactionType: sql.raw("excluded.provider_transaction_type"),
+        providerStatus: sql.raw("excluded.provider_status"),
+        providerResourcePath: sql.raw("excluded.provider_resource_path"),
+        providerDescription: sql.raw("excluded.provider_description"),
+        providerCreatedAt: sql.raw("excluded.provider_created_at"),
+        providerUpdatedAt: sql.raw("excluded.provider_updated_at"),
+        metadata: sql.raw("excluded.metadata"),
+        principalId: sql.raw("excluded.principal_id"),
+        updatedAt: now,
+      } as const
+      const insert = executor.insert(schema.transactions).values({
+        ...transaction,
+        id: transactionId,
+        createdAt: now,
+        updatedAt: now,
+      })
+      const upsert = insert.onConflictDoUpdate({
+        target: schema.transactions.id,
+        set: conflictSet,
+      })
+      const [persisted] = yield* upsert
         .returning(selectPersistedTransactionFields)
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertTransaction"))
 
@@ -1405,6 +1459,8 @@ const make = Effect.gen(function* () {
           remainingAmount: leg.amount,
           costBasisPerToken,
           costBasisCurrency: leg.fiatCurrency ?? "EUR",
+          costBasisStatus:
+            leg.fiatAmount === null || leg.fiatCurrency === null ? "pending_review" : "known",
           sourceLegId: leg.id,
           sourceLegSequence: 0,
           createdAt: now,
@@ -1415,6 +1471,9 @@ const make = Effect.gen(function* () {
           targetWhere: sql`${schema.fifoLots.sourceLegId} is not null`,
           set: {
             assetRepresentationId: sql.raw("excluded.asset_representation_id"),
+            costBasisPerToken: sql.raw("excluded.cost_basis_per_token"),
+            costBasisCurrency: sql.raw("excluded.cost_basis_currency"),
+            costBasisStatus: sql.raw("excluded.cost_basis_status"),
             updatedAt: now,
           },
           setWhere: eq(schema.fifoLots.assetId, leg.assetId),

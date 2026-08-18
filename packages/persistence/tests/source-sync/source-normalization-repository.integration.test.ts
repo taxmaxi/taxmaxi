@@ -331,6 +331,130 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
+  it("keeps the canonical transaction ID stable after deletion and re-creation", async () => {
+    const transaction = {
+      sourceId: TEST_SOURCE_ID,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+      externalId: null,
+      externalGroupId: "group-stable-rematerialization",
+      timestamp: new Date("2025-01-01T10:00:00.000Z"),
+      transactionType: "buy_fiat",
+      providerTransactionType: "buy",
+      providerStatus: "completed",
+      providerResourcePath:
+        "/v2/accounts/coinbase-account-1/transactions/tx-stable-rematerialization",
+      providerDescription: "Stable rematerialization fixture",
+      providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
+      providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
+      metadata: { provider: "coinbase" },
+      principalId: TEST_PRINCIPAL_ID,
+    } as const
+    const venueContext = {
+      venueType: "cex",
+      cexAccountId: fixture.cexAccountId,
+      externalAccountId: "coinbase-account-1",
+      externalOrderId: null,
+      externalFillId: null,
+      side: "buy",
+      instrument: "BTC-EUR",
+      fillPrice: "10000",
+      commissionAmount: null,
+      commissionCurrency: null,
+      metadata: { provider: "coinbase" },
+    } as const
+    const persist = (externalId: string | null) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: { ...transaction, externalId },
+            venueContext,
+            providerTransfers: [],
+            feeTransfers: [],
+            legs: [],
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+
+    const first = await persist(null)
+    const repeated = await persist(null)
+    expect(repeated.transaction.id).toBe(first.transaction.id)
+    const discovered = await persist("discovered-stable-external-id")
+    const corrected = await persist("corrected-stable-external-id")
+    expect(discovered.transaction.id).toBe(first.transaction.id)
+    expect(corrected.transaction.id).toBe(first.transaction.id)
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.id, first.transaction.id))
+      })
+    )
+    const recreated = await persist("corrected-stable-external-id")
+
+    expect(recreated.transaction.id).toBe(first.transaction.id)
+  })
+
+  it("keeps an external-only transaction ID stable after deletion and re-creation", async () => {
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+    const persist = () =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction: {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: null,
+              externalId: "external-only-stable-transaction",
+              externalGroupId: null,
+              timestamp,
+              transactionType: "buy_fiat",
+              providerTransactionType: "buy",
+              providerStatus: "completed",
+              providerResourcePath: null,
+              providerDescription: "External-only stable transaction",
+              providerCreatedAt: timestamp,
+              providerUpdatedAt: timestamp,
+              metadata: { provider: "test" },
+              principalId: TEST_PRINCIPAL_ID,
+            },
+            venueContext: {
+              venueType: "cex",
+              cexAccountId: fixture.cexAccountId,
+              externalAccountId: "test-account",
+              externalOrderId: null,
+              externalFillId: null,
+              side: "buy",
+              instrument: "BTC-EUR",
+              fillPrice: "10000",
+              commissionAmount: null,
+              commissionCurrency: null,
+              metadata: { provider: "test" },
+            },
+            providerTransfers: [],
+            feeTransfers: [],
+            legs: [],
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+
+    const first = await persist()
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.id, first.transaction.id))
+      })
+    )
+    const recreated = await persist()
+
+    expect(recreated.transaction.id).toBe(first.transaction.id)
+  })
+
   it("reserves replay credits atomically before derived state can be reset", async () => {
     const secondRawRecordId = "00000000-0000-0000-0000-000000000484"
     await runPg(
@@ -2382,6 +2506,95 @@ describe("SourceNormalizationRepositoryLive", () => {
         costBasisPerToken: expectedCostBasisPerToken,
       }),
     ])
+  })
+
+  it("marks a fresh acquisition lot pending when its fiat value is missing", async () => {
+    const timestamp = new Date("2025-01-01T10:00:00.000Z")
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "tx-acquisition-without-fiat-value",
+            externalGroupId: null,
+            timestamp,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: timestamp,
+            providerUpdatedAt: timestamp,
+            metadata: { provider: "test" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "test-account",
+            externalOrderId: null,
+            externalFillId: null,
+            side: "buy",
+            instrument: "BTC-EUR",
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: { provider: "test" },
+          },
+          providerTransfers: [],
+          feeTransfers: [],
+          legs: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "leg-acquisition-without-fiat-value",
+              txHash: null,
+              timestamp,
+              addressId: null,
+              assetId: TEST_BTC_ASSET_ID,
+              amount: "0.5",
+              kind: "acquisition",
+              provenance: "deterministic",
+              derivationRule: "test_missing_fiat_value",
+              metadata: { provider: "test" },
+              transactionId: null,
+              sourceTransferId: null,
+              fiatAmount: null,
+              fiatCurrency: null,
+              feeForTransactionId: null,
+            },
+          ],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+    const leg = result.legs[0]
+    expect(leg).toBeDefined()
+    if (leg === undefined) {
+      return
+    }
+
+    const [lot] = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select()
+          .from(schema.fifoLots)
+          .where(eq(schema.fifoLots.sourceLegId, leg.id))
+      })
+    )
+
+    expect(lot).toEqual(
+      expect.objectContaining({
+        costBasisPerToken: "0.000000000000000000",
+        costBasisCurrency: "EUR",
+        costBasisStatus: "pending_review",
+      })
+    )
   })
 
   it("marks disposals with missing FIFO inventory for review instead of failing", async () => {
