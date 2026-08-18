@@ -32,6 +32,7 @@ import { SourcesApiLive } from "./SourcesApiLive.ts"
 import { SyncRunsApiLive } from "./SyncRunsApiLive.ts"
 import { BillingApiLive } from "./BillingApiLive.ts"
 import { StripeBillingServiceLive } from "./StripeBillingServiceLive.ts"
+import { TransactionsApiLive } from "./TransactionsApiLive.ts"
 
 // =============================================================================
 // Health API Implementation
@@ -76,7 +77,8 @@ const CoreApiGroup = Layer.mergeAll(
   PortfolioApiLive.pipe(Layer.provide(CoinGeckoPriceServiceLive)),
   SourcesApiLive,
   SyncRunsApiLive,
-  BillingApiLive.pipe(Layer.provide(StripeBillingServiceLive))
+  BillingApiLive.pipe(Layer.provide(StripeBillingServiceLive)),
+  TransactionsApiLive
 ).pipe(
   Layer.provide(PrincipalResolutionServiceLive),
   Layer.provide(CoinGeckoClientLive.pipe(Layer.provide(FetchHttpClient.layer)))
