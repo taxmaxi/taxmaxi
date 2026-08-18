@@ -9,6 +9,7 @@ import {
   type SourceSyncStart,
 } from "taxmaxi"
 
+import { appSurfaceClassName } from "#/components/app-workspace"
 import { AssetsTable } from "#/components/assets-table"
 import { SourceCards } from "#/components/source-cards"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "#/components/ui/tabs"
@@ -187,7 +188,7 @@ export function Dashboard({
     <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">
       <SourceSyncIsland items={activeSyncs} onDismiss={onDismissSync} onRetry={onRetrySync} />
       <SourceCards
-        contentClassName="border border-marketing-border text-marketing-foreground ring-0 [background:var(--app-content-background)] [box-shadow:var(--app-content-shadow)] supports-[backdrop-filter]:backdrop-blur-[48px]"
+        contentClassName={appSurfaceClassName}
         onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}
         onSourceSync={onSourceSync}
         selectedSourceId={accountScope === ALL_ACCOUNTS ? undefined : accountScope}

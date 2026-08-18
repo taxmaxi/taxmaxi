@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { AccountMenu } from "#/components/account-menu"
 import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
 import { logoutFromApp } from "#/lib/auth-session"
+import { m } from "#/paraglide/messages"
 
 beforeEach(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -40,7 +41,12 @@ const renderAccountMenu = async (onLogout = vi.fn().mockResolvedValue(undefined)
   const appRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: "/app",
-    component: () => <AccountMenu onLogout={onLogout} />,
+    component: () => (
+      <div>
+        <AccountMenu onLogout={onLogout} />
+        <p>App dashboard</p>
+      </div>
+    ),
   })
   const billingRoute = createRoute({
     getParentRoute: () => appRoute,
@@ -71,7 +77,7 @@ const renderAccountMenu = async (onLogout = vi.fn().mockResolvedValue(undefined)
 }
 
 const openAccountMenu = () => {
-  fireEvent.pointerDown(screen.getByRole("button", { name: "Account menu" }), {
+  fireEvent.pointerDown(screen.getByRole("button", { name: "Menu" }), {
     button: 0,
     ctrlKey: false,
   })
@@ -81,7 +87,9 @@ describe("AccountMenu", () => {
   it("provides the asset catalog return-focus target", async () => {
     await renderAccountMenu()
 
-    expect(screen.getByRole("button", { name: "Account menu" }).id).toBe(ASSET_CATALOG_OPENER_ID)
+    expect(screen.getByRole("button", { name: "Menu" }).id).toBe(ASSET_CATALOG_OPENER_ID)
+    expect(screen.getByRole("button", { name: "Menu" }).textContent).toContain("Menu")
+    expect(m["app.accountMenu.label"]({}, { locale: "de" })).toBe("Menü")
   })
 
   it.each([

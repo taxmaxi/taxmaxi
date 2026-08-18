@@ -59,21 +59,18 @@ function createTranslatedPathnames(
   }))
 }
 
+const cookieLocalePath = (pattern: string): TranslatedPathname => ({
+  pattern,
+  localized: [
+    ["en", pattern],
+    ["de", pattern],
+  ],
+})
+
 const preferenceLocalePathnames = [
-  {
-    pattern: "/dashboard/:path(.*)?",
-    localized: [
-      ["en", "/dashboard/:path(.*)?"],
-      ["de", "/dashboard/:path(.*)?"],
-    ],
-  },
-  {
-    pattern: "/app/:path(.*)?",
-    localized: [
-      ["en", "/app/:path(.*)?"],
-      ["de", "/app/:path(.*)?"],
-    ],
-  },
+  cookieLocalePath("/dashboard/:path(.*)?"),
+  cookieLocalePath("/app"),
+  cookieLocalePath("/app/:path(.*)?"),
 ] satisfies UrlPatterns
 
 export const localeStrategy = ["url", "cookie", "baseLocale"] satisfies LocaleStrategy
@@ -176,9 +173,20 @@ export const translatedPathnames = [
   }),
 ] satisfies UrlPatterns
 
+const cookieLocaleStrategy: LocaleStrategy = ["cookie", "baseLocale"]
+
 export const routeStrategies = [
-  { match: "/dashboard/:path(.*)?", strategy: ["cookie", "baseLocale"] },
-  { match: "/app/:path(.*)?", strategy: ["cookie", "baseLocale"] },
+  { match: "/dashboard/:path(.*)?", strategy: cookieLocaleStrategy },
+  { match: "/app", strategy: cookieLocaleStrategy },
+  { match: "/app/:path(.*)?", strategy: cookieLocaleStrategy },
   { match: "/api/:path(.*)?", exclude: true },
   { match: "/demo/api/:path(.*)?", exclude: true },
 ] satisfies RouteStrategies
+
+export const paraglideCompilerOptions = {
+  cookieName: "PARAGLIDE_LOCALE",
+  outputStructure: "message-modules" as const,
+  strategy: localeStrategy,
+  routeStrategies,
+  urlPatterns: translatedPathnames,
+}

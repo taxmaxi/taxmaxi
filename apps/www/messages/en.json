@@ -27,7 +27,7 @@
     "title": "TaxMaxi App",
     "description": "You are signed in. The app workspace will live here.",
     "accountMenu": {
-      "label": "Account menu",
+      "label": "Menu",
       "assets": "Assets",
       "billing": "Billing",
       "settings": "Settings",
@@ -35,6 +35,7 @@
       "loggingOut": "Logging out…"
     },
     "settings": {
+      "close": "Close settings",
       "eyebrow": "Settings",
       "title": "Account access",
       "description": "Review the email used for security messages and the ways you can log in.",
@@ -58,7 +59,7 @@
       }
     },
     "billing": {
-      "dashboard": "Dashboard",
+      "close": "Close billing",
       "eyebrow": "Billing",
       "title": "Plan and transaction credits",
       "description": "Stripe handles payments and invoices. TaxMaxi tracks the credits available to your account.",

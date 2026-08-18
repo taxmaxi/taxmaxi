@@ -1,14 +1,16 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router"
-import { ArrowLeft, CheckCircle2, CircleAlert, KeyRound, Mail } from "lucide-react"
+import { createFileRoute, redirect } from "@tanstack/react-router"
+import { CheckCircle2, CircleAlert, Mail, Settings } from "lucide-react"
+import { useCallback } from "react"
 import type { Account } from "taxmaxi"
 import { isTaxMaxiUnauthorizedError } from "taxmaxi"
 
-import { AccountMenu } from "#/components/account-menu"
-import { AppHeader } from "#/components/app-header"
-import { PageShell } from "#/components/page-shell"
-import { Button } from "#/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "#/components/ui/card"
-import { useAppLogout } from "#/hooks/use-app-logout"
+import { AppFocusSurface } from "#/components/app-focus-surface"
+import { appPanelClassName } from "#/components/app-workspace"
+import { Badge } from "#/components/ui/badge"
+import CoinbaseIcon from "#/components/ui/logos/coinbase/coinbase-app.svg"
+import GoogleLogo from "#/components/ui/logos/google.svg"
+import { Text } from "#/components/ui/typography"
+import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 import { getLocale } from "#/paraglide/runtime"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
@@ -32,9 +34,12 @@ export const Route = createFileRoute("/app_/settings")({
 
 function SettingsPage() {
   const account = Route.useLoaderData()
-  const onLogout = useAppLogout()
+  const navigate = Route.useNavigate()
+  const onClose = useCallback(() => {
+    void navigate({ to: "/app" })
+  }, [navigate])
 
-  return <SettingsPageContent account={account} onLogout={onLogout} />
+  return <SettingsPageContent account={account} onClose={onClose} />
 }
 
 const providerLabel = (provider: Account["loginMethods"][number]["provider"]): string => {
@@ -71,140 +76,123 @@ const unavailableReasonDescription = (
 
 export function SettingsPageContent({
   account,
-  onLogout,
+  onClose,
 }: {
   readonly account: Account
-  readonly onLogout: () => Promise<void>
+  readonly onClose: () => void
 }) {
   return (
-    <PageShell
-      as="main"
-      tone="marketing"
-      className="relative isolate min-h-screen w-full overflow-x-clip bg-[var(--app-page-fallback)] text-marketing-text"
+    <AppFocusSurface
+      bodyClassName="min-h-0 flex-1 overflow-y-auto"
+      closeLabel={m["app.settings.close"]()}
+      icon={<Settings aria-hidden="true" className="size-4" />}
+      onClose={onClose}
+      subtitle={m["app.settings.title"]()}
+      title={m["app.settings.eyebrow"]()}
+      titleId="settings-title"
     >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 [background:var(--app-page-background)]"
-      />
-      <div className="relative">
-        <AppHeader>
-          <Button asChild size="sm" variant="outline">
-            <Link preload="intent" to="/app">
-              <ArrowLeft data-icon="inline-start" />
-              {m["app.billing.dashboard"]()}
-            </Link>
-          </Button>
-          <AccountMenu onLogout={onLogout} />
-        </AppHeader>
+      <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-4 py-6 sm:px-5 sm:py-8">
+        <Text className="max-w-[65ch]" size="bodySm" tone="muted">
+          {m["app.settings.description"]()}
+        </Text>
 
-        <section className="mx-auto flex w-full max-w-4xl flex-col gap-8 px-6 pt-32 pb-16 sm:px-8">
-          <header className="flex max-w-2xl flex-col gap-3">
-            <p className="text-sm font-medium text-marketing-accent">
-              {m["app.settings.eyebrow"]()}
+        <section className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-sm font-medium">{m["app.settings.accountEmail"]()}</h2>
+            <p className="text-sm text-muted-foreground">
+              {m["app.settings.accountEmailDescription"]()}
             </p>
-            <h1 className="font-display text-4xl tracking-[-0.045em] sm:text-5xl">
-              {m["app.settings.title"]()}
-            </h1>
-            <p className="max-w-[65ch] leading-7 text-marketing-muted">
-              {m["app.settings.description"]()}
+          </div>
+          <div className={cn(appPanelClassName, "px-4 py-3")}>
+            <p className="break-all text-sm">{account.account.email}</p>
+          </div>
+        </section>
+
+        <section aria-labelledby="login-methods-heading" className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-sm font-medium" id="login-methods-heading">
+              {m["app.settings.loginMethods"]()}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {m["app.settings.loginMethodsDescription"]()}
             </p>
-          </header>
+          </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>{m["app.settings.accountEmail"]()}</CardTitle>
-              <CardDescription>{m["app.settings.accountEmailDescription"]()}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <label className="flex max-w-xl flex-col gap-2" htmlFor="account-email">
-                <span className="text-sm font-medium">{m["app.settings.accountEmail"]()}</span>
-                <span className="relative">
-                  <Mail
-                    aria-hidden="true"
-                    className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-                  />
-                  <input
-                    aria-readonly="true"
-                    className="h-11 w-full rounded-xl border border-border bg-muted/50 pr-3 pl-10 text-base text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-                    id="account-email"
-                    readOnly
-                    type="email"
-                    value={account.account.email}
-                  />
-                </span>
-              </label>
-            </CardContent>
-          </Card>
-
-          <section aria-labelledby="login-methods-heading" className="flex flex-col gap-4">
-            <header className="flex flex-col gap-1">
-              <h2 className="font-display text-2xl" id="login-methods-heading">
-                {m["app.settings.loginMethods"]()}
-              </h2>
-              <p className="text-marketing-muted">{m["app.settings.loginMethodsDescription"]()}</p>
-            </header>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              {account.loginMethods.map((loginMethod) => {
-                const unavailableDescription = unavailableReasonDescription(
-                  loginMethod.unavailableReason
-                )
-
-                return (
-                  <Card key={loginMethod.id}>
-                    <CardHeader>
-                      <div className="flex items-start gap-3">
-                        <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground">
-                          <KeyRound aria-hidden="true" className="size-5" />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <CardTitle>
-                            <h3>{providerLabel(loginMethod.provider)}</h3>
-                          </CardTitle>
-                          <CardDescription>
-                            {m["app.settings.linked"]({
-                              date: formatLinkedAt(loginMethod.linkedAt),
-                            })}
-                          </CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="flex flex-col gap-3">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                          {m["app.settings.providerEmail"]()}
-                        </span>
-                        <span className="break-all text-sm">
-                          {loginMethod.providerEmail ?? m["app.settings.noProviderEmail"]()}
-                        </span>
-                      </div>
-                      {loginMethod.isCurrentSession ? (
-                        <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                          <CheckCircle2 aria-hidden="true" className="size-3.5" />
-                          {m["app.settings.currentSession"]()}
-                        </span>
-                      ) : null}
-                      {!loginMethod.isAvailable ? (
-                        <div className="flex flex-col gap-2">
-                          <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
-                            <CircleAlert aria-hidden="true" className="size-3.5" />
-                            {m["app.settings.unavailable"]()}
-                          </span>
-                          {unavailableDescription === null ? null : (
-                            <p className="text-sm text-muted-foreground">
-                              {unavailableDescription}
-                            </p>
-                          )}
-                        </div>
-                      ) : null}
-                    </CardContent>
-                  </Card>
-                )
-              })}
-            </div>
-          </section>
+          <ul className="flex flex-col gap-3">
+            {account.loginMethods.map((loginMethod) => (
+              <li key={loginMethod.id}>
+                <LoginMethodRow loginMethod={loginMethod} />
+              </li>
+            ))}
+          </ul>
         </section>
       </div>
-    </PageShell>
+    </AppFocusSurface>
   )
+}
+
+function LoginMethodRow({
+  loginMethod,
+}: {
+  readonly loginMethod: Account["loginMethods"][number]
+}) {
+  const unavailableDescription = unavailableReasonDescription(loginMethod.unavailableReason)
+
+  return (
+    <article className={cn(appPanelClassName, "p-4")}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-muted">
+            <LoginMethodIcon provider={loginMethod.provider} />
+          </span>
+          <div className="flex min-w-0 flex-col gap-1">
+            <h3 className="text-sm font-medium">{providerLabel(loginMethod.provider)}</h3>
+            <p className="text-sm text-muted-foreground">
+              {m["app.settings.linked"]({
+                date: formatLinkedAt(loginMethod.linkedAt),
+              })}
+            </p>
+            <p className="text-sm">
+              <span className="sr-only">{m["app.settings.providerEmail"]()}: </span>
+              <span className="break-all">
+                {loginMethod.providerEmail ?? m["app.settings.noProviderEmail"]()}
+              </span>
+            </p>
+            {unavailableDescription === null ? null : (
+              <p className="text-sm text-muted-foreground">{unavailableDescription}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          {loginMethod.isCurrentSession ? (
+            <Badge variant="secondary">
+              <CheckCircle2 data-icon="inline-start" />
+              {m["app.settings.currentSession"]()}
+            </Badge>
+          ) : null}
+          {loginMethod.isAvailable ? null : (
+            <Badge variant="destructive">
+              <CircleAlert data-icon="inline-start" />
+              {m["app.settings.unavailable"]()}
+            </Badge>
+          )}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function LoginMethodIcon({
+  provider,
+}: {
+  readonly provider: Account["loginMethods"][number]["provider"]
+}) {
+  switch (provider) {
+    case "google":
+      return <img alt="" className="size-4" src={GoogleLogo} />
+    case "coinbase":
+      return <img alt="" className="size-4" src={CoinbaseIcon} />
+    case "local":
+      return <Mail aria-hidden="true" className="size-4 text-muted-foreground" />
+  }
 }

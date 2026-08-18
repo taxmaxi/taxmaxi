@@ -16,7 +16,8 @@
     "generate-routes": "tsr generate",
     "postinstall": "npm run cf-typegen && cd ../.. && pnpm run www:build-deps",
     "clean": "rm -rf .tanstack .turbo .wrangler dist node_modules",
-    "machine-translate": "inlang machine translate --project project.inlang"
+    "machine-translate": "inlang machine translate --project project.inlang",
+    "paraglide:compile": "node --experimental-strip-types ./scripts/compile-paraglide.ts"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "1.42.3",

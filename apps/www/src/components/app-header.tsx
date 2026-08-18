@@ -11,11 +11,22 @@ const headerWidthClasses = {
   expanded: "max-w-[var(--content-width-2xl)]",
 } as const
 
-export function AppHeader({ children }: { readonly children?: ReactNode }) {
+export function AppHeader({
+  children,
+  collapseOnScroll = true,
+}: {
+  readonly children?: ReactNode
+  readonly collapseOnScroll?: boolean
+}) {
   const [isCompact, setIsCompact] = useState(false)
   const frameRef = useRef<number | null>(null)
 
   useEffect(() => {
+    if (!collapseOnScroll) {
+      setIsCompact(false)
+      return
+    }
+
     const syncHeaderState = () => {
       const nextIsCompact = window.scrollY > COMPACT_SCROLL_THRESHOLD
 
@@ -50,7 +61,7 @@ export function AppHeader({ children }: { readonly children?: ReactNode }) {
         window.cancelAnimationFrame(frameRef.current)
       }
     }
-  }, [])
+  }, [collapseOnScroll])
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 flex justify-center pt-4">

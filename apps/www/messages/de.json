@@ -27,7 +27,7 @@
     "title": "TaxMaxi App",
     "description": "Du bist angemeldet. Der App-Workspace entsteht hier.",
     "accountMenu": {
-      "label": "Kontomenü",
+      "label": "Menü",
       "assets": "Assets",
       "billing": "Abrechnung",
       "settings": "Einstellungen",
@@ -35,6 +35,7 @@
       "loggingOut": "Abmeldung läuft…"
     },
     "settings": {
+      "close": "Einstellungen schließen",
       "eyebrow": "Einstellungen",
       "title": "Kontozugriff",
       "description": "Prüfe die E-Mail-Adresse für Sicherheitsnachrichten und deine Anmeldemethoden.",
@@ -58,7 +59,7 @@
       }
     },
     "billing": {
-      "dashboard": "Übersicht",
+      "close": "Abrechnung schließen",
       "eyebrow": "Abrechnung",
       "title": "Tarif und Transaktionsguthaben",
       "description": "Stripe verarbeitet Zahlungen und Rechnungen. TaxMaxi zeigt das verfügbare Guthaben deines Kontos.",

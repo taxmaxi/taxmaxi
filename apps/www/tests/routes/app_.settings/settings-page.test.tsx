@@ -6,7 +6,7 @@ import {
   createRootRoute,
   createRouter,
 } from "@tanstack/react-router"
-import { cleanup, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import type { Account } from "taxmaxi"
 
@@ -87,22 +87,26 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+const renderSettingsPage = async (onClose = vi.fn()) => {
+  const rootRoute = createRootRoute({
+    component: () => <SettingsPageContent account={account} onClose={onClose} />,
+  })
+  const router = createRouter({
+    history: createMemoryHistory({ initialEntries: ["/"] }),
+    routeTree: rootRoute,
+  })
+
+  await router.load()
+  render(<RouterProvider router={router} />)
+  return { onClose }
+}
+
 describe("SettingsPageContent", () => {
-  it("shows the read-only account email and every linked login method", async () => {
-    const rootRoute = createRootRoute({
-      component: () => <SettingsPageContent account={account} onLogout={vi.fn()} />,
-    })
-    const router = createRouter({
-      history: createMemoryHistory({ initialEntries: ["/"] }),
-      routeTree: rootRoute,
-    })
+  it("shows the account email and every linked login method", async () => {
+    await renderSettingsPage()
 
-    await router.load()
-    render(<RouterProvider router={router} />)
-
-    const accountEmail = screen.getByRole("textbox", { name: "Account email" })
-    expect(accountEmail.getAttribute("value")).toBe("account@taxmaxi.test")
-    expect(accountEmail.hasAttribute("readonly")).toBe(true)
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy()
+    expect(screen.getByText("account@taxmaxi.test")).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Coinbase" })).toBeTruthy()
     expect(screen.getByText("provider@coinbase.test")).toBeTruthy()
     expect(screen.getByText("Current session")).toBeTruthy()
@@ -113,6 +117,23 @@ describe("SettingsPageContent", () => {
     expect(screen.getAllByText("Unavailable")).toHaveLength(2)
     expect(screen.getByText("This provider is currently unavailable.")).toBeTruthy()
     expect(screen.getByText("Verify your account email before using this method.")).toBeTruthy()
-    expect(screen.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/app")
+    expect(document.querySelector("[data-page='app']")).toBeTruthy()
+  })
+
+  it("closes from the header button", async () => {
+    const { onClose } = await renderSettingsPage()
+
+    fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it("closes on Escape", async () => {
+    const { onClose } = await renderSettingsPage()
+
+    const wasNotCancelled = fireEvent.keyDown(window, { key: "Escape" })
+
+    expect(wasNotCancelled).toBe(false)
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

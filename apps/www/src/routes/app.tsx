@@ -9,8 +9,8 @@ import {
 
 import { AppHeader } from "#/components/app-header"
 import { AccountMenu } from "#/components/account-menu"
+import { AppWorkspace } from "#/components/app-workspace"
 import { Dashboard } from "#/components/dashboard"
-import { PageShell } from "#/components/page-shell"
 import { useAppLogout } from "#/hooks/use-app-logout"
 import type { Account } from "#/lib/dashboard-types"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
@@ -103,40 +103,18 @@ function RouteComponent() {
   )
 
   return (
-    <PageShell
-      as="main"
-      tone="marketing"
-      data-page="app"
-      className="relative isolate w-full overflow-x-clip bg-[var(--app-page-fallback)] text-marketing-text"
-    >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0 [background:var(--app-page-background)]"
+    <AppWorkspace>
+      <AppHeader>
+        <AccountMenu onLogout={onLogout} />
+      </AppHeader>
+      <Dashboard
+        accounts={sourceAccounts}
+        getSourceSyncJob={getSourceSyncJob}
+        onSourceSyncCompleted={onSourceSyncCompleted}
+        onUnauthorized={onUnauthorized}
+        startSourceSync={startSourceSync}
       />
-
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0"
-        style={{
-          backgroundImage: `linear-gradient(var(--app-grid-line) 1px, transparent 1px),
-                           linear-gradient(90deg, var(--app-grid-line) 1px, transparent 1px)`,
-          backgroundSize: "64px 64px",
-        }}
-      />
-
-      <div className="relative z-10">
-        <AppHeader>
-          <AccountMenu onLogout={onLogout} />
-        </AppHeader>
-        <Dashboard
-          accounts={sourceAccounts}
-          getSourceSyncJob={getSourceSyncJob}
-          onSourceSyncCompleted={onSourceSyncCompleted}
-          onUnauthorized={onUnauthorized}
-          startSourceSync={startSourceSync}
-        />
-      </div>
-    </PageShell>
+    </AppWorkspace>
   )
 }
 

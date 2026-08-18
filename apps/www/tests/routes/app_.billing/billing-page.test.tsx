@@ -85,7 +85,7 @@ const renderBillingPage = async ({
   assignLocation = vi.fn(),
   checkoutReturnKind = null,
   loadStatus,
-  onLogout = vi.fn().mockResolvedValue(undefined),
+  onClose = vi.fn(),
   onUnauthorized = vi.fn().mockResolvedValue(undefined),
   portal = vi.fn().mockResolvedValue({ url: "https://stripe.test/portal" }),
   subscriptionStatus = null,
@@ -95,7 +95,7 @@ const renderBillingPage = async ({
   readonly assignLocation?: (url: string) => void
   readonly checkoutReturnKind?: "annual" | "topUp" | null
   readonly loadStatus?: BillingPromiseResource["status"]
-  readonly onLogout?: () => Promise<void>
+  readonly onClose?: () => void
   readonly onUnauthorized?: () => Promise<void>
   readonly portal?: BillingPromiseResource["createPortalSession"]
   readonly subscriptionStatus?: BillingStatus["subscriptionStatus"]
@@ -115,7 +115,7 @@ const renderBillingPage = async ({
         billing={billing}
         catalog={catalog}
         checkoutReturnKind={checkoutReturnKind}
-        onLogout={onLogout}
+        onClose={onClose}
         onUnauthorized={onUnauthorized}
         status={status(subscriptionStatus)}
       />
@@ -127,12 +127,21 @@ const renderBillingPage = async ({
   })
   await router.load()
   render(<RouterProvider router={router} />)
-  return { assignLocation, onUnauthorized }
+  expect(document.querySelector("[data-page='app']")).toBeTruthy()
+  return { assignLocation, onClose, onUnauthorized }
 }
 
 afterEach(cleanup)
 
 describe("BillingPageContent", () => {
+  it("closes from the header button", async () => {
+    const { onClose } = await renderBillingPage()
+
+    fireEvent.click(screen.getByRole("button", { name: "Close billing" }))
+
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     {
       expectedUrl: "https://stripe.test/annual",

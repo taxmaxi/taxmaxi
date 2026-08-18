@@ -1,11 +1,12 @@
 import { Link } from "@tanstack/react-router"
-import { CreditCard, LibraryBig, LogOut, Settings, UserRound } from "lucide-react"
+import { CreditCard, LibraryBig, LogOut, Menu, Settings } from "lucide-react"
 import { useState } from "react"
 
 import { Button } from "#/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
@@ -32,34 +33,36 @@ export function AccountMenu({ onLogout }: { readonly onLogout: () => Promise<voi
       <DropdownMenuTrigger asChild>
         <Button
           aria-label={m["app.accountMenu.label"]()}
-          className="size-11 rounded-full"
+          className="relative h-9 rounded-full px-3 touch-manipulation before:absolute before:-inset-y-1 before:inset-x-0 before:content-['']"
           id={ASSET_CATALOG_OPENER_ID}
-          size="icon-lg"
           title={m["app.accountMenu.label"]()}
           variant="outline"
         >
-          <UserRound />
+          <Menu data-icon="inline-start" />
+          {m["app.accountMenu.label"]()}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-52">
-        <DropdownMenuItem asChild>
-          <Link preload="intent" to="/assets">
-            <LibraryBig />
-            {m["app.accountMenu.assets"]()}
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link preload="intent" to="/app/billing">
-            <CreditCard />
-            {m["app.accountMenu.billing"]()}
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link preload="intent" to="/app/settings">
-            <Settings />
-            {m["app.accountMenu.settings"]()}
-          </Link>
-        </DropdownMenuItem>
+        <DropdownMenuGroup>
+          <DropdownMenuItem asChild>
+            <Link preload="intent" to="/assets">
+              <LibraryBig />
+              {m["app.accountMenu.assets"]()}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link preload="intent" to="/app/billing">
+              <CreditCard />
+              {m["app.accountMenu.billing"]()}
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link preload="intent" to="/app/settings">
+              <Settings />
+              {m["app.accountMenu.settings"]()}
+            </Link>
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={isLoggingOut}
