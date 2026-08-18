@@ -46,10 +46,11 @@ export interface TransactionListItem {
   readonly movements: ReadonlyArray<TransactionListMovement>
   readonly realizedGainLoss: string | null
   readonly fiatCurrency: string | null
+  readonly calculationState: "complete" | "partial"
   readonly needsReview: boolean
 }
 
-/** Stable cursor page with an exact count for the unfiltered principal scope. */
+/** Stable cursor page with an exact count for principal transactions that have accounting legs. */
 export interface TransactionListPage {
   readonly items: ReadonlyArray<TransactionListItem>
   readonly nextCursor: string | null

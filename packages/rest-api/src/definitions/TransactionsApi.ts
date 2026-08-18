@@ -55,6 +55,7 @@ export class TransactionListItem extends Schema.Class<TransactionListItem>("Tran
   movements: Schema.Array(TransactionListMovement),
   realizedGainLoss: Schema.NullOr(Schema.String),
   fiatCurrency: Schema.NullOr(Schema.String),
+  calculationState: Schema.Literals(["complete", "partial"]),
   needsReview: Schema.Boolean,
 }) {}
 
@@ -65,7 +66,7 @@ export class TransactionListPageInfo extends Schema.Class<TransactionListPageInf
   hasMore: Schema.Boolean,
 }) {}
 
-/** Cursor page plus an exact count of all transactions owned by the principal. */
+/** Cursor page plus an exact count of principal-owned transactions that have accounting legs. */
 export class TransactionListResponse extends Schema.Class<TransactionListResponse>(
   "TransactionListResponse"
 )({

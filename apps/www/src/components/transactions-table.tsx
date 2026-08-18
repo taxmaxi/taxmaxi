@@ -42,8 +42,9 @@ const movementLabel = (transaction: TransactionListItem): string => {
 }
 
 const realizedGainLossLabel = (transaction: TransactionListItem): string => {
+  if (transaction.calculationState === "partial") return "Pending"
   if (transaction.realizedGainLoss === null || transaction.fiatCurrency === null) {
-    return "Pending"
+    return "Not applicable"
   }
 
   const value = Number(transaction.realizedGainLoss)

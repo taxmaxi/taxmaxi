@@ -20,6 +20,7 @@ const transaction: TransactionListItem = {
   movements: [{ amount: "0.4", assetSymbol: "BTC", kind: "disposal" }],
   realizedGainLoss: "2000",
   fiatCurrency: "EUR",
+  calculationState: "complete",
   needsReview: false,
 }
 
@@ -49,6 +50,42 @@ describe("TransactionsTable", () => {
     expect(screen.getByText("Coinbase")).toBeTruthy()
     expect(screen.getByText("1 transaction")).toBeTruthy()
     expect(screen.getByText("1–1 of 1")).toBeTruthy()
+  })
+
+  it("shows incomplete valuation as pending without hiding the transaction row", () => {
+    render(
+      <TransactionsTable
+        {...defaultProps}
+        transactions={[
+          {
+            ...transaction,
+            calculationState: "partial",
+            realizedGainLoss: null,
+            fiatCurrency: null,
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByText("Sold Bitcoin")).toBeTruthy()
+    expect(screen.getByText("Pending")).toBeTruthy()
+  })
+
+  it("does not label a complete transaction with no gain or loss as pending", () => {
+    render(
+      <TransactionsTable
+        {...defaultProps}
+        transactions={[
+          {
+            ...transaction,
+            realizedGainLoss: null,
+            fiatCurrency: null,
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByText("Not applicable")).toBeTruthy()
   })
 
   it("shows loading, empty, and error states", () => {

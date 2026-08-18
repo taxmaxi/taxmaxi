@@ -331,6 +331,68 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
+  it("keeps the canonical transaction ID stable after deletion and re-creation", async () => {
+    const transaction = {
+      sourceId: TEST_SOURCE_ID,
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+      externalId: null,
+      externalGroupId: "group-stable-rematerialization",
+      timestamp: new Date("2025-01-01T10:00:00.000Z"),
+      transactionType: "buy_fiat",
+      providerTransactionType: "buy",
+      providerStatus: "completed",
+      providerResourcePath:
+        "/v2/accounts/coinbase-account-1/transactions/tx-stable-rematerialization",
+      providerDescription: "Stable rematerialization fixture",
+      providerCreatedAt: new Date("2025-01-01T10:00:00.000Z"),
+      providerUpdatedAt: new Date("2025-01-01T10:00:00.000Z"),
+      metadata: { provider: "coinbase" },
+      principalId: TEST_PRINCIPAL_ID,
+    } as const
+    const venueContext = {
+      venueType: "cex",
+      cexAccountId: fixture.cexAccountId,
+      externalAccountId: "coinbase-account-1",
+      externalOrderId: null,
+      externalFillId: null,
+      side: "buy",
+      instrument: "BTC-EUR",
+      fillPrice: "10000",
+      commissionAmount: null,
+      commissionCurrency: null,
+      metadata: { provider: "coinbase" },
+    } as const
+    const persist = () =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts({
+            transaction,
+            venueContext,
+            providerTransfers: [],
+            feeTransfers: [],
+            legs: [],
+            transactionReview: null,
+            resolvedTransactionType: APPROVED_MAPPING,
+          })
+        )
+      )
+
+    const first = await persist()
+    const repeated = await persist()
+    expect(repeated.transaction.id).toBe(first.transaction.id)
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .delete(schema.transactions)
+          .where(eq(schema.transactions.id, first.transaction.id))
+      })
+    )
+    const recreated = await persist()
+
+    expect(recreated.transaction.id).toBe(first.transaction.id)
+  })
+
   it("reserves replay credits atomically before derived state can be reset", async () => {
     const secondRawRecordId = "00000000-0000-0000-0000-000000000484"
     await runPg(

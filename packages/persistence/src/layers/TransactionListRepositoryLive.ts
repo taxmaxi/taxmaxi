@@ -4,13 +4,27 @@
  * @module TransactionListRepositoryLive
  */
 
-import { and, asc, count, desc, eq, inArray, lt, or } from "drizzle-orm"
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  lt,
+  notExists,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
-import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
+import { isPersistenceError, PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   TransactionListInvalidCursorError,
@@ -29,6 +43,7 @@ interface CursorParts {
 interface GainLossSummary {
   readonly realizedGainLoss: string | null
   readonly fiatCurrency: string | null
+  readonly isPartial: boolean
 }
 
 const TransactionCursorPayload = Schema.Struct({
@@ -71,19 +86,26 @@ const decodeDecimal = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type TransactionListExecutor = Pick<typeof db, "execute" | "select" | "selectDistinct">
 
-  const ownedScope = (principalId: string) =>
+  const ownedScope = (executor: TransactionListExecutor, principalId: string) =>
     and(
       eq(schema.transactions.principalId, principalId),
-      eq(schema.sources.principalId, principalId)
+      eq(schema.sources.principalId, principalId),
+      exists(
+        executor
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.transactionId, schema.transactions.id))
+      )
     )
 
-  const loadTotalCount = (principalId: string) =>
-    db
+  const loadTotalCount = (executor: TransactionListExecutor, principalId: string) =>
+    executor
       .select({ count: count(schema.transactions.id) })
       .from(schema.transactions)
       .innerJoin(schema.sources, eq(schema.transactions.sourceId, schema.sources.id))
-      .where(ownedScope(principalId))
+      .where(ownedScope(executor, principalId))
       .pipe(
         wrapSqlError("transactionListRepository.list.count"),
         Effect.map((rows) => rows[0]?.count ?? 0)
@@ -91,10 +113,12 @@ const make = Effect.gen(function* () {
 
   const loadPageRows = ({
     cursor,
+    executor,
     limit,
     principalId,
   }: {
     readonly cursor: Option.Option<CursorParts>
+    readonly executor: TransactionListExecutor
     readonly limit: number
     readonly principalId: string
   }) => {
@@ -109,9 +133,9 @@ const make = Effect.gen(function* () {
           )
         ),
     })
-    const scope = ownedScope(principalId)
+    const scope = ownedScope(executor, principalId)
 
-    return db
+    return executor
       .select({
         transactionId: schema.transactions.id,
         timestamp: schema.transactions.timestamp,
@@ -130,13 +154,16 @@ const make = Effect.gen(function* () {
       .pipe(wrapSqlError("transactionListRepository.list.transactions"))
   }
 
-  const loadMovements = (transactionIds: ReadonlyArray<string>) =>
+  const loadMovements = (
+    executor: TransactionListExecutor,
+    transactionIds: ReadonlyArray<string>
+  ) =>
     Effect.gen(function* () {
       if (transactionIds.length === 0) {
         return new Map<string, ReadonlyArray<TransactionListMovement>>()
       }
 
-      const rows = yield* db
+      const rows = yield* executor
         .select({
           transactionId: schema.transactionLegs.transactionId,
           amount: schema.transactionLegs.amount,
@@ -174,23 +201,25 @@ const make = Effect.gen(function* () {
       return byTransaction
     })
 
-  const loadGainLoss = (transactionIds: ReadonlyArray<string>) =>
+  const loadGainLoss = (executor: TransactionListExecutor, transactionIds: ReadonlyArray<string>) =>
     Effect.gen(function* () {
       if (transactionIds.length === 0) {
         return new Map<string, GainLossSummary>()
       }
 
-      const rows = yield* db
+      const rows = yield* executor
         .select({
           transactionId: schema.transactionLegs.transactionId,
           gainLoss: schema.disposalMatches.gainLoss,
           fiatCurrency: schema.transactionLegs.fiatCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
         })
         .from(schema.disposalMatches)
         .innerJoin(
           schema.transactionLegs,
           eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
         )
+        .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
         .where(inArray(schema.transactionLegs.transactionId, transactionIds))
         .pipe(wrapSqlError("transactionListRepository.list.gainLoss"))
 
@@ -203,11 +232,13 @@ const make = Effect.gen(function* () {
             transactionId: row.transactionId,
             amount,
             fiatCurrency: row.fiatCurrency,
+            costBasisStatus: row.costBasisStatus,
           }))
         )
       )
       const amounts = new Map<string, Array<BigDecimal.BigDecimal>>()
       const currencies = new Map<string, Set<string>>()
+      const pendingCostBasis = new Set<string>()
       for (const row of decoded) {
         if (row.transactionId === null) continue
         const transactionAmounts = amounts.get(row.transactionId) ?? []
@@ -218,33 +249,43 @@ const make = Effect.gen(function* () {
           transactionCurrencies.add(row.fiatCurrency)
           currencies.set(row.transactionId, transactionCurrencies)
         }
+        if (row.costBasisStatus === "pending_review") {
+          pendingCostBasis.add(row.transactionId)
+        }
       }
 
       return new Map(
         transactionIds.map((transactionId): readonly [string, GainLossSummary] => {
           const transactionAmounts = amounts.get(transactionId) ?? []
           const transactionCurrencies = currencies.get(transactionId) ?? new Set<string>()
+          const isPartial =
+            transactionAmounts.length > 0 &&
+            (transactionCurrencies.size !== 1 || pendingCostBasis.has(transactionId))
           return [
             transactionId,
             {
               realizedGainLoss:
-                transactionAmounts.length === 0
+                transactionAmounts.length === 0 || isPartial
                   ? null
                   : BigDecimal.format(BigDecimal.sumAll(transactionAmounts)),
               fiatCurrency:
                 transactionCurrencies.size === 1
                   ? (transactionCurrencies.values().next().value ?? null)
                   : null,
+              isPartial,
             },
           ]
         })
       )
     })
 
-  const loadReviewStates = (transactionIds: ReadonlyArray<string>) =>
+  const loadReviewStates = (
+    executor: TransactionListExecutor,
+    transactionIds: ReadonlyArray<string>
+  ) =>
     transactionIds.length === 0
       ? Effect.succeed(new Map<string, boolean>())
-      : db
+      : executor
           .select({
             transactionId: schema.transactionReviews.transactionId,
             needsReview: schema.transactionReviews.needsReview,
@@ -258,54 +299,126 @@ const make = Effect.gen(function* () {
             )
           )
 
+  const loadPartialTransactionIds = (
+    executor: TransactionListExecutor,
+    transactionIds: ReadonlyArray<string>
+  ) =>
+    Effect.gen(function* () {
+      if (transactionIds.length === 0) {
+        return new Set<string>()
+      }
+
+      const rows = yield* executor
+        .selectDistinct({ transactionId: schema.transactionLegs.transactionId })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            inArray(schema.transactionLegs.transactionId, transactionIds),
+            or(
+              and(
+                or(
+                  isNull(schema.transactionLegs.derivationRule),
+                  notInArray(schema.transactionLegs.derivationRule, [
+                    "internal_transfer_in",
+                    "internal_transfer_out",
+                  ])
+                ),
+                or(
+                  isNull(schema.transactionLegs.fiatAmount),
+                  isNull(schema.transactionLegs.fiatCurrency)
+                )
+              ),
+              and(
+                eq(schema.transactionLegs.kind, "disposal"),
+                sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`,
+                notExists(
+                  executor
+                    .select({ id: schema.disposalMatches.id })
+                    .from(schema.disposalMatches)
+                    .where(eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id))
+                )
+              )
+            )
+          )
+        )
+        .pipe(wrapSqlError("transactionListRepository.list.calculationStates"))
+
+      return new Set(rows.flatMap((row) => (row.transactionId === null ? [] : [row.transactionId])))
+    })
+
   const list: TransactionListRepositoryService["list"] = (params) =>
     Effect.gen(function* () {
       const cursor = yield* parseCursor(params.cursor)
-      const totalCount = yield* loadTotalCount(params.principalId)
-      const rows = yield* loadPageRows({
-        cursor,
-        limit: params.limit,
-        principalId: params.principalId,
-      })
-      const pageRows = rows.slice(0, params.limit)
-      const transactionIds = pageRows.map((row) => row.transactionId)
-      const [movements, gainLoss, reviewStates] = yield* Effect.all([
-        loadMovements(transactionIds),
-        loadGainLoss(transactionIds),
-        loadReviewStates(transactionIds),
-      ])
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.execute(sql`set transaction isolation level repeatable read`)
+            const totalCount = yield* loadTotalCount(tx, params.principalId)
+            const rows = yield* loadPageRows({
+              cursor,
+              executor: tx,
+              limit: params.limit,
+              principalId: params.principalId,
+            })
+            const pageRows = rows.slice(0, params.limit)
+            const transactionIds = pageRows.map((row) => row.transactionId)
+            const [movements, gainLoss, reviewStates, partialTransactionIds] = yield* Effect.all(
+              [
+                loadMovements(tx, transactionIds),
+                loadGainLoss(tx, transactionIds),
+                loadReviewStates(tx, transactionIds),
+                loadPartialTransactionIds(tx, transactionIds),
+              ],
+              { concurrency: 1 }
+            )
 
-      const items = pageRows.map((row): TransactionListItem => {
-        const totals = gainLoss.get(row.transactionId)
-        return {
-          transactionId: row.transactionId,
-          timestamp: row.timestamp.toISOString(),
-          source: {
-            sourceId: row.sourceId,
-            name: row.sourceName,
-            kind: row.sourceKind,
-          },
-          transactionType: row.transactionType,
-          description: row.description,
-          externalId: row.externalId,
-          movements: movements.get(row.transactionId) ?? [],
-          realizedGainLoss: totals?.realizedGainLoss ?? null,
-          fiatCurrency: totals?.fiatCurrency ?? null,
-          needsReview: reviewStates.get(row.transactionId) ?? false,
-        }
-      })
-      const hasMore = rows.length > params.limit
-      const last = pageRows.at(-1)
+            const items = pageRows.map((row): TransactionListItem => {
+              const totals = gainLoss.get(row.transactionId)
+              return {
+                transactionId: row.transactionId,
+                timestamp: row.timestamp.toISOString(),
+                source: {
+                  sourceId: row.sourceId,
+                  name: row.sourceName,
+                  kind: row.sourceKind,
+                },
+                transactionType: row.transactionType,
+                description: row.description,
+                externalId: row.externalId,
+                movements: movements.get(row.transactionId) ?? [],
+                realizedGainLoss: totals?.realizedGainLoss ?? null,
+                fiatCurrency: totals?.fiatCurrency ?? null,
+                calculationState:
+                  partialTransactionIds.has(row.transactionId) || totals?.isPartial === true
+                    ? "partial"
+                    : "complete",
+                needsReview: reviewStates.get(row.transactionId) ?? false,
+              }
+            })
+            const hasMore = rows.length > params.limit
+            const last = pageRows.at(-1)
 
-      return {
-        items,
-        hasMore,
-        nextCursor:
-          hasMore && last !== undefined
-            ? makeCursor({ timestamp: last.timestamp, id: last.transactionId })
-            : null,
-        totalCount,
-      }
+            return {
+              items,
+              hasMore,
+              nextCursor:
+                hasMore && last !== undefined
+                  ? makeCursor({ timestamp: last.timestamp, id: last.transactionId })
+                  : null,
+              totalCount,
+            }
+          })
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            isPersistenceError(cause)
+              ? cause
+              : new PersistenceError({
+                  operation: "transactionListRepository.list.snapshot",
+                  cause,
+                })
+          )
+        )
     })
 
   return TransactionListRepository.of({ list })
