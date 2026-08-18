@@ -668,7 +668,7 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(jobs).toEqual([{ mode: "replay", status: "pending", followUpMode: null }])
     })
 
-    it("schedules approval replay work behind an active replay", async () => {
+    it("schedules approval replay work behind an active replay and keeps its ID pollable", async () => {
       const providerAsset = await seedPendingApprovalAsset("active-replay-follow-up")
       const activeReplayJobId = await runPg(
         Effect.gen(function* () {
@@ -774,14 +774,32 @@ describe("ProviderAssetRepositoryLive", () => {
       )
 
       const followUpReplay = afterCompletion.jobs.find(({ id }) => id !== activeReplayJobId)
+      if (followUpReplay === undefined) {
+        expect.fail("Expected follow-up replay job")
+      }
+      const replayFromOriginalJobId = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findProviderAssetReviewReplay({
+            providerAssetRowId: providerAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            jobId: activeReplayJobId,
+          })
+        )
+      ).then(Option.getOrThrow)
+
       expect(afterCompletion.jobs.find(({ id }) => id === activeReplayJobId)).toMatchObject({
         mode: "replay",
         status: "completed",
-        followUpJobId: followUpReplay?.id,
+        followUpJobId: followUpReplay.id,
       })
       expect(followUpReplay).toMatchObject({ mode: "replay", status: "pending" })
       expect(afterCompletion.reviewReplay).toEqual({
-        jobId: followUpReplay?.id,
+        jobId: followUpReplay.id,
+        dispatchState: "failed_to_queue",
+      })
+      expect(replayFromOriginalJobId).toMatchObject({
+        sourceId: TEST_SOURCE_ID,
+        jobId: followUpReplay.id,
         dispatchState: "failed_to_queue",
       })
     })

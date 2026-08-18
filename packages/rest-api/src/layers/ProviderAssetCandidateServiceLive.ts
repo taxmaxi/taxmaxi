@@ -104,6 +104,14 @@ const economicAssetTypeForRepresentation = (
   representation: RepresentationIdentity
 ): AssetCatalogAssetRecord["type"] => (representation.type === "nft" ? "nft" : "fungible")
 
+const economicAssetTypeForProviderAsset = (
+  providerAsset: ProviderAssetRecord
+): AssetCatalogAssetRecord["type"] | null => {
+  const providerType = providerAsset.providerType?.trim().toLowerCase() ?? null
+
+  return providerType === "nft" ? "nft" : providerType === "crypto" ? "fungible" : null
+}
+
 type ProposedRepresentation = RepresentationIdentity
 
 interface CoinGeckoCandidateDetail {
@@ -433,6 +441,7 @@ const make = Effect.gen(function* () {
             asset.coingeckoCoinId === null
               ? undefined
               : coinDetailsById.get(asset.coingeckoCoinId)?.candidate
+          const expectedAssetType = economicAssetTypeForProviderAsset(providerAsset)
           const strength = evidenceStrengthFor({
             providerAsset,
             candidate: identityCandidate ?? asset,
@@ -450,7 +459,12 @@ const make = Effect.gen(function* () {
             representation: null,
             evidenceStrength: strength,
             matchReasons: ["Compatible chainless economic asset."],
-            conflicts: [],
+            conflicts:
+              expectedAssetType === null || asset.type === expectedAssetType
+                ? []
+                : [
+                    `Provider type ${providerAsset.providerType} requires a ${expectedAssetType} economic asset, but TaxMaxi asset ${asset.id} is ${asset.type}.`,
+                  ],
             warnings:
               strength === "symbol_only"
                 ? ["Symbol-only evidence requires an explicit choice."]

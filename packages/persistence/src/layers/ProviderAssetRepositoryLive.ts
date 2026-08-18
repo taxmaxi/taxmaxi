@@ -932,7 +932,27 @@ const make = Effect.gen(function* () {
           and(
             eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAssetRowId),
             eq(schema.providerAssetReviewReplays.sourceId, sourceId),
-            eq(schema.providerAssetReviewReplays.jobId, jobId)
+            or(
+              eq(schema.providerAssetReviewReplays.jobId, jobId),
+              sql`exists (
+                with recursive replay_follow_up_chain(job_id) as (
+                  select ${schema.processingJobs.followUpJobId}
+                  from ${schema.processingJobs}
+                  where ${schema.processingJobs.id} = ${jobId}
+                    and ${schema.processingJobs.sourceId} = ${sourceId}
+                  union
+                  select processing_job.follow_up_job_id
+                  from ${schema.processingJobs} as processing_job
+                  inner join replay_follow_up_chain
+                    on processing_job.id = replay_follow_up_chain.job_id
+                  where processing_job.source_id = ${sourceId}
+                    and processing_job.follow_up_job_id is not null
+                )
+                select 1
+                from replay_follow_up_chain
+                where replay_follow_up_chain.job_id = ${schema.providerAssetReviewReplays.jobId}
+              )`
+            )
           )
         )
         .limit(1)

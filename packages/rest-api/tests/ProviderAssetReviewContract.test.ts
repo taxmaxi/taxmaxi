@@ -427,6 +427,54 @@ describe("ProviderAssetReviewService admin contract", () => {
     ])
   })
 
+  it.each([
+    { providerType: "nft", assetType: "fungible" as const },
+    { providerType: "crypto", assetType: "nft" as const },
+  ])(
+    "conflicts a chainless $providerType observation with a $assetType catalog asset",
+    async ({ providerType, assetType }) => {
+      const chainlessRepository: ProviderAssetRepositoryShape = {
+        ...repository,
+        findProviderAssetReviewById: () =>
+          Effect.succeed(
+            Option.some({
+              ...review,
+              providerAsset: {
+                ...review.providerAsset,
+                provider: "coinbase",
+                providerAssetId: "sol",
+                naturalKey: null,
+                name: "Solana",
+                providerType,
+              },
+            })
+          ),
+        listProviderAssetObservedRepresentations: () => Effect.succeed([]),
+      }
+      const incompatibleAsset = {
+        id: "00000000-0000-4000-8000-000000000036",
+        name: "Solana",
+        symbol: "SOL",
+        coingeckoCoinId: null,
+        logoUrl: null,
+        type: assetType,
+        representations: [],
+      }
+      const catalog: AssetCatalogRepositoryShape = {
+        ...assetCatalog,
+        listAssets: () => Effect.succeed([incompatibleAsset]),
+      }
+
+      const result = await runCandidateSearch({ candidateRepository: chainlessRepository, catalog })
+      const existing = result.proposals.find(({ effect }) => effect._tag === "UseExistingAsset")
+
+      expect(existing?.conflicts).toEqual([
+        expect.stringContaining(`TaxMaxi asset ${incompatibleAsset.id} is ${assetType}`),
+      ])
+      expect(result.recommendedProposalId).toBeNull()
+    }
+  )
+
   it("preserves an exact observed representation when the local symbol is stale", async () => {
     const staleSymbolCatalog: AssetCatalogRepositoryShape = {
       ...assetCatalog,
