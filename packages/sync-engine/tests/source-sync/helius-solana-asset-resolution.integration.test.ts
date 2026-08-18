@@ -1,3 +1,4 @@
+import { SOLANA_USDC_MINT, SOLANA_USDT_MINT, SOLANA_WRAPPED_NATIVE_MINT } from "@my/core/assets"
 import { and, eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -12,12 +13,7 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { HeliusSolanaAssetResolutionServiceLive } from "../../src/providers/helius-solana/layers/HeliusSolanaAssetResolutionServiceLive.ts"
-import {
-  HeliusSolanaAssetResolutionService,
-  SOLANA_USDC_MINT,
-  SOLANA_USDT_MINT,
-  SOLANA_WRAPPED_NATIVE_MINT,
-} from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
+import { HeliusSolanaAssetResolutionService } from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import {
   HeliusSolanaSyncClient,
   type HeliusSolanaSyncClientShape,

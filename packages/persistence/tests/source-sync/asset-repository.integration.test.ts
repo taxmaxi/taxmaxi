@@ -710,6 +710,20 @@ describe("AssetRepositoryLive", () => {
   })
 
   it("seeds every catalog asset and representation idempotently", async () => {
+    const assetCoinGeckoIdsByKey = new Map(
+      assetReferenceCatalogProjections.economicAssets.map(
+        (asset) => [asset.key, asset.coingeckoCoinId] as const
+      )
+    )
+    const expectedAssets = assetReferenceCatalogProjections.economicAssets
+      .map((asset) => ({
+        name: asset.name,
+        symbol: asset.symbol,
+        coingeckoCoinId: asset.coingeckoCoinId,
+        logoUrl: asset.logoUrl,
+        type: asset.type,
+      }))
+      .sort((left, right) => left.coingeckoCoinId.localeCompare(right.coingeckoCoinId))
     const readCatalogRows = () =>
       runPg(
         Effect.gen(function* () {
@@ -719,14 +733,17 @@ describe("AssetRepositoryLive", () => {
           )
           const assets = yield* db
             .select({
-              id: schema.assets.id,
+              name: schema.assets.name,
+              symbol: schema.assets.symbol,
               coingeckoCoinId: schema.assets.coingeckoCoinId,
+              logoUrl: schema.assets.logoUrl,
+              type: schema.assets.type,
             })
             .from(schema.assets)
             .where(inArray(schema.assets.coingeckoCoinId, coinGeckoIds))
           const representations = yield* db
             .select({
-              assetId: schema.assetRepresentations.assetId,
+              assetCoinGeckoId: schema.assets.coingeckoCoinId,
               blockchain: schema.blockchains.name,
               type: schema.assetRepresentations.type,
               contractAddress: schema.assetRepresentations.contractAddress,
@@ -744,6 +761,7 @@ describe("AssetRepositoryLive", () => {
           const catalogRepresentations = representations.filter((row) =>
             assetReferenceCatalogProjections.networkRepresentations.some(
               (reference) =>
+                assetCoinGeckoIdsByKey.get(reference.assetKey) === row.assetCoinGeckoId &&
                 reference.blockchain === row.blockchain &&
                 reference.type === row.type &&
                 reference.contractAddress === row.contractAddress &&
@@ -770,7 +788,7 @@ describe("AssetRepositoryLive", () => {
     await runPg(seedData)
     const second = await readCatalogRows()
 
-    expect(first.assets).toHaveLength(assetReferenceCatalogProjections.economicAssets.length)
+    expect(first.assets).toEqual(expectedAssets)
     expect(first.representations).toHaveLength(
       assetReferenceCatalogProjections.networkRepresentations.length
     )

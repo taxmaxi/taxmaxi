@@ -11,8 +11,6 @@ import type { ProviderAssetMappingStatus } from "../../../services/ProviderAsset
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
 import type { HeliusSolanaSyncClientError } from "./HeliusSolanaSyncClient.ts"
 
-export { SOLANA_USDC_MINT, SOLANA_USDT_MINT, SOLANA_WRAPPED_NATIVE_MINT } from "@my/core/assets"
-
 /**
  * Canonical Solana blockchain reference name.
  */

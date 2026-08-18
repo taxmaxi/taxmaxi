@@ -4,7 +4,11 @@
  * @module HeliusSolanaAssetResolutionServiceLive
  */
 
-import { assetReferenceCatalogProjections, HELIUS_SOLANA_NATIVE_NATURAL_KEY } from "@my/core/assets"
+import {
+  assetReferenceCatalogProjections,
+  HELIUS_SOLANA_NATIVE_NATURAL_KEY,
+  heliusSolanaMintNaturalKey,
+} from "@my/core/assets"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
@@ -147,8 +151,6 @@ const normalizeMintAddress = (mintAddress: string | null): string | null => {
   const trimmed = mintAddress.trim()
   return trimmed === "" ? null : trimmed
 }
-
-const mintNaturalKey = (mintAddress: string): string => `solana:mint:${mintAddress}`
 
 const defaultMappingForReference = (
   reference: NormalizedAssetReference
@@ -586,7 +588,7 @@ const make = Effect.gen(function* () {
 
   const providerAssetEntryFromDasAsset = (asset: DecodedDasAsset): ProviderAssetCatalogEntry => ({
     providerAssetId: asset.mintAddress,
-    naturalKey: mintNaturalKey(asset.mintAddress),
+    naturalKey: heliusSolanaMintNaturalKey({ mintAddress: asset.mintAddress }),
     currencyCode: asset.currencyCode,
     name: asset.name,
     exponent: asset.decimals,
@@ -602,7 +604,7 @@ const make = Effect.gen(function* () {
     readonly rawProviderPayload: unknown
   }): ProviderAssetCatalogEntry => ({
     providerAssetId: mintAddress,
-    naturalKey: mintNaturalKey(mintAddress),
+    naturalKey: heliusSolanaMintNaturalKey({ mintAddress }),
     currencyCode: fallbackCurrencyCode(mintAddress),
     name: null,
     exponent: null,
@@ -926,7 +928,7 @@ const make = Effect.gen(function* () {
         ? Effect.succeed(null)
         : loadProviderAssetRecord({
             providerAssetId: reference.mintAddress,
-            naturalKey: mintNaturalKey(reference.mintAddress),
+            naturalKey: heliusSolanaMintNaturalKey({ mintAddress: reference.mintAddress }),
           })
 
   const fetchDasAssetsForMissingMints = (mintAddresses: ReadonlyArray<string>) =>

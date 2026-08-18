@@ -4,6 +4,7 @@
  * @module HeliusSolanaSourceSyncProviderLive
  */
 
+import { SOLANA_WRAPPED_NATIVE_MINT } from "@my/core/assets"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import * as BigDecimal from "effect/BigDecimal"
 import * as Effect from "effect/Effect"
@@ -60,7 +61,6 @@ import {
 import {
   HeliusSolanaAssetResolutionService,
   SOLANA_BLOCKCHAIN_NAME,
-  SOLANA_WRAPPED_NATIVE_MINT,
   type HeliusSolanaResolvedAsset,
 } from "../services/HeliusSolanaAssetResolutionService.ts"
 import {

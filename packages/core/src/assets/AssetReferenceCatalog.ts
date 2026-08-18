@@ -197,6 +197,13 @@ export const coinbaseCurrencyNaturalKey = ({
   readonly currencyCode: string
 }): ProviderNaturalKey => `currency_code:${currencyCode.toUpperCase()}`
 
+/** Build the canonical provider identity for a Helius Solana mint. */
+export const heliusSolanaMintNaturalKey = ({
+  mintAddress,
+}: {
+  readonly mintAddress: string
+}): ProviderNaturalKey => `solana:mint:${mintAddress}`
+
 const assets = [
   {
     key: "btc",
@@ -422,7 +429,10 @@ const heliusAlias = ({
 }): ProviderAliasReference => ({
   provider: "helius-solana",
   alias,
-  naturalKey: providerType === "native" ? HELIUS_SOLANA_NATIVE_NATURAL_KEY : `solana:mint:${alias}`,
+  naturalKey:
+    providerType === "native"
+      ? HELIUS_SOLANA_NATIVE_NATURAL_KEY
+      : heliusSolanaMintNaturalKey({ mintAddress: alias }),
   assetKey,
   representationKey,
   displayName,
@@ -566,7 +576,7 @@ const validateCatalog = (
         ? coinbaseCurrencyNaturalKey({ currencyCode: alias.alias })
         : alias.providerType === "native"
           ? HELIUS_SOLANA_NATIVE_NATURAL_KEY
-          : `solana:mint:${alias.alias}`
+          : heliusSolanaMintNaturalKey({ mintAddress: alias.alias })
     if (alias.naturalKey !== expectedNaturalKey) {
       violations.push({
         code: "provider_alias_natural_key_mismatch",

@@ -1,3 +1,4 @@
+import { SOLANA_USDC_MINT } from "@my/core/assets"
 import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -7,10 +8,7 @@ import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecuto
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
 import { HeliusSolanaAssetResolutionServiceLive } from "../../src/providers/helius-solana/layers/HeliusSolanaAssetResolutionServiceLive.ts"
-import {
-  HeliusSolanaAssetResolutionService,
-  SOLANA_USDC_MINT,
-} from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
+import { HeliusSolanaAssetResolutionService } from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import { HeliusSolanaSyncClient } from "../../src/providers/helius-solana/services/HeliusSolanaSyncClient.ts"
 import { CoinbaseLegDerivationServiceLive } from "../../src/providers/coinbase/layers/CoinbaseLegDerivationServiceLive.ts"
 import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
