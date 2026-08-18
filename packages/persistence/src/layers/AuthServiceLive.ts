@@ -273,6 +273,16 @@ const make = Effect.gen(function* () {
           })
         }
 
+        yield* identityRepo.update(identity.id, { providerData: authResult.providerData }).pipe(
+          Effect.mapError(
+            () =>
+              new ProviderAuthFailedError({
+                provider: authResult.provider,
+                reason: "Failed to refresh identity provider data",
+              })
+          )
+        )
+
         return maybeUser.value
       }
 

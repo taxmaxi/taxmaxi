@@ -26,8 +26,40 @@
   "app": {
     "title": "TaxMaxi App",
     "description": "Du bist angemeldet. Der App-Workspace entsteht hier.",
+    "accountMenu": {
+      "label": "Menü",
+      "assets": "Assets",
+      "billing": "Abrechnung",
+      "settings": "Einstellungen",
+      "logout": "Abmelden",
+      "loggingOut": "Abmeldung läuft…"
+    },
+    "settings": {
+      "close": "Einstellungen schließen",
+      "eyebrow": "Einstellungen",
+      "title": "Kontozugriff",
+      "description": "Prüfe die E-Mail-Adresse für Sicherheitsnachrichten und deine Anmeldemethoden.",
+      "accountEmail": "Konto-E-Mail",
+      "accountEmailDescription": "TaxMaxi sendet Sicherheitsnachrichten für dein Konto an diese Adresse.",
+      "loginMethods": "Anmeldemethoden",
+      "loginMethodsDescription": "Diese Methoden sind mit deinem Konto verknüpft.",
+      "providerEmail": "Anbieter-E-Mail",
+      "noProviderEmail": "Keine Anbieter-E-Mail übermittelt",
+      "currentSession": "Aktuelle Sitzung",
+      "unavailable": "Nicht verfügbar",
+      "unavailableReasons": {
+        "providerDisabled": "Dieser Anbieter ist derzeit nicht verfügbar.",
+        "emailUnverified": "Bestätige deine Konto-E-Mail, bevor du diese Methode verwendest."
+      },
+      "linked": "Verknüpft am {date}",
+      "providers": {
+        "local": "E-Mail und Passwort",
+        "google": "Google",
+        "coinbase": "Coinbase"
+      }
+    },
     "billing": {
-      "dashboard": "Übersicht",
+      "close": "Abrechnung schließen",
       "eyebrow": "Abrechnung",
       "title": "Tarif und Transaktionsguthaben",
       "description": "Stripe verarbeitet Zahlungen und Rechnungen. TaxMaxi zeigt das verfügbare Guthaben deines Kontos.",

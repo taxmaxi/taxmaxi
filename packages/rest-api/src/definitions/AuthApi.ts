@@ -21,9 +21,7 @@ import {
   AuthUser,
   Email,
   EmailVerificationCode,
-  ProviderData,
   SessionId,
-  UserIdentity,
   UserIdentityId,
 } from "@my/core/authentication"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
@@ -413,10 +411,14 @@ export class LoginResponse extends Schema.Class<LoginResponse>("LoginResponse")(
 }) {}
 
 /**
- * AuthUserResponse - Response containing user details with linked identities
+ * AccountDetails - User-facing account information.
  */
-export const AuthUserResponseUser = Schema.Struct({
-  ...AuthUser.fields,
+export const AccountDetails = Schema.Struct({
+  id: AuthUser.fields.id,
+  email: AuthUser.fields.email,
+  displayName: AuthUser.fields.displayName,
+  role: AuthUser.fields.role,
+  emailVerified: AuthUser.fields.emailVerified,
   createdAt: Schema.DateTimeUtc.annotate({
     description: "When the user account was created, encoded as an ISO 8601 string",
   }),
@@ -424,39 +426,71 @@ export const AuthUserResponseUser = Schema.Struct({
     description: "When the user account was last updated, encoded as an ISO 8601 string",
   }),
 }).annotate({
-  identifier: "AuthUserResponseUser",
-  title: "Auth User Response User",
+  identifier: "AccountDetails",
+  title: "Account Details",
 })
 
-export type AuthUserResponseUser = typeof AuthUserResponseUser.Type
+export type AccountDetails = typeof AccountDetails.Type
 
-export const AuthUserResponseIdentity = Schema.Struct({
-  ...UserIdentity.fields,
-  providerData: Schema.NullOr(ProviderData).annotate({
-    description: "Optional JSON data from the auth provider",
+/**
+ * LoginMethodUnavailableReason - Why a linked login method cannot currently authenticate.
+ */
+export const LoginMethodUnavailableReason = Schema.Literals([
+  "provider_disabled",
+  "email_unverified",
+]).annotate({
+  identifier: "LoginMethodUnavailableReason",
+  title: "Login Method Unavailable Reason",
+})
+
+export type LoginMethodUnavailableReason = typeof LoginMethodUnavailableReason.Type
+
+/**
+ * LoginMethod - A user-facing way to access an account.
+ */
+export const LoginMethod = Schema.Struct({
+  id: UserIdentityId,
+  provider: AuthProviderType,
+  providerEmail: Schema.NullOr(Email).annotate({
+    description: "The email reported by the login provider, when available",
   }),
-  createdAt: Schema.DateTimeUtc.annotate({
-    description: "When this identity was linked, encoded as an ISO 8601 string",
+  linkedAt: Schema.DateTimeUtc.annotate({
+    description: "When this login method was linked, encoded as an ISO 8601 string",
+  }),
+  isCurrentSession: Schema.Boolean.annotate({
+    description: "Whether this login method authenticated the current session",
+  }),
+  isAvailable: Schema.Boolean.annotate({
+    description: "Whether this login method can currently authenticate the account",
+  }),
+  unavailableReason: Schema.NullOr(LoginMethodUnavailableReason).annotate({
+    description: "Why this login method cannot currently authenticate, when unavailable",
+  }),
+  canRemove: Schema.Boolean.annotate({
+    description: "Whether this login method can be removed without locking the account",
   }),
 }).annotate({
-  identifier: "AuthUserResponseIdentity",
-  title: "Auth User Response Identity",
+  identifier: "LoginMethod",
+  title: "Login Method",
 })
 
-export type AuthUserResponseIdentity = typeof AuthUserResponseIdentity.Type
+export type LoginMethod = typeof LoginMethod.Type
 
-export const AuthUserResponse = Schema.Struct({
-  user: AuthUserResponseUser,
-  identities: Schema.Array(AuthUserResponseIdentity).annotate({
-    description: "All linked authentication provider identities",
+/**
+ * AccountResponse - Authenticated account details and linked login methods.
+ */
+export const AccountResponse = Schema.Struct({
+  account: AccountDetails,
+  loginMethods: Schema.Array(LoginMethod).annotate({
+    description: "All login methods linked to the account",
   }),
 }).annotate({
-  identifier: "AuthUserResponse",
-  title: "Auth User Response",
-  description: "Response containing user details with linked identities",
+  identifier: "AccountResponse",
+  title: "Account Response",
+  description: "Response containing account details and linked login methods",
 })
 
-export type AuthUserResponse = typeof AuthUserResponse.Type
+export type AccountResponse = typeof AccountResponse.Type
 
 /**
  * RefreshResponse - Response from session refresh
@@ -749,12 +783,12 @@ const logout = HttpApiEndpoint.post("logout", "/logout", {
  * GET /auth/me - Get current user details
  */
 const me = HttpApiEndpoint.get("me", "/me", {
-  success: AuthUserResponse,
+  success: AccountResponse,
   error: AuthUserNotFoundError,
 }).annotateMerge(
   OpenApi.annotations({
     summary: "Get current user",
-    description: "Get the authenticated user's details including all linked provider identities",
+    description: "Get the authenticated account and its linked login methods",
   })
 )
 
@@ -763,7 +797,7 @@ const me = HttpApiEndpoint.get("me", "/me", {
  */
 const updateMe = HttpApiEndpoint.put("updateMe", "/me", {
   payload: Schema.Struct(UpdateProfileRequest.fields),
-  success: AuthUserResponse,
+  success: AccountResponse,
   error: [AuthValidationError, AuthUserNotFoundError],
 }).annotateMerge(
   OpenApi.annotations({
@@ -806,7 +840,7 @@ const linkProvider = HttpApiEndpoint.post("linkProvider", "/link/:provider", {
 const linkCallback = HttpApiEndpoint.get("linkCallback", "/link/callback/:provider", {
   params: Schema.Struct({ provider: AuthProviderType }),
   query: OAuthCallbackParams,
-  success: AuthUserResponse,
+  success: AccountResponse,
   error: [ProviderNotFoundError, ProviderAuthError, OAuthStateInvalidError, IdentityLinkedError],
 }).annotateMerge(
   OpenApi.annotations({

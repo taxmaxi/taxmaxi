@@ -26,8 +26,40 @@
   "app": {
     "title": "TaxMaxi App",
     "description": "You are signed in. The app workspace will live here.",
+    "accountMenu": {
+      "label": "Menu",
+      "assets": "Assets",
+      "billing": "Billing",
+      "settings": "Settings",
+      "logout": "Log out",
+      "loggingOut": "Logging out…"
+    },
+    "settings": {
+      "close": "Close settings",
+      "eyebrow": "Settings",
+      "title": "Account access",
+      "description": "Review the email used for security messages and the ways you can log in.",
+      "accountEmail": "Account email",
+      "accountEmailDescription": "TaxMaxi sends account security messages to this address.",
+      "loginMethods": "Login methods",
+      "loginMethodsDescription": "These methods are linked to your account.",
+      "providerEmail": "Provider email",
+      "noProviderEmail": "No provider email reported",
+      "currentSession": "Current session",
+      "unavailable": "Unavailable",
+      "unavailableReasons": {
+        "providerDisabled": "This provider is currently unavailable.",
+        "emailUnverified": "Verify your account email before using this method."
+      },
+      "linked": "Linked {date}",
+      "providers": {
+        "local": "Email and password",
+        "google": "Google",
+        "coinbase": "Coinbase"
+      }
+    },
     "billing": {
-      "dashboard": "Dashboard",
+      "close": "Close billing",
       "eyebrow": "Billing",
       "title": "Plan and transaction credits",
       "description": "Stripe handles payments and invoices. TaxMaxi tracks the credits available to your account.",

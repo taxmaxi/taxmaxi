@@ -74,6 +74,76 @@ const clearAuthTables = () =>
     `,
   })
 
+const COINBASE_USER_ID = "00000000-0000-4000-8000-000000000101"
+const COINBASE_IDENTITY_ID = "00000000-0000-4000-8000-000000000102"
+const COINBASE_SESSION_ID = "coinbase_session_000000000000000000000001"
+const COINBASE_ACCOUNT_EMAIL = "account@taxmaxi.test"
+const COINBASE_PROVIDER_EMAIL = "provider@coinbase.test"
+const MIXED_PROVIDER_USER_ID = "00000000-0000-4000-8000-000000000201"
+const MIXED_PROVIDER_LOCAL_IDENTITY_ID = "00000000-0000-4000-8000-000000000202"
+const MIXED_PROVIDER_COINBASE_IDENTITY_ID = "00000000-0000-4000-8000-000000000203"
+const MIXED_PROVIDER_SESSION_ID = "mixed_provider_session_000000000000000000001"
+const MIXED_PROVIDER_EMAIL = "mixed-provider@taxmaxi.test"
+
+const seedCoinbaseSession = () =>
+  runTestSql({
+    statement: `
+      INSERT INTO users (id, email, email_verified, name, role)
+      VALUES ('${COINBASE_USER_ID}', '${COINBASE_ACCOUNT_EMAIL}', true, 'Coinbase Owner', 'user');
+
+      INSERT INTO auth_identities (id, user_id, provider, provider_id, provider_data)
+      VALUES (
+        '${COINBASE_IDENTITY_ID}',
+        '${COINBASE_USER_ID}',
+        'coinbase',
+        'raw-coinbase-provider-id',
+        '{"profile":{"email":"${COINBASE_PROVIDER_EMAIL}","username":"private-handle"},"metadata":{"access":"private"}}'::jsonb
+      );
+
+      INSERT INTO sessions (id, user_id, provider, expires_at)
+      VALUES (
+        '${COINBASE_SESSION_ID}',
+        '${COINBASE_USER_ID}',
+        'coinbase',
+        NOW() + INTERVAL '1 day'
+      );
+    `,
+  })
+
+const seedMixedProviderSession = () =>
+  runTestSql({
+    statement: `
+      INSERT INTO users (id, email, email_verified, name, role)
+      VALUES ('${MIXED_PROVIDER_USER_ID}', '${MIXED_PROVIDER_EMAIL}', false, 'Mixed Provider', 'user');
+
+      INSERT INTO auth_identities (id, user_id, provider, provider_id, password_hash)
+      VALUES (
+        '${MIXED_PROVIDER_LOCAL_IDENTITY_ID}',
+        '${MIXED_PROVIDER_USER_ID}',
+        'local',
+        '${MIXED_PROVIDER_EMAIL}',
+        'hash:password123'
+      );
+
+      INSERT INTO auth_identities (id, user_id, provider, provider_id, provider_data)
+      VALUES (
+        '${MIXED_PROVIDER_COINBASE_IDENTITY_ID}',
+        '${MIXED_PROVIDER_USER_ID}',
+        'coinbase',
+        'disabled-coinbase-provider-id',
+        '{"profile":{"email":"disabled@coinbase.test"}}'::jsonb
+      );
+
+      INSERT INTO sessions (id, user_id, provider, expires_at)
+      VALUES (
+        '${MIXED_PROVIDER_SESSION_ID}',
+        '${MIXED_PROVIDER_USER_ID}',
+        'local',
+        NOW() + INTERVAL '1 day'
+      );
+    `,
+  })
+
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
     Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
@@ -269,6 +339,60 @@ const postJson = ({
     catch: (cause) => String(cause),
   }).pipe(Effect.orDie)
 
+const postRequest = ({
+  handler,
+  path,
+  cookie,
+}: {
+  readonly handler: (request: Request) => Promise<Response>
+  readonly path: string
+  readonly cookie?: string
+}) =>
+  Effect.tryPromise({
+    try: () => {
+      const headers = new Headers()
+
+      if (cookie !== undefined) {
+        headers.set("cookie", cookie)
+      }
+
+      return handler(
+        new Request(`http://taxmaxi.test${path}`, {
+          method: "POST",
+          headers,
+        })
+      )
+    },
+    catch: (cause) => String(cause),
+  }).pipe(Effect.orDie)
+
+const deleteRequest = ({
+  handler,
+  path,
+  cookie,
+}: {
+  readonly handler: (request: Request) => Promise<Response>
+  readonly path: string
+  readonly cookie?: string
+}) =>
+  Effect.tryPromise({
+    try: () => {
+      const headers = new Headers()
+
+      if (cookie !== undefined) {
+        headers.set("cookie", cookie)
+      }
+
+      return handler(
+        new Request(`http://taxmaxi.test${path}`, {
+          method: "DELETE",
+          headers,
+        })
+      )
+    },
+    catch: (cause) => String(cause),
+  }).pipe(Effect.orDie)
+
 const getRequest = ({
   handler,
   path,
@@ -325,6 +449,134 @@ describe("AuthApiLive integration", () => {
       expect(clearedSessionCookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
       expect(clearedSessionCookie).toContain("HttpOnly")
       expect(clearedSessionCookie).toContain("Path=/")
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("shows an existing Coinbase login method without exposing provider identity data", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+      yield* seedCoinbaseSession()
+
+      const response = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie: makeCookieHeader({ taxmaxi_session: COINBASE_SESSION_ID }),
+      })
+
+      expect(response.status).toBe(200)
+      expect(yield* jsonBody(response)).toEqual({
+        account: {
+          id: COINBASE_USER_ID,
+          email: COINBASE_ACCOUNT_EMAIL,
+          displayName: "Coinbase Owner",
+          role: "member",
+          emailVerified: true,
+          createdAt: expect.any(String),
+          updatedAt: expect.any(String),
+        },
+        loginMethods: [
+          {
+            id: COINBASE_IDENTITY_ID,
+            provider: "coinbase",
+            providerEmail: COINBASE_PROVIDER_EMAIL,
+            linkedAt: expect.any(String),
+            isCurrentSession: true,
+            isAvailable: false,
+            unavailableReason: "provider_disabled",
+            canRemove: false,
+          },
+        ],
+      })
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("does not count unavailable identities as fallback login methods", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+      yield* seedMixedProviderSession()
+      const cookie = makeCookieHeader({ taxmaxi_session: MIXED_PROVIDER_SESSION_ID })
+
+      const accountResponse = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie,
+      })
+
+      expect(accountResponse.status).toBe(200)
+      expect(yield* jsonBody(accountResponse)).toMatchObject({
+        loginMethods: expect.arrayContaining([
+          expect.objectContaining({
+            id: MIXED_PROVIDER_LOCAL_IDENTITY_ID,
+            provider: "local",
+            isCurrentSession: true,
+            isAvailable: false,
+            unavailableReason: "email_unverified",
+            canRemove: false,
+          }),
+          expect.objectContaining({
+            id: MIXED_PROVIDER_COINBASE_IDENTITY_ID,
+            provider: "coinbase",
+            isCurrentSession: false,
+            isAvailable: false,
+            unavailableReason: "provider_disabled",
+            canRemove: false,
+          }),
+        ]),
+      })
+
+      const unlinkResponse = yield* deleteRequest({
+        handler,
+        path: `/auth/identities/${MIXED_PROVIDER_LOCAL_IDENTITY_ID}`,
+        cookie,
+      })
+
+      expect(unlinkResponse.status).toBe(409)
+      expect(yield* jsonBody(unlinkResponse)).toMatchObject({
+        _tag: "CannotUnlinkLastIdentityError",
+      })
+
+      const unlinkCoinbaseResponse = yield* deleteRequest({
+        handler,
+        path: `/auth/identities/${MIXED_PROVIDER_COINBASE_IDENTITY_ID}`,
+        cookie,
+      })
+
+      expect(unlinkCoinbaseResponse.status).toBe(409)
+      expect(yield* jsonBody(unlinkCoinbaseResponse)).toMatchObject({
+        _tag: "CannotUnlinkLastIdentityError",
+      })
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("invalidates the backend session and clears the session cookie on logout", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+      yield* seedCoinbaseSession()
+      const cookie = makeCookieHeader({ taxmaxi_session: COINBASE_SESSION_ID })
+
+      const logoutResponse = yield* postRequest({
+        handler,
+        path: "/auth/logout",
+        cookie,
+      })
+
+      expect(logoutResponse.status).toBe(200)
+      expect(yield* jsonBody(logoutResponse)).toEqual({ success: true })
+      const clearedSessionCookie = getSetCookies(logoutResponse).find((setCookie) =>
+        setCookie.startsWith("taxmaxi_session=")
+      )
+      expect(clearedSessionCookie).toContain("taxmaxi_session=;")
+      expect(clearedSessionCookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+      expect(clearedSessionCookie).toContain("HttpOnly")
+      expect(clearedSessionCookie).toContain("Path=/")
+
+      const accountResponse = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie,
+      })
+
+      expect(accountResponse.status).toBe(401)
     }).pipe(Effect.scoped)
   )
 
@@ -450,15 +702,27 @@ describe("AuthApiLive integration", () => {
         })
 
         expect(meResponse.status).toBe(200)
-        expect(yield* jsonBody(meResponse)).toMatchObject({
-          user: {
+        expect(yield* jsonBody(meResponse)).toEqual({
+          account: {
+            id: expect.any(String),
             email,
+            displayName: "Owner",
+            role: "member",
             emailVerified: true,
+            createdAt: expect.any(String),
+            updatedAt: expect.any(String),
           },
-          identities: [
-            expect.objectContaining({
+          loginMethods: [
+            {
+              id: expect.any(String),
               provider: "local",
-            }),
+              providerEmail: null,
+              linkedAt: expect.any(String),
+              isCurrentSession: true,
+              isAvailable: true,
+              unavailableReason: null,
+              canRemove: false,
+            },
           ],
         })
       }).pipe(Effect.scoped)

@@ -41,7 +41,7 @@ import {
   ProviderMetadata,
   LoginResponse,
   LogoutResponse,
-  type AuthUserResponse,
+  type AccountResponse,
   VerificationFlowResponse,
   VerifyEmailResponse,
   RefreshResponse,
@@ -73,10 +73,10 @@ import {
   AuthService,
   type AuthServiceShape,
   type AuthUser,
+  Email,
   EmailVerificationRequestId,
   LocalAuthRequest,
   PasswordHasher,
-  type ProviderData,
   ProviderId,
   SessionId,
   type UserIdentity,
@@ -261,37 +261,120 @@ const authRouteSpan = ({
     kind: "server",
   })
 
-const providerDataOrNull = (providerData: Option.Option<ProviderData>): ProviderData | null =>
-  Option.match(providerData, {
-    onNone: () => null,
-    onSome: (value) => value,
-  })
+const ProviderProfileEmail = Schema.Struct({
+  email: Schema.optional(Email),
+})
 
-const toAuthUserResponse = ({
+const providerEmailFromIdentity = (identity: UserIdentity): Email | null => {
+  if (identity.provider === "local") {
+    return null
+  }
+
+  return Option.match(identity.providerData, {
+    onNone: () => null,
+    onSome: ({ profile }) =>
+      Option.match(Schema.decodeUnknownOption(ProviderProfileEmail)(profile), {
+        onNone: () => null,
+        onSome: ({ email }) => email ?? null,
+      }),
+  })
+}
+
+const getEnabledProviderSet = (authService: AuthServiceShape) =>
+  authService
+    .getEnabledProviders()
+    .pipe(Effect.map((providers) => new Set(Chunk.toReadonlyArray(providers))))
+
+const getLoginMethodAvailability = ({
+  user,
+  identity,
+  enabledProviders,
+}: {
+  readonly user: AuthUser
+  readonly identity: UserIdentity
+  readonly enabledProviders: ReadonlySet<AuthProviderType>
+}) => {
+  if (!enabledProviders.has(identity.provider)) {
+    return {
+      isAvailable: false,
+      unavailableReason: "provider_disabled" as const,
+    }
+  }
+
+  if (identity.provider === "local" && !user.emailVerified) {
+    return {
+      isAvailable: false,
+      unavailableReason: "email_unverified" as const,
+    }
+  }
+
+  return {
+    isAvailable: true,
+    unavailableReason: null,
+  }
+}
+
+const hasAvailableIdentityOtherThan = ({
   user,
   identities,
+  enabledProviders,
+  identityId,
+}: {
+  readonly user: AuthUser
+  readonly identities: Iterable<UserIdentity>
+  readonly enabledProviders: ReadonlySet<AuthProviderType>
+  readonly identityId: UserIdentity["id"]
+}): boolean => {
+  for (const identity of identities) {
+    if (
+      identity.id !== identityId &&
+      getLoginMethodAvailability({ user, identity, enabledProviders }).isAvailable
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
+const toAccountResponse = ({
+  user,
+  identities,
+  enabledProviders,
+  currentSessionProvider,
 }: {
   readonly user: AuthUser
   readonly identities: ReadonlyArray<UserIdentity>
-}): AuthUserResponse => ({
-  user: {
+  readonly enabledProviders: ReadonlySet<AuthProviderType>
+  readonly currentSessionProvider: AuthProviderType | undefined
+}): AccountResponse => ({
+  account: {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
     role: user.role,
-    primaryProvider: user.primaryProvider,
     emailVerified: user.emailVerified,
     createdAt: user.createdAt.toDateTime(),
     updatedAt: user.updatedAt.toDateTime(),
   },
-  identities: identities.map((identity) => ({
-    id: identity.id,
-    userId: identity.userId,
-    provider: identity.provider,
-    providerId: identity.providerId,
-    providerData: providerDataOrNull(identity.providerData),
-    createdAt: identity.createdAt.toDateTime(),
-  })),
+  loginMethods: identities.map((identity) => {
+    const availability = getLoginMethodAvailability({ user, identity, enabledProviders })
+
+    return {
+      id: identity.id,
+      provider: identity.provider,
+      providerEmail: providerEmailFromIdentity(identity),
+      linkedAt: identity.createdAt.toDateTime(),
+      isCurrentSession: identity.provider === currentSessionProvider,
+      ...availability,
+      canRemove: hasAvailableIdentityOtherThan({
+        user,
+        identities,
+        enabledProviders,
+        identityId: identity.id,
+      }),
+    }
+  }),
 })
 
 /**
@@ -1458,6 +1541,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           const identitiesChunk = identitiesResult.success
 
           const identities = Chunk.toReadonlyArray(identitiesChunk)
+          const enabledProviders = yield* getEnabledProviderSet(authService)
 
           yield* Effect.logInfo(
             {
@@ -1467,9 +1551,11 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             "auth:me-succeeded"
           )
 
-          return toAuthUserResponse({
+          return toAccountResponse({
             user,
             identities,
+            enabledProviders,
+            currentSessionProvider: currentUser.provider,
           })
         }).pipe(
           authRouteSpan({
@@ -1548,6 +1634,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           const identitiesChunk = identitiesResult.success
 
           const identities = Chunk.toReadonlyArray(identitiesChunk)
+          const enabledProviders = yield* getEnabledProviderSet(authService)
 
           yield* Effect.logInfo(
             {
@@ -1558,9 +1645,11 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             "auth:update-me-succeeded"
           )
 
-          return toAuthUserResponse({
+          return toAccountResponse({
             user: updatedUser,
             identities,
+            enabledProviders,
+            currentSessionProvider: currentUser.provider,
           })
         }).pipe(
           authRouteSpan({
@@ -1736,10 +1825,13 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .findByUserId(currentUser.userId)
             .pipe(Effect.mapError(() => new IdentityLinkedError({ provider })))
           const identities = Chunk.toReadonlyArray(identitiesChunk)
+          const enabledProviders = yield* getEnabledProviderSet(authService)
 
-          return toAuthUserResponse({
+          return toAccountResponse({
             user,
             identities,
+            enabledProviders,
+            currentSessionProvider: currentUser.provider,
           })
         })
       )
@@ -1764,12 +1856,27 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* new IdentityNotFoundError({ identityId })
           }
 
-          // Check if this is the last identity - prevent unlinking
+          // Keep at least one identity that can currently authenticate the account
           const allIdentities = yield* identityRepo
             .findByUserId(currentUser.userId)
             .pipe(Effect.mapError(() => new CannotUnlinkLastIdentityError({})))
+          const maybeUser = yield* userRepo
+            .findById(currentUser.userId)
+            .pipe(Effect.mapError(() => new CannotUnlinkLastIdentityError({})))
 
-          if (Chunk.size(allIdentities) <= 1) {
+          if (Option.isNone(maybeUser)) {
+            return yield* new CannotUnlinkLastIdentityError({})
+          }
+
+          const enabledProviders = yield* getEnabledProviderSet(authService)
+          const hasOtherAvailableIdentity = hasAvailableIdentityOtherThan({
+            user: maybeUser.value,
+            identities: allIdentities,
+            enabledProviders,
+            identityId: identity.id,
+          })
+
+          if (!hasOtherAvailableIdentity) {
             return yield* new CannotUnlinkLastIdentityError({})
           }
 
@@ -1895,7 +2002,7 @@ export const SessionTokenValidatorLive: Layer.Layer<TokenValidator, never, AuthS
             )
 
             // Validate session with AuthService
-            const { user } = yield* authService.validateSession(sessionId).pipe(
+            const { session, user } = yield* authService.validateSession(sessionId).pipe(
               Effect.mapError((error) => {
                 if (isSessionNotFoundError(error)) {
                   return new UnauthorizedError({ message: "Invalid session token" })
@@ -1913,6 +2020,7 @@ export const SessionTokenValidatorLive: Layer.Layer<TokenValidator, never, AuthS
             return User.make({
               userId: user.id,
               role: apiRole,
+              provider: session.provider,
               sessionId, // Include the session ID for logout/refresh
             })
           }),
@@ -1940,7 +2048,7 @@ export const makeSessionTokenValidator = (
         Effect.mapError(() => new UnauthorizedError({ message: "Invalid session token format" }))
       )
 
-      const { user } = yield* authService.validateSession(sessionId).pipe(
+      const { session, user } = yield* authService.validateSession(sessionId).pipe(
         Effect.mapError((error) => {
           if (isSessionNotFoundError(error)) {
             return new UnauthorizedError({ message: "Invalid session token" })
@@ -1957,6 +2065,7 @@ export const makeSessionTokenValidator = (
       return User.make({
         userId: user.id,
         role: apiRole,
+        provider: session.provider,
         sessionId, // Include session ID for logout/refresh
       })
     }),

@@ -102,12 +102,12 @@ export type {
   TaxMaxiAssetType,
 } from "./assets/index.ts"
 export type {
+  Account,
   AuthAuthorizeRedirectResponse,
   AuthEffectResource,
   AuthLogoutResponse,
   AuthOAuthSessionResponse,
   AuthPromiseResource,
-  CurrentUserResponse,
 } from "./auth/index.ts"
 export { TaxMaxiError, isTaxMaxiUnauthorizedError, toTaxMaxiError } from "./errors.ts"
 export type { TaxMaxiFieldError } from "./errors.ts"

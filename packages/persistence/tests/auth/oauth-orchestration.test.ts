@@ -16,6 +16,7 @@ import {
   EmailVerificationRequest,
   HashedPassword,
   PasswordHasher,
+  ProviderData,
   ProviderId,
   Session,
   SessionId,
@@ -112,6 +113,26 @@ const makeOAuthProvider = (type: "google" | "coinbase"): AuthProvider => ({
 
 const makeGoogleProvider = (): AuthProvider => makeOAuthProvider("google")
 const makeCoinbaseProvider = (): AuthProvider => makeOAuthProvider("coinbase")
+
+const makeRefreshingGoogleProvider = (): AuthProvider => ({
+  ...makeGoogleProvider(),
+  handleCallback: (code) =>
+    Effect.succeed(
+      AuthResult.make({
+        provider: "google",
+        providerId: ProviderId.make("returning-google-user"),
+        email: Email.make("returning@example.com"),
+        displayName: "Returning User",
+        emailVerified: true,
+        providerData: Option.some(
+          ProviderData.make({
+            profile: { email: `${code}@example.com` },
+          })
+        ),
+        oauthCredentials: Option.none(),
+      })
+    ),
+})
 
 const makeLocalProvider = ({
   emailVerified,
@@ -590,6 +611,30 @@ describe("AuthServiceLive OAuth orchestration", () => {
     if (Result.isFailure(reusedState)) {
       expect(reusedState.failure._tag).toBe("OAuthStateError")
     }
+  })
+
+  it("refreshes provider metadata when an OAuth identity returns", async () => {
+    const harness = makeHarness([makeRefreshingGoogleProvider()])
+
+    const firstLogin = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
+    await harness.runWithAuth((auth) =>
+      auth.completeOAuthLogin("google", "old-profile", firstLogin.state)
+    )
+
+    const returningLogin = await harness.runWithAuth((auth) => auth.startOAuthLogin("google"))
+    await harness.runWithAuth((auth) =>
+      auth.completeOAuthLogin("google", "fresh-profile", returningLogin.state)
+    )
+
+    const identities = Array.from(harness.state.identities.values())
+    expect(identities).toHaveLength(1)
+    expect(identities[0]?.providerData).toEqual(
+      Option.some(
+        ProviderData.make({
+          profile: { email: "fresh-profile@example.com" },
+        })
+      )
+    )
   })
 
   it("link -> callback links identity and does not create a new user", async () => {

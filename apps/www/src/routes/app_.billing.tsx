@@ -1,6 +1,6 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router"
-import { ArrowLeft, CreditCard, Plus } from "lucide-react"
-import { useEffect, useState } from "react"
+import { createFileRoute, redirect } from "@tanstack/react-router"
+import { CreditCard, Plus } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
 import {
   isTaxMaxiUnauthorizedError,
   type BillingCatalog,
@@ -9,17 +9,11 @@ import {
 } from "taxmaxi"
 import { z } from "zod"
 
-import { AppHeader } from "#/components/app-header"
-import { PageShell } from "#/components/page-shell"
+import { AppFocusSurface } from "#/components/app-focus-surface"
+import { appPanelClassName } from "#/components/app-workspace"
 import { Button } from "#/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "#/components/ui/card"
+import { Text } from "#/components/ui/typography"
+import { cn } from "#/lib/utils"
 import { m } from "#/paraglide/messages"
 import { getLocale, type Locale } from "#/paraglide/runtime"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
@@ -124,6 +118,9 @@ function BillingPage() {
   const search = Route.useSearch()
   const { taxmaxi } = Route.useRouteContext()
   const navigate = Route.useNavigate()
+  const onClose = useCallback(() => {
+    void navigate({ to: "/app" })
+  }, [navigate])
   const [checkoutReturnKind] = useState<CheckoutReturnKind | null>(() =>
     search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
   )
@@ -139,6 +136,7 @@ function BillingPage() {
       billing={taxmaxi().billing}
       catalog={catalog}
       checkoutReturnKind={checkoutReturnKind}
+      onClose={onClose}
       onUnauthorized={async () => {
         await clearAuthSessionCookie()
         await navigate({ to: "/login", replace: true })
@@ -153,6 +151,7 @@ export function BillingPageContent({
   billing,
   catalog,
   checkoutReturnKind,
+  onClose,
   onUnauthorized,
   status,
 }: {
@@ -160,6 +159,7 @@ export function BillingPageContent({
   readonly billing: BillingPromiseResource
   readonly catalog: BillingCatalog | null
   readonly checkoutReturnKind: CheckoutReturnKind | null
+  readonly onClose: () => void
   readonly onUnauthorized: () => Promise<void>
   readonly status: BillingStatus
 }) {
@@ -239,67 +239,47 @@ export function BillingPageContent({
   }
 
   return (
-    <PageShell
-      as="main"
-      tone="marketing"
-      className="relative isolate min-h-screen w-full overflow-x-clip bg-[var(--app-page-fallback)] text-marketing-text"
+    <AppFocusSurface
+      bodyClassName="min-h-0 flex-1 overflow-y-auto"
+      closeLabel={m["app.billing.close"]()}
+      icon={<CreditCard aria-hidden="true" className="size-4" />}
+      onClose={onClose}
+      subtitle={m["app.billing.title"]()}
+      title={m["app.billing.eyebrow"]()}
+      titleId="billing-title"
     >
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 [background:var(--app-page-background)]"
-      />
-      <div className="relative">
-        <AppHeader>
-          <Button asChild size="sm" variant="outline">
-            <Link preload="intent" to="/app">
-              <ArrowLeft data-icon="inline-start" />
-              {m["app.billing.dashboard"]()}
-            </Link>
-          </Button>
-        </AppHeader>
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 py-6 sm:px-5 sm:py-8">
+        <Text className="max-w-[65ch]" size="bodySm" tone="muted">
+          {m["app.billing.description"]()}
+        </Text>
 
-        <section className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 pt-32 pb-16 sm:px-8">
-          <header className="flex max-w-2xl flex-col gap-3">
-            <p className="text-sm font-medium text-marketing-accent">
-              {m["app.billing.eyebrow"]()}
-            </p>
-            <h1 className="font-display text-4xl tracking-[-0.045em] sm:text-5xl">
-              {m["app.billing.title"]()}
-            </h1>
-            <p className="leading-7 text-marketing-muted">{m["app.billing.description"]()}</p>
-          </header>
+        {error === null ? null : (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
 
-          {error === null ? null : (
-            <p
-              role="alert"
-              className="rounded-xl border border-destructive/30 p-4 text-destructive"
-            >
-              {error}
-            </p>
-          )}
-
-          <div className="grid gap-5 lg:grid-cols-2">
-            <AnnualBillingCard
-              catalog={catalog}
-              disabled={pendingAction !== null}
-              onAction={() => void redirectToStripe(subscribed ? "portal" : "annual")}
-              pending={pendingAction === (subscribed ? "portal" : "annual")}
-              locale={locale}
-              status={liveStatus}
-              subscribed={subscribed}
-            />
-            <TopUpCard
-              catalog={catalog}
-              disabled={pendingAction !== null}
-              onAction={() => void redirectToStripe("topUp")}
-              pending={pendingAction === "topUp"}
-              locale={locale}
-              subscribed={topUpEligible}
-            />
-          </div>
-        </section>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <AnnualBillingCard
+            catalog={catalog}
+            disabled={pendingAction !== null}
+            onAction={() => void redirectToStripe(subscribed ? "portal" : "annual")}
+            pending={pendingAction === (subscribed ? "portal" : "annual")}
+            locale={locale}
+            status={liveStatus}
+            subscribed={subscribed}
+          />
+          <TopUpCard
+            catalog={catalog}
+            disabled={pendingAction !== null}
+            onAction={() => void redirectToStripe("topUp")}
+            pending={pendingAction === "topUp"}
+            locale={locale}
+            subscribed={topUpEligible}
+          />
+        </div>
       </div>
-    </PageShell>
+    </AppFocusSurface>
   )
 }
 
@@ -323,28 +303,26 @@ function AnnualBillingCard({
   const price = catalog?.prices.find((item) => item.lookupKey === "taxmaxi_annual_10k_eur")
   const displayedPrice = price === undefined ? null : formatCatalogPrice(price, locale)
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m["app.billing.annual.title"]()}</CardTitle>
-        <CardDescription>{m["app.billing.annual.description"]()}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
-        <p className="text-4xl font-semibold tabular-nums">
-          {displayedPrice ?? m["app.billing.priceUnavailable"]()}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">
-            {m["app.billing.annual.priceSuffix"]({
-              taxLabel: taxLabel(price?.taxBehavior),
-            })}
-          </span>
-        </p>
-        <div className="rounded-xl border p-4">
-          <p className="text-sm text-muted-foreground">{m["app.billing.availableCredits"]()}</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums">
-            {new Intl.NumberFormat(locale).format(status.credits)}
-          </p>
-        </div>
-      </CardContent>
-      <CardFooter>
+    <section className={cn(appPanelClassName, "flex flex-col gap-4 p-5")}>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-sm font-medium">{m["app.billing.annual.title"]()}</h2>
+        <p className="text-sm text-muted-foreground">{m["app.billing.annual.description"]()}</p>
+      </div>
+      <p className="text-2xl font-semibold tabular-nums tracking-tight">
+        {displayedPrice ?? m["app.billing.priceUnavailable"]()}
+        <span className="ml-2 text-sm font-normal text-muted-foreground">
+          {m["app.billing.annual.priceSuffix"]({
+            taxLabel: taxLabel(price?.taxBehavior),
+          })}
+        </span>
+      </p>
+      <p className="text-sm text-muted-foreground">
+        {m["app.billing.availableCredits"]()}
+        <span className="ml-2 font-medium tabular-nums text-foreground">
+          {new Intl.NumberFormat(locale).format(status.credits)}
+        </span>
+      </p>
+      <div>
         <Button disabled={disabled || (!subscribed && displayedPrice === null)} onClick={onAction}>
           <CreditCard data-icon="inline-start" />
           {pending
@@ -355,8 +333,8 @@ function AnnualBillingCard({
                 ? m["app.billing.priceUnavailable"]()
                 : m["app.billing.annual.subscribe"]({ price: displayedPrice })}
         </Button>
-      </CardFooter>
-    </Card>
+      </div>
+    </section>
   )
 }
 
@@ -378,20 +356,18 @@ function TopUpCard({
   const price = catalog?.prices.find((item) => item.lookupKey === "taxmaxi_topup_1k_eur")
   const displayedPrice = price === undefined ? null : formatCatalogPrice(price, locale)
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{m["app.billing.topUp.title"]()}</CardTitle>
-        <CardDescription>{m["app.billing.topUp.description"]()}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="text-4xl font-semibold tabular-nums">
-          {displayedPrice ?? m["app.billing.priceUnavailable"]()}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">
-            {taxLabel(price?.taxBehavior)}
-          </span>
-        </p>
-      </CardContent>
-      <CardFooter className="flex-col items-start gap-3">
+    <section className={cn(appPanelClassName, "flex flex-col gap-4 p-5")}>
+      <div className="flex flex-col gap-1">
+        <h2 className="text-sm font-medium">{m["app.billing.topUp.title"]()}</h2>
+        <p className="text-sm text-muted-foreground">{m["app.billing.topUp.description"]()}</p>
+      </div>
+      <p className="text-2xl font-semibold tabular-nums tracking-tight">
+        {displayedPrice ?? m["app.billing.priceUnavailable"]()}
+        <span className="ml-2 text-sm font-normal text-muted-foreground">
+          {taxLabel(price?.taxBehavior)}
+        </span>
+      </p>
+      <div className="flex flex-col items-start gap-2">
         <Button
           disabled={isTopUpActionDisabled({
             hasCatalogPrice: displayedPrice !== null,
@@ -406,8 +382,8 @@ function TopUpCard({
         {subscribed ? null : (
           <p className="text-xs text-muted-foreground">{m["app.billing.topUp.eligibility"]()}</p>
         )}
-      </CardFooter>
-    </Card>
+      </div>
+    </section>
   )
 }
 
