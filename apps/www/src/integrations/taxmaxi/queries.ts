@@ -103,7 +103,6 @@ export const queries = {
     queryOptions({
       queryKey: queryKeys.transactionList(input),
       queryFn: async () => taxmaxi.transactions.list(input),
-      placeholderData: keepPreviousData,
       staleTime: 30 * 1000,
     }),
 }

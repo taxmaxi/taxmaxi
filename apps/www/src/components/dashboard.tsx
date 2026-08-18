@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { useRouteContext } from "@tanstack/react-router"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
@@ -115,6 +115,14 @@ export function Dashboard({
     setTransactionCursors((current) => (current.length > 1 ? current.slice(0, -1) : current))
   }
 
+  const handleSourceSyncCompleted = useCallback(
+    async (sourceId: AccountId) => {
+      setTransactionCursors([null])
+      await onSourceSyncCompleted?.(sourceId)
+    },
+    [onSourceSyncCompleted]
+  )
+
   const summary = useMemo<DashboardSummary>(() => {
     const taxSummaries = taxYearAccountSummaries.filter(
       (yearSummary) =>
@@ -170,7 +178,7 @@ export function Dashboard({
     useSourceSyncs({
       accountsById,
       getSourceSyncJob,
-      onCompleted: onSourceSyncCompleted,
+      onCompleted: handleSourceSyncCompleted,
       onUnauthorized,
       startSourceSync,
     })

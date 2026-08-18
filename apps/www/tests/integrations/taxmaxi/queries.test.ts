@@ -146,6 +146,12 @@ describe("asset catalog infinite queries", () => {
 })
 
 describe("transaction list queries", () => {
+  it("shows a loading state instead of labeling the previous page as the requested page", () => {
+    const taxmaxi = new TaxMaxi({ apiKey: "", baseUrl: "https://transactions.example.test" })
+
+    expect(queries.transactionList(taxmaxi).placeholderData).toBeUndefined()
+  })
+
   it("forwards the selected transaction cursor", async () => {
     const requestedUrls: Array<string> = []
     const taxmaxi = new TaxMaxi({

@@ -30,6 +30,7 @@ import {
   TEST_BTC_ASSET_ID,
 } from "../../persistence/tests/support/integration-test-kit.ts"
 import { TaxMaxiApi } from "../src/definitions/TaxMaxiApi.ts"
+import type { TransactionListResponse } from "../src/definitions/TransactionsApi.ts"
 import { AnonSessionServiceLive } from "../src/layers/AnonSessionServiceLive.ts"
 import { SimpleTokenValidatorLive } from "../src/layers/AuthMiddlewareLive.ts"
 import { TaxMaxiApiLive } from "../src/layers/TaxMaxiApiLive.ts"
@@ -127,6 +128,19 @@ const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
     })
   })
 
+const getAuthenticatedStatus = ({
+  path,
+  userId,
+}: {
+  readonly path: string
+  readonly userId: string
+}) =>
+  HttpClientRequest.get(path).pipe(
+    HttpClientRequest.bearerToken(`user_${userId}_admin`),
+    HttpClient.execute,
+    Effect.map((response) => response.status)
+  )
+
 const fixtureIds = {
   userId: "00000000-0000-4000-8000-000000000181",
   principalId: "00000000-0000-4000-8000-000000000183",
@@ -139,14 +153,28 @@ const fixtureIds = {
   internalTransferTransactionId: "00000000-0000-4000-8000-000000046106",
   pendingBasisTransactionId: "00000000-0000-4000-8000-000000046107",
   mixedCurrencyTransactionId: "00000000-0000-4000-8000-000000046108",
+  missingProceedsTransactionId: "00000000-0000-4000-8000-000000046109",
+  partialMatchTransactionId: "00000000-0000-4000-8000-000000046110",
+  tieTransactionIds: [
+    "00000000-0000-4000-8000-000000046111",
+    "00000000-0000-4000-8000-000000046112",
+    "00000000-0000-4000-8000-000000046113",
+  ],
   buyLegId: "00000000-0000-4000-8000-000000046201",
   sellLegId: "00000000-0000-4000-8000-000000046202",
   partialLegId: "00000000-0000-4000-8000-000000046203",
   internalTransferLegId: "00000000-0000-4000-8000-000000046204",
   pendingBasisAcquisitionLegId: "00000000-0000-4000-8000-000000046205",
   pendingBasisDisposalLegId: "00000000-0000-4000-8000-000000046206",
-  mixedCurrencyEurLegId: "00000000-0000-4000-8000-000000046207",
+  internalTransferOutLegId: "00000000-0000-4000-8000-000000046207",
   mixedCurrencyUsdLegId: "00000000-0000-4000-8000-000000046208",
+  missingProceedsLegId: "00000000-0000-4000-8000-000000046209",
+  partialMatchLegId: "00000000-0000-4000-8000-000000046210",
+  tieLegIds: [
+    "00000000-0000-4000-8000-000000046211",
+    "00000000-0000-4000-8000-000000046212",
+    "00000000-0000-4000-8000-000000046213",
+  ],
   buyLotId: "00000000-0000-4000-8000-000000046301",
   pendingBasisLotId: "00000000-0000-4000-8000-000000046302",
   hiddenTransactionId: "00000000-0000-4000-8000-000000046901",
@@ -374,6 +402,75 @@ describe("TransactionsApiLive", () => {
     )
   })
 
+  it("uses the transaction ID as the cursor tie-breaker for equal timestamps", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const fixture = yield* seedTransactions
+        const db = yield* drizzle
+        const timestamp = new Date("2025-04-10T12:00:00.000Z")
+
+        yield* db.insert(schema.transactions).values(
+          fixtureIds.tieTransactionIds.map((id, index) => ({
+            id,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: `transaction-tie-${index + 1}`,
+            timestamp,
+            transactionType: "buy_fiat",
+          }))
+        )
+        yield* db.insert(schema.transactionLegs).values(
+          fixtureIds.tieLegIds.map((id, index) => ({
+            id,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: `transaction-tie-${index + 1}:acquisition`,
+            timestamp,
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.1",
+            kind: "acquisition" as const,
+            provenance: "deterministic" as const,
+            transactionId: fixtureIds.tieTransactionIds[index],
+            fiatAmount: "1000",
+            fiatCurrency: "EUR",
+          }))
+        )
+
+        const client = yield* makeAuthenticatedClient({ userId: fixture.userId })
+        const listedIds: Array<string> = []
+        let cursor: string | null = null
+
+        for (let page = 0; page < 3; page += 1) {
+          const response: TransactionListResponse = yield* client.transactions.listTransactions({
+            query: { ...(cursor === null ? {} : { cursor }), limit: 1 },
+          })
+          listedIds.push(...response.transactions.map((transaction) => transaction.transactionId))
+          cursor = response.page.nextCursor
+        }
+
+        expect(listedIds).toEqual(
+          [...fixtureIds.tieTransactionIds].sort((left, right) => right.localeCompare(left))
+        )
+        expect(new Set(listedIds).size).toBe(3)
+        expect(cursor).not.toBeNull()
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+  })
+
+  it("returns 400 for a malformed transaction cursor", async () => {
+    const status = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fixture = yield* seedTransactions
+        return yield* getAuthenticatedStatus({
+          path: "/v1/transactions?cursor=not-a-cursor",
+          userId: fixture.userId,
+        })
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(status).toBe(400)
+  })
+
   it("keeps non-taxable transfers complete and marks unfinished calculations partial", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
@@ -403,6 +500,22 @@ describe("TransactionsApiLive", () => {
             principalId: fixture.principalId,
             externalId: "transaction-mixed-currency",
             timestamp: new Date("2025-03-22T12:00:00.000Z"),
+            transactionType: "sell_fiat",
+          },
+          {
+            id: fixtureIds.missingProceedsTransactionId,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: "transaction-missing-proceeds",
+            timestamp: new Date("2025-03-23T12:00:00.000Z"),
+            transactionType: "sell_fiat",
+          },
+          {
+            id: fixtureIds.partialMatchTransactionId,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: "transaction-partial-match",
+            timestamp: new Date("2025-03-24T12:00:00.000Z"),
             transactionType: "sell_fiat",
           },
         ])
@@ -451,17 +564,18 @@ describe("TransactionsApiLive", () => {
             fiatCurrency: "EUR",
           },
           {
-            id: fixtureIds.mixedCurrencyEurLegId,
+            id: fixtureIds.internalTransferOutLegId,
             sourceId: fixture.sourceId,
             principalId: fixture.principalId,
-            externalId: "transaction-mixed-currency:eur",
-            timestamp: new Date("2025-03-22T12:00:00.000Z"),
+            externalId: "transaction-internal-transfer:out",
+            timestamp: new Date("2025-03-20T12:00:00.000Z"),
             assetId: TEST_BTC_ASSET_ID,
             amount: "0.1",
             kind: "disposal",
             provenance: "deterministic",
-            transactionId: fixtureIds.mixedCurrencyTransactionId,
-            fiatAmount: "1500",
+            transactionId: fixtureIds.internalTransferTransactionId,
+            derivationRule: "internal_transfer_out",
+            fiatAmount: "1000",
             fiatCurrency: "EUR",
           },
           {
@@ -477,6 +591,34 @@ describe("TransactionsApiLive", () => {
             transactionId: fixtureIds.mixedCurrencyTransactionId,
             fiatAmount: "1600",
             fiatCurrency: "USD",
+          },
+          {
+            id: fixtureIds.missingProceedsLegId,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: "transaction-missing-proceeds:disposal",
+            timestamp: new Date("2025-03-23T12:00:00.000Z"),
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.1",
+            kind: "disposal",
+            provenance: "deterministic",
+            transactionId: fixtureIds.missingProceedsTransactionId,
+            fiatAmount: null,
+            fiatCurrency: null,
+          },
+          {
+            id: fixtureIds.partialMatchLegId,
+            sourceId: fixture.sourceId,
+            principalId: fixture.principalId,
+            externalId: "transaction-partial-match:disposal",
+            timestamp: new Date("2025-03-24T12:00:00.000Z"),
+            assetId: TEST_BTC_ASSET_ID,
+            amount: "0.1",
+            kind: "disposal",
+            provenance: "deterministic",
+            transactionId: fixtureIds.partialMatchTransactionId,
+            fiatAmount: "1500",
+            fiatCurrency: "EUR",
           },
         ])
         yield* db.insert(schema.fifoLots).values({
@@ -502,12 +644,12 @@ describe("TransactionsApiLive", () => {
             gainLoss: "1500",
           },
           {
-            disposalLegId: fixtureIds.mixedCurrencyEurLegId,
+            disposalLegId: fixtureIds.internalTransferOutLegId,
             fifoLotId: fixtureIds.buyLotId,
             matchedAmount: "0.1",
             costBasis: "1000",
-            proceeds: "1500",
-            gainLoss: "500",
+            proceeds: "1000",
+            gainLoss: "0",
           },
           {
             disposalLegId: fixtureIds.mixedCurrencyUsdLegId,
@@ -516,6 +658,22 @@ describe("TransactionsApiLive", () => {
             costBasis: "1000",
             proceeds: "1600",
             gainLoss: "600",
+          },
+          {
+            disposalLegId: fixtureIds.missingProceedsLegId,
+            fifoLotId: fixtureIds.buyLotId,
+            matchedAmount: "0.1",
+            costBasis: "1000",
+            proceeds: "0",
+            gainLoss: "-1000",
+          },
+          {
+            disposalLegId: fixtureIds.partialMatchLegId,
+            fifoLotId: fixtureIds.buyLotId,
+            matchedAmount: "0.05",
+            costBasis: "500",
+            proceeds: "750",
+            gainLoss: "250",
           },
         ])
 
@@ -530,10 +688,18 @@ describe("TransactionsApiLive", () => {
         const mixedCurrency = response.transactions.find(
           (transaction) => transaction.transactionId === fixtureIds.mixedCurrencyTransactionId
         )
+        const missingProceeds = response.transactions.find(
+          (transaction) => transaction.transactionId === fixtureIds.missingProceedsTransactionId
+        )
+        const partialMatch = response.transactions.find(
+          (transaction) => transaction.transactionId === fixtureIds.partialMatchTransactionId
+        )
         if (
           internalTransfer === undefined ||
           pendingBasis === undefined ||
-          mixedCurrency === undefined
+          mixedCurrency === undefined ||
+          missingProceeds === undefined ||
+          partialMatch === undefined
         ) {
           return yield* Effect.die("Expected calculation-state fixtures in the transaction list")
         }
@@ -546,9 +712,19 @@ describe("TransactionsApiLive", () => {
         expect(pendingBasis).toMatchObject({
           calculationState: "partial",
           realizedGainLoss: null,
-          fiatCurrency: "EUR",
+          fiatCurrency: null,
         })
         expect(mixedCurrency).toMatchObject({
+          calculationState: "partial",
+          realizedGainLoss: null,
+          fiatCurrency: null,
+        })
+        expect(missingProceeds).toMatchObject({
+          calculationState: "partial",
+          realizedGainLoss: null,
+          fiatCurrency: null,
+        })
+        expect(partialMatch).toMatchObject({
           calculationState: "partial",
           realizedGainLoss: null,
           fiatCurrency: null,

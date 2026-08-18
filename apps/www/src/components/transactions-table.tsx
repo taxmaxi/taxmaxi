@@ -24,6 +24,11 @@ const gainLossFormatter = (currency: string) =>
     style: "currency",
   })
 
+const isDecimalString = (value: string): value is `${number}` =>
+  /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(value)
+
+const isZeroDecimal = (value: `${number}`): boolean => /^-?0(?:\.0+)?$/.test(value)
+
 const typeLabel = (value: string | null): string => {
   if (value === null) return "Unclassified"
   const words = value.replaceAll("_", " ").replaceAll("-", " ")
@@ -47,10 +52,15 @@ const realizedGainLossLabel = (transaction: TransactionListItem): string => {
     return "Not applicable"
   }
 
-  const value = Number(transaction.realizedGainLoss)
-  if (!Number.isFinite(value)) return "Pending"
-  const formatted = gainLossFormatter(transaction.fiatCurrency).format(Math.abs(value))
-  return `${value > 0 ? "+" : value < 0 ? "−" : ""}${formatted}`
+  const value = transaction.realizedGainLoss
+  if (!isDecimalString(value)) return "Pending"
+
+  const absoluteValue = value.startsWith("-") ? value.slice(1) : value
+  if (!isDecimalString(absoluteValue)) return "Pending"
+
+  const formatted = gainLossFormatter(transaction.fiatCurrency).format(absoluteValue)
+  const sign = isZeroDecimal(value) ? "" : value.startsWith("-") ? "−" : "+"
+  return `${sign}${formatted}`
 }
 
 export function TransactionsTable({
@@ -162,6 +172,10 @@ export function TransactionsTable({
                       <WalletCards className="size-3.5 shrink-0" />
                     )}
                     {transaction.source.name}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold tabular-nums sm:hidden">
+                    <span className="sr-only">Realized gain/loss: </span>
+                    {realizedGainLossLabel(transaction)}
                   </p>
                 </div>
 

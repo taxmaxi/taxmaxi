@@ -14,7 +14,6 @@ import {
   inArray,
   isNull,
   lt,
-  notExists,
   notInArray,
   or,
   sql,
@@ -212,6 +211,7 @@ const make = Effect.gen(function* () {
           transactionId: schema.transactionLegs.transactionId,
           gainLoss: schema.disposalMatches.gainLoss,
           fiatCurrency: schema.transactionLegs.fiatCurrency,
+          costBasisCurrency: schema.fifoLots.costBasisCurrency,
           costBasisStatus: schema.fifoLots.costBasisStatus,
         })
         .from(schema.disposalMatches)
@@ -220,7 +220,12 @@ const make = Effect.gen(function* () {
           eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
         )
         .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
-        .where(inArray(schema.transactionLegs.transactionId, transactionIds))
+        .where(
+          and(
+            inArray(schema.transactionLegs.transactionId, transactionIds),
+            sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`
+          )
+        )
         .pipe(wrapSqlError("transactionListRepository.list.gainLoss"))
 
       const decoded = yield* Effect.forEach(rows, (row) =>
@@ -232,6 +237,7 @@ const make = Effect.gen(function* () {
             transactionId: row.transactionId,
             amount,
             fiatCurrency: row.fiatCurrency,
+            costBasisCurrency: row.costBasisCurrency,
             costBasisStatus: row.costBasisStatus,
           }))
         )
@@ -244,11 +250,12 @@ const make = Effect.gen(function* () {
         const transactionAmounts = amounts.get(row.transactionId) ?? []
         transactionAmounts.push(row.amount)
         amounts.set(row.transactionId, transactionAmounts)
+        const transactionCurrencies = currencies.get(row.transactionId) ?? new Set<string>()
         if (row.fiatCurrency !== null) {
-          const transactionCurrencies = currencies.get(row.transactionId) ?? new Set<string>()
           transactionCurrencies.add(row.fiatCurrency)
-          currencies.set(row.transactionId, transactionCurrencies)
         }
+        transactionCurrencies.add(row.costBasisCurrency)
+        currencies.set(row.transactionId, transactionCurrencies)
         if (row.costBasisStatus === "pending_review") {
           pendingCostBasis.add(row.transactionId)
         }
@@ -331,12 +338,11 @@ const make = Effect.gen(function* () {
               and(
                 eq(schema.transactionLegs.kind, "disposal"),
                 sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`,
-                notExists(
-                  executor
-                    .select({ id: schema.disposalMatches.id })
-                    .from(schema.disposalMatches)
-                    .where(eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id))
-                )
+                sql`coalesce((
+                  select sum(${schema.disposalMatches.matchedAmount})
+                  from ${schema.disposalMatches}
+                  where ${schema.disposalMatches.disposalLegId} = ${schema.transactionLegs.id}
+                ), 0) <> ${schema.transactionLegs.amount}`
               )
             )
           )
@@ -374,6 +380,8 @@ const make = Effect.gen(function* () {
 
             const items = pageRows.map((row): TransactionListItem => {
               const totals = gainLoss.get(row.transactionId)
+              const isPartial =
+                partialTransactionIds.has(row.transactionId) || totals?.isPartial === true
               return {
                 transactionId: row.transactionId,
                 timestamp: row.timestamp.toISOString(),
@@ -386,12 +394,9 @@ const make = Effect.gen(function* () {
                 description: row.description,
                 externalId: row.externalId,
                 movements: movements.get(row.transactionId) ?? [],
-                realizedGainLoss: totals?.realizedGainLoss ?? null,
-                fiatCurrency: totals?.fiatCurrency ?? null,
-                calculationState:
-                  partialTransactionIds.has(row.transactionId) || totals?.isPartial === true
-                    ? "partial"
-                    : "complete",
+                realizedGainLoss: isPartial ? null : (totals?.realizedGainLoss ?? null),
+                fiatCurrency: isPartial ? null : (totals?.fiatCurrency ?? null),
+                calculationState: isPartial ? "partial" : "complete",
                 needsReview: reviewStates.get(row.transactionId) ?? false,
               }
             })

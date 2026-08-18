@@ -68,7 +68,7 @@ describe("TransactionsTable", () => {
     )
 
     expect(screen.getByText("Sold Bitcoin")).toBeTruthy()
-    expect(screen.getByText("Pending")).toBeTruthy()
+    expect(screen.getAllByText("Pending")).toHaveLength(2)
   })
 
   it("does not label a complete transaction with no gain or loss as pending", () => {
@@ -85,7 +85,61 @@ describe("TransactionsTable", () => {
       />
     )
 
-    expect(screen.getByText("Not applicable")).toBeTruthy()
+    expect(screen.getAllByText("Not applicable")).toHaveLength(2)
+  })
+
+  it("shows gain and calculation state in the compact mobile row", () => {
+    const { rerender } = render(<TransactionsTable {...defaultProps} />)
+
+    const mobileGain = screen
+      .getAllByText("+€2,000.00")
+      .find((element) => element.className.includes("sm:hidden"))
+    expect(mobileGain).toBeDefined()
+
+    rerender(
+      <TransactionsTable
+        {...defaultProps}
+        transactions={[
+          {
+            ...transaction,
+            calculationState: "partial",
+            realizedGainLoss: null,
+            fiatCurrency: null,
+          },
+        ]}
+      />
+    )
+    const mobilePending = screen
+      .getAllByText("Pending")
+      .find((element) => element.className.includes("sm:hidden"))
+    expect(mobilePending).toBeDefined()
+  })
+
+  it("formats gains beyond Number.MAX_SAFE_INTEGER without losing precision", () => {
+    render(
+      <TransactionsTable
+        {...defaultProps}
+        transactions={[{ ...transaction, realizedGainLoss: "9007199254740993" }]}
+      />
+    )
+
+    expect(screen.getAllByText("+€9,007,199,254,740,993.00")).toHaveLength(2)
+  })
+
+  it("formats large fractional losses from the exact decimal string", () => {
+    render(
+      <TransactionsTable
+        {...defaultProps}
+        transactions={[
+          {
+            ...transaction,
+            realizedGainLoss: "-1234567890123456789012345678.87654321",
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getAllByText("−€1,234,567,890,123,456,789,012,345,678.88")).toHaveLength(2)
   })
 
   it("shows loading, empty, and error states", () => {

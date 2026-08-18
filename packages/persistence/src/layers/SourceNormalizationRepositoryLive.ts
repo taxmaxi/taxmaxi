@@ -101,7 +101,8 @@ const stableTransactionId = ({
     return null
   }
 
-  const identity = externalId === null ? `raw:${sourceRawRecordId}` : `external:${externalId}`
+  const identity =
+    sourceRawRecordId === null ? `external:${externalId}` : `raw:${sourceRawRecordId}`
   const digest = createHash("sha256")
     .update("taxmaxi:canonical-transaction")
     .update("\0")
@@ -435,15 +436,35 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const now = nowDate()
-      const transactionId = stableTransactionId(transaction)
-      if (transactionId === null) {
+      const deterministicTransactionId = stableTransactionId(transaction)
+      if (deterministicTransactionId === null) {
         return yield* toSyncEngineStorageError({
           operation: "sourceNormalizationRepository.upsertTransaction.identity",
           error: "Transaction is missing a stable source identity",
         })
       }
+      const [existingExternalTransaction] =
+        transaction.externalId === null
+          ? []
+          : yield* executor
+              .select({ id: schema.transactions.id })
+              .from(schema.transactions)
+              .where(
+                and(
+                  eq(schema.transactions.sourceId, transaction.sourceId),
+                  eq(schema.transactions.externalId, transaction.externalId)
+                )
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "sourceNormalizationRepository.upsertTransaction.findExternal"
+                )
+              )
+      const transactionId = existingExternalTransaction?.id ?? deterministicTransactionId
 
       const conflictSet = {
+        externalId: sql.raw("excluded.external_id"),
         sourceRawRecordId: sql.raw("excluded.source_raw_record_id"),
         externalGroupId: sql.raw("excluded.external_group_id"),
         timestamp: sql.raw("excluded.timestamp"),
@@ -464,17 +485,10 @@ const make = Effect.gen(function* () {
         createdAt: now,
         updatedAt: now,
       })
-      const upsert =
-        transaction.externalId === null
-          ? insert.onConflictDoUpdate({
-              target: schema.transactions.id,
-              set: conflictSet,
-            })
-          : insert.onConflictDoUpdate({
-              target: [schema.transactions.sourceId, schema.transactions.externalId],
-              targetWhere: sql`${schema.transactions.externalId} is not null`,
-              set: conflictSet,
-            })
+      const upsert = insert.onConflictDoUpdate({
+        target: schema.transactions.id,
+        set: conflictSet,
+      })
       const [persisted] = yield* upsert
         .returning(selectPersistedTransactionFields)
         .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertTransaction"))
