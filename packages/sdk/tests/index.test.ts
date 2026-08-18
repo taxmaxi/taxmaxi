@@ -68,6 +68,8 @@ const accountResponse = {
       providerEmail: "provider@coinbase.test",
       linkedAt: "2026-08-18T12:00:00.000Z",
       isCurrentSession: true,
+      isAvailable: false,
+      unavailableReason: "provider_disabled",
       canRemove: false,
     },
   ],
@@ -622,7 +624,11 @@ describe("TaxMaxi Promise client", () => {
       },
     })
 
-    await expect(taxmaxi.auth.account()).resolves.toEqual(accountResponse)
+    const account = await taxmaxi.auth.account()
+
+    expect(account).toEqual(accountResponse)
+    expect(account.loginMethods[0]?.isAvailable).toBe(false)
+    expect(account.loginMethods[0]?.unavailableReason).toBe("provider_disabled")
     await expect(taxmaxi.auth.logout()).resolves.toEqual({ success: true })
 
     expect(capturedRequests).toEqual([

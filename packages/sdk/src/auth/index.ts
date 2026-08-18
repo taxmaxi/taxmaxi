@@ -27,6 +27,8 @@ export type Account = {
     readonly providerEmail: string | null
     readonly linkedAt: string
     readonly isCurrentSession: boolean
+    readonly isAvailable: boolean
+    readonly unavailableReason: DecodedAccountResponse["loginMethods"][number]["unavailableReason"]
     readonly canRemove: boolean
   }>
 }

@@ -433,6 +433,19 @@ export const AccountDetails = Schema.Struct({
 export type AccountDetails = typeof AccountDetails.Type
 
 /**
+ * LoginMethodUnavailableReason - Why a linked login method cannot currently authenticate.
+ */
+export const LoginMethodUnavailableReason = Schema.Literals([
+  "provider_disabled",
+  "email_unverified",
+]).annotate({
+  identifier: "LoginMethodUnavailableReason",
+  title: "Login Method Unavailable Reason",
+})
+
+export type LoginMethodUnavailableReason = typeof LoginMethodUnavailableReason.Type
+
+/**
  * LoginMethod - A user-facing way to access an account.
  */
 export const LoginMethod = Schema.Struct({
@@ -446,6 +459,12 @@ export const LoginMethod = Schema.Struct({
   }),
   isCurrentSession: Schema.Boolean.annotate({
     description: "Whether this login method authenticated the current session",
+  }),
+  isAvailable: Schema.Boolean.annotate({
+    description: "Whether this login method can currently authenticate the account",
+  }),
+  unavailableReason: Schema.NullOr(LoginMethodUnavailableReason).annotate({
+    description: "Why this login method cannot currently authenticate, when unavailable",
   }),
   canRemove: Schema.Boolean.annotate({
     description: "Whether this login method can be removed without locking the account",

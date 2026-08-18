@@ -114,7 +114,7 @@ const seedMixedProviderSession = () =>
   runTestSql({
     statement: `
       INSERT INTO users (id, email, email_verified, name, role)
-      VALUES ('${MIXED_PROVIDER_USER_ID}', '${MIXED_PROVIDER_EMAIL}', true, 'Mixed Provider', 'user');
+      VALUES ('${MIXED_PROVIDER_USER_ID}', '${MIXED_PROVIDER_EMAIL}', false, 'Mixed Provider', 'user');
 
       INSERT INTO auth_identities (id, user_id, provider, provider_id, password_hash)
       VALUES (
@@ -481,6 +481,8 @@ describe("AuthApiLive integration", () => {
             providerEmail: COINBASE_PROVIDER_EMAIL,
             linkedAt: expect.any(String),
             isCurrentSession: true,
+            isAvailable: false,
+            unavailableReason: "provider_disabled",
             canRemove: false,
           },
         ],
@@ -488,7 +490,7 @@ describe("AuthApiLive integration", () => {
     }).pipe(Effect.scoped)
   )
 
-  it.effect("does not count disabled provider identities as fallback login methods", () =>
+  it.effect("does not count unavailable identities as fallback login methods", () =>
     Effect.gen(function* () {
       const { handler } = yield* makeAuthHandlerScoped
       yield* seedMixedProviderSession()
@@ -507,13 +509,17 @@ describe("AuthApiLive integration", () => {
             id: MIXED_PROVIDER_LOCAL_IDENTITY_ID,
             provider: "local",
             isCurrentSession: true,
+            isAvailable: false,
+            unavailableReason: "email_unverified",
             canRemove: false,
           }),
           expect.objectContaining({
             id: MIXED_PROVIDER_COINBASE_IDENTITY_ID,
             provider: "coinbase",
             isCurrentSession: false,
-            canRemove: true,
+            isAvailable: false,
+            unavailableReason: "provider_disabled",
+            canRemove: false,
           }),
         ]),
       })
@@ -526,6 +532,17 @@ describe("AuthApiLive integration", () => {
 
       expect(unlinkResponse.status).toBe(409)
       expect(yield* jsonBody(unlinkResponse)).toMatchObject({
+        _tag: "CannotUnlinkLastIdentityError",
+      })
+
+      const unlinkCoinbaseResponse = yield* deleteRequest({
+        handler,
+        path: `/auth/identities/${MIXED_PROVIDER_COINBASE_IDENTITY_ID}`,
+        cookie,
+      })
+
+      expect(unlinkCoinbaseResponse.status).toBe(409)
+      expect(yield* jsonBody(unlinkCoinbaseResponse)).toMatchObject({
         _tag: "CannotUnlinkLastIdentityError",
       })
     }).pipe(Effect.scoped)
@@ -702,6 +719,8 @@ describe("AuthApiLive integration", () => {
               providerEmail: null,
               linkedAt: expect.any(String),
               isCurrentSession: true,
+              isAvailable: true,
+              unavailableReason: null,
               canRemove: false,
             },
           ],

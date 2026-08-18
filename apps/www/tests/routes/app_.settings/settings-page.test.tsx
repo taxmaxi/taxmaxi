@@ -29,6 +29,8 @@ const account: Account = {
       providerEmail: "provider@coinbase.test",
       linkedAt: "2026-08-18T12:00:00.000Z",
       isCurrentSession: true,
+      isAvailable: false,
+      unavailableReason: "provider_disabled",
       canRemove: true,
     },
     {
@@ -37,6 +39,18 @@ const account: Account = {
       providerEmail: "person@gmail.test",
       linkedAt: "2026-08-18T12:15:00.000Z",
       isCurrentSession: false,
+      isAvailable: true,
+      unavailableReason: null,
+      canRemove: true,
+    },
+    {
+      id: "00000000-0000-4000-8000-000000000104",
+      provider: "local",
+      providerEmail: null,
+      linkedAt: "2026-08-18T12:30:00.000Z",
+      isCurrentSession: false,
+      isAvailable: false,
+      unavailableReason: "email_unverified",
       canRemove: true,
     },
   ],
@@ -94,6 +108,11 @@ describe("SettingsPageContent", () => {
     expect(screen.getByText("Current session")).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Google" })).toBeTruthy()
     expect(screen.getByText("person@gmail.test")).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Email and password" })).toBeTruthy()
+    expect(screen.getByText("These methods are linked to your account.")).toBeTruthy()
+    expect(screen.getAllByText("Unavailable")).toHaveLength(2)
+    expect(screen.getByText("This provider is currently unavailable.")).toBeTruthy()
+    expect(screen.getByText("Verify your account email before using this method.")).toBeTruthy()
     expect(screen.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/app")
   })
 })

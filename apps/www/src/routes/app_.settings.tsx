@@ -1,5 +1,5 @@
 import { createFileRoute, Link, redirect } from "@tanstack/react-router"
-import { ArrowLeft, CheckCircle2, KeyRound, Mail } from "lucide-react"
+import { ArrowLeft, CheckCircle2, CircleAlert, KeyRound, Mail } from "lucide-react"
 import type { Account } from "taxmaxi"
 import { isTaxMaxiUnauthorizedError } from "taxmaxi"
 
@@ -55,6 +55,19 @@ const formatLinkedAt = (linkedAt: string): string =>
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(linkedAt))
+
+const unavailableReasonDescription = (
+  reason: Account["loginMethods"][number]["unavailableReason"]
+): string | null => {
+  switch (reason) {
+    case "provider_disabled":
+      return m["app.settings.unavailableReasons.providerDisabled"]()
+    case "email_unverified":
+      return m["app.settings.unavailableReasons.emailUnverified"]()
+    case null:
+      return null
+  }
+}
 
 export function SettingsPageContent({
   account,
@@ -132,43 +145,62 @@ export function SettingsPageContent({
             </header>
 
             <div className="grid gap-4 md:grid-cols-2">
-              {account.loginMethods.map((loginMethod) => (
-                <Card key={loginMethod.id}>
-                  <CardHeader>
-                    <div className="flex items-start gap-3">
-                      <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground">
-                        <KeyRound aria-hidden="true" className="size-5" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <CardTitle>
-                          <h3>{providerLabel(loginMethod.provider)}</h3>
-                        </CardTitle>
-                        <CardDescription>
-                          {m["app.settings.linked"]({
-                            date: formatLinkedAt(loginMethod.linkedAt),
-                          })}
-                        </CardDescription>
+              {account.loginMethods.map((loginMethod) => {
+                const unavailableDescription = unavailableReasonDescription(
+                  loginMethod.unavailableReason
+                )
+
+                return (
+                  <Card key={loginMethod.id}>
+                    <CardHeader>
+                      <div className="flex items-start gap-3">
+                        <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-muted text-foreground">
+                          <KeyRound aria-hidden="true" className="size-5" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <CardTitle>
+                            <h3>{providerLabel(loginMethod.provider)}</h3>
+                          </CardTitle>
+                          <CardDescription>
+                            {m["app.settings.linked"]({
+                              date: formatLinkedAt(loginMethod.linkedAt),
+                            })}
+                          </CardDescription>
+                        </div>
                       </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="flex flex-col gap-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-                        {m["app.settings.providerEmail"]()}
-                      </span>
-                      <span className="break-all text-sm">
-                        {loginMethod.providerEmail ?? m["app.settings.noProviderEmail"]()}
-                      </span>
-                    </div>
-                    {loginMethod.isCurrentSession ? (
-                      <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
-                        <CheckCircle2 aria-hidden="true" className="size-3.5" />
-                        {m["app.settings.currentSession"]()}
-                      </span>
-                    ) : null}
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardHeader>
+                    <CardContent className="flex flex-col gap-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                          {m["app.settings.providerEmail"]()}
+                        </span>
+                        <span className="break-all text-sm">
+                          {loginMethod.providerEmail ?? m["app.settings.noProviderEmail"]()}
+                        </span>
+                      </div>
+                      {loginMethod.isCurrentSession ? (
+                        <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                          <CheckCircle2 aria-hidden="true" className="size-3.5" />
+                          {m["app.settings.currentSession"]()}
+                        </span>
+                      ) : null}
+                      {!loginMethod.isAvailable ? (
+                        <div className="flex flex-col gap-2">
+                          <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">
+                            <CircleAlert aria-hidden="true" className="size-3.5" />
+                            {m["app.settings.unavailable"]()}
+                          </span>
+                          {unavailableDescription === null ? null : (
+                            <p className="text-sm text-muted-foreground">
+                              {unavailableDescription}
+                            </p>
+                          )}
+                        </div>
+                      ) : null}
+                    </CardContent>
+                  </Card>
+                )
+              })}
             </div>
           </section>
         </section>

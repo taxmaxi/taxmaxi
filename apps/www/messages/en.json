@@ -41,10 +41,15 @@
       "accountEmail": "Account email",
       "accountEmailDescription": "TaxMaxi sends account security messages to this address.",
       "loginMethods": "Login methods",
-      "loginMethodsDescription": "Every method below can be used to access this account.",
+      "loginMethodsDescription": "These methods are linked to your account.",
       "providerEmail": "Provider email",
       "noProviderEmail": "No provider email reported",
       "currentSession": "Current session",
+      "unavailable": "Unavailable",
+      "unavailableReasons": {
+        "providerDisabled": "This provider is currently unavailable.",
+        "emailUnverified": "Verify your account email before using this method."
+      },
       "linked": "Linked {date}",
       "providers": {
         "local": "Email and password",

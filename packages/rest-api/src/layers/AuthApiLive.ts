@@ -285,6 +285,58 @@ const getEnabledProviderSet = (authService: AuthServiceShape) =>
     .getEnabledProviders()
     .pipe(Effect.map((providers) => new Set(Chunk.toReadonlyArray(providers))))
 
+const getLoginMethodAvailability = ({
+  user,
+  identity,
+  enabledProviders,
+}: {
+  readonly user: AuthUser
+  readonly identity: UserIdentity
+  readonly enabledProviders: ReadonlySet<AuthProviderType>
+}) => {
+  if (!enabledProviders.has(identity.provider)) {
+    return {
+      isAvailable: false,
+      unavailableReason: "provider_disabled" as const,
+    }
+  }
+
+  if (identity.provider === "local" && !user.emailVerified) {
+    return {
+      isAvailable: false,
+      unavailableReason: "email_unverified" as const,
+    }
+  }
+
+  return {
+    isAvailable: true,
+    unavailableReason: null,
+  }
+}
+
+const hasAvailableIdentityOtherThan = ({
+  user,
+  identities,
+  enabledProviders,
+  identityId,
+}: {
+  readonly user: AuthUser
+  readonly identities: Iterable<UserIdentity>
+  readonly enabledProviders: ReadonlySet<AuthProviderType>
+  readonly identityId: UserIdentity["id"]
+}): boolean => {
+  for (const identity of identities) {
+    if (
+      identity.id !== identityId &&
+      getLoginMethodAvailability({ user, identity, enabledProviders }).isAvailable
+    ) {
+      return true
+    }
+  }
+
+  return false
+}
+
 const toAccountResponse = ({
   user,
   identities,
@@ -305,17 +357,24 @@ const toAccountResponse = ({
     createdAt: user.createdAt.toDateTime(),
     updatedAt: user.updatedAt.toDateTime(),
   },
-  loginMethods: identities.map((identity) => ({
-    id: identity.id,
-    provider: identity.provider,
-    providerEmail: providerEmailFromIdentity(identity),
-    linkedAt: identity.createdAt.toDateTime(),
-    isCurrentSession: identity.provider === currentSessionProvider,
-    canRemove: identities.some(
-      (otherIdentity) =>
-        otherIdentity.id !== identity.id && enabledProviders.has(otherIdentity.provider)
-    ),
-  })),
+  loginMethods: identities.map((identity) => {
+    const availability = getLoginMethodAvailability({ user, identity, enabledProviders })
+
+    return {
+      id: identity.id,
+      provider: identity.provider,
+      providerEmail: providerEmailFromIdentity(identity),
+      linkedAt: identity.createdAt.toDateTime(),
+      isCurrentSession: identity.provider === currentSessionProvider,
+      ...availability,
+      canRemove: hasAvailableIdentityOtherThan({
+        user,
+        identities,
+        enabledProviders,
+        identityId: identity.id,
+      }),
+    }
+  }),
 })
 
 /**
@@ -1797,18 +1856,27 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* new IdentityNotFoundError({ identityId })
           }
 
-          // Keep at least one identity backed by a currently enabled provider
+          // Keep at least one identity that can currently authenticate the account
           const allIdentities = yield* identityRepo
             .findByUserId(currentUser.userId)
             .pipe(Effect.mapError(() => new CannotUnlinkLastIdentityError({})))
-          const enabledProviders = yield* getEnabledProviderSet(authService)
-          const hasOtherEnabledIdentity = Chunk.some(
-            allIdentities,
-            (otherIdentity) =>
-              otherIdentity.id !== identity.id && enabledProviders.has(otherIdentity.provider)
-          )
+          const maybeUser = yield* userRepo
+            .findById(currentUser.userId)
+            .pipe(Effect.mapError(() => new CannotUnlinkLastIdentityError({})))
 
-          if (!hasOtherEnabledIdentity) {
+          if (Option.isNone(maybeUser)) {
+            return yield* new CannotUnlinkLastIdentityError({})
+          }
+
+          const enabledProviders = yield* getEnabledProviderSet(authService)
+          const hasOtherAvailableIdentity = hasAvailableIdentityOtherThan({
+            user: maybeUser.value,
+            identities: allIdentities,
+            enabledProviders,
+            identityId: identity.id,
+          })
+
+          if (!hasOtherAvailableIdentity) {
             return yield* new CannotUnlinkLastIdentityError({})
           }
 
