@@ -54,9 +54,48 @@ const catalog: BillingCatalog = {
   ],
 }
 
+function getPricingRows(container: HTMLElement, lookupKey: string) {
+  const offer = container.querySelector(`[data-stripe-lookup-key="${lookupKey}"]`)
+
+  return Array.from(offer?.querySelectorAll("[data-pricing-row]") ?? []).map((row) =>
+    row.getAttribute("data-pricing-row")
+  )
+}
+
 afterEach(cleanup)
 
 describe("PricingSection", () => {
+  it("renders every plan in the same comparison-row order", () => {
+    const { container } = render(<PricingSection catalog={catalog} />)
+    const planLookupKeys = [
+      STRIPE_PRICE_LOOKUP_KEYS.individualAnnual,
+      STRIPE_PRICE_LOOKUP_KEYS.professionalAnnual,
+      STRIPE_PRICE_LOOKUP_KEYS.enterprisePilot,
+    ]
+
+    for (const lookupKey of planLookupKeys) {
+      expect(getPricingRows(container, lookupKey)).toEqual([
+        "header",
+        "price",
+        "features",
+        "footer",
+      ])
+    }
+  })
+
+  it("renders every add-on in the same comparison-row order", () => {
+    const { container } = render(<PricingSection catalog={catalog} />)
+    const addOnLookupKeys = [
+      STRIPE_PRICE_LOOKUP_KEYS.individualTopUp,
+      STRIPE_PRICE_LOOKUP_KEYS.professionalMatter,
+      STRIPE_PRICE_LOOKUP_KEYS.professionalTopUp,
+    ]
+
+    for (const lookupKey of addOnLookupKeys) {
+      expect(getPricingRows(container, lookupKey)).toEqual(["header", "price"])
+    }
+  })
+
   it("renders every Stripe catalog price in its matching offer", () => {
     const { container } = render(<PricingSection catalog={catalog} />)
     const expectedPrices = new Map([

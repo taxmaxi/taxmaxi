@@ -68,7 +68,7 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
         description={m["pricing.description"]()}
       />
 
-      <div className="mx-auto grid w-full max-w-6xl gap-5 lg:grid-cols-3">
+      <div className="mx-auto grid w-full max-w-6xl gap-x-5 gap-y-6 xl:grid-cols-3 xl:grid-rows-[auto_auto_auto_auto]">
         <PricingPlanCard
           badge={m["pricing.individual.badge"]()}
           description={m["pricing.individual.description"]()}
@@ -169,7 +169,7 @@ export function PricingSection({ catalog }: { readonly catalog: BillingCatalog |
           </h3>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-3 md:grid-rows-[auto_auto]">
           <PricingAddOn
             description={m["pricing.addOns.individual.description"]()}
             lookupKey={STRIPE_PRICE_LOOKUP_KEYS.individualTopUp}
@@ -245,36 +245,43 @@ function PricingPlanCard({
   readonly price: string
   readonly priceSuffix: string
 }) {
+  const alignmentClassName =
+    "xl:row-span-4 xl:row-start-1 xl:grid xl:grid-cols-[minmax(0,1fr)] xl:grid-rows-subgrid"
+
   return (
     <Card
       className={
         featured
-          ? "border border-emerald-400/20 bg-[linear-gradient(180deg,rgba(20,50,41,0.96),rgba(12,18,16,0.98))] text-[#e8f5ee] shadow-[0_24px_70px_rgba(9,38,29,0.32)] ring-0"
-          : "border border-[#2a3a35] bg-[#111d18]/70 text-[#e8f5ee] ring-0"
+          ? `border border-emerald-400/20 bg-[linear-gradient(180deg,rgba(20,50,41,0.96),rgba(12,18,16,0.98))] text-[#e8f5ee] shadow-[0_24px_70px_rgba(9,38,29,0.32)] ring-0 ${alignmentClassName}`
+          : `border border-[#2a3a35] bg-[#111d18]/70 text-[#e8f5ee] ring-0 ${alignmentClassName}`
       }
       data-stripe-lookup-key={lookupKey}
     >
-      <CardHeader>
+      <CardHeader className="min-w-0 content-start" data-pricing-row="header">
         <CardTitle className="flex items-center gap-2 font-display text-xl tracking-[-0.035em]">
           {icon}
           {name}
         </CardTitle>
-        <CardDescription className="leading-6 text-[#8ab4a3]">{description}</CardDescription>
-        <CardAction>
+        <CardAction className="col-span-full col-start-1 row-span-1 row-start-2 justify-self-start @sm/card-header:col-span-1 @sm/card-header:col-start-2 @sm/card-header:row-start-1 @sm/card-header:justify-self-end">
           <Badge className="border-emerald-300/20 bg-emerald-300/10 text-emerald-200">
             {badge}
           </Badge>
         </CardAction>
+        <CardDescription className="col-span-full row-start-3 leading-6 text-[#8ab4a3] @sm/card-header:row-start-2">
+          {description}
+        </CardDescription>
       </CardHeader>
 
-      <CardContent className="flex flex-1 flex-col gap-7">
+      <CardContent data-pricing-row="price">
         <div>
           <p className="font-display text-4xl tracking-[-0.05em] tabular-nums text-[#f3fbf7]">
             {price}
           </p>
           <p className="mt-2 min-h-10 text-sm leading-5 text-[#8ab4a3]">{priceSuffix}</p>
         </div>
+      </CardContent>
 
+      <CardContent data-pricing-row="features">
         <ul className="flex flex-col gap-3">
           {features.map((feature) => (
             <PricingFeature key={feature}>{feature}</PricingFeature>
@@ -282,7 +289,9 @@ function PricingPlanCard({
         </ul>
       </CardContent>
 
-      <CardFooter className="flex-col items-stretch gap-3">{footer}</CardFooter>
+      <CardFooter className="flex-col items-stretch gap-3" data-pricing-row="footer">
+        {footer}
+      </CardFooter>
     </Card>
   )
 }
@@ -302,15 +311,15 @@ function PricingAddOn({
 }) {
   return (
     <Card
-      className="border border-[#2a3a35] bg-[#0d1210]/70 text-[#e8f5ee] ring-0"
+      className="border border-[#2a3a35] bg-[#0d1210]/70 text-[#e8f5ee] ring-0 md:row-span-2 md:row-start-1 md:grid md:grid-cols-[minmax(0,1fr)] md:grid-rows-subgrid"
       data-stripe-lookup-key={lookupKey}
       size="sm"
     >
-      <CardHeader>
+      <CardHeader className="min-w-0 content-start" data-pricing-row="header">
         <CardTitle className="text-base">{name}</CardTitle>
         <CardDescription className="leading-5 text-[#8ab4a3]">{description}</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent data-pricing-row="price">
         <p className="font-display text-3xl tracking-[-0.045em] tabular-nums text-[#f3fbf7]">
           {price}
         </p>
