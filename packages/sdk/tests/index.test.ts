@@ -289,6 +289,12 @@ const emptySourceTransactionsResponseBody = JSON.stringify({
   page: { nextCursor: null, hasMore: false },
 })
 
+const transactionListResponse = {
+  transactions: [],
+  page: { nextCursor: null, hasMore: false },
+  totalCount: 0,
+} as const
+
 const emptySourceTaxEventsResponseBody = JSON.stringify({
   taxEvents: [],
   page: { nextCursor: null, hasMore: false },
@@ -481,6 +487,24 @@ describe("TaxMaxi Effect client foundation", () => {
 })
 
 describe("TaxMaxi Promise client", () => {
+  it("lists canonical transactions through the transactions resource", async () => {
+    const capturedRequests: Array<CapturedRequest> = []
+    const taxmaxi = new TaxMaxi({
+      apiKey: "tm_transactions",
+      baseUrl: "https://sdk.example.test",
+      fetch: makeFetch(capturedRequests, JSON.stringify(transactionListResponse)),
+    })
+
+    await expect(
+      taxmaxi.transactions.list({ cursor: "transaction-cursor", limit: 10 })
+    ).resolves.toEqual(transactionListResponse)
+    expect(capturedRequests).toEqual([
+      expect.objectContaining({
+        url: "https://sdk.example.test/v1/transactions?cursor=transaction-cursor&limit=10",
+      }),
+    ])
+  })
+
   it("plumbs successful resource responses through Promise methods", async () => {
     const capturedRequests: Array<CapturedRequest> = []
     const taxmaxi = new TaxMaxi({

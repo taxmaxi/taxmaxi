@@ -1,0 +1,433 @@
+/**
+ * TransactionListRepositoryLive - Drizzle-backed principal transaction list.
+ *
+ * @module TransactionListRepositoryLive
+ */
+
+import {
+  and,
+  asc,
+  count,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  lt,
+  notInArray,
+  or,
+  sql,
+} from "drizzle-orm"
+import * as BigDecimal from "effect/BigDecimal"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+import { isPersistenceError, PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
+import { schema } from "../schema/index.ts"
+import {
+  TransactionListInvalidCursorError,
+  TransactionListRepository,
+  type TransactionListItem,
+  type TransactionListMovement,
+  type TransactionListRepositoryService,
+} from "../services/TransactionListRepository.ts"
+import { drizzle } from "./PgClientLive.ts"
+
+interface CursorParts {
+  readonly timestamp: Date
+  readonly id: string
+}
+
+interface GainLossSummary {
+  readonly realizedGainLoss: string | null
+  readonly fiatCurrency: string | null
+  readonly isPartial: boolean
+}
+
+const TransactionCursorPayload = Schema.Struct({
+  version: Schema.Literal(1),
+  timestamp: Schema.DateFromString,
+  id: Schema.String.check(Schema.isUUID()),
+})
+
+const TransactionCursor = Schema.fromJsonString(TransactionCursorPayload)
+
+const makeCursor = ({ timestamp, id }: CursorParts): string =>
+  Schema.encodeSync(TransactionCursor)({ version: 1, timestamp, id })
+
+const parseCursor = (
+  cursor: string | null
+): Effect.Effect<Option.Option<CursorParts>, TransactionListInvalidCursorError> =>
+  cursor === null
+    ? Effect.succeed(Option.none())
+    : Schema.decodeUnknownEffect(TransactionCursor)(cursor).pipe(
+        Effect.map(({ id, timestamp }) => Option.some({ id, timestamp })),
+        Effect.mapError(() => new TransactionListInvalidCursorError({ cursor }))
+      )
+
+const decodeDecimal = ({
+  operation,
+  value,
+}: {
+  readonly operation: string
+  readonly value: unknown
+}) =>
+  Schema.decodeUnknownEffect(Schema.BigDecimalFromString)(value).pipe(
+    Effect.mapError(
+      () =>
+        new PersistenceError({
+          operation,
+          cause: `Invalid decimal value: ${String(value)}`,
+        })
+    )
+  )
+
+const make = Effect.gen(function* () {
+  const db = yield* drizzle
+  type TransactionListExecutor = Pick<typeof db, "execute" | "select" | "selectDistinct">
+
+  const ownedScope = (executor: TransactionListExecutor, principalId: string) =>
+    and(
+      eq(schema.transactions.principalId, principalId),
+      eq(schema.sources.principalId, principalId),
+      exists(
+        executor
+          .select({ id: schema.transactionLegs.id })
+          .from(schema.transactionLegs)
+          .where(eq(schema.transactionLegs.transactionId, schema.transactions.id))
+      )
+    )
+
+  const loadTotalCount = (executor: TransactionListExecutor, principalId: string) =>
+    executor
+      .select({ count: count(schema.transactions.id) })
+      .from(schema.transactions)
+      .innerJoin(schema.sources, eq(schema.transactions.sourceId, schema.sources.id))
+      .where(ownedScope(executor, principalId))
+      .pipe(
+        wrapSqlError("transactionListRepository.list.count"),
+        Effect.map((rows) => rows[0]?.count ?? 0)
+      )
+
+  const loadPageRows = ({
+    cursor,
+    executor,
+    limit,
+    principalId,
+  }: {
+    readonly cursor: Option.Option<CursorParts>
+    readonly executor: TransactionListExecutor
+    readonly limit: number
+    readonly principalId: string
+  }) => {
+    const cursorPredicate = Option.match(cursor, {
+      onNone: () => undefined,
+      onSome: (value) =>
+        or(
+          lt(schema.transactions.timestamp, value.timestamp),
+          and(
+            eq(schema.transactions.timestamp, value.timestamp),
+            lt(schema.transactions.id, value.id)
+          )
+        ),
+    })
+    const scope = ownedScope(executor, principalId)
+
+    return executor
+      .select({
+        transactionId: schema.transactions.id,
+        timestamp: schema.transactions.timestamp,
+        transactionType: schema.transactions.transactionType,
+        description: schema.transactions.providerDescription,
+        externalId: schema.transactions.externalId,
+        sourceId: schema.sources.id,
+        sourceName: schema.sources.name,
+        sourceKind: schema.sources.sourceableType,
+      })
+      .from(schema.transactions)
+      .innerJoin(schema.sources, eq(schema.transactions.sourceId, schema.sources.id))
+      .where(cursorPredicate === undefined ? scope : and(scope, cursorPredicate))
+      .orderBy(desc(schema.transactions.timestamp), desc(schema.transactions.id))
+      .limit(limit + 1)
+      .pipe(wrapSqlError("transactionListRepository.list.transactions"))
+  }
+
+  const loadMovements = (
+    executor: TransactionListExecutor,
+    transactionIds: ReadonlyArray<string>
+  ) =>
+    Effect.gen(function* () {
+      if (transactionIds.length === 0) {
+        return new Map<string, ReadonlyArray<TransactionListMovement>>()
+      }
+
+      const rows = yield* executor
+        .select({
+          transactionId: schema.transactionLegs.transactionId,
+          amount: schema.transactionLegs.amount,
+          assetSymbol: schema.assets.symbol,
+          kind: schema.transactionLegs.kind,
+        })
+        .from(schema.transactionLegs)
+        .innerJoin(schema.assets, eq(schema.transactionLegs.assetId, schema.assets.id))
+        .where(inArray(schema.transactionLegs.transactionId, transactionIds))
+        .orderBy(asc(schema.transactionLegs.timestamp), asc(schema.transactionLegs.id))
+        .pipe(wrapSqlError("transactionListRepository.list.movements"))
+
+      const decoded = yield* Effect.forEach(rows, (row) =>
+        decodeDecimal({
+          operation: "transactionListRepository.list.movementAmount",
+          value: row.amount,
+        }).pipe(
+          Effect.map((amount): readonly [string | null, TransactionListMovement] => [
+            row.transactionId,
+            {
+              amount: BigDecimal.format(amount),
+              assetSymbol: row.assetSymbol,
+              kind: row.kind,
+            },
+          ])
+        )
+      )
+      const byTransaction = new Map<string, Array<TransactionListMovement>>()
+      for (const [transactionId, movement] of decoded) {
+        if (transactionId === null) continue
+        const movements = byTransaction.get(transactionId) ?? []
+        movements.push(movement)
+        byTransaction.set(transactionId, movements)
+      }
+      return byTransaction
+    })
+
+  const loadGainLoss = (executor: TransactionListExecutor, transactionIds: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      if (transactionIds.length === 0) {
+        return new Map<string, GainLossSummary>()
+      }
+
+      const rows = yield* executor
+        .select({
+          transactionId: schema.transactionLegs.transactionId,
+          gainLoss: schema.disposalMatches.gainLoss,
+          fiatCurrency: schema.transactionLegs.fiatCurrency,
+          costBasisCurrency: schema.fifoLots.costBasisCurrency,
+          costBasisStatus: schema.fifoLots.costBasisStatus,
+        })
+        .from(schema.disposalMatches)
+        .innerJoin(
+          schema.transactionLegs,
+          eq(schema.disposalMatches.disposalLegId, schema.transactionLegs.id)
+        )
+        .innerJoin(schema.fifoLots, eq(schema.disposalMatches.fifoLotId, schema.fifoLots.id))
+        .where(
+          and(
+            inArray(schema.transactionLegs.transactionId, transactionIds),
+            sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`
+          )
+        )
+        .pipe(wrapSqlError("transactionListRepository.list.gainLoss"))
+
+      const decoded = yield* Effect.forEach(rows, (row) =>
+        decodeDecimal({
+          operation: "transactionListRepository.list.gainLossAmount",
+          value: row.gainLoss,
+        }).pipe(
+          Effect.map((amount) => ({
+            transactionId: row.transactionId,
+            amount,
+            fiatCurrency: row.fiatCurrency,
+            costBasisCurrency: row.costBasisCurrency,
+            costBasisStatus: row.costBasisStatus,
+          }))
+        )
+      )
+      const amounts = new Map<string, Array<BigDecimal.BigDecimal>>()
+      const currencies = new Map<string, Set<string>>()
+      const pendingCostBasis = new Set<string>()
+      for (const row of decoded) {
+        if (row.transactionId === null) continue
+        const transactionAmounts = amounts.get(row.transactionId) ?? []
+        transactionAmounts.push(row.amount)
+        amounts.set(row.transactionId, transactionAmounts)
+        const transactionCurrencies = currencies.get(row.transactionId) ?? new Set<string>()
+        if (row.fiatCurrency !== null) {
+          transactionCurrencies.add(row.fiatCurrency)
+        }
+        transactionCurrencies.add(row.costBasisCurrency)
+        currencies.set(row.transactionId, transactionCurrencies)
+        if (row.costBasisStatus === "pending_review") {
+          pendingCostBasis.add(row.transactionId)
+        }
+      }
+
+      return new Map(
+        transactionIds.map((transactionId): readonly [string, GainLossSummary] => {
+          const transactionAmounts = amounts.get(transactionId) ?? []
+          const transactionCurrencies = currencies.get(transactionId) ?? new Set<string>()
+          const isPartial =
+            transactionAmounts.length > 0 &&
+            (transactionCurrencies.size !== 1 || pendingCostBasis.has(transactionId))
+          return [
+            transactionId,
+            {
+              realizedGainLoss:
+                transactionAmounts.length === 0 || isPartial
+                  ? null
+                  : BigDecimal.format(BigDecimal.sumAll(transactionAmounts)),
+              fiatCurrency:
+                transactionCurrencies.size === 1
+                  ? (transactionCurrencies.values().next().value ?? null)
+                  : null,
+              isPartial,
+            },
+          ]
+        })
+      )
+    })
+
+  const loadReviewStates = (
+    executor: TransactionListExecutor,
+    transactionIds: ReadonlyArray<string>
+  ) =>
+    transactionIds.length === 0
+      ? Effect.succeed(new Map<string, boolean>())
+      : executor
+          .select({
+            transactionId: schema.transactionReviews.transactionId,
+            needsReview: schema.transactionReviews.needsReview,
+          })
+          .from(schema.transactionReviews)
+          .where(inArray(schema.transactionReviews.transactionId, transactionIds))
+          .pipe(
+            wrapSqlError("transactionListRepository.list.reviews"),
+            Effect.map(
+              (rows) => new Map(rows.map((row) => [row.transactionId, row.needsReview] as const))
+            )
+          )
+
+  const loadPartialTransactionIds = (
+    executor: TransactionListExecutor,
+    transactionIds: ReadonlyArray<string>
+  ) =>
+    Effect.gen(function* () {
+      if (transactionIds.length === 0) {
+        return new Set<string>()
+      }
+
+      const rows = yield* executor
+        .selectDistinct({ transactionId: schema.transactionLegs.transactionId })
+        .from(schema.transactionLegs)
+        .where(
+          and(
+            inArray(schema.transactionLegs.transactionId, transactionIds),
+            or(
+              and(
+                or(
+                  isNull(schema.transactionLegs.derivationRule),
+                  notInArray(schema.transactionLegs.derivationRule, [
+                    "internal_transfer_in",
+                    "internal_transfer_out",
+                  ])
+                ),
+                or(
+                  isNull(schema.transactionLegs.fiatAmount),
+                  isNull(schema.transactionLegs.fiatCurrency)
+                )
+              ),
+              and(
+                eq(schema.transactionLegs.kind, "disposal"),
+                sql`${schema.transactionLegs.derivationRule} is distinct from 'internal_transfer_out'`,
+                sql`coalesce((
+                  select sum(${schema.disposalMatches.matchedAmount})
+                  from ${schema.disposalMatches}
+                  where ${schema.disposalMatches.disposalLegId} = ${schema.transactionLegs.id}
+                ), 0) <> ${schema.transactionLegs.amount}`
+              )
+            )
+          )
+        )
+        .pipe(wrapSqlError("transactionListRepository.list.calculationStates"))
+
+      return new Set(rows.flatMap((row) => (row.transactionId === null ? [] : [row.transactionId])))
+    })
+
+  const list: TransactionListRepositoryService["list"] = (params) =>
+    Effect.gen(function* () {
+      const cursor = yield* parseCursor(params.cursor)
+      return yield* db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            yield* tx.execute(sql`set transaction isolation level repeatable read`)
+            const totalCount = yield* loadTotalCount(tx, params.principalId)
+            const rows = yield* loadPageRows({
+              cursor,
+              executor: tx,
+              limit: params.limit,
+              principalId: params.principalId,
+            })
+            const pageRows = rows.slice(0, params.limit)
+            const transactionIds = pageRows.map((row) => row.transactionId)
+            const [movements, gainLoss, reviewStates, partialTransactionIds] = yield* Effect.all(
+              [
+                loadMovements(tx, transactionIds),
+                loadGainLoss(tx, transactionIds),
+                loadReviewStates(tx, transactionIds),
+                loadPartialTransactionIds(tx, transactionIds),
+              ],
+              { concurrency: 1 }
+            )
+
+            const items = pageRows.map((row): TransactionListItem => {
+              const totals = gainLoss.get(row.transactionId)
+              const isPartial =
+                partialTransactionIds.has(row.transactionId) || totals?.isPartial === true
+              return {
+                transactionId: row.transactionId,
+                timestamp: row.timestamp.toISOString(),
+                source: {
+                  sourceId: row.sourceId,
+                  name: row.sourceName,
+                  kind: row.sourceKind,
+                },
+                transactionType: row.transactionType,
+                description: row.description,
+                externalId: row.externalId,
+                movements: movements.get(row.transactionId) ?? [],
+                realizedGainLoss: isPartial ? null : (totals?.realizedGainLoss ?? null),
+                fiatCurrency: isPartial ? null : (totals?.fiatCurrency ?? null),
+                calculationState: isPartial ? "partial" : "complete",
+                needsReview: reviewStates.get(row.transactionId) ?? false,
+              }
+            })
+            const hasMore = rows.length > params.limit
+            const last = pageRows.at(-1)
+
+            return {
+              items,
+              hasMore,
+              nextCursor:
+                hasMore && last !== undefined
+                  ? makeCursor({ timestamp: last.timestamp, id: last.transactionId })
+                  : null,
+              totalCount,
+            }
+          })
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            isPersistenceError(cause)
+              ? cause
+              : new PersistenceError({
+                  operation: "transactionListRepository.list.snapshot",
+                  cause,
+                })
+          )
+        )
+    })
+
+  return TransactionListRepository.of({ list })
+})
+
+/** Live PostgreSQL implementation of the canonical transaction list. */
+export const TransactionListRepositoryLive = Layer.effect(TransactionListRepository, make)

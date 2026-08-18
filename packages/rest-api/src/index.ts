@@ -1,4 +1,5 @@
 export { TaxMaxiApiLive } from "./layers/TaxMaxiApiLive.ts"
+export * from "./definitions/TransactionsApi.ts"
 export { SessionTokenValidatorLive } from "./layers/AuthApiLive.ts"
 export { invalidSessionCookieCleanup } from "./layers/AuthMiddlewareLive.ts"
 export { AnonSessionServiceLive } from "./layers/AnonSessionServiceLive.ts"

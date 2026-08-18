@@ -54,6 +54,12 @@ import {
   type SourcesEffectResource,
   type SourcesPromiseResource,
 } from "./sources/index.ts"
+import {
+  makeTransactionsEffectResource,
+  makeTransactionsPromiseResource,
+  type TransactionsEffectResource,
+  type TransactionsPromiseResource,
+} from "./transactions/index.ts"
 
 export {
   DEFAULT_BASE_URL,
@@ -153,6 +159,13 @@ export type {
   SourceTransactions,
   TaxCalculation,
 } from "./sources/index.ts"
+export type {
+  TransactionListInput,
+  TransactionListItem,
+  Transactions,
+  TransactionsEffectResource,
+  TransactionsPromiseResource,
+} from "./transactions/index.ts"
 
 export type TaxMaxiEffectResources = {
   readonly adminProtocolReview: AdminProtocolReviewEffectResource
@@ -162,6 +175,7 @@ export type TaxMaxiEffectResources = {
   readonly billing: BillingEffectResource
   readonly portfolio: PortfolioEffectResource
   readonly sources: SourcesEffectResource
+  readonly transactions: TransactionsEffectResource
 }
 
 export type TaxMaxiPromiseResources = {
@@ -172,6 +186,7 @@ export type TaxMaxiPromiseResources = {
   readonly billing: BillingPromiseResource
   readonly portfolio: PortfolioPromiseResource
   readonly sources: SourcesPromiseResource
+  readonly transactions: TransactionsPromiseResource
 }
 
 const makeTaxMaxiEffectResources = (
@@ -184,6 +199,7 @@ const makeTaxMaxiEffectResources = (
   billing: makeBillingEffectResource(client),
   portfolio: makePortfolioEffectResource(client),
   sources: makeSourcesEffectResource(client),
+  transactions: makeTransactionsEffectResource(client),
 })
 
 const mergeHeaders =
@@ -205,6 +221,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
   readonly portfolio: PortfolioPromiseResource
   readonly effect: TaxMaxiEffectResources
   readonly sources: SourcesPromiseResource
+  readonly transactions: TransactionsPromiseResource
 
   private readonly client: Effect.Effect<TaxMaxiEffectClient, never>
 
@@ -221,6 +238,7 @@ export class TaxMaxi implements TaxMaxiPromiseResources {
     this.billing = makeBillingPromiseResource(this.effect.billing, this.run)
     this.portfolio = makePortfolioPromiseResource(this.effect.portfolio, this.run)
     this.sources = makeSourcesPromiseResource(this.effect.sources, this.run)
+    this.transactions = makeTransactionsPromiseResource(this.effect.transactions, this.run)
   }
 
   static makeEffectClient(

@@ -3,6 +3,7 @@ import {
   TaxMaxiError,
   type AssetCatalogListInput,
   type PendingAssetListInput,
+  type TransactionListInput,
   type TaxMaxi,
 } from "taxmaxi"
 
@@ -42,6 +43,9 @@ export const queryKeys = {
   sourceOverview: (sourceId: string) => [...queryKeys.sources(), sourceId, "overview"] as const,
   portfolioAssets: (sourceId?: string) =>
     [...queryKeys.all, "portfolio", "assets", sourceId ?? "all"] as const,
+  transactions: () => [...queryKeys.all, "transactions"] as const,
+  transactionList: (input: TransactionListInput = {}) =>
+    [...queryKeys.transactions(), "list", input] as const,
 }
 
 export const queries = {
@@ -94,6 +98,12 @@ export const queries = {
       queryKey: queryKeys.portfolioAssets(sourceId),
       queryFn: async () => taxmaxi.portfolio.listAssets({ sourceId, currency: "eur" }),
       staleTime: 60 * 1000,
+    }),
+  transactionList: (taxmaxi: TaxMaxi, input: TransactionListInput = {}) =>
+    queryOptions({
+      queryKey: queryKeys.transactionList(input),
+      queryFn: async () => taxmaxi.transactions.list(input),
+      staleTime: 30 * 1000,
     }),
 }
 
