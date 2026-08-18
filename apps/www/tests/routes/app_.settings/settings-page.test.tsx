@@ -94,5 +94,6 @@ describe("SettingsPageContent", () => {
     expect(screen.getByText("Current session")).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Google" })).toBeTruthy()
     expect(screen.getByText("person@gmail.test")).toBeTruthy()
+    expect(screen.getByRole("link", { name: "Dashboard" }).getAttribute("href")).toBe("/app")
   })
 })

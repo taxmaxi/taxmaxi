@@ -106,6 +106,7 @@ const make = Effect.gen(function* () {
       emailVerified: userInfo.verified_email,
       providerData: Option.some({
         profile: {
+          email: userInfo.email,
           picture: userInfo.picture,
           given_name: userInfo.given_name,
           family_name: userInfo.family_name,

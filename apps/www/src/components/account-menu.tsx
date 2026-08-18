@@ -10,6 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "#/components/ui/dropdown-menu"
+import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
 import { m } from "#/paraglide/messages"
 
 export function AccountMenu({ onLogout }: { readonly onLogout: () => Promise<void> }) {
@@ -32,6 +33,7 @@ export function AccountMenu({ onLogout }: { readonly onLogout: () => Promise<voi
         <Button
           aria-label={m["app.accountMenu.label"]()}
           className="size-11 rounded-full"
+          id={ASSET_CATALOG_OPENER_ID}
           size="icon-lg"
           title={m["app.accountMenu.label"]()}
           variant="outline"

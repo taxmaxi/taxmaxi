@@ -12,6 +12,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AccountMenu } from "#/components/account-menu"
+import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
 import { logoutFromApp } from "#/lib/auth-session"
 
 beforeEach(() => {
@@ -77,6 +78,12 @@ const openAccountMenu = () => {
 }
 
 describe("AccountMenu", () => {
+  it("provides the asset catalog return-focus target", async () => {
+    await renderAccountMenu()
+
+    expect(screen.getByRole("button", { name: "Account menu" }).id).toBe(ASSET_CATALOG_OPENER_ID)
+  })
+
   it.each([
     { label: "Assets", path: "/assets" },
     { label: "Billing", path: "/app/billing" },

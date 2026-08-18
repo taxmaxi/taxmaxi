@@ -1,11 +1,12 @@
-import { createFileRoute, redirect } from "@tanstack/react-router"
-import { CheckCircle2, KeyRound, Mail } from "lucide-react"
+import { createFileRoute, Link, redirect } from "@tanstack/react-router"
+import { ArrowLeft, CheckCircle2, KeyRound, Mail } from "lucide-react"
 import type { Account } from "taxmaxi"
 import { isTaxMaxiUnauthorizedError } from "taxmaxi"
 
 import { AccountMenu } from "#/components/account-menu"
 import { AppHeader } from "#/components/app-header"
 import { PageShell } from "#/components/page-shell"
+import { Button } from "#/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "#/components/ui/card"
 import { useAppLogout } from "#/hooks/use-app-logout"
 import { m } from "#/paraglide/messages"
@@ -74,6 +75,12 @@ export function SettingsPageContent({
       />
       <div className="relative">
         <AppHeader>
+          <Button asChild size="sm" variant="outline">
+            <Link preload="intent" to="/app">
+              <ArrowLeft data-icon="inline-start" />
+              {m["app.billing.dashboard"]()}
+            </Link>
+          </Button>
           <AccountMenu onLogout={onLogout} />
         </AppHeader>
 
