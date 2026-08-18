@@ -1315,6 +1315,64 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(state.replay?.jobId).toBe(activeSyncJobId)
     })
 
+    it("attaches a failed replay retry behind a processing replay job", async () => {
+      const { jobId, providerAsset } = await seedFailedApprovalReplay(
+        "retry-behind-processing-replay"
+      )
+      const processingReplayJobId = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [processingReplay] = yield* db
+            .insert(schema.processingJobs)
+            .values({
+              sourceId: TEST_SOURCE_ID,
+              principalId: TEST_PRINCIPAL_ID,
+              mode: "replay",
+              status: "processing",
+              attemptCount: 1,
+              maxAttempts: 3,
+            })
+            .returning({ id: schema.processingJobs.id })
+          if (processingReplay === undefined) {
+            return yield* Effect.die("Expected processing replay job")
+          }
+          return processingReplay.id
+        })
+      )
+
+      const reservation = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.reserveProviderAssetReviewReplayRetry({
+            providerAssetRowId: providerAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            jobId,
+          })
+        )
+      )
+      const reservedReplay = Option.getOrThrow(reservation)
+      const state = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [processingReplay] = yield* db
+            .select({ followUpMode: schema.processingJobs.followUpMode })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, processingReplayJobId))
+          const [replay] = yield* db
+            .select({ jobId: schema.providerAssetReviewReplays.jobId })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return { processingReplay, replay }
+        })
+      )
+
+      expect(reservedReplay).toMatchObject({
+        jobId: processingReplayJobId,
+        dispatchState: "failed_to_queue",
+      })
+      expect(state.processingReplay?.followUpMode).toBe("replay")
+      expect(state.replay?.jobId).toBe(processingReplayJobId)
+    })
+
     it("derives replay dispatch state from durable queue and job progress", async () => {
       const providerAsset = await seedPendingApprovalAsset("replay-dispatch-read-model", {
         withProviderTransfer: false,
@@ -1406,6 +1464,66 @@ describe("ProviderAssetRepositoryLive", () => {
       )
 
       expect(await loadReplay()).toMatchObject({ dispatchState: "queued", errorMessage: null })
+    })
+
+    it("preserves replay dispatch failure after its source is deleted", async () => {
+      const { jobId, providerAsset } = await seedFailedApprovalReplay(
+        "dispatch-failure-after-source-delete"
+      )
+
+      const deletedState = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.delete(schema.sources).where(eq(schema.sources.id, TEST_SOURCE_ID))
+          const jobs = yield* db
+            .select({ id: schema.processingJobs.id })
+            .from(schema.processingJobs)
+            .where(eq(schema.processingJobs.id, jobId))
+          const replays = yield* db
+            .select({ jobId: schema.providerAssetReviewReplays.jobId })
+            .from(schema.providerAssetReviewReplays)
+            .where(eq(schema.providerAssetReviewReplays.providerAssetRowId, providerAsset.id))
+          return { jobs, replays }
+        })
+      )
+
+      const marked = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.markProviderAssetReviewReplayDispatch({
+            providerAssetRowId: providerAsset.id,
+            sourceId: TEST_SOURCE_ID,
+            jobId,
+            dispatchState: "failed_to_queue",
+            errorMessage: "Source was deleted before replay dispatch.",
+          })
+        )
+      )
+      const replayReads = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          Effect.all({
+            found: repository.findProviderAssetReviewReplay({
+              providerAssetRowId: providerAsset.id,
+              sourceId: TEST_SOURCE_ID,
+              jobId,
+            }),
+            listed: repository.listProviderAssetReviewReplays({
+              providerAssetRowId: providerAsset.id,
+            }),
+          })
+        )
+      )
+      const expectedReplay = {
+        sourceId: TEST_SOURCE_ID,
+        principalId: TEST_PRINCIPAL_ID,
+        jobId,
+        dispatchState: "failed_to_queue",
+        errorMessage: "Source was deleted before replay dispatch.",
+      }
+
+      expect(deletedState).toEqual({ jobs: [], replays: [{ jobId }] })
+      expect(marked).toBe(jobId)
+      expect(Option.getOrThrow(replayReads.found)).toEqual(expectedReplay)
+      expect(replayReads.listed).toEqual([expectedReplay])
     })
 
     it("accepts a dispatch result after the replay link advances to its follow-up", async () => {

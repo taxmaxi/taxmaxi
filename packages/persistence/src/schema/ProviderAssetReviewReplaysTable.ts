@@ -5,10 +5,7 @@
  */
 
 import { index, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core"
-import { principals } from "./PrincipalsTable.ts"
-import { processingJobs } from "./ProcessingJobsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
-import { sources } from "./SourcesTable.ts"
 
 export const providerAssetReplayDispatchStateEnum = pgEnum("provider_asset_replay_dispatch_state", [
   "queued",
@@ -23,15 +20,9 @@ export const providerAssetReviewReplays = pgTable(
     providerAssetRowId: uuid("provider_asset_row_id")
       .notNull()
       .references(() => providerAssets.id, { onDelete: "cascade" }),
-    sourceId: uuid("source_id")
-      .notNull()
-      .references(() => sources.id, { onDelete: "cascade" }),
-    principalId: uuid("principal_id")
-      .notNull()
-      .references(() => principals.id, { onDelete: "cascade" }),
-    jobId: uuid("job_id")
-      .notNull()
-      .references(() => processingJobs.id, { onDelete: "cascade" }),
+    sourceId: uuid("source_id").notNull(),
+    principalId: uuid("principal_id").notNull(),
+    jobId: uuid("job_id").notNull(),
     dispatchState: providerAssetReplayDispatchStateEnum("dispatch_state")
       .notNull()
       .default("queued"),

@@ -136,6 +136,8 @@ const make = Effect.gen(function* () {
     principalId: schema.providerAssetReviewReplays.principalId,
     jobId: schema.providerAssetReviewReplays.jobId,
     dispatchState: sql<ProviderAssetReplayDispatchState>`case
+      when ${schema.processingJobs.id} is null
+      then ${schema.providerAssetReviewReplays.dispatchState}
       when ${schema.processingJobs.status} = 'pending'
         and (
           ${schema.processingJobs.queueName} is null
@@ -145,6 +147,8 @@ const make = Effect.gen(function* () {
       else 'queued'::provider_asset_replay_dispatch_state
     end`,
     errorMessage: sql<string | null>`case
+      when ${schema.processingJobs.id} is null
+      then ${schema.providerAssetReviewReplays.errorMessage}
       when ${schema.processingJobs.status} = 'pending'
         and (
           ${schema.processingJobs.queueName} is null
@@ -561,7 +565,7 @@ const make = Effect.gen(function* () {
               const replays = yield* tx
                 .select(selectProviderAssetReviewReplayFields)
                 .from(schema.providerAssetReviewReplays)
-                .innerJoin(
+                .leftJoin(
                   schema.processingJobs,
                   eq(schema.processingJobs.id, schema.providerAssetReviewReplays.jobId)
                 )
@@ -924,7 +928,7 @@ const make = Effect.gen(function* () {
       db
         .select(selectProviderAssetReviewReplayFields)
         .from(schema.providerAssetReviewReplays)
-        .innerJoin(
+        .leftJoin(
           schema.processingJobs,
           eq(schema.processingJobs.id, schema.providerAssetReviewReplays.jobId)
         )
@@ -966,7 +970,7 @@ const make = Effect.gen(function* () {
       db
         .select(selectProviderAssetReviewReplayFields)
         .from(schema.providerAssetReviewReplays)
-        .innerJoin(
+        .leftJoin(
           schema.processingJobs,
           eq(schema.processingJobs.id, schema.providerAssetReviewReplays.jobId)
         )
@@ -1055,7 +1059,11 @@ const make = Effect.gen(function* () {
             ): Effect.Effect<string, SyncEngineStorageError> =>
               Effect.gen(function* () {
                 const [activeJob] = yield* tx
-                  .select({ id: schema.processingJobs.id, mode: schema.processingJobs.mode })
+                  .select({
+                    id: schema.processingJobs.id,
+                    mode: schema.processingJobs.mode,
+                    status: schema.processingJobs.status,
+                  })
                   .from(schema.processingJobs)
                   .where(
                     and(
@@ -1073,7 +1081,7 @@ const make = Effect.gen(function* () {
                   )
 
                 if (activeJob !== undefined) {
-                  if (activeJob.mode !== "replay") {
+                  if (activeJob.status === "processing" || activeJob.mode !== "replay") {
                     yield* tx
                       .update(schema.processingJobs)
                       .set({ followUpMode: "replay", updatedAt: reservedAt })

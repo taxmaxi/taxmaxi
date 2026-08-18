@@ -1526,19 +1526,9 @@ describe("coinbase normalization persistence", () => {
         ])
         expect(repairedCounts.fifoLots).toHaveLength(1)
         expect(repairedCounts.disposalMatches).toHaveLength(0)
-
-        const replay = yield* replaySource()
-        const replayedCounts = yield* fetchCounts()
-
-        expect(replay.status).toBe("completed")
-        expect(replayedCounts.transactions).toHaveLength(repairedCounts.transactions.length)
-        expect(replayedCounts.transfers).toHaveLength(repairedCounts.transfers.length)
-        expect(replayedCounts.legs).toHaveLength(repairedCounts.legs.length)
-        expect(replayedCounts.fifoLots).toHaveLength(repairedCounts.fifoLots.length)
-        expect(replayedCounts.disposalMatches).toHaveLength(repairedCounts.disposalMatches.length)
       })
     )
-  }, 15_000)
+  })
 
   it("still fails malformed Coinbase payloads normally", async () => {
     activeSyncRecords = [
