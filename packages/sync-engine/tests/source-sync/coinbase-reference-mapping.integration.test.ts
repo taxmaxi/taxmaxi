@@ -6,6 +6,12 @@ import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sy
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
 import { HeliusSolanaSourceSyncProviderLive } from "../../src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts"
+import { HeliusSolanaAssetResolutionServiceLive } from "../../src/providers/helius-solana/layers/HeliusSolanaAssetResolutionServiceLive.ts"
+import {
+  HeliusSolanaAssetResolutionService,
+  SOLANA_USDC_MINT,
+} from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
+import { HeliusSolanaSyncClient } from "../../src/providers/helius-solana/services/HeliusSolanaSyncClient.ts"
 import { CoinbaseLegDerivationServiceLive } from "../../src/providers/coinbase/layers/CoinbaseLegDerivationServiceLive.ts"
 import { CoinbaseRecordNormalizerLive } from "../../src/providers/coinbase/layers/CoinbaseRecordNormalizerLive.ts"
 import { CoinbaseReferenceDataServiceLive } from "../../src/providers/coinbase/layers/CoinbaseReferenceDataServiceLive.ts"
@@ -20,6 +26,7 @@ import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
+import { seedData } from "../../../persistence/src/seed/data.ts"
 import {
   makeIntegrationTestDatabaseContext,
   seedSyncEngineRepositoryFixture,
@@ -263,6 +270,21 @@ const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive
   Layer.provide(AssetRepositoryLive)
 )
 
+const HeliusSolanaAssetResolutionWithDepsLive = HeliusSolanaAssetResolutionServiceLive.pipe(
+  Layer.provide(AssetRepositoryLive),
+  Layer.provide(ProviderAssetRepositoryLive),
+  Layer.provide(
+    Layer.succeed(
+      HeliusSolanaSyncClient,
+      HeliusSolanaSyncClient.of({
+        fetchTransactionsForAddress: () => Effect.die("Helius transactions should not be fetched"),
+        fetchAssetBatch: () => Effect.die("Helius DAS assets should not be fetched"),
+        fetchTransfersForAddress: () => Effect.die("Helius transfers should not be fetched"),
+      })
+    )
+  )
+)
+
 const CoinbaseReferenceDataWithDepsLive = CoinbaseReferenceDataServiceLive.pipe(
   Layer.provideMerge(CoinbaseSyncClientTestLive),
   Layer.provide(CoinbaseReferenceMappingWithDepsLive),
@@ -339,6 +361,16 @@ const runReferenceMapping = <A, E>(effect: Effect.Effect<A, E, CoinbaseReference
     )
   )
 
+const runHeliusAssetResolution = <A, E>(
+  effect: Effect.Effect<A, E, HeliusSolanaAssetResolutionService>
+) =>
+  Effect.runPromise(
+    context.runWithLayer({
+      effect,
+      layer: HeliusSolanaAssetResolutionWithDepsLive,
+    })
+  )
+
 const seedCanonicalAsset = ({
   id,
   symbol,
@@ -385,6 +417,7 @@ const fetchProviderAssetMappingRows = () =>
 
     return yield* db
       .select({
+        provider: schema.providerAssets.provider,
         currencyCode: schema.providerAssets.currencyCode,
         providerAssetRowId: schema.providerAssetMappings.providerAssetRowId,
         mappingKind: schema.providerAssetMappings.mappingKind,
@@ -577,6 +610,40 @@ describe("coinbase reference mappings", () => {
       assetRepresentationId: null,
       mappingStatus: "pending_review",
     })
+  })
+
+  it("resolves Coinbase and Solana USDC to one catalog-seeded economic asset", async () => {
+    await context.runPg(seedData)
+    await runReferenceMapping(
+      Effect.flatMap(CoinbaseReferenceMappingService, (service) => service.ensureDefaultMappings())
+    )
+
+    const solanaUsdc = await runHeliusAssetResolution(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        Effect.gen(function* () {
+          yield* service.ensureDefaultMappings()
+          return yield* service.resolveAsset({
+            kind: "spl",
+            mintAddress: SOLANA_USDC_MINT,
+          })
+        })
+      )
+    )
+    const mappings = await Effect.runPromise(fetchProviderAssetMappingRows())
+    const coinbaseUsdc = mappings.find(
+      (mapping) => mapping.provider === "coinbase" && mapping.currencyCode === "USDC"
+    )
+
+    expect(coinbaseUsdc).toMatchObject({
+      mappingStatus: "approved",
+      assetRepresentationId: null,
+    })
+    expect(coinbaseUsdc?.canonicalAssetId).toEqual(expect.any(String))
+    expect(solanaUsdc).toMatchObject({
+      kind: "canonical",
+      mintAddress: SOLANA_USDC_MINT,
+    })
+    expect(solanaUsdc.canonicalAssetId).toBe(coinbaseUsdc?.canonicalAssetId)
   })
 
   it("does not overwrite reviewed provider asset mappings on later default refreshes", async () => {

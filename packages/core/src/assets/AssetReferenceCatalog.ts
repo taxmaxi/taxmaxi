@@ -19,6 +19,7 @@ export const SOLANA_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
 /** Stable local identity for Helius native SOL observations. */
 export const HELIUS_SOLANA_NATIVE_NATURAL_KEY = "solana:native:SOL"
 
+/** Stable TaxMaxi key for one chain-independent economic asset. */
 export type AssetReferenceKey =
   | "ada"
   | "btc"
@@ -31,13 +32,31 @@ export type AssetReferenceKey =
   | "usdt"
   | "zec"
 
+/** Provider adapters that currently consume trusted local aliases. */
 export type AssetReferenceProvider = "coinbase" | "helius-solana"
 
+/** Network names supported by the current exact representation catalog. */
+export type AssetReferenceBlockchain = "base" | "bitcoin" | "ethereum" | "solana"
+
+/** Stable catalog key for one exact native, contract, or mint representation. */
+export type NetworkRepresentationKey =
+  | `${AssetReferenceBlockchain}:native`
+  | `${AssetReferenceBlockchain}:contract:${string}`
+  | `${AssetReferenceBlockchain}:mint:${string}`
+
+/** Canonical provider-local identity stored with a trusted alias. */
+export type ProviderNaturalKey =
+  | `currency_code:${string}`
+  | `solana:mint:${string}`
+  | `solana:native:${string}`
+
+/** Attribution for a TaxMaxi-curated identity assertion. */
 export interface AssetReferenceSource {
   readonly authority: "taxmaxi"
   readonly reference: string
 }
 
+/** Chain-independent economic asset metadata used by persistence seeds. */
 export interface EconomicAssetReference {
   readonly key: AssetReferenceKey
   readonly name: string
@@ -48,29 +67,58 @@ export interface EconomicAssetReference {
   readonly source: AssetReferenceSource
 }
 
-export interface NetworkRepresentationReference {
-  readonly key: string
+interface NetworkRepresentationReferenceBase {
+  readonly key: NetworkRepresentationKey
   readonly assetKey: AssetReferenceKey
-  readonly blockchain: "base" | "bitcoin" | "ethereum" | "solana"
-  readonly type: "native" | "token"
-  readonly contractAddress: string | null
-  readonly mintAddress: string | null
+  readonly blockchain: AssetReferenceBlockchain
   readonly decimals: number
   readonly source: AssetReferenceSource
 }
 
+/** Exact native representation, which never has a contract or mint address. */
+export interface NativeNetworkRepresentationReference extends NetworkRepresentationReferenceBase {
+  readonly key: `${AssetReferenceBlockchain}:native`
+  readonly type: "native"
+  readonly contractAddress: null
+  readonly mintAddress: null
+}
+
+/** Exact contract representation on one network. */
+export interface ContractNetworkRepresentationReference extends NetworkRepresentationReferenceBase {
+  readonly key: `${AssetReferenceBlockchain}:contract:${string}`
+  readonly type: "token"
+  readonly contractAddress: string
+  readonly mintAddress: null
+}
+
+/** Exact mint representation on one network. */
+export interface MintNetworkRepresentationReference extends NetworkRepresentationReferenceBase {
+  readonly key: `${AssetReferenceBlockchain}:mint:${string}`
+  readonly type: "token"
+  readonly contractAddress: null
+  readonly mintAddress: string
+}
+
+/** One valid exact network representation shape. */
+export type NetworkRepresentationReference =
+  | ContractNetworkRepresentationReference
+  | MintNetworkRepresentationReference
+  | NativeNetworkRepresentationReference
+
+/** Trusted mapping from one provider-local identity to TaxMaxi identity. */
 export interface ProviderAliasReference {
   readonly provider: AssetReferenceProvider
   readonly alias: string
-  readonly naturalKey: string
+  readonly naturalKey: ProviderNaturalKey
   readonly assetKey: AssetReferenceKey
-  readonly representationKey: string | null
+  readonly representationKey: NetworkRepresentationKey | null
   readonly displayName: string
   readonly providerType: "crypto" | "native" | "spl-token"
   readonly sourceNotes: string
   readonly source: AssetReferenceSource
 }
 
+/** Versioned source catalog from which all trusted runtime projections are derived. */
 export interface AssetReferenceCatalog {
   readonly revision: string
   readonly assets: ReadonlyArray<EconomicAssetReference>
@@ -78,6 +126,7 @@ export interface AssetReferenceCatalog {
   readonly providerAliases: ReadonlyArray<ProviderAliasReference>
 }
 
+/** Machine-readable reason that a catalog cannot produce trusted projections. */
 export type AssetReferenceCatalogViolationCode =
   | "conflicting_representation_ownership"
   | "duplicate_asset_key"
@@ -86,19 +135,24 @@ export type AssetReferenceCatalogViolationCode =
   | "duplicate_representation_key"
   | "missing_referenced_asset"
   | "missing_referenced_representation"
+  | "provider_alias_natural_key_mismatch"
   | "representation_asset_mismatch"
+  | "representation_key_mismatch"
 
+/** One invalid or conflicting catalog reference. */
 export interface AssetReferenceCatalogViolation {
   readonly code: AssetReferenceCatalogViolationCode
   readonly reference: string
 }
 
+/** Validation failure containing every catalog violation found in one pass. */
 export class AssetReferenceCatalogValidationError extends Data.TaggedError(
   "AssetReferenceCatalogValidationError"
 )<{
   readonly violations: ReadonlyArray<AssetReferenceCatalogViolation>
 }> {}
 
+/** Deterministic persistence and provider lookup data derived from a valid catalog. */
 export interface AssetReferenceCatalogProjections {
   readonly revision: string
   readonly economicAssets: ReadonlyArray<EconomicAssetReference>
@@ -107,18 +161,19 @@ export interface AssetReferenceCatalogProjections {
   readonly coinbaseAliases: ReadonlyArray<{
     readonly currencyCode: string
     readonly assetKey: AssetReferenceKey
+    readonly naturalKey: ProviderNaturalKey
     readonly canonicalAssetCoinGeckoId: string
     readonly sourceNotes: string
   }>
   readonly heliusSolanaAliases: ReadonlyArray<{
     readonly mintAddress: string | null
-    readonly naturalKey: string
+    readonly naturalKey: ProviderNaturalKey
     readonly currencyCode: string
     readonly name: string
     readonly decimals: number
     readonly providerType: "native" | "spl-token"
     readonly assetKey: AssetReferenceKey
-    readonly representationKey: string
+    readonly representationKey: NetworkRepresentationKey
     readonly sourceNotes: string
   }>
 }
@@ -134,6 +189,13 @@ const representationSource = catalogSource(
 )
 const coinbaseSource = catalogSource("docs/asset-reference-catalog.md#coinbase-aliases")
 const heliusSource = catalogSource("docs/asset-reference-catalog.md#helius-solana-aliases")
+
+/** Build the canonical provider identity for a Coinbase currency code. */
+export const coinbaseCurrencyNaturalKey = ({
+  currencyCode,
+}: {
+  readonly currencyCode: string
+}): ProviderNaturalKey => `currency_code:${currencyCode.toUpperCase()}`
 
 const assets = [
   {
@@ -334,7 +396,7 @@ const coinbaseAlias = ({
 }): ProviderAliasReference => ({
   provider: "coinbase",
   alias,
-  naturalKey: `currency:${alias.toUpperCase()}`,
+  naturalKey: coinbaseCurrencyNaturalKey({ currencyCode: alias }),
   assetKey,
   representationKey: null,
   displayName: alias,
@@ -353,7 +415,7 @@ const heliusAlias = ({
 }: {
   readonly alias: string
   readonly assetKey: AssetReferenceKey
-  readonly representationKey: string
+  readonly representationKey: NetworkRepresentationKey
   readonly displayName: string
   readonly providerType: "native" | "spl-token"
   readonly sourceNotes: string
@@ -431,7 +493,7 @@ const exactRepresentationKey = (representation: NetworkRepresentationReference):
   }
 
   return representation.contractAddress === null
-    ? `${representation.blockchain}:mint:${representation.mintAddress ?? "missing"}`
+    ? `${representation.blockchain}:mint:${representation.mintAddress}`
     : `${representation.blockchain}:contract:${representation.contractAddress.toLowerCase()}`
 }
 
@@ -440,7 +502,7 @@ const validateCatalog = (
 ): ReadonlyArray<AssetReferenceCatalogViolation> => {
   const violations: Array<AssetReferenceCatalogViolation> = []
   const assetKeys = new Set<AssetReferenceKey>()
-  const representationsByKey = new Map<string, NetworkRepresentationReference>()
+  const representationsByKey = new Map<NetworkRepresentationKey, NetworkRepresentationReference>()
   const exactRepresentations = new Map<string, NetworkRepresentationReference>()
   const providerAliasKeys = new Set<string>()
 
@@ -470,6 +532,13 @@ const validateCatalog = (
     }
 
     const exactKey = exactRepresentationKey(representation)
+    if (representation.key !== exactKey) {
+      violations.push({
+        code: "representation_key_mismatch",
+        reference: `${representation.key}:${exactKey}`,
+      })
+    }
+
     const existing = exactRepresentations.get(exactKey)
     if (existing !== undefined) {
       violations.push({
@@ -492,7 +561,20 @@ const validateCatalog = (
       })
     }
 
-    const aliasKey = `${alias.provider}:${alias.alias}`
+    const expectedNaturalKey =
+      alias.provider === "coinbase"
+        ? coinbaseCurrencyNaturalKey({ currencyCode: alias.alias })
+        : alias.providerType === "native"
+          ? HELIUS_SOLANA_NATIVE_NATURAL_KEY
+          : `solana:mint:${alias.alias}`
+    if (alias.naturalKey !== expectedNaturalKey) {
+      violations.push({
+        code: "provider_alias_natural_key_mismatch",
+        reference: `${alias.provider}:${alias.alias}:${alias.naturalKey}`,
+      })
+    }
+
+    const aliasKey = `${alias.provider}:${expectedNaturalKey}`
     if (providerAliasKeys.has(aliasKey)) {
       violations.push({ code: "duplicate_provider_alias", reference: aliasKey })
     } else {
@@ -550,6 +632,7 @@ export const deriveAssetReferenceCatalogProjections = (
           {
             currencyCode: alias.alias,
             assetKey: alias.assetKey,
+            naturalKey: alias.naturalKey,
             canonicalAssetCoinGeckoId: asset.coingeckoCoinId,
             sourceNotes: alias.sourceNotes,
           },

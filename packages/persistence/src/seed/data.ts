@@ -10,11 +10,20 @@
 
 import { assetReferenceCatalogProjections } from "@my/core/assets"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
+import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import { drizzle } from "../layers/PgClientLive.ts"
 import { schema } from "../schema/index.ts"
 
 const seedTimestamp = new Date("2026-01-01T00:00:00.000Z")
+
+/** Trusted catalog reference required by persistence seeding was not available. */
+export class PersistenceSeedReferenceError extends Data.TaggedError(
+  "PersistenceSeedReferenceError"
+)<{
+  readonly reference: string
+  readonly message: string
+}> {}
 
 const blockchains = [
   {
@@ -1052,15 +1061,17 @@ export const seedData = Effect.gen(function* () {
         : assetIdsByCoinGeckoId.get(economicAsset.coingeckoCoinId)
 
     if (blockchainId === undefined) {
-      return yield* Effect.die(
-        `Missing ${representation.blockchain} blockchain after seeding blockchains`
-      )
+      return yield* new PersistenceSeedReferenceError({
+        reference: representation.blockchain,
+        message: `Missing ${representation.blockchain} blockchain after seeding blockchains`,
+      })
     }
 
     if (assetId === undefined) {
-      return yield* Effect.die(
-        `Missing ${representation.assetKey} economic asset after seeding assets`
-      )
+      return yield* new PersistenceSeedReferenceError({
+        reference: representation.assetKey,
+        message: `Missing ${representation.assetKey} economic asset after seeding assets`,
+      })
     }
 
     const representationFilter =
@@ -1069,24 +1080,15 @@ export const seedData = Effect.gen(function* () {
             eq(schema.assetRepresentations.blockchainId, blockchainId),
             eq(schema.assetRepresentations.type, "native")
           )
-        : yield* Effect.gen(function* () {
-            const tokenAddress = representation.contractAddress ?? representation.mintAddress
-            if (tokenAddress === null) {
-              return yield* Effect.die(
-                `Missing exact address for ${representation.key} network representation`
-              )
-            }
-
-            return representation.contractAddress !== null
-              ? and(
-                  eq(schema.assetRepresentations.blockchainId, blockchainId),
-                  eq(schema.assetRepresentations.contractAddress, tokenAddress)
-                )
-              : and(
-                  eq(schema.assetRepresentations.blockchainId, blockchainId),
-                  eq(schema.assetRepresentations.mintAddress, tokenAddress)
-                )
-          })
+        : representation.contractAddress !== null
+          ? and(
+              eq(schema.assetRepresentations.blockchainId, blockchainId),
+              eq(schema.assetRepresentations.contractAddress, representation.contractAddress)
+            )
+          : and(
+              eq(schema.assetRepresentations.blockchainId, blockchainId),
+              eq(schema.assetRepresentations.mintAddress, representation.mintAddress)
+            )
     const [existingRepresentation] = yield* db
       .select({ id: schema.assetRepresentations.id })
       .from(schema.assetRepresentations)

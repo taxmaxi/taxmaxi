@@ -41,7 +41,14 @@ describe("AssetReferenceCatalog", () => {
 
   it("rejects duplicate stable asset and representation keys", () => {
     const firstAsset = assetReferenceCatalog.assets[0]
-    const firstRepresentation = assetReferenceCatalog.representations[0]
+    const firstRepresentation = assetReferenceCatalog.representations.find(
+      (representation) => representation.contractAddress !== null
+    )
+
+    if (firstRepresentation === undefined) {
+      expect.fail("Missing built-in contract representation")
+    }
+
     const catalog = {
       ...assetReferenceCatalog,
       assets: [...assetReferenceCatalog.assets, { ...firstAsset, symbol: "XBT" }],
@@ -49,10 +56,7 @@ describe("AssetReferenceCatalog", () => {
         ...assetReferenceCatalog.representations,
         {
           ...firstRepresentation,
-          blockchain: "base",
-          type: "token",
           contractAddress: "0x0000000000000000000000000000000000000001",
-          decimals: 18,
         },
       ],
     } satisfies AssetReferenceCatalog
@@ -72,8 +76,12 @@ describe("AssetReferenceCatalog", () => {
       expect.fail("Missing built-in Solana USDC representation")
     }
 
-    const duplicate = { ...solanaUsdc, key: "duplicate-solana-usdc" }
-    const conflict = { ...solanaUsdc, key: "conflicting-solana-usdc", assetKey: "usdt" } as const
+    const duplicate = { ...solanaUsdc, key: "solana:mint:duplicate-solana-usdc" } as const
+    const conflict = {
+      ...solanaUsdc,
+      key: "solana:mint:conflicting-solana-usdc",
+      assetKey: "usdt",
+    } as const
 
     expect(
       validationCodes({
@@ -98,5 +106,25 @@ describe("AssetReferenceCatalog", () => {
         providerAliases: [...assetReferenceCatalog.providerAliases, firstAlias],
       })
     ).toEqual(expect.arrayContaining(["duplicate_provider_alias", "missing_referenced_asset"]))
+  })
+
+  it("treats Coinbase currency aliases as case-insensitive provider identities", () => {
+    const usdcAlias = assetReferenceCatalog.providerAliases.find(
+      (alias) => alias.provider === "coinbase" && alias.alias === "USDC"
+    )
+
+    if (usdcAlias === undefined) {
+      expect.fail("Missing built-in Coinbase USDC alias")
+    }
+
+    expect(
+      validationCodes({
+        ...assetReferenceCatalog,
+        providerAliases: [
+          ...assetReferenceCatalog.providerAliases,
+          { ...usdcAlias, alias: "usdc" },
+        ],
+      })
+    ).toContain("duplicate_provider_alias")
   })
 })

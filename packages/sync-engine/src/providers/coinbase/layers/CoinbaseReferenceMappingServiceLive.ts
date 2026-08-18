@@ -4,6 +4,7 @@
  * @module CoinbaseReferenceMappingServiceLive
  */
 
+import { coinbaseCurrencyNaturalKey, type ProviderNaturalKey } from "@my/core/assets"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -30,9 +31,6 @@ import {
 } from "../services/CoinbaseReferenceMappingService.ts"
 
 const COINBASE_PROVIDER = "coinbase"
-
-const deriveCoinbaseNaturalKey = ({ currencyCode }: { readonly currencyCode: string }) =>
-  `currency_code:${currencyCode.toUpperCase()}`
 
 const toProviderAssetMappingKind = ({
   providerType,
@@ -144,9 +142,11 @@ const make = Effect.gen(function* () {
 
   const ensureProviderAssetRecord = ({
     currencyCode,
+    naturalKey,
     rawSourcePayload,
   }: {
     readonly currencyCode: string
+    readonly naturalKey?: ProviderNaturalKey
     readonly rawSourcePayload: unknown
   }) =>
     Effect.gen(function* () {
@@ -164,7 +164,8 @@ const make = Effect.gen(function* () {
         entries: [
           {
             providerAssetId: null,
-            naturalKey: deriveCoinbaseNaturalKey({ currencyCode: upperCurrencyCode }),
+            naturalKey:
+              naturalKey ?? coinbaseCurrencyNaturalKey({ currencyCode: upperCurrencyCode }),
             currencyCode: upperCurrencyCode,
             name: null,
             exponent: null,
@@ -411,6 +412,7 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const providerAssetRecord = yield* ensureProviderAssetRecord({
               currencyCode: mapping.currencyCode,
+              naturalKey: mapping.naturalKey,
               rawSourcePayload: {
                 source: "coinbase_default_currency_mapping",
                 currencyCode: mapping.currencyCode,

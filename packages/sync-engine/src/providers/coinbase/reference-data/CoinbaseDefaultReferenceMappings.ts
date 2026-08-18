@@ -4,7 +4,7 @@
  * @module CoinbaseDefaultReferenceMappings
  */
 
-import { assetReferenceCatalogProjections } from "@my/core/assets"
+import { assetReferenceCatalogProjections, type ProviderNaturalKey } from "@my/core/assets"
 import type {
   ProviderAssetMappingKind,
   ProviderAssetMappingStatus,
@@ -29,6 +29,7 @@ export interface CoinbaseDefaultTransactionTypeMapping {
 
 export interface CoinbaseDefaultCurrencyMapping {
   readonly currencyCode: string
+  readonly naturalKey: ProviderNaturalKey
   readonly mappingKind: ProviderAssetMappingKind
   readonly canonicalAssetCoinGeckoId: string | null
   readonly canonicalFiatCurrency: string | null
@@ -387,6 +388,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   ...assetReferenceCatalogProjections.coinbaseAliases.map(
     (alias): CoinbaseDefaultCurrencyMapping => ({
       currencyCode: alias.currencyCode,
+      naturalKey: alias.naturalKey,
       mappingKind: "asset",
       canonicalAssetCoinGeckoId: alias.canonicalAssetCoinGeckoId,
       canonicalFiatCurrency: null,
@@ -396,6 +398,7 @@ export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurre
   ),
   {
     currencyCode: "EUR",
+    naturalKey: "currency_code:EUR",
     mappingKind: "fiat",
     canonicalAssetCoinGeckoId: null,
     canonicalFiatCurrency: "EUR",
