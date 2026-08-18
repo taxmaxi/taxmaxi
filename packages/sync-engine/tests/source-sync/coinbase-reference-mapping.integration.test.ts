@@ -38,6 +38,7 @@ const sourceId = "00000000-0000-0000-0000-000000000261"
 const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000561"
 const ETH_ASSET_ID = "00000000-0000-0000-0000-000000000562"
 const SOL_ASSET_ID = "00000000-0000-0000-0000-000000000563"
+const USDC_ASSET_ID = "00000000-0000-0000-0000-000000000564"
 
 const makeCoinbaseRecord = ({
   externalRecordId,
@@ -510,7 +511,7 @@ describe("coinbase reference mappings", () => {
     expect(adaMapping?.sourceNotes).toContain("no assets row exists")
   })
 
-  it("seeds existing BTC ETH and SOL default assets as approved canonical id mappings", async () => {
+  it("seeds existing BTC ETH SOL and USDC defaults as approved canonical id mappings", async () => {
     await Effect.runPromise(
       Effect.all([
         seedCanonicalAsset({
@@ -530,6 +531,12 @@ describe("coinbase reference mappings", () => {
           symbol: "SOL",
           coingeckoCoinId: "solana",
           contractAddress: "coinbase-default-existing-sol",
+        }),
+        seedCanonicalAsset({
+          id: USDC_ASSET_ID,
+          symbol: "USDC",
+          coingeckoCoinId: "usd-coin",
+          contractAddress: "coinbase-default-existing-usdc",
         }),
       ])
     )
@@ -552,6 +559,11 @@ describe("coinbase reference mappings", () => {
     })
     expect(mappings.find((mapping) => mapping.currencyCode === "SOL")).toMatchObject({
       canonicalAssetId: SOL_ASSET_ID,
+      assetRepresentationId: null,
+      mappingStatus: "approved",
+    })
+    expect(mappings.find((mapping) => mapping.currencyCode === "USDC")).toMatchObject({
+      canonicalAssetId: USDC_ASSET_ID,
       assetRepresentationId: null,
       mappingStatus: "approved",
     })

@@ -4,6 +4,7 @@
  * @module CoinbaseDefaultReferenceMappings
  */
 
+import { assetReferenceCatalogProjections } from "@my/core/assets"
 import type {
   ProviderAssetMappingKind,
   ProviderAssetMappingStatus,
@@ -383,78 +384,16 @@ export const coinbaseDefaultTransactionTypeMappings: ReadonlyArray<CoinbaseDefau
   ]
 
 export const coinbaseDefaultCurrencyMappings: ReadonlyArray<CoinbaseDefaultCurrencyMapping> = [
-  {
-    currencyCode: "BTC",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "bitcoin",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "ETH",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "ethereum",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "ETH2",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "ethereum",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Coinbase-specific alias for staked / deprecated ETH balances.",
-  },
-  {
-    currencyCode: "ADA",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "cardano",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "DOT",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "polkadot",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "SOL",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "solana",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "ZEC",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "zcash",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "EURC",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "euro-coin",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
-  {
-    currencyCode: "TAO",
-    mappingKind: "asset",
-    canonicalAssetCoinGeckoId: "bittensor",
-    canonicalFiatCurrency: null,
-    mappingStatus: "approved",
-    sourceNotes: "Direct Coinbase currency mapping.",
-  },
+  ...assetReferenceCatalogProjections.coinbaseAliases.map(
+    (alias): CoinbaseDefaultCurrencyMapping => ({
+      currencyCode: alias.currencyCode,
+      mappingKind: "asset",
+      canonicalAssetCoinGeckoId: alias.canonicalAssetCoinGeckoId,
+      canonicalFiatCurrency: null,
+      mappingStatus: "approved",
+      sourceNotes: alias.sourceNotes,
+    })
+  ),
   {
     currencyCode: "EUR",
     mappingKind: "fiat",

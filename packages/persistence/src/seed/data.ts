@@ -8,6 +8,7 @@
  * @module seed/data
  */
 
+import { assetReferenceCatalogProjections } from "@my/core/assets"
 import { and, eq, inArray, ne, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { drizzle } from "../layers/PgClientLive.ts"
@@ -54,155 +55,8 @@ const blockchains = [
   },
 ] as const
 
-const economicAssets = [
-  {
-    name: "Bitcoin",
-    symbol: "BTC",
-    coingeckoCoinId: "bitcoin",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png?1696501400",
-    type: "fungible",
-  },
-  {
-    name: "Ether",
-    symbol: "ETH",
-    coingeckoCoinId: "ethereum",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/279/large/ethereum.png?1696501628",
-    type: "fungible",
-  },
-  {
-    name: "Solana",
-    symbol: "SOL",
-    coingeckoCoinId: "solana",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/4128/large/solana.png?1718769756",
-    type: "fungible",
-  },
-  {
-    name: "USD Coin",
-    symbol: "USDC",
-    coingeckoCoinId: "usd-coin",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/6319/large/USDC.png?1769615602",
-    type: "fungible",
-  },
-  {
-    name: "Tether",
-    symbol: "USDT",
-    coingeckoCoinId: "tether",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/325/large/Tether.png?1696501661",
-    type: "fungible",
-  },
-  {
-    name: "Cardano",
-    symbol: "ADA",
-    coingeckoCoinId: "cardano",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/975/large/cardano.png?1696502090",
-    type: "fungible",
-  },
-  {
-    name: "Polkadot",
-    symbol: "DOT",
-    coingeckoCoinId: "polkadot",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/12171/large/polkadot.jpg?1766533446",
-    type: "fungible",
-  },
-  {
-    name: "Zcash",
-    symbol: "ZEC",
-    coingeckoCoinId: "zcash",
-    logoUrl:
-      "https://coin-images.coingecko.com/coins/images/486/large/Brandmark-Yellow_%281%29.png?1785810558",
-    type: "fungible",
-  },
-  {
-    name: "EURC",
-    symbol: "EURC",
-    coingeckoCoinId: "euro-coin",
-    logoUrl: "https://coin-images.coingecko.com/coins/images/26045/large/EURC.png?1769615705",
-    type: "fungible",
-  },
-  {
-    name: "Bittensor",
-    symbol: "TAO",
-    coingeckoCoinId: "bittensor",
-    logoUrl:
-      "https://coin-images.coingecko.com/coins/images/28452/large/ARUsPeNQ_400x400.jpeg?1696527447",
-    type: "fungible",
-  },
-] as const
-
-const assetRepresentations = [
-  {
-    assetCoinGeckoId: "bitcoin",
-    blockchainName: "bitcoin",
-    type: "native",
-    contractAddress: null,
-    mintAddress: null,
-    decimals: 8,
-  },
-  {
-    assetCoinGeckoId: "ethereum",
-    blockchainName: "ethereum",
-    type: "native",
-    contractAddress: null,
-    mintAddress: null,
-    decimals: 18,
-  },
-  {
-    assetCoinGeckoId: "ethereum",
-    blockchainName: "base",
-    type: "native",
-    contractAddress: null,
-    mintAddress: null,
-    decimals: 18,
-  },
-  {
-    assetCoinGeckoId: "solana",
-    blockchainName: "solana",
-    type: "native",
-    contractAddress: null,
-    mintAddress: null,
-    decimals: 9,
-  },
-  {
-    assetCoinGeckoId: "solana",
-    blockchainName: "solana",
-    type: "token",
-    contractAddress: null,
-    mintAddress: "So11111111111111111111111111111111111111112",
-    decimals: 9,
-  },
-  {
-    assetCoinGeckoId: "usd-coin",
-    blockchainName: "solana",
-    type: "token",
-    contractAddress: null,
-    mintAddress: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    decimals: 6,
-  },
-  {
-    assetCoinGeckoId: "tether",
-    blockchainName: "solana",
-    type: "token",
-    contractAddress: null,
-    mintAddress: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-    decimals: 6,
-  },
-  {
-    assetCoinGeckoId: "usd-coin",
-    blockchainName: "ethereum",
-    type: "token",
-    contractAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
-    mintAddress: null,
-    decimals: 6,
-  },
-  {
-    assetCoinGeckoId: "usd-coin",
-    blockchainName: "base",
-    type: "token",
-    contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-    mintAddress: null,
-    decimals: 6,
-  },
-] as const
+const economicAssets = assetReferenceCatalogProjections.economicAssets
+const assetRepresentations = assetReferenceCatalogProjections.networkRepresentations
 
 const cexRows = [
   { name: "coinbase", website: "https://www.coinbase.com" },
@@ -1146,7 +1000,11 @@ export const seedData = Effect.gen(function* () {
     .insert(schema.assets)
     .values(
       economicAssets.map((asset) => ({
-        ...asset,
+        name: asset.name,
+        symbol: asset.symbol,
+        coingeckoCoinId: asset.coingeckoCoinId,
+        logoUrl: asset.logoUrl,
+        type: asset.type,
         createdAt: seedTimestamp,
         updatedAt: seedTimestamp,
       }))
@@ -1183,20 +1041,25 @@ export const seedData = Effect.gen(function* () {
       asset.coingeckoCoinId === null ? [] : [[asset.coingeckoCoinId, asset.id] as const]
     )
   )
+  const economicAssetsByKey = new Map(economicAssets.map((asset) => [asset.key, asset] as const))
 
   for (const representation of assetRepresentations) {
-    const blockchainId = blockchainIdsByName.get(representation.blockchainName)
-    const assetId = assetIdsByCoinGeckoId.get(representation.assetCoinGeckoId)
+    const blockchainId = blockchainIdsByName.get(representation.blockchain)
+    const economicAsset = economicAssetsByKey.get(representation.assetKey)
+    const assetId =
+      economicAsset === undefined
+        ? undefined
+        : assetIdsByCoinGeckoId.get(economicAsset.coingeckoCoinId)
 
     if (blockchainId === undefined) {
       return yield* Effect.die(
-        `Missing ${representation.blockchainName} blockchain after seeding blockchains`
+        `Missing ${representation.blockchain} blockchain after seeding blockchains`
       )
     }
 
     if (assetId === undefined) {
       return yield* Effect.die(
-        `Missing ${representation.assetCoinGeckoId} economic asset after seeding assets`
+        `Missing ${representation.assetKey} economic asset after seeding assets`
       )
     }
 
@@ -1206,15 +1069,24 @@ export const seedData = Effect.gen(function* () {
             eq(schema.assetRepresentations.blockchainId, blockchainId),
             eq(schema.assetRepresentations.type, "native")
           )
-        : representation.contractAddress !== null
-          ? and(
-              eq(schema.assetRepresentations.blockchainId, blockchainId),
-              eq(schema.assetRepresentations.contractAddress, representation.contractAddress)
-            )
-          : and(
-              eq(schema.assetRepresentations.blockchainId, blockchainId),
-              eq(schema.assetRepresentations.mintAddress, representation.mintAddress)
-            )
+        : yield* Effect.gen(function* () {
+            const tokenAddress = representation.contractAddress ?? representation.mintAddress
+            if (tokenAddress === null) {
+              return yield* Effect.die(
+                `Missing exact address for ${representation.key} network representation`
+              )
+            }
+
+            return representation.contractAddress !== null
+              ? and(
+                  eq(schema.assetRepresentations.blockchainId, blockchainId),
+                  eq(schema.assetRepresentations.contractAddress, tokenAddress)
+                )
+              : and(
+                  eq(schema.assetRepresentations.blockchainId, blockchainId),
+                  eq(schema.assetRepresentations.mintAddress, tokenAddress)
+                )
+          })
     const [existingRepresentation] = yield* db
       .select({ id: schema.assetRepresentations.id })
       .from(schema.assetRepresentations)
@@ -1235,7 +1107,11 @@ export const seedData = Effect.gen(function* () {
         ...referenceValues,
         logoUrl: null,
         isSpam: false,
-        metadata: { source: "taxmaxi_reference_data" },
+        metadata: {
+          source: "taxmaxi_asset_reference_catalog",
+          catalogRevision: assetReferenceCatalogProjections.revision,
+          sourceReference: representation.source.reference,
+        },
         createdAt: seedTimestamp,
       })
     } else {
