@@ -14,7 +14,7 @@ import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
 import type * as Redacted from "effect/Redacted"
 import * as Schema from "effect/Schema"
-import { AuthUserId, SessionId } from "@my/core/authentication"
+import { AuthProviderType, AuthUserId, SessionId } from "@my/core/authentication"
 import { ForbiddenError, UnauthorizedError } from "./ApiErrors.ts"
 
 // =============================================================================
@@ -34,6 +34,8 @@ import { ForbiddenError, UnauthorizedError } from "./ApiErrors.ts"
 export class User extends Schema.Class<User>("User")({
   userId: AuthUserId,
   role: Schema.Literals(["admin", "user", "readonly"]),
+  /** The login provider that authenticated this session. */
+  provider: Schema.optional(AuthProviderType),
   /**
    * Session ID for session-based authentication.
    * Used by logout and refresh handlers to invalidate/renew the session.

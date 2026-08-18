@@ -10,6 +10,7 @@ import {
 import { z } from "zod"
 
 import { AppHeader } from "#/components/app-header"
+import { AccountMenu } from "#/components/account-menu"
 import { PageShell } from "#/components/page-shell"
 import { Button } from "#/components/ui/button"
 import {
@@ -22,6 +23,7 @@ import {
 } from "#/components/ui/card"
 import { m } from "#/paraglide/messages"
 import { getLocale, type Locale } from "#/paraglide/runtime"
+import { useAppLogout } from "#/hooks/use-app-logout"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 
 const billingSearchSchema = z.object({
@@ -124,6 +126,7 @@ function BillingPage() {
   const search = Route.useSearch()
   const { taxmaxi } = Route.useRouteContext()
   const navigate = Route.useNavigate()
+  const onLogout = useAppLogout()
   const [checkoutReturnKind] = useState<CheckoutReturnKind | null>(() =>
     search.checkout === "success" ? "annual" : search.top_up === "success" ? "topUp" : null
   )
@@ -143,6 +146,7 @@ function BillingPage() {
         await clearAuthSessionCookie()
         await navigate({ to: "/login", replace: true })
       }}
+      onLogout={onLogout}
       status={status}
     />
   )
@@ -154,6 +158,7 @@ export function BillingPageContent({
   catalog,
   checkoutReturnKind,
   onUnauthorized,
+  onLogout,
   status,
 }: {
   readonly assignLocation: (url: string) => void
@@ -161,6 +166,7 @@ export function BillingPageContent({
   readonly catalog: BillingCatalog | null
   readonly checkoutReturnKind: CheckoutReturnKind | null
   readonly onUnauthorized: () => Promise<void>
+  readonly onLogout: () => Promise<void>
   readonly status: BillingStatus
 }) {
   const locale = getLocale()
@@ -256,6 +262,7 @@ export function BillingPageContent({
               {m["app.billing.dashboard"]()}
             </Link>
           </Button>
+          <AccountMenu onLogout={onLogout} />
         </AppHeader>
 
         <section className="mx-auto flex w-full max-w-5xl flex-col gap-8 px-6 pt-32 pb-16 sm:px-8">

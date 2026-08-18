@@ -74,6 +74,37 @@ const clearAuthTables = () =>
     `,
   })
 
+const COINBASE_USER_ID = "00000000-0000-4000-8000-000000000101"
+const COINBASE_IDENTITY_ID = "00000000-0000-4000-8000-000000000102"
+const COINBASE_SESSION_ID = "coinbase_session_000000000000000000000001"
+const COINBASE_ACCOUNT_EMAIL = "account@taxmaxi.test"
+const COINBASE_PROVIDER_EMAIL = "provider@coinbase.test"
+
+const seedCoinbaseSession = () =>
+  runTestSql({
+    statement: `
+      INSERT INTO users (id, email, email_verified, name, role)
+      VALUES ('${COINBASE_USER_ID}', '${COINBASE_ACCOUNT_EMAIL}', true, 'Coinbase Owner', 'user');
+
+      INSERT INTO auth_identities (id, user_id, provider, provider_id, provider_data)
+      VALUES (
+        '${COINBASE_IDENTITY_ID}',
+        '${COINBASE_USER_ID}',
+        'coinbase',
+        'raw-coinbase-provider-id',
+        '{"profile":{"email":"${COINBASE_PROVIDER_EMAIL}","username":"private-handle"},"metadata":{"access":"private"}}'::jsonb
+      );
+
+      INSERT INTO sessions (id, user_id, provider, expires_at)
+      VALUES (
+        '${COINBASE_SESSION_ID}',
+        '${COINBASE_USER_ID}',
+        'coinbase',
+        NOW() + INTERVAL '1 day'
+      );
+    `,
+  })
+
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
     Effect.die("SourceSyncService test stub: startSourceSyncJob not implemented"),
@@ -269,6 +300,33 @@ const postJson = ({
     catch: (cause) => String(cause),
   }).pipe(Effect.orDie)
 
+const postRequest = ({
+  handler,
+  path,
+  cookie,
+}: {
+  readonly handler: (request: Request) => Promise<Response>
+  readonly path: string
+  readonly cookie?: string
+}) =>
+  Effect.tryPromise({
+    try: () => {
+      const headers = new Headers()
+
+      if (cookie !== undefined) {
+        headers.set("cookie", cookie)
+      }
+
+      return handler(
+        new Request(`http://taxmaxi.test${path}`, {
+          method: "POST",
+          headers,
+        })
+      )
+    },
+    catch: (cause) => String(cause),
+  }).pipe(Effect.orDie)
+
 const getRequest = ({
   handler,
   path,
@@ -325,6 +383,74 @@ describe("AuthApiLive integration", () => {
       expect(clearedSessionCookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
       expect(clearedSessionCookie).toContain("HttpOnly")
       expect(clearedSessionCookie).toContain("Path=/")
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("shows an existing Coinbase login method without exposing provider identity data", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+      yield* seedCoinbaseSession()
+
+      const response = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie: makeCookieHeader({ taxmaxi_session: COINBASE_SESSION_ID }),
+      })
+
+      expect(response.status).toBe(200)
+      expect(yield* jsonBody(response)).toEqual({
+        account: {
+          id: COINBASE_USER_ID,
+          email: COINBASE_ACCOUNT_EMAIL,
+          displayName: "Coinbase Owner",
+          role: "member",
+          emailVerified: true,
+          createdAt: expect.any(String),
+          updatedAt: expect.any(String),
+        },
+        loginMethods: [
+          {
+            id: COINBASE_IDENTITY_ID,
+            provider: "coinbase",
+            providerEmail: COINBASE_PROVIDER_EMAIL,
+            linkedAt: expect.any(String),
+            isCurrentSession: true,
+            canRemove: false,
+          },
+        ],
+      })
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("invalidates the backend session and clears the session cookie on logout", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+      yield* seedCoinbaseSession()
+      const cookie = makeCookieHeader({ taxmaxi_session: COINBASE_SESSION_ID })
+
+      const logoutResponse = yield* postRequest({
+        handler,
+        path: "/auth/logout",
+        cookie,
+      })
+
+      expect(logoutResponse.status).toBe(200)
+      expect(yield* jsonBody(logoutResponse)).toEqual({ success: true })
+      const clearedSessionCookie = getSetCookies(logoutResponse).find((setCookie) =>
+        setCookie.startsWith("taxmaxi_session=")
+      )
+      expect(clearedSessionCookie).toContain("taxmaxi_session=;")
+      expect(clearedSessionCookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+      expect(clearedSessionCookie).toContain("HttpOnly")
+      expect(clearedSessionCookie).toContain("Path=/")
+
+      const accountResponse = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie,
+      })
+
+      expect(accountResponse.status).toBe(401)
     }).pipe(Effect.scoped)
   )
 
@@ -450,15 +576,25 @@ describe("AuthApiLive integration", () => {
         })
 
         expect(meResponse.status).toBe(200)
-        expect(yield* jsonBody(meResponse)).toMatchObject({
-          user: {
+        expect(yield* jsonBody(meResponse)).toEqual({
+          account: {
+            id: expect.any(String),
             email,
+            displayName: "Owner",
+            role: "member",
             emailVerified: true,
+            createdAt: expect.any(String),
+            updatedAt: expect.any(String),
           },
-          identities: [
-            expect.objectContaining({
+          loginMethods: [
+            {
+              id: expect.any(String),
               provider: "local",
-            }),
+              providerEmail: null,
+              linkedAt: expect.any(String),
+              isCurrentSession: true,
+              canRemove: false,
+            },
           ],
         })
       }).pipe(Effect.scoped)

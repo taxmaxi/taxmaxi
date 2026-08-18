@@ -21,7 +21,7 @@ import type {
   TaxMaxiTransactionTypeList,
 } from "taxmaxi"
 import {
-  getCurrentUser,
+  getCurrentAccount,
   logoutSession,
   startCoinbaseOAuth,
   validateSessionToken,
@@ -136,13 +136,13 @@ export const loadSessionState = (): Promise<SessionState> =>
         return { _tag: "invalid", message: "The saved session is no longer valid." } as const
       }
 
-      const currentUser = yield* getCurrentUser({
+      const currentAccount = yield* getCurrentAccount({
         apiUrl: session.value.apiUrl,
         sessionToken: session.value.sessionToken,
       })
       const hydratedSession: CliSession = {
         ...session.value,
-        role: currentUser.user.role,
+        role: currentAccount.account.role,
       }
       if (session.value.role !== hydratedSession.role) {
         yield* saveSession(hydratedSession)
@@ -380,7 +380,7 @@ export const completeCoinbaseConnect = (
   runtime.runPromise(
     Effect.gen(function* () {
       const completed = yield* waitForOAuthCompletion({ apiUrl, sessionId: oauthSessionId })
-      const currentUser = yield* getCurrentUser({
+      const currentAccount = yield* getCurrentAccount({
         apiUrl,
         sessionToken: completed.sessionToken,
       })
@@ -388,7 +388,7 @@ export const completeCoinbaseConnect = (
         apiUrl,
         sessionToken: completed.sessionToken,
         userId: completed.userId,
-        role: currentUser.user.role,
+        role: currentAccount.account.role,
         connectedAt: yield* nowIsoString,
       }
       yield* saveSession(session)

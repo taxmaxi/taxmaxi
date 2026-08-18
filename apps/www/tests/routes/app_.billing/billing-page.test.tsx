@@ -85,6 +85,7 @@ const renderBillingPage = async ({
   assignLocation = vi.fn(),
   checkoutReturnKind = null,
   loadStatus,
+  onLogout = vi.fn().mockResolvedValue(undefined),
   onUnauthorized = vi.fn().mockResolvedValue(undefined),
   portal = vi.fn().mockResolvedValue({ url: "https://stripe.test/portal" }),
   subscriptionStatus = null,
@@ -94,6 +95,7 @@ const renderBillingPage = async ({
   readonly assignLocation?: (url: string) => void
   readonly checkoutReturnKind?: "annual" | "topUp" | null
   readonly loadStatus?: BillingPromiseResource["status"]
+  readonly onLogout?: () => Promise<void>
   readonly onUnauthorized?: () => Promise<void>
   readonly portal?: BillingPromiseResource["createPortalSession"]
   readonly subscriptionStatus?: BillingStatus["subscriptionStatus"]
@@ -113,6 +115,7 @@ const renderBillingPage = async ({
         billing={billing}
         catalog={catalog}
         checkoutReturnKind={checkoutReturnKind}
+        onLogout={onLogout}
         onUnauthorized={onUnauthorized}
         status={status(subscriptionStatus)}
       />

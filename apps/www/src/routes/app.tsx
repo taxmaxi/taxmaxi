@@ -1,6 +1,5 @@
-import { Link, createFileRoute, redirect } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useSuspenseQueries, useSuspenseQuery } from "@tanstack/react-query"
-import { CreditCard, LibraryBig } from "lucide-react"
 import { useCallback, useMemo } from "react"
 import {
   isTaxMaxiUnauthorizedError,
@@ -9,12 +8,11 @@ import {
 } from "taxmaxi"
 
 import { AppHeader } from "#/components/app-header"
+import { AccountMenu } from "#/components/account-menu"
 import { Dashboard } from "#/components/dashboard"
 import { PageShell } from "#/components/page-shell"
-import { Button } from "#/components/ui/button"
-import { ASSET_CATALOG_OPENER_ID } from "#/lib/asset-catalog-focus"
+import { useAppLogout } from "#/hooks/use-app-logout"
 import type { Account } from "#/lib/dashboard-types"
-import { m } from "#/paraglide/messages"
 import { clearAuthSessionCookie, getAuthStatus } from "#/server-functions/auth"
 import { queries, queryKeys } from "#/integrations/taxmaxi/queries"
 
@@ -57,6 +55,7 @@ function RouteComponent() {
   const { queryClient, taxmaxi } = Route.useRouteContext()
 
   const navigate = Route.useNavigate()
+  const onLogout = useAppLogout()
 
   const {
     data: { sources },
@@ -126,29 +125,7 @@ function RouteComponent() {
 
       <div className="relative z-10">
         <AppHeader>
-          <Button asChild size="sm" variant="outline">
-            <Link aria-label="Billing" preload="intent" title="Billing" to="/app/billing">
-              <CreditCard data-icon="inline-start" />
-              <span className="hidden sm:inline">Billing</span>
-            </Link>
-          </Button>
-          <Button
-            asChild
-            className="relative size-11 gap-0 px-0 before:absolute before:-inset-0.5 sm:h-9 sm:w-auto sm:gap-1.5 sm:px-3 sm:has-data-[icon=inline-start]:pl-2.5"
-            size="icon-lg"
-            variant="outline"
-          >
-            <Link
-              aria-label={m["assetCatalog.open"]()}
-              id={ASSET_CATALOG_OPENER_ID}
-              preload="intent"
-              title={m["assetCatalog.open"]()}
-              to="/assets"
-            >
-              <LibraryBig data-icon="inline-start" />
-              <span className="hidden sm:inline">{m["assetCatalog.open"]()}</span>
-            </Link>
-          </Button>
+          <AccountMenu onLogout={onLogout} />
         </AppHeader>
         <Dashboard
           accounts={sourceAccounts}

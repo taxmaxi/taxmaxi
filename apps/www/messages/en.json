@@ -26,6 +26,32 @@
   "app": {
     "title": "TaxMaxi App",
     "description": "You are signed in. The app workspace will live here.",
+    "accountMenu": {
+      "label": "Account menu",
+      "assets": "Assets",
+      "billing": "Billing",
+      "settings": "Settings",
+      "logout": "Log out",
+      "loggingOut": "Logging out…"
+    },
+    "settings": {
+      "eyebrow": "Settings",
+      "title": "Account access",
+      "description": "Review the email used for security messages and the ways you can log in.",
+      "accountEmail": "Account email",
+      "accountEmailDescription": "TaxMaxi sends account security messages to this address.",
+      "loginMethods": "Login methods",
+      "loginMethodsDescription": "Every method below can be used to access this account.",
+      "providerEmail": "Provider email",
+      "noProviderEmail": "No provider email reported",
+      "currentSession": "Current session",
+      "linked": "Linked {date}",
+      "providers": {
+        "local": "Email and password",
+        "google": "Google",
+        "coinbase": "Coinbase"
+      }
+    },
     "billing": {
       "dashboard": "Dashboard",
       "eyebrow": "Billing",

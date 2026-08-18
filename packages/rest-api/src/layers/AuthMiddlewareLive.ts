@@ -450,6 +450,7 @@ const makeSessionTokenValidator = Effect.gen(function* () {
       return User.make({
         userId: authUser.id,
         role: mapUserRole(authUser.role),
+        provider: session.provider,
         sessionId: session.id,
       })
     })

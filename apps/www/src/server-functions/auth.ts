@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start"
 import { deleteCookie, getCookie } from "@tanstack/react-start/server"
+import { TaxMaxi, isTaxMaxiUnauthorizedError } from "taxmaxi"
 
 const REST_SESSION_COOKIE_NAME = "taxmaxi_session"
 const DEFAULT_REST_SERVER_URL = "http://localhost:4000"
@@ -7,6 +8,13 @@ const DEFAULT_REST_SERVER_URL = "http://localhost:4000"
 const getRestServerUrl = (): string => {
   const value = process.env.TAXMAXI_API_BASE_URL?.trim()
   return value === undefined || value.length === 0 ? DEFAULT_REST_SERVER_URL : value
+}
+
+const deleteAuthSessionCookie = (): void => {
+  deleteCookie(REST_SESSION_COOKIE_NAME, {
+    path: "/",
+    ...(process.env.COOKIE_DOMAIN === undefined ? {} : { domain: process.env.COOKIE_DOMAIN }),
+  })
 }
 
 export const getAuthStatus = createServerFn({ method: "GET" }).handler(async () => {
@@ -23,10 +31,28 @@ export const getGuestSession = createServerFn({ method: "GET" }).handler(async (
 })
 
 export const clearAuthSessionCookie = createServerFn({ method: "POST" }).handler(async () => {
-  deleteCookie(REST_SESSION_COOKIE_NAME, {
-    path: "/",
-    ...(process.env.COOKIE_DOMAIN === undefined ? {} : { domain: process.env.COOKIE_DOMAIN }),
-  })
+  deleteAuthSessionCookie()
+})
+
+export const logoutAuthSession = createServerFn({ method: "POST" }).handler(async () => {
+  const sessionCookie = getCookie(REST_SESSION_COOKIE_NAME)
+
+  if (sessionCookie !== undefined) {
+    const taxmaxi = TaxMaxi.fromRequest({
+      baseUrl: getRestServerUrl(),
+      cookieHeader: `${REST_SESSION_COOKIE_NAME}=${sessionCookie}`,
+    })
+
+    try {
+      await taxmaxi.auth.logout()
+    } catch (error) {
+      if (!isTaxMaxiUnauthorizedError(error)) throw error
+    }
+  }
+
+  deleteAuthSessionCookie()
+
+  return { success: true }
 })
 
 export const prepareCoinbaseSignIn = createServerFn({ method: "POST" }).handler(async () => {

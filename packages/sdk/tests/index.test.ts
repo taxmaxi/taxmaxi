@@ -51,6 +51,28 @@ const billingStatusResponse = {
   cancelAtPeriodEnd: false,
 } as const
 
+const accountResponse = {
+  account: {
+    id: "00000000-0000-4000-8000-000000000101",
+    email: "account@taxmaxi.test",
+    displayName: "Account Owner",
+    role: "member",
+    emailVerified: true,
+    createdAt: "2026-08-18T12:00:00.000Z",
+    updatedAt: "2026-08-18T12:30:00.000Z",
+  },
+  loginMethods: [
+    {
+      id: "00000000-0000-4000-8000-000000000102",
+      provider: "coinbase",
+      providerEmail: "provider@coinbase.test",
+      linkedAt: "2026-08-18T12:00:00.000Z",
+      isCurrentSession: true,
+      canRemove: false,
+    },
+  ],
+} as const
+
 const sourceCreateResponseBody = JSON.stringify({
   source: {
     id: "00000000-0000-4000-8000-000000000001",
@@ -571,6 +593,48 @@ describe("TaxMaxi Promise client", () => {
         credentials: "include",
         method: "POST",
         url: "https://sdk.example.test/v1/billing/portal",
+      },
+    ])
+  })
+
+  it("exposes account details and server-side logout through the public auth resource", async () => {
+    const capturedRequests: Array<{
+      readonly credentials: string | undefined
+      readonly method: string
+      readonly url: string
+    }> = []
+    const responseBodies = [JSON.stringify(accountResponse), JSON.stringify({ success: true })]
+    const taxmaxi = TaxMaxi.fromBrowserSession({
+      baseUrl: "https://sdk.example.test",
+      fetch: async (input, init) => {
+        capturedRequests.push({
+          credentials: init?.credentials === undefined ? undefined : String(init.credentials),
+          method:
+            typeof input === "string" || input instanceof URL
+              ? (init?.method ?? "GET")
+              : input.method,
+          url: getRequestUrl(input),
+        })
+        return new Response(responseBodies.shift(), {
+          headers: { "Content-Type": "application/json" },
+          status: 200,
+        })
+      },
+    })
+
+    await expect(taxmaxi.auth.account()).resolves.toEqual(accountResponse)
+    await expect(taxmaxi.auth.logout()).resolves.toEqual({ success: true })
+
+    expect(capturedRequests).toEqual([
+      {
+        credentials: "include",
+        method: "GET",
+        url: "https://sdk.example.test/auth/me",
+      },
+      {
+        credentials: "include",
+        method: "POST",
+        url: "https://sdk.example.test/auth/logout",
       },
     ])
   })

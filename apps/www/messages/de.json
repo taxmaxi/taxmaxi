@@ -26,6 +26,32 @@
   "app": {
     "title": "TaxMaxi App",
     "description": "Du bist angemeldet. Der App-Workspace entsteht hier.",
+    "accountMenu": {
+      "label": "Kontomenü",
+      "assets": "Assets",
+      "billing": "Abrechnung",
+      "settings": "Einstellungen",
+      "logout": "Abmelden",
+      "loggingOut": "Abmeldung läuft…"
+    },
+    "settings": {
+      "eyebrow": "Einstellungen",
+      "title": "Kontozugriff",
+      "description": "Prüfe die E-Mail-Adresse für Sicherheitsnachrichten und deine Anmeldemethoden.",
+      "accountEmail": "Konto-E-Mail",
+      "accountEmailDescription": "TaxMaxi sendet Sicherheitsnachrichten für dein Konto an diese Adresse.",
+      "loginMethods": "Anmeldemethoden",
+      "loginMethodsDescription": "Mit jeder dieser Methoden kannst du auf dieses Konto zugreifen.",
+      "providerEmail": "Anbieter-E-Mail",
+      "noProviderEmail": "Keine Anbieter-E-Mail übermittelt",
+      "currentSession": "Aktuelle Sitzung",
+      "linked": "Verknüpft am {date}",
+      "providers": {
+        "local": "E-Mail und Passwort",
+        "google": "Google",
+        "coinbase": "Coinbase"
+      }
+    },
     "billing": {
       "dashboard": "Übersicht",
       "eyebrow": "Abrechnung",
