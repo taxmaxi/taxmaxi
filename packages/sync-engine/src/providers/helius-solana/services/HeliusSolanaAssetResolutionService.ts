@@ -17,26 +17,6 @@ import type { HeliusSolanaSyncClientError } from "./HeliusSolanaSyncClient.ts"
 export const SOLANA_BLOCKCHAIN_NAME = "solana"
 
 /**
- * Native SOL reference data.
- */
-export const SOLANA_NATIVE_SYMBOL = "SOL"
-
-/**
- * Wrapped/native SOL mint used by Solana tooling when a mint-like id is required.
- */
-export const SOLANA_WRAPPED_NATIVE_MINT = "So11111111111111111111111111111111111111112"
-
-/**
- * Stable Solana USDC mint.
- */
-export const SOLANA_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-
-/**
- * Stable Solana USDT mint.
- */
-export const SOLANA_USDT_MINT = "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"
-
-/**
  * HeliusSolanaAssetKind - Asset reference kind observed during Solana normalization.
  */
 export type HeliusSolanaAssetKind = "native" | "spl"

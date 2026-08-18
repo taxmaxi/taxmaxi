@@ -4,6 +4,11 @@
  * @module HeliusSolanaAssetResolutionServiceLive
  */
 
+import {
+  assetReferenceCatalogProjections,
+  HELIUS_SOLANA_NATIVE_NATURAL_KEY,
+  heliusSolanaMintNaturalKey,
+} from "@my/core/assets"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
 import * as Layer from "effect/Layer"
@@ -30,10 +35,6 @@ import {
   HeliusSolanaAssetResolutionService,
   type HeliusSolanaAssetResolutionServiceShape,
   SOLANA_BLOCKCHAIN_NAME,
-  SOLANA_NATIVE_SYMBOL,
-  SOLANA_USDC_MINT,
-  SOLANA_USDT_MINT,
-  SOLANA_WRAPPED_NATIVE_MINT,
   type HeliusSolanaAssetReference,
   type HeliusSolanaAssetReferenceDataRefreshResult,
   type HeliusSolanaResolvedAsset,
@@ -67,50 +68,8 @@ interface DecodedDasAsset {
   readonly payload: unknown
 }
 
-const NATIVE_SOL_NATURAL_KEY = "solana:native:SOL"
-
-const nativeDefaultAssetMapping = {
-  mintAddress: null,
-  naturalKey: NATIVE_SOL_NATURAL_KEY,
-  currencyCode: SOLANA_NATIVE_SYMBOL,
-  name: "Solana",
-  decimals: 9,
-  providerType: "native",
-  sourceNotes: "TaxMaxi built-in Solana native SOL mapping.",
-} as const satisfies DefaultAssetMapping
-
-const wrappedSolDefaultAssetMapping = {
-  mintAddress: SOLANA_WRAPPED_NATIVE_MINT,
-  naturalKey: `solana:mint:${SOLANA_WRAPPED_NATIVE_MINT}`,
-  currencyCode: SOLANA_NATIVE_SYMBOL,
-  name: "Wrapped SOL",
-  decimals: 9,
-  providerType: "spl-token",
-  sourceNotes: "TaxMaxi built-in wrapped SOL mint mapping.",
-} as const satisfies DefaultAssetMapping
-
-const defaultAssetMappings = [
-  nativeDefaultAssetMapping,
-  wrappedSolDefaultAssetMapping,
-  {
-    mintAddress: SOLANA_USDC_MINT,
-    naturalKey: `solana:mint:${SOLANA_USDC_MINT}`,
-    currencyCode: "USDC",
-    name: "USD Coin",
-    decimals: 6,
-    providerType: "spl-token",
-    sourceNotes: "TaxMaxi built-in Solana USDC mint mapping.",
-  },
-  {
-    mintAddress: SOLANA_USDT_MINT,
-    naturalKey: `solana:mint:${SOLANA_USDT_MINT}`,
-    currencyCode: "USDT",
-    name: "Tether USD",
-    decimals: 6,
-    providerType: "spl-token",
-    sourceNotes: "TaxMaxi built-in Solana USDT mint mapping.",
-  },
-] as const satisfies ReadonlyArray<DefaultAssetMapping>
+const defaultAssetMappings =
+  assetReferenceCatalogProjections.heliusSolanaAliases satisfies ReadonlyArray<DefaultAssetMapping>
 
 const DasMetadataSchema = Schema.Struct({
   name: Schema.optional(Schema.String),
@@ -193,13 +152,11 @@ const normalizeMintAddress = (mintAddress: string | null): string | null => {
   return trimmed === "" ? null : trimmed
 }
 
-const mintNaturalKey = (mintAddress: string): string => `solana:mint:${mintAddress}`
-
 const defaultMappingForReference = (
   reference: NormalizedAssetReference
 ): DefaultAssetMapping | null => {
   if (reference.kind === "native") {
-    return nativeDefaultAssetMapping
+    return defaultAssetMappings.find((mapping) => mapping.providerType === "native") ?? null
   }
 
   const match = defaultAssetMappings.find(
@@ -631,7 +588,7 @@ const make = Effect.gen(function* () {
 
   const providerAssetEntryFromDasAsset = (asset: DecodedDasAsset): ProviderAssetCatalogEntry => ({
     providerAssetId: asset.mintAddress,
-    naturalKey: mintNaturalKey(asset.mintAddress),
+    naturalKey: heliusSolanaMintNaturalKey({ mintAddress: asset.mintAddress }),
     currencyCode: asset.currencyCode,
     name: asset.name,
     exponent: asset.decimals,
@@ -647,7 +604,7 @@ const make = Effect.gen(function* () {
     readonly rawProviderPayload: unknown
   }): ProviderAssetCatalogEntry => ({
     providerAssetId: mintAddress,
-    naturalKey: mintNaturalKey(mintAddress),
+    naturalKey: heliusSolanaMintNaturalKey({ mintAddress }),
     currencyCode: fallbackCurrencyCode(mintAddress),
     name: null,
     exponent: null,
@@ -965,13 +922,13 @@ const make = Effect.gen(function* () {
     reference.kind === "native"
       ? loadProviderAssetRecord({
           providerAssetId: null,
-          naturalKey: NATIVE_SOL_NATURAL_KEY,
+          naturalKey: HELIUS_SOLANA_NATIVE_NATURAL_KEY,
         })
       : reference.mintAddress === null
         ? Effect.succeed(null)
         : loadProviderAssetRecord({
             providerAssetId: reference.mintAddress,
-            naturalKey: mintNaturalKey(reference.mintAddress),
+            naturalKey: heliusSolanaMintNaturalKey({ mintAddress: reference.mintAddress }),
           })
 
   const fetchDasAssetsForMissingMints = (mintAddresses: ReadonlyArray<string>) =>

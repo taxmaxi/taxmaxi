@@ -35,6 +35,8 @@ Normalized accounting data always uses the economic `asset_id`. Rows that descri
 
 Known economic assets and network representations use stable TaxMaxi reference IDs and exact chain reference data. Seeds and provider defaults create or resolve them idempotently. Duplicate symbols are allowed because identity comes from IDs and reviewed mappings, not symbols.
 
+Trusted identity facts live in the version-controlled [asset reference catalog](../asset-reference-catalog.md). Persistence seed rows and provider-local lookup projections are derived from that catalog so providers do not maintain separate identity assertions.
+
 ## Provider resolution lifecycle
 
 1. Store the provider observation and raw payload.
