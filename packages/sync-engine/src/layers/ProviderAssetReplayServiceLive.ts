@@ -198,6 +198,14 @@ const make = Effect.gen(function* () {
           status: status.status,
           message: status.message,
         })),
+        Effect.catchTag("SourceSyncJobNotFoundError", () =>
+          Effect.succeed({
+            sourceId: replay.sourceId,
+            jobId: replay.jobId,
+            status: "failed" as const,
+            message: "Replay job no longer exists.",
+          })
+        ),
         Effect.mapError(
           () =>
             new ProviderAssetReplayError({

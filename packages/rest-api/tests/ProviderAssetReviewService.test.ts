@@ -4,6 +4,7 @@ import {
   ProviderAssetReplayService,
   ProviderAssetRepository,
   SourceNotFoundError,
+  SourceSyncJobNotFoundError,
   SourceSyncQueueError,
   SourceSyncService,
   SyncEngineStorageError,
@@ -317,6 +318,68 @@ describe("ProviderAssetReplayService", () => {
         message: null,
       },
     ])
+  })
+
+  it("returns a stable failed status when a queued replay job no longer exists", async () => {
+    const replay: ProviderAssetReviewReplay = {
+      sourceId: SOURCE_ID,
+      principalId: PRINCIPAL_ID,
+      jobId: JOB_ID,
+      dispatchState: "queued",
+      errorMessage: null,
+    }
+    const repository: ProviderAssetRepositoryShape = {
+      upsertProviderAssets: unexpected,
+      upsertProviderAssetMappings: unexpected,
+      approveProviderAssetMappingAndRequestReplay: unexpected,
+      rejectProviderAssetMapping: unexpected,
+      findProviderAssetReviewReplay: () => Effect.succeed(Option.some(replay)),
+      listProviderAssetReviewReplays: unexpected,
+      replaceProviderAssetReviewReplay: unexpected,
+      reserveProviderAssetReviewReplayRetry: unexpected,
+      markProviderAssetReviewReplayDispatch: unexpected,
+      lockProviderAssetApprovalSnapshot: unexpected,
+      recordProviderAssetSourceUses: unexpected,
+      seedProviderAssetMappingsIfMissing: unexpected,
+      findProviderAssetByProviderAssetId: unexpected,
+      findProviderAssetByNaturalKey: unexpected,
+      findProviderAssetByCurrencyCode: unexpected,
+      findProviderAssetReviewById: unexpected,
+      listProviderAssetReviews: unexpected,
+      listProviderAssetObservedRepresentations: unexpected,
+      findProviderAssetMapping: unexpected,
+    }
+    const sourceSync: SourceSyncServiceShape = {
+      startSourceSyncJob: unexpected,
+      replaySourceSyncJob: unexpected,
+      getSourceSyncJob: () =>
+        Effect.fail(new SourceSyncJobNotFoundError({ sourceId: SOURCE_ID, jobId: JOB_ID })),
+    }
+    const layer = ProviderAssetReplayServiceLive.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.succeed(ProviderAssetRepository, repository),
+          Layer.succeed(SourceSyncService, sourceSync)
+        )
+      )
+    )
+
+    const result = await Effect.runPromise(
+      Effect.flatMap(ProviderAssetReplayService, (service) =>
+        service.getReplay({
+          providerAssetRowId: PROVIDER_ASSET_ID,
+          sourceId: SOURCE_ID,
+          jobId: JOB_ID,
+        })
+      ).pipe(Effect.provide(layer))
+    )
+
+    expect(result).toEqual({
+      sourceId: SOURCE_ID,
+      jobId: JOB_ID,
+      status: "failed",
+      message: "Replay job no longer exists.",
+    })
   })
 
   it("lets only one concurrent failed-job retry reserve, link, and dispatch", async () => {

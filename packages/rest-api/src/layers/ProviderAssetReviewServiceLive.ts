@@ -324,6 +324,8 @@ const make = Effect.gen(function* () {
         )
       const proposal = available.proposals.find(({ id }) => id === decision.proposalId)
       if (
+        available.evidenceState === "insufficient" ||
+        available.evidenceState === "conflicting" ||
         proposal === undefined ||
         !resolutionEffectsMatch(proposal.effect, decision.effect) ||
         proposal.conflicts.length > 0

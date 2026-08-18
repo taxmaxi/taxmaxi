@@ -1528,6 +1528,65 @@ describe("ProviderAssetReviewService admin contract", () => {
     ])
   })
 
+  it.each(["insufficient", "conflicting"] as const)(
+    "rejects an otherwise valid resolution when fresh evidence is %s",
+    async (evidenceState) => {
+      const unsafeCandidates: ProviderAssetCandidateServiceShape = {
+        searchProposals: (params) =>
+          candidates.searchProposals(params).pipe(
+            Effect.map((result) => ({
+              ...result,
+              evidenceState,
+              recommendedProposalId: null,
+            }))
+          ),
+      }
+      const decision = Effect.flatMap(ProviderAssetReviewService, (service) =>
+        service.decide({
+          providerAssetRowId: PROVIDER_ASSET_ID,
+          decision: {
+            _tag: "Resolve",
+            proposalId: "existing-representation:asset:representation",
+            effect: {
+              _tag: "UseExistingRepresentation",
+              canonicalAssetId: "asset",
+              assetRepresentationId: "representation",
+            },
+          },
+          reviewRevision: "2026-08-17T09:00:00.000Z:2026-08-17T09:00:00.000Z:evidence-v1",
+          reviewerNotes: null,
+          reviewedBy: "00000000-0000-4000-8000-000000000012",
+        })
+      )
+
+      await expect(
+        Effect.runPromise(
+          decision.pipe(
+            Effect.provide(
+              ProviderAssetReviewServiceLive.pipe(
+                Layer.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(ProviderAssetRepository, repository),
+                    Layer.succeed(AssetCanonicalizationService, canonicalization),
+                    Layer.succeed(ProviderAssetCandidateService, unsafeCandidates),
+                    Layer.succeed(ProviderAssetReplayService, {
+                      scheduleReplays: unexpected,
+                      getReplay: unexpected,
+                      retryReplay: unexpected,
+                    })
+                  )
+                )
+              )
+            )
+          )
+        )
+      ).rejects.toMatchObject({
+        _tag: "ProviderAssetReviewBadRequestError",
+        message: "The selected resolution proposal is no longer valid.",
+      })
+    }
+  )
+
   it("persists an attributed rejection without scheduling replays", async () => {
     let persistedReviewerNotes: string | null = null
     let persistedReviewedBy: string | null = null
