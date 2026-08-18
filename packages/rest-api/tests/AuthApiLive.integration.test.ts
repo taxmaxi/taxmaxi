@@ -79,6 +79,11 @@ const COINBASE_IDENTITY_ID = "00000000-0000-4000-8000-000000000102"
 const COINBASE_SESSION_ID = "coinbase_session_000000000000000000000001"
 const COINBASE_ACCOUNT_EMAIL = "account@taxmaxi.test"
 const COINBASE_PROVIDER_EMAIL = "provider@coinbase.test"
+const MIXED_PROVIDER_USER_ID = "00000000-0000-4000-8000-000000000201"
+const MIXED_PROVIDER_LOCAL_IDENTITY_ID = "00000000-0000-4000-8000-000000000202"
+const MIXED_PROVIDER_COINBASE_IDENTITY_ID = "00000000-0000-4000-8000-000000000203"
+const MIXED_PROVIDER_SESSION_ID = "mixed_provider_session_000000000000000000001"
+const MIXED_PROVIDER_EMAIL = "mixed-provider@taxmaxi.test"
 
 const seedCoinbaseSession = () =>
   runTestSql({
@@ -100,6 +105,40 @@ const seedCoinbaseSession = () =>
         '${COINBASE_SESSION_ID}',
         '${COINBASE_USER_ID}',
         'coinbase',
+        NOW() + INTERVAL '1 day'
+      );
+    `,
+  })
+
+const seedMixedProviderSession = () =>
+  runTestSql({
+    statement: `
+      INSERT INTO users (id, email, email_verified, name, role)
+      VALUES ('${MIXED_PROVIDER_USER_ID}', '${MIXED_PROVIDER_EMAIL}', true, 'Mixed Provider', 'user');
+
+      INSERT INTO auth_identities (id, user_id, provider, provider_id, password_hash)
+      VALUES (
+        '${MIXED_PROVIDER_LOCAL_IDENTITY_ID}',
+        '${MIXED_PROVIDER_USER_ID}',
+        'local',
+        '${MIXED_PROVIDER_EMAIL}',
+        'hash:password123'
+      );
+
+      INSERT INTO auth_identities (id, user_id, provider, provider_id, provider_data)
+      VALUES (
+        '${MIXED_PROVIDER_COINBASE_IDENTITY_ID}',
+        '${MIXED_PROVIDER_USER_ID}',
+        'coinbase',
+        'disabled-coinbase-provider-id',
+        '{"profile":{"email":"disabled@coinbase.test"}}'::jsonb
+      );
+
+      INSERT INTO sessions (id, user_id, provider, expires_at)
+      VALUES (
+        '${MIXED_PROVIDER_SESSION_ID}',
+        '${MIXED_PROVIDER_USER_ID}',
+        'local',
         NOW() + INTERVAL '1 day'
       );
     `,
@@ -327,6 +366,33 @@ const postRequest = ({
     catch: (cause) => String(cause),
   }).pipe(Effect.orDie)
 
+const deleteRequest = ({
+  handler,
+  path,
+  cookie,
+}: {
+  readonly handler: (request: Request) => Promise<Response>
+  readonly path: string
+  readonly cookie?: string
+}) =>
+  Effect.tryPromise({
+    try: () => {
+      const headers = new Headers()
+
+      if (cookie !== undefined) {
+        headers.set("cookie", cookie)
+      }
+
+      return handler(
+        new Request(`http://taxmaxi.test${path}`, {
+          method: "DELETE",
+          headers,
+        })
+      )
+    },
+    catch: (cause) => String(cause),
+  }).pipe(Effect.orDie)
+
 const getRequest = ({
   handler,
   path,
@@ -418,6 +484,49 @@ describe("AuthApiLive integration", () => {
             canRemove: false,
           },
         ],
+      })
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("does not count disabled provider identities as fallback login methods", () =>
+    Effect.gen(function* () {
+      const { handler } = yield* makeAuthHandlerScoped
+      yield* seedMixedProviderSession()
+      const cookie = makeCookieHeader({ taxmaxi_session: MIXED_PROVIDER_SESSION_ID })
+
+      const accountResponse = yield* getRequest({
+        handler,
+        path: "/auth/me",
+        cookie,
+      })
+
+      expect(accountResponse.status).toBe(200)
+      expect(yield* jsonBody(accountResponse)).toMatchObject({
+        loginMethods: expect.arrayContaining([
+          expect.objectContaining({
+            id: MIXED_PROVIDER_LOCAL_IDENTITY_ID,
+            provider: "local",
+            isCurrentSession: true,
+            canRemove: false,
+          }),
+          expect.objectContaining({
+            id: MIXED_PROVIDER_COINBASE_IDENTITY_ID,
+            provider: "coinbase",
+            isCurrentSession: false,
+            canRemove: true,
+          }),
+        ]),
+      })
+
+      const unlinkResponse = yield* deleteRequest({
+        handler,
+        path: `/auth/identities/${MIXED_PROVIDER_LOCAL_IDENTITY_ID}`,
+        cookie,
+      })
+
+      expect(unlinkResponse.status).toBe(409)
+      expect(yield* jsonBody(unlinkResponse)).toMatchObject({
+        _tag: "CannotUnlinkLastIdentityError",
       })
     }).pipe(Effect.scoped)
   )

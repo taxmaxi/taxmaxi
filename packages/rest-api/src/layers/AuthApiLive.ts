@@ -280,13 +280,20 @@ const providerEmailFromIdentity = (identity: UserIdentity): Email | null => {
   })
 }
 
+const getEnabledProviderSet = (authService: AuthServiceShape) =>
+  authService
+    .getEnabledProviders()
+    .pipe(Effect.map((providers) => new Set(Chunk.toReadonlyArray(providers))))
+
 const toAccountResponse = ({
   user,
   identities,
+  enabledProviders,
   currentSessionProvider,
 }: {
   readonly user: AuthUser
   readonly identities: ReadonlyArray<UserIdentity>
+  readonly enabledProviders: ReadonlySet<AuthProviderType>
   readonly currentSessionProvider: AuthProviderType | undefined
 }): AccountResponse => ({
   account: {
@@ -304,7 +311,10 @@ const toAccountResponse = ({
     providerEmail: providerEmailFromIdentity(identity),
     linkedAt: identity.createdAt.toDateTime(),
     isCurrentSession: identity.provider === currentSessionProvider,
-    canRemove: identities.length > 1,
+    canRemove: identities.some(
+      (otherIdentity) =>
+        otherIdentity.id !== identity.id && enabledProviders.has(otherIdentity.provider)
+    ),
   })),
 })
 
@@ -1472,6 +1482,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           const identitiesChunk = identitiesResult.success
 
           const identities = Chunk.toReadonlyArray(identitiesChunk)
+          const enabledProviders = yield* getEnabledProviderSet(authService)
 
           yield* Effect.logInfo(
             {
@@ -1484,6 +1495,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           return toAccountResponse({
             user,
             identities,
+            enabledProviders,
             currentSessionProvider: currentUser.provider,
           })
         }).pipe(
@@ -1563,6 +1575,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           const identitiesChunk = identitiesResult.success
 
           const identities = Chunk.toReadonlyArray(identitiesChunk)
+          const enabledProviders = yield* getEnabledProviderSet(authService)
 
           yield* Effect.logInfo(
             {
@@ -1576,6 +1589,7 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
           return toAccountResponse({
             user: updatedUser,
             identities,
+            enabledProviders,
             currentSessionProvider: currentUser.provider,
           })
         }).pipe(
@@ -1752,10 +1766,12 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             .findByUserId(currentUser.userId)
             .pipe(Effect.mapError(() => new IdentityLinkedError({ provider })))
           const identities = Chunk.toReadonlyArray(identitiesChunk)
+          const enabledProviders = yield* getEnabledProviderSet(authService)
 
           return toAccountResponse({
             user,
             identities,
+            enabledProviders,
             currentSessionProvider: currentUser.provider,
           })
         })
@@ -1781,12 +1797,18 @@ export const AuthSessionApiLive = HttpApiBuilder.group(TaxMaxiApi, "authSession"
             return yield* new IdentityNotFoundError({ identityId })
           }
 
-          // Check if this is the last identity - prevent unlinking
+          // Keep at least one identity backed by a currently enabled provider
           const allIdentities = yield* identityRepo
             .findByUserId(currentUser.userId)
             .pipe(Effect.mapError(() => new CannotUnlinkLastIdentityError({})))
+          const enabledProviders = yield* getEnabledProviderSet(authService)
+          const hasOtherEnabledIdentity = Chunk.some(
+            allIdentities,
+            (otherIdentity) =>
+              otherIdentity.id !== identity.id && enabledProviders.has(otherIdentity.provider)
+          )
 
-          if (Chunk.size(allIdentities) <= 1) {
+          if (!hasOtherEnabledIdentity) {
             return yield* new CannotUnlinkLastIdentityError({})
           }
 
