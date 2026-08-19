@@ -1,10 +1,10 @@
 {
-  "title": "Example PRD",
+  "title": "Credit-aware source sync",
   "project": "TaxMaxi",
-  "description": "Short description of the work Ralph should implement.",
+  "description": "Stop syncs that cannot pay for themselves, and turn credit exhaustion into a typed, resumable outcome that clients can act on.",
   "version": "1.0.0",
-  "created_at": "YYYY-MM-DD",
-  "updated_at": "YYYY-MM-DD",
+  "created_at": "2026-08-19",
+  "updated_at": "2026-08-19",
   "global_verification": ["pnpm run type-check", "pnpm run lint", "pnpm run test"],
   "completion_criteria": {
     "all_stories_done": "Every story has status: 'done'",
@@ -12,25 +12,200 @@
   },
   "stories": [
     {
-      "id": "EX-001",
-      "epic": "Example Epic",
-      "title": "Example story title",
-      "description": "Short description of what the story changes and why.",
+      "id": "SYNC-001",
+      "epic": "Credit-aware sync admission",
+      "title": "Refuse to start a sync for a registered user with no usable credits",
+      "description": "Check the caller's credit balance before a sync job is created or enqueued, and return a stable machine-readable refusal instead of letting the job fail later.",
       "source": {
         "kind": "github_issue",
-        "issue": 0,
-        "url": "https://github.com/example/example/issues/0",
-        "template": "example"
+        "issue": 107,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/107",
+        "template": "triage-issue"
       },
       "blocked_by": [],
       "blocked_by_issues": [],
-      "acceptance_criteria": ["Acceptance criterion 1", "Acceptance criterion 2"],
-      "implementation_notes": ["Important implementation note from the source issue."],
-      "testing_notes": ["Important testing note from the source issue."],
+      "acceptance_criteria": [
+        "Starting a sync as a registered user with zero usable credits fails with a typed credit-required response instead of a started job.",
+        "No sync job row is written and no queue message is published when the request is refused.",
+        "No provider request is made when the request is refused.",
+        "The refusal carries a stable reason code and the caller's available credit count, and contains no operation name, class name, or nested cause.",
+        "All three sync entry points enforce the rule: starting a sync, replaying a sync, and creating a source with sync requested.",
+        "Anonymous and x402-paid source flows keep working unchanged and are never refused for lack of credits.",
+        "A user with at least one usable credit can still start a sync."
+      ],
+      "implementation_notes": [
+        "The billing repository already exposes a method that returns a user's available credit total; reuse it rather than querying the ledger again.",
+        "The credit-required reason code introduced here is the shared vocabulary for the rest of this epic. Define it once in a place both the start boundary and the job outcome can import.",
+        "Source creation starts a sync when the caller is anonymous or when the request asks for it. Only the registered-user branch is billable.",
+        "Registered users whose source was claimed through an x402 payment do not spend credits on records retained at claim time; do not refuse those callers on balance alone."
+      ],
+      "testing_notes": [
+        "Drive the tests through the authenticated HTTP API, not the service layer, so the rule is proven for SDK and CLI callers too.",
+        "Assert the absence of side effects explicitly: no persisted job, no enqueued message, no provider call.",
+        "Cover the zero-credit refusal and the one-credit success on the same entry point so the boundary is exact."
+      ],
       "priority": "high",
       "status": "pending",
+      "estimated_complexity": "medium",
+      "verification": [
+        "pnpm --filter @my/rest-api run type-check",
+        "pnpm run test packages/rest-api"
+      ]
+    },
+    {
+      "id": "SYNC-002",
+      "epic": "Honest sync progress",
+      "title": "Separate fetched provider records from persisted transactions in sync progress",
+      "description": "The progress counter labelled Imported counts raw provider records that were fetched and cached, which reads as usable imported transactions. Make the public meaning unambiguous.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 107,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/107",
+        "template": "triage-issue"
+      },
+      "blocked_by": [],
+      "blocked_by_issues": [],
+      "acceptance_criteria": [
+        "The counter that measures fetched provider records is named and labelled so it cannot be read as persisted transactions.",
+        "A failed sync that fetched many provider records and persisted none does not display a large Imported total.",
+        "The job status response, the SDK type, and the web progress display all use the clarified naming.",
+        "A test asserts the counter's meaning against a run where fetched and persisted counts differ."
+      ],
+      "implementation_notes": [
+        "The counter is incremented by the size of each fetched provider batch during the discovery loop, before normalization runs, so it has always measured cached provider records.",
+        "The product is pre-launch, so rename the public field rather than adding a parallel one; do not keep a compatibility alias.",
+        "This story is independent of the credit work and can land alongside SYNC-001."
+      ],
+      "testing_notes": [
+        "Prove the distinction with a case where records are fetched but zero transactions are persisted; equal counts would hide a wrong label.",
+        "Include the web progress display in the assertions, since the label is what the user actually reads."
+      ],
+      "priority": "medium",
+      "status": "pending",
       "estimated_complexity": "small",
-      "verification": ["pnpm run test"]
+      "verification": [
+        "pnpm --filter @my/sync-engine run type-check",
+        "pnpm --filter @my/rest-api run type-check",
+        "pnpm run test packages/sync-engine"
+      ]
+    },
+    {
+      "id": "SYNC-003",
+      "epic": "Typed credit outcomes",
+      "title": "Report mid-sync credit exhaustion as a typed resumable outcome",
+      "description": "Promote credit exhaustion from a generic storage failure to a domain outcome that reaches clients as a stable reason code with credit counts, and keep the internal cause in logs only.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 107,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/107",
+        "template": "triage-issue"
+      },
+      "blocked_by": ["SYNC-001"],
+      "blocked_by_issues": [],
+      "acceptance_criteria": [
+        "A sync that starts with fewer credits than it needs keeps the covered transactions committed and ends in a credit-required state, not a generic failure.",
+        "The job status response exposes the credit-required reason code, the credits available, the credits consumed, and the additional credits required once the billable total is known.",
+        "The job status response contains no persistence operation name, internal class name, nested cause, or SQL detail in any field.",
+        "The credit-required state is marked resumable, distinct from a terminal failure.",
+        "Structured logs still record the internal cause together with the source and job identifiers.",
+        "One place maps internal sync outcomes to public reason codes and allowed actions; handlers and clients do not each interpret raw errors."
+      ],
+      "implementation_notes": [
+        "Credit exhaustion is currently raised as a storage error carrying a dedicated operation string, then wrapped again by normalization and stored whole in the job record.",
+        "Reuse the reason code introduced in SYNC-001 so the pre-flight refusal and the mid-sync outcome speak the same vocabulary.",
+        "The additional-credits figure is only knowable once the billable total is counted; report it when known rather than guessing early.",
+        "The BullMQ consumer already treats credit exhaustion as terminal for retry purposes; keep that behavior while changing how the outcome is reported."
+      ],
+      "testing_notes": [
+        "Set up a source with more new billable transactions than the available balance, so the run is partly paid for.",
+        "Assert the committed transactions survive and their credits stay consumed.",
+        "Assert on the shape of the public response, including a negative assertion that no field leaks internal identifiers.",
+        "Cover the worker-to-API path, not just the persistence boundary, since that is where the wrapping happened."
+      ],
+      "priority": "high",
+      "status": "pending",
+      "estimated_complexity": "large",
+      "verification": [
+        "pnpm --filter @my/sync-engine run type-check",
+        "pnpm --filter @my/persistence run type-check",
+        "pnpm --filter @my/rest-api run type-check",
+        "pnpm run test packages/sync-engine",
+        "pnpm run test packages/rest-api"
+      ]
+    },
+    {
+      "id": "SYNC-004",
+      "epic": "Typed credit outcomes",
+      "title": "Prove that continuing after buying credits reuses cached work",
+      "description": "Add the missing coverage for resuming a credit-paused sync, and close any gap it exposes, so a purchase does not refetch provider history or pay twice for a transaction.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 107,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/107",
+        "template": "triage-issue"
+      },
+      "blocked_by": ["SYNC-003"],
+      "blocked_by_issues": [],
+      "acceptance_criteria": [
+        "Continuing a credit-paused sync after credits are added completes the remaining transactions.",
+        "Provider history already fetched before the pause is not requested again.",
+        "Transactions charged before the pause are not charged a second time, and the final ledger balance matches one charge per billable transaction.",
+        "Continuing twice in a row produces the same result as continuing once.",
+        "The continue path is reachable through the public API, not only from an internal service."
+      ],
+      "implementation_notes": [
+        "Credit consumption already keys on a stable per-transaction reference and looks up prior charges by both raw record and external id, so double-charging is probably already prevented. Confirm with a test before writing new guard code.",
+        "Sync execution already carries checkpoint and high-watermark resume state, so the reuse of cached history may need no new machinery either.",
+        "If both hold, this story is mostly the missing test plus whatever public action exposes continuation. Do not add a second credit-reservation mechanism."
+      ],
+      "testing_notes": [
+        "Write this as an integration test against a real database so the ledger arithmetic is genuinely checked.",
+        "Count provider calls across the pause to prove history is not refetched.",
+        "Run the continue action twice to prove it is idempotent."
+      ],
+      "priority": "medium",
+      "status": "pending",
+      "estimated_complexity": "medium",
+      "verification": [
+        "pnpm --filter @my/persistence run type-check",
+        "pnpm run test --project=integration packages/persistence"
+      ]
+    },
+    {
+      "id": "SYNC-005",
+      "epic": "Credit recovery UX",
+      "title": "Show a billing action instead of Retry when a sync runs out of credits",
+      "description": "Render the sync island's credit-required state from the typed API fields, with safe copy and the billing action that matches the user's subscription, and no generic Retry.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 107,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/107",
+        "template": "triage-issue"
+      },
+      "blocked_by": ["SYNC-003"],
+      "blocked_by_issues": [],
+      "acceptance_criteria": [
+        "A credit-required sync shows copy explaining what happened and what is needed, with no operation name, class name, or nested cause on screen.",
+        "A credit-required sync offers no Retry action.",
+        "A user without an active subscription is offered the choose-a-plan action.",
+        "A subscriber whose credits are exhausted is offered the credit-purchase action.",
+        "Other failures keep their existing Retry behavior.",
+        "The copy comes from the response's reason code and credit fields, not from parsing the message text."
+      ],
+      "implementation_notes": [
+        "The island currently renders any failed job with the raw message plus an unconditional Retry button.",
+        "The billing status endpoint already returns credits, subscription status, and period end, and the billing route already distinguishes an active subscriber from an unsubscribed user; reuse that logic instead of writing a second version.",
+        "Keep this story inside the sync island's failed state. Pre-sync gating, first-run onboarding, and dashboard empty states belong to issue #108."
+      ],
+      "testing_notes": [
+        "Cover both billing states with the same credit-required outcome, since the reason code is identical and only the offered action differs.",
+        "Assert the absence of the Retry control for credit-required outcomes and its presence for an unrelated failure.",
+        "Assert that internal identifiers from a nested cause never reach the rendered output."
+      ],
+      "priority": "high",
+      "status": "pending",
+      "estimated_complexity": "medium",
+      "verification": ["pnpm run test apps/www"]
     }
   ]
 }
