@@ -45,10 +45,10 @@
         "Keep an already-known local mapping test that proves sync does not make an external research call."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
-        "pnpm run test -- packages/sync-engine/tests/source-sync/asset-resolution-job.integration.test.ts"
+        "pnpm run test packages/sync-engine/tests/source-sync/asset-resolution-job.integration.test.ts"
       ]
     },
     {
@@ -82,11 +82,9 @@
         "Do not assert private helper structure or SQL."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "small",
-      "verification": [
-        "pnpm run test -- packages/core/tests/assets/AssetResolutionPolicy.test.ts"
-      ]
+      "verification": ["pnpm run test packages/core/tests/assets/AssetResolutionPolicy.test.ts"]
     },
     {
       "id": "AR-003",
@@ -119,10 +117,10 @@
         "Assert observable lots or disposal matches, not private derivation helpers."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "in_progress",
       "estimated_complexity": "medium",
       "verification": [
-        "pnpm run test -- packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts"
+        "pnpm run test packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts"
       ]
     },
     {
@@ -157,7 +155,7 @@
       "status": "pending",
       "estimated_complexity": "medium",
       "verification": [
-        "pnpm run test -- packages/persistence/tests/tax-calculation.integration.test.ts"
+        "pnpm run test packages/persistence/tests/tax-calculation.integration.test.ts"
       ]
     },
     {
@@ -199,7 +197,7 @@
       "status": "pending",
       "estimated_complexity": "large",
       "verification": [
-        "pnpm run test -- packages/sync-engine/tests/source-sync/asset-resolution-attach.integration.test.ts"
+        "pnpm run test packages/sync-engine/tests/source-sync/asset-resolution-attach.integration.test.ts"
       ]
     }
   ]

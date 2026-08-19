@@ -1,4 +1,27 @@
-## Iteration 1 - YYYY-MM-DD HH:MM
-**Story**: EX-001 - Example story title
+# Progress Log
+
+## Iteration 1 - 2026-08-19 09:19
+**Story**: AR-001 - Schedule one durable resolution job when sync stores an unknown observation
+**Status**: blocked
+**Notes**: STORY_BLOCKED: Coinbase known-mapping sync test stayed queued instead of completing. Agent then ran CI=true pnpm, which reinstalled node_modules against ./.pnpm-store.
+---
+
+## Iteration 3 - 2026-08-19 12:51
+**Story**: AR-002 - Decode chain and CoinGecko evidence into typed attach-only claims
+**Status**: blocked
+**Notes**: STORY_BLOCKED: Agent treated the pnpm modules-purge prompt as a story blocker. Policy code already exists in packages/core/src/assets/AssetResolutionPolicy.ts.
+---
+
+## 2026-08-19 13:08
+**Notes**: Restored node_modules against the global pnpm store and set verifyDepsBeforeRun=false. Ralph must not run pnpm install or set CI=true to confirm a modules purge.
+---
+
+## 2026-08-19 13:20
+**Notes**: Re-ran story verification after the pnpm restore. AR-001 (5 integration tests) and AR-002 (17 unit tests) both pass. Marked both done. Story verification now uses `pnpm exec vitest run --project=...` so the loop does not run the whole suite. Next runnable story is AR-003 (in_progress).
+---
+
+## 2026-08-19 13:37
+**Story**: AR-001 - Schedule one durable resolution job when sync stores an unknown observation
 **Status**: done
+**Notes**: evidence_revision was a static default of 1. Upsert now increments it only when stored observation facts change (payload, name, exponent, type, currency, natural key), not on retrieved-at-only refreshes. A pending-review observation then gets one new durable job for that revision. Same evidence still no-ops. Covered by provider-asset repository and asset-resolution-job integration tests (7 story tests passing).
 ---

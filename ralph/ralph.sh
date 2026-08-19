@@ -260,6 +260,8 @@ get_story_verification() {
 run_verification_command() {
   local cmd="$1"
 
+  export npm_config_verify_deps_before_run="${npm_config_verify_deps_before_run:-false}"
+
   if command -v mise > /dev/null 2>&1 && [ -f ".mise.toml" ]; then
     mise exec -- bash -lc "$cmd"
   else
@@ -516,7 +518,9 @@ run_iteration() {
 
   if grep -q "STORY_BLOCKED" "$output_file"; then
     local block_reason
-    block_reason=$(grep -o "STORY_BLOCKED:.*" "$output_file" | head -1 || true)
+    # Grok JSONL keeps the rest of the message on the same line. Stop at the
+    # JSON string boundary so progress.txt does not ingest signatures.
+    block_reason=$(grep -o 'STORY_BLOCKED:[^"]*' "$output_file" | head -1 || true)
     [ -z "$block_reason" ] && block_reason="STORY_BLOCKED"
 
     update_story_status "$story_id" "blocked"
@@ -551,6 +555,8 @@ main() {
   fi
 
   mkdir -p "$OUTPUT_DIR"
+  # Inherited by the agent and its `pnpm run` children.
+  export npm_config_verify_deps_before_run="${npm_config_verify_deps_before_run:-false}"
   log "INFO" "Starting Ralph Loop"
   log "INFO" "Provider: $PROVIDER"
   log "INFO" "Max iterations: $MAX_ITERATIONS"

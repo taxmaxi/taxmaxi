@@ -45,6 +45,13 @@ Treat the current story JSON as the executable slice and the `source` metadata a
 
 Keep changes small and focused. If the story is broad, build the smallest behavior-preserving slice that satisfies the acceptance criteria. Do not expand into adjacent stories.
 
+### Dependencies
+
+Do not run `pnpm install`, `pnpm import`, or any command that recreates `node_modules`.
+Do not set `CI=true` to bypass a pnpm modules-purge prompt.
+If pnpm asks to remove modules directories, stop immediately and signal `STORY_BLOCKED` with that reason.
+Run tests only as `mise x -- pnpm run test <path>`.
+
 ### Verification
 
 Before signaling completion:

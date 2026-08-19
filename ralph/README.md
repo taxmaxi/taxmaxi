@@ -78,6 +78,8 @@ Prerequisites:
 - `pnpm`
 - a supported coding-agent CLI (`codex` for `gpt`, `grok` for `grok`, `claude` for `claude`)
 
+Agents must not run `pnpm install` or set `CI=true` to confirm a modules purge. Grok's workspace sandbox cannot use the global pnpm store, so an install there rewrites `node_modules` against `./.pnpm-store` and the next local `pnpm run test` asks to wipe the tree. The loop sets `npm_config_verify_deps_before_run=false` so verification never does that.
+
 Choose the provider as the first argument. Only these names are accepted:
 
 ```bash
