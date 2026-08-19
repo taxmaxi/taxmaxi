@@ -117,7 +117,7 @@
         "Assert observable lots or disposal matches, not private derivation helpers."
       ],
       "priority": "high",
-      "status": "in_progress",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm run test packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts"

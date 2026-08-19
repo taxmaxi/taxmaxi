@@ -25,3 +25,9 @@
 **Status**: done
 **Notes**: evidence_revision was a static default of 1. Upsert now increments it only when stored observation facts change (payload, name, exponent, type, currency, natural key), not on retrieved-at-only refreshes. A pending-review observation then gets one new durable job for that revision. Same evidence still no-ops. Covered by provider-asset repository and asset-resolution-job integration tests (7 story tests passing).
 ---
+
+## Iteration 1 - 2026-08-19 14:18
+**Story**: AR-003 - Let mapped Solana activity enter canonical accounting and FIFO
+**Status**: done
+**Notes**: Changed files: packages/sync-engine/src/layers/SourceProviderRegistryLive.ts,packages/sync-engine/src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts packages/sync-engine/src/providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts,packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts packages/sync-engine/tests/source-sync/source-provider-registry.test.ts,ralph/prd.json
+---

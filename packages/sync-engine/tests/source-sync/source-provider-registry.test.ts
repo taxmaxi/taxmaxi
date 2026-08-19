@@ -153,6 +153,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           mappingStatus: "pending_review",
         },
         legDerivationStrategy: "skip",
+        legPlans: [],
       }),
     deriveLegs: () => Effect.die("Helius deriveLegs should not be called"),
   })

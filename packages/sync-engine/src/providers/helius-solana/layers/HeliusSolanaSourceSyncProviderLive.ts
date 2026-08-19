@@ -26,6 +26,7 @@ import type {
   SourceTransactionDraft,
   SourceOnchainContextDraft,
   SourceProviderTransferDraft,
+  SourceTransactionLegDraft,
   SourceTransactionReviewDraft,
   SourceTransferDraft,
   SourceVenueContextDraft,
@@ -44,10 +45,10 @@ import {
   HELIUS_SOLANA_RECORD_TYPE_TRANSACTION_FULL,
   HeliusSolanaCursorDecodeError,
   HeliusSolanaNormalizationDecodeError,
-  HeliusSolanaNormalizationNotImplementedError,
   HeliusSolanaNormalizationReferenceError,
   HeliusSolanaPayloadDecodeError,
   HeliusSolanaSourceSyncProvider,
+  type HeliusSolanaCanonicalLegPlan,
   type HeliusSolanaNormalizationLookups,
   type HeliusSolanaReferenceDataRefreshResult,
   type HeliusSolanaSourceSyncProviderShape,
@@ -69,8 +70,6 @@ import {
 } from "./HeliusSolanaAssetResolutionServiceLive.ts"
 import { HeliusSolanaSyncClientLive } from "./HeliusSolanaSyncClientLive.ts"
 import { SyncEngineStorageError } from "../../../services/SyncEngineStorageError.ts"
-
-const HELIUS_SOLANA_NORMALIZATION_MESSAGE = "Helius Solana normalization is not implemented yet."
 
 const emptyReferenceDataRefresh = {
   transactionTypeCatalogCount: 0,
@@ -573,12 +572,6 @@ const toProviderFailureError = (
   })
 }
 
-const normalizationNotImplemented = (cause: unknown) =>
-  new HeliusSolanaNormalizationNotImplementedError({
-    message: HELIUS_SOLANA_NORMALIZATION_MESSAGE,
-    cause,
-  })
-
 const isRetryableFailure = (error: SourceSyncProviderError): boolean =>
   error._tag === "SourceSyncProviderFailureError" && error.retryable
 
@@ -1052,6 +1045,27 @@ const buildTransferDraft = ({
     },
   }
 }
+
+const buildLegPlan = ({
+  movement,
+  signature,
+}: {
+  readonly movement: SolanaBalanceMovement
+  readonly signature: string
+}): HeliusSolanaCanonicalLegPlan => ({
+  transferExternalId: `${signature}:${movement.role}:${movement.position}`,
+  kind:
+    movement.role === "fee" ? "fee" : movement.direction === "inbound" ? "acquisition" : "disposal",
+  role: movement.role,
+  derivationRule:
+    movement.role === "fee"
+      ? "helius_solana_fee"
+      : movement.role === "rent"
+        ? "helius_solana_rent_refund"
+        : movement.direction === "inbound"
+          ? "helius_solana_inbound"
+          : "helius_solana_outbound",
+})
 
 const buildProviderTransferDraft = ({
   sourceId,
@@ -2834,7 +2848,7 @@ const make = ({
             ),
           ]
 
-          const canonicalTransfers = canonicalMovements.flatMap((movement) => {
+          const canonicalTransferPlans = canonicalMovements.flatMap((movement) => {
             const draft = buildTransferDraft({
               source,
               sourceRecord,
@@ -2843,8 +2857,9 @@ const make = ({
               signature,
               timestamp,
             })
-            return draft === null ? [] : [draft]
+            return draft === null ? [] : [{ draft, plan: buildLegPlan({ movement, signature }) }]
           })
+          const canonicalTransfers = canonicalTransferPlans.map(({ draft }) => draft)
 
           const movementsMatch = (
             candidate: SolanaBalanceMovement,
@@ -2944,6 +2959,17 @@ const make = ({
             contradictions,
           })
 
+          // Legs are derived only when every canonical movement is backed by an
+          // approved local mapping and nothing on the transaction needs review.
+          // Unresolved observations keep their raw and provider rows but stay
+          // outside legs, inventory, and FIFO.
+          const legDerivationStrategy =
+            transactionReview === null &&
+            canonicalTransferPlans.length > 0 &&
+            canonicalTransferPlans.length === canonicalMovements.length
+              ? "derive"
+              : "skip"
+
           return {
             providerAssetRowIds,
             transaction: buildTransactionDraft({
@@ -2964,16 +2990,59 @@ const make = ({
             feeTransfers: canonicalTransfers,
             transactionReview,
             resolvedTransactionType,
-            legDerivationStrategy: "skip",
+            legDerivationStrategy,
+            legPlans:
+              legDerivationStrategy === "derive"
+                ? canonicalTransferPlans.map(({ plan }) => plan)
+                : [],
           }
         }),
-      deriveLegs: ({ transaction }) =>
-        Effect.fail(
-          normalizationNotImplemented({
-            transactionId: transaction.id,
-            externalId: transaction.externalId,
+      deriveLegs: ({ transaction, feeTransfers, legPlans }) =>
+        Effect.gen(function* () {
+          const plansByTransferExternalId = new Map(
+            legPlans.map((plan) => [plan.transferExternalId, plan])
+          )
+
+          return yield* Effect.forEach(feeTransfers, (transfer) => {
+            const plan =
+              transfer.externalId === null
+                ? undefined
+                : plansByTransferExternalId.get(transfer.externalId)
+
+            if (plan === undefined) {
+              return Effect.fail(
+                new HeliusSolanaNormalizationReferenceError({
+                  message: `Missing Solana leg plan for canonical transfer ${transfer.externalId ?? transfer.id}.`,
+                })
+              )
+            }
+
+            return Effect.succeed({
+              sourceId: transfer.sourceId,
+              sourceRawRecordId: transfer.sourceRawRecordId,
+              externalId: `${transfer.externalId ?? transfer.id}:leg`,
+              txHash: transfer.txHash,
+              timestamp: transfer.timestamp,
+              principalId: transaction.principalId,
+              addressId: transfer.addressId,
+              assetId: transfer.assetId,
+              assetRepresentationId: transfer.assetRepresentationId,
+              amount: String(transfer.amount),
+              kind: plan.kind,
+              provenance: "deterministic",
+              derivationRule: plan.derivationRule,
+              metadata: {
+                provider: HELIUS_SOLANA_PROVIDER_KEY,
+                role: plan.role,
+              },
+              transactionId: transaction.id,
+              sourceTransferId: transfer.id,
+              fiatAmount: null,
+              fiatCurrency: null,
+              feeForTransactionId: plan.kind === "fee" ? transaction.id : null,
+            } satisfies SourceTransactionLegDraft)
           })
-        ),
+        }),
     } satisfies HeliusSolanaSourceSyncProviderShape)
   })
 

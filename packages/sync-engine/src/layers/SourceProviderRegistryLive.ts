@@ -159,6 +159,7 @@ const makeHeliusSolanaProviderModule = (
                             transaction,
                             venueContext,
                             feeTransfers,
+                            legPlans: prepared.legPlans,
                           })
                           .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))
                     : () => Effect.succeed([]),
