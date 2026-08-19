@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import {
   check,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -22,12 +23,24 @@ export const assetResolutionOutcomeEnum = pgEnum("asset_resolution_outcome", [
 
 export type AssetResolutionOutcome = (typeof assetResolutionOutcomeEnum.enumValues)[number]
 
+export const assetResolutionDecisionStatusEnum = pgEnum("asset_resolution_decision_status", [
+  "active",
+  "superseded",
+])
+
+export type AssetResolutionDecisionStatus =
+  (typeof assetResolutionDecisionStatusEnum.enumValues)[number]
+
 /**
- * Immutable attach-only policy decision history for one provider observation
- * and evidence revision.
+ * Append-only attach-only policy decision history for one provider
+ * observation and evidence revision.
  *
- * One row per (providerAssetRowId, evidenceRevision): a second decision for
- * the same pair is a no-op so replaying a resolution job never rewrites history.
+ * Decision content is never edited. A correction appends a new active row
+ * that names the row it replaces through supersedes_decision_id, and the
+ * replaced row's status flips to superseded. At most one decision is active
+ * per (providerAssetRowId, evidenceRevision), enforced by a partial unique
+ * index, so replaying a resolution job never rewrites history and concurrent
+ * recorders cannot both win.
  */
 export const assetResolutionDecisions = pgTable(
   "asset_resolution_decisions",
@@ -39,6 +52,8 @@ export const assetResolutionDecisions = pgTable(
     evidenceRevision: integer("evidence_revision").notNull(),
     policyRevision: text("policy_revision").notNull(),
     outcome: assetResolutionOutcomeEnum("outcome").notNull(),
+    status: assetResolutionDecisionStatusEnum("status").notNull().default("active"),
+    supersedesDecisionId: uuid("supersedes_decision_id"),
     assetId: uuid("asset_id").references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id"),
     blockchain: text("blockchain"),
@@ -53,11 +68,18 @@ export const assetResolutionDecisions = pgTable(
     createdAt: timestamp("created_at").notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("asset_resolution_decisions_observation_revision_unique").on(
-      table.providerAssetRowId,
-      table.evidenceRevision
-    ),
+    uniqueIndex("asset_resolution_decisions_active_observation_revision_unique")
+      .on(table.providerAssetRowId, table.evidenceRevision)
+      .where(sql`${table.status} = 'active'`),
+    uniqueIndex("asset_resolution_decisions_supersedes_unique")
+      .on(table.supersedesDecisionId)
+      .where(sql`${table.supersedesDecisionId} is not null`),
     index("idx_asset_resolution_decisions_asset_id").on(table.assetId),
+    foreignKey({
+      columns: [table.supersedesDecisionId],
+      foreignColumns: [table.id],
+      name: "asset_resolution_decisions_supersedes_decision_id_fk",
+    }),
     check(
       "asset_resolution_decisions_evidence_revision_positive",
       sql`${table.evidenceRevision} > 0`

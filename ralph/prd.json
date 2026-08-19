@@ -206,7 +206,7 @@
         "Add a test that a second execution at the same evidence revision reports that nothing was recorded and leaves the original decision intact. It must fail before the change."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm --filter @my/persistence run type-check",

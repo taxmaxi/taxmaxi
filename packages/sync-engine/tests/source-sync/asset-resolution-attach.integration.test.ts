@@ -631,6 +631,39 @@ describe("asset resolution attach and rematerialize", () => {
     )
   })
 
+  it("re-executing at the same evidence revision keeps the original decision and repeats nothing", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const first = yield* runResolutionJob({ jobId })
+        expect(first.outcome).toBe("attached")
+
+        // Simulate a crash after the decision was recorded but before the
+        // job completed: the job goes back to pending and runs again at the
+        // same evidence revision.
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ status: "pending", nextRetryAt: null, workerId: null, heartbeatAt: null })
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const replay = yield* runResolutionJob({ jobId })
+        expect(replay.outcome).toBe("attached")
+
+        const state = yield* fetchAttachState()
+        expect(state.decisions).toHaveLength(1)
+        expect(state.decisions[0]).toMatchObject({ outcome: "attach", assetId: ORB_ASSET_ID })
+        expect(state.representations).toHaveLength(1)
+      })
+    )
+  })
+
   it("records a fail_closed decision exactly once for a terminal CoinGecko failure", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

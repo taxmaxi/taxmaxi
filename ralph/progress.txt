@@ -27,3 +27,9 @@ each story closes and the operator decisions already taken.
 **Status**: done
 **Notes**: fetchCoin now classifies: 408/429/5xx/timeout/transport fail with new AssetResolutionCoinGeckoRetryableError (after bounded in-client retries with exponential backoff, Effect Config: COINGECKO_REQUEST_TIMEOUT_MS/RETRY_ATTEMPTS/RETRY_BASE_DELAY_MS); 404 and unreadable bodies stay terminal upstream failures the policy fails closed on. Coin id now URL-encoded. Executor error union widened (AssetResolutionJobExecutorError); its existing release path turns a retryable fetch failure into a pending job with nextRetryAt and no decision row. Exported AssetResolutionCoinGeckoClientLayer without baked-in FetchHttpClient for transport stubbing. 10 client unit tests + 2 executor integration tests (retryable leaves no decision and later attaches; terminal records fail_closed exactly once).
 ---
+
+## Iteration 5 - 2026-08-19 18:06
+**Story**: AR-005 - Make resolution decision history append-only
+**Status**: done
+**Notes**: asset_resolution_decisions is now append-only: dropped the (observation, revision) unique constraint; added status enum (active/superseded) and supersedes_decision_id self-FK (unique, chain without branching); a partial unique index enforces one active decision per observation+revision so the DB rejects a second active row. New repository methods: appendSupersedingAssetResolutionDecision (locks the replaced row, CAS conflict result when it is not active), findActiveAssetResolutionDecision, listAssetResolutionDecisions. recordAssetResolutionDecision now conflicts against the partial index and reports {recorded:false} on replay; the executor logs asset-resolution:decision-replay-detected instead of ignoring it (side effects below it are idempotent). Migration 20260819160238_dizzy_fat_cobra. 4 persistence history tests + 1 executor replay test.
+---

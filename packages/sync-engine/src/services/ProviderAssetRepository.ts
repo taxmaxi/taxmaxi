@@ -102,6 +102,36 @@ export interface AssetResolutionDecisionRecordResult {
   readonly recorded: boolean
 }
 
+/** Lifecycle status of one recorded resolution decision. */
+export type AssetResolutionDecisionStatus = "active" | "superseded"
+
+/** One recorded resolution decision as read back from audit history. */
+export interface AssetResolutionDecisionHistoryEntry {
+  readonly id: string
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+  readonly policyRevision: string
+  readonly outcome: AssetResolutionAuditOutcome
+  readonly status: AssetResolutionDecisionStatus
+  readonly supersedesDecisionId: string | null
+  readonly assetId: string | null
+  readonly assetRepresentationId: string | null
+  readonly reason: string | null
+  readonly actor: string
+  readonly createdAt: Date
+}
+
+/**
+ * Result of appending a superseding decision.
+ *
+ * - superseded: the new decision is active and the replaced one is marked superseded.
+ * - conflict: the named decision does not exist or is no longer active, so
+ *   nothing changed; the caller must re-read and decide again.
+ */
+export type AssetResolutionSupersedeResult =
+  | { readonly _tag: "superseded"; readonly decisionId: string }
+  | { readonly _tag: "conflict" }
+
 /** Outcome of attempting to claim a durable resolution job for execution. */
 export type AssetResolutionJobClaim =
   | {
@@ -409,13 +439,43 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<void, SyncEngineStorageError>
 
   /**
-   * Append one immutable attach-only policy decision to resolution audit
-   * history. A second decision for the same provider asset and evidence
-   * revision is a no-op so replaying a resolution job never rewrites history.
+   * Append one attach-only policy decision to resolution audit history as
+   * the active decision for its provider asset and evidence revision. When
+   * an active decision already exists for that pair, nothing is written and
+   * the result reports recorded: false, so replaying a resolution job never
+   * rewrites history.
    */
   readonly recordAssetResolutionDecision: (params: {
     readonly decision: AssetResolutionDecisionRecord
   }) => Effect.Effect<AssetResolutionDecisionRecordResult, SyncEngineStorageError>
+
+  /**
+   * Append a superseding decision that replaces the named active decision.
+   * The replaced decision keeps its content and flips to superseded; the new
+   * decision becomes active and records which decision it replaced. Fails
+   * with a conflict result when the named decision is missing or no longer
+   * active, so concurrent supersessions cannot overwrite each other.
+   */
+  readonly appendSupersedingAssetResolutionDecision: (params: {
+    readonly supersedesDecisionId: string
+    readonly decision: AssetResolutionDecisionRecord
+  }) => Effect.Effect<AssetResolutionSupersedeResult, SyncEngineStorageError>
+
+  /**
+   * Read the active decision for one provider asset and evidence revision.
+   */
+  readonly findActiveAssetResolutionDecision: (params: {
+    readonly providerAssetRowId: string
+    readonly evidenceRevision: number
+  }) => Effect.Effect<Option.Option<AssetResolutionDecisionHistoryEntry>, SyncEngineStorageError>
+
+  /**
+   * Read every recorded decision for one provider asset in the order they
+   * were appended, including superseded ones.
+   */
+  readonly listAssetResolutionDecisions: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<ReadonlyArray<AssetResolutionDecisionHistoryEntry>, SyncEngineStorageError>
 }
 
 /**

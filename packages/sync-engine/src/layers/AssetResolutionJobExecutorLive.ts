@@ -279,7 +279,7 @@ const make = Effect.gen(function* () {
       })
 
       if (decision._tag !== "attach") {
-        yield* providerAssetRepository.recordAssetResolutionDecision({
+        const { recorded } = yield* providerAssetRepository.recordAssetResolutionDecision({
           decision: decisionToRecord({
             providerAssetRowId,
             evidenceRevision,
@@ -288,6 +288,12 @@ const make = Effect.gen(function* () {
             coinGeckoEvidence,
           }),
         })
+        if (!recorded) {
+          yield* Effect.logInfo(
+            { jobId, providerAssetRowId, evidenceRevision, outcome: decision._tag },
+            "asset-resolution:decision-replay-detected"
+          )
+        }
         yield* providerAssetRepository.finishResolutionJob({ jobId, status: "completed" })
         return {
           outcome: decision._tag,
@@ -310,7 +316,7 @@ const make = Effect.gen(function* () {
         },
       })
 
-      yield* providerAssetRepository.recordAssetResolutionDecision({
+      const { recorded } = yield* providerAssetRepository.recordAssetResolutionDecision({
         decision: {
           ...decisionToRecord({
             providerAssetRowId,
@@ -322,6 +328,16 @@ const make = Effect.gen(function* () {
           assetRepresentationId: representation.id,
         },
       })
+
+      // A replay after a crash between recording and mapping approval still
+      // finishes the idempotent approval below, but it must be visible as a
+      // replay rather than pass for a first decision.
+      if (!recorded) {
+        yield* Effect.logInfo(
+          { jobId, providerAssetRowId, evidenceRevision, outcome: "attach" },
+          "asset-resolution:decision-replay-detected"
+        )
+      }
 
       yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
         mapping: {

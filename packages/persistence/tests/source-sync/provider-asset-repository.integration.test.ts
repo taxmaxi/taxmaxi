@@ -2276,4 +2276,213 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(jobIds).not.toContain(completed.jobId)
     })
   })
+
+  describe("decision history", () => {
+    beforeEach(async () => {
+      await Effect.runPromise(context.recreateTestDatabase())
+      const fixture = await runPg(seedSyncEngineRepositoryFixture())
+      await runPg(
+        seedSyncEngineAssets({
+          baseBlockchainId: fixture.baseBlockchainId,
+          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+        })
+      )
+    })
+
+    const makePendingDecision = ({
+      providerAssetRowId,
+      evidenceRevision = 1,
+      reason = "missing_existing_economic_asset",
+    }: {
+      readonly providerAssetRowId: string
+      readonly evidenceRevision?: number
+      readonly reason?: string
+    }) => ({
+      providerAssetRowId,
+      evidenceRevision,
+      policyRevision: "2026-08-19.attach-only.1",
+      outcome: "pending" as const,
+      assetId: null,
+      assetRepresentationId: null,
+      blockchain: null,
+      representationType: null,
+      contractAddress: null,
+      mintAddress: null,
+      decimals: null,
+      reason,
+      chainEvidence: null,
+      coinGeckoEvidence: null,
+      actor: "system:attach-only-policy",
+    })
+
+    it("re-recording at the same evidence revision reports recorded: false and keeps the original", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-duplicate")
+
+      const first = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      expect(first).toEqual({ recorded: true })
+
+      const second = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({
+              providerAssetRowId,
+              reason: "non_exact_platform_match",
+            }),
+          })
+        )
+      )
+      expect(second).toEqual({ recorded: false })
+
+      const history = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionDecisions({ providerAssetRowId })
+        )
+      )
+      expect(history).toHaveLength(1)
+      expect(history[0]).toMatchObject({
+        status: "active",
+        reason: "missing_existing_economic_asset",
+      })
+    })
+
+    it("appends a superseding decision and preserves the replaced one", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-supersede")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+
+      const original = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(original)) {
+        throw new Error("Expected an active decision to supersede")
+      }
+
+      const superseded = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.appendSupersedingAssetResolutionDecision({
+            supersedesDecisionId: original.value.id,
+            decision: makePendingDecision({
+              providerAssetRowId,
+              reason: "non_exact_platform_match",
+            }),
+          })
+        )
+      )
+      expect(superseded._tag).toBe("superseded")
+
+      const history = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionDecisions({ providerAssetRowId })
+        )
+      )
+      expect(history).toHaveLength(2)
+      expect(history[0]).toMatchObject({
+        id: original.value.id,
+        status: "superseded",
+        reason: "missing_existing_economic_asset",
+        supersedesDecisionId: null,
+      })
+      expect(history[1]).toMatchObject({
+        status: "active",
+        reason: "non_exact_platform_match",
+        supersedesDecisionId: original.value.id,
+      })
+
+      const active = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(active)) {
+        throw new Error("Expected an active decision after supersession")
+      }
+      expect(active.value.reason).toBe("non_exact_platform_match")
+    })
+
+    it("rejects superseding a decision that is no longer active", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-conflict")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      const original = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(original)) {
+        throw new Error("Expected an active decision")
+      }
+
+      const first = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.appendSupersedingAssetResolutionDecision({
+            supersedesDecisionId: original.value.id,
+            decision: makePendingDecision({
+              providerAssetRowId,
+              reason: "non_exact_platform_match",
+            }),
+          })
+        )
+      )
+      expect(first._tag).toBe("superseded")
+
+      const second = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.appendSupersedingAssetResolutionDecision({
+            supersedesDecisionId: original.value.id,
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      expect(second).toEqual({ _tag: "conflict" })
+    })
+
+    it("lets the database reject a second active decision for one observation and revision", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-db-guard")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+
+      const directInsert = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.assetResolutionDecisions).values({
+            providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "2026-08-19.attach-only.1",
+            outcome: "pending",
+            status: "active",
+            reason: "missing_existing_economic_asset",
+            actor: "test:direct-insert",
+          })
+        })
+      )
+
+      await expect(directInsert).rejects.toThrow()
+    })
+  })
 })

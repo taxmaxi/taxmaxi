@@ -626,6 +626,12 @@ const makeExecutorLayer = ({
     releaseResolutionJobAfterFailure: () =>
       Effect.die("releaseResolutionJobAfterFailure should not be called"),
     finishResolutionJob: () => Effect.die("finishResolutionJob should not be called"),
+    appendSupersedingAssetResolutionDecision: () =>
+      Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
+    findActiveAssetResolutionDecision: () =>
+      Effect.die("findActiveAssetResolutionDecision should not be called"),
+    listAssetResolutionDecisions: () =>
+      Effect.die("listAssetResolutionDecisions should not be called"),
     recordAssetResolutionDecision: () =>
       Effect.die("recordAssetResolutionDecision should not be called"),
   })
