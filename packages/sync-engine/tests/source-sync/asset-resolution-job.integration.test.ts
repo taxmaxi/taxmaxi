@@ -42,8 +42,11 @@ const TestPgClientLive = context.TestPgClientLive
 
 const userId = "00000000-0000-0000-0000-000000000171"
 const principalId = "00000000-0000-0000-0000-000000000172"
+const secondUserId = "00000000-0000-0000-0000-000000000173"
+const secondUserPrincipalId = "00000000-0000-0000-0000-000000000174"
 const firstSourceId = "00000000-0000-0000-0000-000000000271"
 const secondSourceId = "00000000-0000-0000-0000-000000000272"
+const secondUserSourceId = "00000000-0000-0000-0000-000000000273"
 const BTC_ASSET_ID = "00000000-0000-0000-0000-000000000571"
 const USDC_ASSET_ID = "00000000-0000-0000-0000-000000000572"
 const USDC_REPRESENTATION_ID = "00000000-4000-4000-8000-000000000572"
@@ -267,6 +270,13 @@ const seedFirstCoinbaseSource = () =>
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
+const seedSecondUserCoinbaseSource = () =>
+  seedSyncEngineRepositoryFixture({
+    userId: secondUserId,
+    principalId: secondUserPrincipalId,
+    sourceId: secondUserSourceId,
+  }).pipe(Effect.asVoid, Effect.provide(TestPgClientLive))
+
 const seedSecondCoinbaseSource = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -338,11 +348,17 @@ const seedKnownSolanaUsdc = () =>
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
-const runSync = ({ sourceId }: { readonly sourceId: string }) =>
+const runSync = ({
+  sourceId,
+  ownerPrincipalId = principalId,
+}: {
+  readonly sourceId: string
+  readonly ownerPrincipalId?: string
+}) =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
     return yield* sourceSync.startSourceSyncJob({
-      principalId,
+      principalId: ownerPrincipalId,
       sourceId,
     })
   }).pipe(Effect.provide(TestLayer))
@@ -350,14 +366,16 @@ const runSync = ({ sourceId }: { readonly sourceId: string }) =>
 const fetchJobDetails = ({
   sourceId,
   jobId,
+  ownerPrincipalId = principalId,
 }: {
   readonly sourceId: string
   readonly jobId: string
+  readonly ownerPrincipalId?: string
 }) =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
     return yield* sourceSync.getSourceSyncJob({
-      principalId,
+      principalId: ownerPrincipalId,
       sourceId,
       jobId,
     })
@@ -502,6 +520,37 @@ describe("asset resolution job scheduling", () => {
     )
     const secondJob = await Effect.runPromise(
       fetchJobDetails({ sourceId: secondSourceId, jobId: secondSummary.jobId })
+    )
+    const state = await Effect.runPromise(fetchUnknownObservationState())
+
+    expect(firstJob.status).toBe("completed")
+    expect(secondJob.status).toBe("completed")
+    expect(state.rawRows).toHaveLength(2)
+    expect(state.resolutionJobs).toHaveLength(1)
+    expect(state.resolutionJobs[0]).toMatchObject({
+      providerAssetRowId: state.providerAsset?.id,
+      evidenceRevision: 1,
+      status: "pending",
+    })
+  })
+
+  it("keeps one job when two different users observe the same provider identity", async () => {
+    await Effect.runPromise(seedFirstCoinbaseSource())
+    await Effect.runPromise(seedSecondUserCoinbaseSource())
+
+    const firstSummary = await Effect.runPromise(runSync({ sourceId: firstSourceId }))
+    const secondSummary = await Effect.runPromise(
+      runSync({ sourceId: secondUserSourceId, ownerPrincipalId: secondUserPrincipalId })
+    )
+    const firstJob = await Effect.runPromise(
+      fetchJobDetails({ sourceId: firstSourceId, jobId: firstSummary.jobId })
+    )
+    const secondJob = await Effect.runPromise(
+      fetchJobDetails({
+        sourceId: secondUserSourceId,
+        jobId: secondSummary.jobId,
+        ownerPrincipalId: secondUserPrincipalId,
+      })
     )
     const state = await Effect.runPromise(fetchUnknownObservationState())
 
