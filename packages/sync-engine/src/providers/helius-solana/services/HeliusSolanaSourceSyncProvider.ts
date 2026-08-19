@@ -87,7 +87,7 @@ export interface PreparedHeliusSolanaNormalization {
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext: SourceOnchainContextDraft | null
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
-  readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
+  readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
   readonly legDerivationStrategy: "derive" | "skip"
@@ -101,7 +101,7 @@ export interface PreparedHeliusSolanaNormalization {
 export interface DeriveHeliusSolanaProviderLegsParams {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext | null
-  readonly feeTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
   readonly legPlans: ReadonlyArray<HeliusSolanaCanonicalLegPlan>
 }
 

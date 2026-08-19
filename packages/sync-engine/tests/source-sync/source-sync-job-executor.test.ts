@@ -343,7 +343,7 @@ const makeExecutorLayer = ({
               metadata: null,
             },
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
             transactionReview: null,
             resolvedTransactionType: {
               providerTransactionType: "test",
@@ -551,7 +551,7 @@ const makeExecutorLayer = ({
             transaction,
             venueContext,
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {
@@ -563,7 +563,7 @@ const makeExecutorLayer = ({
           transaction,
           venueContext,
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [],
         }
       }),

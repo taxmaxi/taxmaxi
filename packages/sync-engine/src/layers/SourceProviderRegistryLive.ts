@@ -97,18 +97,18 @@ const makeCoinbaseProviderModule = (
                 venueContext: prepared.venueContext,
                 onchainContext: null,
                 providerTransfers: prepared.providerTransfers,
-                feeTransfers: prepared.feeTransfers,
+                canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
                 resolvedTransactionType: prepared.resolvedTransactionType,
                 deriveLegs:
                   prepared.legDerivationStrategy === "derive"
-                    ? ({ transaction, venueContext, feeTransfers }) =>
+                    ? ({ transaction, venueContext, canonicalTransfers }) =>
                         coinbaseSourceSyncProvider
                           .deriveLegs({
                             transaction,
                             venueContext,
                             primaryAsset: prepared.primaryAsset,
-                            feeTransfers,
+                            canonicalTransfers,
                           })
                           .pipe(Effect.mapError(toCoinbaseRecoverableNormalizationError))
                     : () => Effect.succeed([]),
@@ -148,17 +148,17 @@ const makeHeliusSolanaProviderModule = (
                 venueContext: prepared.venueContext,
                 onchainContext: prepared.onchainContext,
                 providerTransfers: prepared.providerTransfers,
-                feeTransfers: prepared.feeTransfers,
+                canonicalTransfers: prepared.canonicalTransfers,
                 transactionReview: prepared.transactionReview,
                 resolvedTransactionType: prepared.resolvedTransactionType,
                 deriveLegs:
                   prepared.legDerivationStrategy === "derive"
-                    ? ({ transaction, venueContext, feeTransfers }) =>
+                    ? ({ transaction, venueContext, canonicalTransfers }) =>
                         heliusSolanaSourceSyncProvider
                           .deriveLegs({
                             transaction,
                             venueContext,
-                            feeTransfers,
+                            canonicalTransfers,
                             legPlans: prepared.legPlans,
                           })
                           .pipe(Effect.mapError(toHeliusSolanaRecoverableNormalizationError))

@@ -398,7 +398,9 @@ export interface ProviderAssetRepositoryShape {
   /**
    * Persist one durable resolution job for an unresolved provider observation
    * and its current evidence revision. A second schedule for the same pair is
-   * a no-op. Approved local mappings do not create a job.
+   * a no-op. Approved local mappings do not create a job. The job commits
+   * outside the caller's transaction, so it survives when the caller fails
+   * right after scheduling, as the unmapped-asset path deliberately does.
    */
   readonly scheduleUnresolvedResolutionJob: (params: {
     readonly providerAssetRowId: string

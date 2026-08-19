@@ -657,7 +657,7 @@ describe("TransferReconciliationServiceLive", () => {
               metadata: {},
             })),
           ],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: {
@@ -4573,7 +4573,7 @@ describe("TransferReconciliationServiceLive", () => {
             metadata: null,
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {
@@ -6129,7 +6129,7 @@ describe("TransferReconciliationServiceLive", () => {
             metadata: null,
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {

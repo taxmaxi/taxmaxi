@@ -1180,7 +1180,7 @@ describe("ProviderAssetRepositoryLive", () => {
                     metadata: { role: "principal" },
                   },
                 ],
-                feeTransfers: [],
+                canonicalTransfers: [],
                 legs: [],
                 transactionReview: null,
                 resolvedTransactionType: {
@@ -1315,7 +1315,7 @@ describe("ProviderAssetRepositoryLive", () => {
                   metadata: { role: "principal" },
                 },
               ],
-              feeTransfers: [],
+              canonicalTransfers: [],
               legs: [],
               transactionReview: null,
               resolvedTransactionType: {
@@ -2274,6 +2274,183 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(jobIds).not.toContain(delayed.jobId)
       expect(jobIds).not.toContain(freshProcessing.jobId)
       expect(jobIds).not.toContain(completed.jobId)
+    })
+  })
+
+  describe("resolution job scheduling paths", () => {
+    beforeEach(async () => {
+      await Effect.runPromise(context.recreateTestDatabase())
+      const fixture = await runPg(seedSyncEngineRepositoryFixture())
+      await runPg(
+        seedSyncEngineAssets({
+          baseBlockchainId: fixture.baseBlockchainId,
+          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+        })
+      )
+    })
+
+    const upsertCatalogAsset = ({
+      providerAssetId,
+      payload = { source: "test" },
+    }: {
+      readonly providerAssetId: string
+      readonly payload?: unknown
+    }) =>
+      runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId,
+                naturalKey: null,
+                currencyCode: "ORB",
+                name: "Orb",
+                exponent: 8,
+                providerType: "crypto",
+                payload,
+              },
+            ],
+          })
+          const found = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId,
+          })
+          if (Option.isNone(found)) {
+            return yield* Effect.die("Expected upserted provider asset")
+          }
+          return found.value.id
+        })
+      )
+
+    const selectJobsFor = (providerAssetRowId: string) =>
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              status: schema.assetResolutionJobs.status,
+              evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+            })
+            .from(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAssetRowId))
+        })
+      )
+
+    it("does not schedule research for a never-observed catalog asset", async () => {
+      // A mapping row appears once an asset is observed in a transaction, so
+      // a bare catalog entry has never been seen and must not burn research.
+      const providerAssetRowId = await upsertCatalogAsset({
+        providerAssetId: "schedule-new-catalog-asset",
+      })
+
+      const jobs = await selectJobsFor(providerAssetRowId)
+      expect(jobs).toEqual([])
+    })
+
+    it("schedules a new job when catalog evidence changes for an observed unresolved asset", async () => {
+      const providerAssetRowId = await upsertCatalogAsset({
+        providerAssetId: "schedule-observed-unresolved",
+      })
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId,
+                mappingKind: "asset",
+                canonicalAssetId: null,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "pending_review",
+                reviewerNotes: null,
+                sourceNotes: null,
+              },
+            ],
+          })
+        )
+      )
+
+      await upsertCatalogAsset({
+        providerAssetId: "schedule-observed-unresolved",
+        payload: { source: "test", refreshed: true },
+      })
+
+      const jobs = await selectJobsFor(providerAssetRowId)
+      expect(jobs).toContainEqual({ status: "pending", evidenceRevision: 2 })
+    })
+
+    it("does not schedule for an observation with an approved mapping", async () => {
+      const providerAssetRowId = await upsertCatalogAsset({
+        providerAssetId: "schedule-approved-asset",
+      })
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.upsertProviderAssetMappings({
+            mappings: [
+              {
+                providerAssetRowId,
+                mappingKind: "asset",
+                canonicalAssetId: TEST_BTC_ASSET_ID,
+                assetRepresentationId: null,
+                canonicalFiatCurrency: null,
+                mappingStatus: "approved",
+                reviewerNotes: null,
+                sourceNotes: null,
+              },
+            ],
+          })
+        )
+      )
+
+      // A catalog refresh with changed provider data bumps the evidence
+      // revision, but an approved observation must not be re-scheduled.
+      await upsertCatalogAsset({
+        providerAssetId: "schedule-approved-asset",
+        payload: { source: "test", refreshed: true },
+      })
+
+      const jobs = await selectJobsFor(providerAssetRowId)
+      expect(jobs.filter((job) => job.evidenceRevision > 1)).toEqual([])
+    })
+
+    it("keeps a scheduled job when the transaction around scheduling rolls back", async () => {
+      const providerAssetRowId = await upsertCatalogAsset({
+        providerAssetId: "schedule-rollback-survivor",
+      })
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .delete(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAssetRowId))
+        })
+      )
+
+      const result = await runAtomicNormalization(
+        Effect.result(
+          Effect.gen(function* () {
+            const repository = yield* ProviderAssetRepository
+            const syncEngineTransaction = yield* SyncEngineTransaction
+
+            return yield* syncEngineTransaction.run(
+              Effect.gen(function* () {
+                yield* repository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
+                return yield* new SyncEngineStorageError({
+                  operation: "test.mappingNotApproved",
+                  cause: "The mapping is still pending review.",
+                })
+              })
+            )
+          })
+        )
+      )
+      expect(result._tag).toBe("Failure")
+
+      const jobs = await selectJobsFor(providerAssetRowId)
+      expect(jobs).toEqual([{ status: "pending", evidenceRevision: 1 }])
     })
   })
 

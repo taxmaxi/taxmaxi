@@ -2987,7 +2987,7 @@ const make = ({
             venueContext: buildVenueContext({ walletAddress }),
             onchainContext,
             providerTransfers,
-            feeTransfers: canonicalTransfers,
+            canonicalTransfers,
             transactionReview,
             resolvedTransactionType,
             legDerivationStrategy,
@@ -2997,13 +2997,13 @@ const make = ({
                 : [],
           }
         }),
-      deriveLegs: ({ transaction, feeTransfers, legPlans }) =>
+      deriveLegs: ({ transaction, canonicalTransfers, legPlans }) =>
         Effect.gen(function* () {
           const plansByTransferExternalId = new Map(
             legPlans.map((plan) => [plan.transferExternalId, plan])
           )
 
-          return yield* Effect.forEach(feeTransfers, (transfer) => {
+          return yield* Effect.forEach(canonicalTransfers, (transfer) => {
             const plan =
               transfer.externalId === null
                 ? undefined
@@ -3027,7 +3027,7 @@ const make = ({
               addressId: transfer.addressId,
               assetId: transfer.assetId,
               assetRepresentationId: transfer.assetRepresentationId,
-              amount: String(transfer.amount),
+              amount: transfer.amount,
               kind: plan.kind,
               provenance: "deterministic",
               derivationRule: plan.derivationRule,

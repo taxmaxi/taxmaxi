@@ -940,12 +940,12 @@ const make = Effect.gen(function* () {
 
   const upsertFeeTransfers = ({
     executor,
-    feeTransfers,
+    canonicalTransfers,
   }: {
     readonly executor: SourceNormalizationExecutor
-    readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
+    readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   }) =>
-    Effect.forEach(feeTransfers, (feeTransfer) =>
+    Effect.forEach(canonicalTransfers, (feeTransfer) =>
       Effect.gen(function* () {
         const now = nowDate()
         const [persisted] = yield* executor
@@ -2522,7 +2522,7 @@ const make = Effect.gen(function* () {
           })
           const persistedFeeTransfers = yield* upsertFeeTransfers({
             executor: tx,
-            feeTransfers: params.feeTransfers,
+            canonicalTransfers: params.canonicalTransfers,
           })
           const derivedLegs =
             "deriveLegs" in params
@@ -2530,7 +2530,7 @@ const make = Effect.gen(function* () {
                   transaction: persistedTransaction,
                   venueContext: persistedVenueContext,
                   providerTransfers: persistedProviderTransfers,
-                  feeTransfers: persistedFeeTransfers,
+                  canonicalTransfers: persistedFeeTransfers,
                 })
               : params.legs
           const persistedLegs = yield* upsertTransactionLegs({
@@ -2636,7 +2636,7 @@ const make = Effect.gen(function* () {
             transaction: persistedTransaction,
             venueContext: persistedVenueContext,
             providerTransfers: persistedProviderTransfers,
-            feeTransfers: persistedFeeTransfers,
+            canonicalTransfers: persistedFeeTransfers,
             legs: persistedLegs,
           }
         })

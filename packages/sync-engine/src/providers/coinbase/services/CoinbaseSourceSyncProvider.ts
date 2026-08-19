@@ -61,7 +61,7 @@ export interface PreparedCoinbaseNormalization {
   readonly transaction: SourceTransactionDraft
   readonly venueContext: SourceVenueContextDraft
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
-  readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
+  readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: CoinbaseResolvedTransactionTypeMapping
   readonly primaryAsset: SyncEngineAsset | null
@@ -75,7 +75,7 @@ export interface DeriveCoinbaseProviderLegsParams {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext | null
   readonly primaryAsset: SyncEngineAsset | null
-  readonly feeTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
 }
 
 /**

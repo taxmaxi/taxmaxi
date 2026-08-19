@@ -312,7 +312,7 @@ export interface PersistNormalizedSourceArtifactsResult {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
-  readonly feeTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
   readonly legs: ReadonlyArray<PersistedSourceLeg>
 }
 
@@ -324,7 +324,7 @@ export interface PersistNormalizedSourceArtifactsContext {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext
   readonly providerTransfers: ReadonlyArray<PersistedSourceProviderTransfer>
-  readonly feeTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
 }
 
 /**
@@ -342,7 +342,7 @@ export interface PersistNormalizedSourceArtifactsParamsBase {
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext?: SourceOnchainContextDraft | null | undefined
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
-  readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
+  readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
 }

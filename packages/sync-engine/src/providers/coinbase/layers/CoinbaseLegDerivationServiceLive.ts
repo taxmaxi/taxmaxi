@@ -410,7 +410,7 @@ const buildFeeLegs = (
         instrumentQuoteCurrency(params.venueContext?.instrument ?? null)
       )
       const valuation = yield* deriveFeeValuation({
-        feeAmount: String(transfer.amount),
+        feeAmount: transfer.amount,
         fillPrice:
           params.venueContext?.fillPrice === null ? null : String(params.venueContext?.fillPrice),
         quoteCurrency,
@@ -426,7 +426,7 @@ const buildFeeLegs = (
         addressId: transfer.addressId,
         assetId: transfer.assetId,
         assetRepresentationId: transfer.assetRepresentationId,
-        amount: absoluteDecimal(String(transfer.amount)),
+        amount: absoluteDecimal(transfer.amount),
         kind: "fee",
         provenance: "deterministic",
         derivationRule:

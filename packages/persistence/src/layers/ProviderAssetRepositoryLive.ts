@@ -16,6 +16,8 @@ import {
   type ProviderAssetRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
+import { PgClient } from "@effect/sql-pg"
+import * as Context from "effect/Context"
 import { drizzle } from "./PgClientLive.ts"
 import {
   nowDate,
@@ -77,7 +79,14 @@ const makeMissingIdentityError = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  const pgClient = yield* PgClient.PgClient
   type ProviderAssetTransaction = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0]
+
+  // Runs an effect outside whatever transaction the caller happens to be in,
+  // so its writes commit even when the caller rolls back afterwards.
+  const runDetachedFromAmbientTransaction = <A, E>(
+    effect: Effect.Effect<A, E>
+  ): Effect.Effect<A, E> => Effect.updateContext(effect, Context.omit(pgClient.transactionService))
 
   const nextEvidenceRevisionSql = sql`
     case
@@ -92,16 +101,30 @@ const make = Effect.gen(function* () {
     end
   `
 
+  type UnresolvedMappingStatus = "pending_review" | null
+
+  // An observed asset with no mapping row or a pending_review mapping is
+  // unresolved; approved and rejected are not.
+  const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+    null,
+    "pending_review",
+  ]
+
+  // The catalog path deliberately skips assets with no mapping row: a mapping
+  // row appears once an asset is actually observed, so a bare catalog entry
+  // has never been seen in a transaction and must not trigger research.
+  const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = ["pending_review"]
+
   const insertUnresolvedResolutionJobs = ({
     tx,
     providerAssetRowIds,
     now,
-    mappingStatuses = [null, "pending_review"],
+    unresolvedStatuses,
   }: {
     readonly tx: ProviderAssetTransaction
     readonly providerAssetRowIds: ReadonlyArray<string>
     readonly now: Date
-    readonly mappingStatuses?: ReadonlyArray<"pending_review" | "approved" | "rejected" | null>
+    readonly unresolvedStatuses: ReadonlyArray<UnresolvedMappingStatus>
   }) =>
     Effect.gen(function* () {
       if (providerAssetRowIds.length === 0) {
@@ -128,7 +151,7 @@ const make = Effect.gen(function* () {
         )
 
       const unresolved = candidates.filter((candidate) =>
-        mappingStatuses.some((status) => status === candidate.mappingStatus)
+        unresolvedStatuses.some((status) => status === candidate.mappingStatus)
       )
       if (unresolved.length === 0) {
         return []
@@ -245,7 +268,7 @@ const make = Effect.gen(function* () {
             tx,
             providerAssetRowIds: upserted.flatMap((rows) => rows.map((row) => row.id)),
             now,
-            mappingStatuses: ["pending_review"],
+            unresolvedStatuses: CATALOG_REVIEWABLE_STATUSES,
           })
 
           return entries.length
@@ -765,6 +788,7 @@ const make = Effect.gen(function* () {
               tx,
               providerAssetRowIds: distinctProviderAssetRowIds,
               now,
+              unresolvedStatuses: OBSERVED_UNRESOLVED_STATUSES,
             })
             if (
               mappings.some(
@@ -1086,48 +1110,57 @@ const make = Effect.gen(function* () {
 
   const scheduleUnresolvedResolutionJob: ProviderAssetRepositoryShape["scheduleUnresolvedResolutionJob"] =
     ({ providerAssetRowId }) =>
-      db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const [providerAsset] = yield* tx
-              .select({
-                id: schema.providerAssets.id,
-                evidenceRevision: schema.providerAssets.evidenceRevision,
-              })
-              .from(schema.providerAssets)
-              .where(eq(schema.providerAssets.id, providerAssetRowId))
-              .limit(1)
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset"
+      // Callers schedule a job and then often fail on purpose (an unmapped
+      // asset stops normalization). The job must survive that failure even
+      // when the caller wrapped everything in one transaction.
+      runDetachedFromAmbientTransaction(
+        db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              const [providerAsset] = yield* tx
+                .select({
+                  id: schema.providerAssets.id,
+                  evidenceRevision: schema.providerAssets.evidenceRevision,
+                })
+                .from(schema.providerAssets)
+                .where(eq(schema.providerAssets.id, providerAssetRowId))
+                .limit(1)
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset"
+                  )
                 )
-              )
 
-            if (providerAsset === undefined) {
-              return yield* new SyncEngineStorageError({
-                operation: "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset",
-                cause: {
-                  providerAssetRowId,
-                  message: "Provider asset observation does not exist.",
-                },
+              if (providerAsset === undefined) {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset",
+                  cause: {
+                    providerAssetRowId,
+                    message: "Provider asset observation does not exist.",
+                  },
+                })
+              }
+
+              const inserted = yield* insertUnresolvedResolutionJobs({
+                tx,
+                providerAssetRowIds: [providerAssetRowId],
+                now: nowDate(),
+                unresolvedStatuses: OBSERVED_UNRESOLVED_STATUSES,
               })
-            }
+              const created = inserted.some((job) => job.providerAssetRowId === providerAssetRowId)
 
-            const inserted = yield* insertUnresolvedResolutionJobs({
-              tx,
-              providerAssetRowIds: [providerAssetRowId],
-              now: nowDate(),
+              return {
+                created,
+                providerAssetRowId,
+                evidenceRevision: providerAsset.evidenceRevision,
+              } satisfies AssetResolutionJobScheduleResult
             })
-            const created = inserted.some((job) => job.providerAssetRowId === providerAssetRowId)
-
-            return {
-              created,
-              providerAssetRowId,
-              evidenceRevision: providerAsset.evidenceRevision,
-            } satisfies AssetResolutionJobScheduleResult
-          })
-        )
-        .pipe(wrapSyncEngineStorageError("providerAssetRepository.scheduleUnresolvedResolutionJob"))
+          )
+          .pipe(
+            wrapSyncEngineStorageError("providerAssetRepository.scheduleUnresolvedResolutionJob")
+          )
+      )
 
   const claimResolutionJob: ProviderAssetRepositoryShape["claimResolutionJob"] = ({
     jobId,

@@ -273,22 +273,22 @@ const persistCoinbaseNormalization = ({
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
             providerTransfers,
-            feeTransfers: prepared.feeTransfers,
+            canonicalTransfers: prepared.canonicalTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
-            deriveLegs: ({ transaction, venueContext, feeTransfers }) =>
+            deriveLegs: ({ transaction, venueContext, canonicalTransfers }) =>
               coinbaseSourceSyncProvider.deriveLegs({
                 transaction,
                 venueContext,
                 primaryAsset: prepared.primaryAsset,
-                feeTransfers,
+                canonicalTransfers,
               }),
           }
         : {
             transaction: prepared.transaction,
             venueContext: prepared.venueContext,
             providerTransfers,
-            feeTransfers: prepared.feeTransfers,
+            canonicalTransfers: prepared.canonicalTransfers,
             transactionReview: prepared.transactionReview,
             resolvedTransactionType: prepared.resolvedTransactionType,
             legs: [],
@@ -369,7 +369,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             transaction: { ...transaction, externalId },
             venueContext,
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -433,7 +433,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: { provider: "test" },
             },
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -645,7 +645,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: null,
             },
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -677,7 +677,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: null,
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
@@ -812,7 +812,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         metadata: null,
       },
       providerTransfers: [],
-      feeTransfers: [],
+      canonicalTransfers: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -950,7 +950,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: null,
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [],
           transactionReview: null,
           resolvedTransactionType: APPROVED_MAPPING,
@@ -1010,7 +1010,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           metadata: null,
         },
         providerTransfers: [],
-        feeTransfers: [],
+        canonicalTransfers: [],
         legs: [],
         transactionReview: null,
         resolvedTransactionType: APPROVED_MAPPING,
@@ -1109,7 +1109,7 @@ describe("SourceNormalizationRepositoryLive", () => {
           metadata: null,
         },
         providerTransfers: [],
-        feeTransfers: [],
+        canonicalTransfers: [],
         legs: [],
         transactionReview: null,
         resolvedTransactionType: APPROVED_MAPPING,
@@ -1288,7 +1288,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         metadata: null,
       },
       providerTransfers: [],
-      feeTransfers: [],
+      canonicalTransfers: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -1384,7 +1384,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         metadata: null,
       },
       providerTransfers: [],
-      feeTransfers: [],
+      canonicalTransfers: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -1522,7 +1522,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: null,
             },
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
             legs: [],
             transactionReview: null,
             resolvedTransactionType: APPROVED_MAPPING,
@@ -1636,7 +1636,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         metadata: { provider: "test-onchain-adapter" },
       },
       providerTransfers,
-      feeTransfers: [],
+      canonicalTransfers: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
@@ -2138,7 +2138,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [
+          canonicalTransfers: [
             {
               sourceId: TEST_SOURCE_ID,
               principalId: TEST_PRINCIPAL_ID,
@@ -2206,7 +2206,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
 
     expect(acquisitionResult.transaction.externalId).toBe("tx-acquire-1")
-    expect(acquisitionResult.feeTransfers).toHaveLength(1)
+    expect(acquisitionResult.canonicalTransfers).toHaveLength(1)
     expect(acquisitionResult.legs).toHaveLength(1)
 
     await runRepository(
@@ -2242,7 +2242,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [
+          canonicalTransfers: [
             {
               sourceId: TEST_SOURCE_ID,
               principalId: TEST_PRINCIPAL_ID,
@@ -2351,7 +2351,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2455,7 +2455,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "test" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2544,7 +2544,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "test" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2631,7 +2631,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2704,7 +2704,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,
@@ -2893,7 +2893,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: null,
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: dependentSourceId,
@@ -3046,7 +3046,7 @@ describe("SourceNormalizationRepositoryLive", () => {
               metadata: { provider: "fixture" },
             },
             providerTransfers: [],
-            feeTransfers: [],
+            canonicalTransfers: [],
             deriveLegs: ({ transaction }) =>
               Effect.succeed([
                 {
@@ -3145,7 +3145,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase", partial: true },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [],
           transactionReview: {
             principalId: TEST_PRINCIPAL_ID,
@@ -3293,7 +3293,7 @@ describe("SourceNormalizationRepositoryLive", () => {
     expect(result.providerTransfers).toHaveLength(1)
     expect(result.legs).toHaveLength(1)
     expect(result.legs).toEqual([expect.objectContaining({ kind: "fee" })])
-    expect(result.feeTransfers).toHaveLength(1)
+    expect(result.canonicalTransfers).toHaveLength(1)
     expect(result.providerTransfers[0]).toEqual(
       expect.objectContaining({
         externalId: "tx-send-provider-transfer-1:principal",
@@ -4535,7 +4535,7 @@ describe("SourceNormalizationRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           deriveLegs: ({ transaction }) =>
             Effect.succeed([
               {

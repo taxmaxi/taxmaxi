@@ -369,7 +369,7 @@
         "Add a test that runs the reference-mapping path inside an outer transaction that then fails, and asserts the job is still there."
       ],
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "small",
       "verification": [
         "pnpm --filter @my/persistence run type-check",
