@@ -1,4 +1,4 @@
-import { eq, sql } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
@@ -994,6 +994,152 @@ describe("SourceNormalizationRepositoryLive", () => {
 
     expect(Number(usage[0]?.count ?? 0)).toBe(1)
     expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
+  })
+
+  it("continues after a credit top-up and never charges a covered transaction twice", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const secondRawRecordId = "00000000-0000-0000-0000-000000000383"
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 1,
+          kind: "manual_adjustment",
+          reference: "test:continue-initial-credit",
+          expiresAt: null,
+        })
+      })
+    )
+    await runPg(
+      seedRawRecord({
+        rawRecordId: secondRawRecordId,
+        externalRecordId: "raw-continue-2",
+        occurredAt,
+      })
+    )
+
+    const buildArtifacts = ({
+      externalId,
+      sourceRawRecordId,
+    }: {
+      readonly externalId: string
+      readonly sourceRawRecordId: string
+    }) =>
+      ({
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId,
+          externalId,
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId: fixture.cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy" as const,
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        feeTransfers: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      }) as const
+
+    const coveredArtifacts = buildArtifacts({
+      externalId: "transaction-continue-covered",
+      sourceRawRecordId: TEST_RAW_RECORD_ID,
+    })
+    const pausedArtifacts = buildArtifacts({
+      externalId: "transaction-continue-paused",
+      sourceRawRecordId: secondRawRecordId,
+    })
+    const persist = (artifacts: typeof coveredArtifacts) =>
+      runRepository(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts(artifacts)
+        )
+      )
+
+    await persist(coveredArtifacts)
+    const pauseError = await runRepository(
+      Effect.flip(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts(pausedArtifacts)
+        )
+      )
+    )
+    expect(pauseError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 2,
+          kind: "manual_adjustment",
+          reference: "test:continue-top-up",
+          expiresAt: null,
+        })
+      })
+    )
+
+    // The continue pass replays the paused transaction and may also revisit the
+    // covered one; neither may produce a second usage charge.
+    await persist(pausedArtifacts)
+    await persist(coveredArtifacts)
+    await persist(pausedArtifacts)
+
+    const persistedTransactions = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ externalId: schema.transactions.externalId })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+          .orderBy(asc(schema.transactions.externalId))
+      })
+    )
+    expect(persistedTransactions.map((row) => row.externalId)).toEqual([
+      "transaction-continue-covered",
+      "transaction-continue-paused",
+    ])
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            reference: schema.creditLedger.reference,
+            delta: schema.creditLedger.delta,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+          .orderBy(asc(schema.creditLedger.reference))
+      })
+    )
+    expect(usage).toHaveLength(2)
+    expect(usage.map((row) => Number(row.delta))).toEqual([-1, -1])
+    expect(new Set(usage.map((row) => row.reference)).size).toBe(2)
   })
 
   it("aggregates active credit entries by expiry before choosing a bucket", async () => {

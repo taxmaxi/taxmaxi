@@ -20,3 +20,9 @@
 **Status**: done
 **Notes**: Finished manually after the Ralph loop was stopped mid-story. Verified: full type-check, type-check:tests, lint, and full test suite (956 tests) all pass. Credit exhaustion is now SourceSyncCreditExhaustedError with reasonCode/availableCredits; jobs end in resumable credit_required status with creditOutcome (reason code, available, consumed, additional required); API response leak-tested against internal names; migration 20260819140521 adds the enum value and credit columns.
 ---
+
+## Iteration 4 - 2026-08-19 17:45
+**Story**: SYNC-004 - Prove that continuing after buying credits reuses cached work
+**Status**: done
+**Notes**: Tests-only, as the story predicted: checkpoint/high-watermark resume and ledger reference dedup already made continue safe. Added three proofs: persistence integration test (top-up then re-persist both transactions, exactly one -1 charge each), executor test (continue run fetches from the stored high watermark instead of refetching, covered record not re-persisted, third run idempotent), API integration test (a credit_required job does not block a new start; duplicate continue reuses the queued job). No production code changed.
+---

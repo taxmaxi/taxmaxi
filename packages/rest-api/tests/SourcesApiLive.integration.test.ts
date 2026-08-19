@@ -2789,6 +2789,61 @@ describe("SourcesApiLive", () => {
       }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
+  it.effect(
+    "starts a fresh job that continues a credit-required sync once credits are topped up",
+    () =>
+      Effect.gen(function* () {
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        const sourceId = crypto.randomUUID()
+        yield* seedCoinbaseSource({ userId, principalId, sourceId })
+        yield* seedUsableCredit({ userId })
+
+        const client = yield* makeAuthenticatedClient({ userId })
+        const pausedJob = yield* client.sources.startSourceSyncJob({
+          params: { sourceId },
+        })
+
+        const sourceSyncJobRepository = yield* SourceSyncJobRepository
+        yield* sourceSyncJobRepository.claimJob({
+          jobId: pausedJob.jobId,
+          workerId: "worker-1",
+          startedAt: new Date("2025-01-02T00:00:00.000Z"),
+        })
+        yield* sourceSyncJobRepository.failCreditRequiredJob({
+          jobId: pausedJob.jobId,
+          message: "Sync paused: no usable credits remain. Add credits and run sync again.",
+          completedAt: new Date("2025-01-02T00:10:00.000Z"),
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 1,
+          additionalCreditsRequired: 1,
+        })
+
+        const db = yield* drizzle
+        yield* db.insert(schema.creditLedger).values({
+          userId,
+          delta: 2,
+          kind: "top_up",
+          reference: `test-credit-continue-${userId}`,
+        })
+
+        const continuedJob = yield* client.sources.startSourceSyncJob({
+          params: { sourceId },
+        })
+        const repeatedJob = yield* client.sources.startSourceSyncJob({
+          params: { sourceId },
+        })
+
+        // The credit-required job does not block the continue; a fresh job is
+        // queued and asking again reuses it instead of stacking more jobs.
+        expect(continuedJob.jobId).not.toBe(pausedJob.jobId)
+        expect(continuedJob.status).toBe("queued")
+        expect(repeatedJob.jobId).toBe(continuedJob.jobId)
+        expect(queueEvents).toHaveLength(2)
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
   it.effect("returns the same queued job for duplicate start requests", () =>
     Effect.gen(function* () {
       const userId = crypto.randomUUID()

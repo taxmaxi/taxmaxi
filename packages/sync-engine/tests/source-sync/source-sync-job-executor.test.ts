@@ -109,6 +109,8 @@ const makeExecutorLayer = ({
   failReplayPersistenceStorageRawRecordId,
   failCreditRawRecordId,
   failCreditAvailableCredits = 0,
+  failCreditOnce = false,
+  fetchHighWatermark = null,
   replayCreditReference,
   failReplayReset = false,
   holdReplayCreditReservation = false,
@@ -134,6 +136,8 @@ const makeExecutorLayer = ({
   readonly failReplayPersistenceStorageRawRecordId?: string
   readonly failCreditRawRecordId?: string
   readonly failCreditAvailableCredits?: number
+  readonly failCreditOnce?: boolean
+  readonly fetchHighWatermark?: Date | null
   readonly replayCreditReference?: (sourceRawRecordId: string) => string
   readonly failReplayReset?: boolean
   readonly holdReplayCreditReservation?: boolean
@@ -145,6 +149,8 @@ const makeExecutorLayer = ({
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
+  let remainingCreditFailures = failCreditOnce ? 1 : Number.POSITIVE_INFINITY
+  const normalizedRawRecordIds = new Set<string>()
   const reservedReplayReferences = new Set<string>()
   const toReplayCreditReference =
     replayCreditReference ?? ((sourceRawRecordId: string) => `reserved-credit:${sourceRawRecordId}`)
@@ -280,7 +286,11 @@ const makeExecutorLayer = ({
     listReplayCandidates: () => Effect.succeed(replayCandidates),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
     listPendingNormalizationRecordIds: () =>
-      Effect.succeed(checkpointRawRecords.map((rawRecord) => rawRecord.id)),
+      Effect.sync(() =>
+        checkpointRawRecords
+          .map((rawRecord) => rawRecord.id)
+          .filter((rawRecordId) => !normalizedRawRecordIds.has(rawRecordId))
+      ),
     listRawRecordsByIds: ({ rawRecordIds }) =>
       Effect.succeed(
         [...checkpointRawRecords, ...replayRawRecords].filter((rawRecord) =>
@@ -288,8 +298,9 @@ const makeExecutorLayer = ({
         )
       ),
     listRawRecordsByOccurredAt: () => Effect.succeed([]),
-    markRawRecordNormalized: () =>
+    markRawRecordNormalized: ({ rawRecordId }) =>
       Effect.sync(() => {
+        normalizedRawRecordIds.add(rawRecordId)
         events.push("mark-raw-normalized")
       }),
     markRawRecordFailed: ({ message }) =>
@@ -301,7 +312,7 @@ const makeExecutorLayer = ({
   })
 
   const makeCoinbaseModule = (): SourceProviderModuleShape => ({
-    fetchRawBatch: () =>
+    fetchRawBatch: (params) =>
       failFetch
         ? Effect.fail(
             new SourceSyncProviderFailureError({
@@ -310,14 +321,15 @@ const makeExecutorLayer = ({
               retryable: true,
             })
           )
-        : Effect.succeed(
-            FetchProviderRawBatchResult.make({
+        : Effect.sync(() => {
+            events.push(`fetch:${params.resumeHighWatermark?.toISOString() ?? "none"}`)
+            return FetchProviderRawBatchResult.make({
               records: fetchedProviderRecords,
               cursorPayload: null,
-              highWatermark: null,
+              highWatermark: fetchHighWatermark,
               done: true,
             })
-          ),
+          }),
     refreshReferenceData: () =>
       Effect.succeed({
         transactionTypeCatalogCount: 0,
@@ -565,7 +577,11 @@ const makeExecutorLayer = ({
             cause: "Replay persistence failed",
           })
         }
-        if (params.transaction.sourceRawRecordId === failCreditRawRecordId) {
+        if (
+          params.transaction.sourceRawRecordId === failCreditRawRecordId &&
+          remainingCreditFailures > 0
+        ) {
+          remainingCreditFailures -= 1
           return yield* new SourceSyncCreditExhaustedError({
             reasonCode: "no_usable_credits",
             availableCredits: failCreditAvailableCredits,
@@ -580,6 +596,9 @@ const makeExecutorLayer = ({
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {
+          // The real repository stamps normalizedAt in the same transaction, so a
+          // persisted row leaves the pending-normalization set.
+          normalizedRawRecordIds.add(params.transaction.sourceRawRecordId)
           reservedReplayReferences.delete(
             toReplayCreditReference(params.transaction.sourceRawRecordId)
           )
@@ -1269,6 +1288,55 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain(`persist-normalized:${rawRecordTwo.id}`)
     expect(events).not.toContain(`fail:${result.message}`)
     expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
+  })
+
+  it("continues after a credit top-up reusing cached history without refetching or re-charging", async () => {
+    const events: Array<string> = []
+    const rawRecordOne = makeReplayRawRecord(1)
+    const rawRecordTwo = makeReplayRawRecord(2)
+    const watermark = new Date("2026-01-02T00:00:00.000Z")
+
+    const executorLayer = makeExecutorLayer({
+      mode: "sync",
+      checkpointRawRecords: [rawRecordOne, rawRecordTwo],
+      prepareReplayTransactions: true,
+      failCreditRawRecordId: rawRecordTwo.id,
+      failCreditOnce: true,
+      fetchHighWatermark: watermark,
+      pageSize: 1,
+      events,
+    })
+
+    const [paused, continued, repeated] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        const pausedRun = yield* executor.execute({ jobId: "job-1" })
+        const continuedRun = yield* executor.execute({ jobId: "job-1" })
+        const repeatedRun = yield* executor.execute({ jobId: "job-1" })
+        return [pausedRun, continuedRun, repeatedRun] as const
+      }).pipe(Effect.provide(executorLayer))
+    )
+
+    expect(paused.status).toBe("credit_required")
+    expect(continued.status).toBe("completed")
+    expect(repeated.status).toBe("completed")
+
+    // The continue run resumes provider fetching from the stored high watermark
+    // instead of refetching the history cached before the pause.
+    expect(events.filter((event) => event.startsWith("fetch:"))).toEqual([
+      "fetch:none",
+      `fetch:${watermark.toISOString()}`,
+      `fetch:${watermark.toISOString()}`,
+    ])
+
+    // The transaction covered before the pause is not persisted or charged again;
+    // only the paused record is retried once credits exist.
+    expect(
+      events.filter((event) => event === `persist-normalized:${rawRecordOne.id}`)
+    ).toHaveLength(1)
+    expect(
+      events.filter((event) => event === `persist-normalized:${rawRecordTwo.id}`)
+    ).toHaveLength(2)
   })
 
   it("records retry metadata and returns a retryable error before the final attempt", async () => {
