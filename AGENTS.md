@@ -187,6 +187,7 @@ Select only needed columns. Do not use `SELECT *`.
 7. Only commit when explicitly requested by the user.
 8. In Effect-based packages, load environment variables with Effect Config instead of `process.env` directly. `apps/www` uses its generated Cloudflare environment types and must not add Effect only for configuration loading.
 9. Keep `.env` files local. They are intentionally present for this working copy but must not be committed.
+10. In `apps/www`, every user-visible string must come from paraglide messages (`m["..."]()` with keys in `apps/www/messages/en.json` and `de.json`). Do not hardcode English copy in components. Backend responses carry machine-readable codes, not display text; the frontend maps codes to localized copy.
 
 ## Agent skills
 

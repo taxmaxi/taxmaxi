@@ -1290,8 +1290,6 @@ const make = Effect.gen(function* () {
     | SourceSyncJobExecutionConflictError
   > =>
     Effect.gen(function* () {
-      const message =
-        "Sync paused: no usable credits remain. Add credits and run sync again to continue."
       const completedAt = nowDate()
       const execution = yield* sourceSyncStateRepository.getExecutionState({ sourceId })
       const creditsConsumed = execution.normalizedRecords
@@ -1306,22 +1304,6 @@ const make = Effect.gen(function* () {
         additionalCreditsRequired,
       }
 
-      yield* sourceSyncStateRepository
-        .persistFailureMetadata({ sourceId, lastErrorMessage: message })
-        .pipe(
-          Effect.catch((persistError) =>
-            Effect.logError(
-              {
-                sourceId,
-                jobId,
-                originalMessage: message,
-                persistFailureMetadataError: persistError,
-              },
-              "source-sync:failed-to-persist-credit-required-metadata"
-            )
-          )
-        )
-
       yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "credit-required" })
 
       yield* Effect.logWarning(
@@ -1329,8 +1311,10 @@ const make = Effect.gen(function* () {
         "source-sync:credit-required"
       )
 
+      // No human-readable message is stored or returned: clients derive their
+      // own localized copy from the status and the credit outcome fields.
       yield* sourceSyncJobRepository
-        .failCreditRequiredJob({ jobId, message, completedAt, ...creditOutcome })
+        .failCreditRequiredJob({ jobId, completedAt, ...creditOutcome })
         .pipe(
           Effect.catchTags({
             SourceSyncJobExecutionRecordNotFoundError: () =>
@@ -1346,7 +1330,7 @@ const make = Effect.gen(function* () {
         sourceId,
         jobId,
         status: "credit_required",
-        message,
+        message: null,
         resumable: true,
         creditOutcome,
       } satisfies SourceSyncJobSummary

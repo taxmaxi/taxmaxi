@@ -242,7 +242,6 @@ const makeExecutorLayer = ({
         events.push(`fail:${message}`)
       }),
     failCreditRequiredJob: ({
-      message,
       reasonCode,
       availableCredits,
       creditsConsumed,
@@ -250,7 +249,7 @@ const makeExecutorLayer = ({
     }) =>
       Effect.sync(() => {
         events.push(
-          `credit-required:${message}:${reasonCode}:${availableCredits}:${creditsConsumed}:${additionalCreditsRequired ?? "unknown"}`
+          `credit-required:${reasonCode}:${availableCredits}:${creditsConsumed}:${additionalCreditsRequired ?? "unknown"}`
         )
       }),
   })
@@ -1235,7 +1234,7 @@ describe("SourceSyncJobExecutor", () => {
     })
     expect(events).not.toContain("reset-derived-state")
     expect(events).not.toContain("mark-raw-normalized")
-    expect(events).not.toContain(`fail:${result.message}`)
+    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
     expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
   })
 
@@ -1265,9 +1264,8 @@ describe("SourceSyncJobExecutor", () => {
 
     expect(result.status).toBe("credit_required")
     expect(result.resumable).toBe(true)
-    expect(result.message).not.toMatch(
-      /sourceNormalizationRepository|SyncEngineStorageError|SourceSyncCreditExhaustedError|SELECT|INSERT/i
-    )
+    // No server-authored message: clients localize from the credit outcome.
+    expect(result.message).toBeNull()
     expect(result.creditOutcome).toEqual({
       reasonCode: "no_usable_credits",
       availableCredits: 0,
@@ -1286,7 +1284,7 @@ describe("SourceSyncJobExecutor", () => {
     // Record 1 already committed and must not be replayed away by the credit-required outcome.
     expect(events).toContain(`persist-normalized:${rawRecordOne.id}`)
     expect(events).toContain(`persist-normalized:${rawRecordTwo.id}`)
-    expect(events).not.toContain(`fail:${result.message}`)
+    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
     expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
   })
 

@@ -627,7 +627,6 @@ const make = Effect.gen(function* () {
 
   const failCreditRequiredJob: SourceSyncJobRepositoryShape["failCreditRequiredJob"] = ({
     jobId,
-    message,
     completedAt,
     reasonCode,
     availableCredits,
@@ -642,7 +641,9 @@ const make = Effect.gen(function* () {
             .set({
               status: "credit_required",
               completedAt,
-              errorMessage: message,
+              // Clients derive localized copy from the status and the credit
+              // fields; no server-authored message is stored.
+              errorMessage: null,
               creditReasonCode: reasonCode,
               creditsAvailable: availableCredits,
               creditsConsumed,

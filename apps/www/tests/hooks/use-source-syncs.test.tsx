@@ -118,7 +118,7 @@ describe("useSourceSyncs", () => {
     await act(async () => {
       poll.resolve({
         ...makeJob("credit_required"),
-        message: "Sync paused: no usable credits remain.",
+        message: null,
         resumable: true,
         creditOutcome: {
           reasonCode: "no_usable_credits",

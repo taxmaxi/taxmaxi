@@ -872,7 +872,6 @@ describe("SourceSyncJobRepositoryLive", () => {
       Effect.flatMap(SourceSyncJobRepository, (repository) =>
         repository.failCreditRequiredJob({
           jobId: created.id,
-          message: "Sync paused: no usable credits remain. Add credits and run sync again.",
           completedAt: new Date("2025-01-02T00:10:00.000Z"),
           reasonCode: "no_usable_credits",
           availableCredits: 0,
@@ -901,12 +900,9 @@ describe("SourceSyncJobRepositoryLive", () => {
       creditsConsumed: 3,
       additionalCreditsRequired: 2,
     })
-    expect(job.message).toBe(
-      "Sync paused: no usable credits remain. Add credits and run sync again."
-    )
-    expect(job.message).not.toMatch(
-      /sourceNormalizationRepository|SyncEngineStorageError|SELECT|INSERT|consumeTransactionCredit/i
-    )
+    // No server-authored message: clients build localized copy from the
+    // status and credit outcome instead.
+    expect(job.message).toBeNull()
     expect(persisted.status).toBe("credit_required")
   })
 

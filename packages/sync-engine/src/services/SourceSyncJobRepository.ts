@@ -127,7 +127,6 @@ export interface FailSourceSyncJobParams {
  */
 export interface FailCreditRequiredSourceSyncJobParams {
   readonly jobId: string
-  readonly message: string
   readonly completedAt: Date
   readonly reasonCode: SyncCreditReasonCode
   readonly availableCredits: number

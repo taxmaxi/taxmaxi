@@ -2763,7 +2763,6 @@ describe("SourcesApiLive", () => {
         })
         yield* sourceSyncJobRepository.failCreditRequiredJob({
           jobId: started.jobId,
-          message: "Sync paused: no usable credits remain. Add credits and run sync again.",
           completedAt: new Date("2025-01-02T00:10:00.000Z"),
           reasonCode: "no_usable_credits",
           availableCredits: 0,
@@ -2777,6 +2776,7 @@ describe("SourcesApiLive", () => {
 
         expect(status.status).toBe("credit_required")
         expect(status.resumable).toBe(true)
+        expect(status.message).toBeNull()
         expect(status.creditOutcome).toEqual({
           reasonCode: "no_usable_credits",
           availableCredits: 0,
@@ -2812,7 +2812,6 @@ describe("SourcesApiLive", () => {
         })
         yield* sourceSyncJobRepository.failCreditRequiredJob({
           jobId: pausedJob.jobId,
-          message: "Sync paused: no usable credits remain. Add credits and run sync again.",
           completedAt: new Date("2025-01-02T00:10:00.000Z"),
           reasonCode: "no_usable_credits",
           availableCredits: 0,

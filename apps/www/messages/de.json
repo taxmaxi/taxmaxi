@@ -87,6 +87,21 @@
       "errors": {
         "unavailable": "Die Abrechnung ist vorübergehend nicht verfügbar."
       }
+    },
+    "syncIsland": {
+      "creditRequired": {
+        "statusLabel": "Guthaben nötig",
+        "headline": "Guthaben nötig, um {sourceNames} weiter zu synchronisieren",
+        "pausedNoDetails": "Diese Synchronisierung pausiert, bis du Transaktionsguthaben hinzufügst.",
+        "pausedIntro": "Diese Synchronisierung pausiert: Dein Transaktionsguthaben ist aufgebraucht.",
+        "coveredOne": "{count} Transaktion ist bereits importiert und bleibt erhalten.",
+        "coveredMany": "{count} Transaktionen sind bereits importiert und bleiben erhalten.",
+        "addUnknown": "Füge Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addOne": "Füge {count} weiteres Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addMany": "Füge {count} weitere Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "choosePlan": "Tarif wählen",
+        "buyCredits": "Guthaben kaufen"
+      }
     }
   },
   "assetCatalog": {

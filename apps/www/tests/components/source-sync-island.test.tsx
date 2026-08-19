@@ -2,13 +2,24 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createElement, type ComponentProps, type ReactNode } from "react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import type { BillingStatus } from "taxmaxi"
 
 import {
   SourceSyncIsland,
   getCreditRequiredCopy,
   type SourceSyncIslandItem,
 } from "#/components/source-sync-island"
+
+const navigateMock = vi.fn()
+
+let billingStatusResult: () => Promise<BillingStatus>
+
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => navigateMock,
+  useRouteContext: ({ select }: { readonly select: (context: unknown) => unknown }) =>
+    select({ taxmaxi: () => ({ billing: { status: () => billingStatusResult() } }) }),
+}))
 
 vi.mock("motion/react", () => {
   const stripMotionProps = ({
@@ -33,6 +44,13 @@ vi.mock("motion/react", () => {
     },
     useReducedMotion: () => true,
   }
+})
+
+const makeBillingStatus = (subscriptionStatus: string | null): BillingStatus => ({
+  credits: 0,
+  subscriptionStatus,
+  currentPeriodEnd: null,
+  cancelAtPeriodEnd: false,
 })
 
 const creditRequiredItem: SourceSyncIslandItem = {
@@ -66,7 +84,6 @@ const renderIsland = (props: Partial<ComponentProps<typeof SourceSyncIsland>> = 
   render(
     <SourceSyncIsland
       items={[creditRequiredItem]}
-      onBillingAction={vi.fn()}
       onDismiss={vi.fn()}
       onRetry={vi.fn()}
       {...props}
@@ -74,6 +91,11 @@ const renderIsland = (props: Partial<ComponentProps<typeof SourceSyncIsland>> = 
   )
 
 describe("SourceSyncIsland credit-required recovery", () => {
+  beforeEach(() => {
+    navigateMock.mockReset()
+    billingStatusResult = () => Promise.resolve(makeBillingStatus(null))
+  })
+
   afterEach(() => {
     cleanup()
   })
@@ -96,23 +118,28 @@ describe("SourceSyncIsland credit-required recovery", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
   })
 
-  it("offers the plan action to a user without an active subscription", () => {
-    const onBillingAction = vi.fn()
-    renderIsland({ hasActiveSubscription: false, onBillingAction })
+  it("navigates to billing from the plan action for a user without an active subscription", async () => {
+    renderIsland()
 
-    const action = screen.getByRole("button", { name: "Choose a plan" })
+    const action = await screen.findByRole("button", { name: "Choose a plan" })
     fireEvent.click(action)
 
-    expect(onBillingAction).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "source-1", status: "credit_required" })
-    )
+    expect(navigateMock).toHaveBeenCalledWith({ to: "/app/billing" })
   })
 
-  it("offers the credit purchase action to an exhausted active subscriber", () => {
-    renderIsland({ hasActiveSubscription: true })
+  it("offers the credit purchase action to an exhausted active subscriber", async () => {
+    billingStatusResult = () => Promise.resolve(makeBillingStatus("active"))
+    renderIsland()
 
-    expect(screen.getByRole("button", { name: "Buy credits" })).toBeDefined()
+    expect(await screen.findByRole("button", { name: "Buy credits" })).toBeDefined()
     expect(screen.queryByRole("button", { name: "Choose a plan" })).toBeNull()
+  })
+
+  it("falls back to the plan action when billing status cannot load", async () => {
+    billingStatusResult = () => Promise.reject(new Error("billing unavailable"))
+    renderIsland()
+
+    expect(await screen.findByRole("button", { name: "Choose a plan" })).toBeDefined()
   })
 
   it("keeps the retry action for ordinary failures", () => {

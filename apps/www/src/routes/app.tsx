@@ -90,10 +90,6 @@ function RouteComponent() {
     await navigate({ to: "/login", replace: true })
   }, [navigate, queryClient])
 
-  const onBillingAction = useCallback(() => {
-    void navigate({ to: "/app/billing" })
-  }, [navigate])
-
   const onSourceSyncCompleted = useCallback(
     async (sourceId: string) => {
       await queryClient.invalidateQueries({
@@ -114,7 +110,6 @@ function RouteComponent() {
       <Dashboard
         accounts={sourceAccounts}
         getSourceSyncJob={getSourceSyncJob}
-        onBillingAction={onBillingAction}
         onSourceSyncCompleted={onSourceSyncCompleted}
         onUnauthorized={onUnauthorized}
         startSourceSync={startSourceSync}

@@ -52,8 +52,14 @@ export const waitForSyncCompletion = ({
         }
 
         if (job.status === "credit_required") {
+          // The server sends no message for this outcome; the CLI builds its
+          // own copy from the structured credit fields.
+          const shortfall = job.creditOutcome?.additionalCreditsRequired
           return yield* new CliCommandError({
-            message: job.message ?? "Sync paused: add credits, then run sync again to continue.",
+            message:
+              shortfall === null || shortfall === undefined
+                ? "Sync paused: add credits, then run sync again to continue."
+                : `Sync paused: ${shortfall} more credit${shortfall === 1 ? "" : "s"} needed. Add credits, then run sync again to continue.`,
           })
         }
 

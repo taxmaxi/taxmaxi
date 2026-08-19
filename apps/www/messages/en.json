@@ -87,6 +87,21 @@
       "errors": {
         "unavailable": "Billing is temporarily unavailable."
       }
+    },
+    "syncIsland": {
+      "creditRequired": {
+        "statusLabel": "Needs credits",
+        "headline": "Needs credits to keep syncing {sourceNames}",
+        "pausedNoDetails": "This sync is paused until you add transaction credits.",
+        "pausedIntro": "This sync is paused: your transaction credits ran out.",
+        "coveredOne": "{count} transaction is already imported and stays yours.",
+        "coveredMany": "{count} transactions are already imported and stay yours.",
+        "addUnknown": "Add credits to finish the sync.",
+        "addOne": "Add {count} more credit to finish the sync.",
+        "addMany": "Add {count} more credits to finish the sync.",
+        "choosePlan": "Choose a plan",
+        "buyCredits": "Buy credits"
+      }
     }
   },
   "assetCatalog": {
