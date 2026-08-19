@@ -102,6 +102,42 @@
         "choosePlan": "Choose a plan",
         "buyCredits": "Buy credits",
         "notStarted": "This sync needs transaction credits before it can start. Add credits and run it again."
+      },
+      "status": {
+        "queued": "Queued",
+        "running": "Syncing",
+        "completed": "Synced",
+        "failed": "Failed"
+      },
+      "headline": {
+        "queued": "Waiting for {sourceNames}",
+        "running": "Syncing {sourceNames}",
+        "completed": "Synced {sourceNames}",
+        "failed": "Couldn't sync {sourceNames}",
+        "fallback": "Syncing"
+      },
+      "sourceNames": {
+        "fallback": "source",
+        "pair": "{first} and {second}",
+        "overflow": "{first}, {second} + {count} more"
+      },
+      "metrics": {
+        "fetched": "Fetched",
+        "categorized": "Categorized",
+        "failed": "Failed"
+      },
+      "queue": {
+        "title": "Also syncing",
+        "moreOne": "+{count} more source",
+        "moreMany": "+{count} more sources"
+      },
+      "retry": "Retry",
+      "openDetailsToRetry": "Open sync details to retry.",
+      "aria": {
+        "showDetails": "Show sync details for {sourceName}",
+        "showDetailsHeadline": "Show sync details: {headline}",
+        "hideDetails": "Hide sync details for {sourceName}",
+        "dismiss": "Dismiss {sourceName} sync status"
       }
     }
   },

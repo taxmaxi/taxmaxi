@@ -102,6 +102,42 @@
         "choosePlan": "Tarif wählen",
         "buyCredits": "Guthaben kaufen",
         "notStarted": "Diese Synchronisierung braucht Transaktionsguthaben, bevor sie starten kann. Füge Guthaben hinzu und starte sie erneut."
+      },
+      "status": {
+        "queued": "Wartet",
+        "running": "Synchronisiert",
+        "completed": "Abgeschlossen",
+        "failed": "Fehlgeschlagen"
+      },
+      "headline": {
+        "queued": "Warten auf {sourceNames}",
+        "running": "Synchronisiere {sourceNames}",
+        "completed": "{sourceNames} synchronisiert",
+        "failed": "Synchronisierung von {sourceNames} fehlgeschlagen",
+        "fallback": "Synchronisierung läuft"
+      },
+      "sourceNames": {
+        "fallback": "Quelle",
+        "pair": "{first} und {second}",
+        "overflow": "{first}, {second} + {count} weitere"
+      },
+      "metrics": {
+        "fetched": "Abgerufen",
+        "categorized": "Kategorisiert",
+        "failed": "Fehlgeschlagen"
+      },
+      "queue": {
+        "title": "Wird ebenfalls synchronisiert",
+        "moreOne": "+{count} weitere Quelle",
+        "moreMany": "+{count} weitere Quellen"
+      },
+      "retry": "Erneut versuchen",
+      "openDetailsToRetry": "Öffne die Sync-Details, um es erneut zu versuchen.",
+      "aria": {
+        "showDetails": "Sync-Details für {sourceName} anzeigen",
+        "showDetailsHeadline": "Sync-Details anzeigen: {headline}",
+        "hideDetails": "Sync-Details für {sourceName} ausblenden",
+        "dismiss": "Sync-Status von {sourceName} schließen"
       }
     }
   },

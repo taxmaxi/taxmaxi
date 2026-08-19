@@ -249,19 +249,21 @@ const CONTENT_TRANSITION = {
   ease: CONTENT.easeOut,
 }
 
-const statusLabel: Record<Exclude<SourceSyncStatus, "credit_required">, string> = {
-  queued: "Queued",
-  running: "Syncing",
-  completed: "Synced",
-  failed: "Failed",
-}
-
-// A function rather than a map entry so the localized label follows the active
+// A function rather than a map so the localized labels follow the active
 // locale instead of freezing at module load.
 function getStatusLabel(status: SourceSyncStatus): string {
-  return status === "credit_required"
-    ? m["app.syncIsland.creditRequired.statusLabel"]()
-    : statusLabel[status]
+  switch (status) {
+    case "queued":
+      return m["app.syncIsland.status.queued"]()
+    case "running":
+      return m["app.syncIsland.status.running"]()
+    case "completed":
+      return m["app.syncIsland.status.completed"]()
+    case "failed":
+      return m["app.syncIsland.status.failed"]()
+    case "credit_required":
+      return m["app.syncIsland.creditRequired.statusLabel"]()
+  }
 }
 
 const statusTone: Record<SourceSyncStatus, string> = {
@@ -459,7 +461,7 @@ function CompactIslandContent({
 }) {
   return (
     <motion.button
-      aria-label={`Show sync details for ${item.sourceName}`}
+      aria-label={m["app.syncIsland.aria.showDetails"]({ sourceName: item.sourceName })}
       className="grid size-11 touch-manipulation place-items-center rounded-[inherit] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/40"
       onClick={onOpen}
       type="button"
@@ -512,7 +514,9 @@ function ActiveIslandContent({
           aria-controls={`source-sync-details-${item.id}`}
           aria-expanded={expanded}
           aria-label={
-            expanded ? `Hide sync details for ${item.sourceName}` : `Show sync details: ${headline}`
+            expanded
+              ? m["app.syncIsland.aria.hideDetails"]({ sourceName: item.sourceName })
+              : m["app.syncIsland.aria.showDetailsHeadline"]({ headline })
           }
           className="flex min-h-9 min-w-0 flex-1 touch-manipulation items-center gap-2 rounded-[1.5rem] pl-3 pr-4 text-left outline-none transition-[background-color] duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/40 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-marketing-surface-hover-muted"
           layout="position"
@@ -525,7 +529,7 @@ function ActiveIslandContent({
         {expanded && dismissible && onDismiss ? (
           <div className="shrink-0 pr-2">
             <Button
-              aria-label={`Dismiss ${item.sourceName} sync status`}
+              aria-label={m["app.syncIsland.aria.dismiss"]({ sourceName: item.sourceName })}
               className="shrink-0"
               onClick={() => onDismiss(item)}
               size="icon-xs"
@@ -580,7 +584,7 @@ function ActiveIslandContent({
                 {item.status === "failed" && onRetry ? (
                   <Button onClick={() => onRetry(item)} size="sm" type="button" variant="secondary">
                     <RotateCcw aria-hidden="true" className="size-3.5" strokeWidth={2.5} />
-                    Retry
+                    {m["app.syncIsland.retry"]()}
                   </Button>
                 ) : null}
               </div>
@@ -640,9 +644,9 @@ function CompletionGlow({
 
 function SyncMetrics({ item }: { item: SourceSyncIslandItem }) {
   const metrics = [
-    { label: "Fetched", value: item.fetchedRecords },
-    { label: "Categorized", value: item.normalizedRecords },
-    { label: "Failed", value: item.failedRecords },
+    { label: m["app.syncIsland.metrics.fetched"](), value: item.fetchedRecords },
+    { label: m["app.syncIsland.metrics.categorized"](), value: item.normalizedRecords },
+    { label: m["app.syncIsland.metrics.failed"](), value: item.failedRecords },
   ]
 
   return (
@@ -668,7 +672,7 @@ function SyncQueue({ items }: { items: ReadonlyArray<SourceSyncIslandItem> }) {
   return (
     <div className="mt-3 border-t border-sync-island-border pt-2.5">
       <p className="text-[0.625rem] font-medium uppercase tracking-[0.08em] text-sync-island-muted">
-        Also syncing
+        {m["app.syncIsland.queue.title"]()}
       </p>
       <ul className="mt-2 flex flex-col gap-1.5">
         {visibleItems.map((item) => (
@@ -682,7 +686,9 @@ function SyncQueue({ items }: { items: ReadonlyArray<SourceSyncIslandItem> }) {
       </ul>
       {hiddenCount > 0 ? (
         <p className="mt-2 text-xs tabular-nums text-sync-island-muted">
-          +{hiddenCount} more {hiddenCount === 1 ? "source" : "sources"}
+          {hiddenCount === 1
+            ? m["app.syncIsland.queue.moreOne"]({ count: hiddenCount })
+            : m["app.syncIsland.queue.moreMany"]({ count: hiddenCount })}
         </p>
       ) : null}
     </div>
@@ -695,22 +701,22 @@ function getIslandHeadline(items: ReadonlyArray<SourceSyncIslandItem>): string {
 
   switch (primaryItem?.status) {
     case "queued":
-      return `Waiting for ${sourceNames}`
+      return m["app.syncIsland.headline.queued"]({ sourceNames })
     case "running":
-      return `Syncing ${sourceNames}`
+      return m["app.syncIsland.headline.running"]({ sourceNames })
     case "completed":
-      return `Synced ${sourceNames}`
+      return m["app.syncIsland.headline.completed"]({ sourceNames })
     case "failed":
-      return `Couldn't sync ${sourceNames}`
+      return m["app.syncIsland.headline.failed"]({ sourceNames })
     case "credit_required":
       return m["app.syncIsland.creditRequired.headline"]({ sourceNames })
     default:
-      return "Syncing"
+      return m["app.syncIsland.headline.fallback"]()
   }
 }
 
 function getSourceNames(items: ReadonlyArray<SourceSyncIslandItem>): string {
-  const firstSource = items[0]?.sourceName ?? "source"
+  const firstSource = items[0]?.sourceName ?? m["app.syncIsland.sourceNames.fallback"]()
   const secondSource = items[1]?.sourceName
 
   if (!secondSource) {
@@ -718,10 +724,14 @@ function getSourceNames(items: ReadonlyArray<SourceSyncIslandItem>): string {
   }
 
   if (items.length === 2) {
-    return `${firstSource} and ${secondSource}`
+    return m["app.syncIsland.sourceNames.pair"]({ first: firstSource, second: secondSource })
   }
 
-  return `${firstSource}, ${secondSource} + ${items.length - 2} more`
+  return m["app.syncIsland.sourceNames.overflow"]({
+    first: firstSource,
+    second: secondSource,
+    count: items.length - 2,
+  })
 }
 
 function getAnnouncement(items: ReadonlyArray<SourceSyncIslandItem>): string {
@@ -732,7 +742,7 @@ function getAnnouncement(items: ReadonlyArray<SourceSyncIslandItem>): string {
   }
 
   return primaryItem?.status === "failed"
-    ? `${getIslandHeadline(items)}. ${primaryItem.message ?? "Open sync details to retry."}`
+    ? `${getIslandHeadline(items)}. ${primaryItem.message ?? m["app.syncIsland.openDetailsToRetry"]()}`
     : `${getIslandHeadline(items)}.`
 }
 
