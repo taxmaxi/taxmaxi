@@ -286,7 +286,11 @@ const updateIncomeLegCurrency = (fiatCurrency: string | null) =>
       .where(eq(schema.transactionLegs.externalId, "income-leg"))
   }).pipe(Effect.provide(context.TestPgClientLive))
 
-const insertUnresolvedProviderAssetSourceUse = () =>
+const insertUnresolvedProviderAssetSourceUse = ({
+  mappingStatus,
+}: {
+  readonly mappingStatus?: "pending_review" | "rejected"
+} = {}) =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
@@ -308,6 +312,16 @@ const insertUnresolvedProviderAssetSourceUse = () =>
       providerAssetRowId: providerAsset.id,
       sourceId,
     })
+
+    if (mappingStatus !== undefined) {
+      yield* db.insert(schema.providerAssetMappings).values({
+        providerAssetRowId: providerAsset.id,
+        mappingKind: "asset",
+        canonicalAssetId: null,
+        mappingStatus,
+        sourceNotes: "Tax calculation blocking fixture",
+      })
+    }
   }).pipe(Effect.provide(context.TestPgClientLive))
 
 await Effect.runPromise(context.recreateTestDatabase())
@@ -403,6 +417,25 @@ describe("TaxCalculationServiceLive", () => {
         expect(error._tag).toBe("TaxCalculationPendingObservationsError")
         if (error._tag === "TaxCalculationPendingObservationsError") {
           expect(error.sourceId).toBe(sourceId)
+          expect(error.pendingObservationCount).toBe(1)
+          expect(error.blockingObservations).toEqual([
+            { provider: "coinbase", currencyCode: "XYZ" },
+          ])
+        }
+      })
+    )
+  })
+
+  it("fails with a pending error when an observation's mapping was rejected", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        // A rejected mapping still keeps its transactions out of legs and
+        // FIFO, so totals without it would be silently short.
+        yield* insertUnresolvedProviderAssetSourceUse({ mappingStatus: "rejected" })
+        const error = yield* calculateTax().pipe(Effect.flip)
+
+        expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+        if (error._tag === "TaxCalculationPendingObservationsError") {
           expect(error.pendingObservationCount).toBe(1)
           expect(error.blockingObservations).toEqual([
             { provider: "coinbase", currencyCode: "XYZ" },

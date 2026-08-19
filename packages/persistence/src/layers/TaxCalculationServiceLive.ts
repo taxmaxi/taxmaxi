@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, or } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, ne, or } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -234,13 +234,31 @@ const make = Effect.gen(function* () {
     )
 
   /**
-   * Count provider asset observations used by the source that still await a
-   * mapping decision. An observation with no mapping row or a pending_review
-   * mapping keeps its transactions outside derived accounting, so the
-   * calculation must report pending instead of a zero total.
+   * Filter for observations used by the source whose transactions stay
+   * outside derived accounting: no mapping row yet, or a mapping that is not
+   * approved (pending_review or rejected). Shared by the count and the list
+   * so the two can never disagree about what blocks a calculation.
    *
    * @param sourceId - Source identifier
-   * @returns Number of observations without a mapping decision
+   * @returns Drizzle where condition over source uses joined with mappings
+   */
+  const blockingObservationFilter = (sourceId: string) =>
+    and(
+      eq(schema.providerAssetSourceUses.sourceId, sourceId),
+      or(
+        isNull(schema.providerAssetMappings.id),
+        ne(schema.providerAssetMappings.mappingStatus, "approved")
+      )
+    )
+
+  /**
+   * Count provider asset observations used by the source whose transactions
+   * are still outside derived accounting. Any unapproved mapping keeps its
+   * transactions out of legs and FIFO, so the calculation must report pending
+   * instead of a silently short total.
+   *
+   * @param sourceId - Source identifier
+   * @returns Number of observations blocking the calculation
    */
   const countPendingObservations = (sourceId: string) =>
     Effect.gen(function* () {
@@ -254,15 +272,7 @@ const make = Effect.gen(function* () {
             schema.providerAssetSourceUses.providerAssetRowId
           )
         )
-        .where(
-          and(
-            eq(schema.providerAssetSourceUses.sourceId, sourceId),
-            or(
-              isNull(schema.providerAssetMappings.id),
-              eq(schema.providerAssetMappings.mappingStatus, "pending_review")
-            )
-          )
-        )
+        .where(blockingObservationFilter(sourceId))
         .pipe(wrapSqlError("taxCalculationService.countPendingObservations"))
 
       return row?.pendingObservations ?? 0
@@ -300,15 +310,7 @@ const make = Effect.gen(function* () {
           schema.providerAssetSourceUses.providerAssetRowId
         )
       )
-      .where(
-        and(
-          eq(schema.providerAssetSourceUses.sourceId, sourceId),
-          or(
-            isNull(schema.providerAssetMappings.id),
-            eq(schema.providerAssetMappings.mappingStatus, "pending_review")
-          )
-        )
-      )
+      .where(blockingObservationFilter(sourceId))
       .limit(BLOCKING_OBSERVATION_LIST_LIMIT)
       .pipe(
         wrapSqlError("taxCalculationService.loadBlockingObservations"),
