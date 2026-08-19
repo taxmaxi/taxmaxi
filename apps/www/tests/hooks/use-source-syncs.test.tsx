@@ -27,6 +27,8 @@ const makeJob = (status: SourceSyncJob["status"]): SourceSyncJob => ({
   normalizedRecords: null,
   failedRecords: null,
   message: null,
+  resumable: false,
+  creditOutcome: null,
 })
 
 const deferred = <A,>() => {
@@ -60,6 +62,8 @@ describe("useSourceSyncs", () => {
           jobId: "job-1",
           status: "queued",
           message: null,
+          resumable: false,
+          creditOutcome: null,
         }),
       })
     )

@@ -2734,8 +2734,59 @@ describe("SourcesApiLive", () => {
         normalizedRecords: null,
         failedRecords: null,
         message: null,
+        resumable: false,
+        creditOutcome: null,
       })
     }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect(
+    "reads a resumable credit-required status with its credit outcome, and no internal detail, after a worker stops the job on credit exhaustion",
+    () =>
+      Effect.gen(function* () {
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        const sourceId = crypto.randomUUID()
+        yield* seedCoinbaseSource({ userId, principalId, sourceId })
+        yield* seedUsableCredit({ userId })
+
+        const client = yield* makeAuthenticatedClient({ userId })
+        const started = yield* client.sources.startSourceSyncJob({
+          params: { sourceId },
+        })
+
+        const sourceSyncJobRepository = yield* SourceSyncJobRepository
+        yield* sourceSyncJobRepository.claimJob({
+          jobId: started.jobId,
+          workerId: "worker-1",
+          startedAt: new Date("2025-01-02T00:00:00.000Z"),
+        })
+        yield* sourceSyncJobRepository.failCreditRequiredJob({
+          jobId: started.jobId,
+          message: "Sync paused: no usable credits remain. Add credits and run sync again.",
+          completedAt: new Date("2025-01-02T00:10:00.000Z"),
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 3,
+          additionalCreditsRequired: 2,
+        })
+
+        const status = yield* client.sources.getSourceSyncJobStatus({
+          params: { sourceId, jobId: started.jobId },
+        })
+
+        expect(status.status).toBe("credit_required")
+        expect(status.resumable).toBe(true)
+        expect(status.creditOutcome).toEqual({
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 3,
+          additionalCreditsRequired: 2,
+        })
+        expect(JSON.stringify(status)).not.toMatch(
+          /sourceNormalizationRepository|SyncEngineStorageError|SourceSyncCreditExhaustedError|SELECT |INSERT |consumeTransactionCredit/i
+        )
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 
   it.effect("returns the same queued job for duplicate start requests", () =>

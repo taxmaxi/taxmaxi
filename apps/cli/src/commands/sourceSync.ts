@@ -51,6 +51,12 @@ export const waitForSyncCompletion = ({
           return yield* new CliCommandError({ message: job.message ?? "Source sync failed." })
         }
 
+        if (job.status === "credit_required") {
+          return yield* new CliCommandError({
+            message: job.message ?? "Sync paused: add credits, then run sync again to continue.",
+          })
+        }
+
         const currentTime = yield* nowMillis
         if (currentTime - startedAt > Duration.toMillis(JOB_TIMEOUT)) {
           return yield* new CliCommandError({

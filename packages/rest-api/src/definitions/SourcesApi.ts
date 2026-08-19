@@ -83,6 +83,20 @@ export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("Sour
 }) {}
 
 /**
+ * SourceSyncCreditOutcomeResponse - Credit-required details for a resumable sync outcome.
+ *
+ * `additionalCreditsRequired` is null until the billable total for the run is known.
+ */
+export class SourceSyncCreditOutcomeResponse extends Schema.Class<SourceSyncCreditOutcomeResponse>(
+  "SourceSyncCreditOutcomeResponse"
+)({
+  reasonCode: SyncCreditReasonCode,
+  availableCredits: Schema.Number,
+  creditsConsumed: Schema.Number,
+  additionalCreditsRequired: Schema.NullOr(Schema.Number),
+}) {}
+
+/**
  * SourceSyncStartResponse - Started source sync job info
  */
 export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartResponse>(
@@ -90,8 +104,11 @@ export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartRespons
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
-  status: Schema.Literals(["queued", "running", "completed", "failed"]),
+  status: Schema.Literals(["queued", "running", "completed", "failed", "credit_required"]),
   message: Schema.NullOr(Schema.String),
+  /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
+  resumable: Schema.Boolean,
+  creditOutcome: Schema.NullOr(SourceSyncCreditOutcomeResponse),
 }) {}
 
 /**
@@ -125,7 +142,7 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
-  status: Schema.Literals(["queued", "running", "completed", "failed"]),
+  status: Schema.Literals(["queued", "running", "completed", "failed", "credit_required"]),
   phase: Schema.NullOr(Schema.Literals(["discovering", "classifying", "reconciling", "completed"])),
   processedRecords: Schema.NullOr(Schema.Number),
   totalRecords: Schema.NullOr(Schema.Number),
@@ -135,6 +152,9 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
   normalizedRecords: Schema.NullOr(Schema.Number),
   failedRecords: Schema.NullOr(Schema.Number),
   message: Schema.NullOr(Schema.String),
+  /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
+  resumable: Schema.Boolean,
+  creditOutcome: Schema.NullOr(SourceSyncCreditOutcomeResponse),
 }) {}
 
 const currentTaxYear = new Date().getUTCFullYear()
@@ -216,7 +236,9 @@ export class SourceReportPageInfo extends Schema.Class<SourceReportPageInfo>(
 export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>(
   "SourceReportSyncStatus"
 )({
-  status: Schema.NullOr(Schema.Literals(["pending", "processing", "completed", "failed"])),
+  status: Schema.NullOr(
+    Schema.Literals(["pending", "processing", "completed", "failed", "credit_required"])
+  ),
   mode: Schema.NullOr(Schema.Literals(["sync", "replay"])),
   queuedAt: Schema.NullOr(Schema.String),
   startedAt: Schema.NullOr(Schema.String),

@@ -32,7 +32,7 @@ export function getSourceSyncDisplayProgress({
   progressPercent: number | null
   status: SourceSyncStatus
 }): number {
-  if (status === "completed" || status === "failed") {
+  if (status === "completed" || status === "failed" || status === "credit_required") {
     return SOURCE_SYNC_PROGRESS.completed
   }
 
@@ -156,6 +156,7 @@ const statusLabel: Record<SourceSyncStatus, string> = {
   running: "Syncing",
   completed: "Synced",
   failed: "Failed",
+  credit_required: "Needs credits",
 }
 
 const statusTone: Record<SourceSyncStatus, string> = {
@@ -163,6 +164,7 @@ const statusTone: Record<SourceSyncStatus, string> = {
   running: "text-sync-island-accent",
   completed: "text-sync-island-complete",
   failed: "text-sync-island-failed",
+  credit_required: "text-sync-island-failed",
 }
 
 const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
@@ -576,6 +578,8 @@ function getIslandHeadline(items: ReadonlyArray<SourceSyncIslandItem>): string {
       return `Synced ${sourceNames}`
     case "failed":
       return `Couldn't sync ${sourceNames}`
+    case "credit_required":
+      return `Needs credits to keep syncing ${sourceNames}`
     default:
       return "Syncing"
   }

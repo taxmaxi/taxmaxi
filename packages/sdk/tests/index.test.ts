@@ -361,6 +361,8 @@ const anonSourceJobResponse = {
   normalizedRecords: null,
   failedRecords: null,
   message: null,
+  resumable: false,
+  creditOutcome: null,
 }
 
 const anonSourceJobsResponseBody = JSON.stringify({

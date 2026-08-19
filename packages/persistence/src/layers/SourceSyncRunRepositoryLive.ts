@@ -48,6 +48,10 @@ const toRunItemStatus = (status: SourceSyncJobStatus): SyncRunItemStatus => {
       return "completed"
     case "failed":
       return "failed"
+    // A credit-required source stopped the same way a failure would from the
+    // run's perspective: it needs the caller to act before it can progress.
+    case "credit_required":
+      return "failed"
   }
 }
 

@@ -36,8 +36,8 @@ import {
   type SourceTransferDraft,
   type SourceVenueContextDraft,
   type SourceNormalizationRepositoryShape,
+  SourceSyncCreditExhaustedError,
   SyncEngineStorageError,
-  TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
 } from "@my/sync-engine/services"
 import {
   nowDate,
@@ -81,6 +81,22 @@ interface FifoLotAllocation {
 
 const INSUFFICIENT_FIFO_INVENTORY_OPERATION =
   "sourceNormalizationRepository.buildFifoLotAllocations"
+
+/**
+ * Wrap residual errors in `SyncEngineStorageError`, but let a typed credit-exhaustion
+ * outcome pass through so callers can route it to a resumable state instead of a
+ * generic storage failure.
+ */
+const wrapPreservingCreditExhausted =
+  (operation: string) =>
+  <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ): Effect.Effect<A, SyncEngineStorageError | SourceSyncCreditExhaustedError, R> =>
+    Effect.mapError(effect, (error) =>
+      error instanceof SourceSyncCreditExhaustedError
+        ? error
+        : toSyncEngineStorageError({ error, operation })
+    )
 
 const COMPLETED_PROVIDER_STATUSES = new Set(["completed", "succeeded"])
 
@@ -580,9 +596,9 @@ const make = Effect.gen(function* () {
         )
 
       if (account === undefined) {
-        return yield* toSyncEngineStorageError({
-          operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-          error: "Transaction credit balance is exhausted",
+        return yield* new SourceSyncCreditExhaustedError({
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
         })
       }
 
@@ -786,17 +802,17 @@ const make = Effect.gen(function* () {
       }))
       const totalBalance = buckets.reduce((total, candidate) => total + candidate.balance, 0)
       if (totalBalance <= 0) {
-        return yield* toSyncEngineStorageError({
-          operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-          error: "Transaction credit balance is exhausted",
+        return yield* new SourceSyncCreditExhaustedError({
+          reasonCode: "no_usable_credits",
+          availableCredits: Math.max(totalBalance, 0),
         })
       }
 
       const bucket = buckets.find((candidate) => candidate.balance > 0)
       if (bucket === undefined) {
-        return yield* toSyncEngineStorageError({
-          operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-          error: "Transaction credit balance is exhausted",
+        return yield* new SourceSyncCreditExhaustedError({
+          reasonCode: "no_usable_credits",
+          availableCredits: Math.max(totalBalance, 0),
         })
       }
 
@@ -2430,7 +2446,10 @@ const make = Effect.gen(function* () {
 
   const persistNormalizedArtifacts = <E>(
     params: PersistNormalizedSourceArtifactsParams<E>
-  ): Effect.Effect<PersistNormalizedSourceArtifactsResult, E | SyncEngineStorageError> =>
+  ): Effect.Effect<
+    PersistNormalizedSourceArtifactsResult,
+    E | SyncEngineStorageError | SourceSyncCreditExhaustedError
+  > =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
@@ -2641,7 +2660,9 @@ const make = Effect.gen(function* () {
           }
         })
       )
-      .pipe(wrapSyncEngineStorageError("sourceNormalizationRepository.persistNormalizedArtifacts"))
+      .pipe(
+        wrapPreservingCreditExhausted("sourceNormalizationRepository.persistNormalizedArtifacts")
+      )
 
   const reserveReplayTransactionCredits: SourceNormalizationRepositoryShape["reserveReplayTransactionCredits"] =
     ({ reservationId, transactions }) =>
@@ -2676,7 +2697,7 @@ const make = Effect.gen(function* () {
           )
         )
         .pipe(
-          wrapSyncEngineStorageError(
+          wrapPreservingCreditExhausted(
             "sourceNormalizationRepository.reserveReplayTransactionCredits"
           )
         )

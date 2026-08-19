@@ -75,7 +75,10 @@ const toSyncJobResponse = (job: {
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
   readonly message: string | null
-}) => SourceSyncJobResponse.make(job)
+}) =>
+  // Anonymous x402-paid sources are exempt from credit checks, so this job can
+  // never end in a credit-required outcome.
+  SourceSyncJobResponse.make({ ...job, resumable: false, creditOutcome: null })
 
 const mapSiwxVerificationError = (error: SIWXProofVerificationError) =>
   new AnonBadRequestError({ message: error.message })

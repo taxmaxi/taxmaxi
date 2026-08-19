@@ -123,7 +123,7 @@
         "Cover the worker-to-API path, not just the persistence boundary, since that is where the wrapping happened."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "large",
       "verification": [
         "pnpm --filter @my/sync-engine run type-check",

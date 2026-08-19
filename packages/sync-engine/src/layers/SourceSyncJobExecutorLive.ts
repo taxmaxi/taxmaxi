@@ -28,6 +28,7 @@ import {
   SourceReplayRepository,
   SourceRepository,
   type SourceRawRecord,
+  type SourceSyncCreditExhaustedError,
   type SourceSyncExecutionState,
   type SourceSyncJobMode,
   type SourceSyncJobSummary,
@@ -110,6 +111,7 @@ type SourceSyncExecutionError =
   | SourceProviderModuleError
   | SourceReplayDependencyError
   | SyncEngineStorageError
+  | SourceSyncCreditExhaustedError
 
 const DEFAULT_SYNC_PAGE_SIZE = 100
 const DEFAULT_SOURCE_SYNC_WORKER_ID = "source-sync-inline-executor"
@@ -279,7 +281,9 @@ const make = Effect.gen(function* () {
     readonly replayReservationId: string | null
   }): Effect.Effect<
     NormalizationSummary,
-    SourceProviderRecoverableNormalizationError | SyncEngineStorageError
+    | SourceProviderRecoverableNormalizationError
+    | SyncEngineStorageError
+    | SourceSyncCreditExhaustedError
   > =>
     Effect.gen(function* () {
       if (decision.kind === "skipped") {
@@ -346,7 +350,10 @@ const make = Effect.gen(function* () {
     readonly source: SourceSyncSource
     readonly rawRecord: SourceRawRecord
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
-  }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
+  }): Effect.Effect<
+    NormalizationSummary,
+    SyncEngineStorageError | SourceSyncCreditExhaustedError
+  > =>
     Effect.gen(function* () {
       if (rawRecord.normalizedAt !== null) {
         return {
@@ -364,7 +371,7 @@ const make = Effect.gen(function* () {
       })
     }).pipe(
       Effect.catch((error) =>
-        error._tag === "SyncEngineStorageError"
+        error._tag === "SyncEngineStorageError" || error._tag === "SourceSyncCreditExhaustedError"
           ? Effect.fail(error)
           : markRecoverableNormalizationFailure({ rawRecordId: rawRecord.id, error })
       )
@@ -378,7 +385,10 @@ const make = Effect.gen(function* () {
     readonly source: SourceSyncSource
     readonly rawRecords: ReadonlyArray<SourceRawRecord>
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
-  }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
+  }): Effect.Effect<
+    NormalizationSummary,
+    SyncEngineStorageError | SourceSyncCreditExhaustedError
+  > =>
     Effect.reduce(
       rawRecords,
       () =>
@@ -405,7 +415,10 @@ const make = Effect.gen(function* () {
     readonly rawRecords: ReadonlyArray<SourceRawRecord>
     readonly preparedRecords: ReadonlyMap<string, PreparedReplayRecord>
     readonly replayReservationId: string
-  }): Effect.Effect<NormalizationSummary, SyncEngineStorageError> =>
+  }): Effect.Effect<
+    NormalizationSummary,
+    SyncEngineStorageError | SourceSyncCreditExhaustedError
+  > =>
     Effect.reduce(
       rawRecords,
       () =>
@@ -472,7 +485,10 @@ const make = Effect.gen(function* () {
     readonly replayReservationId?: string
     readonly rawRecordIds: ReadonlyArray<string>
     readonly baseExecution: SourceSyncExecutionState
-  }): Effect.Effect<ClassificationResult, SyncEngineStorageError> =>
+  }): Effect.Effect<
+    ClassificationResult,
+    SyncEngineStorageError | SourceSyncCreditExhaustedError
+  > =>
     Effect.gen(function* () {
       const initialClassification: ClassificationResult = {
         execution: {
@@ -577,7 +593,7 @@ const make = Effect.gen(function* () {
     readonly source: SourceSyncSource
     readonly normalizeRecord: SourceProviderRawRecordNormalizer
     readonly countedFailedRawRecordIds: ReadonlySet<string>
-  }): Effect.Effect<ReplaySummary, SyncEngineStorageError> =>
+  }): Effect.Effect<ReplaySummary, SyncEngineStorageError | SourceSyncCreditExhaustedError> =>
     Effect.gen(function* () {
       const replayCandidates = yield* sourceRawRecordRepository.listReplayCandidates({
         sourceId: source.id,
@@ -1245,10 +1261,98 @@ const make = Effect.gen(function* () {
         jobId,
         status: "failed",
         message,
+        resumable: false,
+        creditOutcome: null,
       } satisfies SourceSyncJobSummary
     }).pipe(
       sourceSyncSpan({
         name: "source-sync.finalize-failure",
+        attributes: { sourceId, jobId, provider, mode },
+      })
+    )
+
+  const finalizeSyncCreditRequired = ({
+    sourceId,
+    jobId,
+    provider,
+    mode,
+    error,
+  }: {
+    readonly sourceId: string
+    readonly jobId: string
+    readonly provider: string
+    readonly mode: SourceSyncJobMode
+    readonly error: SourceSyncCreditExhaustedError
+  }): Effect.Effect<
+    SourceSyncJobSummary,
+    | SyncEngineStorageError
+    | SourceSyncJobExecutionNotFoundError
+    | SourceSyncJobExecutionConflictError
+  > =>
+    Effect.gen(function* () {
+      const message =
+        "Sync paused: no usable credits remain. Add credits and run sync again to continue."
+      const completedAt = nowDate()
+      const execution = yield* sourceSyncStateRepository.getExecutionState({ sourceId })
+      const creditsConsumed = execution.normalizedRecords
+      const additionalCreditsRequired =
+        execution.totalRecords === null
+          ? null
+          : Math.max(execution.totalRecords - execution.processedRecords, 0)
+      const creditOutcome = {
+        reasonCode: error.reasonCode,
+        availableCredits: error.availableCredits,
+        creditsConsumed,
+        additionalCreditsRequired,
+      }
+
+      yield* sourceSyncStateRepository
+        .persistFailureMetadata({ sourceId, lastErrorMessage: message })
+        .pipe(
+          Effect.catch((persistError) =>
+            Effect.logError(
+              {
+                sourceId,
+                jobId,
+                originalMessage: message,
+                persistFailureMetadataError: persistError,
+              },
+              "source-sync:failed-to-persist-credit-required-metadata"
+            )
+          )
+        )
+
+      yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "credit-required" })
+
+      yield* Effect.logWarning(
+        { sourceId, jobId, provider, mode, ...creditOutcome },
+        "source-sync:credit-required"
+      )
+
+      yield* sourceSyncJobRepository
+        .failCreditRequiredJob({ jobId, message, completedAt, ...creditOutcome })
+        .pipe(
+          Effect.catchTags({
+            SourceSyncJobExecutionRecordNotFoundError: () =>
+              Effect.fail(new SourceSyncJobExecutionNotFoundError({ jobId })),
+            SourceSyncJobExecutionRecordConflictError: (recordError) =>
+              Effect.fail(
+                new SourceSyncJobExecutionConflictError({ jobId, reason: recordError.reason })
+              ),
+          })
+        )
+
+      return {
+        sourceId,
+        jobId,
+        status: "credit_required",
+        message,
+        resumable: true,
+        creditOutcome,
+      } satisfies SourceSyncJobSummary
+    }).pipe(
+      sourceSyncSpan({
+        name: "source-sync.finalize-credit-required",
         attributes: { sourceId, jobId, provider, mode },
       })
     )
@@ -1399,6 +1503,16 @@ const make = Effect.gen(function* () {
 
       return yield* Result.match(result, {
         onFailure: (error) => {
+          if (error._tag === "SourceSyncCreditExhaustedError") {
+            return finalizeSyncCreditRequired({
+              sourceId: source.id,
+              jobId,
+              provider,
+              mode,
+              error,
+            })
+          }
+
           if (
             retryPolicy !== undefined &&
             retryPolicy.attemptNumber < retryPolicy.maxAttempts &&
@@ -1458,6 +1572,8 @@ const make = Effect.gen(function* () {
               status: "completed",
               message:
                 mode === "sync" ? "Sync finished successfully." : "Replay finished successfully.",
+              resumable: false,
+              creditOutcome: null,
             } satisfies SourceSyncJobSummary
           }),
       })

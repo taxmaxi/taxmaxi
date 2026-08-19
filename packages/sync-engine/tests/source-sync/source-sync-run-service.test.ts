@@ -240,6 +240,8 @@ describe("SourceSyncRunService", () => {
                 jobId: `job-${sourceId}`,
                 status: "queued",
                 message: null,
+                resumable: false,
+                creditOutcome: null,
               }
             }),
           replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
@@ -287,6 +289,8 @@ describe("SourceSyncRunService", () => {
               jobId: "existing-active-job",
               status: "running",
               message: null,
+              resumable: false,
+              creditOutcome: null,
             }),
           replaySourceSyncJob: () => Effect.die("replaySourceSyncJob should not be called"),
           getSourceSyncJob: () => Effect.die("getSourceSyncJob should not be called"),

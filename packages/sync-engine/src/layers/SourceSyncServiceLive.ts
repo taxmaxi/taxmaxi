@@ -17,12 +17,11 @@ import {
   SourceSyncQueuePayload,
   SourceSyncService,
   SyncEngineStorageError,
+  toPublicSourceSyncJobStatus,
   UnsupportedProviderError,
-  type SourceSyncJobStatus,
   type SourceSyncJobSummary,
   type SourceSyncServiceShape,
   type SourceSyncSource,
-  type SyncJobStatus,
   type SourceSyncQueueError,
 } from "../services/index.ts"
 import {
@@ -33,19 +32,6 @@ import {
 
 const ACTIVE_SYNC_JOB_STALE_AFTER_MILLIS = 30_000
 const DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS = 3
-
-const toPublicStatus = (status: SourceSyncJobStatus): SyncJobStatus => {
-  switch (status) {
-    case "pending":
-      return "queued"
-    case "processing":
-      return "running"
-    case "completed":
-      return "completed"
-    case "failed":
-      return "failed"
-  }
-}
 
 const isStaleActiveProcessingJob = ({
   updatedAt,
@@ -235,6 +221,8 @@ const make = Effect.gen(function* () {
               jobId: replayRequest.id,
               status: "queued",
               message: null,
+              resumable: false,
+              creditOutcome: null,
             } satisfies SourceSyncJobSummary
           }
 
@@ -267,8 +255,10 @@ const make = Effect.gen(function* () {
           return {
             sourceId: source.id,
             jobId: jobToReuse.id,
-            status: toPublicStatus(jobToReuse.status),
+            status: toPublicSourceSyncJobStatus(jobToReuse.status),
             message: null,
+            resumable: false,
+            creditOutcome: null,
           } satisfies SourceSyncJobSummary
         }
       }
@@ -301,8 +291,10 @@ const make = Effect.gen(function* () {
         return {
           sourceId: source.id,
           jobId: job.id,
-          status: toPublicStatus(job.status),
+          status: toPublicSourceSyncJobStatus(job.status),
           message: null,
+          resumable: false,
+          creditOutcome: null,
         } satisfies SourceSyncJobSummary
       }
 
@@ -320,6 +312,8 @@ const make = Effect.gen(function* () {
         jobId: job.id,
         status: "queued",
         message: null,
+        resumable: false,
+        creditOutcome: null,
       } satisfies SourceSyncJobSummary
     }).pipe(
       sourceSyncSpan({ name: "source-sync.job", attributes: { principalId, sourceId, mode } })

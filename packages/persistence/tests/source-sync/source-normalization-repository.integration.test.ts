@@ -26,6 +26,7 @@ import {
 } from "../support/integration-test-kit.ts"
 import {
   SourceNormalizationRepository,
+  SourceSyncCreditExhaustedError,
   TransferReconciliationRepository,
 } from "@my/sync-engine/services"
 import {
@@ -477,8 +478,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    await expect(
-      runRepository(
+    const replayCreditError = await runRepository(
+      Effect.flip(
         Effect.flatMap(SourceNormalizationRepository, (repository) =>
           repository.reserveReplayTransactionCredits({
             reservationId: "replay-credit-atomicity",
@@ -499,7 +500,10 @@ describe("SourceNormalizationRepositoryLive", () => {
           })
         )
       )
-    ).rejects.toThrow("Transaction credit balance is exhausted")
+    )
+
+    expect(replayCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+    expect(replayCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
 
     const usage = await runPg(
       Effect.gen(function* () {
@@ -843,6 +847,137 @@ describe("SourceNormalizationRepositoryLive", () => {
         repository.persistNormalizedArtifacts(artifacts)
       )
     )
+
+    const usage = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            count: sql<number>`count(*)`,
+            totalDelta: sql<number>`coalesce(sum(${schema.creditLedger.delta}), 0)`,
+          })
+          .from(schema.creditLedger)
+          .where(eq(schema.creditLedger.kind, "transaction_usage"))
+      })
+    )
+
+    expect(Number(usage[0]?.count ?? 0)).toBe(1)
+    expect(Number(usage[0]?.totalDelta ?? 0)).toBe(-1)
+  })
+
+  it("commits an earlier transaction and fails a typed credit-exhausted error once a registered user's balance runs out", async () => {
+    const occurredAt = new Date("2025-01-01T10:00:00.000Z")
+    const secondRawRecordId = "00000000-0000-0000-0000-000000000382"
+
+    await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db.delete(schema.creditLedger)
+        yield* db.insert(schema.creditLedger).values({
+          userId: fixture.userId,
+          delta: 1,
+          kind: "manual_adjustment",
+          reference: "test:single-usable-credit",
+          expiresAt: null,
+        })
+      })
+    )
+    await runPg(
+      seedRawRecord({
+        rawRecordId: secondRawRecordId,
+        externalRecordId: "raw-acquire-2",
+        occurredAt,
+      })
+    )
+
+    const buildArtifacts = ({
+      externalId,
+      sourceRawRecordId,
+    }: {
+      readonly externalId: string
+      readonly sourceRawRecordId: string
+    }) =>
+      ({
+        transaction: {
+          sourceId: TEST_SOURCE_ID,
+          sourceRawRecordId,
+          externalId,
+          externalGroupId: null,
+          timestamp: occurredAt,
+          transactionType: "buy_fiat",
+          providerTransactionType: "buy",
+          providerStatus: "completed",
+          providerResourcePath: null,
+          providerDescription: null,
+          providerCreatedAt: occurredAt,
+          providerUpdatedAt: occurredAt,
+          metadata: null,
+          principalId: TEST_PRINCIPAL_ID,
+        },
+        venueContext: {
+          venueType: "cex" as const,
+          cexAccountId: fixture.cexAccountId,
+          externalAccountId: "coinbase-account-1",
+          externalOrderId: null,
+          externalFillId: null,
+          side: "buy" as const,
+          instrument: "BTC-EUR",
+          fillPrice: "10000.00",
+          commissionAmount: null,
+          commissionCurrency: null,
+          metadata: null,
+        },
+        providerTransfers: [],
+        feeTransfers: [],
+        legs: [],
+        transactionReview: null,
+        resolvedTransactionType: APPROVED_MAPPING,
+      }) as const
+
+    await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts(
+          buildArtifacts({
+            externalId: "transaction-covered-by-credit",
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+          })
+        )
+      )
+    )
+
+    const error = await runRepository(
+      Effect.flip(
+        Effect.flatMap(SourceNormalizationRepository, (repository) =>
+          repository.persistNormalizedArtifacts(
+            buildArtifacts({
+              externalId: "transaction-blocked-by-exhaustion",
+              sourceRawRecordId: secondRawRecordId,
+            })
+          )
+        )
+      )
+    )
+
+    expect(error).toBeInstanceOf(SourceSyncCreditExhaustedError)
+    expect(error).toMatchObject({
+      _tag: "SourceSyncCreditExhaustedError",
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+    })
+
+    const persistedTransactions = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({ externalId: schema.transactions.externalId })
+          .from(schema.transactions)
+          .where(eq(schema.transactions.sourceId, TEST_SOURCE_ID))
+      })
+    )
+
+    expect(persistedTransactions.map((row) => row.externalId)).toEqual([
+      "transaction-covered-by-credit",
+    ])
 
     const usage = await runPg(
       Effect.gen(function* () {
@@ -1437,8 +1572,8 @@ describe("SourceNormalizationRepositoryLive", () => {
         occurredAt: new Date("2025-01-03T00:00:00.000Z"),
       })
     )
-    await expect(
-      runRepository(
+    const postClaimCreditError = await runRepository(
+      Effect.flip(
         Effect.flatMap(SourceNormalizationRepository, (repository) =>
           repository.persistNormalizedArtifacts({
             ...paidArtifacts,
@@ -1453,7 +1588,10 @@ describe("SourceNormalizationRepositoryLive", () => {
           })
         )
       )
-    ).rejects.toThrow("Transaction credit balance is exhausted")
+    )
+
+    expect(postClaimCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+    expect(postClaimCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
 
     const state = await runPg(
       Effect.gen(function* () {
@@ -1488,8 +1626,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    await expect(
-      runRepository(
+    const noCreditError = await runRepository(
+      Effect.flip(
         Effect.flatMap(SourceNormalizationRepository, (repository) =>
           repository.persistNormalizedArtifacts({
             transaction: {
@@ -1529,7 +1667,10 @@ describe("SourceNormalizationRepositoryLive", () => {
           })
         )
       )
-    ).rejects.toThrow("Transaction credit balance is exhausted")
+    )
+
+    expect(noCreditError).toBeInstanceOf(SourceSyncCreditExhaustedError)
+    expect(noCreditError).toMatchObject({ reasonCode: "no_usable_credits" })
 
     const persistedTransactions = await runPg(
       Effect.gen(function* () {

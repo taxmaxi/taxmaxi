@@ -4,6 +4,7 @@
  * @module SourceSyncJobRepository
  */
 
+import { SyncCreditReasonCode } from "@my/core/billing"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
@@ -118,6 +119,20 @@ export interface FailSourceSyncJobParams {
   readonly jobId: string
   readonly message: string
   readonly completedAt: Date
+}
+
+/**
+ * FailCreditRequiredSourceSyncJobParams - Input for stopping a job on a resumable
+ * credit-required outcome instead of a terminal failure.
+ */
+export interface FailCreditRequiredSourceSyncJobParams {
+  readonly jobId: string
+  readonly message: string
+  readonly completedAt: Date
+  readonly reasonCode: SyncCreditReasonCode
+  readonly availableCredits: number
+  readonly creditsConsumed: number
+  readonly additionalCreditsRequired: number | null
 }
 
 /**
@@ -259,6 +274,18 @@ export interface SourceSyncJobRepositoryShape {
    */
   readonly failJob: (
     params: FailSourceSyncJobParams
+  ) => Effect.Effect<
+    void,
+    | SourceSyncJobExecutionRecordNotFoundError
+    | SourceSyncJobExecutionRecordConflictError
+    | SyncEngineStorageError
+  >
+
+  /**
+   * Stop a job on a resumable credit-required outcome, distinct from a terminal failure.
+   */
+  readonly failCreditRequiredJob: (
+    params: FailCreditRequiredSourceSyncJobParams
   ) => Effect.Effect<
     void,
     | SourceSyncJobExecutionRecordNotFoundError

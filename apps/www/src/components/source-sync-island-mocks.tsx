@@ -46,6 +46,18 @@ export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
       status: "failed",
     },
   ],
+  credit_required: [
+    {
+      failedRecords: 0,
+      id: "mock-coinbase",
+      fetchedRecords: 104,
+      message: "Add credits and run sync again to continue.",
+      normalizedRecords: 82,
+      progress: 100,
+      sourceName: "Coinbase",
+      status: "credit_required",
+    },
+  ],
   multiple: [
     {
       id: "mock-coinbase",
@@ -73,6 +85,7 @@ const OPTIONS: ReadonlyArray<{ label: string; value: SourceSyncMockScenario }> =
   { label: "Syncing", value: "running" },
   { label: "Synced", value: "completed" },
   { label: "Failed", value: "failed" },
+  { label: "Needs credits", value: "credit_required" },
   { label: "+2", value: "multiple" },
 ]
 

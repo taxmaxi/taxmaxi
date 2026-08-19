@@ -4,18 +4,49 @@
  * @module SourceSyncModels
  */
 
+import { SyncCreditReasonCode } from "@my/core/billing"
 import * as Schema from "effect/Schema"
 
 /**
  * SyncJobStatus - External sync status exposed to API clients.
+ *
+ * `credit_required` is a resumable outcome, distinct from `failed`: the sync stopped
+ * because a registered user ran out of transaction credits, but transactions already
+ * normalized this run stay committed and a later sync call picks up where it left off.
  */
-export type SyncJobStatus = "queued" | "running" | "completed" | "failed"
+export type SyncJobStatus = "queued" | "running" | "completed" | "failed" | "credit_required"
 
 /**
  * SourceSyncJobStatus - Internal processing job status persisted by repositories.
  */
-export type SourceSyncJobStatus = "pending" | "processing" | "completed" | "failed"
+export type SourceSyncJobStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "credit_required"
 export type ActiveSourceSyncJobStatus = Extract<SourceSyncJobStatus, "pending" | "processing">
+
+/**
+ * Map an internal persisted job status to the public status exposed to API clients.
+ *
+ * The single place that performs this mapping so job repository and service layers
+ * do not each reimplement it.
+ */
+export const toPublicSourceSyncJobStatus = (status: SourceSyncJobStatus): SyncJobStatus => {
+  switch (status) {
+    case "pending":
+      return "queued"
+    case "processing":
+      return "running"
+    case "completed":
+      return "completed"
+    case "failed":
+      return "failed"
+    case "credit_required":
+      return "credit_required"
+  }
+}
 
 /**
  * SourceSyncPhase - Current user-visible phase of a running source job.
@@ -165,6 +196,19 @@ export interface SourceSyncPendingDispatchJob extends SourceSyncRepairableActive
 }
 
 /**
+ * SourceSyncCreditOutcome - Public credit-required details for a resumable sync outcome.
+ *
+ * `additionalCreditsRequired` is null until the billable total for this run is known
+ * (once classification starts), rather than guessing before that point.
+ */
+export interface SourceSyncCreditOutcome {
+  readonly reasonCode: SyncCreditReasonCode
+  readonly availableCredits: number
+  readonly creditsConsumed: number
+  readonly additionalCreditsRequired: number | null
+}
+
+/**
  * SourceSyncJobSummary - Public sync job creation/reuse result.
  */
 export interface SourceSyncJobSummary {
@@ -172,6 +216,9 @@ export interface SourceSyncJobSummary {
   readonly jobId: string
   readonly status: SyncJobStatus
   readonly message: string | null
+  /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
+  readonly resumable: boolean
+  readonly creditOutcome: SourceSyncCreditOutcome | null
 }
 
 /**

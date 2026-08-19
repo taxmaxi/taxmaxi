@@ -111,7 +111,9 @@ const SourceSyncJobProgressSnapshot = Schema.Struct({
   failedRecords: Schema.optional(Schema.Number),
 })
 
-const toPublicJobStatus = (status: "pending" | "processing" | "completed" | "failed") => {
+const toPublicJobStatus = (
+  status: "pending" | "processing" | "completed" | "failed" | "credit_required"
+) => {
   switch (status) {
     case "pending":
       return "queued" as const
@@ -120,6 +122,10 @@ const toPublicJobStatus = (status: "pending" | "processing" | "completed" | "fai
     case "completed":
     case "failed":
       return status
+    // Anonymous x402-paid sources are exempt from credit checks, so a credit-required
+    // job here would be unexpected. Treat it like a failure for this claim-visible view.
+    case "credit_required":
+      return "failed" as const
   }
 }
 

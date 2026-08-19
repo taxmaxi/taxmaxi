@@ -21,6 +21,7 @@ import {
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
   SourceSyncJobExecutionRecordPayloadError,
+  SourceSyncCreditExhaustedError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
   SourceSyncStateRepository,
@@ -106,6 +107,8 @@ const makeExecutorLayer = ({
   failReplayCreditReservation = false,
   failReplayPersistenceRawRecordId,
   failReplayPersistenceStorageRawRecordId,
+  failCreditRawRecordId,
+  failCreditAvailableCredits = 0,
   replayCreditReference,
   failReplayReset = false,
   holdReplayCreditReservation = false,
@@ -129,6 +132,8 @@ const makeExecutorLayer = ({
   readonly failReplayCreditReservation?: boolean
   readonly failReplayPersistenceRawRecordId?: string
   readonly failReplayPersistenceStorageRawRecordId?: string
+  readonly failCreditRawRecordId?: string
+  readonly failCreditAvailableCredits?: number
   readonly replayCreditReference?: (sourceRawRecordId: string) => string
   readonly failReplayReset?: boolean
   readonly holdReplayCreditReservation?: boolean
@@ -230,12 +235,26 @@ const makeExecutorLayer = ({
       Effect.sync(() => {
         events.push(`fail:${message}`)
       }),
+    failCreditRequiredJob: ({
+      message,
+      reasonCode,
+      availableCredits,
+      creditsConsumed,
+      additionalCreditsRequired,
+    }) =>
+      Effect.sync(() => {
+        events.push(
+          `credit-required:${message}:${reasonCode}:${availableCredits}:${creditsConsumed}:${additionalCreditsRequired ?? "unknown"}`
+        )
+      }),
   })
 
+  let latestExecutionState = initialExecution
   const SourceSyncStateRepositoryTestLive = Layer.succeed(SourceSyncStateRepository, {
-    getExecutionState: () => Effect.succeed(initialExecution),
+    getExecutionState: () => Effect.succeed(latestExecutionState),
     persistProgress: ({ state, lastSyncedAt }) =>
       Effect.sync(() => {
+        latestExecutionState = state
         events.push(`progress:${state.fetchedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
         events.push(
           `phase:${state.phase}:${state.processedRecords}:${state.totalRecords ?? "unknown"}`
@@ -490,9 +509,9 @@ const makeExecutorLayer = ({
           yield* Effect.sleep(25)
         }
         if (failReplayCreditReservation) {
-          return yield* new SyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit.exhausted",
-            cause: "Transaction credit balance is exhausted",
+          return yield* new SourceSyncCreditExhaustedError({
+            reasonCode: "no_usable_credits",
+            availableCredits: failCreditAvailableCredits,
           })
         }
         const reservations = transactions.flatMap(({ sourceRawRecordId }) =>
@@ -544,6 +563,12 @@ const makeExecutorLayer = ({
           return yield* new SyncEngineStorageError({
             operation: "sourceNormalizationRepository.persistNormalizedArtifacts",
             cause: "Replay persistence failed",
+          })
+        }
+        if (params.transaction.sourceRawRecordId === failCreditRawRecordId) {
+          return yield* new SourceSyncCreditExhaustedError({
+            reasonCode: "no_usable_credits",
+            availableCredits: failCreditAvailableCredits,
           })
         }
         if ("deriveLegs" in params) {
@@ -1163,7 +1188,7 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).not.toContain("reset-derived-state")
   })
 
-  it("does not reset replay state when transaction credits cannot be reserved", async () => {
+  it("marks the job credit-required, not failed, when transaction credits cannot be reserved", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -1181,9 +1206,69 @@ describe("SourceSyncJobExecutor", () => {
       )
     )
 
-    expect(result.status).toBe("failed")
+    expect(result.status).toBe("credit_required")
+    expect(result.resumable).toBe(true)
+    expect(result.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 0,
+      additionalCreditsRequired: null,
+    })
     expect(events).not.toContain("reset-derived-state")
     expect(events).not.toContain("mark-raw-normalized")
+    expect(events).not.toContain(`fail:${result.message}`)
+    expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
+  })
+
+  it("keeps earlier transactions committed and reports a resumable credit-required outcome for a sync run", async () => {
+    const events: Array<string> = []
+    const rawRecordOne = makeReplayRawRecord(1)
+    const rawRecordTwo = makeReplayRawRecord(2)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            checkpointRawRecords: [rawRecordOne, rawRecordTwo],
+            prepareReplayTransactions: true,
+            failCreditRawRecordId: rawRecordTwo.id,
+            failCreditAvailableCredits: 0,
+            pageSize: 1,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("credit_required")
+    expect(result.resumable).toBe(true)
+    expect(result.message).not.toMatch(
+      /sourceNormalizationRepository|SyncEngineStorageError|SourceSyncCreditExhaustedError|SELECT|INSERT/i
+    )
+    expect(result.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 1,
+      additionalCreditsRequired: 1,
+    })
+    expect(Object.keys(result)).toEqual([
+      "sourceId",
+      "jobId",
+      "status",
+      "message",
+      "resumable",
+      "creditOutcome",
+    ])
+
+    // Record 1 already committed and must not be replayed away by the credit-required outcome.
+    expect(events).toContain(`persist-normalized:${rawRecordOne.id}`)
+    expect(events).toContain(`persist-normalized:${rawRecordTwo.id}`)
+    expect(events).not.toContain(`fail:${result.message}`)
+    expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
   })
 
   it("records retry metadata and returns a retryable error before the final attempt", async () => {

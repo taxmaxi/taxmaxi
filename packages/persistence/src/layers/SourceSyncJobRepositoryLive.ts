@@ -4,9 +4,11 @@
  * @module SourceSyncJobRepositoryLive
  */
 
+import { SyncCreditReasonCode } from "@my/core/billing"
 import { and, asc, eq, inArray, isNotNull, isNull, lt, or } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
+import * as Schema from "effect/Schema"
 import { isActiveProcessingJobConflict } from "../errors/ProcessingJobConflict.ts"
 import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { drizzle } from "./PgClientLive.ts"
@@ -23,6 +25,7 @@ import {
   SourceSyncJobRecordNotVisibleError,
   SourceSyncJobRepository,
   SyncEngineStorageError,
+  toPublicSourceSyncJobStatus,
   type SourceSyncJobRepositoryShape,
   type SourceSyncPendingDispatchJob,
   type SourceSyncRepairableActiveJob,
@@ -50,19 +53,28 @@ interface PersistedExecutionJobRow {
   readonly status: SourceSyncJobStatus
 }
 
-const toPublicStatus = (
-  status: SourceSyncJobStatus
-): "queued" | "running" | "completed" | "failed" => {
-  switch (status) {
-    case "pending":
-      return "queued"
-    case "processing":
-      return "running"
-    case "completed":
-      return "completed"
-    case "failed":
-      return "failed"
-  }
+const decodeCreditReasonCode = Schema.decodeUnknownEffect(SyncCreditReasonCode)
+
+/** Decode the persisted credit-outcome columns, falling back to null on any malformed row. */
+const toCreditOutcome = (row: {
+  readonly creditReasonCode: string | null
+  readonly creditsAvailable: number | null
+  readonly creditsConsumed: number | null
+  readonly additionalCreditsRequired: number | null
+}) => {
+  const { creditReasonCode, creditsAvailable, creditsConsumed, additionalCreditsRequired } = row
+
+  return creditReasonCode === null || creditsAvailable === null || creditsConsumed === null
+    ? Effect.succeed(null)
+    : decodeCreditReasonCode(creditReasonCode).pipe(
+        Effect.map((reasonCode) => ({
+          reasonCode,
+          availableCredits: creditsAvailable,
+          creditsConsumed,
+          additionalCreditsRequired,
+        })),
+        Effect.orElseSucceed(() => null)
+      )
 }
 
 const toExecutionJob = ({
@@ -613,6 +625,64 @@ const make = Effect.gen(function* () {
       )
       .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failJob"))
 
+  const failCreditRequiredJob: SourceSyncJobRepositoryShape["failCreditRequiredJob"] = ({
+    jobId,
+    message,
+    completedAt,
+    reasonCode,
+    availableCredits,
+    creditsConsumed,
+    additionalCreditsRequired,
+  }) =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const [job] = yield* tx
+            .update(schema.processingJobs)
+            .set({
+              status: "credit_required",
+              completedAt,
+              errorMessage: message,
+              creditReasonCode: reasonCode,
+              creditsAvailable: availableCredits,
+              creditsConsumed,
+              additionalCreditsRequired,
+              updatedAt: completedAt,
+            })
+            .where(
+              and(
+                eq(schema.processingJobs.id, jobId),
+                eq(schema.processingJobs.status, "processing")
+              )
+            )
+            .returning({
+              id: schema.processingJobs.id,
+              sourceId: schema.processingJobs.sourceId,
+              principalId: schema.processingJobs.principalId,
+              followUpMode: schema.processingJobs.followUpMode,
+            })
+            .pipe(wrapSyncEngineSqlError("sourceSyncJobRepository.failCreditRequiredJob.update"))
+
+          if (job === undefined) {
+            return yield* failExpectedState({
+              jobId,
+              operation: "sourceSyncJobRepository.failCreditRequiredJob.select",
+              reason: "Only processing jobs can become credit-required.",
+            })
+          }
+
+          yield* materializeFollowUpJob({
+            executor: tx,
+            jobId: job.id,
+            sourceId: job.sourceId,
+            principalId: job.principalId,
+            followUpMode: job.followUpMode,
+            createdAt: completedAt,
+          })
+        })
+      )
+      .pipe(preserveExpectedExecutionError("sourceSyncJobRepository.failCreditRequiredJob"))
+
   const completeJob: SourceSyncJobRepositoryShape["completeJob"] = ({ jobId, state }) => {
     const completedAt = nowDate()
     return db
@@ -682,6 +752,10 @@ const make = Effect.gen(function* () {
             sourceId: schema.processingJobs.sourceId,
             status: schema.processingJobs.status,
             errorMessage: schema.processingJobs.errorMessage,
+            creditReasonCode: schema.processingJobs.creditReasonCode,
+            creditsAvailable: schema.processingJobs.creditsAvailable,
+            creditsConsumed: schema.processingJobs.creditsConsumed,
+            additionalCreditsRequired: schema.processingJobs.additionalCreditsRequired,
             progressDetails: schema.processingJobs.progressDetails,
             followUpJobId: schema.processingJobs.followUpJobId,
           })
@@ -709,11 +783,12 @@ const make = Effect.gen(function* () {
           ? requestedJob
           : yield* loadJobRecord(requestedJob.followUpJobId)
       const progress = yield* decodeSourceSyncJobProgressSnapshot(visibleJob.progressDetails)
+      const creditOutcome = yield* toCreditOutcome(visibleJob)
 
       return {
         sourceId: visibleJob.sourceId,
         jobId: visibleJob.id,
-        status: toPublicStatus(visibleJob.status),
+        status: toPublicSourceSyncJobStatus(visibleJob.status),
         phase: progress?.phase ?? null,
         processedRecords: progress?.processedRecords ?? null,
         totalRecords: progress?.totalRecords ?? null,
@@ -726,6 +801,8 @@ const make = Effect.gen(function* () {
         normalizedRecords: progress?.normalizedRecords ?? null,
         failedRecords: progress?.failedRecords ?? null,
         message: visibleJob.errorMessage,
+        resumable: visibleJob.status === "credit_required",
+        creditOutcome,
       }
     })
 
@@ -915,6 +992,7 @@ const make = Effect.gen(function* () {
     recordRetryableFailure,
     recoverStaleActiveJob,
     failJob,
+    failCreditRequiredJob,
     completeJob,
     getJob,
     getExecutionJob,

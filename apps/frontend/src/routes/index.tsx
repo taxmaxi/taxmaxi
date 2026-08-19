@@ -39,6 +39,8 @@ const statusClassName = (status: AnonSourceSyncJob["status"]): string => {
       return "border-[rgba(50,143,151,0.34)] bg-[rgba(79,184,178,0.14)] text-[var(--lagoon-deep)]"
     case "queued":
       return "border-[var(--line)] bg-[var(--surface)] text-[var(--sea-ink-soft)]"
+    case "credit_required":
+      return "border-[color-mix(in_oklab,var(--destructive)_42%,transparent)] bg-[color-mix(in_oklab,var(--destructive)_10%,transparent)] text-[var(--destructive)]"
   }
 }
 

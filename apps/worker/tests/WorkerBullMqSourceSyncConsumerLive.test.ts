@@ -18,8 +18,6 @@ import {
   SourceSyncJobExecutionNotFoundError,
   SourceSyncJobExecutor,
   SourceSyncQueuePayload,
-  SyncEngineStorageError,
-  TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
   type ExecuteSourceSyncJobParams,
   type SourceSyncJobExecutorShape,
   type SourceSyncJobSummary,
@@ -50,12 +48,28 @@ const replayPayload = SourceSyncQueuePayload.make({
   mode: "replay",
 })
 
-const summary = ({ jobId, status }: { readonly jobId: string; readonly status: "completed" }) =>
+const summary = ({
+  jobId,
+  status,
+}: {
+  readonly jobId: string
+  readonly status: "completed" | "credit_required"
+}) =>
   ({
     sourceId: "source-1",
     jobId,
     status,
     message: null,
+    resumable: status === "credit_required",
+    creditOutcome:
+      status === "credit_required"
+        ? {
+            reasonCode: "no_usable_credits",
+            availableCredits: 0,
+            creditsConsumed: 3,
+            additionalCreditsRequired: 2,
+          }
+        : null,
   }) satisfies SourceSyncJobSummary
 
 const makeConfigProvider = (overrides: Record<string, string> = {}) =>
@@ -404,17 +418,11 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
     })
   })
 
-  it("marks transaction credit exhaustion terminal for BullMQ", async () => {
+  it("treats a credit-required job outcome as terminal for BullMQ, not a throw", async () => {
     let processor: WorkerBullMqSourceSyncProcessor | null = null
 
     const executor: SourceSyncJobExecutorShape = {
-      execute: () =>
-        Effect.fail(
-          new SyncEngineStorageError({
-            operation: TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
-            cause: "Transaction credit balance is exhausted",
-          })
-        ),
+      execute: ({ jobId }) => Effect.succeed(summary({ jobId, status: "credit_required" })),
     }
 
     await runWithConsumer({
@@ -435,9 +443,10 @@ describe("WorkerBullMqSourceSyncConsumerLive", () => {
           catch: toPromiseRejectionError,
         }).pipe(Effect.result)
 
-        expect(Result.isFailure(result)).toBe(true)
-        if (Result.isFailure(result)) {
-          expect(result.failure.cause).toBeInstanceOf(UnrecoverableError)
+        expect(Result.isSuccess(result)).toBe(true)
+        if (Result.isSuccess(result)) {
+          expect(result.success.status).toBe("credit_required")
+          expect(result.success.resumable).toBe(true)
         }
       }),
     })

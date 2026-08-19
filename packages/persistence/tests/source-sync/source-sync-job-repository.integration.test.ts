@@ -512,6 +512,8 @@ describe("SourceSyncJobRepositoryLive", () => {
       normalizedRecords: 3,
       failedRecords: 1,
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(persisted.checkpointExternalId).toBe("tx-4")
     expect(persisted.checkpointPayload).toEqual({ page: "done" })
@@ -860,6 +862,52 @@ describe("SourceSyncJobRepositoryLive", () => {
 
     expect(nextJob._tag).toBe("CreatedSourceSyncJob")
     expect(nextJob.id).not.toBe(created.id)
+  })
+
+  it("maps a credit-required job to a resumable public status with its credit outcome, not a generic failure", async () => {
+    const created = await createJob()
+    await claimJob({ jobId: created.id, workerId: "worker-1" })
+
+    await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.failCreditRequiredJob({
+          jobId: created.id,
+          message: "Sync paused: no usable credits remain. Add credits and run sync again.",
+          completedAt: new Date("2025-01-02T00:10:00.000Z"),
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 3,
+          additionalCreditsRequired: 2,
+        })
+      )
+    )
+
+    const job = await runRepository(
+      Effect.flatMap(SourceSyncJobRepository, (repository) =>
+        repository.getJob({
+          principalId: TEST_PRINCIPAL_ID,
+          sourceId: TEST_SOURCE_ID,
+          jobId: created.id,
+        })
+      )
+    )
+    const persisted = await selectProcessingJob({ jobId: created.id })
+
+    expect(job.status).toBe("credit_required")
+    expect(job.resumable).toBe(true)
+    expect(job.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 3,
+      additionalCreditsRequired: 2,
+    })
+    expect(job.message).toBe(
+      "Sync paused: no usable credits remain. Add credits and run sync again."
+    )
+    expect(job.message).not.toMatch(
+      /sourceNormalizationRepository|SyncEngineStorageError|SELECT|INSERT|consumeTransactionCredit/i
+    )
+    expect(persisted.status).toBe("credit_required")
   })
 
   it("maps persisted job states to API-visible queued, running, completed, and failed statuses", async () => {

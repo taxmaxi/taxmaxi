@@ -394,6 +394,7 @@ function getProgressForStatus(status: SourceSyncStatus): number {
       return 0
     case "completed":
     case "failed":
+    case "credit_required":
       return 100
   }
 }
