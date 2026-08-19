@@ -290,6 +290,69 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(providerAssetRows).toHaveLength(1)
     })
 
+    it("bumps evidence revision only when stored observation facts change", async () => {
+      const upsertBtc = ({ name, payload }: { readonly name: string; readonly payload: unknown }) =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.upsertProviderAssets({
+              providerKey: "coinbase",
+              entries: [
+                {
+                  providerAssetId: "btc-provider-asset",
+                  naturalKey: null,
+                  currencyCode: "BTC",
+                  name,
+                  exponent: 8,
+                  providerType: "crypto",
+                  payload,
+                },
+              ],
+            })
+          )
+        )
+
+      await upsertBtc({
+        name: "Bitcoin",
+        payload: { code: "BTC", asset_id: "btc-provider-asset" },
+      })
+      await upsertBtc({
+        name: "Bitcoin",
+        payload: { code: "BTC", asset_id: "btc-provider-asset" },
+      })
+
+      const afterUnchanged = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [row] = yield* db
+            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "btc-provider-asset"))
+            .limit(1)
+          return row ?? null
+        })
+      )
+
+      await upsertBtc({
+        name: "Bitcoin",
+        payload: { code: "BTC", asset_id: "btc-provider-asset", exponent: 8 },
+      })
+
+      const afterChanged = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [row] = yield* db
+            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "btc-provider-asset"))
+            .limit(1)
+          return row ?? null
+        })
+      )
+
+      expect(afterUnchanged).toEqual({ evidenceRevision: 1 })
+      expect(afterChanged).toEqual({ evidenceRevision: 2 })
+    })
+
     it("approves once and attaches replay to an active job under concurrent retries", async () => {
       const providerAsset = await runRepository(
         Effect.gen(function* () {

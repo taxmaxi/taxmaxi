@@ -617,6 +617,8 @@ const makeExecutorLayer = ({
     listProviderAssetObservedRepresentations: () =>
       Effect.die("listProviderAssetObservedRepresentations should not be called"),
     findProviderAssetMapping: () => Effect.die("findProviderAssetMapping should not be called"),
+    scheduleUnresolvedResolutionJob: () =>
+      Effect.die("scheduleUnresolvedResolutionJob should not be called"),
   })
 
   return SourceSyncJobExecutorLive.pipe(

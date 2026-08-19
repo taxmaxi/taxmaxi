@@ -165,6 +165,12 @@ const makeProviderLayer = ({
           findProviderAssetReviewById: () => Effect.succeed(Option.none()),
           listProviderAssetReviews: () => Effect.succeed([]),
           findProviderAssetMapping: () => Effect.succeed(Option.none()),
+          scheduleUnresolvedResolutionJob: () =>
+            Effect.succeed({
+              created: false,
+              providerAssetRowId: "unused",
+              evidenceRevision: 1,
+            }),
         })
       )
     ),

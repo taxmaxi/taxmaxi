@@ -201,20 +201,25 @@ const make = Effect.gen(function* () {
   }) => {
     const mappingKind = toProviderAssetMappingKind({ providerType })
 
-    return providerAssetRepository.upsertProviderAssetMappings({
-      mappings: [
-        {
-          providerAssetRowId,
-          mappingKind,
-          canonicalAssetId: null,
-          assetRepresentationId: null,
-          canonicalFiatCurrency: null,
-          mappingStatus: "pending_review",
-          reviewerNotes: null,
-          sourceNotes:
-            "Observed Coinbase provider asset without an approved TaxMaxi mapping. Review required.",
-        },
-      ],
+    return Effect.gen(function* () {
+      yield* providerAssetRepository.upsertProviderAssetMappings({
+        mappings: [
+          {
+            providerAssetRowId,
+            mappingKind,
+            canonicalAssetId: null,
+            assetRepresentationId: null,
+            canonicalFiatCurrency: null,
+            mappingStatus: "pending_review",
+            reviewerNotes: null,
+            sourceNotes:
+              "Observed Coinbase provider asset without an approved TaxMaxi mapping. Review required.",
+          },
+        ],
+      })
+      yield* providerAssetRepository.scheduleUnresolvedResolutionJob({
+        providerAssetRowId,
+      })
     })
   }
 
@@ -278,13 +283,15 @@ const make = Effect.gen(function* () {
     readonly currencyCode: string
     readonly providerAssetRowId: string
   }) =>
-    Effect.fail(
-      new CoinbasePendingProviderAssetMappingError({
+    Effect.gen(function* () {
+      yield* providerAssetRepository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
+
+      return yield* new CoinbasePendingProviderAssetMappingError({
         currencyCode,
         providerAssetRowId,
         message: `Coinbase provider asset mapping for ${currencyCode} is pending review. Approve the mapping row before replaying normalization.`,
       })
-    )
+    })
 
   const resolveCanonicalAssetId = ({
     persistedMapping,

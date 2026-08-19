@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
   ProviderAssetRepository,
+  type AssetResolutionJobScheduleResult,
   type ProviderAssetObservedRepresentationRecord,
   type ProviderAssetRepositoryShape,
   SyncEngineStorageError,
@@ -74,6 +75,90 @@ const makeMissingIdentityError = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type ProviderAssetTransaction = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0]
+
+  const nextEvidenceRevisionSql = sql`
+    case
+      when ${schema.providerAssets.naturalKey} is distinct from excluded.natural_key
+        or ${schema.providerAssets.currencyCode} is distinct from excluded.currency_code
+        or ${schema.providerAssets.name} is distinct from excluded.name
+        or ${schema.providerAssets.exponent} is distinct from excluded.exponent
+        or ${schema.providerAssets.providerType} is distinct from excluded.provider_type
+        or ${schema.providerAssets.rawProviderPayload} is distinct from excluded.raw_provider_payload
+      then ${schema.providerAssets.evidenceRevision} + 1
+      else ${schema.providerAssets.evidenceRevision}
+    end
+  `
+
+  const insertUnresolvedResolutionJobs = ({
+    tx,
+    providerAssetRowIds,
+    now,
+    mappingStatuses = [null, "pending_review"],
+  }: {
+    readonly tx: ProviderAssetTransaction
+    readonly providerAssetRowIds: ReadonlyArray<string>
+    readonly now: Date
+    readonly mappingStatuses?: ReadonlyArray<"pending_review" | "approved" | "rejected" | null>
+  }) =>
+    Effect.gen(function* () {
+      if (providerAssetRowIds.length === 0) {
+        return [] as ReadonlyArray<{
+          readonly providerAssetRowId: string
+          readonly evidenceRevision: number
+        }>
+      }
+
+      const candidates = yield* tx
+        .select({
+          providerAssetRowId: schema.providerAssets.id,
+          evidenceRevision: schema.providerAssets.evidenceRevision,
+          mappingStatus: schema.providerAssetMappings.mappingStatus,
+        })
+        .from(schema.providerAssets)
+        .leftJoin(
+          schema.providerAssetMappings,
+          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+        )
+        .where(inArray(schema.providerAssets.id, providerAssetRowIds))
+        .pipe(
+          wrapSyncEngineSqlError("providerAssetRepository.scheduleUnresolvedResolutionJob.load")
+        )
+
+      const unresolved = candidates.filter((candidate) =>
+        mappingStatuses.some((status) => status === candidate.mappingStatus)
+      )
+      if (unresolved.length === 0) {
+        return []
+      }
+
+      const inserted = yield* tx
+        .insert(schema.assetResolutionJobs)
+        .values(
+          unresolved.map((candidate) => ({
+            providerAssetRowId: candidate.providerAssetRowId,
+            evidenceRevision: candidate.evidenceRevision,
+            status: "pending" as const,
+            createdAt: now,
+            updatedAt: now,
+          }))
+        )
+        .onConflictDoNothing({
+          target: [
+            schema.assetResolutionJobs.providerAssetRowId,
+            schema.assetResolutionJobs.evidenceRevision,
+          ],
+        })
+        .returning({
+          providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
+          evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+        })
+        .pipe(
+          wrapSyncEngineSqlError("providerAssetRepository.scheduleUnresolvedResolutionJob.insert")
+        )
+
+      return inserted
+    })
 
   const upsertProviderAssets: ProviderAssetRepositoryShape["upsertProviderAssets"] = ({
     providerKey,
@@ -88,7 +173,7 @@ const make = Effect.gen(function* () {
 
           const now = nowDate()
 
-          return yield* Effect.forEach(entries, (entry) => {
+          const upserted = yield* Effect.forEach(entries, (entry) => {
             const values = {
               provider: providerKey,
               providerAssetId: entry.providerAssetId,
@@ -117,10 +202,12 @@ const make = Effect.gen(function* () {
                     exponent: sql.raw("excluded.exponent"),
                     providerType: sql.raw("excluded.provider_type"),
                     rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
+                    evidenceRevision: nextEvidenceRevisionSql,
                     retrievedAt: sql.raw("excluded.retrieved_at"),
                     updatedAt: now,
                   },
                 })
+                .returning({ id: schema.providerAssets.id })
                 .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets"))
             }
 
@@ -137,10 +224,12 @@ const make = Effect.gen(function* () {
                     exponent: sql.raw("excluded.exponent"),
                     providerType: sql.raw("excluded.provider_type"),
                     rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
+                    evidenceRevision: nextEvidenceRevisionSql,
                     retrievedAt: sql.raw("excluded.retrieved_at"),
                     updatedAt: now,
                   },
                 })
+                .returning({ id: schema.providerAssets.id })
                 .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets"))
             }
 
@@ -148,7 +237,16 @@ const make = Effect.gen(function* () {
               providerKey,
               currencyCode: entry.currencyCode,
             })
-          }).pipe(Effect.as(entries.length))
+          })
+
+          yield* insertUnresolvedResolutionJobs({
+            tx,
+            providerAssetRowIds: upserted.flatMap((rows) => rows.map((row) => row.id)),
+            now,
+            mappingStatuses: ["pending_review"],
+          })
+
+          return entries.length
         })
       )
       .pipe(wrapSyncEngineStorageError("providerAssetRepository.upsertProviderAssets"))
@@ -661,6 +759,11 @@ const make = Effect.gen(function* () {
             const newlyRecordedProviderAssetRowIds = new Set(
               rows.map(({ providerAssetRowId }) => providerAssetRowId)
             )
+            yield* insertUnresolvedResolutionJobs({
+              tx,
+              providerAssetRowIds: distinctProviderAssetRowIds,
+              now,
+            })
             if (
               mappings.some(
                 ({ mappingStatus, providerAssetRowId }) =>
@@ -979,6 +1082,51 @@ const make = Effect.gen(function* () {
       return Option.fromNullishOr(row)
     })
 
+  const scheduleUnresolvedResolutionJob: ProviderAssetRepositoryShape["scheduleUnresolvedResolutionJob"] =
+    ({ providerAssetRowId }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [providerAsset] = yield* tx
+              .select({
+                id: schema.providerAssets.id,
+                evidenceRevision: schema.providerAssets.evidenceRevision,
+              })
+              .from(schema.providerAssets)
+              .where(eq(schema.providerAssets.id, providerAssetRowId))
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset"
+                )
+              )
+
+            if (providerAsset === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation: "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset",
+                cause: {
+                  providerAssetRowId,
+                  message: "Provider asset observation does not exist.",
+                },
+              })
+            }
+
+            const inserted = yield* insertUnresolvedResolutionJobs({
+              tx,
+              providerAssetRowIds: [providerAssetRowId],
+              now: nowDate(),
+            })
+            const created = inserted.some((job) => job.providerAssetRowId === providerAssetRowId)
+
+            return {
+              created,
+              providerAssetRowId,
+              evidenceRevision: providerAsset.evidenceRevision,
+            } satisfies AssetResolutionJobScheduleResult
+          })
+        )
+        .pipe(wrapSyncEngineStorageError("providerAssetRepository.scheduleUnresolvedResolutionJob"))
+
   return ProviderAssetRepository.of({
     upsertProviderAssets,
     upsertProviderAssetMappings,
@@ -993,6 +1141,7 @@ const make = Effect.gen(function* () {
     listProviderAssetReviews,
     listProviderAssetObservedRepresentations,
     findProviderAssetMapping,
+    scheduleUnresolvedResolutionJob,
   } satisfies ProviderAssetRepositoryShape)
 })
 

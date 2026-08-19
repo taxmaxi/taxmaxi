@@ -759,6 +759,12 @@ const make = Effect.gen(function* () {
       })
 
       if (mapping !== null) {
+        if (mapping.mappingStatus === "pending_review") {
+          yield* providerAssetRepository.scheduleUnresolvedResolutionJob({
+            providerAssetRowId: providerAsset.id,
+          })
+        }
+
         return mapping
       }
 

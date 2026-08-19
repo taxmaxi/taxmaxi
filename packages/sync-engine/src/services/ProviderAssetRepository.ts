@@ -68,6 +68,13 @@ export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
 }
 
+/** Result of scheduling one durable resolution job for an unresolved observation. */
+export interface AssetResolutionJobScheduleResult {
+  readonly created: boolean
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+}
+
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
  */
@@ -125,7 +132,9 @@ export interface ProviderAssetSourceUseObservation {
  */
 export interface ProviderAssetRepositoryShape {
   /**
-   * Persist provider asset catalog rows.
+   * Persist provider asset catalog rows. When stored observation facts change,
+   * increment evidenceRevision and schedule one unresolved resolution job for
+   * the new revision. Retrieved-at-only refreshes leave the revision in place.
    */
   readonly upsertProviderAssets: (params: {
     readonly providerKey: string
@@ -243,6 +252,15 @@ export interface ProviderAssetRepositoryShape {
   readonly findProviderAssetMapping: (params: {
     readonly providerAssetRowId: string
   }) => Effect.Effect<Option.Option<ResolvedProviderAssetMapping>, SyncEngineStorageError>
+
+  /**
+   * Persist one durable resolution job for an unresolved provider observation
+   * and its current evidence revision. A second schedule for the same pair is
+   * a no-op. Approved local mappings do not create a job.
+   */
+  readonly scheduleUnresolvedResolutionJob: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<AssetResolutionJobScheduleResult, SyncEngineStorageError>
 }
 
 /**

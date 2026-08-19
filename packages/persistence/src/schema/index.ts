@@ -1,6 +1,7 @@
 import * as addresses from "./AddressesTable.ts"
 import * as assetPrices from "./AssetPricesTable.ts"
 import * as assetRepresentations from "./AssetRepresentationsTable.ts"
+import * as assetResolutionJobs from "./AssetResolutionJobsTable.ts"
 import * as assets from "./AssetsTable.ts"
 import * as blockchains from "./BlockchainsTable.ts"
 import * as billing from "./BillingTables.ts"
@@ -49,6 +50,7 @@ export const schema = {
   ...addresses,
   ...assetPrices,
   ...assetRepresentations,
+  ...assetResolutionJobs,
   ...assets,
   ...blockchains,
   ...billing,
@@ -101,6 +103,7 @@ export type {
   AssetRepresentationInsert,
   AssetRepresentationType,
 } from "./AssetRepresentationsTable.ts"
+export type { AssetResolutionJob, AssetResolutionJobInsert } from "./AssetResolutionJobsTable.ts"
 export type { Asset, AssetInsert, AssetType } from "./AssetsTable.ts"
 export type { Blockchain, BlockchainInsert } from "./BlockchainsTable.ts"
 export type { BillingAccountRow, CreditLedgerRow, StripeEventRow } from "./BillingTables.ts"
