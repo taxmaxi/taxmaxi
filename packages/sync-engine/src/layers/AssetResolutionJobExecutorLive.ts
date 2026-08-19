@@ -36,8 +36,11 @@ import {
   type ProviderAssetObservedRepresentationRecord,
   type SyncEngineStorageError,
 } from "../services/index.ts"
+import { nowDate } from "./internal/SourceSyncTelemetry.ts"
 
 const ATTACH_ONLY_ACTOR = "system:attach-only-policy"
+const DEFAULT_ASSET_RESOLUTION_WORKER_ID = "asset-resolution-inline-executor"
+const ASSET_RESOLUTION_JOB_STALE_AFTER_MS = 5 * 60 * 1000
 
 interface ChainFact {
   readonly blockchain: string
@@ -242,10 +245,12 @@ const make = Effect.gen(function* () {
 
   const decideAndAttach = ({
     jobId,
+    workerId,
     providerAssetRowId,
     evidenceRevision,
   }: {
     readonly jobId: string
+    readonly workerId: string
     readonly providerAssetRowId: string
     readonly evidenceRevision: number
   }): Effect.Effect<AssetResolutionJobExecutionResult, SyncEngineStorageError> =>
@@ -342,14 +347,24 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.catch((error) =>
         providerAssetRepository
-          .finishResolutionJob({ jobId, status: "pending" })
+          .releaseResolutionJobAfterFailure({ jobId, workerId, message: error.message })
           .pipe(Effect.andThen(Effect.fail(error)))
       )
     )
 
-  const executeJob: AssetResolutionJobExecutorShape["executeJob"] = ({ jobId }) =>
+  const executeJob: AssetResolutionJobExecutorShape["executeJob"] = ({
+    jobId,
+    workerId = DEFAULT_ASSET_RESOLUTION_WORKER_ID,
+  }) =>
     Effect.gen(function* () {
-      const claim = yield* providerAssetRepository.claimResolutionJob({ jobId })
+      const startedAt = nowDate()
+      const staleBefore = new Date(startedAt.getTime() - ASSET_RESOLUTION_JOB_STALE_AFTER_MS)
+      const claim = yield* providerAssetRepository.claimResolutionJob({
+        jobId,
+        workerId,
+        startedAt,
+        staleBefore,
+      })
 
       if (claim._tag !== "claimed") {
         return {
@@ -361,6 +376,7 @@ const make = Effect.gen(function* () {
 
       return yield* decideAndAttach({
         jobId,
+        workerId,
         providerAssetRowId: claim.providerAssetRowId,
         evidenceRevision: claim.evidenceRevision,
       })

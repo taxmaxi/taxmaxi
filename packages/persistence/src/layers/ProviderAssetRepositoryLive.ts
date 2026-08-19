@@ -24,6 +24,8 @@ import {
 } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
 
+const ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS = 30_000
+
 class ApprovalObservationSourceSetChanged extends Data.TaggedError(
   "ApprovalObservationSourceSetChanged"
 )<{
@@ -1127,17 +1129,25 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineStorageError("providerAssetRepository.scheduleUnresolvedResolutionJob"))
 
-  const claimResolutionJob: ProviderAssetRepositoryShape["claimResolutionJob"] = ({ jobId }) =>
+  const claimResolutionJob: ProviderAssetRepositoryShape["claimResolutionJob"] = ({
+    jobId,
+    workerId,
+    startedAt,
+    staleBefore,
+  }) =>
     db
       .transaction((tx) =>
         Effect.gen(function* () {
-          const now = nowDate()
           const [job] = yield* tx
             .select({
               id: schema.assetResolutionJobs.id,
               providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
               evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
               status: schema.assetResolutionJobs.status,
+              attemptCount: schema.assetResolutionJobs.attemptCount,
+              nextRetryAt: schema.assetResolutionJobs.nextRetryAt,
+              heartbeatAt: schema.assetResolutionJobs.heartbeatAt,
+              updatedAt: schema.assetResolutionJobs.updatedAt,
             })
             .from(schema.assetResolutionJobs)
             .where(eq(schema.assetResolutionJobs.id, jobId))
@@ -1145,7 +1155,17 @@ const make = Effect.gen(function* () {
             .limit(1)
             .pipe(wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.job"))
 
-          if (job === undefined || job.status !== "pending") {
+          if (job === undefined) {
+            return { _tag: "not_claimable" } as const
+          }
+
+          const claimablePending =
+            job.status === "pending" && (job.nextRetryAt === null || job.nextRetryAt <= startedAt)
+          const claimableStaleProcessing =
+            job.status === "processing" &&
+            (job.heartbeatAt === null ? job.updatedAt < staleBefore : job.heartbeatAt < staleBefore)
+
+          if (!claimablePending && !claimableStaleProcessing) {
             return { _tag: "not_claimable" } as const
           }
 
@@ -1164,7 +1184,7 @@ const make = Effect.gen(function* () {
           ) {
             yield* tx
               .update(schema.assetResolutionJobs)
-              .set({ status: "completed", updatedAt: now })
+              .set({ status: "completed", updatedAt: startedAt })
               .where(eq(schema.assetResolutionJobs.id, jobId))
               .pipe(
                 wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.completeStale")
@@ -1173,9 +1193,20 @@ const make = Effect.gen(function* () {
             return { _tag: "stale" } as const
           }
 
+          const attemptCount = job.attemptCount + 1
+
           yield* tx
             .update(schema.assetResolutionJobs)
-            .set({ status: "processing", updatedAt: now })
+            .set({
+              status: "processing",
+              workerId,
+              startedAt,
+              heartbeatAt: startedAt,
+              nextRetryAt: null,
+              errorMessage: null,
+              attemptCount,
+              updatedAt: startedAt,
+            })
             .where(eq(schema.assetResolutionJobs.id, jobId))
             .pipe(wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.claim"))
 
@@ -1183,10 +1214,112 @@ const make = Effect.gen(function* () {
             _tag: "claimed",
             providerAssetRowId: job.providerAssetRowId,
             evidenceRevision: job.evidenceRevision,
+            attemptCount,
           } as const
         })
       )
       .pipe(wrapSyncEngineStorageError("providerAssetRepository.claimResolutionJob"))
+
+  const heartbeatResolutionJob: ProviderAssetRepositoryShape["heartbeatResolutionJob"] = ({
+    jobId,
+    workerId,
+    heartbeatAt,
+  }) =>
+    db
+      .update(schema.assetResolutionJobs)
+      .set({ heartbeatAt, updatedAt: heartbeatAt })
+      .where(
+        and(
+          eq(schema.assetResolutionJobs.id, jobId),
+          eq(schema.assetResolutionJobs.status, "processing"),
+          eq(schema.assetResolutionJobs.workerId, workerId)
+        )
+      )
+      .returning({ id: schema.assetResolutionJobs.id })
+      .pipe(
+        Effect.map((rows) => (rows.length > 0 ? ("heartbeated" as const) : ("not_owned" as const))),
+        wrapSyncEngineSqlError("providerAssetRepository.heartbeatResolutionJob")
+      )
+
+  const releaseResolutionJobAfterFailure: ProviderAssetRepositoryShape["releaseResolutionJobAfterFailure"] =
+    ({ jobId, workerId, message }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const now = nowDate()
+            const [job] = yield* tx
+              .select({
+                attemptCount: schema.assetResolutionJobs.attemptCount,
+                maxAttempts: schema.assetResolutionJobs.maxAttempts,
+              })
+              .from(schema.assetResolutionJobs)
+              .where(
+                and(
+                  eq(schema.assetResolutionJobs.id, jobId),
+                  eq(schema.assetResolutionJobs.status, "processing"),
+                  eq(schema.assetResolutionJobs.workerId, workerId)
+                )
+              )
+              .for("update")
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.releaseResolutionJobAfterFailure.job"
+                )
+              )
+
+            if (job === undefined) {
+              return { _tag: "not_owned" } as const
+            }
+
+            if (job.attemptCount >= job.maxAttempts) {
+              yield* tx
+                .update(schema.assetResolutionJobs)
+                .set({
+                  status: "failed",
+                  errorMessage: message,
+                  workerId: null,
+                  heartbeatAt: null,
+                  updatedAt: now,
+                })
+                .where(eq(schema.assetResolutionJobs.id, jobId))
+                .pipe(
+                  wrapSyncEngineSqlError(
+                    "providerAssetRepository.releaseResolutionJobAfterFailure.fail"
+                  )
+                )
+
+              return { _tag: "attempts_exhausted", attemptCount: job.attemptCount } as const
+            }
+
+            const nextRetryAt = new Date(
+              now.getTime() + ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS * 2 ** (job.attemptCount - 1)
+            )
+
+            yield* tx
+              .update(schema.assetResolutionJobs)
+              .set({
+                status: "pending",
+                errorMessage: message,
+                workerId: null,
+                startedAt: null,
+                heartbeatAt: null,
+                nextRetryAt,
+                updatedAt: now,
+              })
+              .where(eq(schema.assetResolutionJobs.id, jobId))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.releaseResolutionJobAfterFailure.retry"
+                )
+              )
+
+            return { _tag: "retry_scheduled", attemptCount: job.attemptCount, nextRetryAt } as const
+          })
+        )
+        .pipe(
+          wrapSyncEngineStorageError("providerAssetRepository.releaseResolutionJobAfterFailure")
+        )
 
   const finishResolutionJob: ProviderAssetRepositoryShape["finishResolutionJob"] = ({
     jobId,
@@ -1247,6 +1380,8 @@ const make = Effect.gen(function* () {
     findProviderAssetMapping,
     scheduleUnresolvedResolutionJob,
     claimResolutionJob,
+    heartbeatResolutionJob,
+    releaseResolutionJobAfterFailure,
     finishResolutionJob,
     recordAssetResolutionDecision,
   } satisfies ProviderAssetRepositoryShape)

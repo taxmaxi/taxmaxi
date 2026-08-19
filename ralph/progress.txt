@@ -9,3 +9,9 @@ each story closes and the operator decisions already taken.
 **Status**: done
 **Notes**: Changed files: packages/persistence/src/layers/TaxCalculationServiceLive.ts,packages/persistence/src/services/TaxCalculationService.ts packages/persistence/tests/tax-calculation.integration.test.ts,packages/rest-api/src/definitions/SourcesApi.ts packages/rest-api/src/layers/SourcesApiLive.ts,packages/rest-api/tests/SourcesApiLive.integration.test.ts ralph/prd.json,ralph/progress.txt
 ---
+
+## Iteration 2 - 2026-08-19 17:32
+**Story**: AR-002 - Give resolution jobs attempt limits and lease identity
+**Status**: done
+**Notes**: Loop was stopped mid-story; finished and verified interactively. Added attempt_count, max_attempts, started_at, heartbeat_at, next_retry_at, worker_id, error_message to asset_resolution_jobs (generated migration 20260819142618_small_veda). claimResolutionJob now takes worker identity and lease params, increments attempts, and reclaims stale processing jobs; new heartbeatResolutionJob and releaseResolutionJobAfterFailure (backoff doubles per attempt, attempt cap fails the job). Executor releases through the failure path. 7 new lease/retry integration tests. Full-suite timeouts and a TRUNCATE deadlock seen during the loop's verification were parallel-suite DB contention; all pass in isolation and the full suite is green (983 passed).
+---

@@ -160,6 +160,89 @@ const seedPendingApprovalAsset = async (
   return providerAsset
 }
 
+const selectAssetResolutionJob = ({ jobId }: { readonly jobId: string }) =>
+  runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      const [job] = yield* db
+        .select()
+        .from(schema.assetResolutionJobs)
+        .where(eq(schema.assetResolutionJobs.id, jobId))
+        .limit(1)
+
+      if (job === undefined) {
+        return yield* Effect.die(`Missing asset resolution job ${jobId}`)
+      }
+
+      return job
+    })
+  )
+
+const scheduleResolutionJob = async (suffix: string) => {
+  const providerAssetRowId = await runRepository(
+    Effect.gen(function* () {
+      const repository = yield* ProviderAssetRepository
+      yield* repository.upsertProviderAssets({
+        providerKey: "coinbase",
+        entries: [
+          {
+            providerAssetId: `resolution-job-${suffix}`,
+            naturalKey: null,
+            currencyCode: "ORB",
+            name: "Orb",
+            exponent: 8,
+            providerType: "crypto",
+            payload: { source: "test" },
+          },
+        ],
+      })
+      const result = yield* repository.findProviderAssetByProviderAssetId({
+        providerKey: "coinbase",
+        providerAssetId: `resolution-job-${suffix}`,
+      })
+      if (Option.isNone(result)) {
+        return yield* Effect.die("Expected resolution job provider asset")
+      }
+      yield* repository.scheduleUnresolvedResolutionJob({ providerAssetRowId: result.value.id })
+      return result.value.id
+    })
+  )
+
+  const [job] = await runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      return yield* db
+        .select({ id: schema.assetResolutionJobs.id })
+        .from(schema.assetResolutionJobs)
+        .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAssetRowId))
+        .limit(1)
+    })
+  )
+
+  if (job === undefined) {
+    throw new Error("Expected a resolution job to be scheduled")
+  }
+
+  return { providerAssetRowId, jobId: job.id }
+}
+
+const claimResolutionJobForTest = ({
+  jobId,
+  workerId,
+  startedAt = new Date(),
+  staleBefore = new Date(Date.now() - 5 * 60 * 1000),
+}: {
+  readonly jobId: string
+  readonly workerId: string
+  readonly startedAt?: Date
+  readonly staleBefore?: Date
+}) =>
+  runRepository(
+    Effect.flatMap(ProviderAssetRepository, (repository) =>
+      repository.claimResolutionJob({ jobId, workerId, startedAt, staleBefore })
+    )
+  )
+
 describe("ProviderAssetRepositoryLive", () => {
   describe("current schema", () => {
     beforeEach(async () => {
@@ -1933,6 +2016,217 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
       expect(providerAssetRows).toHaveLength(0)
+    })
+  })
+
+  describe("resolution job lease and retry", () => {
+    beforeEach(async () => {
+      await Effect.runPromise(context.recreateTestDatabase())
+      const fixture = await runPg(seedSyncEngineRepositoryFixture())
+      await runPg(
+        seedSyncEngineAssets({
+          baseBlockchainId: fixture.baseBlockchainId,
+          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+        })
+      )
+    })
+
+    it("claims a pending job, increments the attempt count, and records the worker and start time", async () => {
+      const { jobId } = await scheduleResolutionJob("claim")
+      const startedAt = new Date("2025-01-02T00:00:00.000Z")
+
+      const claimed = await claimResolutionJobForTest({ jobId, workerId: "worker-1", startedAt })
+
+      expect(claimed).toEqual({
+        _tag: "claimed",
+        providerAssetRowId: expect.any(String),
+        evidenceRevision: expect.any(Number),
+        attemptCount: 1,
+      })
+
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.status).toBe("processing")
+      expect(job.workerId).toBe("worker-1")
+      expect(job.attemptCount).toBe(1)
+      expect(job.startedAt?.toISOString()).toBe(startedAt.toISOString())
+      expect(job.heartbeatAt?.toISOString()).toBe(startedAt.toISOString())
+    })
+
+    it("lets exactly one of two concurrently racing claims win", async () => {
+      const { jobId } = await scheduleResolutionJob("concurrent")
+
+      const [first, second] = await Promise.all([
+        claimResolutionJobForTest({ jobId, workerId: "worker-1" }),
+        claimResolutionJobForTest({ jobId, workerId: "worker-2" }),
+      ])
+
+      const tags = [first._tag, second._tag].sort()
+      expect(tags).toEqual(["claimed", "not_claimable"])
+
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.status).toBe("processing")
+      expect(job.attemptCount).toBe(1)
+      expect(["worker-1", "worker-2"]).toContain(job.workerId)
+    })
+
+    it("keeps a processing job with a fresh heartbeat un-claimable by another worker", async () => {
+      const { jobId } = await scheduleResolutionJob("fresh-lease")
+      await claimResolutionJobForTest({ jobId, workerId: "worker-1" })
+
+      const secondClaim = await claimResolutionJobForTest({ jobId, workerId: "worker-2" })
+
+      expect(secondClaim).toEqual({ _tag: "not_claimable" })
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.workerId).toBe("worker-1")
+    })
+
+    it("lets another worker reclaim a job whose owner stopped heartbeating", async () => {
+      const { jobId } = await scheduleResolutionJob("stale-lease")
+      await claimResolutionJobForTest({ jobId, workerId: "worker-1" })
+
+      const staleHeartbeatAt = new Date(Date.now() - 10 * 60 * 1000)
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ heartbeatAt: staleHeartbeatAt, updatedAt: staleHeartbeatAt })
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+        })
+      )
+
+      const staleBefore = new Date(Date.now() - 5 * 60 * 1000)
+      const reclaimed = await claimResolutionJobForTest({
+        jobId,
+        workerId: "worker-2",
+        staleBefore,
+      })
+
+      expect(reclaimed).toMatchObject({ _tag: "claimed", attemptCount: 2 })
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.status).toBe("processing")
+      expect(job.workerId).toBe("worker-2")
+    })
+
+    it("releases a job for retry with a delay that grows with the attempt count", async () => {
+      const { jobId } = await scheduleResolutionJob("retry")
+      await claimResolutionJobForTest({ jobId, workerId: "worker-1" })
+
+      const firstRelease = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.releaseResolutionJobAfterFailure({
+            jobId,
+            workerId: "worker-1",
+            message: "CoinGecko timeout",
+          })
+        )
+      )
+
+      if (firstRelease._tag !== "retry_scheduled") {
+        return expect.fail("Expected the first failure to schedule a retry")
+      }
+
+      const jobAfterFirstFailure = await selectAssetResolutionJob({ jobId })
+      expect(jobAfterFirstFailure.status).toBe("pending")
+      expect(jobAfterFirstFailure.attemptCount).toBe(1)
+      expect(jobAfterFirstFailure.errorMessage).toBe("CoinGecko timeout")
+      expect(jobAfterFirstFailure.workerId).toBeNull()
+      expect(firstRelease.nextRetryAt.getTime()).toBeGreaterThan(Date.now())
+
+      const tooEarlyClaim = await claimResolutionJobForTest({ jobId, workerId: "worker-2" })
+      expect(tooEarlyClaim).toEqual({ _tag: "not_claimable" })
+
+      const firstDelayMs = firstRelease.nextRetryAt.getTime() - Date.now()
+
+      const reclaimed = await claimResolutionJobForTest({
+        jobId,
+        workerId: "worker-2",
+        startedAt: firstRelease.nextRetryAt,
+        staleBefore: new Date(firstRelease.nextRetryAt.getTime() - 5 * 60 * 1000),
+      })
+      expect(reclaimed).toMatchObject({ _tag: "claimed", attemptCount: 2 })
+
+      const secondRelease = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.releaseResolutionJobAfterFailure({
+            jobId,
+            workerId: "worker-2",
+            message: "CoinGecko timeout again",
+          })
+        )
+      )
+
+      if (secondRelease._tag !== "retry_scheduled") {
+        return expect.fail("Expected the second failure to schedule a retry")
+      }
+
+      const secondDelayMs = secondRelease.nextRetryAt.getTime() - Date.now()
+      expect(secondDelayMs).toBeGreaterThan(firstDelayMs)
+    })
+
+    it("fails a job once its attempt limit is reached and never hands it out again", async () => {
+      const { jobId } = await scheduleResolutionJob("exhausted")
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ maxAttempts: 1 })
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+        })
+      )
+      await claimResolutionJobForTest({ jobId, workerId: "worker-1" })
+
+      const release = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.releaseResolutionJobAfterFailure({
+            jobId,
+            workerId: "worker-1",
+            message: "Permanent failure",
+          })
+        )
+      )
+
+      expect(release).toEqual({ _tag: "attempts_exhausted", attemptCount: 1 })
+
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.status).toBe("failed")
+      expect(job.errorMessage).toBe("Permanent failure")
+      expect(job.workerId).toBeNull()
+
+      const claimAfterExhaustion = await claimResolutionJobForTest({
+        jobId,
+        workerId: "worker-2",
+        staleBefore: new Date(0),
+      })
+      expect(claimAfterExhaustion).toEqual({ _tag: "not_claimable" })
+    })
+
+    it("heartbeats a processing job only when the worker id matches", async () => {
+      const { jobId } = await scheduleResolutionJob("heartbeat")
+      await claimResolutionJobForTest({ jobId, workerId: "worker-1" })
+
+      const rejected = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.heartbeatResolutionJob({
+            jobId,
+            workerId: "worker-2",
+            heartbeatAt: new Date(),
+          })
+        )
+      )
+      expect(rejected).toBe("not_owned")
+
+      const heartbeatAt = new Date("2025-01-02T00:05:00.000Z")
+      const accepted = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.heartbeatResolutionJob({ jobId, workerId: "worker-1", heartbeatAt })
+        )
+      )
+      expect(accepted).toBe("heartbeated")
+
+      const job = await selectAssetResolutionJob({ jobId })
+      expect(job.heartbeatAt?.toISOString()).toBe(heartbeatAt.toISOString())
     })
   })
 })

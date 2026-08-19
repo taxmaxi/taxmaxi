@@ -44,6 +44,7 @@ export interface AssetResolutionJobExecutorShape {
    */
   readonly executeJob: (params: {
     readonly jobId: string
+    readonly workerId?: string
   }) => Effect.Effect<AssetResolutionJobExecutionResult, SyncEngineStorageError>
 }
 

@@ -108,12 +108,51 @@ export type AssetResolutionJobClaim =
       readonly _tag: "claimed"
       readonly providerAssetRowId: string
       readonly evidenceRevision: number
+      readonly attemptCount: number
     }
   | { readonly _tag: "not_claimable" }
   | { readonly _tag: "stale" }
 
 /** Terminal status a resolution job execution attempt can leave the job in. */
-export type AssetResolutionJobFinishStatus = "completed" | "pending" | "failed"
+export type AssetResolutionJobFinishStatus = "completed" | "failed"
+
+/** Input for claiming a durable resolution job for worker execution. */
+export interface ClaimAssetResolutionJobParams {
+  readonly jobId: string
+  readonly workerId: string
+  readonly startedAt: Date
+  /** Heartbeat cutoff a job stuck in processing must be older than to be reclaimed. */
+  readonly staleBefore: Date
+}
+
+/** Input for refreshing an executing worker's heartbeat on a resolution job. */
+export interface HeartbeatAssetResolutionJobParams {
+  readonly jobId: string
+  readonly workerId: string
+  readonly heartbeatAt: Date
+}
+
+/** Outcome of refreshing a resolution job heartbeat. */
+export type AssetResolutionJobHeartbeatOutcome = "heartbeated" | "not_owned"
+
+/** Input for releasing a resolution job after an execution failure. */
+export interface ReleaseAssetResolutionJobParams {
+  readonly jobId: string
+  readonly workerId: string
+  readonly message: string
+}
+
+/**
+ * Outcome of releasing a resolution job after an execution failure.
+ *
+ * - retry_scheduled: the job became runnable again once nextRetryAt passes.
+ * - attempts_exhausted: attemptCount reached maxAttempts, so the job is now failed.
+ * - not_owned: the calling worker no longer owns the job (already reclaimed or finished).
+ */
+export type AssetResolutionJobReleaseOutcome =
+  | { readonly _tag: "retry_scheduled"; readonly attemptCount: number; readonly nextRetryAt: Date }
+  | { readonly _tag: "attempts_exhausted"; readonly attemptCount: number }
+  | { readonly _tag: "not_owned" }
 
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
@@ -306,17 +345,40 @@ export interface ProviderAssetRepositoryShape {
    * Claim one durable resolution job for execution. Locks the job row and
    * compares its evidence revision against the provider asset's current
    * evidence revision in the same transaction: a stale job is completed
-   * without a decision and reported as stale rather than claimed. A job that
-   * is not pending (already claimed, completed, or failed) is reported
-   * not_claimable, making duplicate execution attempts a safe no-op.
+   * without a decision and reported as stale rather than claimed. A job is
+   * claimable when it is pending with no unexpired retry delay, or when it
+   * is stuck in processing with a heartbeat older than staleBefore. Any
+   * other job (already claimed by a live worker, completed, or failed) is
+   * reported not_claimable, making duplicate execution attempts a safe
+   * no-op. Claiming increments attemptCount and records the claiming worker
+   * and start time.
    */
-  readonly claimResolutionJob: (params: {
-    readonly jobId: string
-  }) => Effect.Effect<AssetResolutionJobClaim, SyncEngineStorageError>
+  readonly claimResolutionJob: (
+    params: ClaimAssetResolutionJobParams
+  ) => Effect.Effect<AssetResolutionJobClaim, SyncEngineStorageError>
 
   /**
-   * Move a resolution job to a terminal or retryable status after an
-   * execution attempt.
+   * Refresh the heartbeat for the worker currently owning a processing
+   * resolution job. Returns not_owned if the job is no longer processing
+   * under that worker, for example after a stale-lease reclaim.
+   */
+  readonly heartbeatResolutionJob: (
+    params: HeartbeatAssetResolutionJobParams
+  ) => Effect.Effect<AssetResolutionJobHeartbeatOutcome, SyncEngineStorageError>
+
+  /**
+   * Release a resolution job back to pending after an execution failure,
+   * scheduling a retry with a delay that grows with the attempt count. A
+   * job whose attempt count has reached its limit becomes failed instead
+   * and is never handed out again.
+   */
+  readonly releaseResolutionJobAfterFailure: (
+    params: ReleaseAssetResolutionJobParams
+  ) => Effect.Effect<AssetResolutionJobReleaseOutcome, SyncEngineStorageError>
+
+  /**
+   * Move a resolution job to a terminal status after a decision was
+   * recorded (completed) or a non-retryable outcome (failed).
    */
   readonly finishResolutionJob: (params: {
     readonly jobId: string
