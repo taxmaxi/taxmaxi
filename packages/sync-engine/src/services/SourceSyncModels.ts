@@ -49,6 +49,29 @@ export const toPublicSourceSyncJobStatus = (status: SourceSyncJobStatus): SyncJo
 }
 
 /**
+ * Build a job summary that carries no credit outcome. `resumable` is derived
+ * from the status so the flag cannot drift from the status it mirrors.
+ */
+export const makePlainSourceSyncJobSummary = ({
+  sourceId,
+  jobId,
+  status,
+  message = null,
+}: {
+  readonly sourceId: string
+  readonly jobId: string
+  readonly status: SyncJobStatus
+  readonly message?: string | null
+}): SourceSyncJobSummary => ({
+  sourceId,
+  jobId,
+  status,
+  message,
+  resumable: status === "credit_required",
+  creditOutcome: null,
+})
+
+/**
  * SourceSyncPhase - Current user-visible phase of a running source job.
  */
 export const SourceSyncPhaseSchema = Schema.Literals([
@@ -199,7 +222,9 @@ export interface SourceSyncPendingDispatchJob extends SourceSyncRepairableActive
  * SourceSyncCreditOutcome - Public credit-required details for a resumable sync outcome.
  *
  * `additionalCreditsRequired` is null until the billable total for this run is known
- * (once classification starts), rather than guessing before that point.
+ * (once classification starts). Once set it is an upper bound, not an exact
+ * figure: pending records may turn out to be free (skipped, failed, or
+ * matching an already-charged transaction).
  */
 export interface SourceSyncCreditOutcome {
   readonly reasonCode: SyncCreditReasonCode

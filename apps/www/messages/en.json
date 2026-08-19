@@ -97,8 +97,8 @@
         "coveredOne": "{count} transaction is already imported and stays yours.",
         "coveredMany": "{count} transactions are already imported and stay yours.",
         "addUnknown": "Add credits to finish the sync.",
-        "addOne": "Add {count} more credit to finish the sync.",
-        "addMany": "Add {count} more credits to finish the sync.",
+        "addOne": "Add up to {count} more credit to finish the sync.",
+        "addMany": "Add up to {count} more credits to finish the sync.",
         "choosePlan": "Choose a plan",
         "buyCredits": "Buy credits",
         "notStarted": "This sync needs transaction credits before it can start. Add credits and run it again."

@@ -85,7 +85,9 @@ export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("Sour
 /**
  * SourceSyncCreditOutcomeResponse - Credit-required details for a resumable sync outcome.
  *
- * `additionalCreditsRequired` is null until the billable total for the run is known.
+ * `additionalCreditsRequired` is null until the billable total for the run is
+ * known, and is an upper bound once set: pending records may turn out to be
+ * free (skipped, failed, or matching an already-charged transaction).
  */
 export class SourceSyncCreditOutcomeResponse extends Schema.Class<SourceSyncCreditOutcomeResponse>(
   "SourceSyncCreditOutcomeResponse"

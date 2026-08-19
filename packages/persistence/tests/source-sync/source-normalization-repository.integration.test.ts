@@ -300,6 +300,53 @@ const persistCoinbaseNormalization = ({
 describe("SourceNormalizationRepositoryLive", () => {
   let fixture: SyncEngineRepositoryFixture
 
+  // Shared by the credit tests: minimal billable buy artifacts for one raw record.
+  const buildBuyArtifacts = ({
+    externalId,
+    occurredAt,
+    sourceRawRecordId,
+  }: {
+    readonly externalId: string
+    readonly occurredAt: Date
+    readonly sourceRawRecordId: string
+  }) =>
+    ({
+      transaction: {
+        sourceId: TEST_SOURCE_ID,
+        sourceRawRecordId,
+        externalId,
+        externalGroupId: null,
+        timestamp: occurredAt,
+        transactionType: "buy_fiat",
+        providerTransactionType: "buy",
+        providerStatus: "completed",
+        providerResourcePath: null,
+        providerDescription: null,
+        providerCreatedAt: occurredAt,
+        providerUpdatedAt: occurredAt,
+        metadata: null,
+        principalId: TEST_PRINCIPAL_ID,
+      },
+      venueContext: {
+        venueType: "cex" as const,
+        cexAccountId: fixture.cexAccountId,
+        externalAccountId: "coinbase-account-1",
+        externalOrderId: null,
+        externalFillId: null,
+        side: "buy" as const,
+        instrument: "BTC-EUR",
+        fillPrice: "10000.00",
+        commissionAmount: null,
+        commissionCurrency: null,
+        metadata: null,
+      },
+      providerTransfers: [],
+      feeTransfers: [],
+      legs: [],
+      transactionReview: null,
+      resolvedTransactionType: APPROVED_MAPPING,
+    }) as const
+
   beforeEach(async () => {
     await Effect.runPromise(context.recreateTestDatabase())
     fixture = await runPg(seedSyncEngineRepositoryFixture())
@@ -890,54 +937,11 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    const buildArtifacts = ({
-      externalId,
-      sourceRawRecordId,
-    }: {
-      readonly externalId: string
-      readonly sourceRawRecordId: string
-    }) =>
-      ({
-        transaction: {
-          sourceId: TEST_SOURCE_ID,
-          sourceRawRecordId,
-          externalId,
-          externalGroupId: null,
-          timestamp: occurredAt,
-          transactionType: "buy_fiat",
-          providerTransactionType: "buy",
-          providerStatus: "completed",
-          providerResourcePath: null,
-          providerDescription: null,
-          providerCreatedAt: occurredAt,
-          providerUpdatedAt: occurredAt,
-          metadata: null,
-          principalId: TEST_PRINCIPAL_ID,
-        },
-        venueContext: {
-          venueType: "cex" as const,
-          cexAccountId: fixture.cexAccountId,
-          externalAccountId: "coinbase-account-1",
-          externalOrderId: null,
-          externalFillId: null,
-          side: "buy" as const,
-          instrument: "BTC-EUR",
-          fillPrice: "10000.00",
-          commissionAmount: null,
-          commissionCurrency: null,
-          metadata: null,
-        },
-        providerTransfers: [],
-        feeTransfers: [],
-        legs: [],
-        transactionReview: null,
-        resolvedTransactionType: APPROVED_MAPPING,
-      }) as const
-
     await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>
         repository.persistNormalizedArtifacts(
-          buildArtifacts({
+          buildBuyArtifacts({
+            occurredAt,
             externalId: "transaction-covered-by-credit",
             sourceRawRecordId: TEST_RAW_RECORD_ID,
           })
@@ -949,7 +953,8 @@ describe("SourceNormalizationRepositoryLive", () => {
       Effect.flip(
         Effect.flatMap(SourceNormalizationRepository, (repository) =>
           repository.persistNormalizedArtifacts(
-            buildArtifacts({
+            buildBuyArtifacts({
+              occurredAt,
               externalId: "transaction-blocked-by-exhaustion",
               sourceRawRecordId: secondRawRecordId,
             })
@@ -1021,59 +1026,17 @@ describe("SourceNormalizationRepositoryLive", () => {
       })
     )
 
-    const buildArtifacts = ({
-      externalId,
-      sourceRawRecordId,
-    }: {
-      readonly externalId: string
-      readonly sourceRawRecordId: string
-    }) =>
-      ({
-        transaction: {
-          sourceId: TEST_SOURCE_ID,
-          sourceRawRecordId,
-          externalId,
-          externalGroupId: null,
-          timestamp: occurredAt,
-          transactionType: "buy_fiat",
-          providerTransactionType: "buy",
-          providerStatus: "completed",
-          providerResourcePath: null,
-          providerDescription: null,
-          providerCreatedAt: occurredAt,
-          providerUpdatedAt: occurredAt,
-          metadata: null,
-          principalId: TEST_PRINCIPAL_ID,
-        },
-        venueContext: {
-          venueType: "cex" as const,
-          cexAccountId: fixture.cexAccountId,
-          externalAccountId: "coinbase-account-1",
-          externalOrderId: null,
-          externalFillId: null,
-          side: "buy" as const,
-          instrument: "BTC-EUR",
-          fillPrice: "10000.00",
-          commissionAmount: null,
-          commissionCurrency: null,
-          metadata: null,
-        },
-        providerTransfers: [],
-        feeTransfers: [],
-        legs: [],
-        transactionReview: null,
-        resolvedTransactionType: APPROVED_MAPPING,
-      }) as const
-
-    const coveredArtifacts = buildArtifacts({
+    const coveredArtifacts = buildBuyArtifacts({
+      occurredAt,
       externalId: "transaction-continue-covered",
       sourceRawRecordId: TEST_RAW_RECORD_ID,
     })
-    const pausedArtifacts = buildArtifacts({
+    const pausedArtifacts = buildBuyArtifacts({
+      occurredAt,
       externalId: "transaction-continue-paused",
       sourceRawRecordId: secondRawRecordId,
     })
-    const persist = (artifacts: typeof coveredArtifacts) =>
+    const persist = (artifacts: ReturnType<typeof buildBuyArtifacts>) =>
       runRepository(
         Effect.flatMap(SourceNormalizationRepository, (repository) =>
           repository.persistNormalizedArtifacts(artifacts)

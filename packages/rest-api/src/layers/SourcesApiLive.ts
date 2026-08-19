@@ -68,7 +68,11 @@ import type { ReportReviewReasonCode } from "@my/core/report"
 import { SourceCreationService } from "../services/SourceCreationService.ts"
 import { AnonSessionService } from "../services/AnonSessionService.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
-import { assertHasSyncCredits, NoUsableCreditsError } from "../helpers/SyncCreditAdmission.ts"
+import {
+  assertHasSyncCredits,
+  NoUsableCreditsError,
+  SYNC_CREDIT_REQUIRED_MESSAGE,
+} from "../helpers/SyncCreditAdmission.ts"
 import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
 import { ANON_SESSION_COOKIE_MAX_AGE, ANON_SESSION_COOKIE_NAME } from "./AnonApiLive.ts"
 
@@ -77,7 +81,7 @@ const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
 const toCreditRequiredError = (error: NoUsableCreditsError) =>
   new SourceCreditRequiredError({
-    message: "No usable credits available to start a sync.",
+    message: SYNC_CREDIT_REQUIRED_MESSAGE,
     reasonCode: error.reasonCode,
     availableCredits: error.availableCredits,
   })
@@ -128,6 +132,34 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       return principal
     })
+
+    // Shared by start and replay: resolve the caller and refuse billable sync
+    // work when a registered user has no usable credits.
+    const resolvePrincipalWithSyncCredits = ({ sourceId }: { readonly sourceId: string }) =>
+      Effect.gen(function* () {
+        const { currentUser, principal } =
+          yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
+            Effect.mapError((error) => toInternalServerError(error.message))
+          )
+
+        yield* assertHasSyncCredits({
+          billingRepository,
+          principalClaimRepository,
+          userId: currentUser.userId,
+          sourceId,
+        }).pipe(
+          Effect.mapError((error) => {
+            switch (error._tag) {
+              case "NoUsableCreditsError":
+                return toCreditRequiredError(error)
+              default:
+                return toInternalServerError("Failed to check sync credit balance.")
+            }
+          })
+        )
+
+        return principal
+      })
 
     const startSync = ({
       principalId,
@@ -323,26 +355,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("startSourceSyncJob", ({ params: path }) =>
         Effect.gen(function* () {
-          const { currentUser, principal } =
-            yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
-              Effect.mapError((error) => toInternalServerError(error.message))
-            )
-
-          yield* assertHasSyncCredits({
-            billingRepository,
-            principalClaimRepository,
-            userId: currentUser.userId,
-            sourceId: path.sourceId,
-          }).pipe(
-            Effect.mapError((error) => {
-              switch (error._tag) {
-                case "NoUsableCreditsError":
-                  return toCreditRequiredError(error)
-                default:
-                  return toInternalServerError("Failed to check sync credit balance.")
-              }
-            })
-          )
+          const principal = yield* resolvePrincipalWithSyncCredits({ sourceId: path.sourceId })
 
           const startParams = {
             principalId: principal.id,
@@ -356,26 +369,7 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("replaySourceSyncJob", ({ params: path }) =>
         Effect.gen(function* () {
-          const { currentUser, principal } =
-            yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
-              Effect.mapError((error) => toInternalServerError(error.message))
-            )
-
-          yield* assertHasSyncCredits({
-            billingRepository,
-            principalClaimRepository,
-            userId: currentUser.userId,
-            sourceId: path.sourceId,
-          }).pipe(
-            Effect.mapError((error) => {
-              switch (error._tag) {
-                case "NoUsableCreditsError":
-                  return toCreditRequiredError(error)
-                default:
-                  return toInternalServerError("Failed to check sync credit balance.")
-              }
-            })
-          )
+          const principal = yield* resolvePrincipalWithSyncCredits({ sourceId: path.sourceId })
 
           const replayParams = {
             principalId: principal.id,

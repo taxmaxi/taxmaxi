@@ -61,12 +61,7 @@ export function getSourceSyncDisplayProgress({
   }
 }
 
-export type SourceSyncCreditOutcome = {
-  reasonCode: string
-  availableCredits: number
-  creditsConsumed: number
-  additionalCreditsRequired: number | null
-}
+export type SourceSyncCreditOutcome = NonNullable<SourceSyncJob["creditOutcome"]>
 
 export type SourceSyncIslandItem = {
   id: string

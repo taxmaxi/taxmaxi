@@ -21,7 +21,11 @@ import { Option } from "effect"
 import * as Redacted from "effect/Redacted"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { claimTokenPepperConfig, hashCliClaimToken } from "../helpers/ClaimTokenHash.ts"
-import { assertHasSyncCredits, type NoUsableCreditsError } from "../helpers/SyncCreditAdmission.ts"
+import {
+  assertHasSyncCredits,
+  SYNC_CREDIT_REQUIRED_MESSAGE,
+  type NoUsableCreditsError,
+} from "../helpers/SyncCreditAdmission.ts"
 import type { User } from "../definitions/AuthMiddleware.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 import {
@@ -55,7 +59,7 @@ const toPaymentRequiredError = ({
 }) => new SourceCreationPaymentRequiredError({ message, paymentRequired, paymentRequiredHeader })
 const toCreditRequiredError = (error: NoUsableCreditsError) =>
   new SourceCreationCreditRequiredError({
-    message: "No usable credits available to start a sync.",
+    message: SYNC_CREDIT_REQUIRED_MESSAGE,
     reasonCode: error.reasonCode,
     availableCredits: error.availableCredits,
   })

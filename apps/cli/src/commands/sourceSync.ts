@@ -59,7 +59,7 @@ export const waitForSyncCompletion = ({
             message:
               shortfall === null || shortfall === undefined
                 ? "Sync paused: add credits, then run sync again to continue."
-                : `Sync paused: ${shortfall} more credit${shortfall === 1 ? "" : "s"} needed. Add credits, then run sync again to continue.`,
+                : `Sync paused: up to ${shortfall} more credit${shortfall === 1 ? "" : "s"} needed. Add credits, then run sync again to continue.`,
           })
         }
 

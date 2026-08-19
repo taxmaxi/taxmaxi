@@ -97,8 +97,8 @@
         "coveredOne": "{count} Transaktion ist bereits importiert und bleibt erhalten.",
         "coveredMany": "{count} Transaktionen sind bereits importiert und bleiben erhalten.",
         "addUnknown": "Füge Guthaben hinzu, um die Synchronisierung abzuschließen.",
-        "addOne": "Füge {count} weiteres Guthaben hinzu, um die Synchronisierung abzuschließen.",
-        "addMany": "Füge {count} weitere Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addOne": "Füge bis zu {count} weiteres Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addMany": "Füge bis zu {count} weitere Guthaben hinzu, um die Synchronisierung abzuschließen.",
         "choosePlan": "Tarif wählen",
         "buyCredits": "Guthaben kaufen",
         "notStarted": "Diese Synchronisierung braucht Transaktionsguthaben, bevor sie starten kann. Füge Guthaben hinzu und starte sie erneut."

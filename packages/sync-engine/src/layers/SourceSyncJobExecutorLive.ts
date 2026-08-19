@@ -45,6 +45,7 @@ import {
   SourceSyncJobRetryableExecutionError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
+  makePlainSourceSyncJobSummary,
   SourceSyncStateRepository,
   SyncEngineTransaction,
   SyncEngineStorageError,
@@ -1256,14 +1257,7 @@ const make = Effect.gen(function* () {
         })
       )
 
-      return {
-        sourceId,
-        jobId,
-        status: "failed",
-        message,
-        resumable: false,
-        creditOutcome: null,
-      } satisfies SourceSyncJobSummary
+      return makePlainSourceSyncJobSummary({ sourceId, jobId, status: "failed", message })
     }).pipe(
       sourceSyncSpan({
         name: "source-sync.finalize-failure",
@@ -1550,15 +1544,13 @@ const make = Effect.gen(function* () {
               "source-sync:job-completed"
             )
 
-            return {
+            return makePlainSourceSyncJobSummary({
               sourceId: source.id,
               jobId,
               status: "completed",
               message:
                 mode === "sync" ? "Sync finished successfully." : "Replay finished successfully.",
-              resumable: false,
-              creditOutcome: null,
-            } satisfies SourceSyncJobSummary
+            })
           }),
       })
     }).pipe(sourceSyncSpan({ name: "source-sync-executor.execute", attributes: { jobId } }))

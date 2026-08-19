@@ -105,7 +105,7 @@ describe("SourceSyncIsland credit-required recovery", () => {
 
     expect(
       screen.getByText(
-        "This sync is paused: your transaction credits ran out. 82 transactions are already imported and stay yours. Add 22 more credits to finish the sync."
+        "This sync is paused: your transaction credits ran out. 82 transactions are already imported and stay yours. Add up to 22 more credits to finish the sync."
       )
     ).toBeDefined()
     expect(document.body.textContent).not.toContain("SyncEngineStorageError")
@@ -195,7 +195,7 @@ describe("getCreditRequiredCopy", () => {
         additionalCreditsRequired: 1,
       })
     ).toBe(
-      "This sync is paused: your transaction credits ran out. Add 1 more credit to finish the sync."
+      "This sync is paused: your transaction credits ran out. Add up to 1 more credit to finish the sync."
     )
   })
 })

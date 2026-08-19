@@ -25,6 +25,9 @@ export class NoUsableCreditsError extends Schema.TaggedError<NoUsableCreditsErro
   }
 ) {}
 
+/** Public refusal message shared by every credit-required sync gate. */
+export const SYNC_CREDIT_REQUIRED_MESSAGE = "No usable credits available to start a sync."
+
 /**
  * Fail with NoUsableCreditsError unless the caller has usable credits, or the source's
  * records were already paid for anonymously through a consumed x402 receipt claim.

@@ -1,4 +1,5 @@
-import { AuthValidationError } from "@my/rest-api/contracts"
+import { AuthValidationError, SourceCreditRequiredError } from "@my/rest-api/contracts"
+import * as Exit from "effect/Exit"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import type * as SchemaAST from "effect/SchemaAST"
@@ -129,9 +130,11 @@ export const isTaxMaxiUnauthorizedError = (error: unknown): error is TaxMaxiErro
   (error.status === 401 || getErrorStatusFromCode(error.code) === 401)
 
 export type TaxMaxiCreditRequired = {
-  readonly reasonCode: string
+  readonly reasonCode: SourceCreditRequiredError["reasonCode"]
   readonly availableCredits: number
 }
+
+const decodeCreditRequired = Schema.decodeUnknownExit(SourceCreditRequiredError)
 
 /**
  * Extract the structured credit details from a credit-required (402) sync
@@ -140,18 +143,11 @@ export type TaxMaxiCreditRequired = {
  */
 export const getTaxMaxiCreditRequired = (error: unknown): TaxMaxiCreditRequired | null => {
   const candidate = error instanceof TaxMaxiError ? error.cause : error
-  const record = getErrorRecord(candidate)
 
-  if (record?._tag !== "SourceCreditRequiredError") {
-    return null
-  }
-
-  const reasonCode = record.reasonCode
-  const availableCredits = record.availableCredits
-
-  return typeof reasonCode === "string" && typeof availableCredits === "number"
-    ? { reasonCode, availableCredits }
-    : null
+  return Exit.match(decodeCreditRequired(candidate), {
+    onFailure: () => null,
+    onSuccess: ({ availableCredits, reasonCode }) => ({ availableCredits, reasonCode }),
+  })
 }
 
 export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
