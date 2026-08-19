@@ -289,7 +289,7 @@
         "Each test must fail before the change."
       ],
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "large",
       "verification": [
         "pnpm --filter @my/persistence run type-check",

@@ -1,6 +1,7 @@
 import * as addresses from "./AddressesTable.ts"
 import * as assetPrices from "./AssetPricesTable.ts"
 import * as assetRepresentations from "./AssetRepresentationsTable.ts"
+import * as assetRepresentationOwnershipDecisions from "./AssetRepresentationOwnershipDecisionsTable.ts"
 import * as assetResolutionDecisions from "./AssetResolutionDecisionsTable.ts"
 import * as assetResolutionEvidence from "./AssetResolutionEvidenceTable.ts"
 import * as assetResolutionJobs from "./AssetResolutionJobsTable.ts"
@@ -52,6 +53,7 @@ export const schema = {
   ...addresses,
   ...assetPrices,
   ...assetRepresentations,
+  ...assetRepresentationOwnershipDecisions,
   ...assetResolutionDecisions,
   ...assetResolutionEvidence,
   ...assetResolutionJobs,
@@ -107,6 +109,10 @@ export type {
   AssetRepresentationInsert,
   AssetRepresentationType,
 } from "./AssetRepresentationsTable.ts"
+export type {
+  AssetRepresentationOwnershipDecisionInsert,
+  AssetRepresentationOwnershipDecisionRow,
+} from "./AssetRepresentationOwnershipDecisionsTable.ts"
 export type {
   AssetResolutionDecisionInsert,
   AssetResolutionDecisionRow,

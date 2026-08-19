@@ -116,6 +116,10 @@ const runWithProvider = <A, E>(
               Effect.die("findAssetResolutionCandidatesBySymbol should not be called"),
             attachRepresentationToExistingAsset: () =>
               Effect.die("attachRepresentationToExistingAsset should not be called"),
+            recordRepresentationOwnershipDecision: () =>
+              Effect.die("recordRepresentationOwnershipDecision should not be called"),
+            findActiveRepresentationOwnership: () =>
+              Effect.die("findActiveRepresentationOwnership should not be called"),
           })
         ),
         Layer.provide(

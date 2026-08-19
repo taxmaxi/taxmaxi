@@ -9,6 +9,8 @@ import { schema } from "../../src/schema/index.ts"
 import { seedData } from "../../src/seed/data.ts"
 import {
   TEST_BTC_ASSET_ID,
+  TEST_BTC_REPRESENTATION_ID,
+  TEST_EUR_ASSET_ID,
   makeIntegrationTestDatabaseContext,
   seedSyncEngineAssets,
   seedSyncEngineRepositoryFixture,
@@ -793,5 +795,93 @@ describe("AssetRepositoryLive", () => {
       assetReferenceCatalogProjections.networkRepresentations.length
     )
     expect(second).toEqual(first)
+  })
+
+  describe("representation ownership decisions", () => {
+    it("records the settled owner once and reads it back keyed on the representation", async () => {
+      const first = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.recordRepresentationOwnershipDecision({
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            policyRevision: "2026-08-19.attach-only.1",
+            actor: "system:attach-only-policy",
+          })
+        )
+      )
+      expect(first).toEqual({ recorded: true })
+
+      const second = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.recordRepresentationOwnershipDecision({
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            policyRevision: "2026-08-19.attach-only.1",
+            actor: "system:attach-only-policy",
+          })
+        )
+      )
+      expect(second).toEqual({ recorded: false })
+
+      const active = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findActiveRepresentationOwnership({
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          })
+        )
+      )
+      if (Option.isNone(active)) {
+        throw new Error("Expected an active ownership decision")
+      }
+      expect(active.value).toMatchObject({
+        assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+        assetId: TEST_BTC_ASSET_ID,
+        status: "active",
+        supersedesDecisionId: null,
+      })
+    })
+
+    it("lets the database reject an ownership decision naming a different owner", async () => {
+      // TEST_BTC_REPRESENTATION_ID belongs to TEST_BTC_ASSET_ID; claiming EUR
+      // as its owner must fail on the composite foreign key, not just in code.
+      const wrongOwnerInsert = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.assetRepresentationOwnershipDecisions).values({
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            assetId: TEST_EUR_ASSET_ID,
+            status: "active",
+            policyRevision: "2026-08-19.attach-only.1",
+            actor: "test:direct-insert",
+          })
+        })
+      )
+
+      await expect(wrongOwnerInsert).rejects.toThrow()
+    })
+
+    it("keeps a representation referenced by a decision from being deleted", async () => {
+      await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.recordRepresentationOwnershipDecision({
+            assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+            assetId: TEST_BTC_ASSET_ID,
+            policyRevision: "2026-08-19.attach-only.1",
+            actor: "system:attach-only-policy",
+          })
+        )
+      )
+
+      const deleteRepresentation = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .delete(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+        })
+      )
+
+      await expect(deleteRepresentation).rejects.toThrow()
+    })
   })
 })

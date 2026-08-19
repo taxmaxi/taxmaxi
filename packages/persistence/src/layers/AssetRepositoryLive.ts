@@ -780,6 +780,58 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineSqlError("assetRepository.attachRepresentationToExistingAsset"))
 
+  const recordRepresentationOwnershipDecision: AssetRepositoryShape["recordRepresentationOwnershipDecision"] =
+    ({ assetRepresentationId, assetId, policyRevision, actor }) =>
+      db
+        .insert(schema.assetRepresentationOwnershipDecisions)
+        .values({
+          assetRepresentationId,
+          assetId,
+          status: "active",
+          policyRevision,
+          reason: null,
+          actor,
+        })
+        .onConflictDoNothing({
+          target: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+          where: sql`${schema.assetRepresentationOwnershipDecisions.status} = 'active'`,
+        })
+        .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+        .pipe(
+          Effect.map((rows) => ({ recorded: rows.length > 0 })),
+          wrapSyncEngineSqlError("assetRepository.recordRepresentationOwnershipDecision")
+        )
+
+  const findActiveRepresentationOwnership: AssetRepositoryShape["findActiveRepresentationOwnership"] =
+    ({ assetRepresentationId }) =>
+      db
+        .select({
+          id: schema.assetRepresentationOwnershipDecisions.id,
+          assetRepresentationId: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+          assetId: schema.assetRepresentationOwnershipDecisions.assetId,
+          status: schema.assetRepresentationOwnershipDecisions.status,
+          supersedesDecisionId: schema.assetRepresentationOwnershipDecisions.supersedesDecisionId,
+          policyRevision: schema.assetRepresentationOwnershipDecisions.policyRevision,
+          reason: schema.assetRepresentationOwnershipDecisions.reason,
+          actor: schema.assetRepresentationOwnershipDecisions.actor,
+          createdAt: schema.assetRepresentationOwnershipDecisions.createdAt,
+        })
+        .from(schema.assetRepresentationOwnershipDecisions)
+        .where(
+          and(
+            eq(
+              schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+              assetRepresentationId
+            ),
+            eq(schema.assetRepresentationOwnershipDecisions.status, "active")
+          )
+        )
+        .limit(1)
+        .pipe(
+          Effect.map(([row]) => Option.fromNullishOr(row)),
+          wrapSyncEngineSqlError("assetRepository.findActiveRepresentationOwnership")
+        )
+
   return AssetRepository.of({
     findAssetById,
     findAssetByCoinGeckoId,
@@ -790,6 +842,8 @@ const make = Effect.gen(function* () {
     upsertEconomicAssetRepresentation,
     findAssetResolutionCandidatesBySymbol,
     attachRepresentationToExistingAsset,
+    recordRepresentationOwnershipDecision,
+    findActiveRepresentationOwnership,
   } satisfies AssetRepositoryShape)
 })
 

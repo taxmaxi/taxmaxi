@@ -11,6 +11,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
+import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
 
@@ -54,7 +55,9 @@ export const assetResolutionDecisions = pgTable(
     status: assetResolutionDecisionStatusEnum("status").notNull().default("active"),
     supersedesDecisionId: uuid("supersedes_decision_id"),
     assetId: uuid("asset_id").references(() => assets.id),
-    assetRepresentationId: uuid("asset_representation_id"),
+    assetRepresentationId: uuid("asset_representation_id").references(
+      () => assetRepresentations.id
+    ),
     blockchain: text("blockchain"),
     representationType: text("representation_type"),
     contractAddress: text("contract_address"),

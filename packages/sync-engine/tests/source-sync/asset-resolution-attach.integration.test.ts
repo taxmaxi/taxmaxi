@@ -21,6 +21,7 @@ import {
   AssetResolutionCoinGeckoClient,
   AssetResolutionCoinGeckoRetryableError,
   AssetResolutionJobExecutor,
+  ProviderAssetRepository,
   SourceSyncService,
 } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
@@ -336,6 +337,91 @@ const recordOrbSolanaObservation = () =>
     })
   }).pipe(Effect.provide(TestPgClientLive))
 
+const SECOND_PROVIDER_ASSET_ROW_ID = "00000000-4000-4000-8000-000000000661"
+
+/**
+ * A second provider surfaces the same ORB mint under its own provider asset
+ * identity, as a later Solana integration would.
+ */
+const recordSecondProviderObservationOfOrbMint = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [solanaBlockchain] = yield* db
+      .select({ id: schema.blockchains.id })
+      .from(schema.blockchains)
+      .where(eq(schema.blockchains.name, "solana"))
+      .limit(1)
+
+    if (solanaBlockchain === undefined) {
+      return yield* Effect.die("Missing seeded Solana blockchain")
+    }
+
+    const [transaction] = yield* db
+      .select({ id: schema.transactions.id })
+      .from(schema.transactions)
+      .where(
+        and(
+          eq(schema.transactions.sourceId, sourceId),
+          eq(schema.transactions.externalId, "tx-orb-buy-1")
+        )
+      )
+      .limit(1)
+
+    if (transaction === undefined) {
+      return yield* Effect.die("Missing tx-orb-buy-1 transaction fixture")
+    }
+
+    yield* db.insert(schema.providerAssets).values({
+      id: SECOND_PROVIDER_ASSET_ROW_ID,
+      provider: "helius-solana",
+      providerAssetId: null,
+      naturalKey: `solana:mint:${ORB_MINT}`,
+      currencyCode: "ORB",
+      name: "Orb Test Coin",
+      exponent: 8,
+      providerType: "crypto",
+      rawProviderPayload: { source: "test" },
+      retrievedAt: new Date("2025-05-01T10:00:00.000Z"),
+    })
+
+    yield* db.insert(schema.providerAssetMappings).values({
+      providerAssetRowId: SECOND_PROVIDER_ASSET_ROW_ID,
+      mappingKind: "asset",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+      canonicalFiatCurrency: null,
+      mappingStatus: "pending_review",
+      reviewerNotes: null,
+      sourceNotes: "Default mapping awaiting resolution.",
+    })
+
+    yield* db.insert(schema.providerTransfers).values({
+      sourceId,
+      transactionId: transaction.id,
+      externalId: "tx-orb-buy-1:second-provider-evidence",
+      providerAssetId: SECOND_PROVIDER_ASSET_ROW_ID,
+      timestamp: new Date("2025-05-01T10:00:00.000Z"),
+      direction: "inbound",
+      processingMode: "evidence_only",
+      fromAccountRef: "external",
+      toAccountRef: "coinbase-account-1",
+      observedBlockchainId: solanaBlockchain.id,
+      observedRepresentationType: "token",
+      observedContractAddress: null,
+      observedMintAddress: ORB_MINT,
+      observedDecimals: 8,
+      amount: "25",
+    })
+  }).pipe(Effect.provide(TestPgClientLive))
+
+const scheduleSecondProviderResolutionJob = () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderAssetRepository
+    return yield* repository.scheduleUnresolvedResolutionJob({
+      providerAssetRowId: SECOND_PROVIDER_ASSET_ROW_ID,
+    })
+  }).pipe(Effect.provide(TestLayer))
+
 const fetchPendingResolutionJobId = () =>
   Effect.gen(function* () {
     const db = yield* drizzle
@@ -476,12 +562,22 @@ const fetchAttachState = () =>
       .from(schema.assetRepresentations)
       .where(eq(schema.assetRepresentations.assetId, ORB_ASSET_ID))
 
+    const ownershipDecisions = yield* db
+      .select({
+        assetRepresentationId: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+        assetId: schema.assetRepresentationOwnershipDecisions.assetId,
+        status: schema.assetRepresentationOwnershipDecisions.status,
+        actor: schema.assetRepresentationOwnershipDecisions.actor,
+      })
+      .from(schema.assetRepresentationOwnershipDecisions)
+      .where(eq(schema.assetRepresentationOwnershipDecisions.assetId, ORB_ASSET_ID))
+
     const replayJobs = yield* db
       .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
       .from(schema.processingJobs)
       .where(eq(schema.processingJobs.sourceId, sourceId))
 
-    return { mapping, decisions, evidence, representations, replayJobs }
+    return { mapping, decisions, evidence, ownershipDecisions, representations, replayJobs }
   }).pipe(Effect.provide(TestPgClientLive))
 
 const fetchAccountingState = () =>
@@ -567,6 +663,13 @@ describe("asset resolution attach and rematerialize", () => {
             rawPayload: expect.objectContaining({
               payload: expect.objectContaining({ id: ORB_COINGECKO_ID }),
             }),
+          }),
+        ])
+        expect(attachState.ownershipDecisions).toEqual([
+          expect.objectContaining({
+            assetId: ORB_ASSET_ID,
+            status: "active",
+            actor: "system:attach-only-policy",
           }),
         ])
         expect(attachState.replayJobs).toContainEqual({ mode: "replay", status: "pending" })
@@ -696,6 +799,64 @@ describe("asset resolution attach and rematerialize", () => {
         expect(state.decisions).toHaveLength(1)
         expect(state.decisions[0]).toMatchObject({ outcome: "attach", assetId: ORB_ASSET_ID })
         expect(state.representations).toHaveLength(1)
+      })
+    )
+  })
+
+  it("resolves a second provider's observation of a settled representation without registry evidence", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const firstJobId = yield* fetchPendingResolutionJobId()
+        const first = yield* runResolutionJob({ jobId: firstJobId })
+        expect(first.outcome).toBe("attached")
+
+        // The registry is now unavailable; only the settled ownership can
+        // resolve the second provider's observation of the same mint.
+        coinGeckoMode = "terminal"
+        yield* recordSecondProviderObservationOfOrbMint()
+        const scheduled = yield* scheduleSecondProviderResolutionJob()
+        expect(scheduled.created).toBe(true)
+
+        const [secondJob] = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID))
+            .limit(1)
+        }).pipe(Effect.provide(TestPgClientLive))
+        if (secondJob === undefined) {
+          throw new Error("Expected a resolution job for the second provider asset")
+        }
+
+        const second = yield* runResolutionJob({ jobId: secondJob.id })
+        expect(second.outcome).toBe("attached")
+
+        const state = yield* fetchAttachState()
+        // Still exactly one ORB representation and one settled owner.
+        expect(state.representations).toHaveLength(1)
+        expect(state.ownershipDecisions).toHaveLength(1)
+
+        const [secondMapping] = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({
+              mappingStatus: schema.providerAssetMappings.mappingStatus,
+              canonicalAssetId: schema.providerAssetMappings.canonicalAssetId,
+            })
+            .from(schema.providerAssetMappings)
+            .where(
+              eq(schema.providerAssetMappings.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID)
+            )
+            .limit(1)
+        }).pipe(Effect.provide(TestPgClientLive))
+        expect(secondMapping).toMatchObject({
+          mappingStatus: "approved",
+          canonicalAssetId: ORB_ASSET_ID,
+        })
       })
     )
   })

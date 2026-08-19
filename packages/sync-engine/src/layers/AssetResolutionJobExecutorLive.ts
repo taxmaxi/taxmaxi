@@ -17,6 +17,7 @@ import * as Option from "effect/Option"
 import {
   ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
   AssetResolutionUpstreamFailure,
+  AttachRepresentationDecision,
   decodeCoinGeckoClaim,
   evaluateAttachOnlyResolution,
   PendingResolutionDecision,
@@ -210,6 +211,30 @@ const make = Effect.gen(function* () {
         decodedClaim: chainResult.fact,
         rawPayload: observations,
       }
+      // A representation whose owner is already settled resolves locally:
+      // exact chain identity is enough, and no registry call is needed.
+      const ownedForReuse =
+        chainResult.fact === null ? [] : yield* findOwnedRepresentations(chainResult.fact)
+      const [settled] = ownedForReuse
+      if (
+        settled !== undefined &&
+        settled.type === chainResult.fact?.type &&
+        settled.decimals === chainResult.fact.decimals
+      ) {
+        return {
+          decision: AttachRepresentationDecision.make({
+            policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
+            assetKey: settled.assetKey,
+            blockchain: settled.blockchain.toLowerCase(),
+            type: settled.type,
+            contractAddress: settled.contractAddress,
+            mintAddress: settled.mintAddress,
+            decimals: settled.decimals,
+          }),
+          evidence: [chainEvidenceRecord],
+        }
+      }
+
       const candidates = yield* assetRepository.findAssetResolutionCandidatesBySymbol({
         symbol: currencyCode,
       })
@@ -248,8 +273,7 @@ const make = Effect.gen(function* () {
         decodedClaim: coinGeckoDecodedClaim,
         rawPayload: coinGeckoEvidence,
       }
-      const ownedRepresentations =
-        chainResult.fact === null ? [] : yield* findOwnedRepresentations(chainResult.fact)
+      const ownedRepresentations = ownedForReuse
 
       const identity: AssetResolutionIdentitySnapshot = {
         economicAssets: [
@@ -366,6 +390,16 @@ const make = Effect.gen(function* () {
           "asset-resolution:decision-replay-detected"
         )
       }
+
+      // The ownership conclusion is keyed on the representation itself so a
+      // later provider observing the same identity can reuse it. Recording is
+      // a no-op when the representation's owner is already settled.
+      yield* assetRepository.recordRepresentationOwnershipDecision({
+        assetRepresentationId: representation.id,
+        assetId: decision.assetKey,
+        policyRevision: decision.policyRevision,
+        actor: ATTACH_ONLY_ACTOR,
+      })
 
       yield* providerAssetRepository.approveProviderAssetMappingAndRequestReplay({
         mapping: {
