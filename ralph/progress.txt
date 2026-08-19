@@ -21,3 +21,9 @@ each story closes and the operator decisions already taken.
 **Status**: done
 **Notes**: New WorkerBullMqAssetResolutionConsumerLive mirrors the source-sync consumer: own BullMQ queue ("asset-resolution"), pending-dispatch poller that lists runnable pending jobs and stale processing jobs via new ProviderAssetRepository.listDispatchableResolutionJobs, DB job id doubles as the BullMQ job id for dedup, DB owns retries (queue attempts=1, removeOnComplete/Fail). Wired executor + CoinGecko client + repositories into apps/worker composition root. 6 consumer seam tests + 1 dispatchable-listing integration test. Repo-wide "pnpm run type-check" fails in apps/crawler with pre-existing effect-language-service diagnostics identical to main (see feat/fix-effect-language-service-warnings); package-scoped checks for worker, sync-engine, persistence pass.
 ---
+
+## Iteration 4 - 2026-08-19 17:57
+**Story**: AR-004 - Retry transient CoinGecko failures instead of failing closed
+**Status**: done
+**Notes**: fetchCoin now classifies: 408/429/5xx/timeout/transport fail with new AssetResolutionCoinGeckoRetryableError (after bounded in-client retries with exponential backoff, Effect Config: COINGECKO_REQUEST_TIMEOUT_MS/RETRY_ATTEMPTS/RETRY_BASE_DELAY_MS); 404 and unreadable bodies stay terminal upstream failures the policy fails closed on. Coin id now URL-encoded. Executor error union widened (AssetResolutionJobExecutorError); its existing release path turns a retryable fetch failure into a pending job with nextRetryAt and no decision row. Exported AssetResolutionCoinGeckoClientLayer without baked-in FetchHttpClient for transport stubbing. 10 client unit tests + 2 executor integration tests (retryable leaves no decision and later attaches; terminal records fail_closed exactly once).
+---

@@ -166,7 +166,7 @@
         "Add an executor-level test proving a retryable failure leaves no decision row and leaves the job runnable, and that a terminal failure records fail-closed exactly once. It must fail before the change."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm --filter @my/sync-engine run type-check",

@@ -6,6 +6,7 @@
 
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import type { AssetResolutionCoinGeckoRetryableError } from "./AssetResolutionCoinGeckoClient.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -34,6 +35,15 @@ export interface AssetResolutionJobExecutionResult {
 }
 
 /**
+ * AssetResolutionJobExecutorError - Failure of one resolution job execution
+ * attempt. Storage failures and transient evidence-fetch failures both
+ * release the job for a later attempt before being raised.
+ */
+export type AssetResolutionJobExecutorError =
+  | SyncEngineStorageError
+  | AssetResolutionCoinGeckoRetryableError
+
+/**
  * AssetResolutionJobExecutorShape - Execute one already-scheduled resolution job.
  */
 export interface AssetResolutionJobExecutorShape {
@@ -45,7 +55,7 @@ export interface AssetResolutionJobExecutorShape {
   readonly executeJob: (params: {
     readonly jobId: string
     readonly workerId?: string
-  }) => Effect.Effect<AssetResolutionJobExecutionResult, SyncEngineStorageError>
+  }) => Effect.Effect<AssetResolutionJobExecutionResult, AssetResolutionJobExecutorError>
 }
 
 /**

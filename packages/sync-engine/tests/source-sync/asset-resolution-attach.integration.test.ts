@@ -19,6 +19,7 @@ import { CoinbaseSourceSyncProviderLive } from "../../src/providers/coinbase/lay
 import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
 import {
   AssetResolutionCoinGeckoClient,
+  AssetResolutionCoinGeckoRetryableError,
   AssetResolutionJobExecutor,
   SourceSyncService,
 } from "@my/sync-engine/services"
@@ -162,9 +163,25 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
 
 const orbCoinGeckoUpstreamFailure = new AssetResolutionUpstreamFailure({ source: "coingecko" })
 
+type FakeCoinGeckoMode = "success" | "retryable" | "terminal"
+
+let coinGeckoMode: FakeCoinGeckoMode = "success"
+
 const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoinGeckoClient, {
-  fetchCoin: ({ coinGeckoCoinId }): Effect.Effect<AssetResolutionProviderEvidence> =>
-    coinGeckoCoinId === ORB_COINGECKO_ID
+  fetchCoin: ({
+    coinGeckoCoinId,
+  }): Effect.Effect<AssetResolutionProviderEvidence, AssetResolutionCoinGeckoRetryableError> => {
+    if (coinGeckoMode === "retryable") {
+      return Effect.fail(
+        new AssetResolutionCoinGeckoRetryableError({ status: 429, cause: "rate limited" })
+      )
+    }
+
+    if (coinGeckoMode === "terminal") {
+      return Effect.succeed(orbCoinGeckoUpstreamFailure)
+    }
+
+    return coinGeckoCoinId === ORB_COINGECKO_ID
       ? Effect.succeed({
           _tag: "payload" as const,
           payload: {
@@ -176,7 +193,8 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
             detail_platforms: { solana: { decimal_place: 8, contract_address: ORB_MINT } },
           },
         })
-      : Effect.succeed(orbCoinGeckoUpstreamFailure),
+      : Effect.succeed(orbCoinGeckoUpstreamFailure)
+  },
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
@@ -343,6 +361,27 @@ const fetchPendingResolutionJobId = () =>
     return job.id
   }).pipe(Effect.provide(TestPgClientLive))
 
+const fetchResolutionJobState = ({ jobId }: { readonly jobId: string }) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+    const [job] = yield* db
+      .select({
+        status: schema.assetResolutionJobs.status,
+        attemptCount: schema.assetResolutionJobs.attemptCount,
+        nextRetryAt: schema.assetResolutionJobs.nextRetryAt,
+        errorMessage: schema.assetResolutionJobs.errorMessage,
+      })
+      .from(schema.assetResolutionJobs)
+      .where(eq(schema.assetResolutionJobs.id, jobId))
+      .limit(1)
+
+    if (job === undefined) {
+      return yield* Effect.die(`Missing asset resolution job ${jobId}`)
+    }
+
+    return job
+  }).pipe(Effect.provide(TestPgClientLive))
+
 const runSync = () =>
   Effect.gen(function* () {
     const sourceSync = yield* SourceSyncService
@@ -452,6 +491,7 @@ describe("asset resolution attach and rematerialize", () => {
   beforeEach(() =>
     Effect.gen(function* () {
       providerFetchCount = 0
+      coinGeckoMode = "success"
       yield* context.recreateTestDatabase()
       yield* seedCoinbaseSource()
     }).pipe(Effect.runPromise)
@@ -541,6 +581,82 @@ describe("asset resolution attach and rematerialize", () => {
         expect(attachState.mapping).toMatchObject({ mappingStatus: "pending_review" })
         expect(attachState.decisions).toEqual([])
         expect(attachState.representations).toEqual([])
+      })
+    )
+  })
+
+  it("releases the job for retry on a transient CoinGecko failure without recording a decision", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        coinGeckoMode = "retryable"
+        const failed = yield* runResolutionJob({ jobId }).pipe(Effect.result)
+        expect(failed._tag).toBe("Failure")
+        if (failed._tag === "Failure") {
+          expect(failed.failure).toBeInstanceOf(AssetResolutionCoinGeckoRetryableError)
+        }
+
+        const stateAfterFailure = yield* fetchAttachState()
+        expect(stateAfterFailure.decisions).toEqual([])
+        expect(stateAfterFailure.representations).toEqual([])
+
+        const jobAfterFailure = yield* fetchResolutionJobState({ jobId })
+        expect(jobAfterFailure.status).toBe("pending")
+        expect(jobAfterFailure.nextRetryAt).not.toBeNull()
+        expect(jobAfterFailure.attemptCount).toBe(1)
+
+        // Once the upstream recovers and the retry delay passes, the same job
+        // reaches the same decision a first-attempt success would have.
+        coinGeckoMode = "success"
+        yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ nextRetryAt: new Date(Date.now() - 1000) })
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        const retried = yield* runResolutionJob({ jobId })
+        expect(retried.outcome).toBe("attached")
+
+        const stateAfterRetry = yield* fetchAttachState()
+        expect(stateAfterRetry.decisions).toEqual([
+          expect.objectContaining({ outcome: "attach", assetId: ORB_ASSET_ID }),
+        ])
+      })
+    )
+  })
+
+  it("records a fail_closed decision exactly once for a terminal CoinGecko failure", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        coinGeckoMode = "terminal"
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("fail_closed")
+
+        const state = yield* fetchAttachState()
+        expect(state.decisions).toEqual([
+          expect.objectContaining({ outcome: "fail_closed", reason: "upstream_failure" }),
+        ])
+        expect(state.representations).toEqual([])
+
+        const job = yield* fetchResolutionJobState({ jobId })
+        expect(job.status).toBe("completed")
+
+        const duplicate = yield* runResolutionJob({ jobId })
+        expect(duplicate.outcome).toBe("already_claimed")
+
+        const stateAfterDuplicate = yield* fetchAttachState()
+        expect(stateAfterDuplicate.decisions).toHaveLength(1)
       })
     )
   })

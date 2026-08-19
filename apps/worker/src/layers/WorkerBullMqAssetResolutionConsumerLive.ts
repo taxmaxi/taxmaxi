@@ -380,7 +380,7 @@ export const makeWorkerBullMqAssetResolutionConsumerLive = (
             "asset-resolution-worker:job-failed"
           )
         )
-        throw new UnrecoverableError(`Asset resolution job execution failed: ${error.operation}`)
+        throw new UnrecoverableError(`Asset resolution job execution failed: ${error._tag}`)
       }
 
       const worker = yield* Effect.acquireRelease(acquireWorker(config, processor), (toClose) =>

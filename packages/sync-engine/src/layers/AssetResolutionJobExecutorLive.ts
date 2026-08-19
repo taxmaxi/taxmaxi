@@ -32,6 +32,7 @@ import {
   type AssetResolutionCandidateAsset,
   type AssetResolutionDecisionRecord,
   type AssetResolutionJobExecutionResult,
+  type AssetResolutionJobExecutorError,
   type AssetResolutionJobExecutorShape,
   type ProviderAssetObservedRepresentationRecord,
   type SyncEngineStorageError,
@@ -193,7 +194,7 @@ const make = Effect.gen(function* () {
       readonly chainEvidence: AssetResolutionProviderEvidence
       readonly coinGeckoEvidence: AssetResolutionProviderEvidence | null
     },
-    SyncEngineStorageError
+    AssetResolutionJobExecutorError
   > =>
     Effect.gen(function* () {
       const chainResult = buildChainEvidence(observations)
@@ -253,7 +254,7 @@ const make = Effect.gen(function* () {
     readonly workerId: string
     readonly providerAssetRowId: string
     readonly evidenceRevision: number
-  }): Effect.Effect<AssetResolutionJobExecutionResult, SyncEngineStorageError> =>
+  }): Effect.Effect<AssetResolutionJobExecutionResult, AssetResolutionJobExecutorError> =>
     Effect.gen(function* () {
       const reviewOption = yield* providerAssetRepository.findProviderAssetReviewById({
         providerAssetRowId,
