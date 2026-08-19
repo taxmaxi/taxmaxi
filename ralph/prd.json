@@ -1,10 +1,10 @@
 {
-  "title": "Example PRD",
+  "title": "Attach a new exact representation to an existing economic asset",
   "project": "TaxMaxi",
-  "description": "Short description of the work Ralph should implement.",
+  "description": "First provider-neutral resolver path: schedule one durable job for an unknown observation, attach a new exact representation to an existing economic asset from chain and CoinGecko claims, rematerialize from stored raw records, and keep affected calculations explicitly incomplete until then.",
   "version": "1.0.0",
-  "created_at": "YYYY-MM-DD",
-  "updated_at": "YYYY-MM-DD",
+  "created_at": "2026-08-19",
+  "updated_at": "2026-08-19",
   "global_verification": ["pnpm run type-check", "pnpm run lint", "pnpm run test"],
   "completion_criteria": {
     "all_stories_done": "Every story has status: 'done'",
@@ -12,25 +12,195 @@
   },
   "stories": [
     {
-      "id": "EX-001",
-      "epic": "Example Epic",
-      "title": "Example story title",
-      "description": "Short description of what the story changes and why.",
+      "id": "AR-001",
+      "epic": "Exact representation resolver",
+      "title": "Schedule one durable resolution job when sync stores an unknown observation",
+      "description": "When source sync stores a provider observation with no local mapping, finish the import and persist one durable resolution job keyed by that observation and the current evidence revision. Known local mappings must still resolve during sync without external research.",
       "source": {
         "kind": "github_issue",
-        "issue": 0,
-        "url": "https://github.com/example/example/issues/0",
-        "template": "example"
+        "issue": 143,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/143",
+        "template": "to-issues"
       },
       "blocked_by": [],
-      "blocked_by_issues": [],
-      "acceptance_criteria": ["Acceptance criterion 1", "Acceptance criterion 2"],
-      "implementation_notes": ["Important implementation note from the source issue."],
-      "testing_notes": ["Important testing note from the source issue."],
+      "blocked_by_issues": ["#142"],
+      "acceptance_criteria": [
+        "An unknown provider observation and its raw transactions are stored without failing or delaying source sync.",
+        "One durable, idempotent resolution job is scheduled per distinct provider observation and current evidence revision, regardless of how many users or transactions observed it.",
+        "A second schedule for the same observation and evidence revision is a no-op.",
+        "Already-known local mappings still resolve during sync without external registry or research calls.",
+        "This story does not attach a representation, call CoinGecko, or change derived accounting."
+      ],
+      "implementation_notes": [
+        "Resolution work is keyed by the global provider observation and evidence revision, not by user, source, or transaction.",
+        "Provider sync may use only trusted mappings already available locally and must not wait for external research.",
+        "Persist the job durably before or without depending on a successful queue enqueue so a later worker can pick up pending work.",
+        "Do not overload the existing per-source sync/replay job as the resolution-job identity.",
+        "Do not implement standalone asset creation, Jupiter exclusion, AI research, human exceptions, or user overrides."
+      ],
+      "testing_notes": [
+        "Extend existing source-sync and Helius or Coinbase unknown-observation integration patterns.",
+        "Assert the stored observation, stored raw record, completed sync, and a single durable job for one evidence revision.",
+        "Cover two sources observing the same provider identity and a duplicate schedule becoming a no-op.",
+        "Keep an already-known local mapping test that proves sync does not make an external research call."
+      ],
+      "priority": "high",
+      "status": "pending",
+      "estimated_complexity": "medium",
+      "verification": [
+        "pnpm run test -- packages/sync-engine/tests/source-sync/asset-resolution-job.integration.test.ts"
+      ]
+    },
+    {
+      "id": "AR-002",
+      "epic": "Exact representation resolver",
+      "title": "Decode chain and CoinGecko evidence into typed attach-only claims",
+      "description": "Decode exact chain facts and CoinGecko responses with Effect Schema into typed claims, and decide attach versus pending or fail-closed at the policy boundary. CoinGecko may support representation ownership only for an existing economic asset under exact platform, address, type, and decimals checks.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 143,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/143",
+        "template": "to-issues"
+      },
+      "blocked_by": [],
+      "blocked_by_issues": ["#142"],
+      "acceptance_criteria": [
+        "Exact chain facts and CoinGecko responses are decoded with Effect Schema into typed claims.",
+        "A valid CoinGecko platform mapping attaches only when its stable identity already belongs to an existing economic asset, the platform chain and address match the chain claim exactly, type and decimals are compatible, and no other asset owns the representation.",
+        "Incompatible decimals or type, an ownership conflict, a missing existing economic asset, or a non-exact platform match do not attach a representation.",
+        "Malformed or changed payloads and upstream failures fail closed and do not produce an attach decision."
+      ],
+      "implementation_notes": [
+        "Trust is claim-specific: CoinGecko may prove representation ownership only under the strict existing-asset checks in #143.",
+        "Exact chain evidence proves chain, address or mint, representation type, and observed decimals. It does not by itself prove cross-network economic identity.",
+        "Names and symbols are display data and must never prove a merge.",
+        "This slice does not persist decisions, schedule rematerialization, or create standalone assets."
+      ],
+      "testing_notes": [
+        "Contract tests cover CoinGecko payload decoding, exact matching, incompatible decimals or type, ownership conflicts, and upstream failures.",
+        "Policy tests use typed claims and assert attach, pending, and fail-closed outcomes at the policy boundary.",
+        "Do not assert private helper structure or SQL."
+      ],
       "priority": "high",
       "status": "pending",
       "estimated_complexity": "small",
-      "verification": ["pnpm run test"]
+      "verification": [
+        "pnpm run test -- packages/core/tests/assets/AssetResolutionPolicy.test.ts"
+      ]
+    },
+    {
+      "id": "AR-003",
+      "epic": "Exact representation resolver",
+      "title": "Let mapped Solana activity enter canonical accounting and FIFO",
+      "description": "After a Solana provider observation already has an approved economic-asset and representation mapping, rematerialization from stored raw records must produce canonical accounting and FIFO. This is required before the new attach path can satisfy the #143 rematerialization outcome.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 143,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/143",
+        "template": "to-issues"
+      },
+      "blocked_by": [],
+      "blocked_by_issues": ["#142"],
+      "acceptance_criteria": [
+        "A Solana transaction whose assets already have approved local mappings produces canonical accounting effects after normalization or replay from stored raw records.",
+        "After successful rematerialization of a mapped Solana source, the affected transaction participates in FIFO.",
+        "Replay uses stored raw records and does not refetch the provider.",
+        "Unresolved Solana observations still stay outside derived accounting."
+      ],
+      "implementation_notes": [
+        "Reuse the existing replay executor as the rematerialization seam.",
+        "Do not invent a second rematerialization engine.",
+        "Do not attach new representations or call CoinGecko in this story.",
+        "Keep unresolved observations out of legs, inventory, and FIFO."
+      ],
+      "testing_notes": [
+        "Extend existing Helius source-sync and replay tests rather than isolating a new rematerialization stack.",
+        "Replay tests prove rematerialization uses stored raw records and does not refetch the provider.",
+        "Assert observable lots or disposal matches, not private derivation helpers."
+      ],
+      "priority": "high",
+      "status": "pending",
+      "estimated_complexity": "medium",
+      "verification": [
+        "pnpm run test -- packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts"
+      ]
+    },
+    {
+      "id": "AR-004",
+      "epic": "Exact representation resolver",
+      "title": "Mark a calculation incomplete while an observation is unresolved",
+      "description": "Transactions that depend on an unresolved provider observation must stay outside derived accounting, and the affected calculation must be explicitly pending or incomplete instead of looking like a finished zero result.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 143,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/143",
+        "template": "to-issues"
+      },
+      "blocked_by": ["AR-001"],
+      "blocked_by_issues": ["#142"],
+      "acceptance_criteria": [
+        "Transactions that depend on an unresolved provider observation remain stored but do not enter derived accounting.",
+        "An affected tax calculation is explicitly pending or incomplete rather than a silent zero total.",
+        "Missing values stay null rather than becoming zero because identity is unresolved."
+      ],
+      "implementation_notes": [
+        "Public calculation state must distinguish complete from pending or incomplete outcomes.",
+        "Do not invent tax facts for unresolved identity.",
+        "Do not implement user-visible task lists from #153 or the canonical Transactions API from #125 beyond the incompleteness signal this story needs."
+      ],
+      "testing_notes": [
+        "Assert calculation incompleteness through the existing tax-calculation seam after a source depends on a pending observation.",
+        "Keep the unresolved transaction stored and outside FIFO or legs.",
+        "Do not require CoinGecko or an accepted attach decision in this story."
+      ],
+      "priority": "high",
+      "status": "pending",
+      "estimated_complexity": "medium",
+      "verification": [
+        "pnpm run test -- packages/persistence/tests/tax-calculation.integration.test.ts"
+      ]
+    },
+    {
+      "id": "AR-005",
+      "epic": "Exact representation resolver",
+      "title": "Attach a new exact representation and rematerialize affected sources",
+      "description": "Run the durable resolution job with controlled chain and CoinGecko evidence. When policy accepts, persist the audit history, attach the new representation to the existing economic asset, and rematerialize every affected source from stored raw records without refetching the provider.",
+      "source": {
+        "kind": "github_issue",
+        "issue": 143,
+        "url": "https://github.com/taxmaxi/taxmaxi/issues/143",
+        "template": "to-issues"
+      },
+      "blocked_by": ["AR-001", "AR-002", "AR-003"],
+      "blocked_by_issues": ["#142"],
+      "acceptance_criteria": [
+        "Accepted resolution appends immutable evidence snapshots, the policy revision, actor, provider mapping decision, and representation-ownership decision.",
+        "The newly observed network representation is attached to the existing economic asset and no other asset owns it.",
+        "Stale evidence or decision revisions fail compare-and-set checks, and duplicate jobs become no-ops.",
+        "A durable accepted decision schedules rematerialization for every affected source from stored raw records without refetching the provider.",
+        "Workers own retries and expose persistent rematerialization failure separately from the accepted identity decision.",
+        "After successful rematerialization, the affected transaction participates in canonical accounting and FIFO."
+      ],
+      "implementation_notes": [
+        "A provider observation never becomes the economic asset or representation; it maps to a TaxMaxi-owned identity.",
+        "The global decision and current projection become durable before background rematerialization.",
+        "Rematerialize through the existing replay and normalization path from stored raw records.",
+        "Do not roll back an accepted identity decision because rematerialization dispatch or execution failed.",
+        "Do not create a standalone economic asset, apply Jupiter exclusion, collect AI evidence, or accept a human exception in this story.",
+        "Amend ADR 0002's provider resolution lifecycle so unknown observations enter asynchronous resolution rather than stopping at manual review."
+      ],
+      "testing_notes": [
+        "Use one primary integration seam: persist a provider observation and raw record, run resolution with real persistence and controlled CoinGecko and chain clients, persist audit history, rematerialize, and assert transaction and calculation state.",
+        "Concurrency tests cover duplicate dispatch, stale revisions, and idempotent completion.",
+        "Replay tests prove rematerialization uses stored raw records and does not refetch the provider.",
+        "Cover many sources sharing the same observation: one resolution job for that evidence revision, and rematerialization fan-out only after the durable decision."
+      ],
+      "priority": "high",
+      "status": "pending",
+      "estimated_complexity": "large",
+      "verification": [
+        "pnpm run test -- packages/sync-engine/tests/source-sync/asset-resolution-attach.integration.test.ts"
+      ]
     }
   ]
 }
