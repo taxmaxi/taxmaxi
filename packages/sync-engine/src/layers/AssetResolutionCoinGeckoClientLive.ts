@@ -18,13 +18,13 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schedule from "effect/Schedule"
-import * as Schema from "effect/Schema"
 import { AssetResolutionUpstreamFailure } from "@my/core/assets"
 import {
   AssetResolutionCoinGeckoClient,
   AssetResolutionCoinGeckoRetryableError,
   type AssetResolutionCoinGeckoClientShape,
 } from "../services/AssetResolutionCoinGeckoClient.ts"
+import { positiveIntConfig } from "../shared/PositiveIntConfig.ts"
 
 const COINGECKO_PRO_API_BASE_URL = "https://pro-api.coingecko.com/api/v3"
 const COINGECKO_PUBLIC_API_BASE_URL = "https://api.coingecko.com/api/v3"
@@ -38,32 +38,20 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 1_000
 const isRetryableStatus = (status: number): boolean =>
   status === 408 || status === 429 || status >= 500
 
-const positiveConfig = ({
-  name,
-  defaultValue,
-}: {
-  readonly name: string
-  readonly defaultValue: number
-}) =>
-  Config.schema(
-    Schema.Int.check(Schema.isGreaterThan(0, { message: `${name} must be greater than zero` })),
-    name
-  ).pipe(Config.withDefault(defaultValue))
-
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
   const configuredBaseUrl = yield* Config.option(Config.string("COINGECKO_API_BASE_URL"))
   const demoApiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
   const proApiKey = yield* Config.option(Config.string("COINGECKO_PRO_API_KEY"))
-  const requestTimeoutMs = yield* positiveConfig({
+  const requestTimeoutMs = yield* positiveIntConfig({
     name: "COINGECKO_REQUEST_TIMEOUT_MS",
     defaultValue: DEFAULT_REQUEST_TIMEOUT_MS,
   })
-  const retryAttempts = yield* positiveConfig({
+  const retryAttempts = yield* positiveIntConfig({
     name: "COINGECKO_RETRY_ATTEMPTS",
     defaultValue: DEFAULT_RETRY_ATTEMPTS,
   })
-  const retryBaseDelayMs = yield* positiveConfig({
+  const retryBaseDelayMs = yield* positiveIntConfig({
     name: "COINGECKO_RETRY_BASE_DELAY_MS",
     defaultValue: DEFAULT_RETRY_BASE_DELAY_MS,
   })

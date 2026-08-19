@@ -30,6 +30,7 @@ import {
   ProviderAssetRepository,
   type AssetResolutionJobExecutionResult,
 } from "@my/sync-engine/services"
+import { positiveIntConfig } from "@my/sync-engine/shared"
 
 const DEFAULT_QUEUE_PREFIX = "taxmaxi"
 const DEFAULT_RESOLUTION_WORKER_CONCURRENCY = 1
@@ -120,41 +121,29 @@ class WorkerBullMqMalformedAssetResolutionPayloadError extends Schema.TaggedErro
   }
 ) {}
 
-const positiveConfig = ({
-  name,
-  defaultValue,
-}: {
-  readonly name: string
-  readonly defaultValue: number
-}) =>
-  Config.schema(
-    Schema.Int.check(Schema.isGreaterThan(0, { message: `${name} must be greater than zero` })),
-    name
-  ).pipe(Config.withDefault(defaultValue))
-
 const loadConfig = Effect.gen(function* () {
   return {
     redisUrl: yield* Config.url("QUEUE_REDIS_URL"),
     queuePrefix: yield* Config.string("ASSET_RESOLUTION_QUEUE_PREFIX").pipe(
       Config.withDefault(DEFAULT_QUEUE_PREFIX)
     ),
-    concurrency: yield* positiveConfig({
+    concurrency: yield* positiveIntConfig({
       name: "ASSET_RESOLUTION_WORKER_CONCURRENCY",
       defaultValue: DEFAULT_RESOLUTION_WORKER_CONCURRENCY,
     }),
-    lockDurationMs: yield* positiveConfig({
+    lockDurationMs: yield* positiveIntConfig({
       name: "ASSET_RESOLUTION_WORKER_LOCK_DURATION_MS",
       defaultValue: DEFAULT_RESOLUTION_WORKER_LOCK_DURATION_MS,
     }),
-    pendingDispatchIntervalMs: yield* positiveConfig({
+    pendingDispatchIntervalMs: yield* positiveIntConfig({
       name: "ASSET_RESOLUTION_PENDING_DISPATCH_INTERVAL_MS",
       defaultValue: DEFAULT_PENDING_DISPATCH_INTERVAL_MS,
     }),
-    staleAfterMs: yield* positiveConfig({
+    staleAfterMs: yield* positiveIntConfig({
       name: "ASSET_RESOLUTION_STALE_AFTER_MS",
       defaultValue: DEFAULT_STALE_AFTER_MS,
     }),
-    dispatchBatchSize: yield* positiveConfig({
+    dispatchBatchSize: yield* positiveIntConfig({
       name: "ASSET_RESOLUTION_DISPATCH_BATCH_SIZE",
       defaultValue: DEFAULT_DISPATCH_BATCH_SIZE,
     }),

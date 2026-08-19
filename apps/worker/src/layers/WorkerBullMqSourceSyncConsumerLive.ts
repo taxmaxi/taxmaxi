@@ -17,6 +17,7 @@ import {
   type SourceSyncJobExecutorError,
   type SourceSyncJobSummary,
 } from "@my/sync-engine/services"
+import { positiveIntConfig } from "@my/sync-engine/shared"
 import { WorkerSourceSyncStartupRepair } from "./WorkerSourceSyncStartupRepairLive.ts"
 
 const DEFAULT_QUEUE_PREFIX = "taxmaxi"
@@ -92,33 +93,21 @@ class WorkerBullMqMalformedSourceSyncPayloadError extends Schema.TaggedError<Wor
   }
 ) {}
 
-const positiveConfig = ({
-  name,
-  defaultValue,
-}: {
-  readonly name: string
-  readonly defaultValue: number
-}) =>
-  Config.schema(
-    Schema.Int.check(Schema.isGreaterThan(0, { message: `${name} must be greater than zero` })),
-    name
-  ).pipe(Config.withDefault(defaultValue))
-
 const loadConfig = Effect.gen(function* () {
   return {
     redisUrl: yield* Config.url("QUEUE_REDIS_URL"),
     queuePrefix: yield* Config.string("SOURCE_SYNC_QUEUE_PREFIX").pipe(
       Config.withDefault(DEFAULT_QUEUE_PREFIX)
     ),
-    concurrency: yield* positiveConfig({
+    concurrency: yield* positiveIntConfig({
       name: "SYNC_WORKER_CONCURRENCY",
       defaultValue: DEFAULT_SYNC_WORKER_CONCURRENCY,
     }),
-    lockDurationMs: yield* positiveConfig({
+    lockDurationMs: yield* positiveIntConfig({
       name: "SYNC_WORKER_LOCK_DURATION_MS",
       defaultValue: DEFAULT_SYNC_WORKER_LOCK_DURATION_MS,
     }),
-    pendingDispatchIntervalMs: yield* positiveConfig({
+    pendingDispatchIntervalMs: yield* positiveIntConfig({
       name: "SOURCE_SYNC_PENDING_DISPATCH_INTERVAL_MS",
       defaultValue: DEFAULT_PENDING_DISPATCH_INTERVAL_MS,
     }),
