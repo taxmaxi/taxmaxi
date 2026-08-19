@@ -100,7 +100,8 @@
         "addOne": "Füge {count} weiteres Guthaben hinzu, um die Synchronisierung abzuschließen.",
         "addMany": "Füge {count} weitere Guthaben hinzu, um die Synchronisierung abzuschließen.",
         "choosePlan": "Tarif wählen",
-        "buyCredits": "Guthaben kaufen"
+        "buyCredits": "Guthaben kaufen",
+        "notStarted": "Diese Synchronisierung braucht Transaktionsguthaben, bevor sie starten kann. Füge Guthaben hinzu und starte sie erneut."
       }
     }
   },

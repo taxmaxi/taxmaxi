@@ -98,6 +98,13 @@ export function getCreditRequiredCopy(creditOutcome: SourceSyncCreditOutcome | u
     return m["app.syncIsland.creditRequired.pausedNoDetails"]()
   }
 
+  // Nothing consumed and no known shortfall means the sync was refused before
+  // it started (the shape the start-refusal path emits), so "ran out" wording
+  // would be wrong for a user who never had credits.
+  if (creditOutcome.creditsConsumed === 0 && creditOutcome.additionalCreditsRequired === null) {
+    return m["app.syncIsland.creditRequired.notStarted"]()
+  }
+
   const parts = [m["app.syncIsland.creditRequired.pausedIntro"]()]
 
   if (creditOutcome.creditsConsumed > 0) {

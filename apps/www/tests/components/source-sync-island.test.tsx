@@ -175,6 +175,17 @@ describe("getCreditRequiredCopy", () => {
     )
   })
 
+  it("tells a refused start it needs credits to begin, not that credits ran out", () => {
+    expect(
+      getCreditRequiredCopy({
+        reasonCode: "no_usable_credits",
+        availableCredits: 0,
+        creditsConsumed: 0,
+        additionalCreditsRequired: null,
+      })
+    ).toBe("This sync needs transaction credits before it can start. Add credits and run it again.")
+  })
+
   it("uses singular wording for a shortfall of one credit", () => {
     expect(
       getCreditRequiredCopy({

@@ -100,7 +100,8 @@
         "addOne": "Add {count} more credit to finish the sync.",
         "addMany": "Add {count} more credits to finish the sync.",
         "choosePlan": "Choose a plan",
-        "buyCredits": "Buy credits"
+        "buyCredits": "Buy credits",
+        "notStarted": "This sync needs transaction credits before it can start. Add credits and run it again."
       }
     }
   },
