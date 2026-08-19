@@ -680,6 +680,10 @@ describe("asset resolution attach and rematerialize", () => {
         const replay = yield* replaySource()
         expect(replay.status).toBe("completed")
 
+        // Rematerialization runs from stored raw records: the provider was
+        // fetched exactly once, by the original sync.
+        expect(providerFetchCount).toBe(1)
+
         const accountingState = yield* fetchAccountingState()
         expect(accountingState.legs).toEqual([
           expect.objectContaining({ kind: "acquisition", derivationRule: "coinbase_buy" }),
@@ -688,6 +692,34 @@ describe("asset resolution attach and rematerialize", () => {
 
         const taxAfterAttach = yield* calculateTax()
         expect(taxAfterAttach.taxableGains).toBe(0)
+      })
+    )
+  })
+
+  it("records a durable pending decision when no candidate economic asset exists", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        // No ORB economic asset is inserted, so symbol search finds nothing.
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("pending")
+
+        const state = yield* fetchAttachState()
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "pending",
+            reason: "missing_existing_economic_asset",
+            actor: "system:attach-only-policy",
+          }),
+        ])
+        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(state.representations).toEqual([])
+
+        const job = yield* fetchResolutionJobState({ jobId })
+        expect(job.status).toBe("completed")
       })
     )
   })

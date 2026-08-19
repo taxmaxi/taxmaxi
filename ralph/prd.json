@@ -409,7 +409,7 @@
         "Prefer asserting observable state through repository contracts over reading tables directly."
       ],
       "priority": "low",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm run test packages/sync-engine/tests/source-sync/asset-resolution-attach.integration.test.ts",
