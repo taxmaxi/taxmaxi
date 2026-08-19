@@ -32,6 +32,7 @@ import { drizzle } from "./PgClientLive.ts"
 const HOLDING_PERIOD_YEARS = 1
 const SUPPORTED_JURISDICTION = "germany"
 const REPORTING_CURRENCY = EUR
+const BLOCKING_OBSERVATION_LIST_LIMIT = 50
 const taxCalculationOutcomeMetric = Metric.frequency("taxmaxi_tax_calculation_outcomes", {
   description: "Outcome frequencies for source-scoped tax calculations.",
 })
@@ -274,6 +275,51 @@ const make = Effect.gen(function* () {
     )
 
   /**
+   * Load a bounded list of provider asset observations that block a source's
+   * tax calculation, named by provider and currency code so a user can act on
+   * them without guessing from missing IDs.
+   *
+   * @param sourceId - Source identifier
+   * @returns Blocking observations, capped at BLOCKING_OBSERVATION_LIST_LIMIT
+   */
+  const loadBlockingObservations = (sourceId: string) =>
+    db
+      .select({
+        provider: schema.providerAssets.provider,
+        currencyCode: schema.providerAssets.currencyCode,
+      })
+      .from(schema.providerAssetSourceUses)
+      .innerJoin(
+        schema.providerAssets,
+        eq(schema.providerAssets.id, schema.providerAssetSourceUses.providerAssetRowId)
+      )
+      .leftJoin(
+        schema.providerAssetMappings,
+        eq(
+          schema.providerAssetMappings.providerAssetRowId,
+          schema.providerAssetSourceUses.providerAssetRowId
+        )
+      )
+      .where(
+        and(
+          eq(schema.providerAssetSourceUses.sourceId, sourceId),
+          or(
+            isNull(schema.providerAssetMappings.id),
+            eq(schema.providerAssetMappings.mappingStatus, "pending_review")
+          )
+        )
+      )
+      .limit(BLOCKING_OBSERVATION_LIST_LIMIT)
+      .pipe(
+        wrapSqlError("taxCalculationService.loadBlockingObservations"),
+        withObservedOperation({
+          name: "persistence.tax-calculation.load-blocking-observations",
+          attributes: { sourceId },
+          kind: "client",
+        })
+      )
+
+  /**
    * Load disposal matches that fall within the selected tax year.
    *
    * @param sourceId - Source identifier
@@ -468,9 +514,12 @@ const make = Effect.gen(function* () {
       const pendingObservationCount = yield* countPendingObservations(sourceId)
 
       if (pendingObservationCount > 0) {
+        const blockingObservations = yield* loadBlockingObservations(sourceId)
+
         return yield* new TaxCalculationPendingObservationsError({
           sourceId,
           pendingObservationCount,
+          blockingObservations,
         })
       }
 

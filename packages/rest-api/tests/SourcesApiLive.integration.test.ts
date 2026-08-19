@@ -29,6 +29,7 @@ import * as EffectSchema from "effect/Schema"
 import { SourceSyncServiceLive } from "@my/sync-engine/layers"
 import { drizzle } from "../../persistence/src/layers/PgClientLive.ts"
 import { RepositoriesLive } from "../../persistence/src/layers/RepositoriesLive.ts"
+import { TaxCalculationServiceLive } from "../../persistence/src/layers/TaxCalculationServiceLive.ts"
 import { schema } from "../../persistence/src/schema/index.ts"
 import { TaxCalculationService } from "../../persistence/src/services/index.ts"
 import { makeIntegrationTestDatabaseContext } from "../../persistence/tests/support/integration-test-kit.ts"
@@ -182,22 +183,32 @@ const makeSourceSyncServiceWithDepsTestLive = (
 ) =>
   SourceSyncServiceLive.pipe(Layer.provide(sourceSyncQueueLayer), Layer.provide(RepositoriesLive))
 
-const makePersistenceLayer = (
-  sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>
+const makePersistenceLayer = <R = never>(
+  sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>,
+  taxCalculationServiceLayer: Layer.Layer<
+    TaxCalculationService,
+    never,
+    R
+  > = TaxCalculationServiceTestLive
 ) =>
   Layer.mergeAll(
     RepositoriesLive,
     makeSourceSyncServiceWithDepsTestLive(sourceSyncQueueLayer),
     SourceSyncRunServiceTestLive,
-    TaxCalculationServiceTestLive,
+    taxCalculationServiceLayer,
     TransferReconciliationServiceTestLive,
     AuthServiceTestLive,
     PasswordHasherTestLive
   ).pipe(Layer.provideMerge(TestPgClientLive))
 
-const makeHttpLive = (
+const makeHttpLive = <R = never>(
   sourceSyncQueueLayer: Layer.Layer<SourceSyncQueue, never, SourceSyncJobRepository>,
-  x402PaymentValidatorLayer: Layer.Layer<X402PaymentValidator> = X402PaymentValidatorTestLive
+  x402PaymentValidatorLayer: Layer.Layer<X402PaymentValidator> = X402PaymentValidatorTestLive,
+  taxCalculationServiceLayer: Layer.Layer<
+    TaxCalculationService,
+    never,
+    R
+  > = TaxCalculationServiceTestLive
 ) =>
   HttpRouter.serve(
     TaxMaxiApiLive.pipe(
@@ -207,7 +218,7 @@ const makeHttpLive = (
       Layer.provide(SimpleTokenValidatorLive)
     )
   ).pipe(
-    Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer)),
+    Layer.provideMerge(makePersistenceLayer(sourceSyncQueueLayer, taxCalculationServiceLayer)),
     Layer.provideMerge(NodeHttpServer.layerTest),
     Layer.provide(ConfigProvider.layer(ClaimTokenConfigProvider))
   )
@@ -225,6 +236,11 @@ const NoPayerIdentityHttpLive = makeHttpLive(
 const PaidQueueFailureHttpLive = makeHttpLive(
   SourceSyncQueueFailureTestLive,
   X402PaymentValidatorTrackingTestLive
+)
+const TaxCalculationHttpLive = makeHttpLive(
+  SourceSyncQueueTestLive,
+  X402PaymentValidatorTestLive,
+  TaxCalculationServiceLive
 )
 
 const makeAuthenticatedClient = ({ userId }: { readonly userId: string }) =>
@@ -2780,5 +2796,55 @@ describe("SourcesApiLive", () => {
         expect(result.failure.message).toBe("Failed to enqueue source sync job.")
       }
     }).pipe(Effect.provide(QueueFailureHttpLive), Effect.scoped)
+  )
+
+  it.effect(
+    "returns a 422 naming blocking observations when a source has unresolved provider asset observations",
+    () =>
+      Effect.gen(function* () {
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        const sourceId = crypto.randomUUID()
+        yield* seedCoinbaseSource({ userId, principalId, sourceId })
+
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            naturalKey: `unresolved-${sourceId}`,
+            currencyCode: "XYZ",
+            retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+          })
+          .returning({ id: schema.providerAssets.id })
+
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to create unresolved provider asset fixture")
+        }
+
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId,
+        })
+
+        const client = yield* makeAuthenticatedClient({ userId })
+        const result = yield* client.sources
+          .calculateTaxForSource({
+            params: { sourceId },
+            payload: { year: 2025, jurisdiction: "germany" },
+          })
+          .pipe(Effect.result)
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          const failure = result.failure
+          expect(failure._tag).toBe("SourceTaxCalculationPendingError")
+          if (failure._tag === "SourceTaxCalculationPendingError") {
+            expect(failure.blockingObservations).toEqual([
+              { provider: "coinbase", currencyCode: "XYZ" },
+            ])
+          }
+        }
+      }).pipe(Effect.provide(TaxCalculationHttpLive), Effect.scoped)
   )
 })

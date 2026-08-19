@@ -1,45 +1,11 @@
 # Progress Log
 
-## Iteration 1 - 2026-08-19 09:19
-**Story**: AR-001 - Schedule one durable resolution job when sync stores an unknown observation
-**Status**: blocked
-**Notes**: STORY_BLOCKED: Coinbase known-mapping sync test stayed queued instead of completing. Agent then ran CI=true pnpm, which reinstalled node_modules against ./.pnpm-store.
----
+No iterations yet. Stories AR-001..AR-010 come from the review of PR #157
+against issue #143 and its parent #140. See ralph/intake.md for the findings
+each story closes and the operator decisions already taken.
 
-## Iteration 3 - 2026-08-19 12:51
-**Story**: AR-002 - Decode chain and CoinGecko evidence into typed attach-only claims
-**Status**: blocked
-**Notes**: STORY_BLOCKED: Agent treated the pnpm modules-purge prompt as a story blocker. Policy code already exists in packages/core/src/assets/AssetResolutionPolicy.ts.
----
-
-## 2026-08-19 13:08
-**Notes**: Restored node_modules against the global pnpm store and set verifyDepsBeforeRun=false. Ralph must not run pnpm install or set CI=true to confirm a modules purge.
----
-
-## 2026-08-19 13:20
-**Notes**: Re-ran story verification after the pnpm restore. AR-001 (5 integration tests) and AR-002 (17 unit tests) both pass. Marked both done. Story verification now uses `pnpm exec vitest run --project=...` so the loop does not run the whole suite. Next runnable story is AR-003 (in_progress).
----
-
-## 2026-08-19 13:37
-**Story**: AR-001 - Schedule one durable resolution job when sync stores an unknown observation
+## Iteration 1 - 2026-08-19 16:18
+**Story**: AR-001 - Return 422 naming the observations that block a tax calculation
 **Status**: done
-**Notes**: evidence_revision was a static default of 1. Upsert now increments it only when stored observation facts change (payload, name, exponent, type, currency, natural key), not on retrieved-at-only refreshes. A pending-review observation then gets one new durable job for that revision. Same evidence still no-ops. Covered by provider-asset repository and asset-resolution-job integration tests (7 story tests passing).
----
-
-## Iteration 1 - 2026-08-19 14:18
-**Story**: AR-003 - Let mapped Solana activity enter canonical accounting and FIFO
-**Status**: done
-**Notes**: Changed files: packages/sync-engine/src/layers/SourceProviderRegistryLive.ts,packages/sync-engine/src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts packages/sync-engine/src/providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts,packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts packages/sync-engine/tests/source-sync/source-provider-registry.test.ts,ralph/prd.json
----
-
-## Iteration 1 - 2026-08-19 14:31
-**Story**: AR-004 - Mark a calculation incomplete while an observation is unresolved
-**Status**: done
-**Notes**: Changed files: packages/persistence/src/layers/TaxCalculationServiceLive.ts,packages/persistence/src/services/TaxCalculationService.ts packages/persistence/tests/tax-calculation.integration.test.ts,ralph/prd.json
----
-
-## Iteration 2 - 2026-08-19 15:10
-**Story**: AR-005 - Attach a new exact representation and rematerialize affected sources
-**Status**: done
-**Notes**: Changed files: docs/adr/0002-asset-identity-provider-mapping.md,packages/persistence/src/layers/AssetRepositoryLive.ts packages/persistence/src/layers/PgClientLive.ts,packages/persistence/src/layers/ProviderAssetRepositoryLive.ts packages/persistence/src/schema/index.ts,packages/persistence/tests/support/integration-test-kit.ts packages/persistence/tests/support/vitest.integration.setup.ts,packages/sync-engine/src/layers/index.ts packages/sync-engine/src/services/AssetRepository.ts,packages/sync-engine/src/services/ProviderAssetRepository.ts packages/sync-engine/src/services/index.ts,packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts packages/sync-engine/tests/source-sync/source-sync-job-executor.test.ts,packages/sync-engine/tests/source-sync/source-sync-resume-boundary.test.ts ralph/prd.json
+**Notes**: Changed files: packages/persistence/src/layers/TaxCalculationServiceLive.ts,packages/persistence/src/services/TaxCalculationService.ts packages/persistence/tests/tax-calculation.integration.test.ts,packages/rest-api/src/definitions/SourcesApi.ts packages/rest-api/src/layers/SourcesApiLive.ts,packages/rest-api/tests/SourcesApiLive.integration.test.ts ralph/prd.json,ralph/progress.txt
 ---

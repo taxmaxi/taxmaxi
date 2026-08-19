@@ -45,6 +45,30 @@ export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePayment
   { httpApiStatus: 402 }
 ) {}
 
+/**
+ * SourceTaxCalculationBlockingObservation - A provider asset observation blocking
+ * a source's tax calculation, named by provider and currency code.
+ */
+export class SourceTaxCalculationBlockingObservation extends Schema.Class<SourceTaxCalculationBlockingObservation>(
+  "SourceTaxCalculationBlockingObservation"
+)({
+  provider: Schema.String,
+  currencyCode: Schema.String,
+}) {}
+
+/**
+ * SourceTaxCalculationPendingError - The source has unresolved provider asset
+ * observations, so its tax calculation cannot run yet.
+ */
+export class SourceTaxCalculationPendingError extends Schema.TaggedError<SourceTaxCalculationPendingError>()(
+  "SourceTaxCalculationPendingError",
+  {
+    message: Schema.String,
+    blockingObservations: Schema.Array(SourceTaxCalculationBlockingObservation),
+  },
+  { httpApiStatus: 422 }
+) {}
+
 // =============================================================================
 // Request/Response Schemas
 // =============================================================================
@@ -517,7 +541,12 @@ const calculateTaxForSource = HttpApiEndpoint.post(
     }),
     payload: Schema.Struct(TaxCalculationRequest.fields),
     success: TaxCalculationResponse,
-    error: [SourceBadRequestError, SourceNotFoundError, InternalServerError],
+    error: [
+      SourceBadRequestError,
+      SourceNotFoundError,
+      SourceTaxCalculationPendingError,
+      InternalServerError,
+    ],
   }
 ).annotateMerge(
   OpenApi.annotations({

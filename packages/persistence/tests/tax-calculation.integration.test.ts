@@ -404,6 +404,9 @@ describe("TaxCalculationServiceLive", () => {
         if (error._tag === "TaxCalculationPendingObservationsError") {
           expect(error.sourceId).toBe(sourceId)
           expect(error.pendingObservationCount).toBe(1)
+          expect(error.blockingObservations).toEqual([
+            { provider: "coinbase", currencyCode: "XYZ" },
+          ])
         }
       })
     )

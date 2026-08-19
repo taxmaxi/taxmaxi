@@ -47,6 +47,17 @@ export class TaxCalculationIncompleteDataError extends Schema.TaggedError<TaxCal
 }
 
 /**
+ * TaxCalculationBlockingObservation - A provider asset observation blocking a
+ * tax calculation, named by provider and currency code.
+ */
+export class TaxCalculationBlockingObservation extends Schema.Class<TaxCalculationBlockingObservation>(
+  "TaxCalculationBlockingObservation"
+)({
+  provider: Schema.String,
+  currencyCode: Schema.String,
+}) {}
+
+/**
  * TaxCalculationPendingObservationsError - Source activity depends on provider asset
  * observations that have no mapping decision yet, so the calculation is pending.
  */
@@ -55,6 +66,7 @@ export class TaxCalculationPendingObservationsError extends Schema.TaggedError<T
   {
     sourceId: Schema.String,
     pendingObservationCount: Schema.Int,
+    blockingObservations: Schema.Array(TaxCalculationBlockingObservation),
   },
   { httpApiStatus: 422 }
 ) {
