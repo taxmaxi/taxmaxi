@@ -33,6 +33,7 @@ export default defineConfig({
           ],
           name: { label: "unit", color: "cyan" },
           env: loadEnv("test", "./apps/server", ""),
+          globalSetup: ["./apps/www/tests/support/vitest.paraglide.setup.ts"],
         },
       },
       {

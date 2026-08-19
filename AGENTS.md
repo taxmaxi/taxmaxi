@@ -53,10 +53,14 @@ Use turbo CLI for running dev servers and builds. Default to scripts in package.
 ```bash
 mise x -- pnpm run test                                    # Run all tests
 mise x -- pnpm run test transactions.test.ts               # Run single test file
+mise x -- pnpm run test packages/rest-api                  # Run one package
+mise x -- pnpm run test apps/www                           # Run one app
 mise x -- pnpm run test --project=unit                     # Run only unit tests
 mise x -- pnpm run test --project=integration              # Run only integration tests
 mise x -- pnpm run test -t "test name"                     # Run tests matching name
 ```
+
+Run tests from the repo root. Packages and apps do not have their own test scripts.
 
 Test files use naming conventions:
 

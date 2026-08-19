@@ -32,10 +32,10 @@ pnpm build
 
 ## Testing
 
-This project uses [Vitest](https://vitest.dev/) for testing. You can run the tests with:
+Run tests from the repo root:
 
 ```bash
-pnpm test
+mise x -- pnpm run test apps/www
 ```
 
 ## Styling
