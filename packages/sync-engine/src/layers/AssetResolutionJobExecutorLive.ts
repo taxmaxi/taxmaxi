@@ -18,6 +18,7 @@ import {
   ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
   AssetResolutionUpstreamFailure,
   AttachRepresentationDecision,
+  canonicalizeAddress,
   decodeCoinGeckoClaim,
   evaluateAttachOnlyResolution,
   PendingResolutionDecision,
@@ -63,17 +64,19 @@ const chainFactKey = (fact: ChainFact): string =>
   JSON.stringify([
     fact.blockchain.trim().toLowerCase(),
     fact.type,
-    fact.contractAddress?.trim().toLowerCase() ?? null,
-    fact.mintAddress,
+    canonicalizeAddress(fact.contractAddress),
+    canonicalizeAddress(fact.mintAddress),
     fact.decimals,
   ])
 
 /**
  * Reduce every recorded on-chain observation for a provider asset to the one
  * exact chain fact evidence can prove. Zero or conflicting observations fail
- * closed as a chain evidence upstream failure rather than guessing.
+ * closed as a chain evidence upstream failure rather than guessing. Addresses
+ * are compared through the policy's canonicalizer, so case only merges facts
+ * on chains where case is not significant.
  */
-const buildChainEvidence = (
+export const buildChainEvidence = (
   observations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
 ): ChainEvidenceResult => {
   const facts = new Map<string, ChainFact>()
@@ -155,14 +158,21 @@ const make = Effect.gen(function* () {
     fact: ChainFact
   ): Effect.Effect<ReadonlyArray<AssetResolutionOwnedRepresentation>, SyncEngineStorageError> =>
     Effect.gen(function* () {
+      const factAddress = fact.contractAddress ?? fact.mintAddress
+      if (fact.type !== "native" && factAddress === null) {
+        // No address means no identity to look up; the policy fails closed
+        // on the malformed fact instead of matching an empty address.
+        return []
+      }
+
       const existing =
-        fact.type === "native"
+        fact.type === "native" || factAddress === null
           ? yield* assetRepository.findNativeRepresentationForBlockchain({
               blockchainName: fact.blockchain,
             })
           : yield* assetRepository.findRepresentationByBlockchainAndAddress({
               blockchainName: fact.blockchain,
-              address: fact.contractAddress ?? fact.mintAddress ?? "",
+              address: factAddress,
             })
 
       if (Option.isNone(existing)) {
@@ -248,7 +258,10 @@ const make = Effect.gen(function* () {
         return {
           decision: PendingResolutionDecision.make({
             policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
-            reason: "missing_existing_economic_asset",
+            reason:
+              candidate === undefined
+                ? "missing_existing_economic_asset"
+                : "ambiguous_symbol_candidates",
           }),
           evidence: [chainEvidenceRecord],
         }

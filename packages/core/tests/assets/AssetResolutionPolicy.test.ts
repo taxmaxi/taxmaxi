@@ -5,7 +5,9 @@ import {
   AssetResolutionMalformedPayload,
   AssetResolutionUpstreamFailure,
   ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
+  canonicalizeAddress,
   ChainClaim,
+  exactRepresentationKey,
   CoinGeckoClaim,
   CoinGeckoPlatformMapping,
   decodeChainClaim,
@@ -524,6 +526,85 @@ describe("AssetResolutionPolicy", () => {
         _tag: "fail_closed",
         reason: "upstream_failure",
       })
+    })
+  })
+
+  describe("canonicalizeAddress", () => {
+    it("lowercases EVM-shaped addresses because their case is not significant", () => {
+      expect(canonicalizeAddress(ETHEREUM_USDC_CONTRACT_CHECKSUM)).toBe(ETHEREUM_USDC_CONTRACT)
+    })
+
+    it("preserves the case of every other address", () => {
+      expect(canonicalizeAddress(SOLANA_USDC_MINT)).toBe(SOLANA_USDC_MINT)
+      expect(canonicalizeAddress(SOLANA_USDC_MINT.toLowerCase())).toBe(
+        SOLANA_USDC_MINT.toLowerCase()
+      )
+    })
+
+    it("passes null through", () => {
+      expect(canonicalizeAddress(null)).toBeNull()
+    })
+  })
+
+  describe("exactRepresentationKey", () => {
+    it("keys native, contract, and mint representations distinctly", () => {
+      const native = exactRepresentationKey({
+        blockchain: "ethereum",
+        type: "native",
+        contractAddress: null,
+        mintAddress: null,
+      })
+      const contract = exactRepresentationKey({
+        blockchain: "ethereum",
+        type: "token",
+        contractAddress: ETHEREUM_USDC_CONTRACT,
+        mintAddress: null,
+      })
+      const mint = exactRepresentationKey({
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: SOLANA_USDC_MINT,
+      })
+
+      expect(new Set([native, contract, mint]).size).toBe(3)
+    })
+
+    it("treats EVM contract case variants as one identity", () => {
+      const checksum = exactRepresentationKey({
+        blockchain: "ethereum",
+        type: "token",
+        contractAddress: ETHEREUM_USDC_CONTRACT_CHECKSUM,
+        mintAddress: null,
+      })
+      const lower = exactRepresentationKey({
+        blockchain: "ethereum",
+        type: "token",
+        contractAddress: ETHEREUM_USDC_CONTRACT,
+        mintAddress: null,
+      })
+
+      expect(checksum).toBe(lower)
+    })
+
+    it("gives a non-native representation without an address no identity at all", () => {
+      const first = exactRepresentationKey({
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: null,
+      })
+      const second = exactRepresentationKey({
+        blockchain: "solana",
+        type: "nft",
+        contractAddress: null,
+        mintAddress: null,
+      })
+
+      // Null means "no identity": two malformed rows must not collide into
+      // one shared key the way an empty-string key would.
+      expect(first).toBeNull()
+      expect(second).toBeNull()
     })
   })
 })

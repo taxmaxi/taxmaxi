@@ -187,6 +187,7 @@ export const isAssetResolutionUpstreamFailure = Schema.is(AssetResolutionUpstrea
 /** Reason a well-formed claim set stays pending instead of attaching. */
 export const PendingResolutionReason = Schema.Literals([
   "missing_existing_economic_asset",
+  "ambiguous_symbol_candidates",
   "non_exact_platform_match",
 ]).annotate({
   identifier: "PendingResolutionReason",
@@ -319,7 +320,12 @@ export type AssetResolutionProviderEvidence =
 
 const isEvmAddress = (address: string): boolean => /^0x[a-fA-F0-9]{40}$/.test(address)
 
-const canonicalizeAddress = (address: string | null): string | null => {
+/**
+ * Canonical address form used everywhere resolution compares identities:
+ * EVM-shaped addresses are case-insensitive and lowercase; every other
+ * address keeps its case because it is significant on its chain.
+ */
+export const canonicalizeAddress = (address: string | null): string | null => {
   if (address === null) {
     return null
   }
@@ -335,7 +341,12 @@ const emptyToNull = (value: string): string | null => {
 const addressesMatch = (left: string | null, right: string | null): boolean =>
   canonicalizeAddress(left) === canonicalizeAddress(right)
 
-const exactRepresentationKey = ({
+/**
+ * Canonical identity key of one network representation, or null when a
+ * non-native shape carries no address and therefore has no identity to
+ * compare. Null never matches anything, so malformed rows cannot collide.
+ */
+export const exactRepresentationKey = ({
   blockchain,
   type,
   contractAddress,
@@ -345,7 +356,7 @@ const exactRepresentationKey = ({
   readonly type: RepresentationType
   readonly contractAddress: string | null
   readonly mintAddress: string | null
-}): string => {
+}): string | null => {
   const chain = blockchain.toLowerCase()
   if (type === "native") {
     return `${chain}:native`
@@ -357,7 +368,7 @@ const exactRepresentationKey = ({
   }
 
   const mint = canonicalizeAddress(mintAddress)
-  return `${chain}:mint:${mint ?? ""}`
+  return mint === null ? null : `${chain}:mint:${mint}`
 }
 
 const chainAddress = (claim: ChainClaim): string | null =>
@@ -474,23 +485,10 @@ const findMatchingPlatform = ({
 const typesAreCompatible = ({
   asset,
   chain,
-  platform,
 }: {
   readonly asset: AssetResolutionEconomicAsset
   readonly chain: ChainClaim
-  readonly platform: CoinGeckoPlatformMapping
-}): boolean => {
-  const platformLooksNative = platform.contractAddress === null
-  if ((chain.type === "native") !== platformLooksNative) {
-    return false
-  }
-
-  if (chain.type === "nft") {
-    return asset.type === "nft"
-  }
-
-  return asset.type === "fungible"
-}
+}): boolean => (chain.type === "nft" ? asset.type === "nft" : asset.type === "fungible")
 
 /**
  * Decide attach, pending, or fail-closed from typed claims or evidence failures.
@@ -534,7 +532,7 @@ export const decideAttachOnlyResolution = ({
     return pending("non_exact_platform_match")
   }
 
-  if (!typesAreCompatible({ asset, chain, platform })) {
+  if (!typesAreCompatible({ asset, chain })) {
     return failClosed("incompatible_type")
   }
 
@@ -546,9 +544,10 @@ export const decideAttachOnlyResolution = ({
   }
 
   const representationKey = exactRepresentationKey(chain)
-  const owned = identity.representations.find(
-    (representation) => exactRepresentationKey(representation) === representationKey
-  )
+  const owned = identity.representations.find((representation) => {
+    const ownedKey = exactRepresentationKey(representation)
+    return ownedKey !== null && ownedKey === representationKey
+  })
   if (owned !== undefined && owned.assetKey !== asset.assetKey) {
     return failClosed("ownership_conflict")
   }

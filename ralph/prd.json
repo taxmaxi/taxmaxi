@@ -329,7 +329,7 @@
         "Each criterion needs a test that fails before the change. The case-collapse test is the important one: today the wrong answer is silently the last observation seen."
       ],
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "small",
       "verification": [
         "pnpm --filter @my/core run type-check",
