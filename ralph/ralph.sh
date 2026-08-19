@@ -8,12 +8,18 @@ DRY_RUN=false
 MAX_ITERATIONS=10
 COMMIT_CHANGES=false
 ALLOW_DIRTY=false
+PROVIDER=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'TEXT'
-Usage: bash ralph/ralph.sh [options] [max_iterations]
+Usage: bash ralph/ralph.sh [provider] [options] [max_iterations]
+
+Providers:
+  gpt      Codex CLI (default)
+  grok     Grok CLI
+  claude   Claude Code CLI
 
 Options:
   --dry-run              Run verification only; do not start the agent loop.
@@ -23,8 +29,8 @@ Options:
   --help                 Show this help.
 
 Environment:
-  AGENT_CMD_BASE         Agent command. Default:
-                         codex exec --model gpt-5 --sandbox workspace-write --ask-for-approval never --json
+  AGENT_CMD_BASE         Override the provider command entirely. When set, the
+                         provider argument is ignored.
 TEXT
 }
 
@@ -50,6 +56,15 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
+    gpt|grok|claude)
+      if [ -n "$PROVIDER" ] && [ "$PROVIDER" != "$1" ]; then
+        echo "Provider already set to $PROVIDER" >&2
+        usage
+        exit 1
+      fi
+      PROVIDER=$1
+      shift
+      ;;
     [0-9]*)
       MAX_ITERATIONS=$1
       shift
@@ -62,12 +77,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+PROVIDER="${PROVIDER:-gpt}"
+
 PRD_FILE="$SCRIPT_DIR/prd.json"
 PROGRESS_FILE="$SCRIPT_DIR/progress.txt"
 PROMPT_FILE="$SCRIPT_DIR/PROMPT.md"
 OUTPUT_DIR="$SCRIPT_DIR/.output"
 
-AGENT_CMD_BASE="${AGENT_CMD_BASE:-codex exec --model gpt-5 --sandbox workspace-write --ask-for-approval never --json}"
+AGENT_CMD_OVERRIDE="${AGENT_CMD_BASE:-}"
+AGENT_BIN=""
+AGENT_DISPLAY=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -93,11 +112,40 @@ log() {
   echo "[$timestamp] [$level] $message" >> "$OUTPUT_DIR/ralph.log"
 }
 
+resolve_agent() {
+  if [ -n "$AGENT_CMD_OVERRIDE" ]; then
+    AGENT_BIN="${AGENT_CMD_OVERRIDE%% *}"
+    AGENT_DISPLAY="$AGENT_CMD_OVERRIDE"
+    if [ "$PROVIDER" != "gpt" ]; then
+      log "WARN" "AGENT_CMD_BASE is set; ignoring provider $PROVIDER"
+    fi
+    return
+  fi
+
+  case "$PROVIDER" in
+    gpt)
+      AGENT_BIN="codex"
+      AGENT_DISPLAY='codex exec --model gpt-5.6-sol --sandbox workspace-write --approve-for-me --json'
+      ;;
+    grok)
+      AGENT_BIN="grok"
+      AGENT_DISPLAY='grok --prompt-file <prompt> --output-format streaming-messages-json --sandbox workspace --always-approve'
+      ;;
+    claude)
+      AGENT_BIN="claude"
+      AGENT_DISPLAY='claude -p --model claude-sonnet-5 --output-format stream-json --verbose --allowedTools Read,Edit,Write,Bash,...'
+      ;;
+  esac
+}
+
 enforce_agent_policy() {
-  if [[ "$AGENT_CMD_BASE" == *"--dangerously-bypass"* ]] ||
-    [[ "$AGENT_CMD_BASE" == *"danger-full-access"* ]] ||
-    [[ "$AGENT_CMD_BASE" == *"--yolo"* ]] ||
-    [[ "$AGENT_CMD_BASE" == *"--force"* ]]; then
+  local cmd="$AGENT_DISPLAY"
+
+  if [[ "$cmd" == *"--dangerously-bypass"* ]] ||
+    [[ "$cmd" == *"danger-full-access"* ]] ||
+    [[ "$cmd" == *"--yolo"* ]] ||
+    [[ "$cmd" == *"--force"* ]] ||
+    [[ "$cmd" == *"--dangerously-skip-permissions"* ]]; then
     log "ERROR" "Unsafe agent permission-bypass flags are disabled for this repository."
     exit 1
   fi
@@ -105,12 +153,11 @@ enforce_agent_policy() {
 
 check_prerequisites() {
   log "INFO" "Checking prerequisites..."
+  resolve_agent
   enforce_agent_policy
 
-  local agent_bin="${AGENT_CMD_BASE%% *}"
-
-  if ! command -v "$agent_bin" > /dev/null 2>&1; then
-    log "ERROR" "Agent command is not available: $agent_bin"
+  if ! command -v "$AGENT_BIN" > /dev/null 2>&1; then
+    log "ERROR" "Agent command is not available: $AGENT_BIN"
     exit 1
   fi
 
@@ -213,6 +260,8 @@ get_story_verification() {
 run_verification_command() {
   local cmd="$1"
 
+  export npm_config_verify_deps_before_run="${npm_config_verify_deps_before_run:-false}"
+
   if command -v mise > /dev/null 2>&1 && [ -f ".mise.toml" ]; then
     mise exec -- bash -lc "$cmd"
   else
@@ -309,6 +358,12 @@ stream_filter() {
           "> Shell: \(.cmd // .command // "?")"
         elif .type == "item.completed" and .item.type == "assistant_message" then
           (.item.text // .item.content[]?.text // empty)
+        elif .type == "text" then
+          (.data // .text // empty)
+        elif .type == "tool_call" then
+          "> Tool: \(.toolName // .title // .name // "?")"
+        elif .type == "content_block_delta" and (.delta.type? == "text_delta") then
+          (.delta.text // empty)
         else
           empty
         end
@@ -340,6 +395,57 @@ append_progress_entry() {
     fi
     echo "---"
   } >> "$PROGRESS_FILE"
+}
+
+run_agent() {
+  local prompt_file="$1"
+  local output_file="$2"
+  local status=0
+
+  set +e
+  if [ -n "$AGENT_CMD_OVERRIDE" ]; then
+    local -a agent_cmd
+    read -r -a agent_cmd <<< "$AGENT_CMD_OVERRIDE"
+    local prompt
+    prompt=$(cat "$prompt_file")
+    "${agent_cmd[@]}" "$prompt" 2>&1 | tee "$output_file" | stream_filter
+  else
+    case "$PROVIDER" in
+      gpt)
+        codex exec \
+          --model gpt-5.6-sol \
+          -c 'model_reasoning_effort="high"' \
+          --sandbox workspace-write \
+          --approve-for-me \
+          --json \
+          - < "$prompt_file" 2>&1 | tee "$output_file" | stream_filter
+        ;;
+      grok)
+        grok \
+          --prompt-file "$prompt_file" \
+          --output-format streaming-messages-json \
+          --sandbox workspace \
+          --always-approve \
+          --effort high \
+          --verbatim \
+          --no-plan \
+          2>&1 | tee "$output_file" | stream_filter
+        ;;
+      claude)
+        claude \
+          -p \
+          --output-format stream-json \
+          --model claude-sonnet-5 \
+          --verbose \
+          --allowedTools "Read,Edit,Write,Bash,Grep,Glob,Agent,WebFetch,WebSearch,Skill,NotebookEdit,TodoWrite" \
+          -- "$(cat "$prompt_file")" \
+          2>&1 | tee "$output_file" | stream_filter
+        ;;
+    esac
+  fi
+  status=${PIPESTATUS[0]}
+  set -e
+  return "$status"
 }
 
 commit_story() {
@@ -404,11 +510,8 @@ run_iteration() {
   local prompt_file="$OUTPUT_DIR/iteration_${iteration}_prompt.md"
   echo "$prompt" > "$prompt_file"
 
-  local -a agent_cmd
-  read -r -a agent_cmd <<< "$AGENT_CMD_BASE"
-
-  log "INFO" "Running agent: $AGENT_CMD_BASE"
-  if "${agent_cmd[@]}" "$prompt" 2>&1 | tee "$output_file" | stream_filter; then
+  log "INFO" "Running agent: $AGENT_DISPLAY"
+  if run_agent "$prompt_file" "$output_file"; then
     log "SUCCESS" "Agent completed iteration $iteration"
   else
     log "WARN" "Agent exited with non-zero status"
@@ -416,7 +519,9 @@ run_iteration() {
 
   if grep -q "STORY_BLOCKED" "$output_file"; then
     local block_reason
-    block_reason=$(grep -o "STORY_BLOCKED:.*" "$output_file" | head -1 || true)
+    # Grok JSONL keeps the rest of the message on the same line. Stop at the
+    # JSON string boundary so progress.txt does not ingest signatures.
+    block_reason=$(grep -o 'STORY_BLOCKED:[^"]*' "$output_file" | head -1 || true)
     [ -z "$block_reason" ] && block_reason="STORY_BLOCKED"
 
     update_story_status "$story_id" "blocked"
@@ -451,7 +556,10 @@ main() {
   fi
 
   mkdir -p "$OUTPUT_DIR"
+  # Inherited by the agent and its `pnpm run` children.
+  export npm_config_verify_deps_before_run="${npm_config_verify_deps_before_run:-false}"
   log "INFO" "Starting Ralph Loop"
+  log "INFO" "Provider: $PROVIDER"
   log "INFO" "Max iterations: $MAX_ITERATIONS"
   log "INFO" "PRD file: $PRD_FILE"
   log "INFO" "Commit mode: $COMMIT_CHANGES"

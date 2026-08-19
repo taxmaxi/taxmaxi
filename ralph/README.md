@@ -19,23 +19,25 @@ Local runtime output goes under `ralph/.output/`, which is ignored by git.
    - `.agents/skills/to-issues`
    - `.agents/skills/request-refactor-plan`
    - `.agents/skills/triage-issue`
-2. Ask an agent to use the `ralph` skill to import the issue into Ralph stories, for example:
+2. Ask an agent to use the `ralph` skill to import the issue. The skill splits that one issue into multiple stories in `ralph/prd.json`, for example:
 
    ```text
    Use the ralph skill to import #123 into ralph/prd.json.
    ```
 
-3. Review `ralph/prd.json`.
-4. Run the loop:
+3. Review the stories in `ralph/prd.json`.
+4. Run the loop with a provider name (`gpt`, `grok`, or `claude`):
 
    ```bash
-   bash ralph/ralph.sh --max-iterations 10
+   bash ralph/ralph.sh grok --max-iterations 10
    ```
+
+`gpt` is the default and runs Codex. `grok` runs the Grok CLI. `claude` runs Claude Code.
 
 By default, the loop does not commit. This keeps the repo aligned with `AGENTS.md`, which requires explicit user intent before commits. If you want Ralph's classic one-story-one-commit behavior, opt in:
 
 ```bash
-bash ralph/ralph.sh --commit --max-iterations 10
+bash ralph/ralph.sh grok --commit --max-iterations 10
 ```
 
 ## Story Schema
@@ -74,22 +76,26 @@ Prerequisites:
 
 - `jq`
 - `pnpm`
-- a supported coding-agent CLI
+- a supported coding-agent CLI (`codex` for `gpt`, `grok` for `grok`, `claude` for `claude`)
 
-The default agent command is:
+Agents must not run `pnpm install` or set `CI=true` to confirm a modules purge. Grok's workspace sandbox cannot use the global pnpm store, so an install there rewrites `node_modules` against `./.pnpm-store` and the next local `pnpm run test` asks to wipe the tree. The loop sets `npm_config_verify_deps_before_run=false` so verification never does that.
+
+Choose the provider as the first argument. Only these names are accepted:
 
 ```bash
-codex exec --model gpt-5 --sandbox workspace-write --ask-for-approval never --json
+bash ralph/ralph.sh gpt
+bash ralph/ralph.sh grok
+bash ralph/ralph.sh claude
 ```
 
-Override it with `AGENT_CMD_BASE`:
+Override the provider command with `AGENT_CMD_BASE`:
 
 ```bash
 AGENT_CMD_BASE="cursor agent --model gpt-5.5-extra-high-fast --print --output-format stream-json --trust" \
   bash ralph/ralph.sh --max-iterations 10
 ```
 
-The script refuses dangerous bypass flags such as `--dangerously-bypass-approvals-and-sandbox`, `danger-full-access`, `--yolo`, and `--force`.
+The script refuses dangerous bypass flags such as `--dangerously-bypass-approvals-and-sandbox`, `danger-full-access`, `--yolo`, `--force`, and `--dangerously-skip-permissions`.
 
 Useful options:
 
