@@ -33,7 +33,6 @@ import {
   AssetResolutionCoinGeckoClient,
   AssetResolutionJobExecutor,
   ProviderAssetRepository,
-  type AssetResolutionCandidateAsset,
   type AssetResolutionDecisionRecord,
   type AssetResolutionEvidenceRecord,
   type AssetResolutionJobExecutionResult,
@@ -253,12 +252,11 @@ const make = Effect.gen(function* () {
       const candidates = yield* assetRepository.findAssetResolutionCandidatesBySymbol({
         symbol: currencyCode,
       })
-      const withCoinGeckoId = candidates.filter(
-        (candidate): candidate is AssetResolutionCandidateAsset & { coingeckoCoinId: string } =>
-          candidate.coingeckoCoinId !== null
-      )
 
-      const [candidate, ...extraCandidates] = withCoinGeckoId
+      // Ambiguity counts every asset sharing the symbol, including ones
+      // without a CoinGecko id: picking the only id-carrying asset out of
+      // several same-symbol assets would attach on symbol luck, not evidence.
+      const [candidate, ...extraCandidates] = candidates
       if (candidate === undefined || extraCandidates.length > 0) {
         return {
           decision: PendingResolutionDecision.make({
@@ -272,8 +270,19 @@ const make = Effect.gen(function* () {
         }
       }
 
+      const coingeckoCoinId = candidate.coingeckoCoinId
+      if (coingeckoCoinId === null) {
+        return {
+          decision: PendingResolutionDecision.make({
+            policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
+            reason: "missing_registry_identity",
+          }),
+          evidence: [chainEvidenceRecord],
+        }
+      }
+
       const coinGeckoEvidence = yield* coinGeckoClient.fetchCoin({
-        coinGeckoCoinId: candidate.coingeckoCoinId,
+        coinGeckoCoinId: coingeckoCoinId,
       })
       const coinGeckoRetrievedAt = nowDate()
       const coinGeckoDecodedClaim =
@@ -285,7 +294,7 @@ const make = Effect.gen(function* () {
       const coinGeckoEvidenceRecord: AssetResolutionEvidenceRecord = {
         authority: "coingecko",
         claimKind: "registry_platform_mapping",
-        sourceLocator: `coingecko://coins/${candidate.coingeckoCoinId}`,
+        sourceLocator: `coingecko://coins/${coingeckoCoinId}`,
         retrievedAt: coinGeckoRetrievedAt,
         evidenceRevision,
         decodedClaim: coinGeckoDecodedClaim,
@@ -295,7 +304,7 @@ const make = Effect.gen(function* () {
         economicAssets: [
           {
             assetKey: candidate.id,
-            coingeckoCoinId: candidate.coingeckoCoinId,
+            coingeckoCoinId,
             type: candidate.type,
           },
         ],

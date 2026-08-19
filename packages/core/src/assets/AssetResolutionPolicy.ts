@@ -198,6 +198,7 @@ export const isAssetResolutionConflictingEvidence = Schema.is(AssetResolutionCon
 /** Reason a well-formed claim set stays pending instead of attaching. */
 export const PendingResolutionReason = Schema.Literals([
   "missing_existing_economic_asset",
+  "missing_registry_identity",
   "ambiguous_symbol_candidates",
   "non_exact_platform_match",
 ]).annotate({

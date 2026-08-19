@@ -255,15 +255,23 @@ const seedCoinbaseSource = () =>
     Effect.provide(TestPgClientLive)
   )
 
-const insertOrbAsset = () =>
+const insertOrbAsset = ({
+  id = ORB_ASSET_ID,
+  name = "Orb Test Coin",
+  coingeckoCoinId = ORB_COINGECKO_ID,
+}: {
+  readonly id?: string
+  readonly name?: string
+  readonly coingeckoCoinId?: string | null
+} = {}) =>
   Effect.gen(function* () {
     const db = yield* drizzle
 
     yield* db.insert(schema.assets).values({
-      id: ORB_ASSET_ID,
-      name: "Orb Test Coin",
+      id,
+      name,
       symbol: "ORB",
-      coingeckoCoinId: ORB_COINGECKO_ID,
+      coingeckoCoinId,
       type: "fungible",
     })
   }).pipe(Effect.provide(TestPgClientLive))
@@ -712,6 +720,69 @@ describe("asset resolution attach and rebuild", () => {
           expect.objectContaining({
             outcome: "pending",
             reason: "missing_existing_economic_asset",
+            actor: "system:attach-only-policy",
+          }),
+        ])
+        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(state.representations).toEqual([])
+
+        const job = yield* fetchResolutionJobState({ jobId })
+        expect(job.status).toBe("completed")
+      })
+    )
+  })
+
+  it("stays pending as ambiguous when a second same-symbol asset has no CoinGecko id", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        // A second ORB asset without a CoinGecko id must still make the
+        // symbol ambiguous instead of letting the id-carrying asset win.
+        yield* insertOrbAsset({
+          id: "00000000-0000-0000-0000-000000000562",
+          name: "Orb Test Coin Clone",
+          coingeckoCoinId: null,
+        })
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("pending")
+
+        const state = yield* fetchAttachState()
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "pending",
+            reason: "ambiguous_symbol_candidates",
+            actor: "system:attach-only-policy",
+          }),
+        ])
+        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(state.representations).toEqual([])
+
+        const job = yield* fetchResolutionJobState({ jobId })
+        expect(job.status).toBe("completed")
+      })
+    )
+  })
+
+  it("stays pending when the only candidate asset has no CoinGecko id", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset({ coingeckoCoinId: null })
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("pending")
+
+        const state = yield* fetchAttachState()
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "pending",
+            reason: "missing_registry_identity",
             actor: "system:attach-only-policy",
           }),
         ])
