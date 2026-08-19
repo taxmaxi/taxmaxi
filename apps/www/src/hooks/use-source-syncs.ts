@@ -72,6 +72,7 @@ export function useSourceSyncs({
             sourceName: source.name,
             status: started.status,
             ...(started.message === null ? {} : { message: started.message }),
+            ...(started.creditOutcome === null ? {} : { creditOutcome: started.creditOutcome }),
           })
         )
       } catch (error: unknown) {
@@ -308,6 +309,7 @@ function toActiveSourceSync(job: SourceSyncJob, current: ActiveSourceSync): Acti
     ...(job.normalizedRecords === null ? {} : { normalizedRecords: job.normalizedRecords }),
     ...(job.failedRecords === null ? {} : { failedRecords: job.failedRecords }),
     ...(job.message === null ? {} : { message: job.message }),
+    ...(job.creditOutcome === null ? {} : { creditOutcome: job.creditOutcome }),
   }
 }
 

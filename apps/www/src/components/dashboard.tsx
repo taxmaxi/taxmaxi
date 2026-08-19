@@ -4,6 +4,7 @@ import { useRouteContext } from "@tanstack/react-router"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import {
   isTaxMaxiUnauthorizedError,
+  type BillingStatus,
   type SourceSyncJob,
   type SourceSyncJobInput,
   type SourceSyncStart,
@@ -45,12 +46,14 @@ type DashboardSummary = {
 export function Dashboard({
   accounts = mockAccounts,
   getSourceSyncJob,
+  onBillingAction,
   onSourceSyncCompleted,
   onUnauthorized,
   startSourceSync,
 }: {
   accounts?: ReadonlyArray<Account>
   getSourceSyncJob?: (input: SourceSyncJobInput) => Promise<SourceSyncJob>
+  onBillingAction?: () => void
   onSourceSyncCompleted?: (sourceId: AccountId) => void | Promise<void>
   onUnauthorized?: () => void | Promise<void>
   startSourceSync?: (sourceId: AccountId) => Promise<SourceSyncStart>
@@ -184,9 +187,49 @@ export function Dashboard({
       startSourceSync,
     })
 
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null)
+  const needsBillingStatus = activeSyncs.some((sync) => sync.status === "credit_required")
+
+  useEffect(() => {
+    if (!needsBillingStatus || billingStatus !== null) {
+      return
+    }
+
+    let cancelled = false
+    taxmaxi.billing.status().then(
+      (status) => {
+        if (!cancelled) {
+          setBillingStatus(status)
+        }
+      },
+      () => {
+        // Billing status is only used to pick the action label; without it the
+        // island falls back to the plan action, which still leads to billing.
+      }
+    )
+
+    return () => {
+      cancelled = true
+    }
+  }, [billingStatus, needsBillingStatus, taxmaxi])
+
+  const hasActiveSubscription =
+    billingStatus?.subscriptionStatus === "active" ||
+    billingStatus?.subscriptionStatus === "trialing"
+  const onBillingSyncAction = useMemo(
+    () => (onBillingAction === undefined ? undefined : () => onBillingAction()),
+    [onBillingAction]
+  )
+
   return (
     <div className="text-marketing-foreground flex min-h-screen flex-col pt-28 pb-8 sm:pt-32">
-      <SourceSyncIsland items={activeSyncs} onDismiss={onDismissSync} onRetry={onRetrySync} />
+      <SourceSyncIsland
+        hasActiveSubscription={hasActiveSubscription}
+        items={activeSyncs}
+        onBillingAction={onBillingSyncAction}
+        onDismiss={onDismissSync}
+        onRetry={onRetrySync}
+      />
       <SourceCards
         contentClassName={appSurfaceClassName}
         onSelectedSourceIdChange={(sourceId) => onAccountScopeChange(sourceId ?? ALL_ACCOUNTS)}

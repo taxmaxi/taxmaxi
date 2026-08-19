@@ -87,4 +87,55 @@ describe("useSourceSyncs", () => {
     })
     expect(result.current.activeSyncs[0]?.status).toBe("completed")
   })
+
+  it("carries the structured credit outcome of a credit-required job onto the island item", async () => {
+    vi.useFakeTimers()
+    const poll = deferred<SourceSyncJob>()
+    const getSourceSyncJob = vi.fn<() => Promise<SourceSyncJob>>().mockReturnValue(poll.promise)
+
+    const { result } = renderHook(() =>
+      useSourceSyncs({
+        accountsById: new Map([[source.id, source]]),
+        getSourceSyncJob,
+        startSourceSync: async () => ({
+          sourceId: source.id,
+          jobId: "job-1",
+          status: "queued",
+          message: null,
+          resumable: false,
+          creditOutcome: null,
+        }),
+      })
+    )
+
+    await act(async () => {
+      await result.current.onSourceSync(source)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    await act(async () => {
+      poll.resolve({
+        ...makeJob("credit_required"),
+        message: "Sync paused: no usable credits remain.",
+        resumable: true,
+        creditOutcome: {
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 3,
+          additionalCreditsRequired: 2,
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(result.current.activeSyncs[0]?.status).toBe("credit_required")
+    expect(result.current.activeSyncs[0]?.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 3,
+      additionalCreditsRequired: 2,
+    })
+  })
 })

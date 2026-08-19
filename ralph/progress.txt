@@ -26,3 +26,9 @@
 **Status**: done
 **Notes**: Tests-only, as the story predicted: checkpoint/high-watermark resume and ledger reference dedup already made continue safe. Added three proofs: persistence integration test (top-up then re-persist both transactions, exactly one -1 charge each), executor test (continue run fetches from the stored high watermark instead of refetching, covered record not re-persisted, third run idempotent), API integration test (a credit_required job does not block a new start; duplicate continue reuses the queued job). No production code changed.
 ---
+
+## Iteration 5 - 2026-08-19 17:55
+**Story**: SYNC-005 - Show a billing action instead of Retry when a sync runs out of credits
+**Status**: done
+**Notes**: The island now renders credit_required from the structured creditOutcome fields: safe copy built by getCreditRequiredCopy (raw server message never shown), a billing action (Choose a plan for non-subscribers, Buy credits for active/trialing subscribers), and no Retry. Failed syncs keep Retry. The dashboard lazily loads billing status only when a credit_required sync appears; app.tsx supplies navigation to /app/billing. Hook maps creditOutcome from start and poll responses. 8 new island tests plus a hook mapping test; full suite (968) green.
+---

@@ -59,6 +59,13 @@ export function getSourceSyncDisplayProgress({
   }
 }
 
+export type SourceSyncCreditOutcome = {
+  reasonCode: string
+  availableCredits: number
+  creditsConsumed: number
+  additionalCreditsRequired: number | null
+}
+
 export type SourceSyncIslandItem = {
   id: string
   sourceName: string
@@ -71,12 +78,42 @@ export type SourceSyncIslandItem = {
   normalizedRecords?: number
   failedRecords?: number
   message?: string
+  creditOutcome?: SourceSyncCreditOutcome
 }
 
 type SourceSyncIslandProps = {
   items: ReadonlyArray<SourceSyncIslandItem>
+  hasActiveSubscription?: boolean
+  onBillingAction?: (item: SourceSyncIslandItem) => void
   onDismiss?: (item: SourceSyncIslandItem) => void
   onRetry?: (item: SourceSyncIslandItem) => void
+}
+
+/**
+ * Copy for a credit-required sync, built only from the structured credit outcome
+ * so internal error text never reaches the screen.
+ */
+export function getCreditRequiredCopy(creditOutcome: SourceSyncCreditOutcome | undefined): string {
+  if (!creditOutcome) {
+    return "This sync is paused until you add transaction credits."
+  }
+
+  const covered =
+    creditOutcome.creditsConsumed > 0
+      ? `${integerFormatter.format(creditOutcome.creditsConsumed)} ${
+          creditOutcome.creditsConsumed === 1
+            ? "transaction is already imported and stays yours."
+            : "transactions are already imported and stay yours."
+        } `
+      : ""
+  const needed =
+    creditOutcome.additionalCreditsRequired === null
+      ? "Add credits to finish the sync."
+      : `Add ${integerFormatter.format(creditOutcome.additionalCreditsRequired)} more ${
+          creditOutcome.additionalCreditsRequired === 1 ? "credit" : "credits"
+        } to finish the sync.`
+
+  return `This sync is paused: your transaction credits ran out. ${covered}${needed}`
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -169,7 +206,13 @@ const statusTone: Record<SourceSyncStatus, string> = {
 
 const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
 
-export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIslandProps) {
+export function SourceSyncIsland({
+  items,
+  hasActiveSubscription,
+  onBillingAction,
+  onDismiss,
+  onRetry,
+}: SourceSyncIslandProps) {
   const reduceMotion = useReducedMotion()
   const [mockScenario, setMockScenario] = useState<SourceSyncMockScenario>("live")
   const usingMockScenario = SOURCE_SYNC_MOCKS_ENABLED && mockScenario !== "live"
@@ -248,7 +291,7 @@ export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIsland
   }, [primaryItem?.id, reduceMotion])
 
   useEffect(() => {
-    if (primaryItem?.status !== "failed") {
+    if (primaryItem?.status !== "failed" && primaryItem?.status !== "credit_required") {
       return
     }
 
@@ -314,8 +357,10 @@ export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIsland
                   ) : (
                     <ActiveIslandContent
                       expanded={expanded}
+                      hasActiveSubscription={hasActiveSubscription}
                       item={primaryItem}
                       items={visibleItems}
+                      onBillingAction={onBillingAction}
                       onDismiss={effectiveOnDismiss}
                       onOpen={toggleDetails}
                       onRetry={effectiveOnRetry}
@@ -369,23 +414,28 @@ function CompactIslandContent({
 
 function ActiveIslandContent({
   expanded,
+  hasActiveSubscription,
   item,
   items,
+  onBillingAction,
   onDismiss,
   onOpen,
   onRetry,
   reduceMotion,
 }: {
   expanded: boolean
+  hasActiveSubscription?: boolean
   item: SourceSyncIslandItem
   items: ReadonlyArray<SourceSyncIslandItem>
+  onBillingAction?: (item: SourceSyncIslandItem) => void
   onDismiss?: (item: SourceSyncIslandItem) => void
   onOpen: () => void
   onRetry?: (item: SourceSyncIslandItem) => void
   reduceMotion: boolean
 }) {
   const headline = getIslandHeadline(items)
-  const dismissible = item.status === "completed" || item.status === "failed"
+  const dismissible =
+    item.status === "completed" || item.status === "failed" || item.status === "credit_required"
 
   return (
     <div
@@ -438,7 +488,11 @@ function ActiveIslandContent({
           >
             <SyncMetrics item={item} />
 
-            {item.message ? (
+            {item.status === "credit_required" ? (
+              <p className="mt-3 text-xs leading-5 font-medium text-sync-island-failed">
+                {getCreditRequiredCopy(item.creditOutcome)}
+              </p>
+            ) : item.message ? (
               <p
                 className={cn(
                   "mt-3 text-xs leading-5 font-medium",
@@ -451,8 +505,20 @@ function ActiveIslandContent({
 
             {items.length > 1 ? <SyncQueue items={items.slice(1)} /> : null}
 
-            {item.status === "failed" || item.status === "completed" ? (
+            {item.status === "failed" ||
+            item.status === "completed" ||
+            item.status === "credit_required" ? (
               <div className="mt-3 flex items-center justify-end gap-2">
+                {item.status === "credit_required" && onBillingAction ? (
+                  <Button
+                    onClick={() => onBillingAction(item)}
+                    size="sm"
+                    type="button"
+                    variant="secondary"
+                  >
+                    {hasActiveSubscription ? "Buy credits" : "Choose a plan"}
+                  </Button>
+                ) : null}
                 {item.status === "failed" && onRetry ? (
                   <Button onClick={() => onRetry(item)} size="sm" type="button" variant="secondary">
                     <RotateCcw aria-hidden="true" className="size-3.5" strokeWidth={2.5} />
@@ -602,6 +668,10 @@ function getSourceNames(items: ReadonlyArray<SourceSyncIslandItem>): string {
 
 function getAnnouncement(items: ReadonlyArray<SourceSyncIslandItem>): string {
   const primaryItem = items[0]
+
+  if (primaryItem?.status === "credit_required") {
+    return `${getIslandHeadline(items)}. ${getCreditRequiredCopy(primaryItem.creditOutcome)}`
+  }
 
   return primaryItem?.status === "failed"
     ? `${getIslandHeadline(items)}. ${primaryItem.message ?? "Open sync details to retry."}`

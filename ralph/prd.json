@@ -203,7 +203,7 @@
         "Assert that internal identifiers from a nested cause never reach the rendered output."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": ["pnpm run test apps/www"]
     }

@@ -48,10 +48,15 @@ export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
   ],
   credit_required: [
     {
+      creditOutcome: {
+        additionalCreditsRequired: 22,
+        availableCredits: 0,
+        creditsConsumed: 82,
+        reasonCode: "no_usable_credits",
+      },
       failedRecords: 0,
       id: "mock-coinbase",
       fetchedRecords: 104,
-      message: "Add credits and run sync again to continue.",
       normalizedRecords: 82,
       progress: 100,
       sourceName: "Coinbase",
