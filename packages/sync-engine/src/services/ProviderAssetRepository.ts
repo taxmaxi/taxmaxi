@@ -125,6 +125,19 @@ export interface ClaimAssetResolutionJobParams {
   readonly staleBefore: Date
 }
 
+/** Input for listing resolution jobs the worker's poller should dispatch. */
+export interface ListDispatchableResolutionJobsParams {
+  readonly now: Date
+  /** Heartbeat cutoff a job stuck in processing must be older than to be re-dispatched. */
+  readonly staleBefore: Date
+  readonly limit: number
+}
+
+/** One resolution job the worker's poller should dispatch. */
+export interface DispatchableResolutionJob {
+  readonly jobId: string
+}
+
 /** Input for refreshing an executing worker's heartbeat on a resolution job. */
 export interface HeartbeatAssetResolutionJobParams {
   readonly jobId: string
@@ -356,6 +369,16 @@ export interface ProviderAssetRepositoryShape {
   readonly claimResolutionJob: (
     params: ClaimAssetResolutionJobParams
   ) => Effect.Effect<AssetResolutionJobClaim, SyncEngineStorageError>
+
+  /**
+   * List resolution jobs a worker's poller should enqueue for execution:
+   * pending jobs whose retry delay has passed, and processing jobs whose
+   * heartbeat is older than staleBefore so a crashed worker's claim can be
+   * reclaimed. Oldest first, capped at limit.
+   */
+  readonly listDispatchableResolutionJobs: (
+    params: ListDispatchableResolutionJobsParams
+  ) => Effect.Effect<ReadonlyArray<DispatchableResolutionJob>, SyncEngineStorageError>
 
   /**
    * Refresh the heartbeat for the worker currently owning a processing

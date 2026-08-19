@@ -148,6 +148,8 @@ const runWithProvider = <A, E>(
             scheduleUnresolvedResolutionJob: () =>
               Effect.die("scheduleUnresolvedResolutionJob should not be called"),
             claimResolutionJob: () => Effect.die("claimResolutionJob should not be called"),
+            listDispatchableResolutionJobs: () =>
+              Effect.die("listDispatchableResolutionJobs should not be called"),
             heartbeatResolutionJob: () => Effect.die("heartbeatResolutionJob should not be called"),
             releaseResolutionJobAfterFailure: () =>
               Effect.die("releaseResolutionJobAfterFailure should not be called"),

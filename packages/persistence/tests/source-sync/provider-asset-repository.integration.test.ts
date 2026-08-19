@@ -2228,5 +2228,52 @@ describe("ProviderAssetRepositoryLive", () => {
       const job = await selectAssetResolutionJob({ jobId })
       expect(job.heartbeatAt?.toISOString()).toBe(heartbeatAt.toISOString())
     })
+
+    it("lists only runnable pending jobs and stale processing jobs as dispatchable", async () => {
+      const runnable = await scheduleResolutionJob("dispatch-runnable")
+      const delayed = await scheduleResolutionJob("dispatch-delayed")
+      const freshProcessing = await scheduleResolutionJob("dispatch-fresh-processing")
+      const staleProcessing = await scheduleResolutionJob("dispatch-stale-processing")
+      const completed = await scheduleResolutionJob("dispatch-completed")
+
+      const now = new Date()
+      const staleHeartbeatAt = new Date(now.getTime() - 10 * 60 * 1000)
+      await claimResolutionJobForTest({ jobId: freshProcessing.jobId, workerId: "worker-1" })
+      await claimResolutionJobForTest({ jobId: staleProcessing.jobId, workerId: "worker-1" })
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ nextRetryAt: new Date(now.getTime() + 60 * 60 * 1000) })
+            .where(eq(schema.assetResolutionJobs.id, delayed.jobId))
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ heartbeatAt: staleHeartbeatAt, updatedAt: staleHeartbeatAt })
+            .where(eq(schema.assetResolutionJobs.id, staleProcessing.jobId))
+          yield* db
+            .update(schema.assetResolutionJobs)
+            .set({ status: "completed" })
+            .where(eq(schema.assetResolutionJobs.id, completed.jobId))
+        })
+      )
+
+      const dispatchable = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listDispatchableResolutionJobs({
+            now,
+            staleBefore: new Date(now.getTime() - 5 * 60 * 1000),
+            limit: 10,
+          })
+        )
+      )
+
+      const jobIds = dispatchable.map((job) => job.jobId)
+      expect(jobIds).toContain(runnable.jobId)
+      expect(jobIds).toContain(staleProcessing.jobId)
+      expect(jobIds).not.toContain(delayed.jobId)
+      expect(jobIds).not.toContain(freshProcessing.jobId)
+      expect(jobIds).not.toContain(completed.jobId)
+    })
   })
 })

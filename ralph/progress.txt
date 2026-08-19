@@ -15,3 +15,9 @@ each story closes and the operator decisions already taken.
 **Status**: done
 **Notes**: Loop was stopped mid-story; finished and verified interactively. Added attempt_count, max_attempts, started_at, heartbeat_at, next_retry_at, worker_id, error_message to asset_resolution_jobs (generated migration 20260819142618_small_veda). claimResolutionJob now takes worker identity and lease params, increments attempts, and reclaims stale processing jobs; new heartbeatResolutionJob and releaseResolutionJobAfterFailure (backoff doubles per attempt, attempt cap fails the job). Executor releases through the failure path. 7 new lease/retry integration tests. Full-suite timeouts and a TRUNCATE deadlock seen during the loop's verification were parallel-suite DB contention; all pass in isolation and the full suite is green (983 passed).
 ---
+
+## Iteration 3 - 2026-08-19 17:46
+**Story**: AR-003 - Dispatch pending resolution jobs from the worker
+**Status**: done
+**Notes**: New WorkerBullMqAssetResolutionConsumerLive mirrors the source-sync consumer: own BullMQ queue ("asset-resolution"), pending-dispatch poller that lists runnable pending jobs and stale processing jobs via new ProviderAssetRepository.listDispatchableResolutionJobs, DB job id doubles as the BullMQ job id for dedup, DB owns retries (queue attempts=1, removeOnComplete/Fail). Wired executor + CoinGecko client + repositories into apps/worker composition root. 6 consumer seam tests + 1 dispatchable-listing integration test. Repo-wide "pnpm run type-check" fails in apps/crawler with pre-existing effect-language-service diagnostics identical to main (see feat/fix-effect-language-service-warnings); package-scoped checks for worker, sync-engine, persistence pass.
+---

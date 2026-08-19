@@ -125,7 +125,7 @@
         "An end-to-end test that a scheduled job reaches a terminal state without a manual executor call is the criterion that proves the original gap is closed."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm --filter worker run type-check",

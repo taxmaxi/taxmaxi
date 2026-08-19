@@ -4,7 +4,7 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -1220,6 +1220,36 @@ const make = Effect.gen(function* () {
       )
       .pipe(wrapSyncEngineStorageError("providerAssetRepository.claimResolutionJob"))
 
+  const listDispatchableResolutionJobs: ProviderAssetRepositoryShape["listDispatchableResolutionJobs"] =
+    ({ now, staleBefore, limit }) =>
+      db
+        .select({ jobId: schema.assetResolutionJobs.id })
+        .from(schema.assetResolutionJobs)
+        .where(
+          or(
+            and(
+              eq(schema.assetResolutionJobs.status, "pending"),
+              or(
+                isNull(schema.assetResolutionJobs.nextRetryAt),
+                lte(schema.assetResolutionJobs.nextRetryAt, now)
+              )
+            ),
+            and(
+              eq(schema.assetResolutionJobs.status, "processing"),
+              or(
+                and(
+                  isNull(schema.assetResolutionJobs.heartbeatAt),
+                  lt(schema.assetResolutionJobs.updatedAt, staleBefore)
+                ),
+                lt(schema.assetResolutionJobs.heartbeatAt, staleBefore)
+              )
+            )
+          )
+        )
+        .orderBy(asc(schema.assetResolutionJobs.createdAt))
+        .limit(limit)
+        .pipe(wrapSyncEngineSqlError("providerAssetRepository.listDispatchableResolutionJobs"))
+
   const heartbeatResolutionJob: ProviderAssetRepositoryShape["heartbeatResolutionJob"] = ({
     jobId,
     workerId,
@@ -1380,6 +1410,7 @@ const make = Effect.gen(function* () {
     findProviderAssetMapping,
     scheduleUnresolvedResolutionJob,
     claimResolutionJob,
+    listDispatchableResolutionJobs,
     heartbeatResolutionJob,
     releaseResolutionJobAfterFailure,
     finishResolutionJob,
