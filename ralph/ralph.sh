@@ -133,7 +133,7 @@ resolve_agent() {
       ;;
     claude)
       AGENT_BIN="claude"
-      AGENT_DISPLAY='claude -p --output-format stream-json --verbose --allowedTools Read,Edit,Write,Bash,...'
+      AGENT_DISPLAY='claude -p --model claude-sonnet-5 --output-format stream-json --verbose --allowedTools Read,Edit,Write,Bash,...'
       ;;
   esac
 }
@@ -435,6 +435,7 @@ run_agent() {
         claude \
           -p \
           --output-format stream-json \
+          --model claude-sonnet-5 \
           --verbose \
           --allowedTools "Read,Edit,Write,Bash,Grep,Glob,Agent,WebFetch,WebSearch,Skill,NotebookEdit,TodoWrite" \
           -- "$(cat "$prompt_file")" \
