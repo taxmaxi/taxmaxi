@@ -171,6 +171,10 @@ const makeProviderLayer = ({
               providerAssetRowId: "unused",
               evidenceRevision: 1,
             }),
+          claimResolutionJob: () => Effect.die("claimResolutionJob should not be called"),
+          finishResolutionJob: () => Effect.die("finishResolutionJob should not be called"),
+          recordAssetResolutionDecision: () =>
+            Effect.die("recordAssetResolutionDecision should not be called"),
         })
       )
     ),
@@ -186,6 +190,9 @@ const makeProviderLayer = ({
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
           upsertEconomicAssetRepresentation: () =>
             Effect.die("upsertEconomicAssetRepresentation should not be called"),
+          findAssetResolutionCandidatesBySymbol: () => Effect.succeed([]),
+          attachRepresentationToExistingAsset: () =>
+            Effect.die("attachRepresentationToExistingAsset should not be called"),
         })
       )
     ),

@@ -1127,6 +1127,110 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineStorageError("providerAssetRepository.scheduleUnresolvedResolutionJob"))
 
+  const claimResolutionJob: ProviderAssetRepositoryShape["claimResolutionJob"] = ({ jobId }) =>
+    db
+      .transaction((tx) =>
+        Effect.gen(function* () {
+          const now = nowDate()
+          const [job] = yield* tx
+            .select({
+              id: schema.assetResolutionJobs.id,
+              providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
+              evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+              status: schema.assetResolutionJobs.status,
+            })
+            .from(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+            .for("update")
+            .limit(1)
+            .pipe(wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.job"))
+
+          if (job === undefined || job.status !== "pending") {
+            return { _tag: "not_claimable" } as const
+          }
+
+          const [providerAsset] = yield* tx
+            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.id, job.providerAssetRowId))
+            .limit(1)
+            .pipe(
+              wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.providerAsset")
+            )
+
+          if (
+            providerAsset === undefined ||
+            providerAsset.evidenceRevision !== job.evidenceRevision
+          ) {
+            yield* tx
+              .update(schema.assetResolutionJobs)
+              .set({ status: "completed", updatedAt: now })
+              .where(eq(schema.assetResolutionJobs.id, jobId))
+              .pipe(
+                wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.completeStale")
+              )
+
+            return { _tag: "stale" } as const
+          }
+
+          yield* tx
+            .update(schema.assetResolutionJobs)
+            .set({ status: "processing", updatedAt: now })
+            .where(eq(schema.assetResolutionJobs.id, jobId))
+            .pipe(wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.claim"))
+
+          return {
+            _tag: "claimed",
+            providerAssetRowId: job.providerAssetRowId,
+            evidenceRevision: job.evidenceRevision,
+          } as const
+        })
+      )
+      .pipe(wrapSyncEngineStorageError("providerAssetRepository.claimResolutionJob"))
+
+  const finishResolutionJob: ProviderAssetRepositoryShape["finishResolutionJob"] = ({
+    jobId,
+    status,
+  }) =>
+    db
+      .update(schema.assetResolutionJobs)
+      .set({ status, updatedAt: nowDate() })
+      .where(eq(schema.assetResolutionJobs.id, jobId))
+      .pipe(Effect.asVoid, wrapSyncEngineSqlError("providerAssetRepository.finishResolutionJob"))
+
+  const recordAssetResolutionDecision: ProviderAssetRepositoryShape["recordAssetResolutionDecision"] =
+    ({ decision }) =>
+      db
+        .insert(schema.assetResolutionDecisions)
+        .values({
+          providerAssetRowId: decision.providerAssetRowId,
+          evidenceRevision: decision.evidenceRevision,
+          policyRevision: decision.policyRevision,
+          outcome: decision.outcome,
+          assetId: decision.assetId,
+          assetRepresentationId: decision.assetRepresentationId,
+          blockchain: decision.blockchain,
+          representationType: decision.representationType,
+          contractAddress: decision.contractAddress,
+          mintAddress: decision.mintAddress,
+          decimals: decision.decimals,
+          reason: decision.reason,
+          chainEvidence: decision.chainEvidence,
+          coinGeckoEvidence: decision.coinGeckoEvidence,
+          actor: decision.actor,
+        })
+        .onConflictDoNothing({
+          target: [
+            schema.assetResolutionDecisions.providerAssetRowId,
+            schema.assetResolutionDecisions.evidenceRevision,
+          ],
+        })
+        .returning({ providerAssetRowId: schema.assetResolutionDecisions.providerAssetRowId })
+        .pipe(
+          Effect.map((rows) => ({ recorded: rows.length > 0 })),
+          wrapSyncEngineSqlError("providerAssetRepository.recordAssetResolutionDecision")
+        )
+
   return ProviderAssetRepository.of({
     upsertProviderAssets,
     upsertProviderAssetMappings,
@@ -1142,6 +1246,9 @@ const make = Effect.gen(function* () {
     listProviderAssetObservedRepresentations,
     findProviderAssetMapping,
     scheduleUnresolvedResolutionJob,
+    claimResolutionJob,
+    finishResolutionJob,
+    recordAssetResolutionDecision,
   } satisfies ProviderAssetRepositoryShape)
 })
 

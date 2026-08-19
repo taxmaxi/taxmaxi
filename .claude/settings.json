@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "p=$(cat); d=$(printf '%s' \"$p\" | jq -r '.worktree_path // .worktreePath // .path // .cwd // empty' 2>/dev/null); d=\"${d:-$PWD}\"; printf '\\n=== %s\\npayload: %s\\nresolved: %s\\n' \"$(date)\" \"$p\" \"$d\" >> ~/.claude/worktree-setup.log; if [ -x \"$d/setup.sh\" ]; then cd \"$d\" && ./setup.sh; else echo \"worktree setup skipped: no setup.sh at $d\"; fi",
+            "timeout": 900,
+            "statusMessage": "Bootstrapping worktree (./setup.sh)"
+          }
+        ]
+      }
+    ]
+  }
+}

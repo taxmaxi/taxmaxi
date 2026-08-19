@@ -75,6 +75,14 @@ export interface AssetRepresentationDraft {
   readonly metadata: unknown
 }
 
+/** Existing economic asset considered as an attach-only resolution candidate. */
+export interface AssetResolutionCandidateAsset {
+  readonly id: string
+  readonly symbol: string
+  readonly type: "fungible" | "nft"
+  readonly coingeckoCoinId: string | null
+}
+
 /** Economic asset and the exact network representation created for it. */
 export interface EconomicAssetRepresentationRecord {
   readonly id: string
@@ -144,6 +152,27 @@ export interface AssetRepositoryShape {
     readonly asset: EconomicAssetDraft
     readonly representation: AssetRepresentationDraft
   }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
+
+  /**
+   * List existing economic assets whose symbol matches a provider observation's
+   * currency code, for attach-only resolution to consider as a candidate. Only
+   * candidates with a coingeckoCoinId can be checked against CoinGecko evidence.
+   */
+  readonly findAssetResolutionCandidatesBySymbol: (params: {
+    readonly symbol: string
+  }) => Effect.Effect<ReadonlyArray<AssetResolutionCandidateAsset>, SyncEngineStorageError>
+
+  /**
+   * Attach a new exact network representation to an already-existing economic
+   * asset, without creating or modifying the asset or blockchain rows. Retrying
+   * with the same identity on the same asset is a successful no-op; attaching
+   * an identity already owned by a different asset fails.
+   */
+  readonly attachRepresentationToExistingAsset: (params: {
+    readonly assetId: string
+    readonly blockchainName: string
+    readonly representation: AssetRepresentationDraft
+  }) => Effect.Effect<SyncEngineAssetRepresentation, SyncEngineStorageError>
 }
 
 /**

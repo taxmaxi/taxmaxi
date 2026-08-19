@@ -75,6 +75,46 @@ export interface AssetResolutionJobScheduleResult {
   readonly evidenceRevision: number
 }
 
+/** Outcome of an attach-only policy decision, recorded as immutable audit history. */
+export type AssetResolutionAuditOutcome = "attach" | "pending" | "fail_closed"
+
+/** One immutable attach-only policy decision to append to resolution audit history. */
+export interface AssetResolutionDecisionRecord {
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+  readonly policyRevision: string
+  readonly outcome: AssetResolutionAuditOutcome
+  readonly assetId: string | null
+  readonly assetRepresentationId: string | null
+  readonly blockchain: string | null
+  readonly representationType: "native" | "token" | "nft" | null
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
+  readonly reason: string | null
+  readonly chainEvidence: unknown
+  readonly coinGeckoEvidence: unknown
+  readonly actor: string
+}
+
+/** Result of appending one decision to resolution audit history. */
+export interface AssetResolutionDecisionRecordResult {
+  readonly recorded: boolean
+}
+
+/** Outcome of attempting to claim a durable resolution job for execution. */
+export type AssetResolutionJobClaim =
+  | {
+      readonly _tag: "claimed"
+      readonly providerAssetRowId: string
+      readonly evidenceRevision: number
+    }
+  | { readonly _tag: "not_claimable" }
+  | { readonly _tag: "stale" }
+
+/** Terminal status a resolution job execution attempt can leave the job in. */
+export type AssetResolutionJobFinishStatus = "completed" | "pending" | "failed"
+
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
  */
@@ -261,6 +301,36 @@ export interface ProviderAssetRepositoryShape {
   readonly scheduleUnresolvedResolutionJob: (params: {
     readonly providerAssetRowId: string
   }) => Effect.Effect<AssetResolutionJobScheduleResult, SyncEngineStorageError>
+
+  /**
+   * Claim one durable resolution job for execution. Locks the job row and
+   * compares its evidence revision against the provider asset's current
+   * evidence revision in the same transaction: a stale job is completed
+   * without a decision and reported as stale rather than claimed. A job that
+   * is not pending (already claimed, completed, or failed) is reported
+   * not_claimable, making duplicate execution attempts a safe no-op.
+   */
+  readonly claimResolutionJob: (params: {
+    readonly jobId: string
+  }) => Effect.Effect<AssetResolutionJobClaim, SyncEngineStorageError>
+
+  /**
+   * Move a resolution job to a terminal or retryable status after an
+   * execution attempt.
+   */
+  readonly finishResolutionJob: (params: {
+    readonly jobId: string
+    readonly status: AssetResolutionJobFinishStatus
+  }) => Effect.Effect<void, SyncEngineStorageError>
+
+  /**
+   * Append one immutable attach-only policy decision to resolution audit
+   * history. A second decision for the same provider asset and evidence
+   * revision is a no-op so replaying a resolution job never rewrites history.
+   */
+  readonly recordAssetResolutionDecision: (params: {
+    readonly decision: AssetResolutionDecisionRecord
+  }) => Effect.Effect<AssetResolutionDecisionRecordResult, SyncEngineStorageError>
 }
 
 /**

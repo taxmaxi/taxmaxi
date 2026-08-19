@@ -8,7 +8,7 @@ import * as Redacted from "effect/Redacted"
 import { inject } from "vitest"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
 import {
-  makePgClientLayer,
+  makePgClientLayerForTests,
   runDrizzleMigrations,
   runSqlUnsafe,
 } from "../../src/layers/PgClientLive.ts"
@@ -104,11 +104,11 @@ export const makeIntegrationTestDatabaseContext = ({
     `postgresql://${pgUser}:${pgPassword}@${pgHost}:${pgPort}/postgres`
   )
 
-  const TestPgClientLive = makePgClientLayer({
+  const TestPgClientLive = makePgClientLayerForTests({
     url: testDatabaseUrl,
   })
 
-  const AdminPgClientLive = makePgClientLayer({
+  const AdminPgClientLive = makePgClientLayerForTests({
     url: adminDatabaseUrl,
     maxConnections: 2,
   })

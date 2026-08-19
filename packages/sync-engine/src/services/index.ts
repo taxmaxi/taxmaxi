@@ -1,5 +1,7 @@
 export * from "./ActivityClassificationService.ts"
 export * from "./AssetRepository.ts"
+export * from "./AssetResolutionCoinGeckoClient.ts"
+export * from "./AssetResolutionJobExecutor.ts"
 export * from "./ProviderAssetRepository.ts"
 export * from "./ProviderReferenceRepository.ts"
 export * from "./ProtocolCandidateRepository.ts"

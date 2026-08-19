@@ -37,3 +37,9 @@
 **Status**: done
 **Notes**: Changed files: packages/persistence/src/layers/TaxCalculationServiceLive.ts,packages/persistence/src/services/TaxCalculationService.ts packages/persistence/tests/tax-calculation.integration.test.ts,ralph/prd.json
 ---
+
+## Iteration 2 - 2026-08-19 15:10
+**Story**: AR-005 - Attach a new exact representation and rematerialize affected sources
+**Status**: done
+**Notes**: Changed files: docs/adr/0002-asset-identity-provider-mapping.md,packages/persistence/src/layers/AssetRepositoryLive.ts packages/persistence/src/layers/PgClientLive.ts,packages/persistence/src/layers/ProviderAssetRepositoryLive.ts packages/persistence/src/schema/index.ts,packages/persistence/tests/support/integration-test-kit.ts packages/persistence/tests/support/vitest.integration.setup.ts,packages/sync-engine/src/layers/index.ts packages/sync-engine/src/services/AssetRepository.ts,packages/sync-engine/src/services/ProviderAssetRepository.ts packages/sync-engine/src/services/index.ts,packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts packages/sync-engine/tests/source-sync/source-sync-job-executor.test.ts,packages/sync-engine/tests/source-sync/source-sync-resume-boundary.test.ts ralph/prd.json
+---

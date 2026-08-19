@@ -62,10 +62,16 @@ const makeTypeParsers = () => ({
 /**
  * Build a PgClient layer from an explicit database URL.
  *
- * Useful in integration tests where multiple databases are orchestrated
+ * Intended for integration tests that orchestrate multiple databases
  * (for example admin DB + isolated test DB) without mutating process env.
+ *
+ * Idle timeout defaults to 1ms. `pg-pool` keeps the Node event loop alive
+ * for each idle client until that timeout unless `allowExitOnIdle` is set,
+ * and `@effect/sql-pg` does not pass that flag. A 60s idle timeout here
+ * leaves Vitest running for about a minute after the suite has finished.
+ * Production processes should use `PgClientLive`.
  */
-export const makePgClientLayer = ({
+export const makePgClientLayerForTests = ({
   url,
   maxConnections = 10,
 }: {
@@ -75,7 +81,7 @@ export const makePgClientLayer = ({
   PgClient.layer({
     url,
     maxConnections,
-    idleTimeout: "60 seconds",
+    idleTimeout: "1 millis",
     connectTimeout: "10 seconds",
     types: makeTypeParsers(),
   })

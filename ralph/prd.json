@@ -194,7 +194,7 @@
         "Cover many sources sharing the same observation: one resolution job for that evidence revision, and rematerialization fan-out only after the durable decision."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "large",
       "verification": [
         "pnpm run test packages/sync-engine/tests/source-sync/asset-resolution-attach.integration.test.ts"

@@ -112,6 +112,10 @@ const runWithProvider = <A, E>(
             listBlockchains: () => Effect.die("listBlockchains should not be called"),
             upsertEconomicAssetRepresentation: () =>
               Effect.die("upsertEconomicAssetRepresentation should not be called"),
+            findAssetResolutionCandidatesBySymbol: () =>
+              Effect.die("findAssetResolutionCandidatesBySymbol should not be called"),
+            attachRepresentationToExistingAsset: () =>
+              Effect.die("attachRepresentationToExistingAsset should not be called"),
           })
         ),
         Layer.provide(
@@ -143,6 +147,10 @@ const runWithProvider = <A, E>(
               Effect.die("findProviderAssetMapping should not be called"),
             scheduleUnresolvedResolutionJob: () =>
               Effect.die("scheduleUnresolvedResolutionJob should not be called"),
+            claimResolutionJob: () => Effect.die("claimResolutionJob should not be called"),
+            finishResolutionJob: () => Effect.die("finishResolutionJob should not be called"),
+            recordAssetResolutionDecision: () =>
+              Effect.die("recordAssetResolutionDecision should not be called"),
           })
         ),
         Layer.provide(

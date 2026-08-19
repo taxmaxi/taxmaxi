@@ -5,7 +5,7 @@ import * as Effect from "effect/Effect"
 import * as Redacted from "effect/Redacted"
 import type { TestProject } from "vitest/node"
 import {
-  makePgClientLayer,
+  makePgClientLayerForTests,
   runDrizzleMigrations,
   runSqlUnsafe,
 } from "../../src/layers/PgClientLive.ts"
@@ -58,11 +58,11 @@ export const setup = async (project: TestProject) => {
   const templateDatabaseUrl = Redacted.make(
     `postgresql://${user}:${passwordValue}@${host}:${port}/${migratedTestDatabaseTemplateName}`
   )
-  const AdminPgClientLive = makePgClientLayer({
+  const AdminPgClientLive = makePgClientLayerForTests({
     url: adminDatabaseUrl,
     maxConnections: 2,
   })
-  const TemplatePgClientLive = makePgClientLayer({
+  const TemplatePgClientLive = makePgClientLayerForTests({
     url: templateDatabaseUrl,
   })
 
