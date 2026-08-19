@@ -602,7 +602,7 @@ const fetchAccountingState = () =>
 
 await Effect.runPromise(context.recreateTestDatabase())
 
-describe("asset resolution attach and rematerialize", () => {
+describe("asset resolution attach and rebuild", () => {
   beforeEach(() =>
     Effect.gen(function* () {
       providerFetchCount = 0
@@ -612,7 +612,7 @@ describe("asset resolution attach and rematerialize", () => {
     }).pipe(Effect.runPromise)
   )
 
-  it("attaches a new exact representation and rematerializes every affected source", async () => {
+  it("attaches a new exact representation and rebuilds every affected source", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* runSync()

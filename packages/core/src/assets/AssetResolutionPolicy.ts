@@ -184,6 +184,17 @@ export class AssetResolutionUpstreamFailure extends Schema.TaggedError<AssetReso
 /** Type guard for AssetResolutionUpstreamFailure. */
 export const isAssetResolutionUpstreamFailure = Schema.is(AssetResolutionUpstreamFailure)
 
+/** Stored evidence records that contradict each other. */
+export class AssetResolutionConflictingEvidence extends Schema.TaggedError<AssetResolutionConflictingEvidence>()(
+  "conflicting_evidence",
+  {
+    source: AssetResolutionEvidenceSource,
+  }
+) {}
+
+/** Type guard for AssetResolutionConflictingEvidence. */
+export const isAssetResolutionConflictingEvidence = Schema.is(AssetResolutionConflictingEvidence)
+
 /** Reason a well-formed claim set stays pending instead of attaching. */
 export const PendingResolutionReason = Schema.Literals([
   "missing_existing_economic_asset",
@@ -201,6 +212,7 @@ export type PendingResolutionReason = typeof PendingResolutionReason.Type
 /** Reason attach-only policy failed closed. */
 export const FailClosedResolutionReason = Schema.Literals([
   "ambiguous_economic_asset",
+  "conflicting_evidence",
   "incompatible_decimals",
   "incompatible_type",
   "malformed_payload",
@@ -303,12 +315,14 @@ export interface AssetResolutionIdentitySnapshot {
 
 /** Chain input at the policy boundary. */
 export type ChainResolutionInput =
+  | AssetResolutionConflictingEvidence
   | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
   | ChainClaim
 
 /** CoinGecko input at the policy boundary. */
 export type CoinGeckoResolutionInput =
+  | AssetResolutionConflictingEvidence
   | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
   | CoinGeckoClaim
@@ -316,6 +330,8 @@ export type CoinGeckoResolutionInput =
 /** Provider evidence before decoding. */
 export type AssetResolutionProviderEvidence =
   | { readonly _tag: "payload"; readonly payload: unknown }
+  | AssetResolutionConflictingEvidence
+  | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
 
 const isEvmAddress = (address: string): boolean => /^0x[a-fA-F0-9]{40}$/.test(address)
@@ -465,9 +481,11 @@ const failClosed = (reason: FailClosedResolutionReason): FailClosedResolutionDec
   })
 
 const evidenceFailureReason = (
-  evidence: AssetResolutionMalformedPayload | AssetResolutionUpstreamFailure
-): FailClosedResolutionReason =>
-  evidence._tag === "upstream_failure" ? "upstream_failure" : "malformed_payload"
+  evidence:
+    | AssetResolutionConflictingEvidence
+    | AssetResolutionMalformedPayload
+    | AssetResolutionUpstreamFailure
+): FailClosedResolutionReason => evidence._tag
 
 const findMatchingPlatform = ({
   chain,
@@ -569,7 +587,7 @@ export const decideAttachOnlyResolution = ({
 const decodeChainEvidence = (
   evidence: AssetResolutionProviderEvidence
 ): Effect.Effect<ChainResolutionInput> => {
-  if (evidence._tag === "upstream_failure") {
+  if (evidence._tag !== "payload") {
     return Effect.succeed(evidence)
   }
 
@@ -581,7 +599,7 @@ const decodeChainEvidence = (
 const decodeCoinGeckoEvidence = (
   evidence: AssetResolutionProviderEvidence
 ): Effect.Effect<CoinGeckoResolutionInput> => {
-  if (evidence._tag === "upstream_failure") {
+  if (evidence._tag !== "payload") {
     return Effect.succeed(evidence)
   }
 

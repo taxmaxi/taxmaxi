@@ -16,7 +16,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  * - stale: the provider observation's evidence changed since the job was
  *   scheduled; the job completed without a decision.
  * - attached: the attach-only policy attached a new representation and
- *   durably scheduled rematerialization for every affected source.
+ *   durably scheduled a replay of every affected source.
  * - pending / fail_closed: the attach-only policy decided not to attach;
  *   the decision is recorded as audit history.
  */

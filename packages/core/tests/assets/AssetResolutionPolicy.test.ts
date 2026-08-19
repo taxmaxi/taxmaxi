@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect"
 import { describe, expect, it } from "vitest"
 import { SOLANA_USDC_MINT } from "../../src/assets/AssetReferenceCatalog.ts"
 import {
+  AssetResolutionConflictingEvidence,
   AssetResolutionMalformedPayload,
   AssetResolutionUpstreamFailure,
   ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
@@ -484,6 +485,19 @@ describe("AssetResolutionPolicy", () => {
       expect(upstream).toMatchObject({
         _tag: "fail_closed",
         reason: "upstream_failure",
+      })
+    })
+
+    it("fails closed for conflicting evidence and names the conflict", () => {
+      const decision = decideAttachOnlyResolution({
+        chain: new AssetResolutionConflictingEvidence({ source: "chain" }),
+        coinGecko: usdcCoinGeckoClaim(),
+        identity: usdcIdentity(),
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "fail_closed",
+        reason: "conflicting_evidence",
       })
     })
   })

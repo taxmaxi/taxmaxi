@@ -42,7 +42,7 @@ describe("buildChainEvidence", () => {
     // Solana mint case is significant: these are two different identities,
     // so the evidence must conflict instead of silently keeping one of them.
     expect(result.fact).toBeNull()
-    expect(result.evidence._tag).toBe("upstream_failure")
+    expect(result.evidence._tag).toBe("conflicting_evidence")
   })
 
   it("merges EVM contract case variants into one fact", () => {
@@ -59,6 +59,6 @@ describe("buildChainEvidence", () => {
     const result = buildChainEvidence([])
 
     expect(result.fact).toBeNull()
-    expect(result.evidence._tag).toBe("upstream_failure")
+    expect(result.evidence._tag).toBe("malformed_payload")
   })
 })

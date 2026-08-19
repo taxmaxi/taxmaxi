@@ -47,7 +47,7 @@ Trusted identity facts live in the version-controlled [asset reference catalog](
    - The attach-only policy may accept the job with exact chain evidence and CoinGecko evidence: it attaches a new network representation to an already-existing economic asset, never creates an economic asset, and records the evidence, the policy revision, the actor, and the decision as immutable audit history.
    - Otherwise the observation stays pending for manual review, approved the same way as before: with an economic asset ID and, when the observation identifies a network representation, that representation ID.
    - Stale evidence or a stale decision revision fails its compare-and-set check instead of silently overwriting a newer observation, and a duplicate job run is a no-op.
-6. Replay normalization from the stored observation and approved mapping. An accepted resolution job durably schedules replay for every affected source before any rematerialization work starts; workers own replay retries and report persistent replay failure separately from the accepted identity decision, so a rematerialization problem never rolls back an already-accepted mapping.
+6. Replay from the stored observation and approved mapping. An accepted resolution job durably schedules a replay for every affected source before any replay work starts; workers own replay retries and report persistent replay failure separately from the accepted identity decision, so a replay problem never rolls back an already-accepted mapping.
 
 ## Consequences
 

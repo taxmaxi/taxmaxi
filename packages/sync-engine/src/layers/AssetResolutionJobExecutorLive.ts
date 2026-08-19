@@ -5,8 +5,8 @@
  * CoinGecko evidence from the controlled evidence client, decides
  * attach/pending/fail_closed through the attach-only policy, appends the
  * decision to immutable audit history, and, on attach, attaches the new
- * representation and durably schedules rematerialization for every affected
- * source through the existing replay mechanism.
+ * representation and durably schedules a replay of every affected source
+ * through the existing replay mechanism.
  *
  * @module AssetResolutionJobExecutorLive
  */
@@ -16,7 +16,8 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
   ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
-  AssetResolutionUpstreamFailure,
+  AssetResolutionConflictingEvidence,
+  AssetResolutionMalformedPayload,
   AttachRepresentationDecision,
   canonicalizeAddress,
   decodeCoinGeckoClaim,
@@ -71,10 +72,11 @@ const chainFactKey = (fact: ChainFact): string =>
 
 /**
  * Reduce every recorded on-chain observation for a provider asset to the one
- * exact chain fact evidence can prove. Zero or conflicting observations fail
- * closed as a chain evidence upstream failure rather than guessing. Addresses
- * are compared through the policy's canonicalizer, so case only merges facts
- * on chains where case is not significant.
+ * exact chain fact evidence can prove. No usable observation fails closed as
+ * malformed chain evidence; observations that contradict each other fail
+ * closed as conflicting chain evidence. Neither guesses. Addresses are
+ * compared through the policy's canonicalizer, so case only merges facts on
+ * chains where case is not significant.
  */
 export const buildChainEvidence = (
   observations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
@@ -97,8 +99,11 @@ export const buildChainEvidence = (
   }
 
   const [fact, ...extraFacts] = facts.values()
-  if (fact === undefined || extraFacts.length > 0) {
-    return { evidence: new AssetResolutionUpstreamFailure({ source: "chain" }), fact: null }
+  if (fact === undefined) {
+    return { evidence: new AssetResolutionMalformedPayload({ source: "chain" }), fact: null }
+  }
+  if (extraFacts.length > 0) {
+    return { evidence: new AssetResolutionConflictingEvidence({ source: "chain" }), fact: null }
   }
 
   return { evidence: { _tag: "payload", payload: fact }, fact }
@@ -286,8 +291,6 @@ const make = Effect.gen(function* () {
         decodedClaim: coinGeckoDecodedClaim,
         rawPayload: coinGeckoEvidence,
       }
-      const ownedRepresentations = ownedForReuse
-
       const identity: AssetResolutionIdentitySnapshot = {
         economicAssets: [
           {
@@ -296,7 +299,7 @@ const make = Effect.gen(function* () {
             type: candidate.type,
           },
         ],
-        representations: ownedRepresentations,
+        representations: ownedForReuse,
       }
 
       const decision = yield* evaluateAttachOnlyResolution({
@@ -306,6 +309,33 @@ const make = Effect.gen(function* () {
       })
 
       return { decision, evidence: [chainEvidenceRecord, coinGeckoEvidenceRecord] }
+    })
+
+  // A replay after a crash between recording and the follow-up steps still
+  // finishes idempotently, but it must be visible as a replay rather than
+  // pass for a first decision.
+  const recordDecision = ({
+    jobId,
+    record,
+  }: {
+    readonly jobId: string
+    readonly record: AssetResolutionDecisionRecord
+  }): Effect.Effect<void, SyncEngineStorageError> =>
+    Effect.gen(function* () {
+      const { recorded } = yield* providerAssetRepository.recordAssetResolutionDecision({
+        decision: record,
+      })
+      if (!recorded) {
+        yield* Effect.logInfo(
+          {
+            jobId,
+            providerAssetRowId: record.providerAssetRowId,
+            evidenceRevision: record.evidenceRevision,
+            outcome: record.outcome,
+          },
+          "asset-resolution:decision-replay-detected"
+        )
+      }
     })
 
   const decideAndAttach = ({
@@ -346,20 +376,15 @@ const make = Effect.gen(function* () {
       })
 
       if (decision._tag !== "attach") {
-        const { recorded } = yield* providerAssetRepository.recordAssetResolutionDecision({
-          decision: decisionToRecord({
+        yield* recordDecision({
+          jobId,
+          record: decisionToRecord({
             providerAssetRowId,
             evidenceRevision,
             decision,
             evidence,
           }),
         })
-        if (!recorded) {
-          yield* Effect.logInfo(
-            { jobId, providerAssetRowId, evidenceRevision, outcome: decision._tag },
-            "asset-resolution:decision-replay-detected"
-          )
-        }
         yield* providerAssetRepository.finishResolutionJob({ jobId, status: "completed" })
         return {
           outcome: decision._tag,
@@ -382,8 +407,9 @@ const make = Effect.gen(function* () {
         },
       })
 
-      const { recorded } = yield* providerAssetRepository.recordAssetResolutionDecision({
-        decision: {
+      yield* recordDecision({
+        jobId,
+        record: {
           ...decisionToRecord({
             providerAssetRowId,
             evidenceRevision,
@@ -393,16 +419,6 @@ const make = Effect.gen(function* () {
           assetRepresentationId: representation.id,
         },
       })
-
-      // A replay after a crash between recording and mapping approval still
-      // finishes the idempotent approval below, but it must be visible as a
-      // replay rather than pass for a first decision.
-      if (!recorded) {
-        yield* Effect.logInfo(
-          { jobId, providerAssetRowId, evidenceRevision, outcome: "attach" },
-          "asset-resolution:decision-replay-detected"
-        )
-      }
 
       // The ownership conclusion is keyed on the representation itself so a
       // later provider observing the same identity can reuse it. Recording is
@@ -423,7 +439,7 @@ const make = Effect.gen(function* () {
           canonicalFiatCurrency: null,
           mappingStatus: "approved",
           reviewerNotes: null,
-          sourceNotes: `Attach-only policy ${decision.policyRevision} attached the exact representation and requested rematerialization.`,
+          sourceNotes: `Attach-only policy ${decision.policyRevision} attached the exact representation and requested a replay of affected sources.`,
         },
         expectedObservedRepresentations: observations,
         expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
