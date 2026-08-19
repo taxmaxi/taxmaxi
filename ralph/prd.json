@@ -81,7 +81,7 @@
         "Include the web progress display in the assertions, since the label is what the user actually reads."
       ],
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "small",
       "verification": [
         "pnpm --filter @my/sync-engine run type-check",

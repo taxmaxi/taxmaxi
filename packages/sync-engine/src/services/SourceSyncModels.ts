@@ -69,7 +69,8 @@ export interface SourceSyncExecutionState {
   readonly phase: SourceSyncPhase
   readonly processedRecords: number
   readonly totalRecords: number | null
-  readonly importedRecords: number
+  /** Count of raw provider records fetched and cached so far. Not the count of persisted transactions; see `normalizedRecords`. */
+  readonly fetchedRecords: number
   readonly normalizedRecords: number
   readonly failedRecords: number
   readonly cursorPayload: unknown
@@ -86,7 +87,7 @@ export interface SourceSyncJobProgressSnapshot {
   readonly phase: SourceSyncPhase | null
   readonly processedRecords: number | null
   readonly totalRecords: number | null
-  readonly importedRecords: number | null
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
   readonly cursorPayload: unknown
@@ -181,7 +182,8 @@ export interface SourceSyncJobDetails extends SourceSyncJobSummary {
   readonly processedRecords: number | null
   readonly totalRecords: number | null
   readonly progressPercent: number | null
-  readonly importedRecords: number | null
+  /** Count of raw provider records fetched and cached so far. Not the count of persisted transactions; see `normalizedRecords`. */
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
 }

@@ -9,7 +9,7 @@ const JOB_POLL_INTERVAL = Duration.seconds(2)
 export type SyncSummary = {
   readonly sourceId: string
   readonly jobId: string
-  readonly importedRecords: number
+  readonly fetchedRecords: number
   readonly normalizedRecords: number
   readonly failedRecords: number
 }
@@ -41,7 +41,7 @@ export const waitForSyncCompletion = ({
           return {
             sourceId: job.sourceId,
             jobId: job.jobId,
-            importedRecords: job.importedRecords ?? 0,
+            fetchedRecords: job.fetchedRecords ?? 0,
             normalizedRecords: job.normalizedRecords ?? 0,
             failedRecords: job.failedRecords ?? 0,
           } satisfies SyncSummary

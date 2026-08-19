@@ -91,9 +91,9 @@ function SourceCard({
         ) : (
           <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
             <div>
-              <dt className="text-[var(--sea-ink-soft)]">Imported</dt>
+              <dt className="text-[var(--sea-ink-soft)]">Fetched</dt>
               <dd className="mt-1 font-mono font-semibold text-[var(--sea-ink)]">
-                {formatNullableCount(latestJob.importedRecords)}
+                {formatNullableCount(latestJob.fetchedRecords)}
               </dd>
             </div>
             <div>

@@ -817,7 +817,7 @@ const make = Effect.gen(function* () {
             )
           const nextExecution: SourceSyncExecutionState = {
             ...finalLoop.execution,
-            importedRecords: finalLoop.execution.importedRecords + nextBatch.records.length,
+            fetchedRecords: finalLoop.execution.fetchedRecords + nextBatch.records.length,
             cursorPayload: nextBatch.cursorPayload,
             highWatermark: Timestamp.maxNullableDate(
               finalLoop.execution.highWatermark,
@@ -842,7 +842,7 @@ const make = Effect.gen(function* () {
             sourceId: source.id,
             jobId,
             provider,
-            importedRecords: nextExecution.importedRecords,
+            fetchedRecords: nextExecution.fetchedRecords,
             normalizedRecords: nextExecution.normalizedRecords,
             failedRecords: nextExecution.failedRecords,
             done: nextBatch.done,
@@ -852,7 +852,7 @@ const make = Effect.gen(function* () {
             {
               sourceId: source.id,
               jobId,
-              importedRecords: nextExecution.importedRecords,
+              fetchedRecords: nextExecution.fetchedRecords,
               normalizedRecords: nextExecution.normalizedRecords,
               failedRecords: nextExecution.failedRecords,
               checkpointExternalId: nextExecution.checkpointExternalId,
@@ -943,7 +943,7 @@ const make = Effect.gen(function* () {
         sourceId: source.id,
         jobId,
         provider,
-        importedRecords: completedExecution.importedRecords,
+        fetchedRecords: completedExecution.fetchedRecords,
         normalizedRecords: completedExecution.normalizedRecords,
         failedRecords: completedExecution.failedRecords,
         reconciledProviderTransfers: reconciliationSummary.evaluatedProviderTransfers,
@@ -957,7 +957,7 @@ const make = Effect.gen(function* () {
         {
           sourceId: source.id,
           jobId,
-          importedRecords: completedExecution.importedRecords,
+          fetchedRecords: completedExecution.fetchedRecords,
           normalizedRecords: completedExecution.normalizedRecords,
           failedRecords: completedExecution.failedRecords,
           reconciledProviderTransfers: reconciliationSummary.evaluatedProviderTransfers,
@@ -1093,7 +1093,7 @@ const make = Effect.gen(function* () {
           rawRecordIds: rawRecords.map((rawRecord) => rawRecord.id),
           baseExecution: {
             ...initialExecution,
-            importedRecords: rawRecords.length,
+            fetchedRecords: rawRecords.length,
           },
         })
 
@@ -1138,7 +1138,7 @@ const make = Effect.gen(function* () {
           sourceId: source.id,
           jobId,
           provider,
-          importedRecords: replayExecution.importedRecords,
+          fetchedRecords: replayExecution.fetchedRecords,
           normalizedRecords: replayExecution.normalizedRecords,
           failedRecords: replayExecution.failedRecords,
           reconciledProviderTransfers: reconciliationSummary.evaluatedProviderTransfers,
@@ -1152,7 +1152,7 @@ const make = Effect.gen(function* () {
           {
             sourceId: source.id,
             jobId,
-            importedRecords: replayExecution.importedRecords,
+            fetchedRecords: replayExecution.fetchedRecords,
             normalizedRecords: replayExecution.normalizedRecords,
             failedRecords: replayExecution.failedRecords,
             reconciledProviderTransfers: reconciliationSummary.evaluatedProviderTransfers,

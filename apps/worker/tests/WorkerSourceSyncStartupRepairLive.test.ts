@@ -273,7 +273,7 @@ const runDispatchFollowUp = ({
     processedRecords: null,
     totalRecords: null,
     progressPercent: null,
-    importedRecords: null,
+    fetchedRecords: null,
     normalizedRecords: null,
     failedRecords: null,
     message: null,

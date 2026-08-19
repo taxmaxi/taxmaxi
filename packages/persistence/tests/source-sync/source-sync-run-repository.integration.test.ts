@@ -97,7 +97,7 @@ const createProcessingJob = ({
           completedAt: status === "completed" || status === "failed" ? now : null,
           errorMessage,
           progressDetails: {
-            importedRecords: status === "completed" ? 4 : 0,
+            fetchedRecords: status === "completed" ? 4 : 0,
             normalizedRecords: status === "completed" ? 3 : 0,
             failedRecords: status === "failed" ? 1 : 0,
           },

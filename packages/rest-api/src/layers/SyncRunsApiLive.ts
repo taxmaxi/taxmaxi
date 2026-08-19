@@ -46,7 +46,7 @@ const toSyncRunResponse = (run: SourceSyncRunDetails): SyncRunResponse =>
         processedRecords: item.processedRecords,
         totalRecords: item.totalRecords,
         progressPercent: item.progressPercent,
-        importedRecords: item.importedRecords,
+        fetchedRecords: item.fetchedRecords,
         normalizedRecords: item.normalizedRecords,
         failedRecords: item.failedRecords,
         message: item.message,

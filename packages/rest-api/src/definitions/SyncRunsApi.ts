@@ -26,7 +26,8 @@ export class SyncRunItemResponse extends Schema.Class<SyncRunItemResponse>("Sync
   processedRecords: Schema.NullOr(Schema.Number),
   totalRecords: Schema.NullOr(Schema.Number),
   progressPercent: Schema.NullOr(Schema.Number),
-  importedRecords: Schema.NullOr(Schema.Number),
+  /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
+  fetchedRecords: Schema.NullOr(Schema.Number),
   normalizedRecords: Schema.NullOr(Schema.Number),
   failedRecords: Schema.NullOr(Schema.Number),
   message: Schema.NullOr(Schema.String),

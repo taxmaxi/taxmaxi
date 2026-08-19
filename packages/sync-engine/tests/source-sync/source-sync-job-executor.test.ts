@@ -47,7 +47,7 @@ const initialExecution: SourceSyncExecutionState = {
   phase: "discovering",
   processedRecords: 0,
   totalRecords: null,
-  importedRecords: 0,
+  fetchedRecords: 0,
   normalizedRecords: 0,
   failedRecords: 0,
   cursorPayload: null,
@@ -223,7 +223,7 @@ const makeExecutorLayer = ({
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     completeJob: ({ state }) =>
       Effect.sync(() => {
-        events.push(`complete:${state.importedRecords}:${state.normalizedRecords}`)
+        events.push(`complete:${state.fetchedRecords}:${state.normalizedRecords}`)
         events.push(`failed:${state.failedRecords}`)
       }),
     failJob: ({ message }) =>
@@ -236,7 +236,7 @@ const makeExecutorLayer = ({
     getExecutionState: () => Effect.succeed(initialExecution),
     persistProgress: ({ state, lastSyncedAt }) =>
       Effect.sync(() => {
-        events.push(`progress:${state.importedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
+        events.push(`progress:${state.fetchedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
         events.push(
           `phase:${state.phase}:${state.processedRecords}:${state.totalRecords ?? "unknown"}`
         )
@@ -834,6 +834,54 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("mark-raw-failed:Helius Solana normalization is not implemented yet.")
     expect(events).toContain("complete:1:0")
     expect(events).toContain("failed:1")
+  })
+
+  it("keeps fetchedRecords and normalizedRecords distinct when every fetched record fails to persist", async () => {
+    const events: Array<string> = []
+    const fetchedProviderRecords = [1, 2, 3].map((index) =>
+      ProviderRawRecord.make({
+        providerKey: "helius-solana",
+        recordType: "solana_transaction_full",
+        externalRecordId: `solana-signature-${index}`,
+        externalAccountId: "So11111111111111111111111111111111111111112",
+        externalParentId: null,
+        occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+        payload: { transaction: { signatures: [`solana-signature-${index}`] } },
+      })
+    )
+    const checkpointRawRecords = [1, 2, 3].map((index) => ({
+      ...replayRawRecord,
+      id: `raw-solana-${index}`,
+      provider: "helius-solana",
+      recordType: "solana_transaction_full",
+      externalRecordId: `solana-signature-${index}`,
+      externalAccountId: "So11111111111111111111111111111111111111112",
+      payload: { transaction: { signatures: [`solana-signature-${index}`] } },
+    }))
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            sourceProviderKey: "helius-solana",
+            fetchedProviderRecords,
+            checkpointRawRecords,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    // Every fetched batch is cached during discovery, before normalization runs,
+    // so a run that persists nothing must still report the full fetched count.
+    expect(events).toContain("complete:3:0")
+    expect(events).toContain("failed:3")
+    expect(events).not.toContain("complete:0:0")
   })
 
   it("runs replay mode with cached raw rows and marks the job completed", async () => {

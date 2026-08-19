@@ -304,7 +304,7 @@ function toActiveSourceSync(job: SourceSyncJob, current: ActiveSourceSync): Acti
     ...(job.phase === null ? {} : { phase: job.phase }),
     ...(job.processedRecords === null ? {} : { processedRecords: job.processedRecords }),
     ...(job.totalRecords === null ? {} : { totalRecords: job.totalRecords }),
-    ...(job.importedRecords === null ? {} : { importedRecords: job.importedRecords }),
+    ...(job.fetchedRecords === null ? {} : { fetchedRecords: job.fetchedRecords }),
     ...(job.normalizedRecords === null ? {} : { normalizedRecords: job.normalizedRecords }),
     ...(job.failedRecords === null ? {} : { failedRecords: job.failedRecords }),
     ...(job.message === null ? {} : { message: job.message }),

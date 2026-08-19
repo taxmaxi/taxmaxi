@@ -76,7 +76,7 @@ export interface SourceReportSyncStatus {
   readonly completedAt: string | null
   readonly lastSyncedAt: string | null
   readonly lastErrorMessage: string | null
-  readonly importedRecords: number | null
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
 }

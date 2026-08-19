@@ -23,7 +23,7 @@ const makeJob = (status: SourceSyncJob["status"]): SourceSyncJob => ({
   processedRecords: null,
   totalRecords: null,
   progressPercent: status === "completed" ? 100 : 50,
-  importedRecords: null,
+  fetchedRecords: null,
   normalizedRecords: null,
   failedRecords: null,
   message: null,

@@ -67,7 +67,7 @@ export type SourceSyncIslandItem = {
   phase?: SourceSyncPhase
   processedRecords?: number
   totalRecords?: number
-  importedRecords?: number
+  fetchedRecords?: number
   normalizedRecords?: number
   failedRecords?: number
   message?: string
@@ -514,7 +514,7 @@ function CompletionGlow({
 
 function SyncMetrics({ item }: { item: SourceSyncIslandItem }) {
   const metrics = [
-    { label: "Imported", value: item.importedRecords },
+    { label: "Fetched", value: item.fetchedRecords },
     { label: "Categorized", value: item.normalizedRecords },
     { label: "Failed", value: item.failedRecords },
   ]

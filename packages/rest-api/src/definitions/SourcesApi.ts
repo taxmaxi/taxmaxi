@@ -130,7 +130,8 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
   processedRecords: Schema.NullOr(Schema.Number),
   totalRecords: Schema.NullOr(Schema.Number),
   progressPercent: Schema.NullOr(Schema.Number),
-  importedRecords: Schema.NullOr(Schema.Number),
+  /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
+  fetchedRecords: Schema.NullOr(Schema.Number),
   normalizedRecords: Schema.NullOr(Schema.Number),
   failedRecords: Schema.NullOr(Schema.Number),
   message: Schema.NullOr(Schema.String),
@@ -222,7 +223,8 @@ export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>
   completedAt: Schema.NullOr(Schema.String),
   lastSyncedAt: Schema.NullOr(Schema.String),
   lastErrorMessage: Schema.NullOr(Schema.String),
-  importedRecords: Schema.NullOr(Schema.Number),
+  /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
+  fetchedRecords: Schema.NullOr(Schema.Number),
   normalizedRecords: Schema.NullOr(Schema.Number),
   failedRecords: Schema.NullOr(Schema.Number),
 }) {}

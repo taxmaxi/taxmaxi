@@ -171,7 +171,7 @@ export interface AnonymousSourceSyncJob {
   readonly processedRecords: number | null
   readonly totalRecords: number | null
   readonly progressPercent: number | null
-  readonly importedRecords: number | null
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
   readonly message: string | null

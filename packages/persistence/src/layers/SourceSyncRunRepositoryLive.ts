@@ -183,7 +183,7 @@ const rowToRunItem = (item: {
       processedRecords,
       totalRecords,
       progressPercent,
-      importedRecords: progress?.importedRecords ?? null,
+      fetchedRecords: progress?.fetchedRecords ?? null,
       normalizedRecords: progress?.normalizedRecords ?? null,
       failedRecords: progress?.failedRecords ?? null,
       message: item.itemMessage ?? item.jobMessage,

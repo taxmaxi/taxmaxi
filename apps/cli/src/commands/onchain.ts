@@ -51,7 +51,7 @@ export const syncOnchainSourceProgram = ({
     if (providerKey !== null) {
       yield* Console.log(`Provider: ${providerKey}`)
     }
-    yield* Console.log(`Imported: ${summary.importedRecords}`)
+    yield* Console.log(`Fetched: ${summary.fetchedRecords}`)
     yield* Console.log(`Normalized: ${summary.normalizedRecords}`)
     yield* Console.log(`Failed: ${summary.failedRecords}`)
   })
