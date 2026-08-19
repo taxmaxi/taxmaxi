@@ -165,7 +165,14 @@ const selectAssetResolutionJob = ({ jobId }: { readonly jobId: string }) =>
     Effect.gen(function* () {
       const db = yield* drizzle
       const [job] = yield* db
-        .select()
+        .select({
+          status: schema.assetResolutionJobs.status,
+          attemptCount: schema.assetResolutionJobs.attemptCount,
+          startedAt: schema.assetResolutionJobs.startedAt,
+          heartbeatAt: schema.assetResolutionJobs.heartbeatAt,
+          workerId: schema.assetResolutionJobs.workerId,
+          errorMessage: schema.assetResolutionJobs.errorMessage,
+        })
         .from(schema.assetResolutionJobs)
         .where(eq(schema.assetResolutionJobs.id, jobId))
         .limit(1)
