@@ -152,7 +152,7 @@
         "Do not require CoinGecko or an accepted attach decision in this story."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm run test packages/persistence/tests/tax-calculation.integration.test.ts"

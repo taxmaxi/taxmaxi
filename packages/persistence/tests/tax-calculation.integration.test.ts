@@ -286,6 +286,30 @@ const updateIncomeLegCurrency = (fiatCurrency: string | null) =>
       .where(eq(schema.transactionLegs.externalId, "income-leg"))
   }).pipe(Effect.provide(context.TestPgClientLive))
 
+const insertUnresolvedProviderAssetSourceUse = () =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    const [providerAsset] = yield* db
+      .insert(schema.providerAssets)
+      .values({
+        provider: "coinbase",
+        naturalKey: "coinbase-unresolved-asset",
+        currencyCode: "XYZ",
+        retrievedAt: new Date("2025-01-01T00:00:00.000Z"),
+      })
+      .returning({ id: schema.providerAssets.id })
+
+    if (providerAsset === undefined) {
+      return yield* Effect.die("Failed to create unresolved provider asset fixture")
+    }
+
+    yield* db.insert(schema.providerAssetSourceUses).values({
+      providerAssetRowId: providerAsset.id,
+      sourceId,
+    })
+  }).pipe(Effect.provide(context.TestPgClientLive))
+
 await Effect.runPromise(context.recreateTestDatabase())
 
 describe("TaxCalculationServiceLive", () => {
@@ -365,6 +389,21 @@ describe("TaxCalculationServiceLive", () => {
         expect(error._tag).toBe("SourceNotFoundError")
         if (error._tag === "SourceNotFoundError") {
           expect(error.sourceId).toBe("00000000-0000-0000-0000-000000000999")
+        }
+      })
+    )
+  })
+
+  it("fails with a pending error instead of a zero total when a provider observation is unresolved", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* insertUnresolvedProviderAssetSourceUse()
+        const error = yield* calculateTax().pipe(Effect.flip)
+
+        expect(error._tag).toBe("TaxCalculationPendingObservationsError")
+        if (error._tag === "TaxCalculationPendingObservationsError") {
+          expect(error.sourceId).toBe(sourceId)
+          expect(error.pendingObservationCount).toBe(1)
         }
       })
     )

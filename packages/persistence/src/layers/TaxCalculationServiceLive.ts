@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, eq, gte, lt } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, or } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -20,6 +20,7 @@ import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   TaxCalculationIncompleteDataError,
+  TaxCalculationPendingObservationsError,
   TaxCalculationService,
   TaxCalculationUnsupportedCurrencyError,
   UnsupportedJurisdictionError,
@@ -88,6 +89,7 @@ const normalizeTaxCalculationError = (error: unknown): TaxCalculationServiceErro
   error instanceof SourceNotFoundError ||
   error instanceof UnsupportedJurisdictionError ||
   error instanceof TaxCalculationIncompleteDataError ||
+  error instanceof TaxCalculationPendingObservationsError ||
   error instanceof TaxCalculationUnsupportedCurrencyError ||
   error instanceof PersistenceError
     ? error
@@ -225,6 +227,47 @@ const make = Effect.gen(function* () {
     }).pipe(
       withObservedOperation({
         name: "persistence.tax-calculation.load-source",
+        attributes: { sourceId },
+        kind: "client",
+      })
+    )
+
+  /**
+   * Count provider asset observations used by the source that still await a
+   * mapping decision. An observation with no mapping row or a pending_review
+   * mapping keeps its transactions outside derived accounting, so the
+   * calculation must report pending instead of a zero total.
+   *
+   * @param sourceId - Source identifier
+   * @returns Number of observations without a mapping decision
+   */
+  const countPendingObservations = (sourceId: string) =>
+    Effect.gen(function* () {
+      const [row] = yield* db
+        .select({ pendingObservations: count() })
+        .from(schema.providerAssetSourceUses)
+        .leftJoin(
+          schema.providerAssetMappings,
+          eq(
+            schema.providerAssetMappings.providerAssetRowId,
+            schema.providerAssetSourceUses.providerAssetRowId
+          )
+        )
+        .where(
+          and(
+            eq(schema.providerAssetSourceUses.sourceId, sourceId),
+            or(
+              isNull(schema.providerAssetMappings.id),
+              eq(schema.providerAssetMappings.mappingStatus, "pending_review")
+            )
+          )
+        )
+        .pipe(wrapSqlError("taxCalculationService.countPendingObservations"))
+
+      return row?.pendingObservations ?? 0
+    }).pipe(
+      withObservedOperation({
+        name: "persistence.tax-calculation.count-pending-observations",
         attributes: { sourceId },
         kind: "client",
       })
@@ -421,6 +464,15 @@ const make = Effect.gen(function* () {
       }
 
       yield* loadSource(sourceId)
+
+      const pendingObservationCount = yield* countPendingObservations(sourceId)
+
+      if (pendingObservationCount > 0) {
+        return yield* new TaxCalculationPendingObservationsError({
+          sourceId,
+          pendingObservationCount,
+        })
+      }
 
       const yearStart = startOfYearUtc(year)
       const yearEnd = endOfYearUtc(year)

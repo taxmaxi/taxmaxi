@@ -31,3 +31,9 @@
 **Status**: done
 **Notes**: Changed files: packages/sync-engine/src/layers/SourceProviderRegistryLive.ts,packages/sync-engine/src/providers/helius-solana/layers/HeliusSolanaSourceSyncProviderLive.ts packages/sync-engine/src/providers/helius-solana/services/HeliusSolanaSourceSyncProvider.ts,packages/sync-engine/tests/source-sync/helius-solana-source-sync-provider.test.ts packages/sync-engine/tests/source-sync/source-provider-registry.test.ts,ralph/prd.json
 ---
+
+## Iteration 1 - 2026-08-19 14:31
+**Story**: AR-004 - Mark a calculation incomplete while an observation is unresolved
+**Status**: done
+**Notes**: Changed files: packages/persistence/src/layers/TaxCalculationServiceLive.ts,packages/persistence/src/services/TaxCalculationService.ts packages/persistence/tests/tax-calculation.integration.test.ts,ralph/prd.json
+---
