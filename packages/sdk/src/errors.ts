@@ -128,6 +128,32 @@ export const isTaxMaxiUnauthorizedError = (error: unknown): error is TaxMaxiErro
   error instanceof TaxMaxiError &&
   (error.status === 401 || getErrorStatusFromCode(error.code) === 401)
 
+export type TaxMaxiCreditRequired = {
+  readonly reasonCode: string
+  readonly availableCredits: number
+}
+
+/**
+ * Extract the structured credit details from a credit-required (402) sync
+ * refusal, or null for any other error. Clients use these fields to render
+ * their own recovery copy instead of the error message.
+ */
+export const getTaxMaxiCreditRequired = (error: unknown): TaxMaxiCreditRequired | null => {
+  const candidate = error instanceof TaxMaxiError ? error.cause : error
+  const record = getErrorRecord(candidate)
+
+  if (record?._tag !== "SourceCreditRequiredError") {
+    return null
+  }
+
+  const reasonCode = record.reasonCode
+  const availableCredits = record.availableCredits
+
+  return typeof reasonCode === "string" && typeof availableCredits === "number"
+    ? { reasonCode, availableCredits }
+    : null
+}
+
 export const toTaxMaxiError = (error: unknown): TaxMaxiError => {
   if (error instanceof TaxMaxiError) {
     return error

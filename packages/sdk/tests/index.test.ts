@@ -4,6 +4,7 @@ import {
   DEFAULT_BASE_URL,
   TaxMaxi,
   TaxMaxiError,
+  getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   makeTaxMaxiHttpClientTransform,
   normalizeBaseUrl,
@@ -1126,6 +1127,33 @@ describe("TaxMaxi Promise client", () => {
     })
 
     expect(isTaxMaxiUnauthorizedError(error)).toBe(true)
+  })
+
+  it("extracts structured credit details from a credit-required sync refusal", () => {
+    const refusal = {
+      _tag: "SourceCreditRequiredError",
+      message: "No usable credits available to start a sync.",
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+    }
+    const wrapped = toTaxMaxiError(refusal)
+
+    expect(getTaxMaxiCreditRequired(wrapped)).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+    })
+    expect(getTaxMaxiCreditRequired(refusal)).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+    })
+  })
+
+  it("returns null credit details for unrelated errors", () => {
+    expect(getTaxMaxiCreditRequired(new Error("boom"))).toBeNull()
+    expect(
+      getTaxMaxiCreditRequired(toTaxMaxiError({ _tag: "SourceNotFoundError", message: "gone" }))
+    ).toBeNull()
+    expect(getTaxMaxiCreditRequired(null)).toBeNull()
   })
 
   it("builds explicit first-party request clients with cookie headers", async () => {

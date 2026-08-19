@@ -2,7 +2,7 @@
 
 import { act, renderHook } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { SourceSyncJob } from "taxmaxi"
+import { TaxMaxiError, type SourceSyncJob } from "taxmaxi"
 
 import { useSourceSyncs } from "#/hooks/use-source-syncs"
 
@@ -136,6 +136,43 @@ describe("useSourceSyncs", () => {
       availableCredits: 0,
       creditsConsumed: 3,
       additionalCreditsRequired: 2,
+    })
+  })
+
+  it("surfaces a refused zero-credit start as credit-required, not a failed sync", async () => {
+    const refusal = new TaxMaxiError({
+      code: "SourceCreditRequiredError",
+      message: "No usable credits available to start a sync.",
+      status: 402,
+      cause: {
+        _tag: "SourceCreditRequiredError",
+        message: "No usable credits available to start a sync.",
+        reasonCode: "no_usable_credits",
+        availableCredits: 0,
+      },
+    })
+
+    const { result } = renderHook(() =>
+      useSourceSyncs({
+        accountsById: new Map([[source.id, source]]),
+        startSourceSync: async () => {
+          throw refusal
+        },
+      })
+    )
+
+    await act(async () => {
+      await result.current.onSourceSync(source)
+    })
+
+    const sync = result.current.activeSyncs[0]
+    expect(sync?.status).toBe("credit_required")
+    expect(sync?.message).toBeUndefined()
+    expect(sync?.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 0,
+      additionalCreditsRequired: null,
     })
   })
 })

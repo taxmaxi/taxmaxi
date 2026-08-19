@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Dispatch, SetStateAction } from "react"
 import {
   TaxMaxiError,
+  getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   type SourceSyncJob,
   type SourceSyncJobInput,
@@ -76,6 +77,29 @@ export function useSourceSyncs({
           })
         )
       } catch (error: unknown) {
+        const creditRequired = getTaxMaxiCreditRequired(error)
+        if (creditRequired !== null) {
+          // The start was refused before any job existed. Surface the same
+          // credit-required recovery state as a mid-sync pause, so the island
+          // offers a billing action instead of a pointless retry.
+          setActiveSyncs((syncs) =>
+            upsertSourceSync(syncs, {
+              id: source.id,
+              progress: 100,
+              sourceId: source.id,
+              sourceName: source.name,
+              status: "credit_required",
+              creditOutcome: {
+                reasonCode: creditRequired.reasonCode,
+                availableCredits: creditRequired.availableCredits,
+                creditsConsumed: 0,
+                additionalCreditsRequired: null,
+              },
+            })
+          )
+          return
+        }
+
         if (isTaxMaxiUnauthorizedError(error)) {
           setActiveSyncs((syncs) => syncs.filter((sync) => sync.sourceId !== source.id))
           try {
