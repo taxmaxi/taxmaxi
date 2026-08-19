@@ -2,3 +2,9 @@
 **Story**: EX-001 - Example story title
 **Status**: done
 ---
+
+## Iteration 1 - 2026-08-19 15:35
+**Story**: SYNC-001 - Refuse to start a sync for a registered user with no usable credits
+**Status**: done
+**Notes**: Changed files: packages/core/package.json,packages/persistence/package.json packages/persistence/src/layers/PrincipalClaimRepositoryLive.ts,packages/persistence/src/services/PrincipalClaimRepository.ts packages/rest-api/src/definitions/SourcesApi.ts,packages/rest-api/src/layers/SourceCreationServiceLive.ts packages/rest-api/src/layers/SourcesApiLive.ts,packages/rest-api/src/services/SourceCreationService.ts packages/rest-api/tests/SourcesApiLive.integration.test.ts,ralph/prd.json
+---

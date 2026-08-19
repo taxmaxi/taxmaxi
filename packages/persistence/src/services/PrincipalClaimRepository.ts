@@ -231,6 +231,14 @@ export interface PrincipalClaimRepositoryService {
   ) => Effect.Effect<Option.Option<PrincipalClaim>, PersistenceError>
 
   /**
+   * Check whether a source was originally paid for anonymously through a consumed x402
+   * receipt claim, meaning its retained records were already paid for at claim time.
+   */
+  readonly hasConsumedX402ReceiptForSource: (
+    sourceId: string
+  ) => Effect.Effect<boolean, PersistenceError>
+
+  /**
    * Move a no-conflict anonymous source into a user principal and consume request claims.
    */
   readonly claimAnonymousSourceForUser: (

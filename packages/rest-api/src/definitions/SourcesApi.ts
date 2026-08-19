@@ -13,6 +13,7 @@ import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 import { ReportReviewReasonCode } from "@my/core/report"
+import { SyncCreditReasonCode } from "@my/core/billing"
 import { Source } from "@my/core/source"
 import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 
@@ -41,6 +42,19 @@ export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePayment
   {
     message: Schema.String,
     paymentRequired: Schema.optional(Schema.Unknown),
+  },
+  { httpApiStatus: 402 }
+) {}
+
+/**
+ * SourceCreditRequiredError - Caller has no usable credits to start a billable sync (402).
+ */
+export class SourceCreditRequiredError extends Schema.TaggedError<SourceCreditRequiredError>()(
+  "SourceCreditRequiredError",
+  {
+    message: Schema.String,
+    reasonCode: SyncCreditReasonCode,
+    availableCredits: Schema.Number,
   },
   { httpApiStatus: 402 }
 ) {}
@@ -437,6 +451,7 @@ const createSource = HttpApiEndpoint.post("createSource", "/sources", {
     SourceBadRequestError,
     UnauthorizedError,
     SourcePaymentRequiredError,
+    SourceCreditRequiredError,
     InternalServerError,
   ],
 }).annotateMerge(
@@ -455,7 +470,7 @@ const startSourceSyncJob = HttpApiEndpoint.post("startSourceSyncJob", "/sources/
     sourceId: Schema.String,
   }),
   success: SourceSyncStartResponse,
-  error: [SourceBadRequestError, InternalServerError],
+  error: [SourceBadRequestError, SourceCreditRequiredError, InternalServerError],
 }).annotateMerge(
   OpenApi.annotations({
     summary: "Start source sync",
@@ -474,7 +489,7 @@ const replaySourceSyncJob = HttpApiEndpoint.post(
       sourceId: Schema.String,
     }),
     success: SourceSyncStartResponse,
-    error: [SourceBadRequestError, InternalServerError],
+    error: [SourceBadRequestError, SourceCreditRequiredError, InternalServerError],
   }
 ).annotateMerge(
   OpenApi.annotations({

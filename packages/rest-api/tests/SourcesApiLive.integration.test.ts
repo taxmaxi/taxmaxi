@@ -451,6 +451,24 @@ const seedCoinbaseSource = ({
     })
   })
 
+const seedUsableCredit = ({
+  userId,
+  amount = 1,
+}: {
+  readonly userId: string
+  readonly amount?: number
+}) =>
+  Effect.gen(function* () {
+    const db = yield* drizzle
+
+    yield* db.insert(schema.creditLedger).values({
+      userId,
+      delta: amount,
+      kind: "top_up",
+      reference: `test-credit-${userId}`,
+    })
+  })
+
 const seedPrincipalUser = ({
   userId,
   principalId,
@@ -2666,6 +2684,7 @@ describe("SourcesApiLive", () => {
       const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
+      yield* seedUsableCredit({ userId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const job = yield* client.sources.startSourceSyncJob({
@@ -2693,6 +2712,7 @@ describe("SourcesApiLive", () => {
       const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
+      yield* seedUsableCredit({ userId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const started = yield* client.sources.startSourceSyncJob({
@@ -2724,6 +2744,7 @@ describe("SourcesApiLive", () => {
       const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
+      yield* seedUsableCredit({ userId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const firstJob = yield* client.sources.startSourceSyncJob({
@@ -2745,6 +2766,7 @@ describe("SourcesApiLive", () => {
       const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
+      yield* seedUsableCredit({ userId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const replay = yield* client.sources.replaySourceSyncJob({
@@ -2766,6 +2788,7 @@ describe("SourcesApiLive", () => {
       const principalId = crypto.randomUUID()
       const sourceId = crypto.randomUUID()
       yield* seedCoinbaseSource({ userId, principalId, sourceId })
+      yield* seedUsableCredit({ userId })
 
       const client = yield* makeAuthenticatedClient({ userId })
       const result = yield* client.sources
@@ -2780,5 +2803,175 @@ describe("SourcesApiLive", () => {
         expect(result.failure.message).toBe("Failed to enqueue source sync job.")
       }
     }).pipe(Effect.provide(QueueFailureHttpLive), Effect.scoped)
+  )
+
+  it.effect("refuses to start a sync for a registered user with no usable credits", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const sourceId = crypto.randomUUID()
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const result = yield* client.sources
+        .startSourceSyncJob({ params: { sourceId } })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure" && result.failure._tag === "SourceCreditRequiredError") {
+        expect(result.failure.reasonCode).toBe("no_usable_credits")
+        expect(result.failure.availableCredits).toBe(0)
+        expect(result.failure).not.toHaveProperty("cause")
+        expect(result.failure).not.toHaveProperty("operation")
+      } else {
+        return yield* Effect.die("Expected SourceCreditRequiredError")
+      }
+
+      expect(queueEvents).toHaveLength(0)
+
+      const db = yield* drizzle
+      const jobs = yield* db
+        .select({ id: schema.processingJobs.id })
+        .from(schema.processingJobs)
+        .where(eq(schema.processingJobs.sourceId, sourceId))
+      expect(jobs).toEqual([])
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("starts a sync for a registered user with at least one usable credit", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const sourceId = crypto.randomUUID()
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
+      yield* seedUsableCredit({ userId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const started = yield* client.sources.startSourceSyncJob({ params: { sourceId } })
+
+      expect(started.status).toBe("queued")
+      expect(queueEvents).toHaveLength(1)
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("refuses to replay a sync for a registered user with no usable credits", () =>
+    Effect.gen(function* () {
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      const sourceId = crypto.randomUUID()
+      yield* seedCoinbaseSource({ userId, principalId, sourceId })
+
+      const client = yield* makeAuthenticatedClient({ userId })
+      const result = yield* client.sources
+        .replaySourceSyncJob({ params: { sourceId } })
+        .pipe(Effect.result)
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure" && result.failure._tag === "SourceCreditRequiredError") {
+        expect(result.failure.reasonCode).toBe("no_usable_credits")
+        expect(result.failure.availableCredits).toBe(0)
+      } else {
+        return yield* Effect.die("Expected SourceCreditRequiredError")
+      }
+
+      expect(queueEvents).toHaveLength(0)
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect(
+    "refuses to start sync during source creation for a registered user with no usable credits",
+    () =>
+      Effect.gen(function* () {
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        const walletAddress = "So11111111111111111111111111111111111111112"
+        yield* seedPrincipalUser({ userId, principalId })
+
+        const client = yield* makeAuthenticatedClient({ userId })
+        const result = yield* client.sources
+          .createSource({
+            payload: {
+              type: "onchain",
+              walletAddress,
+              name: "No credits wallet",
+              sync: true,
+            },
+          })
+          .pipe(Effect.result)
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure" && result.failure._tag === "SourceCreditRequiredError") {
+          expect(result.failure.reasonCode).toBe("no_usable_credits")
+          expect(result.failure.availableCredits).toBe(0)
+        } else {
+          return yield* Effect.die("Expected SourceCreditRequiredError")
+        }
+
+        expect(queueEvents).toHaveLength(0)
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect(
+    "starts sync during source creation for a registered user with at least one usable credit",
+    () =>
+      Effect.gen(function* () {
+        const userId = crypto.randomUUID()
+        const principalId = crypto.randomUUID()
+        const walletAddress = "So11111111111111111111111111111111111111112"
+        yield* seedPrincipalUser({ userId, principalId })
+        yield* seedUsableCredit({ userId })
+
+        const client = yield* makeAuthenticatedClient({ userId })
+        const response = yield* client.sources.createSource({
+          payload: {
+            type: "onchain",
+            walletAddress,
+            name: "Has credits wallet",
+            sync: true,
+          },
+        })
+
+        expect(response.syncJob).not.toBeNull()
+        expect(queueEvents).toHaveLength(1)
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+  )
+
+  it.effect("does not require credits to resync a source claimed through an x402 payment", () =>
+    Effect.gen(function* () {
+      const walletAddress = "So11111111111111111111111111111111111111112"
+      const anonymousClient = yield* makeUnauthenticatedClientWithPayment()
+      const created = yield* anonymousClient.sources.createSource({
+        payload: {
+          type: "onchain",
+          walletAddress,
+          name: "X402 claimed wallet",
+          year: 2025,
+          jurisdiction: "germany",
+        },
+      })
+
+      if (created.claim === null) {
+        return yield* Effect.die("Anonymous source creation did not return claim metadata")
+      }
+
+      const userId = crypto.randomUUID()
+      const principalId = crypto.randomUUID()
+      yield* seedPrincipalUser({ userId, principalId })
+
+      const authenticatedClient = yield* makeAuthenticatedClient({ userId })
+      yield* authenticatedClient.principals.claimPrincipal({
+        payload: {
+          requestId: created.claim.requestId,
+          claimToken: created.claim.claimToken,
+          siwxProof: null,
+        },
+      })
+
+      const started = yield* authenticatedClient.sources.startSourceSyncJob({
+        params: { sourceId: created.source.id },
+      })
+
+      expect(started.sourceId).toBe(created.source.id)
+    }).pipe(Effect.provide(HttpLive), Effect.scoped)
   )
 })

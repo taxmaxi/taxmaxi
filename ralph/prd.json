@@ -45,7 +45,7 @@
         "Cover the zero-credit refusal and the one-credit success on the same entry point so the boundary is exact."
       ],
       "priority": "high",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm --filter @my/rest-api run type-check",
