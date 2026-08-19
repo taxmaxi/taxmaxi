@@ -247,7 +247,7 @@
         "Prove a stored decision can be reproduced from its evidence records without reading any provider payload table."
       ],
       "priority": "medium",
-      "status": "pending",
+      "status": "done",
       "estimated_complexity": "medium",
       "verification": [
         "pnpm --filter @my/persistence run type-check",

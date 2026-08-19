@@ -33,3 +33,9 @@ each story closes and the operator decisions already taken.
 **Status**: done
 **Notes**: asset_resolution_decisions is now append-only: dropped the (observation, revision) unique constraint; added status enum (active/superseded) and supersedes_decision_id self-FK (unique, chain without branching); a partial unique index enforces one active decision per observation+revision so the DB rejects a second active row. New repository methods: appendSupersedingAssetResolutionDecision (locks the replaced row, CAS conflict result when it is not active), findActiveAssetResolutionDecision, listAssetResolutionDecisions. recordAssetResolutionDecision now conflicts against the partial index and reports {recorded:false} on replay; the executor logs asset-resolution:decision-replay-detected instead of ignoring it (side effects below it are idempotent). Migration 20260819160238_dizzy_fat_cobra. 4 persistence history tests + 1 executor replay test.
 ---
+
+## Iteration 6 - 2026-08-19 19:58
+**Story**: AR-006 - Store evidence snapshots as authority-scoped records
+**Status**: done
+**Notes**: New asset_resolution_evidence table: one row per (decision, authority, claim kind) with source locator, retrieval time, evidence revision, decoded claim, and raw payload; unique per decision+authority+claimKind; cascade on decision delete. Dropped chain_evidence/coingecko_evidence from asset_resolution_decisions. AssetResolutionDecisionRecord now carries an evidence array; record/supersede write it in the same transaction; new listAssetResolutionEvidence read. Executor builds the records: chain evidence from stored observations (locator taxmaxi://provider-assets/{id}/observed-representations, retrievedAt = provider retrievedAt), CoinGecko evidence with locator coingecko://coins/{id} and the decoded claim when the payload decodes. Migration 20260819175447_glossy_glorian. Attach test reproduces both evidence records; 2 new persistence tests.
+---

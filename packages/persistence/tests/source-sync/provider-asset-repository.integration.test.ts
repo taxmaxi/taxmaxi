@@ -2310,8 +2310,7 @@ describe("ProviderAssetRepositoryLive", () => {
       mintAddress: null,
       decimals: null,
       reason,
-      chainEvidence: null,
-      coinGeckoEvidence: null,
+      evidence: [],
       actor: "system:attach-only-policy",
     })
 
@@ -2454,6 +2453,125 @@ describe("ProviderAssetRepositoryLive", () => {
         )
       )
       expect(second).toEqual({ _tag: "conflict" })
+    })
+
+    it("stores authority-scoped evidence records behind a decision and reads them back", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-evidence")
+      const retrievedAt = new Date("2025-06-01T12:00:00.000Z")
+
+      const recorded = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: {
+              ...makePendingDecision({ providerAssetRowId }),
+              evidence: [
+                {
+                  authority: "chain",
+                  claimKind: "chain_fact",
+                  sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/observed-representations`,
+                  retrievedAt,
+                  evidenceRevision: 1,
+                  decodedClaim: { blockchain: "solana", decimals: 8 },
+                  rawPayload: [{ observation: "raw" }],
+                },
+                {
+                  authority: "coingecko",
+                  claimKind: "registry_platform_mapping",
+                  sourceLocator: "coingecko://coins/orb-test-coin",
+                  retrievedAt,
+                  evidenceRevision: 1,
+                  decodedClaim: null,
+                  rawPayload: { _tag: "upstream_failure", source: "coingecko" },
+                },
+              ],
+            },
+          })
+        )
+      )
+      expect(recorded).toEqual({ recorded: true })
+
+      const decision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(decision)) {
+        throw new Error("Expected an active decision")
+      }
+
+      const evidence = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionEvidence({ decisionId: decision.value.id })
+        )
+      )
+      expect(evidence).toEqual([
+        expect.objectContaining({
+          authority: "chain",
+          claimKind: "chain_fact",
+          evidenceRevision: 1,
+          decodedClaim: { blockchain: "solana", decimals: 8 },
+          rawPayload: [{ observation: "raw" }],
+        }),
+        expect.objectContaining({
+          authority: "coingecko",
+          claimKind: "registry_platform_mapping",
+          decodedClaim: null,
+          rawPayload: { _tag: "upstream_failure", source: "coingecko" },
+        }),
+      ])
+      expect(evidence[0]?.retrievedAt.toISOString()).toBe(retrievedAt.toISOString())
+    })
+
+    it("rejects a second evidence record for the same authority and claim kind on one decision", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-evidence-duplicate")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: {
+              ...makePendingDecision({ providerAssetRowId }),
+              evidence: [
+                {
+                  authority: "chain",
+                  claimKind: "chain_fact",
+                  sourceLocator: null,
+                  retrievedAt: new Date(),
+                  evidenceRevision: 1,
+                  decodedClaim: null,
+                  rawPayload: null,
+                },
+              ],
+            },
+          })
+        )
+      )
+
+      const decision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(decision)) {
+        throw new Error("Expected an active decision")
+      }
+
+      const duplicateInsert = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.assetResolutionEvidence).values({
+            decisionId: decision.value.id,
+            authority: "chain",
+            claimKind: "chain_fact",
+            sourceLocator: null,
+            retrievedAt: new Date(),
+            evidenceRevision: 1,
+            decodedClaim: null,
+            rawPayload: null,
+          })
+        })
+      )
+
+      await expect(duplicateInsert).rejects.toThrow()
     })
 
     it("lets the database reject a second active decision for one observation and revision", async () => {

@@ -78,6 +78,27 @@ export interface AssetResolutionJobScheduleResult {
 /** Outcome of an attach-only policy decision, recorded as immutable audit history. */
 export type AssetResolutionAuditOutcome = "attach" | "pending" | "fail_closed"
 
+/**
+ * One evidence snapshot to store behind a decision, scoped to the authority
+ * that provided it and the kind of claim it makes. The decoded claim is what
+ * the policy read; the raw payload is what the authority actually returned.
+ */
+export interface AssetResolutionEvidenceRecord {
+  readonly authority: string
+  readonly claimKind: string
+  readonly sourceLocator: string | null
+  readonly retrievedAt: Date
+  readonly evidenceRevision: number
+  readonly decodedClaim: unknown
+  readonly rawPayload: unknown
+}
+
+/** One stored evidence snapshot as read back from a decision. */
+export interface AssetResolutionEvidenceEntry extends AssetResolutionEvidenceRecord {
+  readonly id: string
+  readonly decisionId: string
+}
+
 /** One immutable attach-only policy decision to append to resolution audit history. */
 export interface AssetResolutionDecisionRecord {
   readonly providerAssetRowId: string
@@ -92,8 +113,7 @@ export interface AssetResolutionDecisionRecord {
   readonly mintAddress: string | null
   readonly decimals: number | null
   readonly reason: string | null
-  readonly chainEvidence: unknown
-  readonly coinGeckoEvidence: unknown
+  readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
   readonly actor: string
 }
 
@@ -476,6 +496,14 @@ export interface ProviderAssetRepositoryShape {
   readonly listAssetResolutionDecisions: (params: {
     readonly providerAssetRowId: string
   }) => Effect.Effect<ReadonlyArray<AssetResolutionDecisionHistoryEntry>, SyncEngineStorageError>
+
+  /**
+   * Read the evidence snapshots stored behind one decision, so the decision
+   * can be reproduced without reading any provider payload table.
+   */
+  readonly listAssetResolutionEvidence: (params: {
+    readonly decisionId: string
+  }) => Effect.Effect<ReadonlyArray<AssetResolutionEvidenceEntry>, SyncEngineStorageError>
 }
 
 /**

@@ -184,6 +184,8 @@ const makeProviderLayer = ({
             Effect.die("findActiveAssetResolutionDecision should not be called"),
           listAssetResolutionDecisions: () =>
             Effect.die("listAssetResolutionDecisions should not be called"),
+          listAssetResolutionEvidence: () =>
+            Effect.die("listAssetResolutionEvidence should not be called"),
           recordAssetResolutionDecision: () =>
             Effect.die("recordAssetResolutionDecision should not be called"),
         })

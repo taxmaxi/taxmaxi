@@ -17,6 +17,7 @@ import * as Option from "effect/Option"
 import {
   ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
   AssetResolutionUpstreamFailure,
+  decodeCoinGeckoClaim,
   evaluateAttachOnlyResolution,
   PendingResolutionDecision,
   type AssetResolutionDecision,
@@ -31,6 +32,7 @@ import {
   ProviderAssetRepository,
   type AssetResolutionCandidateAsset,
   type AssetResolutionDecisionRecord,
+  type AssetResolutionEvidenceRecord,
   type AssetResolutionJobExecutionResult,
   type AssetResolutionJobExecutorError,
   type AssetResolutionJobExecutorShape,
@@ -102,14 +104,12 @@ const decisionToRecord = ({
   providerAssetRowId,
   evidenceRevision,
   decision,
-  chainEvidence,
-  coinGeckoEvidence,
+  evidence,
 }: {
   readonly providerAssetRowId: string
   readonly evidenceRevision: number
   readonly decision: AssetResolutionDecision
-  readonly chainEvidence: unknown
-  readonly coinGeckoEvidence: unknown
+  readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
 }): AssetResolutionDecisionRecord =>
   decision._tag === "attach"
     ? {
@@ -125,8 +125,7 @@ const decisionToRecord = ({
         mintAddress: decision.mintAddress,
         decimals: decision.decimals,
         reason: null,
-        chainEvidence,
-        coinGeckoEvidence,
+        evidence,
         actor: ATTACH_ONLY_ACTOR,
       }
     : {
@@ -142,8 +141,7 @@ const decisionToRecord = ({
         mintAddress: null,
         decimals: null,
         reason: decision.reason,
-        chainEvidence,
-        coinGeckoEvidence,
+        evidence,
         actor: ATTACH_ONLY_ACTOR,
       }
 
@@ -183,21 +181,35 @@ const make = Effect.gen(function* () {
     })
 
   const decideForProviderAsset = ({
+    providerAssetRowId,
+    evidenceRevision,
+    retrievedAt,
     currencyCode,
     observations,
   }: {
+    readonly providerAssetRowId: string
+    readonly evidenceRevision: number
+    readonly retrievedAt: Date
     readonly currencyCode: string
     readonly observations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
   }): Effect.Effect<
     {
       readonly decision: AssetResolutionDecision
-      readonly chainEvidence: AssetResolutionProviderEvidence
-      readonly coinGeckoEvidence: AssetResolutionProviderEvidence | null
+      readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
     },
     AssetResolutionJobExecutorError
   > =>
     Effect.gen(function* () {
       const chainResult = buildChainEvidence(observations)
+      const chainEvidenceRecord: AssetResolutionEvidenceRecord = {
+        authority: "chain",
+        claimKind: "chain_fact",
+        sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/observed-representations`,
+        retrievedAt,
+        evidenceRevision,
+        decodedClaim: chainResult.fact,
+        rawPayload: observations,
+      }
       const candidates = yield* assetRepository.findAssetResolutionCandidatesBySymbol({
         symbol: currencyCode,
       })
@@ -213,14 +225,29 @@ const make = Effect.gen(function* () {
             policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
             reason: "missing_existing_economic_asset",
           }),
-          chainEvidence: chainResult.evidence,
-          coinGeckoEvidence: null,
+          evidence: [chainEvidenceRecord],
         }
       }
 
       const coinGeckoEvidence = yield* coinGeckoClient.fetchCoin({
         coinGeckoCoinId: candidate.coingeckoCoinId,
       })
+      const coinGeckoRetrievedAt = nowDate()
+      const coinGeckoDecodedClaim =
+        coinGeckoEvidence._tag === "payload"
+          ? yield* Effect.result(decodeCoinGeckoClaim(coinGeckoEvidence.payload)).pipe(
+              Effect.map((decoded) => (decoded._tag === "Success" ? decoded.success : null))
+            )
+          : null
+      const coinGeckoEvidenceRecord: AssetResolutionEvidenceRecord = {
+        authority: "coingecko",
+        claimKind: "registry_platform_mapping",
+        sourceLocator: `coingecko://coins/${candidate.coingeckoCoinId}`,
+        retrievedAt: coinGeckoRetrievedAt,
+        evidenceRevision,
+        decodedClaim: coinGeckoDecodedClaim,
+        rawPayload: coinGeckoEvidence,
+      }
       const ownedRepresentations =
         chainResult.fact === null ? [] : yield* findOwnedRepresentations(chainResult.fact)
 
@@ -241,7 +268,7 @@ const make = Effect.gen(function* () {
         identity,
       })
 
-      return { decision, chainEvidence: chainResult.evidence, coinGeckoEvidence }
+      return { decision, evidence: [chainEvidenceRecord, coinGeckoEvidenceRecord] }
     })
 
   const decideAndAttach = ({
@@ -273,7 +300,10 @@ const make = Effect.gen(function* () {
       const observations = yield* providerAssetRepository.listProviderAssetObservedRepresentations({
         providerAssetRowId,
       })
-      const { decision, chainEvidence, coinGeckoEvidence } = yield* decideForProviderAsset({
+      const { decision, evidence } = yield* decideForProviderAsset({
+        providerAssetRowId,
+        evidenceRevision,
+        retrievedAt: providerAsset.retrievedAt,
         currencyCode: providerAsset.currencyCode,
         observations,
       })
@@ -284,8 +314,7 @@ const make = Effect.gen(function* () {
             providerAssetRowId,
             evidenceRevision,
             decision,
-            chainEvidence,
-            coinGeckoEvidence,
+            evidence,
           }),
         })
         if (!recorded) {
@@ -322,8 +351,7 @@ const make = Effect.gen(function* () {
             providerAssetRowId,
             evidenceRevision,
             decision,
-            chainEvidence,
-            coinGeckoEvidence,
+            evidence,
           }),
           assetRepresentationId: representation.id,
         },

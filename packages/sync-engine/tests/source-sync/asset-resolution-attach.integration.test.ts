@@ -437,8 +437,6 @@ const fetchAttachState = () =>
         policyRevision: schema.assetResolutionDecisions.policyRevision,
         actor: schema.assetResolutionDecisions.actor,
         reason: schema.assetResolutionDecisions.reason,
-        chainEvidence: schema.assetResolutionDecisions.chainEvidence,
-        coinGeckoEvidence: schema.assetResolutionDecisions.coinGeckoEvidence,
       })
       .from(schema.assetResolutionDecisions)
       .innerJoin(
@@ -446,6 +444,27 @@ const fetchAttachState = () =>
         eq(schema.assetResolutionDecisions.providerAssetRowId, schema.providerAssets.id)
       )
       .where(eq(schema.providerAssets.currencyCode, "ORB"))
+
+    const evidence = yield* db
+      .select({
+        authority: schema.assetResolutionEvidence.authority,
+        claimKind: schema.assetResolutionEvidence.claimKind,
+        sourceLocator: schema.assetResolutionEvidence.sourceLocator,
+        evidenceRevision: schema.assetResolutionEvidence.evidenceRevision,
+        decodedClaim: schema.assetResolutionEvidence.decodedClaim,
+        rawPayload: schema.assetResolutionEvidence.rawPayload,
+      })
+      .from(schema.assetResolutionEvidence)
+      .innerJoin(
+        schema.assetResolutionDecisions,
+        eq(schema.assetResolutionEvidence.decisionId, schema.assetResolutionDecisions.id)
+      )
+      .innerJoin(
+        schema.providerAssets,
+        eq(schema.assetResolutionDecisions.providerAssetRowId, schema.providerAssets.id)
+      )
+      .where(eq(schema.providerAssets.currencyCode, "ORB"))
+      .orderBy(schema.assetResolutionEvidence.authority)
 
     const representations = yield* db
       .select({
@@ -462,7 +481,7 @@ const fetchAttachState = () =>
       .from(schema.processingJobs)
       .where(eq(schema.processingJobs.sourceId, sourceId))
 
-    return { mapping, decisions, representations, replayJobs }
+    return { mapping, decisions, evidence, representations, replayJobs }
   }).pipe(Effect.provide(TestPgClientLive))
 
 const fetchAccountingState = () =>
@@ -531,6 +550,23 @@ describe("asset resolution attach and rematerialize", () => {
             type: "token",
             mintAddress: ORB_MINT,
             decimals: 8,
+          }),
+        ])
+        expect(attachState.evidence).toEqual([
+          expect.objectContaining({
+            authority: "chain",
+            claimKind: "chain_fact",
+            evidenceRevision: 1,
+            decodedClaim: expect.objectContaining({ mintAddress: ORB_MINT, decimals: 8 }),
+          }),
+          expect.objectContaining({
+            authority: "coingecko",
+            claimKind: "registry_platform_mapping",
+            sourceLocator: `coingecko://coins/${ORB_COINGECKO_ID}`,
+            evidenceRevision: 1,
+            rawPayload: expect.objectContaining({
+              payload: expect.objectContaining({ id: ORB_COINGECKO_ID }),
+            }),
           }),
         ])
         expect(attachState.replayJobs).toContainEqual({ mode: "replay", status: "pending" })

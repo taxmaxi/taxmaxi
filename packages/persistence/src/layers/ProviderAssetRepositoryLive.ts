@@ -1384,10 +1384,40 @@ const make = Effect.gen(function* () {
     mintAddress: decision.mintAddress,
     decimals: decision.decimals,
     reason: decision.reason,
-    chainEvidence: decision.chainEvidence,
-    coinGeckoEvidence: decision.coinGeckoEvidence,
     actor: decision.actor,
   })
+
+  const insertDecisionEvidence = ({
+    tx,
+    decisionId,
+    evidence,
+  }: {
+    readonly tx: ProviderAssetTransaction
+    readonly decisionId: string
+    readonly evidence: Parameters<
+      ProviderAssetRepositoryShape["recordAssetResolutionDecision"]
+    >[0]["decision"]["evidence"]
+  }) =>
+    evidence.length === 0
+      ? Effect.void
+      : tx
+          .insert(schema.assetResolutionEvidence)
+          .values(
+            evidence.map((entry) => ({
+              decisionId,
+              authority: entry.authority,
+              claimKind: entry.claimKind,
+              sourceLocator: entry.sourceLocator,
+              retrievedAt: entry.retrievedAt,
+              evidenceRevision: entry.evidenceRevision,
+              decodedClaim: entry.decodedClaim,
+              rawPayload: entry.rawPayload,
+            }))
+          )
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError("providerAssetRepository.insertDecisionEvidence")
+          )
 
   const decisionHistoryFields = {
     id: schema.assetResolutionDecisions.id,
@@ -1407,20 +1437,35 @@ const make = Effect.gen(function* () {
   const recordAssetResolutionDecision: ProviderAssetRepositoryShape["recordAssetResolutionDecision"] =
     ({ decision }) =>
       db
-        .insert(schema.assetResolutionDecisions)
-        .values(decisionInsertValues({ decision }))
-        .onConflictDoNothing({
-          target: [
-            schema.assetResolutionDecisions.providerAssetRowId,
-            schema.assetResolutionDecisions.evidenceRevision,
-          ],
-          where: sql`${schema.assetResolutionDecisions.status} = 'active'`,
-        })
-        .returning({ providerAssetRowId: schema.assetResolutionDecisions.providerAssetRowId })
-        .pipe(
-          Effect.map((rows) => ({ recorded: rows.length > 0 })),
-          wrapSyncEngineSqlError("providerAssetRepository.recordAssetResolutionDecision")
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [inserted] = yield* tx
+              .insert(schema.assetResolutionDecisions)
+              .values(decisionInsertValues({ decision }))
+              .onConflictDoNothing({
+                target: [
+                  schema.assetResolutionDecisions.providerAssetRowId,
+                  schema.assetResolutionDecisions.evidenceRevision,
+                ],
+                where: sql`${schema.assetResolutionDecisions.status} = 'active'`,
+              })
+              .returning({ id: schema.assetResolutionDecisions.id })
+              .pipe(wrapSyncEngineSqlError("providerAssetRepository.recordAssetResolutionDecision"))
+
+            if (inserted === undefined) {
+              return { recorded: false }
+            }
+
+            yield* insertDecisionEvidence({
+              tx,
+              decisionId: inserted.id,
+              evidence: decision.evidence,
+            })
+
+            return { recorded: true }
+          })
         )
+        .pipe(wrapSyncEngineStorageError("providerAssetRepository.recordAssetResolutionDecision"))
 
   const appendSupersedingAssetResolutionDecision: ProviderAssetRepositoryShape["appendSupersedingAssetResolutionDecision"] =
     ({ supersedesDecisionId, decision }) =>
@@ -1471,6 +1516,12 @@ const make = Effect.gen(function* () {
               })
             }
 
+            yield* insertDecisionEvidence({
+              tx,
+              decisionId: inserted.id,
+              evidence: decision.evidence,
+            })
+
             return { _tag: "superseded", decisionId: inserted.id } as const
           })
         )
@@ -1510,6 +1561,28 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineSqlError("providerAssetRepository.listAssetResolutionDecisions"))
 
+  const listAssetResolutionEvidence: ProviderAssetRepositoryShape["listAssetResolutionEvidence"] =
+    ({ decisionId }) =>
+      db
+        .select({
+          id: schema.assetResolutionEvidence.id,
+          decisionId: schema.assetResolutionEvidence.decisionId,
+          authority: schema.assetResolutionEvidence.authority,
+          claimKind: schema.assetResolutionEvidence.claimKind,
+          sourceLocator: schema.assetResolutionEvidence.sourceLocator,
+          retrievedAt: schema.assetResolutionEvidence.retrievedAt,
+          evidenceRevision: schema.assetResolutionEvidence.evidenceRevision,
+          decodedClaim: schema.assetResolutionEvidence.decodedClaim,
+          rawPayload: schema.assetResolutionEvidence.rawPayload,
+        })
+        .from(schema.assetResolutionEvidence)
+        .where(eq(schema.assetResolutionEvidence.decisionId, decisionId))
+        .orderBy(
+          asc(schema.assetResolutionEvidence.authority),
+          asc(schema.assetResolutionEvidence.claimKind)
+        )
+        .pipe(wrapSyncEngineSqlError("providerAssetRepository.listAssetResolutionEvidence"))
+
   return ProviderAssetRepository.of({
     upsertProviderAssets,
     upsertProviderAssetMappings,
@@ -1534,6 +1607,7 @@ const make = Effect.gen(function* () {
     appendSupersedingAssetResolutionDecision,
     findActiveAssetResolutionDecision,
     listAssetResolutionDecisions,
+    listAssetResolutionEvidence,
   } satisfies ProviderAssetRepositoryShape)
 })
 
