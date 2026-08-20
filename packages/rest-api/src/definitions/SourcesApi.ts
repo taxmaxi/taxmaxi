@@ -13,6 +13,7 @@ import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
 import { AuthMiddleware } from "./AuthMiddleware.ts"
 import { ReportReviewReasonCode } from "@my/core/report"
+import { SyncCreditReasonCode } from "@my/core/billing"
 import { Source } from "@my/core/source"
 import { InternalServerError, UnauthorizedError } from "./ApiErrors.ts"
 
@@ -45,6 +46,19 @@ export class SourcePaymentRequiredError extends Schema.TaggedError<SourcePayment
   { httpApiStatus: 402 }
 ) {}
 
+/**
+ * SourceCreditRequiredError - Caller has no usable credits to start a billable sync (402).
+ */
+export class SourceCreditRequiredError extends Schema.TaggedError<SourceCreditRequiredError>()(
+  "SourceCreditRequiredError",
+  {
+    message: Schema.String,
+    reasonCode: SyncCreditReasonCode,
+    availableCredits: Schema.Number,
+  },
+  { httpApiStatus: 402 }
+) {}
+
 // =============================================================================
 // Request/Response Schemas
 // =============================================================================
@@ -69,6 +83,22 @@ export class SourceCreateRequest extends Schema.Class<SourceCreateRequest>("Sour
 }) {}
 
 /**
+ * SourceSyncCreditOutcomeResponse - Credit-required details for a resumable sync outcome.
+ *
+ * `additionalCreditsRequired` is null until the billable total for the run is
+ * known, and is an upper bound once set: pending records may turn out to be
+ * free (skipped, failed, or matching an already-charged transaction).
+ */
+export class SourceSyncCreditOutcomeResponse extends Schema.Class<SourceSyncCreditOutcomeResponse>(
+  "SourceSyncCreditOutcomeResponse"
+)({
+  reasonCode: SyncCreditReasonCode,
+  availableCredits: Schema.Number,
+  creditsConsumed: Schema.Number,
+  additionalCreditsRequired: Schema.NullOr(Schema.Number),
+}) {}
+
+/**
  * SourceSyncStartResponse - Started source sync job info
  */
 export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartResponse>(
@@ -76,8 +106,11 @@ export class SourceSyncStartResponse extends Schema.Class<SourceSyncStartRespons
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
-  status: Schema.Literals(["queued", "running", "completed", "failed"]),
+  status: Schema.Literals(["queued", "running", "completed", "failed", "credit_required"]),
   message: Schema.NullOr(Schema.String),
+  /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
+  resumable: Schema.Boolean,
+  creditOutcome: Schema.NullOr(SourceSyncCreditOutcomeResponse),
 }) {}
 
 /**
@@ -111,15 +144,19 @@ export class SourceSyncJobResponse extends Schema.Class<SourceSyncJobResponse>(
 )({
   sourceId: Schema.String,
   jobId: Schema.String,
-  status: Schema.Literals(["queued", "running", "completed", "failed"]),
+  status: Schema.Literals(["queued", "running", "completed", "failed", "credit_required"]),
   phase: Schema.NullOr(Schema.Literals(["discovering", "classifying", "reconciling", "completed"])),
   processedRecords: Schema.NullOr(Schema.Number),
   totalRecords: Schema.NullOr(Schema.Number),
   progressPercent: Schema.NullOr(Schema.Number),
-  importedRecords: Schema.NullOr(Schema.Number),
+  /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
+  fetchedRecords: Schema.NullOr(Schema.Number),
   normalizedRecords: Schema.NullOr(Schema.Number),
   failedRecords: Schema.NullOr(Schema.Number),
   message: Schema.NullOr(Schema.String),
+  /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
+  resumable: Schema.Boolean,
+  creditOutcome: Schema.NullOr(SourceSyncCreditOutcomeResponse),
 }) {}
 
 const currentTaxYear = new Date().getUTCFullYear()
@@ -201,14 +238,17 @@ export class SourceReportPageInfo extends Schema.Class<SourceReportPageInfo>(
 export class SourceReportSyncStatus extends Schema.Class<SourceReportSyncStatus>(
   "SourceReportSyncStatus"
 )({
-  status: Schema.NullOr(Schema.Literals(["pending", "processing", "completed", "failed"])),
+  status: Schema.NullOr(
+    Schema.Literals(["pending", "processing", "completed", "failed", "credit_required"])
+  ),
   mode: Schema.NullOr(Schema.Literals(["sync", "replay"])),
   queuedAt: Schema.NullOr(Schema.String),
   startedAt: Schema.NullOr(Schema.String),
   completedAt: Schema.NullOr(Schema.String),
   lastSyncedAt: Schema.NullOr(Schema.String),
   lastErrorMessage: Schema.NullOr(Schema.String),
-  importedRecords: Schema.NullOr(Schema.Number),
+  /** Raw provider records fetched and cached so far, not the count of persisted transactions. */
+  fetchedRecords: Schema.NullOr(Schema.Number),
   normalizedRecords: Schema.NullOr(Schema.Number),
   failedRecords: Schema.NullOr(Schema.Number),
 }) {}
@@ -437,6 +477,7 @@ const createSource = HttpApiEndpoint.post("createSource", "/sources", {
     SourceBadRequestError,
     UnauthorizedError,
     SourcePaymentRequiredError,
+    SourceCreditRequiredError,
     InternalServerError,
   ],
 }).annotateMerge(
@@ -455,7 +496,7 @@ const startSourceSyncJob = HttpApiEndpoint.post("startSourceSyncJob", "/sources/
     sourceId: Schema.String,
   }),
   success: SourceSyncStartResponse,
-  error: [SourceBadRequestError, InternalServerError],
+  error: [SourceBadRequestError, SourceCreditRequiredError, InternalServerError],
 }).annotateMerge(
   OpenApi.annotations({
     summary: "Start source sync",
@@ -474,7 +515,7 @@ const replaySourceSyncJob = HttpApiEndpoint.post(
       sourceId: Schema.String,
     }),
     success: SourceSyncStartResponse,
-    error: [SourceBadRequestError, InternalServerError],
+    error: [SourceBadRequestError, SourceCreditRequiredError, InternalServerError],
   }
 ).annotateMerge(
   OpenApi.annotations({

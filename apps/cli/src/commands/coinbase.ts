@@ -60,7 +60,7 @@ const printWorkflowSummary = ({
 }) =>
   Effect.gen(function* () {
     yield* Console.log(`Coinbase tax summary for ${tax.year} (${tax.currency})`)
-    yield* Console.log(`Imported records: ${sync.importedRecords}`)
+    yield* Console.log(`Fetched records: ${sync.fetchedRecords}`)
     yield* Console.log(`Failed records: ${sync.failedRecords}`)
     yield* Console.log(`Taxable gains: ${tax.taxableGains}`)
     yield* Console.log(`Taxable losses: ${tax.taxableLosses}`)
@@ -104,7 +104,7 @@ export const syncProgram = ({
 
     if (emitConsoleOutput) {
       yield* Console.log("Coinbase sync completed.")
-      yield* Console.log(`Imported: ${summary.importedRecords}`)
+      yield* Console.log(`Fetched: ${summary.fetchedRecords}`)
       yield* Console.log(`Normalized: ${summary.normalizedRecords}`)
       yield* Console.log(`Failed: ${summary.failedRecords}`)
     }
@@ -147,7 +147,7 @@ export const replayProgram = ({
 
     if (emitConsoleOutput) {
       yield* Console.log("Coinbase replay completed.")
-      yield* Console.log(`Imported: ${summary.importedRecords}`)
+      yield* Console.log(`Fetched: ${summary.fetchedRecords}`)
       yield* Console.log(`Normalized: ${summary.normalizedRecords}`)
       yield* Console.log(`Failed: ${summary.failedRecords}`)
     }
@@ -329,7 +329,7 @@ export const coinbaseCommand = Command.make(
           stage: "workflow_completed",
           year: taxSummary.year,
           currency: taxSummary.currency,
-          importedRecords: syncSummary.importedRecords,
+          fetchedRecords: syncSummary.fetchedRecords,
           failedRecords: syncSummary.failedRecords,
           taxableGains: taxSummary.taxableGains,
           taxableLosses: taxSummary.taxableLosses,

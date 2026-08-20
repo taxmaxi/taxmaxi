@@ -267,7 +267,7 @@ const markJobTerminal = ({
       new Date("2026-01-01T00:05:00.000Z"),
       status === "failed" ? "Provider failed" : null,
       JSON.stringify({
-        importedRecords: status === "completed" ? 4 : 0,
+        fetchedRecords: status === "completed" ? 4 : 0,
         normalizedRecords: status === "completed" ? 3 : 0,
         failedRecords: status === "failed" ? 1 : 0,
       }),

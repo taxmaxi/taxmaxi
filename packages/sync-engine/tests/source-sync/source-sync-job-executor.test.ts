@@ -21,6 +21,7 @@ import {
   SourceSyncJobExecutionRecordConflictError,
   SourceSyncJobExecutionRecordNotFoundError,
   SourceSyncJobExecutionRecordPayloadError,
+  SourceSyncCreditExhaustedError,
   SourceSyncJobExecutor,
   SourceSyncJobRepository,
   SourceSyncStateRepository,
@@ -47,7 +48,7 @@ const initialExecution: SourceSyncExecutionState = {
   phase: "discovering",
   processedRecords: 0,
   totalRecords: null,
-  importedRecords: 0,
+  fetchedRecords: 0,
   normalizedRecords: 0,
   failedRecords: 0,
   cursorPayload: null,
@@ -106,6 +107,10 @@ const makeExecutorLayer = ({
   failReplayCreditReservation = false,
   failReplayPersistenceRawRecordId,
   failReplayPersistenceStorageRawRecordId,
+  failCreditRawRecordId,
+  failCreditAvailableCredits = 0,
+  failCreditOnce = false,
+  fetchHighWatermark = null,
   replayCreditReference,
   failReplayReset = false,
   holdReplayCreditReservation = false,
@@ -129,6 +134,10 @@ const makeExecutorLayer = ({
   readonly failReplayCreditReservation?: boolean
   readonly failReplayPersistenceRawRecordId?: string
   readonly failReplayPersistenceStorageRawRecordId?: string
+  readonly failCreditRawRecordId?: string
+  readonly failCreditAvailableCredits?: number
+  readonly failCreditOnce?: boolean
+  readonly fetchHighWatermark?: Date | null
   readonly replayCreditReference?: (sourceRawRecordId: string) => string
   readonly failReplayReset?: boolean
   readonly holdReplayCreditReservation?: boolean
@@ -140,6 +149,8 @@ const makeExecutorLayer = ({
   readonly events: Array<string>
 }) => {
   let heartbeatCount = 0
+  let remainingCreditFailures = failCreditOnce ? 1 : Number.POSITIVE_INFINITY
+  const normalizedRawRecordIds = new Set<string>()
   const reservedReplayReferences = new Set<string>()
   const toReplayCreditReference =
     replayCreditReference ?? ((sourceRawRecordId: string) => `reserved-credit:${sourceRawRecordId}`)
@@ -223,20 +234,33 @@ const makeExecutorLayer = ({
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     completeJob: ({ state }) =>
       Effect.sync(() => {
-        events.push(`complete:${state.importedRecords}:${state.normalizedRecords}`)
+        events.push(`complete:${state.fetchedRecords}:${state.normalizedRecords}`)
         events.push(`failed:${state.failedRecords}`)
       }),
     failJob: ({ message }) =>
       Effect.sync(() => {
         events.push(`fail:${message}`)
       }),
+    failCreditRequiredJob: ({
+      reasonCode,
+      availableCredits,
+      creditsConsumed,
+      additionalCreditsRequired,
+    }) =>
+      Effect.sync(() => {
+        events.push(
+          `credit-required:${reasonCode}:${availableCredits}:${creditsConsumed}:${additionalCreditsRequired ?? "unknown"}`
+        )
+      }),
   })
 
+  let latestExecutionState = initialExecution
   const SourceSyncStateRepositoryTestLive = Layer.succeed(SourceSyncStateRepository, {
-    getExecutionState: () => Effect.succeed(initialExecution),
+    getExecutionState: () => Effect.succeed(latestExecutionState),
     persistProgress: ({ state, lastSyncedAt }) =>
       Effect.sync(() => {
-        events.push(`progress:${state.importedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
+        latestExecutionState = state
+        events.push(`progress:${state.fetchedRecords}:${lastSyncedAt === null ? "open" : "done"}`)
         events.push(
           `phase:${state.phase}:${state.processedRecords}:${state.totalRecords ?? "unknown"}`
         )
@@ -261,7 +285,11 @@ const makeExecutorLayer = ({
     listReplayCandidates: () => Effect.succeed(replayCandidates),
     listAllRawRowsForReplay: () => Effect.succeed(replayRawRecords),
     listPendingNormalizationRecordIds: () =>
-      Effect.succeed(checkpointRawRecords.map((rawRecord) => rawRecord.id)),
+      Effect.sync(() =>
+        checkpointRawRecords
+          .map((rawRecord) => rawRecord.id)
+          .filter((rawRecordId) => !normalizedRawRecordIds.has(rawRecordId))
+      ),
     listRawRecordsByIds: ({ rawRecordIds }) =>
       Effect.succeed(
         [...checkpointRawRecords, ...replayRawRecords].filter((rawRecord) =>
@@ -269,8 +297,9 @@ const makeExecutorLayer = ({
         )
       ),
     listRawRecordsByOccurredAt: () => Effect.succeed([]),
-    markRawRecordNormalized: () =>
+    markRawRecordNormalized: ({ rawRecordId }) =>
       Effect.sync(() => {
+        normalizedRawRecordIds.add(rawRecordId)
         events.push("mark-raw-normalized")
       }),
     markRawRecordFailed: ({ message }) =>
@@ -282,7 +311,7 @@ const makeExecutorLayer = ({
   })
 
   const makeCoinbaseModule = (): SourceProviderModuleShape => ({
-    fetchRawBatch: () =>
+    fetchRawBatch: (params) =>
       failFetch
         ? Effect.fail(
             new SourceSyncProviderFailureError({
@@ -291,14 +320,15 @@ const makeExecutorLayer = ({
               retryable: true,
             })
           )
-        : Effect.succeed(
-            FetchProviderRawBatchResult.make({
+        : Effect.sync(() => {
+            events.push(`fetch:${params.resumeHighWatermark?.toISOString() ?? "none"}`)
+            return FetchProviderRawBatchResult.make({
               records: fetchedProviderRecords,
               cursorPayload: null,
-              highWatermark: null,
+              highWatermark: fetchHighWatermark,
               done: true,
             })
-          ),
+          }),
     refreshReferenceData: () =>
       Effect.succeed({
         transactionTypeCatalogCount: 0,
@@ -490,9 +520,9 @@ const makeExecutorLayer = ({
           yield* Effect.sleep(25)
         }
         if (failReplayCreditReservation) {
-          return yield* new SyncEngineStorageError({
-            operation: "sourceNormalizationRepository.consumeTransactionCredit.exhausted",
-            cause: "Transaction credit balance is exhausted",
+          return yield* new SourceSyncCreditExhaustedError({
+            reasonCode: "no_usable_credits",
+            availableCredits: failCreditAvailableCredits,
           })
         }
         const reservations = transactions.flatMap(({ sourceRawRecordId }) =>
@@ -546,6 +576,16 @@ const makeExecutorLayer = ({
             cause: "Replay persistence failed",
           })
         }
+        if (
+          params.transaction.sourceRawRecordId === failCreditRawRecordId &&
+          remainingCreditFailures > 0
+        ) {
+          remainingCreditFailures -= 1
+          return yield* new SourceSyncCreditExhaustedError({
+            reasonCode: "no_usable_credits",
+            availableCredits: failCreditAvailableCredits,
+          })
+        }
         if ("deriveLegs" in params) {
           yield* params.deriveLegs({
             transaction,
@@ -555,6 +595,9 @@ const makeExecutorLayer = ({
           })
         }
         if (params.transaction.sourceRawRecordId !== null) {
+          // The real repository stamps normalizedAt in the same transaction, so a
+          // persisted row leaves the pending-normalization set.
+          normalizedRawRecordIds.add(params.transaction.sourceRawRecordId)
           reservedReplayReferences.delete(
             toReplayCreditReference(params.transaction.sourceRawRecordId)
           )
@@ -836,6 +879,54 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).toContain("failed:1")
   })
 
+  it("keeps fetchedRecords and normalizedRecords distinct when every fetched record fails to persist", async () => {
+    const events: Array<string> = []
+    const fetchedProviderRecords = [1, 2, 3].map((index) =>
+      ProviderRawRecord.make({
+        providerKey: "helius-solana",
+        recordType: "solana_transaction_full",
+        externalRecordId: `solana-signature-${index}`,
+        externalAccountId: "So11111111111111111111111111111111111111112",
+        externalParentId: null,
+        occurredAt: new Date("2026-01-01T00:00:00.000Z"),
+        payload: { transaction: { signatures: [`solana-signature-${index}`] } },
+      })
+    )
+    const checkpointRawRecords = [1, 2, 3].map((index) => ({
+      ...replayRawRecord,
+      id: `raw-solana-${index}`,
+      provider: "helius-solana",
+      recordType: "solana_transaction_full",
+      externalRecordId: `solana-signature-${index}`,
+      externalAccountId: "So11111111111111111111111111111111111111112",
+      payload: { transaction: { signatures: [`solana-signature-${index}`] } },
+    }))
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            sourceProviderKey: "helius-solana",
+            fetchedProviderRecords,
+            checkpointRawRecords,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("completed")
+    // Every fetched batch is cached during discovery, before normalization runs,
+    // so a run that persists nothing must still report the full fetched count.
+    expect(events).toContain("complete:3:0")
+    expect(events).toContain("failed:3")
+    expect(events).not.toContain("complete:0:0")
+  })
+
   it("runs replay mode with cached raw rows and marks the job completed", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
@@ -1115,7 +1206,7 @@ describe("SourceSyncJobExecutor", () => {
     expect(events).not.toContain("reset-derived-state")
   })
 
-  it("does not reset replay state when transaction credits cannot be reserved", async () => {
+  it("marks the job credit-required, not failed, when transaction credits cannot be reserved", async () => {
     const events: Array<string> = []
     const result = await Effect.runPromise(
       Effect.gen(function* () {
@@ -1133,9 +1224,117 @@ describe("SourceSyncJobExecutor", () => {
       )
     )
 
-    expect(result.status).toBe("failed")
+    expect(result.status).toBe("credit_required")
+    expect(result.resumable).toBe(true)
+    expect(result.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 0,
+      additionalCreditsRequired: null,
+    })
     expect(events).not.toContain("reset-derived-state")
     expect(events).not.toContain("mark-raw-normalized")
+    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+    expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
+  })
+
+  it("keeps earlier transactions committed and reports a resumable credit-required outcome for a sync run", async () => {
+    const events: Array<string> = []
+    const rawRecordOne = makeReplayRawRecord(1)
+    const rawRecordTwo = makeReplayRawRecord(2)
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        return yield* executor.execute({ jobId: "job-1" })
+      }).pipe(
+        Effect.provide(
+          makeExecutorLayer({
+            mode: "sync",
+            checkpointRawRecords: [rawRecordOne, rawRecordTwo],
+            prepareReplayTransactions: true,
+            failCreditRawRecordId: rawRecordTwo.id,
+            failCreditAvailableCredits: 0,
+            pageSize: 1,
+            events,
+          })
+        )
+      )
+    )
+
+    expect(result.status).toBe("credit_required")
+    expect(result.resumable).toBe(true)
+    // No server-authored message: clients localize from the credit outcome.
+    expect(result.message).toBeNull()
+    expect(result.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 1,
+      additionalCreditsRequired: 1,
+    })
+    expect(Object.keys(result)).toEqual([
+      "sourceId",
+      "jobId",
+      "status",
+      "message",
+      "resumable",
+      "creditOutcome",
+    ])
+
+    // Record 1 already committed and must not be replayed away by the credit-required outcome.
+    expect(events).toContain(`persist-normalized:${rawRecordOne.id}`)
+    expect(events).toContain(`persist-normalized:${rawRecordTwo.id}`)
+    expect(events.some((event) => event.startsWith("fail:"))).toBe(false)
+    expect(events.some((event) => event.startsWith("credit-required:"))).toBe(true)
+  })
+
+  it("continues after a credit top-up reusing cached history without refetching or re-charging", async () => {
+    const events: Array<string> = []
+    const rawRecordOne = makeReplayRawRecord(1)
+    const rawRecordTwo = makeReplayRawRecord(2)
+    const watermark = new Date("2026-01-02T00:00:00.000Z")
+
+    const executorLayer = makeExecutorLayer({
+      mode: "sync",
+      checkpointRawRecords: [rawRecordOne, rawRecordTwo],
+      prepareReplayTransactions: true,
+      failCreditRawRecordId: rawRecordTwo.id,
+      failCreditOnce: true,
+      fetchHighWatermark: watermark,
+      pageSize: 1,
+      events,
+    })
+
+    const [paused, continued, repeated] = await Effect.runPromise(
+      Effect.gen(function* () {
+        const executor = yield* SourceSyncJobExecutor
+        const pausedRun = yield* executor.execute({ jobId: "job-1" })
+        const continuedRun = yield* executor.execute({ jobId: "job-1" })
+        const repeatedRun = yield* executor.execute({ jobId: "job-1" })
+        return [pausedRun, continuedRun, repeatedRun] as const
+      }).pipe(Effect.provide(executorLayer))
+    )
+
+    expect(paused.status).toBe("credit_required")
+    expect(continued.status).toBe("completed")
+    expect(repeated.status).toBe("completed")
+
+    // The continue run resumes provider fetching from the stored high watermark
+    // instead of refetching the history cached before the pause.
+    expect(events.filter((event) => event.startsWith("fetch:"))).toEqual([
+      "fetch:none",
+      `fetch:${watermark.toISOString()}`,
+      `fetch:${watermark.toISOString()}`,
+    ])
+
+    // The transaction covered before the pause is not persisted or charged again;
+    // only the paused record is retried once credits exist.
+    expect(
+      events.filter((event) => event === `persist-normalized:${rawRecordOne.id}`)
+    ).toHaveLength(1)
+    expect(
+      events.filter((event) => event === `persist-normalized:${rawRecordTwo.id}`)
+    ).toHaveLength(2)
   })
 
   it("records retry metadata and returns a retryable error before the final attempt", async () => {

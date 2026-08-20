@@ -39,11 +39,11 @@ const syncStatusLabel = (overview: SourceOverview): string => {
 
 const syncRecordsLabel = (overview: SourceOverview): string | undefined => {
   const sync = overview.latestSync
-  if (sync.importedRecords === null && sync.normalizedRecords === null) {
+  if (sync.fetchedRecords === null && sync.normalizedRecords === null) {
     return undefined
   }
   return [
-    `imported ${sync.importedRecords ?? 0}`,
+    `fetched ${sync.fetchedRecords ?? 0}`,
     `normalized ${sync.normalizedRecords ?? 0}`,
     `failed ${sync.failedRecords ?? 0}`,
   ].join(" · ")

@@ -138,6 +138,8 @@ const makeRepositoryLayer = ({
       })
     },
     failJob: () => Effect.die(new Error("failJob should not be called")),
+    failCreditRequiredJob: () =>
+      Effect.die(new Error("failCreditRequiredJob should not be called")),
     completeJob: () => Effect.die(new Error("completeJob should not be called")),
     getJob: () =>
       visibleJob === undefined
@@ -273,10 +275,12 @@ const runDispatchFollowUp = ({
     processedRecords: null,
     totalRecords: null,
     progressPercent: null,
-    importedRecords: null,
+    fetchedRecords: null,
     normalizedRecords: null,
     failedRecords: null,
     message: null,
+    resumable: false,
+    creditOutcome: null,
   } satisfies SourceSyncJobDetails
 
   const executionJob = {

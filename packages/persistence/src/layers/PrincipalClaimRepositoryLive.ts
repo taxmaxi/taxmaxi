@@ -4,7 +4,7 @@
  * @module PrincipalClaimRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, isNull, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from "drizzle-orm"
 import { PrincipalId } from "@my/core/ownership"
 import type { ChainType } from "@my/core/source"
 import { SourceId } from "@my/core/source"
@@ -106,12 +106,14 @@ const SourceSyncJobProgressSnapshot = Schema.Struct({
   ),
   processedRecords: Schema.optional(Schema.Number),
   totalRecords: Schema.optional(Schema.NullOr(Schema.Number)),
-  importedRecords: Schema.optional(Schema.Number),
+  fetchedRecords: Schema.optional(Schema.Number),
   normalizedRecords: Schema.optional(Schema.Number),
   failedRecords: Schema.optional(Schema.Number),
 })
 
-const toPublicJobStatus = (status: "pending" | "processing" | "completed" | "failed") => {
+const toPublicJobStatus = (
+  status: "pending" | "processing" | "completed" | "failed" | "credit_required"
+) => {
   switch (status) {
     case "pending":
       return "queued" as const
@@ -120,6 +122,10 @@ const toPublicJobStatus = (status: "pending" | "processing" | "completed" | "fai
     case "completed":
     case "failed":
       return status
+    // Anonymous x402-paid sources are exempt from credit checks, so a credit-required
+    // job here would be unexpected. Treat it like a failure for this claim-visible view.
+    case "credit_required":
+      return "failed" as const
   }
 }
 
@@ -131,7 +137,7 @@ const decodeProgress = (progressDetails: unknown) =>
           phase: progress.phase ?? null,
           processedRecords: progress.processedRecords ?? null,
           totalRecords: progress.totalRecords ?? null,
-          importedRecords: progress.importedRecords ?? null,
+          fetchedRecords: progress.fetchedRecords ?? null,
           normalizedRecords: progress.normalizedRecords ?? null,
           failedRecords: progress.failedRecords ?? null,
         })),
@@ -140,7 +146,7 @@ const decodeProgress = (progressDetails: unknown) =>
             phase: null,
             processedRecords: null,
             totalRecords: null,
-            importedRecords: null,
+            fetchedRecords: null,
             normalizedRecords: null,
             failedRecords: null,
           })
@@ -274,6 +280,24 @@ const make = Effect.gen(function* () {
       return Option.some(claim)
     }).pipe(wrapSqlError("principalClaimRepository.findValidCliSourceClaim"))
 
+  const hasConsumedX402ReceiptForSource: PrincipalClaimRepositoryService["hasConsumedX402ReceiptForSource"] =
+    (sourceId) =>
+      Effect.gen(function* () {
+        const [row] = yield* db
+          .select({ id: schema.principalClaims.id })
+          .from(schema.principalClaims)
+          .where(
+            and(
+              eq(schema.principalClaims.sourceId, sourceId),
+              eq(schema.principalClaims.claimType, "x402_receipt"),
+              isNotNull(schema.principalClaims.consumedAt)
+            )
+          )
+          .limit(1)
+
+        return row !== undefined
+      }).pipe(wrapSqlError("principalClaimRepository.hasConsumedX402ReceiptForSource"))
+
   const findAnonymousSourceEntitlementsByPayer: PrincipalClaimRepositoryService["findAnonymousSourceEntitlementsByPayer"] =
     (params) =>
       Effect.gen(function* () {
@@ -392,7 +416,7 @@ const make = Effect.gen(function* () {
                 processedRecords,
                 totalRecords,
               }),
-              importedRecords: progress?.importedRecords ?? null,
+              fetchedRecords: progress?.fetchedRecords ?? null,
               normalizedRecords: progress?.normalizedRecords ?? null,
               failedRecords: progress?.failedRecords ?? null,
               message: row.errorMessage,
@@ -944,6 +968,7 @@ const make = Effect.gen(function* () {
   return PrincipalClaimRepository.of({
     create,
     findValidCliSourceClaim,
+    hasConsumedX402ReceiptForSource,
     findAnonymousSourceEntitlementsByPayer,
     findAnonymousSourceEntitlementByPayer,
     listAnonymousSourceSyncJobsByPayer,

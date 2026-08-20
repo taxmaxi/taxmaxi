@@ -80,6 +80,8 @@ const makeRepositoryLayer = ({
     recoverStaleActiveJob: () =>
       Effect.die(new Error("recoverStaleActiveJob should not be called")),
     failJob: () => Effect.die(new Error("failJob should not be called")),
+    failCreditRequiredJob: () =>
+      Effect.die(new Error("failCreditRequiredJob should not be called")),
     completeJob: () => Effect.die(new Error("completeJob should not be called")),
     getJob: () => Effect.die(new Error("getJob should not be called")),
     getExecutionJob: () => Effect.die(new Error("getExecutionJob should not be called")),

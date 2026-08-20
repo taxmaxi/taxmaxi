@@ -171,7 +171,7 @@ export interface AnonymousSourceSyncJob {
   readonly processedRecords: number | null
   readonly totalRecords: number | null
   readonly progressPercent: number | null
-  readonly importedRecords: number | null
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
   readonly message: string | null
@@ -229,6 +229,14 @@ export interface PrincipalClaimRepositoryService {
   readonly findValidSiwxSourceClaim: (
     params: FindValidSiwxSourceClaimParams
   ) => Effect.Effect<Option.Option<PrincipalClaim>, PersistenceError>
+
+  /**
+   * Check whether a source was originally paid for anonymously through a consumed x402
+   * receipt claim, meaning its retained records were already paid for at claim time.
+   */
+  readonly hasConsumedX402ReceiptForSource: (
+    sourceId: string
+  ) => Effect.Effect<boolean, PersistenceError>
 
   /**
    * Move a no-conflict anonymous source into a user principal and consume request claims.
