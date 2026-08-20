@@ -13,7 +13,6 @@ import {
   SOURCE_SYNC_QUEUE_NAME,
   SourceSyncJobExecutor,
   SourceSyncQueuePayload,
-  TRANSACTION_CREDIT_EXHAUSTED_OPERATION,
   type SourceSyncJobExecutorError,
   type SourceSyncJobSummary,
 } from "@my/sync-engine/services"
@@ -180,9 +179,7 @@ const toJobFailure = (error: unknown): Error =>
 const isRetryableWorkerError = (
   error: SourceSyncJobExecutorError | WorkerBullMqMalformedSourceSyncPayloadError
 ): boolean =>
-  error._tag === "SourceSyncJobRetryableExecutionError" ||
-  (error._tag === "SyncEngineStorageError" &&
-    error.operation !== TRANSACTION_CREDIT_EXHAUSTED_OPERATION)
+  error._tag === "SourceSyncJobRetryableExecutionError" || error._tag === "SyncEngineStorageError"
 
 const processJob = Effect.fn("worker.source-sync.process", {
   attributes: {
@@ -250,6 +247,8 @@ const processJob = Effect.fn("worker.source-sync.process", {
 
   if (summary.status === "failed") {
     yield* Effect.logError(logPayload, "source-sync-worker:job-failed")
+  } else if (summary.status === "credit_required") {
+    yield* Effect.logWarning(logPayload, "source-sync-worker:job-credit-required")
   } else {
     yield* Effect.logInfo(logPayload, "source-sync-worker:job-succeeded")
   }

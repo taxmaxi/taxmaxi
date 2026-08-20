@@ -4,10 +4,26 @@
  * @module SourceNormalizationRepository
  */
 
+import { SyncCreditReasonCode } from "@my/core/billing"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 import type { ResolvedProviderTransactionTypeMapping } from "./ProviderReferenceRepository.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
+
+/**
+ * SourceSyncCreditExhaustedError - A registered user's transaction credits ran out mid-sync.
+ *
+ * Distinct from `SyncEngineStorageError` so callers can route it to a resumable
+ * credit-required outcome instead of a generic sync failure.
+ */
+export class SourceSyncCreditExhaustedError extends Schema.TaggedError<SourceSyncCreditExhaustedError>()(
+  "SourceSyncCreditExhaustedError",
+  {
+    reasonCode: SyncCreditReasonCode,
+    availableCredits: Schema.Number,
+  }
+) {}
 
 /**
  * SourceTransferType - Canonical transfer types persisted during normalization.
@@ -394,7 +410,10 @@ export interface SourceNormalizationRepositoryShape {
   readonly reserveReplayTransactionCredits: (params: {
     readonly reservationId: string
     readonly transactions: ReadonlyArray<ReplayTransactionCreditReservation>
-  }) => Effect.Effect<ReadonlyArray<ReservedReplayTransactionCredit>, SyncEngineStorageError>
+  }) => Effect.Effect<
+    ReadonlyArray<ReservedReplayTransactionCredit>,
+    SyncEngineStorageError | SourceSyncCreditExhaustedError
+  >
   /** Release credits that are still owned by a failed replay reservation. */
   readonly releaseReplayTransactionCredits: (params: {
     readonly reservationId: string
@@ -405,7 +424,10 @@ export interface SourceNormalizationRepositoryShape {
    */
   readonly persistNormalizedArtifacts: <E>(
     params: PersistNormalizedSourceArtifactsParams<E>
-  ) => Effect.Effect<PersistNormalizedSourceArtifactsResult, E | SyncEngineStorageError>
+  ) => Effect.Effect<
+    PersistNormalizedSourceArtifactsResult,
+    E | SyncEngineStorageError | SourceSyncCreditExhaustedError
+  >
 }
 
 /**

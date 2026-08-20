@@ -4,18 +4,72 @@
  * @module SourceSyncModels
  */
 
+import { SyncCreditReasonCode } from "@my/core/billing"
 import * as Schema from "effect/Schema"
 
 /**
  * SyncJobStatus - External sync status exposed to API clients.
+ *
+ * `credit_required` is a resumable outcome, distinct from `failed`: the sync stopped
+ * because a registered user ran out of transaction credits, but transactions already
+ * normalized this run stay committed and a later sync call picks up where it left off.
  */
-export type SyncJobStatus = "queued" | "running" | "completed" | "failed"
+export type SyncJobStatus = "queued" | "running" | "completed" | "failed" | "credit_required"
 
 /**
  * SourceSyncJobStatus - Internal processing job status persisted by repositories.
  */
-export type SourceSyncJobStatus = "pending" | "processing" | "completed" | "failed"
+export type SourceSyncJobStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "credit_required"
 export type ActiveSourceSyncJobStatus = Extract<SourceSyncJobStatus, "pending" | "processing">
+
+/**
+ * Map an internal persisted job status to the public status exposed to API clients.
+ *
+ * The single place that performs this mapping so job repository and service layers
+ * do not each reimplement it.
+ */
+export const toPublicSourceSyncJobStatus = (status: SourceSyncJobStatus): SyncJobStatus => {
+  switch (status) {
+    case "pending":
+      return "queued"
+    case "processing":
+      return "running"
+    case "completed":
+      return "completed"
+    case "failed":
+      return "failed"
+    case "credit_required":
+      return "credit_required"
+  }
+}
+
+/**
+ * Build a job summary that carries no credit outcome. `resumable` is derived
+ * from the status so the flag cannot drift from the status it mirrors.
+ */
+export const makePlainSourceSyncJobSummary = ({
+  sourceId,
+  jobId,
+  status,
+  message = null,
+}: {
+  readonly sourceId: string
+  readonly jobId: string
+  readonly status: SyncJobStatus
+  readonly message?: string | null
+}): SourceSyncJobSummary => ({
+  sourceId,
+  jobId,
+  status,
+  message,
+  resumable: status === "credit_required",
+  creditOutcome: null,
+})
 
 /**
  * SourceSyncPhase - Current user-visible phase of a running source job.
@@ -69,7 +123,8 @@ export interface SourceSyncExecutionState {
   readonly phase: SourceSyncPhase
   readonly processedRecords: number
   readonly totalRecords: number | null
-  readonly importedRecords: number
+  /** Count of raw provider records fetched and cached so far. Not the count of persisted transactions; see `normalizedRecords`. */
+  readonly fetchedRecords: number
   readonly normalizedRecords: number
   readonly failedRecords: number
   readonly cursorPayload: unknown
@@ -86,7 +141,7 @@ export interface SourceSyncJobProgressSnapshot {
   readonly phase: SourceSyncPhase | null
   readonly processedRecords: number | null
   readonly totalRecords: number | null
-  readonly importedRecords: number | null
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
   readonly cursorPayload: unknown
@@ -164,6 +219,21 @@ export interface SourceSyncPendingDispatchJob extends SourceSyncRepairableActive
 }
 
 /**
+ * SourceSyncCreditOutcome - Public credit-required details for a resumable sync outcome.
+ *
+ * `additionalCreditsRequired` is null until the billable total for this run is known
+ * (once classification starts). Once set it is an upper bound, not an exact
+ * figure: pending records may turn out to be free (skipped, failed, or
+ * matching an already-charged transaction).
+ */
+export interface SourceSyncCreditOutcome {
+  readonly reasonCode: SyncCreditReasonCode
+  readonly availableCredits: number
+  readonly creditsConsumed: number
+  readonly additionalCreditsRequired: number | null
+}
+
+/**
  * SourceSyncJobSummary - Public sync job creation/reuse result.
  */
 export interface SourceSyncJobSummary {
@@ -171,6 +241,9 @@ export interface SourceSyncJobSummary {
   readonly jobId: string
   readonly status: SyncJobStatus
   readonly message: string | null
+  /** True when the caller can resume progress with a new sync call, e.g. after topping up credits. */
+  readonly resumable: boolean
+  readonly creditOutcome: SourceSyncCreditOutcome | null
 }
 
 /**
@@ -181,7 +254,8 @@ export interface SourceSyncJobDetails extends SourceSyncJobSummary {
   readonly processedRecords: number | null
   readonly totalRecords: number | null
   readonly progressPercent: number | null
-  readonly importedRecords: number | null
+  /** Count of raw provider records fetched and cached so far. Not the count of persisted transactions; see `normalizedRecords`. */
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
 }

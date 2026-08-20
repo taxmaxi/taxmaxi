@@ -405,7 +405,7 @@ const make = Effect.gen(function* () {
         completedAt: isoOrNull(job?.completedAt ?? null),
         lastSyncedAt: isoOrNull(state?.lastSyncedAt ?? null),
         lastErrorMessage: state?.lastErrorMessage ?? null,
-        importedRecords: progress?.importedRecords ?? null,
+        fetchedRecords: progress?.fetchedRecords ?? null,
         normalizedRecords: progress?.normalizedRecords ?? null,
         failedRecords: progress?.failedRecords ?? null,
       } satisfies SourceReportSyncStatus

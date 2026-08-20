@@ -1,9 +1,12 @@
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
 import { useEffect, useState } from "react"
+import { useNavigate, useRouteContext } from "@tanstack/react-router"
 import { RotateCcw, X } from "lucide-react"
-import type { SourceSyncJob } from "taxmaxi"
+import type { BillingStatus, SourceSyncJob } from "taxmaxi"
 
 import { SourceSyncStatusOrb } from "#/components/source-sync-status-orb"
+import { m } from "#/paraglide/messages"
+import { getLocale } from "#/paraglide/runtime"
 import {
   SOURCE_SYNC_MOCK_SCENARIOS,
   SOURCE_SYNC_MOCKS_ENABLED,
@@ -32,7 +35,7 @@ export function getSourceSyncDisplayProgress({
   progressPercent: number | null
   status: SourceSyncStatus
 }): number {
-  if (status === "completed" || status === "failed") {
+  if (status === "completed" || status === "failed" || status === "credit_required") {
     return SOURCE_SYNC_PROGRESS.completed
   }
 
@@ -59,6 +62,8 @@ export function getSourceSyncDisplayProgress({
   }
 }
 
+export type SourceSyncCreditOutcome = NonNullable<SourceSyncJob["creditOutcome"]>
+
 export type SourceSyncIslandItem = {
   id: string
   sourceName: string
@@ -67,16 +72,110 @@ export type SourceSyncIslandItem = {
   phase?: SourceSyncPhase
   processedRecords?: number
   totalRecords?: number
-  importedRecords?: number
+  fetchedRecords?: number
   normalizedRecords?: number
   failedRecords?: number
   message?: string
+  creditOutcome?: SourceSyncCreditOutcome
 }
 
 type SourceSyncIslandProps = {
   items: ReadonlyArray<SourceSyncIslandItem>
   onDismiss?: (item: SourceSyncIslandItem) => void
   onRetry?: (item: SourceSyncIslandItem) => void
+}
+
+/**
+ * Copy for a credit-required sync, built only from the structured credit outcome
+ * so internal error text never reaches the screen.
+ */
+export function getCreditRequiredCopy(creditOutcome: SourceSyncCreditOutcome | undefined): string {
+  if (!creditOutcome) {
+    return m["app.syncIsland.creditRequired.pausedNoDetails"]()
+  }
+
+  // Nothing consumed and no known shortfall means the sync was refused before
+  // it started (the shape the start-refusal path emits), so "ran out" wording
+  // would be wrong for a user who never had credits.
+  if (creditOutcome.creditsConsumed === 0 && creditOutcome.additionalCreditsRequired === null) {
+    return m["app.syncIsland.creditRequired.notStarted"]()
+  }
+
+  const parts = [m["app.syncIsland.creditRequired.pausedIntro"]()]
+
+  if (creditOutcome.creditsConsumed > 0) {
+    const covered =
+      creditOutcome.creditsConsumed === 1
+        ? m["app.syncIsland.creditRequired.coveredOne"]
+        : m["app.syncIsland.creditRequired.coveredMany"]
+    parts.push(covered({ count: formatInteger(creditOutcome.creditsConsumed) }))
+  }
+
+  if (creditOutcome.additionalCreditsRequired === null) {
+    parts.push(m["app.syncIsland.creditRequired.addUnknown"]())
+  } else {
+    const add =
+      creditOutcome.additionalCreditsRequired === 1
+        ? m["app.syncIsland.creditRequired.addOne"]
+        : m["app.syncIsland.creditRequired.addMany"]
+    parts.push(add({ count: formatInteger(creditOutcome.additionalCreditsRequired) }))
+  }
+
+  return parts.join(" ")
+}
+
+/**
+ * Billing recovery for credit-required syncs, owned by the island so callers do
+ * not have to thread billing state and navigation through their props.
+ *
+ * The billing status is loaded once, and only after a credit-required sync
+ * appears; without it the island falls back to the plan action, which still
+ * leads to billing.
+ */
+function useCreditRecovery(items: ReadonlyArray<SourceSyncIslandItem>) {
+  const navigate = useNavigate()
+  const taxmaxi = useRouteContext({
+    from: "/app",
+    select: (context) => context.taxmaxi(),
+  })
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null)
+  const needsBillingStatus = items.some((item) => item.status === "credit_required")
+
+  useEffect(() => {
+    if (!needsBillingStatus || billingStatus !== null) {
+      return
+    }
+
+    let cancelled = false
+    const load = async () => {
+      try {
+        const status = await taxmaxi.billing.status()
+        if (!cancelled) {
+          setBillingStatus(status)
+        }
+      } catch {
+        // Ignored: the island then shows the plan action instead.
+      }
+    }
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [billingStatus, needsBillingStatus, taxmaxi])
+
+  const hasActiveSubscription =
+    billingStatus?.subscriptionStatus === "active" ||
+    billingStatus?.subscriptionStatus === "trialing"
+
+  return {
+    billingActionLabel: hasActiveSubscription
+      ? m["app.syncIsland.creditRequired.buyCredits"]()
+      : m["app.syncIsland.creditRequired.choosePlan"](),
+    onBillingAction: () => {
+      void navigate({ to: "/app/billing" })
+    },
+  }
 }
 
 /* ─────────────────────────────────────────────────────────
@@ -151,11 +250,21 @@ const CONTENT_TRANSITION = {
   ease: CONTENT.easeOut,
 }
 
-const statusLabel: Record<SourceSyncStatus, string> = {
-  queued: "Queued",
-  running: "Syncing",
-  completed: "Synced",
-  failed: "Failed",
+// A function rather than a map so the localized labels follow the active
+// locale instead of freezing at module load.
+function getStatusLabel(status: SourceSyncStatus): string {
+  switch (status) {
+    case "queued":
+      return m["app.syncIsland.status.queued"]()
+    case "running":
+      return m["app.syncIsland.status.running"]()
+    case "completed":
+      return m["app.syncIsland.status.completed"]()
+    case "failed":
+      return m["app.syncIsland.status.failed"]()
+    case "credit_required":
+      return m["app.syncIsland.creditRequired.statusLabel"]()
+  }
 }
 
 const statusTone: Record<SourceSyncStatus, string> = {
@@ -163,12 +272,16 @@ const statusTone: Record<SourceSyncStatus, string> = {
   running: "text-sync-island-accent",
   completed: "text-sync-island-complete",
   failed: "text-sync-island-failed",
+  credit_required: "text-sync-island-failed",
 }
 
-const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
+// Resolved per call so number grouping follows the active locale.
+const formatInteger = (value: number): string =>
+  new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 0 }).format(value)
 
 export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIslandProps) {
   const reduceMotion = useReducedMotion()
+  const { billingActionLabel, onBillingAction } = useCreditRecovery(items)
   const [mockScenario, setMockScenario] = useState<SourceSyncMockScenario>("live")
   const usingMockScenario = SOURCE_SYNC_MOCKS_ENABLED && mockScenario !== "live"
   const rawVisibleItems = usingMockScenario ? SOURCE_SYNC_MOCK_SCENARIOS[mockScenario] : items
@@ -246,7 +359,7 @@ export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIsland
   }, [primaryItem?.id, reduceMotion])
 
   useEffect(() => {
-    if (primaryItem?.status !== "failed") {
+    if (primaryItem?.status !== "failed" && primaryItem?.status !== "credit_required") {
       return
     }
 
@@ -311,9 +424,11 @@ export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIsland
                     />
                   ) : (
                     <ActiveIslandContent
+                      billingActionLabel={billingActionLabel}
                       expanded={expanded}
                       item={primaryItem}
                       items={visibleItems}
+                      onBillingAction={onBillingAction}
                       onDismiss={effectiveOnDismiss}
                       onOpen={toggleDetails}
                       onRetry={effectiveOnRetry}
@@ -349,7 +464,7 @@ function CompactIslandContent({
 }) {
   return (
     <motion.button
-      aria-label={`Show sync details for ${item.sourceName}`}
+      aria-label={m["app.syncIsland.aria.showDetails"]({ sourceName: item.sourceName })}
       className="grid size-11 touch-manipulation place-items-center rounded-[inherit] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/40"
       onClick={onOpen}
       type="button"
@@ -366,24 +481,29 @@ function CompactIslandContent({
 }
 
 function ActiveIslandContent({
+  billingActionLabel,
   expanded,
   item,
   items,
+  onBillingAction,
   onDismiss,
   onOpen,
   onRetry,
   reduceMotion,
 }: {
+  billingActionLabel: string
   expanded: boolean
   item: SourceSyncIslandItem
   items: ReadonlyArray<SourceSyncIslandItem>
+  onBillingAction: () => void
   onDismiss?: (item: SourceSyncIslandItem) => void
   onOpen: () => void
   onRetry?: (item: SourceSyncIslandItem) => void
   reduceMotion: boolean
 }) {
   const headline = getIslandHeadline(items)
-  const dismissible = item.status === "completed" || item.status === "failed"
+  const dismissible =
+    item.status === "completed" || item.status === "failed" || item.status === "credit_required"
 
   return (
     <div
@@ -397,7 +517,9 @@ function ActiveIslandContent({
           aria-controls={`source-sync-details-${item.id}`}
           aria-expanded={expanded}
           aria-label={
-            expanded ? `Hide sync details for ${item.sourceName}` : `Show sync details: ${headline}`
+            expanded
+              ? m["app.syncIsland.aria.hideDetails"]({ sourceName: item.sourceName })
+              : m["app.syncIsland.aria.showDetailsHeadline"]({ headline })
           }
           className="flex min-h-9 min-w-0 flex-1 touch-manipulation items-center gap-2 rounded-[1.5rem] pl-3 pr-4 text-left outline-none transition-[background-color] duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-white/40 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-marketing-surface-hover-muted"
           layout="position"
@@ -410,7 +532,7 @@ function ActiveIslandContent({
         {expanded && dismissible && onDismiss ? (
           <div className="shrink-0 pr-2">
             <Button
-              aria-label={`Dismiss ${item.sourceName} sync status`}
+              aria-label={m["app.syncIsland.aria.dismiss"]({ sourceName: item.sourceName })}
               className="shrink-0"
               onClick={() => onDismiss(item)}
               size="icon-xs"
@@ -436,7 +558,11 @@ function ActiveIslandContent({
           >
             <SyncMetrics item={item} />
 
-            {item.message ? (
+            {item.status === "credit_required" ? (
+              <p className="mt-3 text-xs leading-5 font-medium text-sync-island-failed">
+                {getCreditRequiredCopy(item.creditOutcome)}
+              </p>
+            ) : item.message ? (
               <p
                 className={cn(
                   "mt-3 text-xs leading-5 font-medium",
@@ -449,12 +575,19 @@ function ActiveIslandContent({
 
             {items.length > 1 ? <SyncQueue items={items.slice(1)} /> : null}
 
-            {item.status === "failed" || item.status === "completed" ? (
+            {item.status === "failed" ||
+            item.status === "completed" ||
+            item.status === "credit_required" ? (
               <div className="mt-3 flex items-center justify-end gap-2">
+                {item.status === "credit_required" ? (
+                  <Button onClick={onBillingAction} size="sm" type="button" variant="secondary">
+                    {billingActionLabel}
+                  </Button>
+                ) : null}
                 {item.status === "failed" && onRetry ? (
                   <Button onClick={() => onRetry(item)} size="sm" type="button" variant="secondary">
                     <RotateCcw aria-hidden="true" className="size-3.5" strokeWidth={2.5} />
-                    Retry
+                    {m["app.syncIsland.retry"]()}
                   </Button>
                 ) : null}
               </div>
@@ -514,9 +647,9 @@ function CompletionGlow({
 
 function SyncMetrics({ item }: { item: SourceSyncIslandItem }) {
   const metrics = [
-    { label: "Imported", value: item.importedRecords },
-    { label: "Categorized", value: item.normalizedRecords },
-    { label: "Failed", value: item.failedRecords },
+    { label: m["app.syncIsland.metrics.fetched"](), value: item.fetchedRecords },
+    { label: m["app.syncIsland.metrics.categorized"](), value: item.normalizedRecords },
+    { label: m["app.syncIsland.metrics.failed"](), value: item.failedRecords },
   ]
 
   return (
@@ -542,21 +675,23 @@ function SyncQueue({ items }: { items: ReadonlyArray<SourceSyncIslandItem> }) {
   return (
     <div className="mt-3 border-t border-sync-island-border pt-2.5">
       <p className="text-[0.625rem] font-medium uppercase tracking-[0.08em] text-sync-island-muted">
-        Also syncing
+        {m["app.syncIsland.queue.title"]()}
       </p>
       <ul className="mt-2 flex flex-col gap-1.5">
         {visibleItems.map((item) => (
           <li className="flex items-center justify-between gap-3 text-xs" key={item.id}>
             <span className="truncate text-sync-island-foreground">{item.sourceName}</span>
             <span className={cn("shrink-0", statusTone[item.status])}>
-              {statusLabel[item.status]}
+              {getStatusLabel(item.status)}
             </span>
           </li>
         ))}
       </ul>
       {hiddenCount > 0 ? (
         <p className="mt-2 text-xs tabular-nums text-sync-island-muted">
-          +{hiddenCount} more {hiddenCount === 1 ? "source" : "sources"}
+          {hiddenCount === 1
+            ? m["app.syncIsland.queue.moreOne"]({ count: hiddenCount })
+            : m["app.syncIsland.queue.moreMany"]({ count: hiddenCount })}
         </p>
       ) : null}
     </div>
@@ -569,20 +704,22 @@ function getIslandHeadline(items: ReadonlyArray<SourceSyncIslandItem>): string {
 
   switch (primaryItem?.status) {
     case "queued":
-      return `Waiting for ${sourceNames}`
+      return m["app.syncIsland.headline.queued"]({ sourceNames })
     case "running":
-      return `Syncing ${sourceNames}`
+      return m["app.syncIsland.headline.running"]({ sourceNames })
     case "completed":
-      return `Synced ${sourceNames}`
+      return m["app.syncIsland.headline.completed"]({ sourceNames })
     case "failed":
-      return `Couldn't sync ${sourceNames}`
+      return m["app.syncIsland.headline.failed"]({ sourceNames })
+    case "credit_required":
+      return m["app.syncIsland.creditRequired.headline"]({ sourceNames })
     default:
-      return "Syncing"
+      return m["app.syncIsland.headline.fallback"]()
   }
 }
 
 function getSourceNames(items: ReadonlyArray<SourceSyncIslandItem>): string {
-  const firstSource = items[0]?.sourceName ?? "source"
+  const firstSource = items[0]?.sourceName ?? m["app.syncIsland.sourceNames.fallback"]()
   const secondSource = items[1]?.sourceName
 
   if (!secondSource) {
@@ -590,22 +727,30 @@ function getSourceNames(items: ReadonlyArray<SourceSyncIslandItem>): string {
   }
 
   if (items.length === 2) {
-    return `${firstSource} and ${secondSource}`
+    return m["app.syncIsland.sourceNames.pair"]({ first: firstSource, second: secondSource })
   }
 
-  return `${firstSource}, ${secondSource} + ${items.length - 2} more`
+  return m["app.syncIsland.sourceNames.overflow"]({
+    first: firstSource,
+    second: secondSource,
+    count: items.length - 2,
+  })
 }
 
 function getAnnouncement(items: ReadonlyArray<SourceSyncIslandItem>): string {
   const primaryItem = items[0]
 
+  if (primaryItem?.status === "credit_required") {
+    return `${getIslandHeadline(items)}. ${getCreditRequiredCopy(primaryItem.creditOutcome)}`
+  }
+
   return primaryItem?.status === "failed"
-    ? `${getIslandHeadline(items)}. ${primaryItem.message ?? "Open sync details to retry."}`
+    ? `${getIslandHeadline(items)}. ${primaryItem.message ?? m["app.syncIsland.openDetailsToRetry"]()}`
     : `${getIslandHeadline(items)}.`
 }
 
 function formatRecordCount(value: number | undefined): string {
-  return value === undefined ? "—" : integerFormatter.format(value)
+  return value === undefined ? "—" : formatInteger(value)
 }
 
 function getShellTransition(reduceMotion: boolean) {

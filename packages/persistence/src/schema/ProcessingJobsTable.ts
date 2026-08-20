@@ -16,7 +16,13 @@ import { sources } from "./SourcesTable.ts"
 import { principals } from "./PrincipalsTable.ts"
 
 export const jobModeEnum = pgEnum("job_mode", ["sync", "replay"])
-export const jobStatusEnum = pgEnum("job_status", ["pending", "processing", "completed", "failed"])
+export const jobStatusEnum = pgEnum("job_status", [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "credit_required",
+])
 
 /**
  * Per-run processing status and resume metadata.
@@ -48,6 +54,10 @@ export const processingJobs = pgTable(
     completedAt: timestamp("completed_at"),
     nextRetryAt: timestamp("next_retry_at"),
     errorMessage: text("error_message"),
+    creditReasonCode: text("credit_reason_code"), // Stable reason code set only on a credit-required outcome.
+    creditsAvailable: integer("credits_available"), // Usable credit balance at the moment the run stopped.
+    creditsConsumed: integer("credits_consumed"), // Credits this run already spent before it stopped.
+    additionalCreditsRequired: integer("additional_credits_required"), // Null until the billable total for this run is known.
     progressDetails: jsonb("progress_details"), // Optional run metrics/stage counters for UI and debugging.
     queueName: text("queue_name"),
     queueJobId: text("queue_job_id"),

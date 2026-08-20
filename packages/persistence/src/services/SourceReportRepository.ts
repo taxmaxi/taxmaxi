@@ -69,14 +69,14 @@ export interface SourceReportPage<T> {
 }
 
 export interface SourceReportSyncStatus {
-  readonly status: "pending" | "processing" | "completed" | "failed" | null
+  readonly status: "pending" | "processing" | "completed" | "failed" | "credit_required" | null
   readonly mode: "sync" | "replay" | null
   readonly queuedAt: string | null
   readonly startedAt: string | null
   readonly completedAt: string | null
   readonly lastSyncedAt: string | null
   readonly lastErrorMessage: string | null
-  readonly importedRecords: number | null
+  readonly fetchedRecords: number | null
   readonly normalizedRecords: number | null
   readonly failedRecords: number | null
 }

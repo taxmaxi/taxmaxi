@@ -87,6 +87,58 @@
       "errors": {
         "unavailable": "Billing is temporarily unavailable."
       }
+    },
+    "syncIsland": {
+      "creditRequired": {
+        "statusLabel": "Needs credits",
+        "headline": "Needs credits to keep syncing {sourceNames}",
+        "pausedNoDetails": "This sync is paused until you add transaction credits.",
+        "pausedIntro": "This sync is paused: your transaction credits ran out.",
+        "coveredOne": "{count} transaction is already imported and stays yours.",
+        "coveredMany": "{count} transactions are already imported and stay yours.",
+        "addUnknown": "Add credits to finish the sync.",
+        "addOne": "Add up to {count} more credit to finish the sync.",
+        "addMany": "Add up to {count} more credits to finish the sync.",
+        "choosePlan": "Choose a plan",
+        "buyCredits": "Buy credits",
+        "notStarted": "This sync needs transaction credits before it can start. Add credits and run it again."
+      },
+      "status": {
+        "queued": "Queued",
+        "running": "Syncing",
+        "completed": "Synced",
+        "failed": "Failed"
+      },
+      "headline": {
+        "queued": "Waiting for {sourceNames}",
+        "running": "Syncing {sourceNames}",
+        "completed": "Synced {sourceNames}",
+        "failed": "Couldn't sync {sourceNames}",
+        "fallback": "Syncing"
+      },
+      "sourceNames": {
+        "fallback": "source",
+        "pair": "{first} and {second}",
+        "overflow": "{first}, {second} + {count} more"
+      },
+      "metrics": {
+        "fetched": "Fetched",
+        "categorized": "Categorized",
+        "failed": "Failed"
+      },
+      "queue": {
+        "title": "Also syncing",
+        "moreOne": "+{count} more source",
+        "moreMany": "+{count} more sources"
+      },
+      "retry": "Retry",
+      "openDetailsToRetry": "Open sync details to retry.",
+      "aria": {
+        "showDetails": "Show sync details for {sourceName}",
+        "showDetailsHeadline": "Show sync details: {headline}",
+        "hideDetails": "Hide sync details for {sourceName}",
+        "dismiss": "Dismiss {sourceName} sync status"
+      }
     }
   },
   "assetCatalog": {

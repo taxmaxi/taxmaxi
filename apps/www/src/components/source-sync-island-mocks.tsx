@@ -16,7 +16,7 @@ export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
   running: [
     {
       id: "mock-coinbase",
-      importedRecords: 24,
+      fetchedRecords: 24,
       normalizedRecords: 21,
       progress: 18,
       sourceName: "Coinbase",
@@ -27,7 +27,7 @@ export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
     {
       failedRecords: 0,
       id: "mock-coinbase",
-      importedRecords: 284,
+      fetchedRecords: 284,
       normalizedRecords: 284,
       progress: 100,
       sourceName: "Coinbase",
@@ -38,18 +38,35 @@ export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
     {
       failedRecords: 5,
       id: "mock-coinbase",
-      importedRecords: 104,
-      message: "Coinbase stopped responding. Your imported records are safe.",
+      fetchedRecords: 104,
+      message: "Coinbase stopped responding. Your fetched records are safe.",
       normalizedRecords: 99,
       progress: 100,
       sourceName: "Coinbase",
       status: "failed",
     },
   ],
+  credit_required: [
+    {
+      creditOutcome: {
+        additionalCreditsRequired: 22,
+        availableCredits: 0,
+        creditsConsumed: 82,
+        reasonCode: "no_usable_credits",
+      },
+      failedRecords: 0,
+      id: "mock-coinbase",
+      fetchedRecords: 104,
+      normalizedRecords: 82,
+      progress: 100,
+      sourceName: "Coinbase",
+      status: "credit_required",
+    },
+  ],
   multiple: [
     {
       id: "mock-coinbase",
-      importedRecords: 24,
+      fetchedRecords: 24,
       normalizedRecords: 21,
       progress: 18,
       sourceName: "Coinbase",
@@ -58,7 +75,7 @@ export const SOURCE_SYNC_MOCK_SCENARIOS: Record<
     { id: "mock-kraken", progress: 0, sourceName: "Kraken", status: "queued" },
     {
       id: "mock-phantom",
-      importedRecords: 57,
+      fetchedRecords: 57,
       normalizedRecords: 52,
       progress: 0,
       sourceName: "Phantom",
@@ -73,6 +90,7 @@ const OPTIONS: ReadonlyArray<{ label: string; value: SourceSyncMockScenario }> =
   { label: "Syncing", value: "running" },
   { label: "Synced", value: "completed" },
   { label: "Failed", value: "failed" },
+  { label: "Needs credits", value: "credit_required" },
   { label: "+2", value: "multiple" },
 ]
 

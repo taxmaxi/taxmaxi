@@ -23,6 +23,8 @@ import {
   SourceSyncService,
 } from "@my/sync-engine/services"
 import {
+  BillingRepository,
+  PrincipalClaimRepository,
   SourceRepository as PersistenceSourceRepository,
   SourceReportRepository,
   TaxCalculationService,
@@ -34,6 +36,7 @@ import {
   SourceSyncStartResponse,
   TaxCalculationResponse,
   SourceBadRequestError,
+  SourceCreditRequiredError,
   SourceNotFoundError,
   SourceListResponse,
   SourceCreateResponse,
@@ -66,12 +69,23 @@ import type { ReportReviewReasonCode } from "@my/core/report"
 import { SourceCreationService } from "../services/SourceCreationService.ts"
 import { AnonSessionService } from "../services/AnonSessionService.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
+import {
+  assertHasSyncCredits,
+  NoUsableCreditsError,
+  SYNC_CREDIT_REQUIRED_MESSAGE,
+} from "../helpers/SyncCreditAdmission.ts"
 import { SourceCreationServiceLive } from "./SourceCreationServiceLive.ts"
 import { ANON_SESSION_COOKIE_MAX_AGE, ANON_SESSION_COOKIE_NAME } from "./AnonApiLive.ts"
 
 const toBadRequestError = (message: string) => new SourceBadRequestError({ message })
 const toInternalServerError = (message: string) =>
   new InternalServerError({ requestId: Option.none(), message })
+const toCreditRequiredError = (error: NoUsableCreditsError) =>
+  new SourceCreditRequiredError({
+    message: SYNC_CREDIT_REQUIRED_MESSAGE,
+    reasonCode: error.reasonCode,
+    availableCredits: error.availableCredits,
+  })
 const sourceNotFoundMessage = "No source found. Connect a source first."
 const defaultReportPageLimit = 50
 const cookieOptionsForEnv = (environment: string) => ({
@@ -88,6 +102,8 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
     const sourceRepository = yield* PersistenceSourceRepository
     const sourceReportRepository = yield* SourceReportRepository
     const syncEngineSourceRepository = yield* SyncEngineSourceRepository
+    const billingRepository = yield* BillingRepository
+    const principalClaimRepository = yield* PrincipalClaimRepository
     const optionalCurrentUser = yield* OptionalCurrentUser
     const sourceCreationService = yield* SourceCreationService
     const anonSessionService = yield* AnonSessionService
@@ -117,6 +133,34 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       return principal
     })
+
+    // Shared by start and replay: resolve the caller and refuse billable sync
+    // work when a registered user has no usable credits.
+    const resolvePrincipalWithSyncCredits = ({ sourceId }: { readonly sourceId: string }) =>
+      Effect.gen(function* () {
+        const { currentUser, principal } =
+          yield* principalResolutionService.resolveCurrentUserPrincipal.pipe(
+            Effect.mapError((error) => toInternalServerError(error.message))
+          )
+
+        yield* assertHasSyncCredits({
+          billingRepository,
+          principalClaimRepository,
+          userId: currentUser.userId,
+          sourceId,
+        }).pipe(
+          Effect.mapError((error) => {
+            switch (error._tag) {
+              case "NoUsableCreditsError":
+                return toCreditRequiredError(error)
+              default:
+                return toInternalServerError("Failed to check sync credit balance.")
+            }
+          })
+        )
+
+        return principal
+      })
 
     const startSync = ({
       principalId,
@@ -242,6 +286,12 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                 return yield* toBadRequestError(creationResult.failure.message)
               case "SourceCreationInternalError":
                 return yield* toInternalServerError(creationResult.failure.message)
+              case "SourceCreationCreditRequiredError":
+                return yield* new SourceCreditRequiredError({
+                  message: creationResult.failure.message,
+                  reasonCode: creationResult.failure.reasonCode,
+                  availableCredits: creationResult.failure.availableCredits,
+                })
               case "SourceCreationPaymentRequiredError": {
                 const error = new SourcePaymentRequiredError({
                   message: creationResult.failure.message,
@@ -306,7 +356,8 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("startSourceSyncJob", ({ params: path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal
+          const principal = yield* resolvePrincipalWithSyncCredits({ sourceId: path.sourceId })
+
           const startParams = {
             principalId: principal.id,
             sourceId: path.sourceId,
@@ -319,7 +370,8 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
       )
       .handle("replaySourceSyncJob", ({ params: path }) =>
         Effect.gen(function* () {
-          const principal = yield* resolveCurrentUserPrincipal
+          const principal = yield* resolvePrincipalWithSyncCredits({ sourceId: path.sourceId })
+
           const replayParams = {
             principalId: principal.id,
             sourceId: path.sourceId,

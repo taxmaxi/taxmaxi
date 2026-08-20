@@ -71,6 +71,10 @@
     "./report": {
       "types": "./dist/report/index.d.ts",
       "default": "./dist/report/index.js"
+    },
+    "./billing": {
+      "types": "./dist/billing/index.d.ts",
+      "default": "./dist/billing/index.js"
     }
   },
   "scripts": {

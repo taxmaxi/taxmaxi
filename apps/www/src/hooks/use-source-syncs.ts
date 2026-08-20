@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Dispatch, SetStateAction } from "react"
 import {
   TaxMaxiError,
+  getTaxMaxiCreditRequired,
   isTaxMaxiUnauthorizedError,
   type SourceSyncJob,
   type SourceSyncJobInput,
@@ -72,9 +73,33 @@ export function useSourceSyncs({
             sourceName: source.name,
             status: started.status,
             ...(started.message === null ? {} : { message: started.message }),
+            ...(started.creditOutcome === null ? {} : { creditOutcome: started.creditOutcome }),
           })
         )
       } catch (error: unknown) {
+        const creditRequired = getTaxMaxiCreditRequired(error)
+        if (creditRequired !== null) {
+          // The start was refused before any job existed. Surface the same
+          // credit-required recovery state as a mid-sync pause, so the island
+          // offers a billing action instead of a pointless retry.
+          setActiveSyncs((syncs) =>
+            upsertSourceSync(syncs, {
+              id: source.id,
+              progress: 100,
+              sourceId: source.id,
+              sourceName: source.name,
+              status: "credit_required",
+              creditOutcome: {
+                reasonCode: creditRequired.reasonCode,
+                availableCredits: creditRequired.availableCredits,
+                creditsConsumed: 0,
+                additionalCreditsRequired: null,
+              },
+            })
+          )
+          return
+        }
+
         if (isTaxMaxiUnauthorizedError(error)) {
           setActiveSyncs((syncs) => syncs.filter((sync) => sync.sourceId !== source.id))
           try {
@@ -304,10 +329,11 @@ function toActiveSourceSync(job: SourceSyncJob, current: ActiveSourceSync): Acti
     ...(job.phase === null ? {} : { phase: job.phase }),
     ...(job.processedRecords === null ? {} : { processedRecords: job.processedRecords }),
     ...(job.totalRecords === null ? {} : { totalRecords: job.totalRecords }),
-    ...(job.importedRecords === null ? {} : { importedRecords: job.importedRecords }),
+    ...(job.fetchedRecords === null ? {} : { fetchedRecords: job.fetchedRecords }),
     ...(job.normalizedRecords === null ? {} : { normalizedRecords: job.normalizedRecords }),
     ...(job.failedRecords === null ? {} : { failedRecords: job.failedRecords }),
     ...(job.message === null ? {} : { message: job.message }),
+    ...(job.creditOutcome === null ? {} : { creditOutcome: job.creditOutcome }),
   }
 }
 
@@ -394,6 +420,7 @@ function getProgressForStatus(status: SourceSyncStatus): number {
       return 0
     case "completed":
     case "failed":
+    case "credit_required":
       return 100
   }
 }

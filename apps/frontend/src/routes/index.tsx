@@ -39,6 +39,8 @@ const statusClassName = (status: AnonSourceSyncJob["status"]): string => {
       return "border-[rgba(50,143,151,0.34)] bg-[rgba(79,184,178,0.14)] text-[var(--lagoon-deep)]"
     case "queued":
       return "border-[var(--line)] bg-[var(--surface)] text-[var(--sea-ink-soft)]"
+    case "credit_required":
+      return "border-[color-mix(in_oklab,var(--destructive)_42%,transparent)] bg-[color-mix(in_oklab,var(--destructive)_10%,transparent)] text-[var(--destructive)]"
   }
 }
 
@@ -91,9 +93,9 @@ function SourceCard({
         ) : (
           <dl className="mt-3 grid grid-cols-3 gap-2 text-xs">
             <div>
-              <dt className="text-[var(--sea-ink-soft)]">Imported</dt>
+              <dt className="text-[var(--sea-ink-soft)]">Fetched</dt>
               <dd className="mt-1 font-mono font-semibold text-[var(--sea-ink)]">
-                {formatNullableCount(latestJob.importedRecords)}
+                {formatNullableCount(latestJob.fetchedRecords)}
               </dd>
             </div>
             <div>

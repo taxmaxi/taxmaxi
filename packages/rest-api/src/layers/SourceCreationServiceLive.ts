@@ -7,6 +7,7 @@
 import type { PrincipalId } from "@my/core/ownership"
 import { parseCryptoAddress, SourceId, type ChainType } from "@my/core/source"
 import {
+  BillingRepository,
   PrincipalClaimRepository,
   PrincipalRepository,
   SourceRepository,
@@ -20,10 +21,16 @@ import { Option } from "effect"
 import * as Redacted from "effect/Redacted"
 import * as Timestamp from "@my/core/shared/values/Timestamp"
 import { claimTokenPepperConfig, hashCliClaimToken } from "../helpers/ClaimTokenHash.ts"
+import {
+  assertHasSyncCredits,
+  SYNC_CREDIT_REQUIRED_MESSAGE,
+  type NoUsableCreditsError,
+} from "../helpers/SyncCreditAdmission.ts"
 import type { User } from "../definitions/AuthMiddleware.ts"
 import { PrincipalResolutionService } from "../services/PrincipalResolutionService.ts"
 import {
   SourceCreationBadRequestError,
+  SourceCreationCreditRequiredError,
   SourceCreationInternalError,
   SourceCreationPaymentRequiredError,
   SourceCreationService,
@@ -50,6 +57,12 @@ const toPaymentRequiredError = ({
   readonly paymentRequired?: unknown
   readonly paymentRequiredHeader?: string | undefined
 }) => new SourceCreationPaymentRequiredError({ message, paymentRequired, paymentRequiredHeader })
+const toCreditRequiredError = (error: NoUsableCreditsError) =>
+  new SourceCreationCreditRequiredError({
+    message: SYNC_CREDIT_REQUIRED_MESSAGE,
+    reasonCode: error.reasonCode,
+    availableCredits: error.availableCredits,
+  })
 
 const generateClaimToken = (): string => {
   const bytes = new Uint8Array(CLI_CLAIM_TOKEN_BYTES)
@@ -65,6 +78,7 @@ export const SourceCreationServiceLive = Layer.effect(
   Effect.gen(function* () {
     const principalRepository = yield* PrincipalRepository
     const principalClaimRepository = yield* PrincipalClaimRepository
+    const billingRepository = yield* BillingRepository
     const sourceRepository = yield* SourceRepository
     const sourceSyncService = yield* SourceSyncService
     const x402PaymentValidator = yield* X402PaymentValidator
@@ -377,6 +391,24 @@ export const SourceCreationServiceLive = Layer.effect(
             paymentResponseHeader: null,
             anonPayerSession: null,
           }
+        }
+
+        if (Option.isSome(currentUser)) {
+          yield* assertHasSyncCredits({
+            billingRepository,
+            principalClaimRepository,
+            userId: currentUser.value.userId,
+            sourceId: created.source.id,
+          }).pipe(
+            Effect.mapError((error) => {
+              switch (error._tag) {
+                case "NoUsableCreditsError":
+                  return toCreditRequiredError(error)
+                default:
+                  return toInternalError("Failed to check sync credit balance.")
+              }
+            })
+          )
         }
 
         const maybeClaimTokenPepper = isAnonymous

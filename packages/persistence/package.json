@@ -23,6 +23,10 @@
     "./query": {
       "types": "./dist/query/index.d.ts",
       "default": "./dist/query/index.js"
+    },
+    "./errors": {
+      "types": "./dist/errors/RepositoryError.d.ts",
+      "default": "./dist/errors/RepositoryError.js"
     }
   },
   "scripts": {

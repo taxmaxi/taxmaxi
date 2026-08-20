@@ -4,6 +4,7 @@
  * @module SourceCreationService
  */
 
+import { SyncCreditReasonCode } from "@my/core/billing"
 import type { Source } from "@my/core/source"
 import type { AnonPayerSessionSubject } from "./AnonSessionService.ts"
 import type { SourceSyncJobSummary } from "@my/sync-engine/services"
@@ -47,6 +48,18 @@ export class SourceCreationPaymentRequiredError extends Schema.TaggedError<Sourc
 ) {}
 
 /**
+ * SourceCreationCreditRequiredError - Registered caller has no usable credits for a billable sync.
+ */
+export class SourceCreationCreditRequiredError extends Schema.TaggedError<SourceCreationCreditRequiredError>()(
+  "SourceCreationCreditRequiredError",
+  {
+    message: Schema.String,
+    reasonCode: SyncCreditReasonCode,
+    availableCredits: Schema.Number,
+  }
+) {}
+
+/**
  * SourceCreationClaimMetadata - Anonymous source claim handle.
  */
 export interface SourceCreationClaimMetadata {
@@ -84,6 +97,7 @@ export type SourceCreationError =
   | SourceCreationBadRequestError
   | SourceCreationInternalError
   | SourceCreationPaymentRequiredError
+  | SourceCreationCreditRequiredError
 
 /**
  * SourceCreationServiceShape - Optional-auth source creation use case.

@@ -103,6 +103,7 @@ const makeServiceLayer = ({
     listRepairableActiveJobs: unusedJobLifecycleMethods.listRepairableActiveJobs,
     listPendingJobsNeedingDispatch: unusedJobLifecycleMethods.listPendingJobsNeedingDispatch,
     failJob: () => Effect.die("failJob should not be called"),
+    failCreditRequiredJob: () => Effect.die("failCreditRequiredJob should not be called"),
     completeJob: () => Effect.die("completeJob should not be called"),
     getJob: () => Effect.die("getJob should not be called"),
     getExecutionJob: () => Effect.die("getExecutionJob should not be called"),
@@ -168,6 +169,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-sync",
       status: "queued",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual(["create:sync"])
     expect(enqueued).toHaveLength(1)
@@ -224,6 +227,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-reused-pending",
       status: "queued",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual(["create:sync"])
     expect(enqueued).toHaveLength(1)
@@ -262,6 +267,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-reused-processing",
       status: "running",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual(["create:sync"])
     expect(enqueued).toEqual([])
@@ -291,6 +298,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-active",
       status: "queued",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual([])
     expect(enqueued).toEqual([])
@@ -336,6 +345,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-processing",
       status: "running",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual([])
     expect(enqueued).toEqual([])
@@ -398,6 +409,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-replacement",
       status: "queued",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual(["create:replay"])
     expect(enqueued).toHaveLength(1)
@@ -460,6 +473,8 @@ describe("SourceSyncService queue orchestration", () => {
       jobId: "job-sync",
       status: "queued",
       message: null,
+      resumable: false,
+      creditOutcome: null,
     })
     expect(repositoryEvents).toEqual(["recover:job-stale", "create:sync"])
     expect(enqueued).toHaveLength(1)

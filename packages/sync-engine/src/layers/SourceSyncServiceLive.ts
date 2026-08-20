@@ -17,12 +17,12 @@ import {
   SourceSyncQueuePayload,
   SourceSyncService,
   SyncEngineStorageError,
+  makePlainSourceSyncJobSummary,
+  toPublicSourceSyncJobStatus,
   UnsupportedProviderError,
-  type SourceSyncJobStatus,
   type SourceSyncJobSummary,
   type SourceSyncServiceShape,
   type SourceSyncSource,
-  type SyncJobStatus,
   type SourceSyncQueueError,
 } from "../services/index.ts"
 import {
@@ -33,19 +33,6 @@ import {
 
 const ACTIVE_SYNC_JOB_STALE_AFTER_MILLIS = 30_000
 const DEFAULT_SOURCE_SYNC_MAX_ATTEMPTS = 3
-
-const toPublicStatus = (status: SourceSyncJobStatus): SyncJobStatus => {
-  switch (status) {
-    case "pending":
-      return "queued"
-    case "processing":
-      return "running"
-    case "completed":
-      return "completed"
-    case "failed":
-      return "failed"
-  }
-}
 
 const isStaleActiveProcessingJob = ({
   updatedAt,
@@ -230,12 +217,11 @@ const make = Effect.gen(function* () {
             })
             yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "queued" })
 
-            return {
+            return makePlainSourceSyncJobSummary({
               sourceId: source.id,
               jobId: replayRequest.id,
               status: "queued",
-              message: null,
-            } satisfies SourceSyncJobSummary
+            })
           }
 
           // A different active job may have replaced the initial snapshot while
@@ -264,12 +250,11 @@ const make = Effect.gen(function* () {
             yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "already-running" })
           }
 
-          return {
+          return makePlainSourceSyncJobSummary({
             sourceId: source.id,
             jobId: jobToReuse.id,
-            status: toPublicStatus(jobToReuse.status),
-            message: null,
-          } satisfies SourceSyncJobSummary
+            status: toPublicSourceSyncJobStatus(jobToReuse.status),
+          })
         }
       }
 
@@ -298,12 +283,11 @@ const make = Effect.gen(function* () {
 
         yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "reused-job" })
 
-        return {
+        return makePlainSourceSyncJobSummary({
           sourceId: source.id,
           jobId: job.id,
-          status: toPublicStatus(job.status),
-          message: null,
-        } satisfies SourceSyncJobSummary
+          status: toPublicSourceSyncJobStatus(job.status),
+        })
       }
 
       yield* enqueuePendingJob({
@@ -315,12 +299,11 @@ const make = Effect.gen(function* () {
 
       yield* recordSourceSyncJobOutcome({ provider, mode, outcome: "enqueued-job" })
 
-      return {
+      return makePlainSourceSyncJobSummary({
         sourceId: source.id,
         jobId: job.id,
         status: "queued",
-        message: null,
-      } satisfies SourceSyncJobSummary
+      })
     }).pipe(
       sourceSyncSpan({ name: "source-sync.job", attributes: { principalId, sourceId, mode } })
     )

@@ -109,8 +109,13 @@ export type {
   AuthOAuthSessionResponse,
   AuthPromiseResource,
 } from "./auth/index.ts"
-export { TaxMaxiError, isTaxMaxiUnauthorizedError, toTaxMaxiError } from "./errors.ts"
-export type { TaxMaxiFieldError } from "./errors.ts"
+export {
+  TaxMaxiError,
+  getTaxMaxiCreditRequired,
+  isTaxMaxiUnauthorizedError,
+  toTaxMaxiError,
+} from "./errors.ts"
+export type { TaxMaxiCreditRequired, TaxMaxiFieldError } from "./errors.ts"
 export type {
   BillingCatalog,
   BillingEffectResource,

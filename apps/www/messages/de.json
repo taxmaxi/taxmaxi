@@ -87,6 +87,58 @@
       "errors": {
         "unavailable": "Die Abrechnung ist vorübergehend nicht verfügbar."
       }
+    },
+    "syncIsland": {
+      "creditRequired": {
+        "statusLabel": "Guthaben nötig",
+        "headline": "Guthaben nötig, um {sourceNames} weiter zu synchronisieren",
+        "pausedNoDetails": "Diese Synchronisierung pausiert, bis du Transaktionsguthaben hinzufügst.",
+        "pausedIntro": "Diese Synchronisierung pausiert: Dein Transaktionsguthaben ist aufgebraucht.",
+        "coveredOne": "{count} Transaktion ist bereits importiert und bleibt erhalten.",
+        "coveredMany": "{count} Transaktionen sind bereits importiert und bleiben erhalten.",
+        "addUnknown": "Füge Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addOne": "Füge bis zu {count} weiteres Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "addMany": "Füge bis zu {count} weitere Guthaben hinzu, um die Synchronisierung abzuschließen.",
+        "choosePlan": "Tarif wählen",
+        "buyCredits": "Guthaben kaufen",
+        "notStarted": "Diese Synchronisierung braucht Transaktionsguthaben, bevor sie starten kann. Füge Guthaben hinzu und starte sie erneut."
+      },
+      "status": {
+        "queued": "Wartet",
+        "running": "Synchronisiert",
+        "completed": "Abgeschlossen",
+        "failed": "Fehlgeschlagen"
+      },
+      "headline": {
+        "queued": "Warten auf {sourceNames}",
+        "running": "Synchronisiere {sourceNames}",
+        "completed": "{sourceNames} synchronisiert",
+        "failed": "Synchronisierung von {sourceNames} fehlgeschlagen",
+        "fallback": "Synchronisierung läuft"
+      },
+      "sourceNames": {
+        "fallback": "Quelle",
+        "pair": "{first} und {second}",
+        "overflow": "{first}, {second} + {count} weitere"
+      },
+      "metrics": {
+        "fetched": "Abgerufen",
+        "categorized": "Kategorisiert",
+        "failed": "Fehlgeschlagen"
+      },
+      "queue": {
+        "title": "Wird ebenfalls synchronisiert",
+        "moreOne": "+{count} weitere Quelle",
+        "moreMany": "+{count} weitere Quellen"
+      },
+      "retry": "Erneut versuchen",
+      "openDetailsToRetry": "Öffne die Sync-Details, um es erneut zu versuchen.",
+      "aria": {
+        "showDetails": "Sync-Details für {sourceName} anzeigen",
+        "showDetailsHeadline": "Sync-Details anzeigen: {headline}",
+        "hideDetails": "Sync-Details für {sourceName} ausblenden",
+        "dismiss": "Sync-Status von {sourceName} schließen"
+      }
     }
   },
   "assetCatalog": {

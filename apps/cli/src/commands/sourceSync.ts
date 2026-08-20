@@ -9,7 +9,7 @@ const JOB_POLL_INTERVAL = Duration.seconds(2)
 export type SyncSummary = {
   readonly sourceId: string
   readonly jobId: string
-  readonly importedRecords: number
+  readonly fetchedRecords: number
   readonly normalizedRecords: number
   readonly failedRecords: number
 }
@@ -41,7 +41,7 @@ export const waitForSyncCompletion = ({
           return {
             sourceId: job.sourceId,
             jobId: job.jobId,
-            importedRecords: job.importedRecords ?? 0,
+            fetchedRecords: job.fetchedRecords ?? 0,
             normalizedRecords: job.normalizedRecords ?? 0,
             failedRecords: job.failedRecords ?? 0,
           } satisfies SyncSummary
@@ -49,6 +49,18 @@ export const waitForSyncCompletion = ({
 
         if (job.status === "failed") {
           return yield* new CliCommandError({ message: job.message ?? "Source sync failed." })
+        }
+
+        if (job.status === "credit_required") {
+          // The server sends no message for this outcome; the CLI builds its
+          // own copy from the structured credit fields.
+          const shortfall = job.creditOutcome?.additionalCreditsRequired
+          return yield* new CliCommandError({
+            message:
+              shortfall === null || shortfall === undefined
+                ? "Sync paused: add credits, then run sync again to continue."
+                : `Sync paused: up to ${shortfall} more credit${shortfall === 1 ? "" : "s"} needed. Add credits, then run sync again to continue.`,
+          })
         }
 
         const currentTime = yield* nowMillis

@@ -2,7 +2,7 @@
 
 import { act, renderHook } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import type { SourceSyncJob } from "taxmaxi"
+import { TaxMaxiError, type SourceSyncJob } from "taxmaxi"
 
 import { useSourceSyncs } from "#/hooks/use-source-syncs"
 
@@ -23,10 +23,12 @@ const makeJob = (status: SourceSyncJob["status"]): SourceSyncJob => ({
   processedRecords: null,
   totalRecords: null,
   progressPercent: status === "completed" ? 100 : 50,
-  importedRecords: null,
+  fetchedRecords: null,
   normalizedRecords: null,
   failedRecords: null,
   message: null,
+  resumable: false,
+  creditOutcome: null,
 })
 
 const deferred = <A,>() => {
@@ -60,6 +62,8 @@ describe("useSourceSyncs", () => {
           jobId: "job-1",
           status: "queued",
           message: null,
+          resumable: false,
+          creditOutcome: null,
         }),
       })
     )
@@ -82,5 +86,93 @@ describe("useSourceSyncs", () => {
       await Promise.resolve()
     })
     expect(result.current.activeSyncs[0]?.status).toBe("completed")
+  })
+
+  it("carries the structured credit outcome of a credit-required job onto the island item", async () => {
+    vi.useFakeTimers()
+    const poll = deferred<SourceSyncJob>()
+    const getSourceSyncJob = vi.fn<() => Promise<SourceSyncJob>>().mockReturnValue(poll.promise)
+
+    const { result } = renderHook(() =>
+      useSourceSyncs({
+        accountsById: new Map([[source.id, source]]),
+        getSourceSyncJob,
+        startSourceSync: async () => ({
+          sourceId: source.id,
+          jobId: "job-1",
+          status: "queued",
+          message: null,
+          resumable: false,
+          creditOutcome: null,
+        }),
+      })
+    )
+
+    await act(async () => {
+      await result.current.onSourceSync(source)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000)
+    })
+
+    await act(async () => {
+      poll.resolve({
+        ...makeJob("credit_required"),
+        message: null,
+        resumable: true,
+        creditOutcome: {
+          reasonCode: "no_usable_credits",
+          availableCredits: 0,
+          creditsConsumed: 3,
+          additionalCreditsRequired: 2,
+        },
+      })
+      await Promise.resolve()
+    })
+
+    expect(result.current.activeSyncs[0]?.status).toBe("credit_required")
+    expect(result.current.activeSyncs[0]?.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 3,
+      additionalCreditsRequired: 2,
+    })
+  })
+
+  it("surfaces a refused zero-credit start as credit-required, not a failed sync", async () => {
+    const refusal = new TaxMaxiError({
+      code: "SourceCreditRequiredError",
+      message: "No usable credits available to start a sync.",
+      status: 402,
+      cause: {
+        _tag: "SourceCreditRequiredError",
+        message: "No usable credits available to start a sync.",
+        reasonCode: "no_usable_credits",
+        availableCredits: 0,
+      },
+    })
+
+    const { result } = renderHook(() =>
+      useSourceSyncs({
+        accountsById: new Map([[source.id, source]]),
+        startSourceSync: async () => {
+          throw refusal
+        },
+      })
+    )
+
+    await act(async () => {
+      await result.current.onSourceSync(source)
+    })
+
+    const sync = result.current.activeSyncs[0]
+    expect(sync?.status).toBe("credit_required")
+    expect(sync?.message).toBeUndefined()
+    expect(sync?.creditOutcome).toEqual({
+      reasonCode: "no_usable_credits",
+      availableCredits: 0,
+      creditsConsumed: 0,
+      additionalCreditsRequired: null,
+    })
   })
 })
