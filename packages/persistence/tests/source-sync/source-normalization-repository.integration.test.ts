@@ -341,7 +341,7 @@ describe("SourceNormalizationRepositoryLive", () => {
         metadata: null,
       },
       providerTransfers: [],
-      feeTransfers: [],
+      canonicalTransfers: [],
       legs: [],
       transactionReview: null,
       resolvedTransactionType: APPROVED_MAPPING,
