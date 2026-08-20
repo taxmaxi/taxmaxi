@@ -1,27 +1,31 @@
 ---
 name: ralph
-description: Manage TaxMaxi Ralph workflow files, especially importing GitHub issues created by the local planning skills into ralph/prd.json stories.
-compatibility: Designed for Codex, Cursor CLI, and similar coding agents.
+description: Import a GitHub issue into ralph/prd.json by splitting it into independently runnable Ralph stories. Use when the user asks to import an issue into Ralph, populate prd.json, or turn a planning/implementation issue into Ralph tasks.
+compatibility: Designed for Codex, Grok, Claude Code, Cursor CLI, and similar coding agents.
 allowed-tools: Bash Read Write Edit Grep
 ---
 
 # Ralph Workflow Skill
 
+Turn one GitHub issue into multiple Ralph stories in `ralph/prd.json`.
+
 Use this skill when the user asks to:
 
-- Import a GitHub issue into Ralph stories.
+- Import a GitHub issue into Ralph.
 - Populate or update `ralph/prd.json`.
-- Convert issues created by `to-prd`, `to-issues`, `request-refactor-plan`, or `triage-issue` into executable Ralph stories.
+- Split an issue created by `to-prd`, `to-issues`, `request-refactor-plan`, or `triage-issue` into Ralph tasks.
 - Reset or maintain Ralph working files.
 
 ## Core Principle
 
-Do not rely on transient chat context as the source of truth. Materialize the GitHub issue into `ralph/intake.md`, then update `ralph/prd.json` from that stable artifact.
+Do not rely on chat context. Fetch the GitHub issue, write `ralph/intake.md`, then split that issue into independently runnable stories in `ralph/prd.json`.
 
-Preferred flow:
+A Ralph story is one slice the loop can finish in a single iteration or a few corrective iterations. Prefer several small stories over one large story.
+
+## Flow
 
 1. Fetch the source issue with `gh issue view <number-or-url> --comments --json number,title,body,url,labels,state,comments`.
-2. If the source issue names a parent issue, fetch that parent issue and sibling issue titles:
+2. If the source issue names a parent issue, fetch that parent and sibling titles:
    - Parse the source issue's `Parent` section, or any explicit issue reference described as the parent, into a parent issue number or URL.
    - Fetch the parent issue with `gh issue view <parent-number-or-url> --json number,title,body,url,labels,state`.
    - Find related sibling issues that mention the same parent issue with `gh issue list --state all --search "<parent-issue-url-or-#number> in:body" --json number,title,url,state`.
@@ -29,79 +33,66 @@ Preferred flow:
    - Exclude the source issue itself from siblings.
 3. Write or update `ralph/intake.md` with the issue metadata, detected template, parsed sections, parent issue context, sibling issue titles, constraints, and verification expectations.
 4. Read `ralph/prd.json`.
-5. Generate or update Ralph stories from `ralph/intake.md`.
-6. Write `ralph/prd.json` and summarize the changes.
+5. Split the issue into multiple Ralph stories and write `ralph/prd.json`.
+6. Summarize the stories and how to run the loop.
 
-## Supported Source Issue Templates
+## How To Split
 
-### `to-prd`
+Default: create more than one story.
 
-Detected sections:
+Split on independently verifiable units already present in the issue:
 
-- `Problem Statement`
-- `Solution`
-- `User Stories`
-- `Implementation Decisions`
-- `Testing Decisions`
-- `Out of Scope`
-- `Further Notes`
+- User stories or "What to build" clusters
+- Acceptance-criteria groups that can ship separately
+- Commit steps from a refactor plan
+- RED/GREEN cycles from a triage plan
+- Foundation work that later stories depend on
 
-Conversion:
+Keep a single story only when the issue is already one small, independently verifiable slice.
 
-- Prefer one Ralph story per cohesive user-story cluster.
+Do not split a vertical slice into horizontal layers (schema-only, then API-only, then UI-only). Each story should still be a complete, checkable change.
+
+Do not create stories for out-of-scope work or sibling issues.
+
+Use `blocked_by` for Ralph story IDs so later stories wait on earlier ones.
+
+### Template hints
+
+**to-prd**
+
+Detected sections: `Problem Statement`, `Solution`, `User Stories`, `Implementation Decisions`, `Testing Decisions`, `Out of Scope`, `Further Notes`.
+
+- One story per cohesive user-story cluster.
 - Preserve the PRD issue as `source`.
 - Put durable architecture guidance in `implementation_notes`.
 - Put behavior-focused testing guidance in `testing_notes`.
 - Do not copy file paths or brittle implementation details into stories.
 
-### `to-issues`
+**to-issues**
 
-Detected sections:
+Detected sections: `Parent`, `What to build`, `Acceptance criteria`, `Blocked by`.
 
-- `Parent`
-- `What to build`
-- `Acceptance criteria`
-- `Blocked by`
-
-Conversion:
-
-- Usually create exactly one Ralph story per implementation issue.
+- Split further when `What to build` or `Acceptance criteria` contain more than one independently verifiable change.
+- One story is enough when the issue is already a single thin slice.
 - Use `What to build` as `description`.
 - Use checklist items from `Acceptance criteria` as `acceptance_criteria`.
 - Preserve GitHub blockers in `blocked_by_issues`.
 - Use `blocked_by` only for Ralph story IDs that exist in `ralph/prd.json`.
 
-### `request-refactor-plan`
+**request-refactor-plan**
 
-Detected sections:
+Detected sections: `Problem Statement`, `Solution`, `Commits`, `Decision Document`, `Testing Decisions`, `Out of Scope`, `Further Notes`.
 
-- `Problem Statement`
-- `Solution`
-- `Commits`
-- `Decision Document`
-- `Testing Decisions`
-- `Out of Scope`
-- `Further Notes`
-
-Conversion:
-
-- Create one Ralph story per independently verifiable commit step or small commit group.
+- One story per independently verifiable commit step or small commit group.
 - Keep each story behavior-preserving unless the source issue explicitly includes a behavior change.
 - Put durable design decisions in `implementation_notes`.
 - Put testing decisions in `testing_notes`.
 
-### `triage-issue`
+**triage-issue**
 
-Detected sections:
+Detected sections: `Problem`, `Root Cause Analysis`, `TDD Fix Plan`, `Acceptance Criteria`.
 
-- `Problem`
-- `Root Cause Analysis`
-- `TDD Fix Plan`
-- `Acceptance Criteria`
-
-Conversion:
-
-- Create one Ralph story per RED/GREEN cycle when cycles are independently verifiable.
+- One story per RED/GREEN cycle when cycles are independently verifiable.
 - Otherwise create one story for the smallest complete bug fix.
 - Use observable acceptance criteria, not internal implementation assertions.
 - Preserve root-cause summary in `implementation_notes`.
@@ -183,7 +174,7 @@ Every story in `ralph/prd.json` must match this shape:
 2. Read or create `ralph/intake.md` from the source issue.
    - If the source issue has a parent issue, include a concise parent summary in `Parent Context`.
    - Include titles of sibling issues that mention the same parent issue in `Related Future Issues`.
-   - Use sibling issue titles to avoid over-scoping the current story into work that has already been split into future tickets.
+   - Use sibling issue titles to avoid over-scoping the current stories into work that has already been split into future tickets.
 3. If the PRD still contains the example story (`EX-001` / `Example story title`), remove it when adding real stories.
 4. Update PRD metadata:
    - `title`: short name for the imported issue or issue group.
@@ -196,12 +187,10 @@ Every story in `ralph/prd.json` must match this shape:
    - Do not use `EX`.
    - Use 2-4 uppercase letters derived from the feature or issue type.
    - Continue numbering from existing real stories with the same prefix.
-6. Generate small, ordered stories:
+6. Generate small, ordered stories from the one source issue:
    - Foundation and dependency stories first.
    - End-to-end tracer bullets where possible.
-   - Prefer one issue-slice story for `to-issues`.
-   - Prefer RED/GREEN cycle stories for `triage-issue`.
-   - Prefer behavior-preserving small steps for `request-refactor-plan`.
+   - Default to multiple stories; keep one only when the issue is already a single thin slice.
 7. Deduplicate:
    - Do not generate a story when `source.issue` and title/scope are already represented.
    - Do not edit existing real stories unless the user asks for an update.
@@ -244,3 +233,4 @@ After updating `ralph/prd.json`, report:
 - Short changelog of PRD updates.
 - Table of added stories: ID, title, priority, complexity, verification.
 - Assumptions or blockers.
+- How to run the loop: `bash ralph/ralph.sh gpt`, `bash ralph/ralph.sh grok`, or `bash ralph/ralph.sh claude`.
