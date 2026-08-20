@@ -6,6 +6,7 @@ import type { BillingStatus, SourceSyncJob } from "taxmaxi"
 
 import { SourceSyncStatusOrb } from "#/components/source-sync-status-orb"
 import { m } from "#/paraglide/messages"
+import { getLocale } from "#/paraglide/runtime"
 import {
   SOURCE_SYNC_MOCK_SCENARIOS,
   SOURCE_SYNC_MOCKS_ENABLED,
@@ -107,7 +108,7 @@ export function getCreditRequiredCopy(creditOutcome: SourceSyncCreditOutcome | u
       creditOutcome.creditsConsumed === 1
         ? m["app.syncIsland.creditRequired.coveredOne"]
         : m["app.syncIsland.creditRequired.coveredMany"]
-    parts.push(covered({ count: integerFormatter.format(creditOutcome.creditsConsumed) }))
+    parts.push(covered({ count: formatInteger(creditOutcome.creditsConsumed) }))
   }
 
   if (creditOutcome.additionalCreditsRequired === null) {
@@ -117,7 +118,7 @@ export function getCreditRequiredCopy(creditOutcome: SourceSyncCreditOutcome | u
       creditOutcome.additionalCreditsRequired === 1
         ? m["app.syncIsland.creditRequired.addOne"]
         : m["app.syncIsland.creditRequired.addMany"]
-    parts.push(add({ count: integerFormatter.format(creditOutcome.additionalCreditsRequired) }))
+    parts.push(add({ count: formatInteger(creditOutcome.additionalCreditsRequired) }))
   }
 
   return parts.join(" ")
@@ -274,7 +275,9 @@ const statusTone: Record<SourceSyncStatus, string> = {
   credit_required: "text-sync-island-failed",
 }
 
-const integerFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 })
+// Resolved per call so number grouping follows the active locale.
+const formatInteger = (value: number): string =>
+  new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 0 }).format(value)
 
 export function SourceSyncIsland({ items, onDismiss, onRetry }: SourceSyncIslandProps) {
   const reduceMotion = useReducedMotion()
@@ -747,7 +750,7 @@ function getAnnouncement(items: ReadonlyArray<SourceSyncIslandItem>): string {
 }
 
 function formatRecordCount(value: number | undefined): string {
-  return value === undefined ? "—" : integerFormatter.format(value)
+  return value === undefined ? "—" : formatInteger(value)
 }
 
 function getShellTransition(reduceMotion: boolean) {
