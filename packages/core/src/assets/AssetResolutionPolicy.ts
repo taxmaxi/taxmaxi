@@ -1,10 +1,15 @@
 /**
- * Attach-only asset resolution policy.
+ * Automatic asset resolution policy.
  *
- * Decodes exact chain facts and CoinGecko responses into typed claims and
- * decides attach, pending, or fail-closed. CoinGecko may prove representation
- * ownership only for an existing economic asset under exact platform, address,
- * type, and decimals checks. Names and symbols are display data.
+ * Decodes exact chain facts and CoinGecko contract-lookup responses into
+ * typed claims and decides attach, create-standalone, pending, or
+ * fail-closed. CoinGecko may prove representation ownership for an existing
+ * economic asset under exact platform, address, type, and decimals checks. A
+ * new exact representation with no plausible existing candidate, no
+ * ownership conflict, and no authoritative spam evidence may become a
+ * standalone economic asset. Names and symbols are display data: they can
+ * block automatic creation by raising a possible duplicate, but they never
+ * prove a merge or separation.
  *
  * @module assets/AssetResolutionPolicy
  */
@@ -12,8 +17,8 @@
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
-/** Policy revision recorded with every attach-only decision. */
-export const ATTACH_ONLY_RESOLUTION_POLICY_REVISION = "2026-08-19.attach-only.1"
+/** Policy revision recorded with every automatic resolution decision. */
+export const ASSET_RESOLUTION_POLICY_REVISION = "2026-08-21.standalone-create.1"
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 
@@ -49,6 +54,15 @@ export const EconomicAssetType = Schema.Literals(["fungible", "nft"]).annotate({
 
 /** The EconomicAssetType type. */
 export type EconomicAssetType = typeof EconomicAssetType.Type
+
+/**
+ * Representation types the policy may turn into a standalone economic asset.
+ * Fungible tokens only for now: native assets ship as reference data, and
+ * NFTs wait for spam evidence and an NFT accounting story. Adding a type
+ * here (for example EVM contracts arrive as "token" too) is a policy
+ * revision, not a restructure.
+ */
+export const STANDALONE_CREATION_SUPPORTED_TYPES: ReadonlyArray<RepresentationType> = ["token"]
 
 const chainFactIdentityMatchesType = ({
   type,
@@ -126,7 +140,7 @@ export const CoinGeckoCoinPayload = Schema.Struct({
 }).annotate({
   identifier: "CoinGeckoCoinPayload",
   title: "CoinGecko Coin Payload",
-  description: "CoinGecko coin response used as attach-only representation evidence",
+  description: "CoinGecko coin response used as resolution evidence",
 })
 
 /** The CoinGeckoCoinPayload type. */
@@ -141,7 +155,7 @@ export class CoinGeckoPlatformMapping extends Schema.Class<CoinGeckoPlatformMapp
   decimals: Schema.NullOr(AssetDecimals),
 }) {}
 
-/** Typed CoinGecko claim. Ownership may be proved only under existing-asset checks. */
+/** Typed CoinGecko claim. Ownership may be proved only under exact checks. */
 export class CoinGeckoClaim extends Schema.TaggedClass<CoinGeckoClaim>()("coingecko_claim", {
   coinId: NonEmptyString,
   name: Schema.String,
@@ -151,6 +165,48 @@ export class CoinGeckoClaim extends Schema.TaggedClass<CoinGeckoClaim>()("coinge
 
 /** Type guard for CoinGeckoClaim. */
 export const isCoinGeckoClaim = Schema.is(CoinGeckoClaim)
+
+/**
+ * Definitive registry answer that no coin exists for the looked-up
+ * representation. Unlike an upstream failure, this is evidence: the registry
+ * was reached and does not know the asset.
+ */
+export class RegistryLookupNotFound extends Schema.TaggedClass<RegistryLookupNotFound>()(
+  "registry_not_found",
+  {}
+) {}
+
+/** Type guard for RegistryLookupNotFound. */
+export const isRegistryLookupNotFound = Schema.is(RegistryLookupNotFound)
+
+/**
+ * No registry lookup was performed because the observation carries nothing
+ * to look up, such as a native representation with no address. Unlike
+ * RegistryLookupNotFound this says nothing about what the registry knows.
+ */
+export class RegistryLookupSkipped extends Schema.TaggedClass<RegistryLookupSkipped>()(
+  "registry_not_queried",
+  {}
+) {}
+
+/** Type guard for RegistryLookupSkipped. */
+export const isRegistryLookupSkipped = Schema.is(RegistryLookupSkipped)
+
+/**
+ * Typed legitimacy or spam claim from an allowlisted authority such as
+ * Jupiter. Only an explicit `banned` verdict is authoritative spam evidence;
+ * `unverified` or `suspicious` alone never blocks a legitimate asset.
+ */
+export class AssetLegitimacyClaim extends Schema.TaggedClass<AssetLegitimacyClaim>()(
+  "legitimacy_claim",
+  {
+    authority: NonEmptyString,
+    verdict: Schema.Literals(["verified", "unverified", "suspicious", "banned"]),
+  }
+) {}
+
+/** Type guard for AssetLegitimacyClaim. */
+export const isAssetLegitimacyClaim = Schema.is(AssetLegitimacyClaim)
 
 /** Evidence source whose payload could not be decoded or fetched. */
 export const AssetResolutionEvidenceSource = Schema.Literals(["chain", "coingecko"]).annotate({
@@ -195,24 +251,23 @@ export class AssetResolutionConflictingEvidence extends Schema.TaggedError<Asset
 /** Type guard for AssetResolutionConflictingEvidence. */
 export const isAssetResolutionConflictingEvidence = Schema.is(AssetResolutionConflictingEvidence)
 
-/** Reason a well-formed claim set stays pending instead of attaching. */
+/** Reason a well-formed claim set stays pending instead of resolving. */
 export const PendingResolutionReason = Schema.Literals([
-  "missing_existing_economic_asset",
-  "missing_registry_identity",
-  "ambiguous_symbol_candidates",
+  "display_collision",
   "non_exact_platform_match",
+  "spam_evidence",
+  "unsupported_representation_type",
 ]).annotate({
   identifier: "PendingResolutionReason",
   title: "Pending Resolution Reason",
-  description: "Why attach-only policy did not attach a representation",
+  description: "Why the policy neither attached nor created",
 })
 
 /** The PendingResolutionReason type. */
 export type PendingResolutionReason = typeof PendingResolutionReason.Type
 
-/** Reason attach-only policy failed closed. */
+/** Reason the policy failed closed. */
 export const FailClosedResolutionReason = Schema.Literals([
-  "ambiguous_economic_asset",
   "conflicting_evidence",
   "incompatible_decimals",
   "incompatible_type",
@@ -222,13 +277,13 @@ export const FailClosedResolutionReason = Schema.Literals([
 ]).annotate({
   identifier: "FailClosedResolutionReason",
   title: "Fail Closed Resolution Reason",
-  description: "Why attach-only policy failed closed",
+  description: "Why the policy failed closed",
 })
 
 /** The FailClosedResolutionReason type. */
 export type FailClosedResolutionReason = typeof FailClosedResolutionReason.Type
 
-const PolicyRevision = Schema.Literal(ATTACH_ONLY_RESOLUTION_POLICY_REVISION)
+const PolicyRevision = Schema.Literal(ASSET_RESOLUTION_POLICY_REVISION)
 
 /** Attach a new exact representation to an existing economic asset. */
 export class AttachRepresentationDecision extends Schema.TaggedClass<AttachRepresentationDecision>()(
@@ -247,7 +302,31 @@ export class AttachRepresentationDecision extends Schema.TaggedClass<AttachRepre
 /** Type guard for AttachRepresentationDecision. */
 export const isAttachRepresentationDecision = Schema.is(AttachRepresentationDecision)
 
-/** Evidence is well-formed but not enough to attach. */
+/**
+ * Create a standalone economic asset owning one new exact representation.
+ * The display name and symbol are untrusted display data carried from the
+ * evidence the decision links to; identity is the representation and, when
+ * present, the stamped CoinGecko coin id.
+ */
+export class CreateStandaloneAssetDecision extends Schema.TaggedClass<CreateStandaloneAssetDecision>()(
+  "create_standalone",
+  {
+    policyRevision: PolicyRevision,
+    blockchain: NonEmptyString,
+    type: RepresentationType,
+    contractAddress: Schema.NullOr(NonEmptyString),
+    mintAddress: Schema.NullOr(NonEmptyString),
+    decimals: AssetDecimals,
+    coingeckoCoinId: Schema.NullOr(NonEmptyString),
+    name: NonEmptyString,
+    symbol: NonEmptyString,
+  }
+) {}
+
+/** Type guard for CreateStandaloneAssetDecision. */
+export const isCreateStandaloneAssetDecision = Schema.is(CreateStandaloneAssetDecision)
+
+/** Evidence is well-formed but not enough to attach or create. */
 export class PendingResolutionDecision extends Schema.TaggedClass<PendingResolutionDecision>()(
   "pending",
   {
@@ -259,7 +338,7 @@ export class PendingResolutionDecision extends Schema.TaggedClass<PendingResolut
 /** Type guard for PendingResolutionDecision. */
 export const isPendingResolutionDecision = Schema.is(PendingResolutionDecision)
 
-/** Evidence is unsafe or unusable; do not attach. */
+/** Evidence is unsafe or unusable; do not attach or create. */
 export class FailClosedResolutionDecision extends Schema.TaggedClass<FailClosedResolutionDecision>()(
   "fail_closed",
   {
@@ -271,30 +350,43 @@ export class FailClosedResolutionDecision extends Schema.TaggedClass<FailClosedR
 /** Type guard for FailClosedResolutionDecision. */
 export const isFailClosedResolutionDecision = Schema.is(FailClosedResolutionDecision)
 
-/** Attach-only policy outcome. */
+/** Automatic resolution policy outcome. */
 export type AssetResolutionDecision =
   | AttachRepresentationDecision
+  | CreateStandaloneAssetDecision
   | FailClosedResolutionDecision
   | PendingResolutionDecision
 
-/** Schema for attach-only policy outcomes. */
+/** Schema for automatic resolution policy outcomes. */
 export const AssetResolutionDecisionSchema = Schema.Union([
   AttachRepresentationDecision,
+  CreateStandaloneAssetDecision,
   PendingResolutionDecision,
   FailClosedResolutionDecision,
 ]).annotate({
   identifier: "AssetResolutionDecision",
   title: "Asset Resolution Decision",
-  description: "Attach, pending, or fail-closed outcome at the attach-only policy boundary",
+  description: "Attach, create-standalone, pending, or fail-closed policy outcome",
 })
 
 /** Type guard for AssetResolutionDecision. */
 export const isAssetResolutionDecision = Schema.is(AssetResolutionDecisionSchema)
 
-/** Existing economic asset that CoinGecko may attach a representation to. */
+/** Existing economic asset that owns the looked-up CoinGecko coin id. */
 export interface AssetResolutionEconomicAsset {
   readonly assetKey: string
   readonly coingeckoCoinId: string
+  readonly type: EconomicAssetType
+}
+
+/**
+ * Existing economic asset whose display name or symbol matches the
+ * observation. Display matches can raise a possible duplicate but never
+ * prove one.
+ */
+export interface AssetResolutionDisplayCandidate {
+  readonly assetKey: string
+  readonly coingeckoCoinId: string | null
   readonly type: EconomicAssetType
 }
 
@@ -308,10 +400,20 @@ export interface AssetResolutionOwnedRepresentation {
   readonly decimals: number
 }
 
-/** Local identity snapshot consulted by attach-only policy. */
+/** Local identity snapshot consulted by the resolution policy. */
 export interface AssetResolutionIdentitySnapshot {
-  readonly economicAssets: ReadonlyArray<AssetResolutionEconomicAsset>
+  /** Local asset owning the coin id the registry lookup returned, if any. */
+  readonly registryOwner: AssetResolutionEconomicAsset | null
+  /** Local assets whose display name or symbol matches the observation. */
+  readonly displayCandidates: ReadonlyArray<AssetResolutionDisplayCandidate>
+  /** Exact representations already owned locally for this identity. */
   readonly representations: ReadonlyArray<AssetResolutionOwnedRepresentation>
+}
+
+/** Untrusted provider display metadata used to name a standalone asset. */
+export interface ProviderDisplayMetadata {
+  readonly name: string | null
+  readonly symbol: string
 }
 
 /** Chain input at the policy boundary. */
@@ -321,12 +423,14 @@ export type ChainResolutionInput =
   | AssetResolutionUpstreamFailure
   | ChainClaim
 
-/** CoinGecko input at the policy boundary. */
-export type CoinGeckoResolutionInput =
+/** Registry contract-lookup input at the policy boundary. */
+export type RegistryResolutionInput =
   | AssetResolutionConflictingEvidence
   | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
   | CoinGeckoClaim
+  | RegistryLookupNotFound
+  | RegistryLookupSkipped
 
 /** Provider evidence before decoding. */
 export type AssetResolutionProviderEvidence =
@@ -334,6 +438,12 @@ export type AssetResolutionProviderEvidence =
   | AssetResolutionConflictingEvidence
   | AssetResolutionMalformedPayload
   | AssetResolutionUpstreamFailure
+
+/** Registry lookup evidence before decoding: a payload, a definitive miss, a skipped lookup, or a failure. */
+export type AssetResolutionRegistryEvidence =
+  | AssetResolutionProviderEvidence
+  | RegistryLookupNotFound
+  | RegistryLookupSkipped
 
 const isEvmAddress = (address: string): boolean => /^0x[a-fA-F0-9]{40}$/.test(address)
 
@@ -357,6 +467,14 @@ const emptyToNull = (value: string): string | null => {
 
 const addressesMatch = (left: string | null, right: string | null): boolean =>
   canonicalizeAddress(left) === canonicalizeAddress(right)
+
+/**
+ * Canonical form used everywhere resolution compares display names and
+ * symbols: unicode-normalized (NFKC) and case-folded, so trivial lookalikes
+ * collide instead of slipping past the duplicate brake.
+ */
+export const canonicalizeDisplayText = (value: string): string =>
+  value.normalize("NFKC").toLowerCase().trim()
 
 /**
  * Canonical identity key of one network representation, or null when a
@@ -471,13 +589,13 @@ export const decodeCoinGeckoClaim = (
 
 const pending = (reason: PendingResolutionReason): PendingResolutionDecision =>
   PendingResolutionDecision.make({
-    policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
+    policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
     reason,
   })
 
 const failClosed = (reason: FailClosedResolutionReason): FailClosedResolutionDecision =>
   FailClosedResolutionDecision.make({
-    policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
+    policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
     reason,
   })
 
@@ -505,61 +623,129 @@ const typesAreCompatible = ({
   asset,
   chain,
 }: {
-  readonly asset: AssetResolutionEconomicAsset
+  readonly asset: { readonly type: EconomicAssetType }
   readonly chain: ChainClaim
 }): boolean => (chain.type === "nft" ? asset.type === "nft" : asset.type === "fungible")
 
-/**
- * Decide attach, pending, or fail-closed from typed claims or evidence failures.
- *
- * CoinGecko may support representation ownership only when its stable identity
- * already belongs to an existing economic asset, the platform chain and address
- * match the chain claim exactly, type and decimals are compatible, and no other
- * asset owns the representation.
- */
-export const decideAttachOnlyResolution = ({
+const attach = ({
+  assetKey,
   chain,
-  coinGecko,
+}: {
+  readonly assetKey: string
+  readonly chain: ChainClaim
+}): AttachRepresentationDecision =>
+  AttachRepresentationDecision.make({
+    policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
+    assetKey,
+    blockchain: chain.blockchain.toLowerCase(),
+    type: chain.type,
+    contractAddress: chain.contractAddress,
+    mintAddress: chain.mintAddress,
+    decimals: chain.decimals,
+  })
+
+const decideForOwnedRepresentation = ({
+  owned,
+  chain,
+  registry,
   identity,
 }: {
-  readonly chain: ChainResolutionInput
-  readonly coinGecko: CoinGeckoResolutionInput
+  readonly owned: AssetResolutionOwnedRepresentation
+  readonly chain: ChainClaim
+  readonly registry: RegistryResolutionInput
   readonly identity: AssetResolutionIdentitySnapshot
+}): AssetResolutionDecision => {
+  if (owned.type !== chain.type) {
+    return failClosed("incompatible_type")
+  }
+  if (owned.decimals !== chain.decimals) {
+    return failClosed("incompatible_decimals")
+  }
+  if (
+    registry._tag === "coingecko_claim" &&
+    identity.registryOwner !== null &&
+    identity.registryOwner.assetKey !== owned.assetKey
+  ) {
+    return failClosed("ownership_conflict")
+  }
+
+  return attach({ assetKey: owned.assetKey, chain })
+}
+
+const decideStandaloneCreation = ({
+  chain,
+  coinGecko,
+  legitimacy,
+  identity,
+  providerDisplay,
+}: {
+  readonly chain: ChainClaim
+  readonly coinGecko: CoinGeckoClaim | null
+  readonly legitimacy: ReadonlyArray<AssetLegitimacyClaim>
+  readonly identity: AssetResolutionIdentitySnapshot
+  readonly providerDisplay: ProviderDisplayMetadata
+}): AssetResolutionDecision => {
+  if (legitimacy.some((claim) => claim.verdict === "banned")) {
+    return pending("spam_evidence")
+  }
+  if (!STANDALONE_CREATION_SUPPORTED_TYPES.includes(chain.type)) {
+    return pending("unsupported_representation_type")
+  }
+  if (identity.displayCandidates.length > 0) {
+    return pending("display_collision")
+  }
+
+  const symbol =
+    (coinGecko === null ? null : emptyToNull(coinGecko.symbol)) ??
+    emptyToNull(providerDisplay.symbol)
+  const name =
+    (coinGecko === null ? null : emptyToNull(coinGecko.name)) ??
+    (providerDisplay.name === null ? null : emptyToNull(providerDisplay.name)) ??
+    symbol
+  if (symbol === null || name === null) {
+    return failClosed("malformed_payload")
+  }
+
+  return CreateStandaloneAssetDecision.make({
+    policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
+    blockchain: chain.blockchain.toLowerCase(),
+    type: chain.type,
+    contractAddress: chain.contractAddress,
+    mintAddress: chain.mintAddress,
+    decimals: chain.decimals,
+    coingeckoCoinId: coinGecko === null ? null : coinGecko.coinId,
+    name,
+    symbol,
+  })
+}
+
+/**
+ * Decide attach, create-standalone, pending, or fail-closed from typed
+ * claims or evidence failures.
+ *
+ * Deterministic evidence decides: an exact representation already owned
+ * locally attaches to its owner, and a registry contract lookup whose coin
+ * id belongs to a local asset attaches under exact platform, address, type,
+ * and decimals checks. Display metadata only blocks: a name or symbol match
+ * without authoritative linkage stays pending as a possible duplicate. An
+ * exact, supported, collision-free representation with no authoritative spam
+ * evidence becomes a standalone economic asset.
+ */
+export const decideAssetResolution = ({
+  chain,
+  registry,
+  identity,
+  legitimacy,
+  providerDisplay,
+}: {
+  readonly chain: ChainResolutionInput
+  readonly registry: RegistryResolutionInput
+  readonly identity: AssetResolutionIdentitySnapshot
+  readonly legitimacy: ReadonlyArray<AssetLegitimacyClaim>
+  readonly providerDisplay: ProviderDisplayMetadata
 }): AssetResolutionDecision => {
   if (chain._tag !== "chain_claim") {
     return failClosed(evidenceFailureReason(chain))
-  }
-
-  if (coinGecko._tag !== "coingecko_claim") {
-    return failClosed(evidenceFailureReason(coinGecko))
-  }
-
-  const matchingAssets = identity.economicAssets.filter(
-    (asset) => asset.coingeckoCoinId === coinGecko.coinId
-  )
-  if (matchingAssets.length > 1) {
-    return failClosed("ambiguous_economic_asset")
-  }
-
-  const [asset] = matchingAssets
-  if (asset === undefined) {
-    return pending("missing_existing_economic_asset")
-  }
-
-  const platform = findMatchingPlatform({ chain, coinGecko })
-  if (platform === undefined) {
-    return pending("non_exact_platform_match")
-  }
-
-  if (!typesAreCompatible({ asset, chain })) {
-    return failClosed("incompatible_type")
-  }
-
-  if (platform.decimals === null) {
-    return pending("non_exact_platform_match")
-  }
-  if (platform.decimals !== chain.decimals) {
-    return failClosed("incompatible_decimals")
   }
 
   const representationKey = exactRepresentationKey(chain)
@@ -567,21 +753,55 @@ export const decideAttachOnlyResolution = ({
     const ownedKey = exactRepresentationKey(representation)
     return ownedKey !== null && ownedKey === representationKey
   })
-  if (owned !== undefined && owned.assetKey !== asset.assetKey) {
-    return failClosed("ownership_conflict")
-  }
-  if (owned !== undefined && owned.decimals !== chain.decimals) {
-    return failClosed("incompatible_decimals")
+  if (owned !== undefined) {
+    return decideForOwnedRepresentation({ owned, chain, registry, identity })
   }
 
-  return AttachRepresentationDecision.make({
-    policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
-    assetKey: asset.assetKey,
-    blockchain: chain.blockchain.toLowerCase(),
-    type: chain.type,
-    contractAddress: chain.contractAddress,
-    mintAddress: chain.mintAddress,
-    decimals: chain.decimals,
+  if (
+    registry._tag !== "coingecko_claim" &&
+    registry._tag !== "registry_not_found" &&
+    registry._tag !== "registry_not_queried"
+  ) {
+    return failClosed(evidenceFailureReason(registry))
+  }
+
+  if (registry._tag === "coingecko_claim") {
+    const platform = findMatchingPlatform({ chain, coinGecko: registry })
+    if (platform === undefined) {
+      // The registry answered a lookup for this exact representation with a
+      // coin that does not list it. That is contradictory evidence, not a
+      // safe basis to attach or create.
+      return failClosed("conflicting_evidence")
+    }
+
+    const registryOwner = identity.registryOwner
+    if (registryOwner !== null && registryOwner.coingeckoCoinId === registry.coinId) {
+      if (!typesAreCompatible({ asset: registryOwner, chain })) {
+        return failClosed("incompatible_type")
+      }
+      if (platform.decimals === null) {
+        return pending("non_exact_platform_match")
+      }
+      if (platform.decimals !== chain.decimals) {
+        return failClosed("incompatible_decimals")
+      }
+
+      return attach({ assetKey: registryOwner.assetKey, chain })
+    }
+
+    // No local asset owns the coin id. Registry decimals must not contradict
+    // the chain, but their absence is missing data, not a conflict.
+    if (platform.decimals !== null && platform.decimals !== chain.decimals) {
+      return failClosed("incompatible_decimals")
+    }
+  }
+
+  return decideStandaloneCreation({
+    chain,
+    coinGecko: registry._tag === "coingecko_claim" ? registry : null,
+    legitimacy,
+    identity,
+    providerDisplay,
   })
 }
 
@@ -597,9 +817,9 @@ const decodeChainEvidence = (
   )
 }
 
-const decodeCoinGeckoEvidence = (
-  evidence: AssetResolutionProviderEvidence
-): Effect.Effect<CoinGeckoResolutionInput> => {
+const decodeRegistryEvidence = (
+  evidence: AssetResolutionRegistryEvidence
+): Effect.Effect<RegistryResolutionInput> => {
   if (evidence._tag !== "payload") {
     return Effect.succeed(evidence)
   }
@@ -610,26 +830,32 @@ const decodeCoinGeckoEvidence = (
 }
 
 /**
- * Decode provider evidence and decide at the attach-only policy boundary.
+ * Decode provider evidence and decide at the resolution policy boundary.
  *
  * Malformed or changed payloads and upstream failures fail closed and never
- * produce an attach decision.
+ * produce an attach or create decision.
  */
-export const evaluateAttachOnlyResolution = ({
+export const evaluateAssetResolution = ({
   chain,
-  coinGecko,
+  registry,
   identity,
+  legitimacy,
+  providerDisplay,
 }: {
   readonly chain: AssetResolutionProviderEvidence
-  readonly coinGecko: AssetResolutionProviderEvidence
+  readonly registry: AssetResolutionRegistryEvidence
   readonly identity: AssetResolutionIdentitySnapshot
+  readonly legitimacy: ReadonlyArray<AssetLegitimacyClaim>
+  readonly providerDisplay: ProviderDisplayMetadata
 }): Effect.Effect<AssetResolutionDecision> =>
   Effect.gen(function* () {
     const chainInput = yield* decodeChainEvidence(chain)
-    const coinGeckoInput = yield* decodeCoinGeckoEvidence(coinGecko)
-    return decideAttachOnlyResolution({
+    const registryInput = yield* decodeRegistryEvidence(registry)
+    return decideAssetResolution({
       chain: chainInput,
-      coinGecko: coinGeckoInput,
+      registry: registryInput,
       identity,
+      legitimacy,
+      providerDisplay,
     })
   })

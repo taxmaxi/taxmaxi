@@ -23,6 +23,8 @@ const testConfigProvider = ConfigProvider.fromEnvRecord({
   COINGECKO_RETRY_BASE_DELAY_MS: "1",
 })
 
+const ORB_MINT = "OrbMint1111111111111111111111111111111111111"
+
 const runFetch = ({
   handler,
 }: {
@@ -32,7 +34,7 @@ const runFetch = ({
 }) =>
   Effect.runPromise(
     Effect.flatMap(AssetResolutionCoinGeckoClient, (client) =>
-      client.fetchCoin({ coinGeckoCoinId: "orb" }).pipe(Effect.result)
+      client.fetchCoinByContract({ platformId: "solana", address: ORB_MINT }).pipe(Effect.result)
     ).pipe(
       Effect.provide(
         AssetResolutionCoinGeckoClientLayer.pipe(
@@ -78,12 +80,14 @@ describe("AssetResolutionCoinGeckoClientLive", () => {
     }
   })
 
-  it("URL-encodes the coin id into the request path", async () => {
+  it("URL-encodes the platform id and address into the request path", async () => {
     const urls: Array<string> = []
 
     await Effect.runPromise(
       Effect.flatMap(AssetResolutionCoinGeckoClient, (client) =>
-        client.fetchCoin({ coinGeckoCoinId: "weird/id?x=1" }).pipe(Effect.result)
+        client
+          .fetchCoinByContract({ platformId: "weird/id", address: "0xAb?x=1" })
+          .pipe(Effect.result)
       ).pipe(
         Effect.provide(
           AssetResolutionCoinGeckoClientLayer.pipe(
@@ -105,7 +109,7 @@ describe("AssetResolutionCoinGeckoClientLive", () => {
     )
 
     expect(urls).toHaveLength(1)
-    expect(urls[0]).toContain("/coins/weird%2Fid%3Fx%3D1")
+    expect(urls[0]).toContain("/coins/weird%2Fid/contract/0xAb%3Fx%3D1")
     expect(urls[0]).not.toContain("/coins/weird/id")
   })
 
@@ -191,7 +195,7 @@ describe("AssetResolutionCoinGeckoClientLive", () => {
     }
   }, 10_000)
 
-  it("treats a 404 as a terminal upstream failure without retrying", async () => {
+  it("treats a 404 as a definitive not-found answer without retrying", async () => {
     let requests = 0
 
     const result = await runFetch({
@@ -199,6 +203,24 @@ describe("AssetResolutionCoinGeckoClientLive", () => {
         Effect.sync(() => {
           requests += 1
           return jsonResponse(url, { error: "coin not found" }, 404)
+        }),
+    })
+
+    expect(requests).toBe(1)
+    expect(result._tag).toBe("Success")
+    if (result._tag === "Success") {
+      expect(result.success._tag).toBe("registry_not_found")
+    }
+  })
+
+  it("treats an unexpected 4xx as a terminal upstream failure without retrying", async () => {
+    let requests = 0
+
+    const result = await runFetch({
+      handler: (url) =>
+        Effect.sync(() => {
+          requests += 1
+          return jsonResponse(url, { error: "bad request" }, 400)
         }),
     })
 

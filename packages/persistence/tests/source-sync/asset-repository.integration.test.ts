@@ -884,4 +884,312 @@ describe("AssetRepositoryLive", () => {
       await expect(deleteRepresentation).rejects.toThrow()
     })
   })
+
+  describe("display candidate discovery", () => {
+    it("matches assets by symbol or name, NFKC-normalized and case-insensitive", async () => {
+      const bySymbol = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findAssetResolutionCandidatesByDisplay({ symbol: "btc", name: null })
+        )
+      )
+      const byName = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findAssetResolutionCandidatesByDisplay({
+            symbol: "XXX",
+            name: "sync engine bitcoin fixture",
+          })
+        )
+      )
+      // Fullwidth "BTC" collides with the stored symbol through NFKC.
+      const byLookalike = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findAssetResolutionCandidatesByDisplay({
+            symbol: "\uFF22\uFF34\uFF23",
+            name: null,
+          })
+        )
+      )
+      const noMatch = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findAssetResolutionCandidatesByDisplay({ symbol: "ZZZ", name: "Nothing" })
+        )
+      )
+
+      expect(bySymbol).toEqual([expect.objectContaining({ id: TEST_BTC_ASSET_ID })])
+      expect(byName).toEqual([expect.objectContaining({ id: TEST_BTC_ASSET_ID })])
+      expect(byLookalike).toEqual([expect.objectContaining({ id: TEST_BTC_ASSET_ID })])
+      expect(noMatch).toEqual([])
+    })
+
+    it("matches a provider name against a stored symbol", async () => {
+      const candidates = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findAssetResolutionCandidatesByDisplay({ symbol: "OTHER", name: "BTC" })
+        )
+      )
+
+      expect(candidates).toEqual([expect.objectContaining({ id: TEST_BTC_ASSET_ID })])
+    })
+
+    it("matches a stored symbol with padding, mirroring the trimmed provider side", async () => {
+      const PADDED_ASSET_ID = "00000000-0000-0000-0000-000000000483"
+      await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.assets).values({
+            id: PADDED_ASSET_ID,
+            name: "Padded Fixture",
+            symbol: " PAD ",
+            type: "fungible",
+          })
+        })
+      )
+
+      const candidates = await runRepository(
+        Effect.flatMap(AssetRepository, (repository) =>
+          repository.findAssetResolutionCandidatesByDisplay({ symbol: "pad", name: null })
+        )
+      )
+
+      expect(candidates).toEqual([expect.objectContaining({ id: PADDED_ASSET_ID })])
+    })
+  })
+
+  describe("standalone asset creation", () => {
+    const ORB_MINT = "OrbRepoMint111111111111111111111111111111111"
+    const ORB_PROVIDER_ASSET_ROW_ID = "00000000-0000-0000-0000-000000000681"
+    const ORB_POLICY_REVISION = "2026-08-21.standalone-create.1"
+
+    const seedOrbProviderAsset = () =>
+      runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.providerAssets).values({
+            id: ORB_PROVIDER_ASSET_ROW_ID,
+            provider: "helius",
+            providerAssetId: null,
+            naturalKey: `solana:${ORB_MINT}`,
+            currencyCode: "ORBR",
+            name: "Orb Repo Coin",
+            retrievedAt: new Date("2026-08-01T00:00:00.000Z"),
+          })
+        })
+      )
+
+    const orbDecision = ({ mintAddress = ORB_MINT }: { readonly mintAddress?: string } = {}) => ({
+      providerAssetRowId: ORB_PROVIDER_ASSET_ROW_ID,
+      evidenceRevision: 1,
+      policyRevision: ORB_POLICY_REVISION,
+      outcome: "create_standalone" as const,
+      assetId: null,
+      assetRepresentationId: null,
+      blockchain: "solana",
+      representationType: "token" as const,
+      contractAddress: null,
+      mintAddress,
+      decimals: 9,
+      reason: null,
+      evidence: [],
+      actor: "system:asset-resolution-policy",
+    })
+
+    const createOrb = ({
+      mintAddress = ORB_MINT,
+      coingeckoCoinId = null,
+      blockchainName = "solana",
+    }: {
+      readonly mintAddress?: string
+      readonly coingeckoCoinId?: string | null
+      readonly blockchainName?: string
+    } = {}) =>
+      Effect.flatMap(AssetRepository, (repository) =>
+        repository.createStandaloneAssetRepresentation({
+          blockchainName,
+          asset: {
+            name: "Orb Repo Coin",
+            symbol: "ORBR",
+            coingeckoCoinId,
+            logoUrl: null,
+            type: "fungible",
+          },
+          representation: {
+            contractAddress: null,
+            mintAddress,
+            decimals: 9,
+            logoUrl: null,
+            type: "token",
+            isSpam: false,
+            metadata: null,
+          },
+          decision: orbDecision({ mintAddress }),
+        })
+      )
+
+    beforeEach(async () => {
+      await seedOrbProviderAsset()
+    })
+
+    it("creates the asset, representation, and audit decision in one durable operation", async () => {
+      const created = await runRepository(createOrb({ coingeckoCoinId: "orb-repo-coin" }))
+
+      expect(created).toMatchObject({
+        name: "Orb Repo Coin",
+        symbol: "ORBR",
+        type: "fungible",
+        blockchainName: "solana",
+        mintAddress: ORB_MINT,
+        contractAddress: null,
+        decimals: 9,
+        representationType: "token",
+      })
+
+      const stored = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const assets = yield* db
+            .select({
+              id: schema.assets.id,
+              coingeckoCoinId: schema.assets.coingeckoCoinId,
+            })
+            .from(schema.assets)
+            .where(eq(schema.assets.symbol, "ORBR"))
+          const representations = yield* db
+            .select({ assetId: schema.assetRepresentations.assetId })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.mintAddress, ORB_MINT))
+          const decisions = yield* db
+            .select({
+              outcome: schema.assetResolutionDecisions.outcome,
+              status: schema.assetResolutionDecisions.status,
+              assetId: schema.assetResolutionDecisions.assetId,
+              assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
+            })
+            .from(schema.assetResolutionDecisions)
+            .where(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, ORB_PROVIDER_ASSET_ROW_ID)
+            )
+
+          return { assets, representations, decisions }
+        })
+      )
+
+      expect(stored.assets).toEqual([{ id: created.id, coingeckoCoinId: "orb-repo-coin" }])
+      expect(stored.representations).toEqual([{ assetId: created.id }])
+      // The decision carries the created ids, so the audit shows the creation.
+      expect(stored.decisions).toEqual([
+        {
+          outcome: "create_standalone",
+          status: "active",
+          assetId: created.id,
+          assetRepresentationId: created.representationId,
+        },
+      ])
+    })
+
+    it("fails without creating an orphan asset when the representation already has an owner", async () => {
+      const first = await runRepository(createOrb())
+
+      await expect(runRepository(createOrb())).rejects.toThrow()
+
+      const stored = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const assets = yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.symbol, "ORBR"))
+          const representations = yield* db
+            .select({ assetId: schema.assetRepresentations.assetId })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.mintAddress, ORB_MINT))
+
+          return { assets, representations }
+        })
+      )
+
+      expect(stored.assets).toEqual([{ id: first.id }])
+      expect(stored.representations).toEqual([{ assetId: first.id }])
+    })
+
+    it("fails when the blockchain does not exist instead of inventing reference data", async () => {
+      await expect(runRepository(createOrb({ blockchainName: "unknown-chain" }))).rejects.toThrow()
+
+      const stored = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.symbol, "ORBR"))
+        })
+      )
+
+      expect(stored).toEqual([])
+    })
+
+    it("lets exactly one of two concurrent creations win and keeps no orphan rows", async () => {
+      const results = await runRepository(
+        Effect.all([Effect.result(createOrb()), Effect.result(createOrb())], {
+          concurrency: "unbounded",
+        })
+      )
+
+      const successes = results.filter((result) => result._tag === "Success")
+      const failures = results.filter((result) => result._tag === "Failure")
+      expect(successes).toHaveLength(1)
+      expect(failures).toHaveLength(1)
+      expect(failures[0]?.failure).toBeInstanceOf(SyncEngineStorageError)
+
+      const stored = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const assets = yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.symbol, "ORBR"))
+          const representations = yield* db
+            .select({ id: schema.assetRepresentations.id })
+            .from(schema.assetRepresentations)
+            .where(eq(schema.assetRepresentations.mintAddress, ORB_MINT))
+          const decisions = yield* db
+            .select({ id: schema.assetResolutionDecisions.id })
+            .from(schema.assetResolutionDecisions)
+            .where(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, ORB_PROVIDER_ASSET_ROW_ID)
+            )
+
+          return { assets, representations, decisions }
+        })
+      )
+
+      expect(stored.assets).toHaveLength(1)
+      expect(stored.representations).toHaveLength(1)
+      expect(stored.decisions).toHaveLength(1)
+    })
+
+    it("rejects a second standalone asset for an already-claimed CoinGecko coin id", async () => {
+      await runRepository(createOrb({ coingeckoCoinId: "orb-repo-coin" }))
+
+      await expect(
+        runRepository(
+          createOrb({
+            mintAddress: "OrbRepoMint211111111111111111111111111111111",
+            coingeckoCoinId: "orb-repo-coin",
+          })
+        )
+      ).rejects.toThrow()
+
+      const stored = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assets.id })
+            .from(schema.assets)
+            .where(eq(schema.assets.coingeckoCoinId, "orb-repo-coin"))
+        })
+      )
+
+      expect(stored).toHaveLength(1)
+    })
+  })
 })

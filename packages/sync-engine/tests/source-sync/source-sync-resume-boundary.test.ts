@@ -112,8 +112,10 @@ const runWithProvider = <A, E>(
             listBlockchains: () => Effect.die("listBlockchains should not be called"),
             upsertEconomicAssetRepresentation: () =>
               Effect.die("upsertEconomicAssetRepresentation should not be called"),
-            findAssetResolutionCandidatesBySymbol: () =>
-              Effect.die("findAssetResolutionCandidatesBySymbol should not be called"),
+            findAssetResolutionCandidatesByDisplay: () =>
+              Effect.die("findAssetResolutionCandidatesByDisplay should not be called"),
+            createStandaloneAssetRepresentation: () =>
+              Effect.die("createStandaloneAssetRepresentation should not be called"),
             attachRepresentationToExistingAsset: () =>
               Effect.die("attachRepresentationToExistingAsset should not be called"),
             recordRepresentationOwnershipDecision: () =>

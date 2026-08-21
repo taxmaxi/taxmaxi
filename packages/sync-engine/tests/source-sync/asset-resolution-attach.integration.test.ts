@@ -4,7 +4,8 @@ import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import {
   AssetResolutionUpstreamFailure,
-  type AssetResolutionProviderEvidence,
+  RegistryLookupNotFound,
+  type AssetResolutionRegistryEvidence,
 } from "@my/core/assets"
 import { SourceSyncServiceLive, TransferReconciliationServiceLive } from "@my/sync-engine/layers"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
@@ -93,7 +94,7 @@ const syncRecords = [
       native_amount: { amount: "1050.00", currency: "EUR" },
       created_at: "2025-05-01T10:00:00.000Z",
       resource_path: "/v2/accounts/coinbase-account-1/transactions/tx-orb-buy-1",
-      description: "ORB buy awaiting attach-only resolution",
+      description: "ORB buy awaiting automatic resolution",
     },
   }),
 ] as const
@@ -164,14 +165,15 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
 
 const orbCoinGeckoUpstreamFailure = new AssetResolutionUpstreamFailure({ source: "coingecko" })
 
-type FakeCoinGeckoMode = "success" | "retryable" | "terminal"
+type FakeCoinGeckoMode = "success" | "retryable" | "terminal" | "not_found"
 
 let coinGeckoMode: FakeCoinGeckoMode = "success"
 
 const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoinGeckoClient, {
-  fetchCoin: ({
-    coinGeckoCoinId,
-  }): Effect.Effect<AssetResolutionProviderEvidence, AssetResolutionCoinGeckoRetryableError> => {
+  fetchCoinByContract: ({
+    platformId,
+    address,
+  }): Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionCoinGeckoRetryableError> => {
     if (coinGeckoMode === "retryable") {
       return Effect.fail(
         new AssetResolutionCoinGeckoRetryableError({ status: 429, cause: "rate limited" })
@@ -182,7 +184,11 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
       return Effect.succeed(orbCoinGeckoUpstreamFailure)
     }
 
-    return coinGeckoCoinId === ORB_COINGECKO_ID
+    if (coinGeckoMode === "not_found") {
+      return Effect.succeed(new RegistryLookupNotFound())
+    }
+
+    return platformId === "solana" && address === ORB_MINT
       ? Effect.succeed({
           _tag: "payload" as const,
           payload: {
@@ -194,7 +200,7 @@ const FakeAssetResolutionCoinGeckoClientLive = Layer.succeed(AssetResolutionCoin
             detail_platforms: { solana: { decimal_place: 8, contract_address: ORB_MINT } },
           },
         })
-      : Effect.succeed(orbCoinGeckoUpstreamFailure)
+      : Effect.succeed(new RegistryLookupNotFound())
   },
 })
 
@@ -568,7 +574,7 @@ const fetchAttachState = () =>
         decimals: schema.assetRepresentations.decimals,
       })
       .from(schema.assetRepresentations)
-      .where(eq(schema.assetRepresentations.assetId, ORB_ASSET_ID))
+      .where(eq(schema.assetRepresentations.mintAddress, ORB_MINT))
 
     const ownershipDecisions = yield* db
       .select({
@@ -578,14 +584,44 @@ const fetchAttachState = () =>
         actor: schema.assetRepresentationOwnershipDecisions.actor,
       })
       .from(schema.assetRepresentationOwnershipDecisions)
-      .where(eq(schema.assetRepresentationOwnershipDecisions.assetId, ORB_ASSET_ID))
+      .innerJoin(
+        schema.assetRepresentations,
+        eq(
+          schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+          schema.assetRepresentations.id
+        )
+      )
+      .where(eq(schema.assetRepresentations.mintAddress, ORB_MINT))
 
     const replayJobs = yield* db
       .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
       .from(schema.processingJobs)
       .where(eq(schema.processingJobs.sourceId, sourceId))
 
-    return { mapping, decisions, evidence, ownershipDecisions, representations, replayJobs }
+    const owningAssets = yield* db
+      .select({
+        id: schema.assets.id,
+        name: schema.assets.name,
+        symbol: schema.assets.symbol,
+        type: schema.assets.type,
+        coingeckoCoinId: schema.assets.coingeckoCoinId,
+      })
+      .from(schema.assets)
+      .innerJoin(
+        schema.assetRepresentations,
+        eq(schema.assetRepresentations.assetId, schema.assets.id)
+      )
+      .where(eq(schema.assetRepresentations.mintAddress, ORB_MINT))
+
+    return {
+      mapping,
+      decisions,
+      evidence,
+      ownershipDecisions,
+      representations,
+      replayJobs,
+      owningAssets,
+    }
   }).pipe(Effect.provide(TestPgClientLive))
 
 const fetchAccountingState = () =>
@@ -645,7 +681,7 @@ describe("asset resolution attach and rebuild", () => {
           expect.objectContaining({
             outcome: "attach",
             assetId: ORB_ASSET_ID,
-            actor: "system:attach-only-policy",
+            actor: "system:asset-resolution-policy",
           }),
         ])
         expect(attachState.representations).toEqual([
@@ -666,7 +702,7 @@ describe("asset resolution attach and rebuild", () => {
           expect.objectContaining({
             authority: "coingecko",
             claimKind: "registry_platform_mapping",
-            sourceLocator: `coingecko://coins/${ORB_COINGECKO_ID}`,
+            sourceLocator: `coingecko://coins/solana/contract/${ORB_MINT}`,
             evidenceRevision: 1,
             rawPayload: expect.objectContaining({
               payload: expect.objectContaining({ id: ORB_COINGECKO_ID }),
@@ -677,7 +713,7 @@ describe("asset resolution attach and rebuild", () => {
           expect.objectContaining({
             assetId: ORB_ASSET_ID,
             status: "active",
-            actor: "system:attach-only-policy",
+            actor: "system:asset-resolution-policy",
           }),
         ])
         expect(attachState.replayJobs).toContainEqual({ mode: "replay", status: "pending" })
@@ -704,41 +740,133 @@ describe("asset resolution attach and rebuild", () => {
     )
   })
 
-  it("records a durable pending decision when no candidate economic asset exists", async () => {
+  it("creates a standalone asset for an unambiguous long-tail mint and includes it after replay", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* runSync()
-        // No ORB economic asset is inserted, so symbol search finds nothing.
+
+        const pendingTax = yield* calculateTax().pipe(Effect.result)
+        expect(pendingTax._tag).toBe("Failure")
+
+        // No ORB economic asset exists and the registry does not know the
+        // mint: the exact long-tail representation creates its own asset.
+        coinGeckoMode = "not_found"
         yield* recordOrbSolanaObservation()
         const jobId = yield* fetchPendingResolutionJobId()
 
         const result = yield* runResolutionJob({ jobId })
-        expect(result.outcome).toBe("pending")
+        expect(result.outcome).toBe("created")
 
         const state = yield* fetchAttachState()
-        expect(state.decisions).toEqual([
+        expect(state.owningAssets).toEqual([
           expect.objectContaining({
-            outcome: "pending",
-            reason: "missing_existing_economic_asset",
-            actor: "system:attach-only-policy",
+            name: "Orb Test Coin",
+            symbol: "ORB",
+            type: "fungible",
+            coingeckoCoinId: null,
           }),
         ])
-        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
-        expect(state.representations).toEqual([])
+        const createdAssetId = state.owningAssets[0]?.id
+        expect(state.mapping).toMatchObject({
+          mappingStatus: "approved",
+          canonicalAssetId: createdAssetId,
+        })
+        expect(state.mapping?.assetRepresentationId).not.toBeNull()
+        expect(state.decisions).toEqual([
+          expect.objectContaining({
+            outcome: "create_standalone",
+            assetId: createdAssetId,
+            actor: "system:asset-resolution-policy",
+          }),
+        ])
+        expect(state.decisions[0]?.assetRepresentationId).not.toBeNull()
+        expect(state.representations).toEqual([
+          expect.objectContaining({
+            assetId: createdAssetId,
+            type: "token",
+            mintAddress: ORB_MINT,
+            decimals: 8,
+          }),
+        ])
+        expect(state.evidence).toEqual([
+          expect.objectContaining({
+            authority: "chain",
+            claimKind: "chain_fact",
+            evidenceRevision: 1,
+            decodedClaim: expect.objectContaining({ mintAddress: ORB_MINT, decimals: 8 }),
+          }),
+          expect.objectContaining({
+            authority: "coingecko",
+            claimKind: "registry_platform_mapping",
+            sourceLocator: `coingecko://coins/solana/contract/${ORB_MINT}`,
+            evidenceRevision: 1,
+            rawPayload: expect.objectContaining({ _tag: "registry_not_found" }),
+          }),
+        ])
+        expect(state.ownershipDecisions).toEqual([
+          expect.objectContaining({
+            assetId: createdAssetId,
+            status: "active",
+            actor: "system:asset-resolution-policy",
+          }),
+        ])
+        expect(state.replayJobs).toContainEqual({ mode: "replay", status: "pending" })
 
-        const job = yield* fetchResolutionJobState({ jobId })
-        expect(job.status).toBe("completed")
+        const duplicateResult = yield* runResolutionJob({ jobId })
+        expect(duplicateResult.outcome).toBe("already_claimed")
+
+        const replay = yield* replaySource()
+        expect(replay.status).toBe("completed")
+
+        // Rematerialization runs from stored raw records: the provider was
+        // fetched exactly once, by the original sync.
+        expect(providerFetchCount).toBe(1)
+
+        const accountingState = yield* fetchAccountingState()
+        expect(accountingState.legs).toEqual([
+          expect.objectContaining({ kind: "acquisition", derivationRule: "coinbase_buy" }),
+        ])
+        expect(accountingState.fifoLots).toHaveLength(1)
+
+        const taxAfterCreate = yield* calculateTax()
+        expect(taxAfterCreate.taxableGains).toBe(0)
       })
     )
   })
 
-  it("stays pending as ambiguous when a second same-symbol asset has no CoinGecko id", async () => {
+  it("creates a standalone asset stamped with the registry coin id no local asset owns", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        // The registry knows the mint as orb-test-coin, but no local asset
+        // owns that coin id and no display candidate exists.
+        yield* recordOrbSolanaObservation()
+        const jobId = yield* fetchPendingResolutionJobId()
+
+        const result = yield* runResolutionJob({ jobId })
+        expect(result.outcome).toBe("created")
+
+        const state = yield* fetchAttachState()
+        expect(state.owningAssets).toEqual([
+          expect.objectContaining({
+            name: "Orb Test Coin",
+            symbol: "ORB",
+            coingeckoCoinId: ORB_COINGECKO_ID,
+          }),
+        ])
+        expect(state.decisions).toEqual([expect.objectContaining({ outcome: "create_standalone" })])
+        expect(state.mapping).toMatchObject({ mappingStatus: "approved" })
+      })
+    )
+  })
+
+  it("attaches through registry linkage even when a same-symbol clone exists", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* runSync()
         yield* insertOrbAsset()
-        // A second ORB asset without a CoinGecko id must still make the
-        // symbol ambiguous instead of letting the id-carrying asset win.
+        // A same-display clone without a CoinGecko id cannot block the
+        // deterministic registry linkage to the id-carrying asset.
         yield* insertOrbAsset({
           id: "00000000-0000-0000-0000-000000000562",
           name: "Orb Test Coin Clone",
@@ -748,30 +876,33 @@ describe("asset resolution attach and rebuild", () => {
         const jobId = yield* fetchPendingResolutionJobId()
 
         const result = yield* runResolutionJob({ jobId })
-        expect(result.outcome).toBe("pending")
+        expect(result.outcome).toBe("attached")
 
         const state = yield* fetchAttachState()
         expect(state.decisions).toEqual([
           expect.objectContaining({
-            outcome: "pending",
-            reason: "ambiguous_symbol_candidates",
-            actor: "system:attach-only-policy",
+            outcome: "attach",
+            assetId: ORB_ASSET_ID,
+            actor: "system:asset-resolution-policy",
           }),
         ])
-        expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })
-        expect(state.representations).toEqual([])
-
-        const job = yield* fetchResolutionJobState({ jobId })
-        expect(job.status).toBe("completed")
+        expect(state.mapping).toMatchObject({
+          mappingStatus: "approved",
+          canonicalAssetId: ORB_ASSET_ID,
+        })
       })
     )
   })
 
-  it("stays pending when the only candidate asset has no CoinGecko id", async () => {
+  it("stays pending as a display collision when the colliding asset has no registry linkage", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
         yield* runSync()
+        // The only ORB asset has no CoinGecko id, and the registry does not
+        // know the mint: the display match alone must neither attach nor
+        // allow a potentially duplicate standalone asset.
         yield* insertOrbAsset({ coingeckoCoinId: null })
+        coinGeckoMode = "not_found"
         yield* recordOrbSolanaObservation()
         const jobId = yield* fetchPendingResolutionJobId()
 
@@ -782,8 +913,8 @@ describe("asset resolution attach and rebuild", () => {
         expect(state.decisions).toEqual([
           expect.objectContaining({
             outcome: "pending",
-            reason: "missing_registry_identity",
-            actor: "system:attach-only-policy",
+            reason: "display_collision",
+            actor: "system:asset-resolution-policy",
           }),
         ])
         expect(state.mapping).toMatchObject({ mappingStatus: "pending_review" })

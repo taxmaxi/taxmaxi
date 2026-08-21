@@ -211,7 +211,9 @@ const makeProviderLayer = ({
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
           upsertEconomicAssetRepresentation: () =>
             Effect.die("upsertEconomicAssetRepresentation should not be called"),
-          findAssetResolutionCandidatesBySymbol: () => Effect.succeed([]),
+          findAssetResolutionCandidatesByDisplay: () => Effect.succeed([]),
+          createStandaloneAssetRepresentation: () =>
+            Effect.die("createStandaloneAssetRepresentation should not be called"),
           attachRepresentationToExistingAsset: () =>
             Effect.die("attachRepresentationToExistingAsset should not be called"),
           recordRepresentationOwnershipDecision: () =>

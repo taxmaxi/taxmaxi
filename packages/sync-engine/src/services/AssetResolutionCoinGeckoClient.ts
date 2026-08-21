@@ -1,5 +1,5 @@
 /**
- * AssetResolutionCoinGeckoClient - Injectable CoinGecko evidence source for attach-only resolution.
+ * AssetResolutionCoinGeckoClient - Injectable CoinGecko evidence source for asset resolution.
  *
  * @module AssetResolutionCoinGeckoClient
  */
@@ -7,7 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import type { AssetResolutionProviderEvidence } from "@my/core/assets"
+import type { AssetResolutionRegistryEvidence } from "@my/core/assets"
 
 /**
  * AssetResolutionCoinGeckoRetryableError - Transient CoinGecko fetch failure.
@@ -26,21 +26,26 @@ export class AssetResolutionCoinGeckoRetryableError extends Schema.TaggedError<A
 ) {}
 
 /**
- * AssetResolutionCoinGeckoClientShape - Fetch one CoinGecko coin payload by its stable coin id.
+ * AssetResolutionCoinGeckoClientShape - Look up one CoinGecko coin by the exact
+ * on-chain contract or mint address it represents.
  */
 export interface AssetResolutionCoinGeckoClientShape {
   /**
-   * Fetch a CoinGecko coin payload.
+   * Look up the CoinGecko coin for one exact platform address.
    *
-   * Terminal outcomes (a missing coin or a body that cannot be read) surface
-   * as an AssetResolutionUpstreamFailure evidence value so attach-only policy
-   * can fail closed. Transient outcomes (rate limit, server error, timeout,
-   * transport failure) fail with AssetResolutionCoinGeckoRetryableError so
-   * the caller can retry later instead of recording a durable decision.
+   * A 404 is a definitive answer that CoinGecko does not know the
+   * representation and surfaces as a RegistryLookupNotFound evidence value,
+   * so the policy may consider standalone creation. Other terminal outcomes
+   * (an unreadable body, an unexpected status) surface as an
+   * AssetResolutionUpstreamFailure evidence value so the policy can fail
+   * closed. Transient outcomes (rate limit, server error, timeout, transport
+   * failure) fail with AssetResolutionCoinGeckoRetryableError so the caller
+   * can retry later instead of recording a durable decision.
    */
-  readonly fetchCoin: (params: {
-    readonly coinGeckoCoinId: string
-  }) => Effect.Effect<AssetResolutionProviderEvidence, AssetResolutionCoinGeckoRetryableError>
+  readonly fetchCoinByContract: (params: {
+    readonly platformId: string
+    readonly address: string
+  }) => Effect.Effect<AssetResolutionRegistryEvidence, AssetResolutionCoinGeckoRetryableError>
 }
 
 /**
