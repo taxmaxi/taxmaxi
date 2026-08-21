@@ -44,7 +44,8 @@ Trusted identity facts live in the version-controlled [asset reference catalog](
 3. Resolve known on-chain observations by blockchain plus native identity, contract, or mint.
 4. Create a pending mapping for unknown observations without inventing an economic asset, and schedule one durable resolution job keyed by the observation and its evidence revision. A provider observation never becomes the economic asset or representation itself; it only maps to a TaxMaxi-owned identity.
 5. Let the resolution job decide automatically or wait for a human reviewer:
-   - The attach-only policy may accept the job with exact chain evidence and CoinGecko evidence: it attaches a new network representation to an already-existing economic asset, never creates an economic asset, and records the evidence, the policy revision, the actor, and the decision as immutable audit history.
+   - The automatic policy may accept the job with exact chain evidence and CoinGecko evidence: it attaches a new network representation to an already-existing economic asset and records the evidence, the policy revision, the actor, and the decision as immutable audit history.
+   - The automatic policy may create a standalone economic asset for an exact, supported representation when no plausible existing candidate, ownership conflict, or authoritative spam evidence exists. Names and symbols can only pause this outcome as a possible duplicate; they never prove a merge or separation.
    - Otherwise the observation stays pending for manual review, approved the same way as before: with an economic asset ID and, when the observation identifies a network representation, that representation ID.
    - Stale evidence or a stale decision revision fails its compare-and-set check instead of silently overwriting a newer observation, and a duplicate job run is a no-op.
 6. Replay from the stored observation and approved mapping. An accepted resolution job durably schedules a replay for every affected source before any replay work starts; workers own replay retries and report persistent replay failure separately from the accepted identity decision, so a replay problem never rolls back an already-accepted mapping.
@@ -55,5 +56,5 @@ Trusted identity facts live in the version-controlled [asset reference catalog](
 - Network decimals and addresses remain available for decoding and provenance without affecting economic identity.
 - Chainless custody data does not invent a blockchain.
 - Duplicate symbols cannot silently merge assets.
-- Review and replay remain deterministic because mappings target IDs, whether a human reviewer or the attach-only policy decided the mapping.
+- Review and replay remain deterministic because mappings target IDs, whether a human reviewer or the automatic policy decided the mapping.
 - This is a pre-launch hard migration. The old chain-bound asset schema and symbol mapping bridge are removed rather than supported in parallel.

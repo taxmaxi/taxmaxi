@@ -1,10 +1,11 @@
 /**
- * AssetResolutionCoinGeckoClientLive - Live CoinGecko coin lookup for attach-only resolution.
+ * AssetResolutionCoinGeckoClientLive - Live CoinGecko contract lookup for asset resolution.
  *
  * Classifies fetch failures before they become durable decisions: rate
  * limits, server errors, timeouts, and transport failures are retried with
- * backoff and then raised as retryable so the job runs again later, while a
- * missing coin or an unreadable body stays a terminal upstream failure the
+ * backoff and then raised as retryable so the job runs again later. A 404 is
+ * a definitive not-found answer the policy may create on, while an
+ * unreadable body or unexpected status stays a terminal upstream failure the
  * policy fails closed on.
  *
  * Dependencies: HttpClient (provided via FetchHttpClient).
@@ -16,7 +17,11 @@ import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Schedule from "effect/Schedule"
-import { AssetResolutionUpstreamFailure } from "@my/core/assets"
+import {
+  AssetResolutionUpstreamFailure,
+  CoinGeckoLookupNotFound,
+  type AssetResolutionRegistryEvidence,
+} from "@my/core/assets"
 import {
   AssetResolutionCoinGeckoClient,
   AssetResolutionCoinGeckoRetryableError,
@@ -51,34 +56,51 @@ const make = Effect.gen(function* () {
   })
 
   const upstreamFailure = new AssetResolutionUpstreamFailure({ source: "coingecko" })
+  const notFound = new CoinGeckoLookupNotFound()
 
-  const fetchCoin: AssetResolutionCoinGeckoClientShape["fetchCoin"] = ({ coinGeckoCoinId }) => {
-    const request = coinGeckoRequest.getRequest(`/coins/${encodeURIComponent(coinGeckoCoinId)}`)
+  const fetchCoinByContract: AssetResolutionCoinGeckoClientShape["fetchCoinByContract"] = ({
+    platformId,
+    address,
+  }) => {
+    const request = coinGeckoRequest.getRequest(
+      `/coins/${encodeURIComponent(platformId)}/contract/${encodeURIComponent(address)}`
+    )
 
     const attempt = httpClient.execute(request).pipe(
       Effect.timeout(requestTimeoutMs),
       Effect.mapError(
         (cause) => new AssetResolutionCoinGeckoRetryableError({ status: null, cause })
       ),
-      Effect.flatMap((response) => {
-        if (isRetryableStatus(response.status)) {
-          return Effect.fail(
-            new AssetResolutionCoinGeckoRetryableError({
-              status: response.status,
-              cause: `CoinGecko responded ${response.status}`,
-            })
+      Effect.flatMap(
+        (
+          response
+        ): Effect.Effect<
+          AssetResolutionRegistryEvidence,
+          AssetResolutionCoinGeckoRetryableError
+        > => {
+          if (isRetryableStatus(response.status)) {
+            return Effect.fail(
+              new AssetResolutionCoinGeckoRetryableError({
+                status: response.status,
+                cause: `CoinGecko responded ${response.status}`,
+              })
+            )
+          }
+
+          if (response.status === 404) {
+            return Effect.succeed(notFound)
+          }
+
+          if (response.status < 200 || response.status >= 300) {
+            return Effect.succeed(upstreamFailure)
+          }
+
+          return response.json.pipe(
+            Effect.map((payload) => ({ _tag: "payload", payload }) as const),
+            Effect.orElseSucceed(() => upstreamFailure)
           )
         }
-
-        if (response.status < 200 || response.status >= 300) {
-          return Effect.succeed(upstreamFailure)
-        }
-
-        return response.json.pipe(
-          Effect.map((payload) => ({ _tag: "payload", payload }) as const),
-          Effect.orElseSucceed(() => upstreamFailure)
-        )
-      })
+      )
     )
 
     return attempt.pipe(
@@ -89,7 +111,7 @@ const make = Effect.gen(function* () {
     )
   }
 
-  return AssetResolutionCoinGeckoClient.of({ fetchCoin })
+  return AssetResolutionCoinGeckoClient.of({ fetchCoinByContract })
 })
 
 /**

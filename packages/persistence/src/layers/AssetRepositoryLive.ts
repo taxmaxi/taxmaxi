@@ -4,10 +4,11 @@
  * @module AssetRepositoryLive
  */
 
-import { and, eq, ne, or, sql } from "drizzle-orm"
+import { and, eq, inArray, ne, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import { canonicalizeDisplayText } from "@my/core/assets"
 import {
   AssetRepository,
   type AssetRepositoryShape,
@@ -594,9 +595,25 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineSqlError("assetRepository.upsertEconomicAssetRepresentation"))
 
-  const findAssetResolutionCandidatesBySymbol: AssetRepositoryShape["findAssetResolutionCandidatesBySymbol"] =
-    ({ symbol }) =>
-      db
+  const findAssetResolutionCandidatesByDisplay: AssetRepositoryShape["findAssetResolutionCandidatesByDisplay"] =
+    ({ symbol, name }) => {
+      // Either provider display value colliding with either stored display
+      // value counts: a provider name equal to a stored symbol is still a
+      // possible duplicate. Comparison is NFKC-normalized and case-folded on
+      // both sides so trivial lookalikes collide.
+      const keys = [
+        ...new Set(
+          [
+            canonicalizeDisplayText(symbol),
+            name === null ? "" : canonicalizeDisplayText(name),
+          ].filter((key) => key !== "")
+        ),
+      ]
+      if (keys.length === 0) {
+        return Effect.succeed([])
+      }
+
+      return db
         .select({
           id: schema.assets.id,
           symbol: schema.assets.symbol,
@@ -604,8 +621,14 @@ const make = Effect.gen(function* () {
           coingeckoCoinId: schema.assets.coingeckoCoinId,
         })
         .from(schema.assets)
-        .where(eq(sql<string>`lower(${schema.assets.symbol})`, symbol.toLowerCase()))
-        .pipe(wrapSyncEngineSqlError("assetRepository.findAssetResolutionCandidatesBySymbol"))
+        .where(
+          or(
+            inArray(sql<string>`lower(normalize(${schema.assets.symbol}, NFKC))`, keys),
+            inArray(sql<string>`lower(normalize(${schema.assets.name}, NFKC))`, keys)
+          )
+        )
+        .pipe(wrapSyncEngineSqlError("assetRepository.findAssetResolutionCandidatesByDisplay"))
+    }
 
   const attachRepresentationToExistingAsset: AssetRepositoryShape["attachRepresentationToExistingAsset"] =
     ({ assetId, blockchainName, representation }) =>
@@ -780,6 +803,183 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineSqlError("assetRepository.attachRepresentationToExistingAsset"))
 
+  const createStandaloneAssetRepresentation: AssetRepositoryShape["createStandaloneAssetRepresentation"] =
+    ({ blockchainName, asset, representation }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [blockchain] = yield* tx
+              .select({
+                id: schema.blockchains.id,
+                name: schema.blockchains.name,
+                chainType: schema.blockchains.chainType,
+              })
+              .from(schema.blockchains)
+              .where(
+                eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase())
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.createStandaloneAssetRepresentation.blockchain"
+                )
+              )
+
+            if (blockchain === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.createStandaloneAssetRepresentation.blockchain",
+                cause: { blockchainName, message: "Blockchain does not exist." },
+              })
+            }
+
+            const contractAddress = normalizeAddress({
+              chainType: blockchain.chainType,
+              address: representation.contractAddress,
+            })
+            const mintAddress = representation.mintAddress
+
+            if (
+              representation.type === "native" ||
+              (contractAddress === null && mintAddress === null)
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.createStandaloneAssetRepresentation.identity",
+                cause: {
+                  blockchainName,
+                  representationType: representation.type,
+                  message:
+                    "Standalone creation requires a token or NFT representation with a contract or mint address.",
+                },
+              })
+            }
+
+            const representationFilter =
+              contractAddress !== null
+                ? and(
+                    eq(schema.assetRepresentations.blockchainId, blockchain.id),
+                    eq(schema.assetRepresentations.contractAddress, contractAddress)
+                  )
+                : and(
+                    eq(schema.assetRepresentations.blockchainId, blockchain.id),
+                    eq(schema.assetRepresentations.mintAddress, mintAddress ?? "")
+                  )
+
+            // An existing representation means the create decision was made on
+            // stale evidence. Fail the transaction; the retrying job re-reads
+            // current identity and attaches to the existing owner instead.
+            const [existing] = yield* tx
+              .select({
+                id: schema.assetRepresentations.id,
+                assetId: schema.assetRepresentations.assetId,
+              })
+              .from(schema.assetRepresentations)
+              .where(representationFilter)
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.createStandaloneAssetRepresentation.findRepresentation"
+                )
+              )
+
+            if (existing !== undefined) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.createStandaloneAssetRepresentation.validateRepresentationOwner",
+                cause: {
+                  existingAssetId: existing.assetId,
+                  representationId: existing.id,
+                  message: "Representation already belongs to an economic asset.",
+                },
+              })
+            }
+
+            // A plain insert on purpose: losing a concurrent race surfaces as
+            // a unique violation on the CoinGecko coin id or the
+            // representation identity, rolling back the whole transaction so
+            // no orphan asset survives.
+            const [persistedAsset] = yield* tx
+              .insert(schema.assets)
+              .values({
+                name: asset.name,
+                symbol: asset.symbol.toUpperCase(),
+                coingeckoCoinId: asset.coingeckoCoinId,
+                logoUrl: asset.logoUrl,
+                type: asset.type,
+              })
+              .returning({
+                id: schema.assets.id,
+                name: schema.assets.name,
+                symbol: schema.assets.symbol,
+                type: schema.assets.type,
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.createStandaloneAssetRepresentation.insertAsset"
+                )
+              )
+
+            if (persistedAsset === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.createStandaloneAssetRepresentation.insertAsset",
+                cause: {
+                  assetSymbol: asset.symbol,
+                  message: "Economic asset missing after insert.",
+                },
+              })
+            }
+
+            const [persistedRepresentation] = yield* tx
+              .insert(schema.assetRepresentations)
+              .values({
+                assetId: persistedAsset.id,
+                blockchainId: blockchain.id,
+                type: representation.type,
+                contractAddress,
+                mintAddress,
+                decimals: representation.decimals,
+                logoUrl: representation.logoUrl,
+                isSpam: representation.isSpam,
+                metadata: representation.metadata,
+              })
+              .returning({
+                id: schema.assetRepresentations.id,
+                blockchainId: schema.assetRepresentations.blockchainId,
+                decimals: schema.assetRepresentations.decimals,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                mintAddress: schema.assetRepresentations.mintAddress,
+                representationType: schema.assetRepresentations.type,
+              })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.createStandaloneAssetRepresentation.insertRepresentation"
+                )
+              )
+
+            if (persistedRepresentation === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.createStandaloneAssetRepresentation.insertRepresentation",
+                cause: {
+                  assetId: persistedAsset.id,
+                  message: "Representation missing after insert.",
+                },
+              })
+            }
+
+            return {
+              ...persistedAsset,
+              representationId: persistedRepresentation.id,
+              blockchainId: persistedRepresentation.blockchainId,
+              blockchainName: blockchain.name,
+              decimals: persistedRepresentation.decimals,
+              contractAddress: persistedRepresentation.contractAddress,
+              mintAddress: persistedRepresentation.mintAddress,
+              representationType: persistedRepresentation.representationType,
+            }
+          })
+        )
+        .pipe(wrapSyncEngineSqlError("assetRepository.createStandaloneAssetRepresentation"))
+
   const recordRepresentationOwnershipDecision: AssetRepositoryShape["recordRepresentationOwnershipDecision"] =
     ({ assetRepresentationId, assetId, policyRevision, actor }) =>
       db
@@ -840,8 +1040,9 @@ const make = Effect.gen(function* () {
     findRepresentationByBlockchainAndAddress,
     listBlockchains,
     upsertEconomicAssetRepresentation,
-    findAssetResolutionCandidatesBySymbol,
+    findAssetResolutionCandidatesByDisplay,
     attachRepresentationToExistingAsset,
+    createStandaloneAssetRepresentation,
     recordRepresentationOwnershipDecision,
     findActiveRepresentationOwnership,
   } satisfies AssetRepositoryShape)

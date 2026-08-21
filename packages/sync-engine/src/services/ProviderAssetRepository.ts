@@ -68,8 +68,8 @@ export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
 }
 
-/** Outcome of an attach-only policy decision, recorded as immutable audit history. */
-export type AssetResolutionAuditOutcome = "attach" | "pending" | "fail_closed"
+/** Outcome of an automatic policy decision, recorded as immutable audit history. */
+export type AssetResolutionAuditOutcome = "attach" | "create_standalone" | "pending" | "fail_closed"
 
 /**
  * One evidence snapshot to store behind a decision, scoped to the authority
@@ -92,7 +92,7 @@ export interface AssetResolutionEvidenceEntry extends AssetResolutionEvidenceRec
   readonly decisionId: string
 }
 
-/** One immutable attach-only policy decision to append to resolution audit history. */
+/** One immutable automatic policy decision to append to resolution audit history. */
 export interface AssetResolutionDecisionRecord {
   readonly providerAssetRowId: string
   readonly evidenceRevision: number
@@ -324,7 +324,7 @@ export interface ProviderAssetRepositoryShape {
   }) => Effect.Effect<Option.Option<ResolvedProviderAssetMapping>, SyncEngineStorageError>
 
   /**
-   * Append one attach-only policy decision to resolution audit history as
+   * Append one automatic policy decision to resolution audit history as
    * the active decision for its provider asset and evidence revision. When
    * an active decision already exists for that pair, nothing is written and
    * the result reports recorded: false, so replaying a resolution job never

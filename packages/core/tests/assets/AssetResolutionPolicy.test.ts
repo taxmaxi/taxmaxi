@@ -2,33 +2,45 @@ import * as Effect from "effect/Effect"
 import { describe, expect, it } from "vitest"
 import { SOLANA_USDC_MINT } from "../../src/assets/AssetReferenceCatalog.ts"
 import {
+  ASSET_RESOLUTION_POLICY_REVISION,
+  AssetLegitimacyClaim,
   AssetResolutionConflictingEvidence,
   AssetResolutionMalformedPayload,
   AssetResolutionUpstreamFailure,
-  ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
   canonicalizeAddress,
+  canonicalizeDisplayText,
   ChainClaim,
-  exactRepresentationKey,
   CoinGeckoClaim,
+  CoinGeckoLookupNotFound,
   CoinGeckoPlatformMapping,
+  decideAssetResolution,
   decodeChainClaim,
   decodeCoinGeckoClaim,
-  decideAttachOnlyResolution,
-  evaluateAttachOnlyResolution,
+  evaluateAssetResolution,
+  exactRepresentationKey,
   type AssetResolutionIdentitySnapshot,
+  type ChainResolutionInput,
+  type ProviderDisplayMetadata,
+  type RegistryResolutionInput,
 } from "../../src/assets/AssetResolutionPolicy.ts"
 
 const ETHEREUM_USDC_CONTRACT = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 const ETHEREUM_USDC_CONTRACT_CHECKSUM = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+const LONG_TAIL_MINT = "orbMint1111111111111111111111111111111111111"
+
+const emptyIdentity = (): AssetResolutionIdentitySnapshot => ({
+  registryOwner: null,
+  displayCandidates: [],
+  representations: [],
+})
 
 const usdcIdentity = (): AssetResolutionIdentitySnapshot => ({
-  economicAssets: [
-    {
-      assetKey: "usdc",
-      coingeckoCoinId: "usd-coin",
-      type: "fungible",
-    },
-  ],
+  registryOwner: {
+    assetKey: "usdc",
+    coingeckoCoinId: "usd-coin",
+    type: "fungible",
+  },
+  displayCandidates: [],
   representations: [
     {
       assetKey: "usdc",
@@ -39,17 +51,6 @@ const usdcIdentity = (): AssetResolutionIdentitySnapshot => ({
       decimals: 6,
     },
   ],
-})
-
-const ethIdentity = (): AssetResolutionIdentitySnapshot => ({
-  economicAssets: [
-    {
-      assetKey: "eth",
-      coingeckoCoinId: "ethereum",
-      type: "fungible",
-    },
-  ],
-  representations: [],
 })
 
 const solanaUsdcChainFact = {
@@ -74,6 +75,14 @@ const ethNativeChainFact = {
   contractAddress: null,
   mintAddress: null,
   decimals: 18,
+} as const
+
+const longTailChainFact = {
+  blockchain: "solana",
+  type: "token",
+  contractAddress: null,
+  mintAddress: LONG_TAIL_MINT,
+  decimals: 9,
 } as const
 
 const usdcCoinPayload = {
@@ -127,6 +136,10 @@ const solanaUsdcChainClaim = () =>
     decimals: 6,
   })
 
+const longTailChainClaim = (
+  overrides: Partial<{ readonly type: "token" | "nft"; readonly decimals: number }> = {}
+) => ChainClaim.make({ ...longTailChainFact, ...overrides })
+
 const usdcCoinGeckoClaim = () =>
   CoinGeckoClaim.make({
     coinId: "usd-coin",
@@ -146,25 +159,48 @@ const usdcCoinGeckoClaim = () =>
     ],
   })
 
+const longTailCoinGeckoClaim = (overrides: { readonly decimals?: number | null } = {}) =>
+  CoinGeckoClaim.make({
+    coinId: "orb-token",
+    name: "Orb Token",
+    symbol: "orb",
+    platforms: [
+      CoinGeckoPlatformMapping.make({
+        platformId: "solana",
+        contractAddress: LONG_TAIL_MINT,
+        decimals: overrides.decimals === undefined ? 9 : overrides.decimals,
+      }),
+    ],
+  })
+
+const providerDisplay: ProviderDisplayMetadata = { name: "Orb Token", symbol: "ORB" }
+
 const decodeFailureTag = (effect: Effect.Effect<unknown, { readonly _tag: string }>) => {
   const result = Effect.runSync(Effect.result(effect))
   expect(result._tag).toBe("Failure")
   return result._tag === "Failure" ? result.failure._tag : "Success"
 }
 
-const evaluate = ({
+const decide = ({
   chain,
-  coinGecko,
-  identity = usdcIdentity(),
+  registry = new CoinGeckoLookupNotFound(),
+  identity = emptyIdentity(),
+  legitimacy = [],
+  display = providerDisplay,
 }: {
-  readonly chain:
-    | { readonly _tag: "payload"; readonly payload: unknown }
-    | AssetResolutionUpstreamFailure
-  readonly coinGecko:
-    | { readonly _tag: "payload"; readonly payload: unknown }
-    | AssetResolutionUpstreamFailure
+  readonly chain: ChainResolutionInput
+  readonly registry?: RegistryResolutionInput
   readonly identity?: AssetResolutionIdentitySnapshot
-}) => Effect.runSync(evaluateAttachOnlyResolution({ chain, coinGecko, identity }))
+  readonly legitimacy?: ReadonlyArray<AssetLegitimacyClaim>
+  readonly display?: ProviderDisplayMetadata
+}) =>
+  decideAssetResolution({
+    chain,
+    registry,
+    identity,
+    legitimacy,
+    providerDisplay: display,
+  })
 
 describe("AssetResolutionPolicy", () => {
   describe("decodeChainClaim", () => {
@@ -276,17 +312,17 @@ describe("AssetResolutionPolicy", () => {
     })
   })
 
-  describe("decideAttachOnlyResolution", () => {
-    it("attaches a new exact representation to the existing economic asset", () => {
-      const decision = decideAttachOnlyResolution({
+  describe("decideAssetResolution attach", () => {
+    it("attaches a new exact representation when the registry coin id belongs to an existing asset", () => {
+      const decision = decide({
         chain: solanaUsdcChainClaim(),
-        coinGecko: usdcCoinGeckoClaim(),
+        registry: usdcCoinGeckoClaim(),
         identity: usdcIdentity(),
       })
 
       expect(decision).toMatchObject({
         _tag: "attach",
-        policyRevision: ATTACH_ONLY_RESOLUTION_POLICY_REVISION,
+        policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
         assetKey: "usdc",
         blockchain: "solana",
         type: "token",
@@ -296,103 +332,44 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("attaches a native representation when the CoinGecko platform address is empty", () => {
-      const decision = decideAttachOnlyResolution({
-        chain: ChainClaim.make(ethNativeChainFact),
-        coinGecko: Effect.runSync(decodeCoinGeckoClaim(ethCoinPayload)),
-        identity: ethIdentity(),
+    it("attaches to the local owner of the exact representation without registry evidence", () => {
+      const decision = decide({
+        chain: ChainClaim.make({
+          ...ethereumUsdcChainFact,
+          contractAddress: ETHEREUM_USDC_CONTRACT,
+        }),
+        registry: new CoinGeckoLookupNotFound(),
+        identity: usdcIdentity(),
       })
 
       expect(decision).toMatchObject({
         _tag: "attach",
-        assetKey: "eth",
+        assetKey: "usdc",
         blockchain: "ethereum",
-        type: "native",
-        contractAddress: null,
-        mintAddress: null,
-        decimals: 18,
+        contractAddress: ETHEREUM_USDC_CONTRACT,
       })
     })
 
-    it("does not attach when names and symbols match a known asset but the CoinGecko id does not", () => {
-      const decision = decideAttachOnlyResolution({
+    it("attaches through deterministic registry linkage even when display candidates collide", () => {
+      const decision = decide({
         chain: solanaUsdcChainClaim(),
-        coinGecko: CoinGeckoClaim.make({
-          coinId: "usd-coin-impersonator",
-          name: "USD Coin",
-          symbol: "usdc",
-          platforms: usdcCoinGeckoClaim().platforms,
-        }),
-        identity: usdcIdentity(),
-      })
-
-      expect(decision).toMatchObject({
-        _tag: "pending",
-        reason: "missing_existing_economic_asset",
-      })
-    })
-
-    it("stays pending when no existing economic asset owns the CoinGecko id", () => {
-      const decision = decideAttachOnlyResolution({
-        chain: solanaUsdcChainClaim(),
-        coinGecko: usdcCoinGeckoClaim(),
-        identity: ethIdentity(),
-      })
-
-      expect(decision).toMatchObject({
-        _tag: "pending",
-        reason: "missing_existing_economic_asset",
-      })
-    })
-
-    it("stays pending when the CoinGecko platform chain or address is not an exact match", () => {
-      const wrongChain = decideAttachOnlyResolution({
-        chain: solanaUsdcChainClaim(),
-        coinGecko: CoinGeckoClaim.make({
-          coinId: "usd-coin",
-          name: "USDC",
-          symbol: "usdc",
-          platforms: [
-            CoinGeckoPlatformMapping.make({
-              platformId: "ethereum",
-              contractAddress: ETHEREUM_USDC_CONTRACT,
-              decimals: 6,
-            }),
+        registry: usdcCoinGeckoClaim(),
+        identity: {
+          ...usdcIdentity(),
+          displayCandidates: [
+            { assetKey: "usdc", coingeckoCoinId: "usd-coin", type: "fungible" },
+            { assetKey: "usdc-lookalike", coingeckoCoinId: null, type: "fungible" },
           ],
-        }),
-        identity: usdcIdentity(),
-      })
-      const wrongAddress = decideAttachOnlyResolution({
-        chain: solanaUsdcChainClaim(),
-        coinGecko: CoinGeckoClaim.make({
-          coinId: "usd-coin",
-          name: "USDC",
-          symbol: "usdc",
-          platforms: [
-            CoinGeckoPlatformMapping.make({
-              platformId: "solana",
-              contractAddress: "So11111111111111111111111111111111111111112",
-              decimals: 6,
-            }),
-          ],
-        }),
-        identity: usdcIdentity(),
+        },
       })
 
-      expect(wrongChain).toMatchObject({
-        _tag: "pending",
-        reason: "non_exact_platform_match",
-      })
-      expect(wrongAddress).toMatchObject({
-        _tag: "pending",
-        reason: "non_exact_platform_match",
-      })
+      expect(decision).toMatchObject({ _tag: "attach", assetKey: "usdc" })
     })
 
-    it("stays pending when the matching CoinGecko platform has no decimals", () => {
-      const decision = decideAttachOnlyResolution({
+    it("stays pending when the matching registry platform has no decimals", () => {
+      const decision = decide({
         chain: solanaUsdcChainClaim(),
-        coinGecko: CoinGeckoClaim.make({
+        registry: CoinGeckoClaim.make({
           coinId: "usd-coin",
           name: "USDC",
           symbol: "usdc",
@@ -404,7 +381,7 @@ describe("AssetResolutionPolicy", () => {
             }),
           ],
         }),
-        identity: usdcIdentity(),
+        identity: { ...usdcIdentity(), representations: [] },
       })
 
       expect(decision).toMatchObject({
@@ -413,22 +390,16 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("fails closed for incompatible decimals or type", () => {
-      const incompatibleDecimals = decideAttachOnlyResolution({
-        chain: ChainClaim.make({
-          ...solanaUsdcChainFact,
-          decimals: 8,
-        }),
-        coinGecko: usdcCoinGeckoClaim(),
-        identity: usdcIdentity(),
+    it("fails closed for incompatible decimals or type against the registry owner", () => {
+      const incompatibleDecimals = decide({
+        chain: ChainClaim.make({ ...solanaUsdcChainFact, decimals: 8 }),
+        registry: usdcCoinGeckoClaim(),
+        identity: { ...usdcIdentity(), representations: [] },
       })
-      const incompatibleType = decideAttachOnlyResolution({
-        chain: ChainClaim.make({
-          ...solanaUsdcChainFact,
-          type: "nft",
-        }),
-        coinGecko: usdcCoinGeckoClaim(),
-        identity: usdcIdentity(),
+      const incompatibleType = decide({
+        chain: ChainClaim.make({ ...solanaUsdcChainFact, type: "nft" }),
+        registry: usdcCoinGeckoClaim(),
+        identity: { ...usdcIdentity(), representations: [] },
       })
 
       expect(incompatibleDecimals).toMatchObject({
@@ -441,12 +412,29 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("fails closed when another asset already owns the representation", () => {
-      const decision = decideAttachOnlyResolution({
+    it("fails closed when the owned representation disagrees with the chain claim", () => {
+      const incompatibleDecimals = decide({
+        chain: ChainClaim.make({
+          ...ethereumUsdcChainFact,
+          contractAddress: ETHEREUM_USDC_CONTRACT,
+          decimals: 8,
+        }),
+        identity: usdcIdentity(),
+      })
+
+      expect(incompatibleDecimals).toMatchObject({
+        _tag: "fail_closed",
+        reason: "incompatible_decimals",
+      })
+    })
+
+    it("fails closed when the registry names a different owner than the representation", () => {
+      const decision = decide({
         chain: solanaUsdcChainClaim(),
-        coinGecko: usdcCoinGeckoClaim(),
+        registry: usdcCoinGeckoClaim(),
         identity: {
-          economicAssets: usdcIdentity().economicAssets,
+          registryOwner: usdcIdentity().registryOwner,
+          displayCandidates: [],
           representations: [
             {
               assetKey: "usdt",
@@ -466,33 +454,22 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("fails closed for malformed payloads and upstream failures", () => {
-      const malformed = decideAttachOnlyResolution({
+    it("fails closed when the looked-up coin does not list the exact representation", () => {
+      const decision = decide({
         chain: solanaUsdcChainClaim(),
-        coinGecko: new AssetResolutionMalformedPayload({ source: "coingecko" }),
-        identity: usdcIdentity(),
-      })
-      const upstream = decideAttachOnlyResolution({
-        chain: new AssetResolutionUpstreamFailure({ source: "chain" }),
-        coinGecko: usdcCoinGeckoClaim(),
-        identity: usdcIdentity(),
-      })
-
-      expect(malformed).toMatchObject({
-        _tag: "fail_closed",
-        reason: "malformed_payload",
-      })
-      expect(upstream).toMatchObject({
-        _tag: "fail_closed",
-        reason: "upstream_failure",
-      })
-    })
-
-    it("fails closed for conflicting evidence and names the conflict", () => {
-      const decision = decideAttachOnlyResolution({
-        chain: new AssetResolutionConflictingEvidence({ source: "chain" }),
-        coinGecko: usdcCoinGeckoClaim(),
-        identity: usdcIdentity(),
+        registry: CoinGeckoClaim.make({
+          coinId: "usd-coin",
+          name: "USDC",
+          symbol: "usdc",
+          platforms: [
+            CoinGeckoPlatformMapping.make({
+              platformId: "ethereum",
+              contractAddress: ETHEREUM_USDC_CONTRACT,
+              decimals: 6,
+            }),
+          ],
+        }),
+        identity: { ...usdcIdentity(), representations: [] },
       })
 
       expect(decision).toMatchObject({
@@ -502,12 +479,187 @@ describe("AssetResolutionPolicy", () => {
     })
   })
 
-  describe("evaluateAttachOnlyResolution", () => {
-    it("attaches from decoded chain and CoinGecko payloads", () => {
-      const decision = evaluate({
-        chain: { _tag: "payload", payload: solanaUsdcChainFact },
-        coinGecko: { _tag: "payload", payload: usdcCoinPayload },
+  describe("decideAssetResolution create_standalone", () => {
+    it("creates a standalone asset for an exact unknown representation with no candidates", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        registry: new CoinGeckoLookupNotFound(),
       })
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
+        policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
+        blockchain: "solana",
+        type: "token",
+        contractAddress: null,
+        mintAddress: LONG_TAIL_MINT,
+        decimals: 9,
+        coingeckoCoinId: null,
+        name: "Orb Token",
+        symbol: "ORB",
+      })
+    })
+
+    it("stamps the registry coin id when the registry knows the mint but no local asset owns it", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        registry: longTailCoinGeckoClaim(),
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
+        coingeckoCoinId: "orb-token",
+        name: "Orb Token",
+        symbol: "orb",
+      })
+    })
+
+    it("creates when the registry platform lacks decimals but fails closed when they conflict", () => {
+      const missingDecimals = decide({
+        chain: longTailChainClaim(),
+        registry: longTailCoinGeckoClaim({ decimals: null }),
+      })
+      const conflictingDecimals = decide({
+        chain: longTailChainClaim(),
+        registry: longTailCoinGeckoClaim({ decimals: 6 }),
+      })
+
+      expect(missingDecimals).toMatchObject({
+        _tag: "create_standalone",
+        coingeckoCoinId: "orb-token",
+        decimals: 9,
+      })
+      expect(conflictingDecimals).toMatchObject({
+        _tag: "fail_closed",
+        reason: "incompatible_decimals",
+      })
+    })
+
+    it("falls back to the provider symbol when no display name exists anywhere", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        display: { name: null, symbol: "ORB" },
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
+        name: "ORB",
+        symbol: "ORB",
+      })
+    })
+
+    it("stays pending when a display name or symbol collides with an existing asset", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        identity: {
+          registryOwner: null,
+          displayCandidates: [{ assetKey: "orb", coingeckoCoinId: null, type: "fungible" }],
+          representations: [],
+        },
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "pending",
+        reason: "display_collision",
+      })
+    })
+
+    it("stays pending for unsupported representation types", () => {
+      const nft = decide({
+        chain: longTailChainClaim({ type: "nft", decimals: 0 }),
+      })
+      const native = decide({
+        chain: ChainClaim.make(ethNativeChainFact),
+      })
+
+      expect(nft).toMatchObject({
+        _tag: "pending",
+        reason: "unsupported_representation_type",
+      })
+      expect(native).toMatchObject({
+        _tag: "pending",
+        reason: "unsupported_representation_type",
+      })
+    })
+
+    it("stays pending on authoritative spam evidence but not on weaker signals", () => {
+      const banned = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })],
+      })
+      const weakSignals = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [
+          AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "unverified" }),
+          AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "suspicious" }),
+        ],
+      })
+
+      expect(banned).toMatchObject({
+        _tag: "pending",
+        reason: "spam_evidence",
+      })
+      expect(weakSignals).toMatchObject({ _tag: "create_standalone" })
+    })
+
+    it("fails closed when no usable display metadata exists", () => {
+      const decision = decide({
+        chain: longTailChainClaim(),
+        display: { name: null, symbol: "   " },
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "fail_closed",
+        reason: "malformed_payload",
+      })
+    })
+  })
+
+  describe("decideAssetResolution evidence failures", () => {
+    it("fails closed for malformed payloads and upstream failures", () => {
+      const malformedRegistry = decide({
+        chain: solanaUsdcChainClaim(),
+        registry: new AssetResolutionMalformedPayload({ source: "coingecko" }),
+      })
+      const upstreamChain = decide({
+        chain: new AssetResolutionUpstreamFailure({ source: "chain" }),
+        registry: usdcCoinGeckoClaim(),
+      })
+
+      expect(malformedRegistry).toMatchObject({
+        _tag: "fail_closed",
+        reason: "malformed_payload",
+      })
+      expect(upstreamChain).toMatchObject({
+        _tag: "fail_closed",
+        reason: "upstream_failure",
+      })
+    })
+
+    it("fails closed for conflicting evidence and names the conflict", () => {
+      const decision = decide({
+        chain: new AssetResolutionConflictingEvidence({ source: "chain" }),
+        registry: usdcCoinGeckoClaim(),
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "fail_closed",
+        reason: "conflicting_evidence",
+      })
+    })
+  })
+
+  describe("evaluateAssetResolution", () => {
+    it("attaches from decoded chain and registry payloads", () => {
+      const decision = Effect.runSync(
+        evaluateAssetResolution({
+          chain: { _tag: "payload", payload: solanaUsdcChainFact },
+          registry: { _tag: "payload", payload: usdcCoinPayload },
+          identity: { ...usdcIdentity(), representations: [] },
+          legitimacy: [],
+          providerDisplay: { name: "USDC", symbol: "USDC" },
+        })
+      )
 
       expect(decision).toMatchObject({
         _tag: "attach",
@@ -518,11 +670,34 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("fails closed for malformed payloads and does not attach", () => {
-      const decision = evaluate({
-        chain: { _tag: "payload", payload: solanaUsdcChainFact },
-        coinGecko: { _tag: "payload", payload: { id: "usd-coin" } },
+    it("creates from a decoded chain payload and a definitive registry miss", () => {
+      const decision = Effect.runSync(
+        evaluateAssetResolution({
+          chain: { _tag: "payload", payload: longTailChainFact },
+          registry: new CoinGeckoLookupNotFound(),
+          identity: emptyIdentity(),
+          legitimacy: [],
+          providerDisplay: providerDisplay,
+        })
+      )
+
+      expect(decision).toMatchObject({
+        _tag: "create_standalone",
+        mintAddress: LONG_TAIL_MINT,
+        coingeckoCoinId: null,
       })
+    })
+
+    it("fails closed for malformed payloads and does not attach or create", () => {
+      const decision = Effect.runSync(
+        evaluateAssetResolution({
+          chain: { _tag: "payload", payload: solanaUsdcChainFact },
+          registry: { _tag: "payload", payload: { id: "usd-coin" } },
+          identity: emptyIdentity(),
+          legitimacy: [],
+          providerDisplay: providerDisplay,
+        })
+      )
 
       expect(decision).toMatchObject({
         _tag: "fail_closed",
@@ -530,11 +705,16 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("fails closed for upstream failures and does not attach", () => {
-      const decision = evaluate({
-        chain: { _tag: "payload", payload: solanaUsdcChainFact },
-        coinGecko: new AssetResolutionUpstreamFailure({ source: "coingecko" }),
-      })
+    it("fails closed for upstream failures and does not attach or create", () => {
+      const decision = Effect.runSync(
+        evaluateAssetResolution({
+          chain: { _tag: "payload", payload: solanaUsdcChainFact },
+          registry: new AssetResolutionUpstreamFailure({ source: "coingecko" }),
+          identity: emptyIdentity(),
+          legitimacy: [],
+          providerDisplay: providerDisplay,
+        })
+      )
 
       expect(decision).toMatchObject({
         _tag: "fail_closed",
@@ -557,6 +737,17 @@ describe("AssetResolutionPolicy", () => {
 
     it("passes null through", () => {
       expect(canonicalizeAddress(null)).toBeNull()
+    })
+  })
+
+  describe("canonicalizeDisplayText", () => {
+    it("case-folds and trims display values", () => {
+      expect(canonicalizeDisplayText("  USD Coin ")).toBe("usd coin")
+    })
+
+    it("collapses unicode lookalike forms through NFKC", () => {
+      // Fullwidth "USDC" normalizes to plain "usdc".
+      expect(canonicalizeDisplayText("ＵＳＤＣ")).toBe("usdc")
     })
   })
 

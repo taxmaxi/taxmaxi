@@ -75,7 +75,7 @@ export interface AssetRepresentationDraft {
   readonly metadata: unknown
 }
 
-/** Existing economic asset considered as an attach-only resolution candidate. */
+/** Existing economic asset considered as a resolution display candidate. */
 export interface AssetResolutionCandidateAsset {
   readonly id: string
   readonly symbol: string
@@ -172,12 +172,14 @@ export interface AssetRepositoryShape {
   }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
 
   /**
-   * List existing economic assets whose symbol matches a provider observation's
-   * currency code, for attach-only resolution to consider as a candidate. Only
-   * candidates with a coingeckoCoinId can be checked against CoinGecko evidence.
+   * List existing economic assets whose display symbol or name matches a
+   * provider observation's display metadata. Matching is unicode-normalized
+   * (NFKC) and case-insensitive, so trivial lookalikes collide. A match can
+   * only raise a possible duplicate for the policy; it never proves one.
    */
-  readonly findAssetResolutionCandidatesBySymbol: (params: {
+  readonly findAssetResolutionCandidatesByDisplay: (params: {
     readonly symbol: string
+    readonly name: string | null
   }) => Effect.Effect<ReadonlyArray<AssetResolutionCandidateAsset>, SyncEngineStorageError>
 
   /**
@@ -191,6 +193,21 @@ export interface AssetRepositoryShape {
     readonly blockchainName: string
     readonly representation: AssetRepresentationDraft
   }) => Effect.Effect<SyncEngineAssetRepresentation, SyncEngineStorageError>
+
+  /**
+   * Create a standalone economic asset owning one new exact network
+   * representation in one transaction. The blockchain must already exist;
+   * standalone creation never invents reference data. Losing a race for the
+   * representation identity or the CoinGecko coin id fails the transaction
+   * so no orphan asset survives; the retrying job then finds the winner's
+   * rows and attaches instead, so concurrent attempts cannot create
+   * duplicate economic assets or assign one representation to two owners.
+   */
+  readonly createStandaloneAssetRepresentation: (params: {
+    readonly blockchainName: string
+    readonly asset: EconomicAssetDraft
+    readonly representation: AssetRepresentationDraft
+  }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
 
   /**
    * Record the audited conclusion that an economic asset owns a network

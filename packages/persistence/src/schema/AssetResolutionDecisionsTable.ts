@@ -17,6 +17,7 @@ import { providerAssets } from "./ProviderAssetsTable.ts"
 
 export const assetResolutionOutcomeEnum = pgEnum("asset_resolution_outcome", [
   "attach",
+  "create_standalone",
   "pending",
   "fail_closed",
 ])
@@ -32,7 +33,7 @@ export type AssetResolutionDecisionStatus =
   (typeof assetResolutionDecisionStatusEnum.enumValues)[number]
 
 /**
- * Append-only attach-only policy decision history for one provider
+ * Append-only automatic policy decision history for one provider
  * observation and evidence revision.
  *
  * Decision content is never edited. A correction appends a new active row
@@ -85,8 +86,8 @@ export const assetResolutionDecisions = pgTable(
       sql`${table.evidenceRevision} > 0`
     ),
     check(
-      "asset_resolution_decisions_attach_requires_target",
-      sql`${table.outcome} <> 'attach' or (${table.assetId} is not null and ${table.assetRepresentationId} is not null)`
+      "asset_resolution_decisions_approval_requires_target",
+      sql`${table.outcome}::text not in ('attach', 'create_standalone') or (${table.assetId} is not null and ${table.assetRepresentationId} is not null)`
     ),
   ]
 )

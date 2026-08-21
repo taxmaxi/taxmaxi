@@ -1,5 +1,5 @@
 /**
- * AssetResolutionJobExecutor - Runs one durable attach-only resolution job to completion.
+ * AssetResolutionJobExecutor - Runs one durable asset resolution job to completion.
  *
  * @module AssetResolutionJobExecutor
  */
@@ -15,15 +15,18 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  * - already_claimed: the job was not pending, so this call made no changes.
  * - stale: the provider observation's evidence changed since the job was
  *   scheduled; the job completed without a decision.
- * - attached: the attach-only policy attached a new representation and
- *   durably scheduled a replay of every affected source.
- * - pending / fail_closed: the attach-only policy decided not to attach;
+ * - attached: the policy attached a new representation to an existing
+ *   economic asset and durably scheduled a replay of every affected source.
+ * - created: the policy created a standalone economic asset owning the new
+ *   representation and durably scheduled a replay of every affected source.
+ * - pending / fail_closed: the policy decided not to attach or create;
  *   the decision is recorded as audit history.
  */
 export type AssetResolutionJobOutcome =
   | "already_claimed"
   | "stale"
   | "attached"
+  | "created"
   | "pending"
   | "fail_closed"
 
@@ -48,7 +51,7 @@ export type AssetResolutionJobExecutorError =
  */
 export interface AssetResolutionJobExecutorShape {
   /**
-   * Claim, decide, and record an attach-only resolution decision for one job.
+   * Claim, decide, and record an automatic resolution decision for one job.
    * On any execution failure the job is released back to pending for retry
    * and the failure is raised to the caller.
    */
