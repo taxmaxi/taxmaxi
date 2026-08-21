@@ -7,6 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
+import type { AssetResolutionDecisionRecord } from "./ProviderAssetRepository.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -196,17 +197,22 @@ export interface AssetRepositoryShape {
 
   /**
    * Create a standalone economic asset owning one new exact network
-   * representation in one transaction. The blockchain must already exist;
-   * standalone creation never invents reference data. Losing a race for the
-   * representation identity or the CoinGecko coin id fails the transaction
-   * so no orphan asset survives; the retrying job then finds the winner's
-   * rows and attaches instead, so concurrent attempts cannot create
-   * duplicate economic assets or assign one representation to two owners.
+   * representation, and record the create_standalone audit decision, in one
+   * transaction. The decision is passed with null asset ids; the repository
+   * fills in the created ids before writing it, so a created asset can never
+   * exist without the decision that created it. The blockchain must already
+   * exist; standalone creation never invents reference data. Losing a race
+   * for the representation identity, the CoinGecko coin id, or the active
+   * decision slot fails the transaction so no orphan asset survives; the
+   * retrying job then finds the winner's rows and attaches instead, so
+   * concurrent attempts cannot create duplicate economic assets or assign
+   * one representation to two owners.
    */
   readonly createStandaloneAssetRepresentation: (params: {
     readonly blockchainName: string
     readonly asset: EconomicAssetDraft
     readonly representation: AssetRepresentationDraft
+    readonly decision: AssetResolutionDecisionRecord
   }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
 
   /**

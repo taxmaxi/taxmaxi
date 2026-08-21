@@ -5,7 +5,7 @@
  */
 
 import * as Timestamp from "@my/core/shared/values/Timestamp"
-import { eq, inArray } from "drizzle-orm"
+import { eq, inArray, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import { PersistenceError, isPersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
@@ -13,6 +13,7 @@ import {
   SourceSyncJobModeSchema,
   SourceSyncPhaseSchema,
   SyncEngineStorageError,
+  type AssetResolutionDecisionRecord,
   type SourceSyncJobProgressSnapshot,
 } from "@my/sync-engine/services"
 import { drizzle } from "./PgClientLive.ts"
@@ -182,6 +183,99 @@ export const insertUnresolvedResolutionJobs = ({
         evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
       })
       .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.insert"))
+
+    return inserted
+  })
+
+/**
+ * Insert one automatic resolution decision and its evidence snapshots as the
+ * active decision for its provider asset and evidence revision, inside the
+ * caller's transaction. Shared by ProviderAssetRepositoryLive (decision
+ * recording and supersession) and AssetRepositoryLive (standalone asset
+ * creation, which records its decision in the same transaction) so every
+ * writer follows the same row shape and active-decision rules.
+ *
+ * With skipOnActiveConflict, an existing active decision for the pair leaves
+ * history untouched and returns null, so replays never rewrite it. Without
+ * it, a conflicting active decision fails the caller's transaction.
+ */
+export const insertAssetResolutionDecision = ({
+  tx,
+  decision,
+  supersedesDecisionId = null,
+  skipOnActiveConflict = false,
+  operation,
+}: {
+  readonly tx: SyncEngineDbTransaction
+  readonly decision: AssetResolutionDecisionRecord
+  readonly supersedesDecisionId?: string | null
+  readonly skipOnActiveConflict?: boolean
+  readonly operation: string
+}): Effect.Effect<{ readonly id: string } | null, SyncEngineStorageError> =>
+  Effect.gen(function* () {
+    const insert = tx.insert(schema.assetResolutionDecisions).values({
+      providerAssetRowId: decision.providerAssetRowId,
+      evidenceRevision: decision.evidenceRevision,
+      policyRevision: decision.policyRevision,
+      outcome: decision.outcome,
+      status: "active" as const,
+      supersedesDecisionId,
+      assetId: decision.assetId,
+      assetRepresentationId: decision.assetRepresentationId,
+      blockchain: decision.blockchain,
+      representationType: decision.representationType,
+      contractAddress: decision.contractAddress,
+      mintAddress: decision.mintAddress,
+      decimals: decision.decimals,
+      reason: decision.reason,
+      actor: decision.actor,
+    })
+    const conflictAwareInsert = skipOnActiveConflict
+      ? insert.onConflictDoNothing({
+          target: [
+            schema.assetResolutionDecisions.providerAssetRowId,
+            schema.assetResolutionDecisions.evidenceRevision,
+          ],
+          where: sql`${schema.assetResolutionDecisions.status} = 'active'`,
+        })
+      : insert
+
+    const [inserted] = yield* conflictAwareInsert
+      .returning({ id: schema.assetResolutionDecisions.id })
+      .pipe(wrapSyncEngineSqlError(operation))
+
+    if (inserted === undefined) {
+      if (skipOnActiveConflict) {
+        return null
+      }
+
+      return yield* new SyncEngineStorageError({
+        operation,
+        cause: {
+          providerAssetRowId: decision.providerAssetRowId,
+          evidenceRevision: decision.evidenceRevision,
+          message: "Resolution decision was not inserted.",
+        },
+      })
+    }
+
+    if (decision.evidence.length > 0) {
+      yield* tx
+        .insert(schema.assetResolutionEvidence)
+        .values(
+          decision.evidence.map((entry) => ({
+            decisionId: inserted.id,
+            authority: entry.authority,
+            claimKind: entry.claimKind,
+            sourceLocator: entry.sourceLocator,
+            retrievedAt: entry.retrievedAt,
+            evidenceRevision: entry.evidenceRevision,
+            decodedClaim: entry.decodedClaim,
+            rawPayload: entry.rawPayload,
+          }))
+        )
+        .pipe(wrapSyncEngineSqlError(operation))
+    }
 
     return inserted
   })
