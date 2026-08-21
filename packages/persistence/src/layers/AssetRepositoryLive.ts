@@ -16,7 +16,10 @@ import {
 } from "@my/sync-engine/services"
 import { schema } from "../schema/index.ts"
 import { drizzle } from "./PgClientLive.ts"
-import { wrapSyncEngineSqlError } from "./SyncEngineRepositorySupport.ts"
+import {
+  insertAssetResolutionDecision,
+  wrapSyncEngineSqlError,
+} from "./SyncEngineRepositorySupport.ts"
 
 const normalizeAddress = ({
   chainType,
@@ -599,8 +602,9 @@ const make = Effect.gen(function* () {
     ({ symbol, name }) => {
       // Either provider display value colliding with either stored display
       // value counts: a provider name equal to a stored symbol is still a
-      // possible duplicate. Comparison is NFKC-normalized and case-folded on
-      // both sides so trivial lookalikes collide.
+      // possible duplicate. Comparison mirrors canonicalizeDisplayText on
+      // both sides (NFKC, case-folded, trimmed) so trivial lookalikes and
+      // padded values collide instead of slipping past.
       const keys = [
         ...new Set(
           [
@@ -623,8 +627,8 @@ const make = Effect.gen(function* () {
         .from(schema.assets)
         .where(
           or(
-            inArray(sql<string>`lower(normalize(${schema.assets.symbol}, NFKC))`, keys),
-            inArray(sql<string>`lower(normalize(${schema.assets.name}, NFKC))`, keys)
+            inArray(sql<string>`btrim(lower(normalize(${schema.assets.symbol}, NFKC)))`, keys),
+            inArray(sql<string>`btrim(lower(normalize(${schema.assets.name}, NFKC)))`, keys)
           )
         )
         .pipe(wrapSyncEngineSqlError("assetRepository.findAssetResolutionCandidatesByDisplay"))
@@ -804,7 +808,7 @@ const make = Effect.gen(function* () {
         .pipe(wrapSyncEngineSqlError("assetRepository.attachRepresentationToExistingAsset"))
 
   const createStandaloneAssetRepresentation: AssetRepositoryShape["createStandaloneAssetRepresentation"] =
-    ({ blockchainName, asset, representation }) =>
+    ({ blockchainName, asset, representation, decision }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -965,6 +969,20 @@ const make = Effect.gen(function* () {
                 },
               })
             }
+
+            // The audit decision is written in the same transaction, with the
+            // created ids filled in, so a crash can never leave a created
+            // asset without the decision that created it. A conflicting
+            // active decision rolls the creation back.
+            yield* insertAssetResolutionDecision({
+              tx,
+              decision: {
+                ...decision,
+                assetId: persistedAsset.id,
+                assetRepresentationId: persistedRepresentation.id,
+              },
+              operation: "assetRepository.createStandaloneAssetRepresentation.recordDecision",
+            })
 
             return {
               ...persistedAsset,
