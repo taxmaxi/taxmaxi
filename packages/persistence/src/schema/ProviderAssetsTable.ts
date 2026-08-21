@@ -26,6 +26,7 @@ export const providerAssets = pgTable(
     exponent: integer("exponent"),
     providerType: text("provider_type"),
     rawProviderPayload: jsonb("raw_provider_payload"),
+    evidenceRevision: integer("evidence_revision").notNull().default(1),
     discoveredAt: timestamp("discovered_at").notNull().defaultNow(),
     retrievedAt: timestamp("retrieved_at").notNull(),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -43,6 +44,7 @@ export const providerAssets = pgTable(
       "provider_assets_identity_requires_key",
       sql`${table.providerAssetId} is not null or ${table.naturalKey} is not null`
     ),
+    check("provider_assets_evidence_revision_positive", sql`${table.evidenceRevision} > 0`),
   ]
 )
 

@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, eq, gte, lt } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, ne, or } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -20,6 +20,7 @@ import { PersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
 import { schema } from "../schema/index.ts"
 import {
   TaxCalculationIncompleteDataError,
+  TaxCalculationPendingObservationsError,
   TaxCalculationService,
   TaxCalculationUnsupportedCurrencyError,
   UnsupportedJurisdictionError,
@@ -31,6 +32,7 @@ import { drizzle } from "./PgClientLive.ts"
 const HOLDING_PERIOD_YEARS = 1
 const SUPPORTED_JURISDICTION = "germany"
 const REPORTING_CURRENCY = EUR
+const BLOCKING_OBSERVATION_LIST_LIMIT = 50
 const taxCalculationOutcomeMetric = Metric.frequency("taxmaxi_tax_calculation_outcomes", {
   description: "Outcome frequencies for source-scoped tax calculations.",
 })
@@ -88,6 +90,7 @@ const normalizeTaxCalculationError = (error: unknown): TaxCalculationServiceErro
   error instanceof SourceNotFoundError ||
   error instanceof UnsupportedJurisdictionError ||
   error instanceof TaxCalculationIncompleteDataError ||
+  error instanceof TaxCalculationPendingObservationsError ||
   error instanceof TaxCalculationUnsupportedCurrencyError ||
   error instanceof PersistenceError
     ? error
@@ -229,6 +232,94 @@ const make = Effect.gen(function* () {
         kind: "client",
       })
     )
+
+  /**
+   * Filter for observations used by the source whose transactions stay
+   * outside derived accounting: no mapping row yet, or a mapping that is not
+   * approved (pending_review or rejected). Shared by the count and the list
+   * so the two can never disagree about what blocks a calculation.
+   *
+   * @param sourceId - Source identifier
+   * @returns Drizzle where condition over source uses joined with mappings
+   */
+  const blockingObservationFilter = (sourceId: string) =>
+    and(
+      eq(schema.providerAssetSourceUses.sourceId, sourceId),
+      or(
+        isNull(schema.providerAssetMappings.id),
+        ne(schema.providerAssetMappings.mappingStatus, "approved")
+      )
+    )
+
+  /**
+   * Count provider asset observations used by the source whose transactions
+   * are still outside derived accounting. Any unapproved mapping keeps its
+   * transactions out of legs and FIFO, so the calculation must report pending
+   * instead of a silently short total.
+   *
+   * @param sourceId - Source identifier
+   * @returns Number of observations blocking the calculation
+   */
+  const countPendingObservations = (sourceId: string) =>
+    Effect.gen(function* () {
+      const [row] = yield* db
+        .select({ pendingObservations: count() })
+        .from(schema.providerAssetSourceUses)
+        .leftJoin(
+          schema.providerAssetMappings,
+          eq(
+            schema.providerAssetMappings.providerAssetRowId,
+            schema.providerAssetSourceUses.providerAssetRowId
+          )
+        )
+        .where(blockingObservationFilter(sourceId))
+        .pipe(wrapSqlError("taxCalculationService.countPendingObservations"))
+
+      return row?.pendingObservations ?? 0
+    }).pipe(
+      withObservedOperation({
+        name: "persistence.tax-calculation.count-pending-observations",
+        attributes: { sourceId },
+        kind: "client",
+      })
+    )
+
+  /**
+   * Load a bounded list of provider asset observations that block a source's
+   * tax calculation, named by provider and currency code so a user can act on
+   * them without guessing from missing IDs.
+   *
+   * @param sourceId - Source identifier
+   * @returns Blocking observations, capped at BLOCKING_OBSERVATION_LIST_LIMIT
+   */
+  const loadBlockingObservations = (sourceId: string) =>
+    db
+      .select({
+        provider: schema.providerAssets.provider,
+        currencyCode: schema.providerAssets.currencyCode,
+      })
+      .from(schema.providerAssetSourceUses)
+      .innerJoin(
+        schema.providerAssets,
+        eq(schema.providerAssets.id, schema.providerAssetSourceUses.providerAssetRowId)
+      )
+      .leftJoin(
+        schema.providerAssetMappings,
+        eq(
+          schema.providerAssetMappings.providerAssetRowId,
+          schema.providerAssetSourceUses.providerAssetRowId
+        )
+      )
+      .where(blockingObservationFilter(sourceId))
+      .limit(BLOCKING_OBSERVATION_LIST_LIMIT)
+      .pipe(
+        wrapSqlError("taxCalculationService.loadBlockingObservations"),
+        withObservedOperation({
+          name: "persistence.tax-calculation.load-blocking-observations",
+          attributes: { sourceId },
+          kind: "client",
+        })
+      )
 
   /**
    * Load disposal matches that fall within the selected tax year.
@@ -421,6 +512,18 @@ const make = Effect.gen(function* () {
       }
 
       yield* loadSource(sourceId)
+
+      const pendingObservationCount = yield* countPendingObservations(sourceId)
+
+      if (pendingObservationCount > 0) {
+        const blockingObservations = yield* loadBlockingObservations(sourceId)
+
+        return yield* new TaxCalculationPendingObservationsError({
+          sourceId,
+          pendingObservationCount,
+          blockingObservations,
+        })
+      }
 
       const yearStart = startOfYearUtc(year)
       const yearEnd = endOfYearUtc(year)

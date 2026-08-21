@@ -25,6 +25,7 @@ import {
   ActivityFacts,
 } from "../../src/services/ActivityClassificationService.ts"
 import { AssetRepository } from "../../src/services/AssetRepository.ts"
+import { AssetResolutionJobRepository } from "../../src/services/AssetResolutionJobRepository.ts"
 import {
   ProviderAssetRepository,
   type ProviderAssetRepositoryShape,
@@ -165,6 +166,36 @@ const makeProviderLayer = ({
           findProviderAssetReviewById: () => Effect.succeed(Option.none()),
           listProviderAssetReviews: () => Effect.succeed([]),
           findProviderAssetMapping: () => Effect.succeed(Option.none()),
+          appendSupersedingAssetResolutionDecision: () =>
+            Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
+          findActiveAssetResolutionDecision: () =>
+            Effect.die("findActiveAssetResolutionDecision should not be called"),
+          listAssetResolutionDecisions: () =>
+            Effect.die("listAssetResolutionDecisions should not be called"),
+          listAssetResolutionEvidence: () =>
+            Effect.die("listAssetResolutionEvidence should not be called"),
+          recordAssetResolutionDecision: () =>
+            Effect.die("recordAssetResolutionDecision should not be called"),
+        })
+      )
+    ),
+    Layer.provide(
+      Layer.succeed(
+        AssetResolutionJobRepository,
+        AssetResolutionJobRepository.of({
+          scheduleUnresolvedResolutionJob: () =>
+            Effect.succeed({
+              created: false,
+              providerAssetRowId: "unused",
+              evidenceRevision: 1,
+            }),
+          claimResolutionJob: () => Effect.die("claimResolutionJob should not be called"),
+          listDispatchableResolutionJobs: () =>
+            Effect.die("listDispatchableResolutionJobs should not be called"),
+          heartbeatResolutionJob: () => Effect.die("heartbeatResolutionJob should not be called"),
+          releaseResolutionJobAfterFailure: () =>
+            Effect.die("releaseResolutionJobAfterFailure should not be called"),
+          finishResolutionJob: () => Effect.die("finishResolutionJob should not be called"),
         })
       )
     ),
@@ -180,6 +211,13 @@ const makeProviderLayer = ({
           listBlockchains: () => Effect.succeed([{ id: "solana-blockchain-id", name: "solana" }]),
           upsertEconomicAssetRepresentation: () =>
             Effect.die("upsertEconomicAssetRepresentation should not be called"),
+          findAssetResolutionCandidatesBySymbol: () => Effect.succeed([]),
+          attachRepresentationToExistingAsset: () =>
+            Effect.die("attachRepresentationToExistingAsset should not be called"),
+          recordRepresentationOwnershipDecision: () =>
+            Effect.die("recordRepresentationOwnershipDecision should not be called"),
+          findActiveRepresentationOwnership: () =>
+            Effect.die("findActiveRepresentationOwnership should not be called"),
         })
       )
     ),
@@ -1044,8 +1082,11 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       feeAmount: "5000",
       isError: false,
     })
-    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5", "0.000005"])
-    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native", "fee"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.amount)).toEqual([
+      "0.5",
+      "0.000005",
+    ])
+    expect(result.canonicalTransfers.map((transfer) => transfer.type)).toEqual(["native", "fee"])
     expect(result.providerTransfers).toHaveLength(2)
     const principalProviderTransfer = result.providerTransfers.find((transfer) =>
       transfer.externalId?.includes(":provider:principal:")
@@ -1058,6 +1099,217 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedDecimals: 9,
     })
     expect(result.transactionReview).toBeNull()
+  })
+
+  it("derives disposal and fee legs for a fully mapped Solana transfer", async () => {
+    const signature = "signature-mapped-sol-transfer"
+    const payload = {
+      slot: 123,
+      transactionIndex: 4,
+      transaction: {
+        signatures: [signature],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+          ],
+          instructions: [{ programId: "11111111111111111111111111111111", program: "system" }],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0],
+        postBalances: [1_499_995_000, 500_000_000],
+      },
+      blockTime: 1_735_689_600,
+      type: "TRANSFER",
+      source: "SYSTEM_PROGRAM",
+    }
+
+    const { prepared, legs } = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        const prepared = yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
+          lookups,
+        })
+        const legs = yield* provider.deriveLegs({
+          transaction: {
+            id: "transaction-mapped-sol",
+            sourceId: prepared.transaction.sourceId,
+            sourceRawRecordId: prepared.transaction.sourceRawRecordId,
+            externalId: prepared.transaction.externalId,
+            timestamp: prepared.transaction.timestamp,
+            providerTransactionType: prepared.transaction.providerTransactionType,
+            metadata: prepared.transaction.metadata,
+            principalId: prepared.transaction.principalId,
+          },
+          venueContext: null,
+          canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
+            id: `persisted-transfer-${index}`,
+            sourceId: transfer.sourceId,
+            sourceRawRecordId: transfer.sourceRawRecordId,
+            externalId: transfer.externalId,
+            txHash: transfer.txHash,
+            timestamp: transfer.timestamp,
+            addressId: transfer.addressId,
+            assetId: transfer.assetId,
+            assetRepresentationId: transfer.assetRepresentationId ?? null,
+            amount: transfer.amount,
+            type: transfer.type,
+          })),
+          legPlans: prepared.legPlans,
+        })
+        return { prepared, legs }
+      }),
+      () => Effect.die("Helius client should not be called during normalization")
+    )
+
+    expect(prepared.transactionReview).toBeNull()
+    expect(prepared.legDerivationStrategy).toBe("derive")
+    expect(prepared.legPlans).toEqual([
+      {
+        transferExternalId: `${signature}:principal:0`,
+        kind: "disposal",
+        role: "principal",
+        derivationRule: "helius_solana_outbound",
+      },
+      {
+        transferExternalId: `${signature}:fee:1`,
+        kind: "fee",
+        role: "fee",
+        derivationRule: "helius_solana_fee",
+      },
+    ])
+    expect(legs).toHaveLength(2)
+    expect(legs[0]).toMatchObject({
+      externalId: `${signature}:principal:0:leg`,
+      kind: "disposal",
+      amount: "0.5",
+      assetId: "asset-sol",
+      assetRepresentationId: "representation-sol",
+      provenance: "deterministic",
+      derivationRule: "helius_solana_outbound",
+      transactionId: "transaction-mapped-sol",
+      sourceTransferId: "persisted-transfer-0",
+      feeForTransactionId: null,
+    })
+    expect(legs[1]).toMatchObject({
+      externalId: `${signature}:fee:1:leg`,
+      kind: "fee",
+      amount: "0.000005",
+      assetId: "asset-sol",
+      transactionId: "transaction-mapped-sol",
+      sourceTransferId: "persisted-transfer-1",
+      feeForTransactionId: "transaction-mapped-sol",
+    })
+  })
+
+  it("derives an acquisition leg for a mapped inbound SPL movement", async () => {
+    const signature = "signature-mapped-spl-acquisition"
+    const payload = {
+      slot: 127,
+      transactionIndex: 3,
+      transaction: {
+        signatures: [signature],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [1_999_995_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const { prepared, legs } = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        const prepared = yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
+          lookups,
+        })
+        const legs = yield* provider.deriveLegs({
+          transaction: {
+            id: "transaction-mapped-spl",
+            sourceId: prepared.transaction.sourceId,
+            sourceRawRecordId: prepared.transaction.sourceRawRecordId,
+            externalId: prepared.transaction.externalId,
+            timestamp: prepared.transaction.timestamp,
+            providerTransactionType: prepared.transaction.providerTransactionType,
+            metadata: prepared.transaction.metadata,
+            principalId: prepared.transaction.principalId,
+          },
+          venueContext: null,
+          canonicalTransfers: prepared.canonicalTransfers.map((transfer, index) => ({
+            id: `persisted-transfer-${index}`,
+            sourceId: transfer.sourceId,
+            sourceRawRecordId: transfer.sourceRawRecordId,
+            externalId: transfer.externalId,
+            txHash: transfer.txHash,
+            timestamp: transfer.timestamp,
+            addressId: transfer.addressId,
+            assetId: transfer.assetId,
+            assetRepresentationId: transfer.assetRepresentationId ?? null,
+            amount: transfer.amount,
+            type: transfer.type,
+          })),
+          legPlans: prepared.legPlans,
+        })
+        return { prepared, legs }
+      }),
+      () => Effect.die("Helius client should not be called during normalization")
+    )
+
+    expect(prepared.legDerivationStrategy).toBe("derive")
+    expect(legs).toHaveLength(2)
+
+    const acquisitionLeg = legs.find((leg) => leg.kind === "acquisition")
+    expect(acquisitionLeg).toMatchObject({
+      assetId: "asset-usdc",
+      assetRepresentationId: "representation-usdc-solana",
+      amount: "12.5",
+      derivationRule: "helius_solana_inbound",
+      transactionId: "transaction-mapped-spl",
+      feeForTransactionId: null,
+    })
+
+    const feeLeg = legs.find((leg) => leg.kind === "fee")
+    expect(feeLeg).toMatchObject({
+      assetId: "asset-sol",
+      amount: "0.000005",
+      derivationRule: "helius_solana_fee",
+      feeForTransactionId: "transaction-mapped-spl",
+    })
   })
 
   it("does not treat a native SOL wallet row sentinel as wrapped SOL", async () => {
@@ -1581,8 +1833,8 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native"])
-    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.type)).toEqual(["native"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.amount)).toEqual(["0.5"])
     expect(result.providerTransfers).toHaveLength(1)
     expect(result.providerTransfers[0]).toMatchObject({
       fromAddress: "counterparty-address",
@@ -1628,8 +1880,8 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["native"])
-    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.5"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.type)).toEqual(["native"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.amount)).toEqual(["0.5"])
     expect(result.providerTransfers).toHaveLength(1)
     const metadata = Schema.decodeUnknownSync(Schema.Struct({ activityFacts: ActivityFacts }))(
       result.transaction.metadata
@@ -1672,10 +1924,12 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     )
 
     expect(result.transaction.providerStatus).toBe("failed")
-    expect(result.feeTransfers.map((transfer) => transfer.type)).toEqual(["fee"])
-    expect(result.feeTransfers.map((transfer) => transfer.amount)).toEqual(["0.000005"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.type)).toEqual(["fee"])
+    expect(result.canonicalTransfers.map((transfer) => transfer.amount)).toEqual(["0.000005"])
     expect(result.onchainContext?.isError).toBe(true)
     expect(result.transactionReview?.matchedLayer).toBe("solana_failed_transaction")
+    expect(result.legDerivationStrategy).toBe("skip")
+    expect(result.legPlans).toEqual([])
   })
 
   it("marks successful Solana transactions without deterministic classification for review", async () => {
@@ -1716,7 +1970,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    expect(result.feeTransfers).toHaveLength(0)
+    expect(result.canonicalTransfers).toHaveLength(0)
     expect(result.providerTransfers).toHaveLength(0)
     expect(result.transactionReview).toMatchObject({
       matchedLayer: "solana_unknown_activity",
@@ -1803,7 +2057,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({
       amount: "12.5",
       type: "spl",
@@ -1900,7 +2156,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({
       amount: "123456789012.123456",
       type: "spl",
@@ -2601,7 +2859,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       expect.objectContaining({ amount: "1", observedDecimals: 6 }),
     ])
     expect(
-      result.feeTransfers.filter((transfer) => transfer.assetId === "asset-usdc")
+      result.canonicalTransfers.filter((transfer) => transfer.assetId === "asset-usdc")
     ).toHaveLength(1)
   })
 
@@ -2793,7 +3051,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({
       amount: "12.5",
       type: "spl",
@@ -2875,7 +3135,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({
       amount: "1.234567890123456789",
       type: "spl",
@@ -2941,7 +3203,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    const wrappedSolTransfer = result.feeTransfers.find(
+    const wrappedSolTransfer = result.canonicalTransfers.find(
       (transfer) =>
         transfer.assetId === "asset-sol" && transfer.type === "spl" && transfer.amount === "1.25"
     )
@@ -3440,7 +3702,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
     expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
   })
@@ -3598,6 +3862,8 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedMintAddress: UNKNOWN_MINT,
       observedDecimals: 5,
     })
+    expect(result.legDerivationStrategy).toBe("skip")
+    expect(result.legPlans).toEqual([])
   })
 
   it("records separate SPL token and NFT facts in a multi-transfer transaction", async () => {
@@ -3816,7 +4082,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({
       amount: "1.234567890123456789",
       type: "spl",
@@ -3913,7 +4181,9 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    const splTransfer = result.feeTransfers.find((transfer) => transfer.assetId === "asset-usdc")
+    const splTransfer = result.canonicalTransfers.find(
+      (transfer) => transfer.assetId === "asset-usdc"
+    )
     expect(splTransfer).toMatchObject({ amount: "12.5", type: "spl" })
     expect(splTransfer?.metadata).toMatchObject({ evidenceKind: "token_balance_delta" })
     const providerTransfers = result.providerTransfers.filter(
@@ -4007,8 +4277,8 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
         })
     )
 
-    const rentTransfer = result.feeTransfers.find((transfer) => transfer.notes !== null)
-    const splTransfers = result.feeTransfers.filter((transfer) => transfer.type === "spl")
+    const rentTransfer = result.canonicalTransfers.find((transfer) => transfer.notes !== null)
+    const splTransfers = result.canonicalTransfers.filter((transfer) => transfer.type === "spl")
     expect(rentTransfer).toMatchObject({
       amount: "0.00203928",
       type: "native",
@@ -4099,7 +4369,7 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       () => Effect.die("Helius client should not be called during normalization")
     )
 
-    const rentTransfer = result.feeTransfers.find((transfer) => transfer.notes !== null)
+    const rentTransfer = result.canonicalTransfers.find((transfer) => transfer.notes !== null)
     expect(rentTransfer).toMatchObject({
       amount: "0.00203928",
       type: "native",

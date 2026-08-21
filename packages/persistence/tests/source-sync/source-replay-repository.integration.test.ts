@@ -150,7 +150,7 @@ describe("SourceReplayRepositoryLive", () => {
             metadata: { provider: "coinbase" },
           },
           providerTransfers: [],
-          feeTransfers: [],
+          canonicalTransfers: [],
           legs: [
             {
               sourceId: TEST_SOURCE_ID,

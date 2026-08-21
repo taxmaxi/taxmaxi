@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { beforeEach, describe, expect, it } from "vitest"
+import { AssetResolutionJobRepositoryLive } from "../../src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { SourceNormalizationRepositoryLive } from "../../src/layers/SourceNormalizationRepositoryLive.ts"
 import { SyncEngineTransactionLive } from "../../src/layers/SyncEngineTransactionLive.ts"
@@ -20,6 +21,7 @@ import {
   seedSyncEngineRepositoryFixture,
 } from "../support/integration-test-kit.ts"
 import {
+  AssetResolutionJobRepository,
   ProviderAssetRepository,
   SourceNormalizationRepository,
   SyncEngineStorageError,
@@ -36,6 +38,9 @@ await Effect.runPromise(context.recreateTestDatabase())
 
 const runRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
+
+const runJobRepository = <A, E>(effect: Effect.Effect<A, E, AssetResolutionJobRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: AssetResolutionJobRepositoryLive }))
 
 const AtomicNormalizationLayer = Layer.mergeAll(
   ProviderAssetRepositoryLive,
@@ -158,6 +163,59 @@ const seedPendingApprovalAsset = async (
   )
 
   return providerAsset
+}
+
+const scheduleResolutionJob = async (suffix: string) => {
+  const providerAssetRowId = await runRepository(
+    Effect.gen(function* () {
+      const repository = yield* ProviderAssetRepository
+      yield* repository.upsertProviderAssets({
+        providerKey: "coinbase",
+        entries: [
+          {
+            providerAssetId: `resolution-job-${suffix}`,
+            naturalKey: null,
+            currencyCode: "ORB",
+            name: "Orb",
+            exponent: 8,
+            providerType: "crypto",
+            payload: { source: "test" },
+          },
+        ],
+      })
+      const result = yield* repository.findProviderAssetByProviderAssetId({
+        providerKey: "coinbase",
+        providerAssetId: `resolution-job-${suffix}`,
+      })
+      if (Option.isNone(result)) {
+        return yield* Effect.die("Expected resolution job provider asset")
+      }
+      return result.value.id
+    })
+  )
+
+  await runJobRepository(
+    Effect.flatMap(AssetResolutionJobRepository, (repository) =>
+      repository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
+    )
+  )
+
+  const [job] = await runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      return yield* db
+        .select({ id: schema.assetResolutionJobs.id })
+        .from(schema.assetResolutionJobs)
+        .where(eq(schema.assetResolutionJobs.providerAssetRowId, providerAssetRowId))
+        .limit(1)
+    })
+  )
+
+  if (job === undefined) {
+    throw new Error("Expected a resolution job to be scheduled")
+  }
+
+  return { providerAssetRowId, jobId: job.id }
 }
 
 describe("ProviderAssetRepositoryLive", () => {
@@ -288,6 +346,69 @@ describe("ProviderAssetRepositoryLive", () => {
         mappingStatus: "approved",
       })
       expect(providerAssetRows).toHaveLength(1)
+    })
+
+    it("bumps evidence revision only when stored observation facts change", async () => {
+      const upsertBtc = ({ name, payload }: { readonly name: string; readonly payload: unknown }) =>
+        runRepository(
+          Effect.flatMap(ProviderAssetRepository, (repository) =>
+            repository.upsertProviderAssets({
+              providerKey: "coinbase",
+              entries: [
+                {
+                  providerAssetId: "btc-provider-asset",
+                  naturalKey: null,
+                  currencyCode: "BTC",
+                  name,
+                  exponent: 8,
+                  providerType: "crypto",
+                  payload,
+                },
+              ],
+            })
+          )
+        )
+
+      await upsertBtc({
+        name: "Bitcoin",
+        payload: { code: "BTC", asset_id: "btc-provider-asset" },
+      })
+      await upsertBtc({
+        name: "Bitcoin",
+        payload: { code: "BTC", asset_id: "btc-provider-asset" },
+      })
+
+      const afterUnchanged = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [row] = yield* db
+            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "btc-provider-asset"))
+            .limit(1)
+          return row ?? null
+        })
+      )
+
+      await upsertBtc({
+        name: "Bitcoin",
+        payload: { code: "BTC", asset_id: "btc-provider-asset", exponent: 8 },
+      })
+
+      const afterChanged = await runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          const [row] = yield* db
+            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+            .from(schema.providerAssets)
+            .where(eq(schema.providerAssets.providerAssetId, "btc-provider-asset"))
+            .limit(1)
+          return row ?? null
+        })
+      )
+
+      expect(afterUnchanged).toEqual({ evidenceRevision: 1 })
+      expect(afterChanged).toEqual({ evidenceRevision: 2 })
     })
 
     it("approves once and attaches replay to an active job under concurrent retries", async () => {
@@ -1034,7 +1155,7 @@ describe("ProviderAssetRepositoryLive", () => {
                     metadata: { role: "principal" },
                   },
                 ],
-                feeTransfers: [],
+                canonicalTransfers: [],
                 legs: [],
                 transactionReview: null,
                 resolvedTransactionType: {
@@ -1169,7 +1290,7 @@ describe("ProviderAssetRepositoryLive", () => {
                   metadata: { role: "principal" },
                 },
               ],
-              feeTransfers: [],
+              canonicalTransfers: [],
               legs: [],
               transactionReview: null,
               resolvedTransactionType: {
@@ -1870,6 +1991,333 @@ describe("ProviderAssetRepositoryLive", () => {
         })
       )
       expect(providerAssetRows).toHaveLength(0)
+    })
+  })
+
+  describe("decision history", () => {
+    beforeEach(async () => {
+      await Effect.runPromise(context.recreateTestDatabase())
+      const fixture = await runPg(seedSyncEngineRepositoryFixture())
+      await runPg(
+        seedSyncEngineAssets({
+          baseBlockchainId: fixture.baseBlockchainId,
+          bitcoinBlockchainId: fixture.bitcoinBlockchainId,
+        })
+      )
+    })
+
+    const makePendingDecision = ({
+      providerAssetRowId,
+      evidenceRevision = 1,
+      reason = "missing_existing_economic_asset",
+    }: {
+      readonly providerAssetRowId: string
+      readonly evidenceRevision?: number
+      readonly reason?: string
+    }) => ({
+      providerAssetRowId,
+      evidenceRevision,
+      policyRevision: "2026-08-19.attach-only.1",
+      outcome: "pending" as const,
+      assetId: null,
+      assetRepresentationId: null,
+      blockchain: null,
+      representationType: null,
+      contractAddress: null,
+      mintAddress: null,
+      decimals: null,
+      reason,
+      evidence: [],
+      actor: "system:attach-only-policy",
+    })
+
+    it("re-recording at the same evidence revision reports recorded: false and keeps the original", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-duplicate")
+
+      const first = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      expect(first).toEqual({ recorded: true })
+
+      const second = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({
+              providerAssetRowId,
+              reason: "non_exact_platform_match",
+            }),
+          })
+        )
+      )
+      expect(second).toEqual({ recorded: false })
+
+      const history = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionDecisions({ providerAssetRowId })
+        )
+      )
+      expect(history).toHaveLength(1)
+      expect(history[0]).toMatchObject({
+        status: "active",
+        reason: "missing_existing_economic_asset",
+      })
+    })
+
+    it("appends a superseding decision and preserves the replaced one", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-supersede")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+
+      const original = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(original)) {
+        throw new Error("Expected an active decision to supersede")
+      }
+
+      const superseded = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.appendSupersedingAssetResolutionDecision({
+            supersedesDecisionId: original.value.id,
+            decision: makePendingDecision({
+              providerAssetRowId,
+              reason: "non_exact_platform_match",
+            }),
+          })
+        )
+      )
+      expect(superseded._tag).toBe("superseded")
+
+      const history = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionDecisions({ providerAssetRowId })
+        )
+      )
+      expect(history).toHaveLength(2)
+      expect(history[0]).toMatchObject({
+        id: original.value.id,
+        status: "superseded",
+        reason: "missing_existing_economic_asset",
+        supersedesDecisionId: null,
+      })
+      expect(history[1]).toMatchObject({
+        status: "active",
+        reason: "non_exact_platform_match",
+        supersedesDecisionId: original.value.id,
+      })
+
+      const active = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(active)) {
+        throw new Error("Expected an active decision after supersession")
+      }
+      expect(active.value.reason).toBe("non_exact_platform_match")
+    })
+
+    it("rejects superseding a decision that is no longer active", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-conflict")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      const original = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(original)) {
+        throw new Error("Expected an active decision")
+      }
+
+      const first = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.appendSupersedingAssetResolutionDecision({
+            supersedesDecisionId: original.value.id,
+            decision: makePendingDecision({
+              providerAssetRowId,
+              reason: "non_exact_platform_match",
+            }),
+          })
+        )
+      )
+      expect(first._tag).toBe("superseded")
+
+      const second = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.appendSupersedingAssetResolutionDecision({
+            supersedesDecisionId: original.value.id,
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+      expect(second).toEqual({ _tag: "conflict" })
+    })
+
+    it("stores authority-scoped evidence records behind a decision and reads them back", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-evidence")
+      const retrievedAt = new Date("2025-06-01T12:00:00.000Z")
+
+      const recorded = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: {
+              ...makePendingDecision({ providerAssetRowId }),
+              evidence: [
+                {
+                  authority: "chain",
+                  claimKind: "chain_fact",
+                  sourceLocator: `taxmaxi://provider-assets/${providerAssetRowId}/observed-representations`,
+                  retrievedAt,
+                  evidenceRevision: 1,
+                  decodedClaim: { blockchain: "solana", decimals: 8 },
+                  rawPayload: [{ observation: "raw" }],
+                },
+                {
+                  authority: "coingecko",
+                  claimKind: "registry_platform_mapping",
+                  sourceLocator: "coingecko://coins/orb-test-coin",
+                  retrievedAt,
+                  evidenceRevision: 1,
+                  decodedClaim: null,
+                  rawPayload: { _tag: "upstream_failure", source: "coingecko" },
+                },
+              ],
+            },
+          })
+        )
+      )
+      expect(recorded).toEqual({ recorded: true })
+
+      const decision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(decision)) {
+        throw new Error("Expected an active decision")
+      }
+
+      const evidence = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.listAssetResolutionEvidence({ decisionId: decision.value.id })
+        )
+      )
+      expect(evidence).toEqual([
+        expect.objectContaining({
+          authority: "chain",
+          claimKind: "chain_fact",
+          evidenceRevision: 1,
+          decodedClaim: { blockchain: "solana", decimals: 8 },
+          rawPayload: [{ observation: "raw" }],
+        }),
+        expect.objectContaining({
+          authority: "coingecko",
+          claimKind: "registry_platform_mapping",
+          decodedClaim: null,
+          rawPayload: { _tag: "upstream_failure", source: "coingecko" },
+        }),
+      ])
+      expect(evidence[0]?.retrievedAt.toISOString()).toBe(retrievedAt.toISOString())
+    })
+
+    it("rejects a second evidence record for the same authority and claim kind on one decision", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-evidence-duplicate")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: {
+              ...makePendingDecision({ providerAssetRowId }),
+              evidence: [
+                {
+                  authority: "chain",
+                  claimKind: "chain_fact",
+                  sourceLocator: null,
+                  retrievedAt: new Date(),
+                  evidenceRevision: 1,
+                  decodedClaim: null,
+                  rawPayload: null,
+                },
+              ],
+            },
+          })
+        )
+      )
+
+      const decision = await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.findActiveAssetResolutionDecision({ providerAssetRowId, evidenceRevision: 1 })
+        )
+      )
+      if (Option.isNone(decision)) {
+        throw new Error("Expected an active decision")
+      }
+
+      const duplicateInsert = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.assetResolutionEvidence).values({
+            decisionId: decision.value.id,
+            authority: "chain",
+            claimKind: "chain_fact",
+            sourceLocator: null,
+            retrievedAt: new Date(),
+            evidenceRevision: 1,
+            decodedClaim: null,
+            rawPayload: null,
+          })
+        })
+      )
+
+      await expect(duplicateInsert).rejects.toThrow()
+    })
+
+    it("lets the database reject a second active decision for one observation and revision", async () => {
+      const { providerAssetRowId } = await scheduleResolutionJob("history-db-guard")
+
+      await runRepository(
+        Effect.flatMap(ProviderAssetRepository, (repository) =>
+          repository.recordAssetResolutionDecision({
+            decision: makePendingDecision({ providerAssetRowId }),
+          })
+        )
+      )
+
+      const directInsert = runPg(
+        Effect.gen(function* () {
+          const db = yield* drizzle
+          yield* db.insert(schema.assetResolutionDecisions).values({
+            providerAssetRowId,
+            evidenceRevision: 1,
+            policyRevision: "2026-08-19.attach-only.1",
+            outcome: "pending",
+            status: "active",
+            reason: "missing_existing_economic_asset",
+            actor: "test:direct-insert",
+          })
+        })
+      )
+
+      await expect(directInsert).rejects.toThrow()
     })
   })
 })

@@ -284,7 +284,9 @@ describe("AssetCatalog", () => {
       expect(screen.queryByRole("button", { name: "Back to asset list" })).toBeNull()
     )
     expect(screen.queryByRole("heading", { level: 2, name: "PND" })).toBeNull()
-    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Search assets" }))
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Search assets" }))
+    )
   })
 
   it("loads matches beyond the initial 80-row window", () => {

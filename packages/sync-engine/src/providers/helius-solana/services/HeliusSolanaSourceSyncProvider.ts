@@ -12,6 +12,7 @@ import type {
   PersistedSourceTransaction,
   PersistedSourceTransfer,
   PersistedSourceVenueContext,
+  SourceLegKind,
   SourceProviderTransferDraft,
   SourceTransactionDraft,
   SourceTransactionLegDraft,
@@ -66,6 +67,18 @@ export interface PrepareHeliusSolanaNormalizationParams {
 }
 
 /**
+ * HeliusSolanaCanonicalLegPlan - Leg classification computed during normalization for one
+ * canonical transfer, keyed by the transfer's external id so deriveLegs can link the
+ * persisted transfer row to its accounting leg.
+ */
+export interface HeliusSolanaCanonicalLegPlan {
+  readonly transferExternalId: string
+  readonly kind: SourceLegKind
+  readonly role: "principal" | "fee" | "rent"
+  readonly derivationRule: string
+}
+
+/**
  * PreparedHeliusSolanaNormalization - Canonical Solana artifacts ready for persistence.
  */
 export interface PreparedHeliusSolanaNormalization {
@@ -74,10 +87,12 @@ export interface PreparedHeliusSolanaNormalization {
   readonly venueContext: SourceVenueContextDraft
   readonly onchainContext: SourceOnchainContextDraft | null
   readonly providerTransfers: ReadonlyArray<SourceProviderTransferDraft>
-  readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
+  readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   readonly transactionReview: SourceTransactionReviewDraft | null
   readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
   readonly legDerivationStrategy: "derive" | "skip"
+  /** One plan per canonical transfer; empty when legDerivationStrategy is "skip". */
+  readonly legPlans: ReadonlyArray<HeliusSolanaCanonicalLegPlan>
 }
 
 /**
@@ -86,19 +101,9 @@ export interface PreparedHeliusSolanaNormalization {
 export interface DeriveHeliusSolanaProviderLegsParams {
   readonly transaction: PersistedSourceTransaction
   readonly venueContext: PersistedSourceVenueContext | null
-  readonly feeTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly canonicalTransfers: ReadonlyArray<PersistedSourceTransfer>
+  readonly legPlans: ReadonlyArray<HeliusSolanaCanonicalLegPlan>
 }
-
-/**
- * HeliusSolanaNormalizationNotImplementedError - Current typed stub for follow-up ingestion slices.
- */
-export class HeliusSolanaNormalizationNotImplementedError extends Schema.TaggedError<HeliusSolanaNormalizationNotImplementedError>()(
-  "HeliusSolanaNormalizationNotImplementedError",
-  {
-    message: Schema.String,
-    cause: Schema.optional(Schema.Unknown),
-  }
-) {}
 
 /**
  * HeliusSolanaNormalizationDecodeError - Cached Solana full transaction payload is malformed.
@@ -148,7 +153,6 @@ export class HeliusSolanaPayloadDecodeError extends Schema.TaggedError<HeliusSol
  * HeliusSolanaRecoverableNormalizationError - Helius errors that fail one raw row without aborting the job.
  */
 export type HeliusSolanaRecoverableNormalizationError =
-  | HeliusSolanaNormalizationNotImplementedError
   | HeliusSolanaNormalizationDecodeError
   | HeliusSolanaNormalizationReferenceError
 

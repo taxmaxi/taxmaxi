@@ -59,6 +59,7 @@ import {
   SourceTransactionRow,
   SourceTaxEventRow,
   SourceReportPageInfo,
+  SourceTaxCalculationPendingError,
   SourceTaxEventsResponse,
   SourceTransactionsResponse,
 } from "../definitions/SourcesApi.ts"
@@ -459,6 +460,14 @@ export const SourcesApiLive = HttpApiBuilder.group(TaxMaxiApi, "sources", (handl
                     return toBadRequestError(
                       `Tax summary currently supports ${error.expectedCurrency} only; found ${error.actualCurrency} in ${error.field}.`
                     )
+                  case "TaxCalculationPendingObservationsError":
+                    return new SourceTaxCalculationPendingError({
+                      message: `Tax calculation for this source is pending: ${error.pendingObservationCount} provider asset observation(s) await resolution.`,
+                      blockingObservations: error.blockingObservations.map((observation) => ({
+                        provider: observation.provider,
+                        currencyCode: observation.currencyCode,
+                      })),
+                    })
                   case "SourceNotFoundError":
                     return new SourceNotFoundError({
                       message: sourceNotFoundMessage,

@@ -25,7 +25,7 @@ describe("integration test template setup", () => {
     expect(events).toEqual(["created", "cleaned"])
   })
 
-  it("cleans integration databases sequentially", async () => {
+  it("cleans integration databases concurrently", async () => {
     const events: Array<string> = []
 
     await Effect.runPromise(
@@ -40,6 +40,6 @@ describe("integration test template setup", () => {
       })
     )
 
-    expect(events).toEqual(["start:first", "finish:first", "start:second", "finish:second"])
+    expect(events).toEqual(["start:first", "start:second", "finish:first", "finish:second"])
   })
 })

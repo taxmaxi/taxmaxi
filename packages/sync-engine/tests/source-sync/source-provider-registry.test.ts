@@ -141,7 +141,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           metadata: { provider: HELIUS_SOLANA_PROVIDER_KEY },
         },
         providerTransfers: [],
-        feeTransfers: [],
+        canonicalTransfers: [],
         transactionReview: null,
         resolvedTransactionType: {
           providerTransactionType: "unknown",
@@ -153,6 +153,7 @@ const HeliusSolanaSourceSyncProviderTestLive = Layer.succeed(
           mappingStatus: "pending_review",
         },
         legDerivationStrategy: "skip",
+        legPlans: [],
       }),
     deriveLegs: () => Effect.die("Helius deriveLegs should not be called"),
   })

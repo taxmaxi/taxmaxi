@@ -68,6 +68,83 @@ export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
 }
 
+/** Outcome of an attach-only policy decision, recorded as immutable audit history. */
+export type AssetResolutionAuditOutcome = "attach" | "pending" | "fail_closed"
+
+/**
+ * One evidence snapshot to store behind a decision, scoped to the authority
+ * that provided it and the kind of claim it makes. The decoded claim is what
+ * the policy read; the raw payload is what the authority actually returned.
+ */
+export interface AssetResolutionEvidenceRecord {
+  readonly authority: string
+  readonly claimKind: string
+  readonly sourceLocator: string | null
+  readonly retrievedAt: Date
+  readonly evidenceRevision: number
+  readonly decodedClaim: unknown
+  readonly rawPayload: unknown
+}
+
+/** One stored evidence snapshot as read back from a decision. */
+export interface AssetResolutionEvidenceEntry extends AssetResolutionEvidenceRecord {
+  readonly id: string
+  readonly decisionId: string
+}
+
+/** One immutable attach-only policy decision to append to resolution audit history. */
+export interface AssetResolutionDecisionRecord {
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+  readonly policyRevision: string
+  readonly outcome: AssetResolutionAuditOutcome
+  readonly assetId: string | null
+  readonly assetRepresentationId: string | null
+  readonly blockchain: string | null
+  readonly representationType: "native" | "token" | "nft" | null
+  readonly contractAddress: string | null
+  readonly mintAddress: string | null
+  readonly decimals: number | null
+  readonly reason: string | null
+  readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
+  readonly actor: string
+}
+
+/** Result of appending one decision to resolution audit history. */
+export interface AssetResolutionDecisionRecordResult {
+  readonly recorded: boolean
+}
+
+/** Lifecycle status of one recorded resolution decision. */
+export type AssetResolutionDecisionStatus = "active" | "superseded"
+
+/** One recorded resolution decision as read back from audit history. */
+export interface AssetResolutionDecisionHistoryEntry {
+  readonly id: string
+  readonly providerAssetRowId: string
+  readonly evidenceRevision: number
+  readonly policyRevision: string
+  readonly outcome: AssetResolutionAuditOutcome
+  readonly status: AssetResolutionDecisionStatus
+  readonly supersedesDecisionId: string | null
+  readonly assetId: string | null
+  readonly assetRepresentationId: string | null
+  readonly reason: string | null
+  readonly actor: string
+  readonly createdAt: Date
+}
+
+/**
+ * Result of appending a superseding decision.
+ *
+ * - superseded: the new decision is active and the replaced one is marked superseded.
+ * - conflict: the named decision does not exist or is no longer active, so
+ *   nothing changed; the caller must re-read and decide again.
+ */
+export type AssetResolutionSupersedeResult =
+  | { readonly _tag: "superseded"; readonly decisionId: string }
+  | { readonly _tag: "conflict" }
+
 /**
  * ProviderAssetMappingState - Provider-asset mapping target and review status.
  */
@@ -125,7 +202,9 @@ export interface ProviderAssetSourceUseObservation {
  */
 export interface ProviderAssetRepositoryShape {
   /**
-   * Persist provider asset catalog rows.
+   * Persist provider asset catalog rows. When stored observation facts change,
+   * increment evidenceRevision and schedule one unresolved resolution job for
+   * the new revision. Retrieved-at-only refreshes leave the revision in place.
    */
   readonly upsertProviderAssets: (params: {
     readonly providerKey: string
@@ -243,6 +322,53 @@ export interface ProviderAssetRepositoryShape {
   readonly findProviderAssetMapping: (params: {
     readonly providerAssetRowId: string
   }) => Effect.Effect<Option.Option<ResolvedProviderAssetMapping>, SyncEngineStorageError>
+
+  /**
+   * Append one attach-only policy decision to resolution audit history as
+   * the active decision for its provider asset and evidence revision. When
+   * an active decision already exists for that pair, nothing is written and
+   * the result reports recorded: false, so replaying a resolution job never
+   * rewrites history.
+   */
+  readonly recordAssetResolutionDecision: (params: {
+    readonly decision: AssetResolutionDecisionRecord
+  }) => Effect.Effect<AssetResolutionDecisionRecordResult, SyncEngineStorageError>
+
+  /**
+   * Append a superseding decision that replaces the named active decision.
+   * The replaced decision keeps its content and flips to superseded; the new
+   * decision becomes active and records which decision it replaced. Fails
+   * with a conflict result when the named decision is missing or no longer
+   * active, so concurrent supersessions cannot overwrite each other.
+   */
+  readonly appendSupersedingAssetResolutionDecision: (params: {
+    readonly supersedesDecisionId: string
+    readonly decision: AssetResolutionDecisionRecord
+  }) => Effect.Effect<AssetResolutionSupersedeResult, SyncEngineStorageError>
+
+  /**
+   * Read the active decision for one provider asset and evidence revision.
+   */
+  readonly findActiveAssetResolutionDecision: (params: {
+    readonly providerAssetRowId: string
+    readonly evidenceRevision: number
+  }) => Effect.Effect<Option.Option<AssetResolutionDecisionHistoryEntry>, SyncEngineStorageError>
+
+  /**
+   * Read every recorded decision for one provider asset in the order they
+   * were appended, including superseded ones.
+   */
+  readonly listAssetResolutionDecisions: (params: {
+    readonly providerAssetRowId: string
+  }) => Effect.Effect<ReadonlyArray<AssetResolutionDecisionHistoryEntry>, SyncEngineStorageError>
+
+  /**
+   * Read the evidence snapshots stored behind one decision, so the decision
+   * can be reproduced without reading any provider payload table.
+   */
+  readonly listAssetResolutionEvidence: (params: {
+    readonly decisionId: string
+  }) => Effect.Effect<ReadonlyArray<AssetResolutionEvidenceEntry>, SyncEngineStorageError>
 }
 
 /**

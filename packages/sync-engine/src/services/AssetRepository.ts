@@ -75,6 +75,32 @@ export interface AssetRepresentationDraft {
   readonly metadata: unknown
 }
 
+/** Existing economic asset considered as an attach-only resolution candidate. */
+export interface AssetResolutionCandidateAsset {
+  readonly id: string
+  readonly symbol: string
+  readonly type: "fungible" | "nft"
+  readonly coingeckoCoinId: string | null
+}
+
+/** One audited conclusion that an economic asset owns a network representation. */
+export interface RepresentationOwnershipDecisionEntry {
+  readonly id: string
+  readonly assetRepresentationId: string
+  readonly assetId: string
+  readonly status: "active" | "superseded"
+  readonly supersedesDecisionId: string | null
+  readonly policyRevision: string
+  readonly reason: string | null
+  readonly actor: string
+  readonly createdAt: Date
+}
+
+/** Result of recording a representation ownership decision. */
+export interface RepresentationOwnershipRecordResult {
+  readonly recorded: boolean
+}
+
 /** Economic asset and the exact network representation created for it. */
 export interface EconomicAssetRepresentationRecord {
   readonly id: string
@@ -144,6 +170,48 @@ export interface AssetRepositoryShape {
     readonly asset: EconomicAssetDraft
     readonly representation: AssetRepresentationDraft
   }) => Effect.Effect<EconomicAssetRepresentationRecord, SyncEngineStorageError>
+
+  /**
+   * List existing economic assets whose symbol matches a provider observation's
+   * currency code, for attach-only resolution to consider as a candidate. Only
+   * candidates with a coingeckoCoinId can be checked against CoinGecko evidence.
+   */
+  readonly findAssetResolutionCandidatesBySymbol: (params: {
+    readonly symbol: string
+  }) => Effect.Effect<ReadonlyArray<AssetResolutionCandidateAsset>, SyncEngineStorageError>
+
+  /**
+   * Attach a new exact network representation to an already-existing economic
+   * asset, without creating or modifying the asset or blockchain rows. Retrying
+   * with the same identity on the same asset is a successful no-op; attaching
+   * an identity already owned by a different asset fails.
+   */
+  readonly attachRepresentationToExistingAsset: (params: {
+    readonly assetId: string
+    readonly blockchainName: string
+    readonly representation: AssetRepresentationDraft
+  }) => Effect.Effect<SyncEngineAssetRepresentation, SyncEngineStorageError>
+
+  /**
+   * Record the audited conclusion that an economic asset owns a network
+   * representation, keyed on the representation so any provider can reuse it.
+   * A second record for an already-settled representation with the same owner
+   * reports recorded: false; a record naming a different owner than the
+   * representation's current asset is rejected by the database.
+   */
+  readonly recordRepresentationOwnershipDecision: (params: {
+    readonly assetRepresentationId: string
+    readonly assetId: string
+    readonly policyRevision: string
+    readonly actor: string
+  }) => Effect.Effect<RepresentationOwnershipRecordResult, SyncEngineStorageError>
+
+  /**
+   * Read the active ownership decision for one network representation.
+   */
+  readonly findActiveRepresentationOwnership: (params: {
+    readonly assetRepresentationId: string
+  }) => Effect.Effect<Option.Option<RepresentationOwnershipDecisionEntry>, SyncEngineStorageError>
 }
 
 /**

@@ -167,7 +167,7 @@ const partyAddress = (party: CoinbaseTransaction["from"]): string | null =>
   Option.getOrNull(Option.fromNullishOr(party?.address))
 
 interface CoinbaseFeeTransferBuildResult {
-  readonly transfer: CoinbaseRecordNormalizationResult["feeTransfers"][number] | null
+  readonly transfer: CoinbaseRecordNormalizationResult["canonicalTransfers"][number] | null
   readonly unresolvedAssetCurrency: string | null
 }
 
@@ -454,7 +454,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
       { concurrency: 2 }
     )
 
-    const feeTransfers = feeTransferResults.flatMap((result) =>
+    const canonicalTransfers = feeTransferResults.flatMap((result) =>
       result.transfer === null ? [] : [result.transfer]
     )
     const providerTransfers = buildPrincipalProviderTransfers({
@@ -516,7 +516,7 @@ const normalizeCoinbaseRecord = (params: NormalizeCoinbaseRecordParams) =>
         },
       },
       providerTransfers,
-      feeTransfers,
+      canonicalTransfers,
       unresolvedAssetCurrencies,
       primaryAssetCurrency: transactionPayload.amount.currency,
     }

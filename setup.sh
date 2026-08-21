@@ -135,6 +135,13 @@ main() {
   log "Installing mise-managed tools"
   mise install
 
+  # Automation environments can carry a PATH where an old node (for
+  # example a leftover nvm install) shadows the mise one, and `mise x`
+  # does not fix the ordering when mise paths are already on PATH. Put
+  # the mise tool paths first so pnpm always runs on the pinned node.
+  PATH="$(mise bin-paths | paste -sd: -):$PATH"
+  export PATH
+
   if [[ -n "${CODEX_WORKTREE_PATH:-}" || -n "${CODEX_SOURCE_TREE_PATH:-}" ]]; then
     log "Codex worktree context"
     print_codex_context

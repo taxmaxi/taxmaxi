@@ -594,6 +594,244 @@ const make = Effect.gen(function* () {
         )
         .pipe(wrapSyncEngineSqlError("assetRepository.upsertEconomicAssetRepresentation"))
 
+  const findAssetResolutionCandidatesBySymbol: AssetRepositoryShape["findAssetResolutionCandidatesBySymbol"] =
+    ({ symbol }) =>
+      db
+        .select({
+          id: schema.assets.id,
+          symbol: schema.assets.symbol,
+          type: schema.assets.type,
+          coingeckoCoinId: schema.assets.coingeckoCoinId,
+        })
+        .from(schema.assets)
+        .where(eq(sql<string>`lower(${schema.assets.symbol})`, symbol.toLowerCase()))
+        .pipe(wrapSyncEngineSqlError("assetRepository.findAssetResolutionCandidatesBySymbol"))
+
+  const attachRepresentationToExistingAsset: AssetRepositoryShape["attachRepresentationToExistingAsset"] =
+    ({ assetId, blockchainName, representation }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [blockchain] = yield* tx
+              .select({ id: schema.blockchains.id, chainType: schema.blockchains.chainType })
+              .from(schema.blockchains)
+              .where(
+                eq(sql<string>`lower(${schema.blockchains.name})`, blockchainName.toLowerCase())
+              )
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "assetRepository.attachRepresentationToExistingAsset.blockchain"
+                )
+              )
+
+            if (blockchain === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.attachRepresentationToExistingAsset.blockchain",
+                cause: { blockchainName, message: "Blockchain does not exist." },
+              })
+            }
+
+            const contractAddress = normalizeAddress({
+              chainType: blockchain.chainType,
+              address: representation.contractAddress,
+            })
+            const mintAddress = representation.mintAddress
+
+            if (
+              representation.type !== "native" &&
+              contractAddress === null &&
+              mintAddress === null
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.attachRepresentationToExistingAsset.identity",
+                cause: {
+                  assetId,
+                  blockchainName,
+                  message: "Token and NFT representations require a contract or mint address.",
+                },
+              })
+            }
+
+            const representationFilter =
+              representation.type === "native"
+                ? and(
+                    eq(schema.assetRepresentations.blockchainId, blockchain.id),
+                    eq(schema.assetRepresentations.type, "native")
+                  )
+                : contractAddress !== null
+                  ? and(
+                      eq(schema.assetRepresentations.blockchainId, blockchain.id),
+                      eq(schema.assetRepresentations.contractAddress, contractAddress)
+                    )
+                  : and(
+                      eq(schema.assetRepresentations.blockchainId, blockchain.id),
+                      eq(schema.assetRepresentations.mintAddress, mintAddress ?? "")
+                    )
+
+            const insert = tx.insert(schema.assetRepresentations).values({
+              assetId,
+              blockchainId: blockchain.id,
+              type: representation.type,
+              contractAddress,
+              mintAddress: representation.mintAddress,
+              decimals: representation.decimals,
+              logoUrl: representation.logoUrl,
+              isSpam: representation.isSpam,
+              metadata: representation.metadata,
+            })
+            const conflictSafeInsert =
+              representation.type === "native"
+                ? insert.onConflictDoNothing({
+                    target: schema.assetRepresentations.blockchainId,
+                    where: sql`${schema.assetRepresentations.type} = 'native'`,
+                  })
+                : contractAddress !== null
+                  ? insert.onConflictDoNothing({
+                      target: [
+                        schema.assetRepresentations.blockchainId,
+                        schema.assetRepresentations.contractAddress,
+                      ],
+                      where: sql`${schema.assetRepresentations.contractAddress} is not null`,
+                    })
+                  : insert.onConflictDoNothing({
+                      target: [
+                        schema.assetRepresentations.blockchainId,
+                        schema.assetRepresentations.mintAddress,
+                      ],
+                      where: sql`${schema.assetRepresentations.mintAddress} is not null`,
+                    })
+
+            yield* conflictSafeInsert.pipe(
+              wrapSyncEngineSqlError("assetRepository.attachRepresentationToExistingAsset.insert")
+            )
+
+            const [persisted] = yield* tx
+              .select({
+                id: schema.assetRepresentations.id,
+                assetId: schema.assetRepresentations.assetId,
+                representationType: schema.assetRepresentations.type,
+                contractAddress: schema.assetRepresentations.contractAddress,
+                mintAddress: schema.assetRepresentations.mintAddress,
+                decimals: schema.assetRepresentations.decimals,
+                symbol: schema.assets.symbol,
+              })
+              .from(schema.assetRepresentations)
+              .innerJoin(schema.assets, eq(schema.assetRepresentations.assetId, schema.assets.id))
+              .where(representationFilter)
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError("assetRepository.attachRepresentationToExistingAsset.reload")
+              )
+
+            if (persisted === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation: "assetRepository.attachRepresentationToExistingAsset.reload",
+                cause: {
+                  assetId,
+                  blockchainName,
+                  message: "Representation missing after conflict-safe insert.",
+                },
+              })
+            }
+
+            if (persisted.assetId !== assetId) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.attachRepresentationToExistingAsset.validateRepresentationOwner",
+                cause: {
+                  assetId,
+                  existingAssetId: persisted.assetId,
+                  representationId: persisted.id,
+                  message: "Representation belongs to a different economic asset.",
+                },
+              })
+            }
+
+            if (
+              persisted.representationType !== representation.type ||
+              persisted.decimals !== representation.decimals
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "assetRepository.attachRepresentationToExistingAsset.validateRepresentationIdentity",
+                cause: {
+                  existingDecimals: persisted.decimals,
+                  existingType: persisted.representationType,
+                  incomingDecimals: representation.decimals,
+                  incomingType: representation.type,
+                  representationId: persisted.id,
+                  message: "Representation type and decimals do not match the exact evidence.",
+                },
+              })
+            }
+
+            return {
+              id: persisted.id,
+              assetId: persisted.assetId,
+              symbol: persisted.symbol,
+              blockchainName,
+              representationType: persisted.representationType,
+              contractAddress: persisted.contractAddress,
+              mintAddress: persisted.mintAddress,
+              decimals: persisted.decimals,
+            }
+          })
+        )
+        .pipe(wrapSyncEngineSqlError("assetRepository.attachRepresentationToExistingAsset"))
+
+  const recordRepresentationOwnershipDecision: AssetRepositoryShape["recordRepresentationOwnershipDecision"] =
+    ({ assetRepresentationId, assetId, policyRevision, actor }) =>
+      db
+        .insert(schema.assetRepresentationOwnershipDecisions)
+        .values({
+          assetRepresentationId,
+          assetId,
+          status: "active",
+          policyRevision,
+          reason: null,
+          actor,
+        })
+        .onConflictDoNothing({
+          target: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+          where: sql`${schema.assetRepresentationOwnershipDecisions.status} = 'active'`,
+        })
+        .returning({ id: schema.assetRepresentationOwnershipDecisions.id })
+        .pipe(
+          Effect.map((rows) => ({ recorded: rows.length > 0 })),
+          wrapSyncEngineSqlError("assetRepository.recordRepresentationOwnershipDecision")
+        )
+
+  const findActiveRepresentationOwnership: AssetRepositoryShape["findActiveRepresentationOwnership"] =
+    ({ assetRepresentationId }) =>
+      db
+        .select({
+          id: schema.assetRepresentationOwnershipDecisions.id,
+          assetRepresentationId: schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+          assetId: schema.assetRepresentationOwnershipDecisions.assetId,
+          status: schema.assetRepresentationOwnershipDecisions.status,
+          supersedesDecisionId: schema.assetRepresentationOwnershipDecisions.supersedesDecisionId,
+          policyRevision: schema.assetRepresentationOwnershipDecisions.policyRevision,
+          reason: schema.assetRepresentationOwnershipDecisions.reason,
+          actor: schema.assetRepresentationOwnershipDecisions.actor,
+          createdAt: schema.assetRepresentationOwnershipDecisions.createdAt,
+        })
+        .from(schema.assetRepresentationOwnershipDecisions)
+        .where(
+          and(
+            eq(
+              schema.assetRepresentationOwnershipDecisions.assetRepresentationId,
+              assetRepresentationId
+            ),
+            eq(schema.assetRepresentationOwnershipDecisions.status, "active")
+          )
+        )
+        .limit(1)
+        .pipe(
+          Effect.map(([row]) => Option.fromNullishOr(row)),
+          wrapSyncEngineSqlError("assetRepository.findActiveRepresentationOwnership")
+        )
+
   return AssetRepository.of({
     findAssetById,
     findAssetByCoinGeckoId,
@@ -602,6 +840,10 @@ const make = Effect.gen(function* () {
     findRepresentationByBlockchainAndAddress,
     listBlockchains,
     upsertEconomicAssetRepresentation,
+    findAssetResolutionCandidatesBySymbol,
+    attachRepresentationToExistingAsset,
+    recordRepresentationOwnershipDecision,
+    findActiveRepresentationOwnership,
   } satisfies AssetRepositoryShape)
 })
 

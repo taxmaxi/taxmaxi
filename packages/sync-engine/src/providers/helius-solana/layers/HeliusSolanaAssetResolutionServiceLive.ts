@@ -15,6 +15,7 @@ import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
+import { AssetResolutionJobRepository } from "../../../services/AssetResolutionJobRepository.ts"
 import {
   ProviderAssetRepository,
   type ProviderAssetCatalogEntry,
@@ -413,6 +414,7 @@ const makeMissingProviderAssetAfterUpsertError = ({
 const make = Effect.gen(function* () {
   const assetRepository = yield* AssetRepository
   const providerAssetRepository = yield* ProviderAssetRepository
+  const assetResolutionJobRepository = yield* AssetResolutionJobRepository
   const heliusSyncClient = yield* HeliusSolanaSyncClient
 
   const loadProviderAssetRecord = ({
@@ -759,6 +761,12 @@ const make = Effect.gen(function* () {
       })
 
       if (mapping !== null) {
+        if (mapping.mappingStatus === "pending_review") {
+          yield* assetResolutionJobRepository.scheduleUnresolvedResolutionJob({
+            providerAssetRowId: providerAsset.id,
+          })
+        }
+
         return mapping
       }
 

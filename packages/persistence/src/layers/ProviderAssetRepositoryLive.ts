@@ -17,6 +17,9 @@ import {
 } from "@my/sync-engine/services"
 import { drizzle } from "./PgClientLive.ts"
 import {
+  CATALOG_REVIEWABLE_STATUSES,
+  OBSERVED_UNRESOLVED_STATUSES,
+  insertUnresolvedResolutionJobs,
   nowDate,
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
@@ -74,6 +77,20 @@ const makeMissingIdentityError = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
+  type ProviderAssetTransaction = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0]
+
+  const nextEvidenceRevisionSql = sql`
+    case
+      when ${schema.providerAssets.naturalKey} is distinct from excluded.natural_key
+        or ${schema.providerAssets.currencyCode} is distinct from excluded.currency_code
+        or ${schema.providerAssets.name} is distinct from excluded.name
+        or ${schema.providerAssets.exponent} is distinct from excluded.exponent
+        or ${schema.providerAssets.providerType} is distinct from excluded.provider_type
+        or ${schema.providerAssets.rawProviderPayload} is distinct from excluded.raw_provider_payload
+      then ${schema.providerAssets.evidenceRevision} + 1
+      else ${schema.providerAssets.evidenceRevision}
+    end
+  `
 
   const upsertProviderAssets: ProviderAssetRepositoryShape["upsertProviderAssets"] = ({
     providerKey,
@@ -88,7 +105,7 @@ const make = Effect.gen(function* () {
 
           const now = nowDate()
 
-          return yield* Effect.forEach(entries, (entry) => {
+          const upserted = yield* Effect.forEach(entries, (entry) => {
             const values = {
               provider: providerKey,
               providerAssetId: entry.providerAssetId,
@@ -117,10 +134,12 @@ const make = Effect.gen(function* () {
                     exponent: sql.raw("excluded.exponent"),
                     providerType: sql.raw("excluded.provider_type"),
                     rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
+                    evidenceRevision: nextEvidenceRevisionSql,
                     retrievedAt: sql.raw("excluded.retrieved_at"),
                     updatedAt: now,
                   },
                 })
+                .returning({ id: schema.providerAssets.id })
                 .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets"))
             }
 
@@ -137,10 +156,12 @@ const make = Effect.gen(function* () {
                     exponent: sql.raw("excluded.exponent"),
                     providerType: sql.raw("excluded.provider_type"),
                     rawProviderPayload: sql.raw("excluded.raw_provider_payload"),
+                    evidenceRevision: nextEvidenceRevisionSql,
                     retrievedAt: sql.raw("excluded.retrieved_at"),
                     updatedAt: now,
                   },
                 })
+                .returning({ id: schema.providerAssets.id })
                 .pipe(wrapSyncEngineSqlError("providerAssetRepository.upsertProviderAssets"))
             }
 
@@ -148,7 +169,16 @@ const make = Effect.gen(function* () {
               providerKey,
               currencyCode: entry.currencyCode,
             })
-          }).pipe(Effect.as(entries.length))
+          })
+
+          yield* insertUnresolvedResolutionJobs({
+            tx,
+            providerAssetRowIds: upserted.flatMap((rows) => rows.map((row) => row.id)),
+            now,
+            unresolvedStatuses: CATALOG_REVIEWABLE_STATUSES,
+          })
+
+          return entries.length
         })
       )
       .pipe(wrapSyncEngineStorageError("providerAssetRepository.upsertProviderAssets"))
@@ -661,6 +691,12 @@ const make = Effect.gen(function* () {
             const newlyRecordedProviderAssetRowIds = new Set(
               rows.map(({ providerAssetRowId }) => providerAssetRowId)
             )
+            yield* insertUnresolvedResolutionJobs({
+              tx,
+              providerAssetRowIds: distinctProviderAssetRowIds,
+              now,
+              unresolvedStatuses: OBSERVED_UNRESOLVED_STATUSES,
+            })
             if (
               mappings.some(
                 ({ mappingStatus, providerAssetRowId }) =>
@@ -979,6 +1015,228 @@ const make = Effect.gen(function* () {
       return Option.fromNullishOr(row)
     })
 
+  const decisionInsertValues = ({
+    decision,
+    supersedesDecisionId = null,
+  }: {
+    readonly decision: Parameters<
+      ProviderAssetRepositoryShape["recordAssetResolutionDecision"]
+    >[0]["decision"]
+    readonly supersedesDecisionId?: string | null
+  }) => ({
+    providerAssetRowId: decision.providerAssetRowId,
+    evidenceRevision: decision.evidenceRevision,
+    policyRevision: decision.policyRevision,
+    outcome: decision.outcome,
+    status: "active" as const,
+    supersedesDecisionId,
+    assetId: decision.assetId,
+    assetRepresentationId: decision.assetRepresentationId,
+    blockchain: decision.blockchain,
+    representationType: decision.representationType,
+    contractAddress: decision.contractAddress,
+    mintAddress: decision.mintAddress,
+    decimals: decision.decimals,
+    reason: decision.reason,
+    actor: decision.actor,
+  })
+
+  const insertDecisionEvidence = ({
+    tx,
+    decisionId,
+    evidence,
+  }: {
+    readonly tx: ProviderAssetTransaction
+    readonly decisionId: string
+    readonly evidence: Parameters<
+      ProviderAssetRepositoryShape["recordAssetResolutionDecision"]
+    >[0]["decision"]["evidence"]
+  }) =>
+    evidence.length === 0
+      ? Effect.void
+      : tx
+          .insert(schema.assetResolutionEvidence)
+          .values(
+            evidence.map((entry) => ({
+              decisionId,
+              authority: entry.authority,
+              claimKind: entry.claimKind,
+              sourceLocator: entry.sourceLocator,
+              retrievedAt: entry.retrievedAt,
+              evidenceRevision: entry.evidenceRevision,
+              decodedClaim: entry.decodedClaim,
+              rawPayload: entry.rawPayload,
+            }))
+          )
+          .pipe(
+            Effect.asVoid,
+            wrapSyncEngineSqlError("providerAssetRepository.insertDecisionEvidence")
+          )
+
+  const decisionHistoryFields = {
+    id: schema.assetResolutionDecisions.id,
+    providerAssetRowId: schema.assetResolutionDecisions.providerAssetRowId,
+    evidenceRevision: schema.assetResolutionDecisions.evidenceRevision,
+    policyRevision: schema.assetResolutionDecisions.policyRevision,
+    outcome: schema.assetResolutionDecisions.outcome,
+    status: schema.assetResolutionDecisions.status,
+    supersedesDecisionId: schema.assetResolutionDecisions.supersedesDecisionId,
+    assetId: schema.assetResolutionDecisions.assetId,
+    assetRepresentationId: schema.assetResolutionDecisions.assetRepresentationId,
+    reason: schema.assetResolutionDecisions.reason,
+    actor: schema.assetResolutionDecisions.actor,
+    createdAt: schema.assetResolutionDecisions.createdAt,
+  }
+
+  const recordAssetResolutionDecision: ProviderAssetRepositoryShape["recordAssetResolutionDecision"] =
+    ({ decision }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [inserted] = yield* tx
+              .insert(schema.assetResolutionDecisions)
+              .values(decisionInsertValues({ decision }))
+              .onConflictDoNothing({
+                target: [
+                  schema.assetResolutionDecisions.providerAssetRowId,
+                  schema.assetResolutionDecisions.evidenceRevision,
+                ],
+                where: sql`${schema.assetResolutionDecisions.status} = 'active'`,
+              })
+              .returning({ id: schema.assetResolutionDecisions.id })
+              .pipe(wrapSyncEngineSqlError("providerAssetRepository.recordAssetResolutionDecision"))
+
+            if (inserted === undefined) {
+              return { recorded: false }
+            }
+
+            yield* insertDecisionEvidence({
+              tx,
+              decisionId: inserted.id,
+              evidence: decision.evidence,
+            })
+
+            return { recorded: true }
+          })
+        )
+        .pipe(wrapSyncEngineStorageError("providerAssetRepository.recordAssetResolutionDecision"))
+
+  const appendSupersedingAssetResolutionDecision: ProviderAssetRepositoryShape["appendSupersedingAssetResolutionDecision"] =
+    ({ supersedesDecisionId, decision }) =>
+      db
+        .transaction((tx) =>
+          Effect.gen(function* () {
+            const [replaced] = yield* tx
+              .select({ status: schema.assetResolutionDecisions.status })
+              .from(schema.assetResolutionDecisions)
+              .where(eq(schema.assetResolutionDecisions.id, supersedesDecisionId))
+              .for("update")
+              .limit(1)
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.appendSupersedingAssetResolutionDecision.load"
+                )
+              )
+
+            if (replaced === undefined || replaced.status !== "active") {
+              return { _tag: "conflict" } as const
+            }
+
+            yield* tx
+              .update(schema.assetResolutionDecisions)
+              .set({ status: "superseded" })
+              .where(eq(schema.assetResolutionDecisions.id, supersedesDecisionId))
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.appendSupersedingAssetResolutionDecision.retire"
+                )
+              )
+
+            const [inserted] = yield* tx
+              .insert(schema.assetResolutionDecisions)
+              .values(decisionInsertValues({ decision, supersedesDecisionId }))
+              .returning({ id: schema.assetResolutionDecisions.id })
+              .pipe(
+                wrapSyncEngineSqlError(
+                  "providerAssetRepository.appendSupersedingAssetResolutionDecision.append"
+                )
+              )
+
+            if (inserted === undefined) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.appendSupersedingAssetResolutionDecision.append",
+                cause: { supersedesDecisionId, message: "Superseding decision was not inserted." },
+              })
+            }
+
+            yield* insertDecisionEvidence({
+              tx,
+              decisionId: inserted.id,
+              evidence: decision.evidence,
+            })
+
+            return { _tag: "superseded", decisionId: inserted.id } as const
+          })
+        )
+        .pipe(
+          wrapSyncEngineStorageError(
+            "providerAssetRepository.appendSupersedingAssetResolutionDecision"
+          )
+        )
+
+  const findActiveAssetResolutionDecision: ProviderAssetRepositoryShape["findActiveAssetResolutionDecision"] =
+    ({ providerAssetRowId, evidenceRevision }) =>
+      db
+        .select(decisionHistoryFields)
+        .from(schema.assetResolutionDecisions)
+        .where(
+          and(
+            eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId),
+            eq(schema.assetResolutionDecisions.evidenceRevision, evidenceRevision),
+            eq(schema.assetResolutionDecisions.status, "active")
+          )
+        )
+        .limit(1)
+        .pipe(
+          Effect.map(([row]) => Option.fromNullishOr(row)),
+          wrapSyncEngineSqlError("providerAssetRepository.findActiveAssetResolutionDecision")
+        )
+
+  const listAssetResolutionDecisions: ProviderAssetRepositoryShape["listAssetResolutionDecisions"] =
+    ({ providerAssetRowId }) =>
+      db
+        .select(decisionHistoryFields)
+        .from(schema.assetResolutionDecisions)
+        .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+        .orderBy(
+          asc(schema.assetResolutionDecisions.createdAt),
+          asc(schema.assetResolutionDecisions.id)
+        )
+        .pipe(wrapSyncEngineSqlError("providerAssetRepository.listAssetResolutionDecisions"))
+
+  const listAssetResolutionEvidence: ProviderAssetRepositoryShape["listAssetResolutionEvidence"] =
+    ({ decisionId }) =>
+      db
+        .select({
+          id: schema.assetResolutionEvidence.id,
+          decisionId: schema.assetResolutionEvidence.decisionId,
+          authority: schema.assetResolutionEvidence.authority,
+          claimKind: schema.assetResolutionEvidence.claimKind,
+          sourceLocator: schema.assetResolutionEvidence.sourceLocator,
+          retrievedAt: schema.assetResolutionEvidence.retrievedAt,
+          evidenceRevision: schema.assetResolutionEvidence.evidenceRevision,
+          decodedClaim: schema.assetResolutionEvidence.decodedClaim,
+          rawPayload: schema.assetResolutionEvidence.rawPayload,
+        })
+        .from(schema.assetResolutionEvidence)
+        .where(eq(schema.assetResolutionEvidence.decisionId, decisionId))
+        .orderBy(
+          asc(schema.assetResolutionEvidence.authority),
+          asc(schema.assetResolutionEvidence.claimKind)
+        )
+        .pipe(wrapSyncEngineSqlError("providerAssetRepository.listAssetResolutionEvidence"))
+
   return ProviderAssetRepository.of({
     upsertProviderAssets,
     upsertProviderAssetMappings,
@@ -993,6 +1251,11 @@ const make = Effect.gen(function* () {
     listProviderAssetReviews,
     listProviderAssetObservedRepresentations,
     findProviderAssetMapping,
+    recordAssetResolutionDecision,
+    appendSupersedingAssetResolutionDecision,
+    findActiveAssetResolutionDecision,
+    listAssetResolutionDecisions,
+    listAssetResolutionEvidence,
   } satisfies ProviderAssetRepositoryShape)
 })
 

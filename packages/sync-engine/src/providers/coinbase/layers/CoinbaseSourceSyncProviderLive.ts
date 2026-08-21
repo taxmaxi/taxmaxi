@@ -1137,7 +1137,7 @@ const make = Effect.gen(function* () {
           ...providerTransfer,
           providerAssetId: providerTransfer.providerAssetId ?? primaryProviderAssetId,
         })),
-        feeTransfers: normalized.feeTransfers,
+        canonicalTransfers: normalized.canonicalTransfers,
         transactionReview,
         resolvedTransactionType,
         primaryAsset: Option.getOrNull(maybePrimaryAsset),
@@ -1149,10 +1149,10 @@ const make = Effect.gen(function* () {
     transaction,
     venueContext,
     primaryAsset,
-    feeTransfers,
+    canonicalTransfers,
   }) =>
     Effect.gen(function* () {
-      const resolvedFeeTransfers = yield* Effect.forEach(feeTransfers, (transfer) =>
+      const resolvedFeeTransfers = yield* Effect.forEach(canonicalTransfers, (transfer) =>
         resolveCanonicalAsset({
           assetId: transfer.assetId,
           message: `Missing asset row for fee transfer asset ${transfer.assetId}`,

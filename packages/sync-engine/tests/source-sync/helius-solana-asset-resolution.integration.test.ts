@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
+import { AssetResolutionJobRepositoryLive } from "../../../persistence/src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
@@ -174,6 +175,7 @@ const HeliusSolanaAssetResolutionTestLive = (
 ) =>
   HeliusSolanaAssetResolutionServiceLive.pipe(
     Layer.provide(AssetRepositoryLive),
+    Layer.provide(AssetResolutionJobRepositoryLive),
     Layer.provide(ProviderAssetRepositoryLive),
     Layer.provide(
       Layer.succeed(

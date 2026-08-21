@@ -954,20 +954,20 @@ const make = Effect.gen(function* () {
             .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertOnchainContext"))
         })
 
-  const upsertFeeTransfers = ({
+  const upsertCanonicalTransfers = ({
     executor,
-    feeTransfers,
+    canonicalTransfers,
   }: {
     readonly executor: SourceNormalizationExecutor
-    readonly feeTransfers: ReadonlyArray<SourceTransferDraft>
+    readonly canonicalTransfers: ReadonlyArray<SourceTransferDraft>
   }) =>
-    Effect.forEach(feeTransfers, (feeTransfer) =>
+    Effect.forEach(canonicalTransfers, (transfer) =>
       Effect.gen(function* () {
         const now = nowDate()
         const [persisted] = yield* executor
           .insert(schema.transfers)
           .values({
-            ...feeTransfer,
+            ...transfer,
             createdAt: now,
             updatedAt: now,
           })
@@ -1001,18 +1001,18 @@ const make = Effect.gen(function* () {
             },
           })
           .returning(selectPersistedTransferFields)
-          .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertFeeTransfers"))
+          .pipe(wrapSyncEngineSqlError("sourceNormalizationRepository.upsertCanonicalTransfers"))
 
         if (persisted === undefined) {
           return yield* toSyncEngineStorageError({
-            operation: "sourceNormalizationRepository.upsertFeeTransfers",
+            operation: "sourceNormalizationRepository.upsertCanonicalTransfers",
             error: "failed to persist transfer",
           })
         }
 
         const amount = yield* decodeNumericString({
           value: persisted.amount,
-          operation: "sourceNormalizationRepository.upsertFeeTransfers.amount",
+          operation: "sourceNormalizationRepository.upsertCanonicalTransfers.amount",
         })
 
         return {
@@ -2539,9 +2539,9 @@ const make = Effect.gen(function* () {
             transactionId: persistedTransaction.id,
             providerTransfers: params.providerTransfers,
           })
-          const persistedFeeTransfers = yield* upsertFeeTransfers({
+          const persistedCanonicalTransfers = yield* upsertCanonicalTransfers({
             executor: tx,
-            feeTransfers: params.feeTransfers,
+            canonicalTransfers: params.canonicalTransfers,
           })
           const derivedLegs =
             "deriveLegs" in params
@@ -2549,7 +2549,7 @@ const make = Effect.gen(function* () {
                   transaction: persistedTransaction,
                   venueContext: persistedVenueContext,
                   providerTransfers: persistedProviderTransfers,
-                  feeTransfers: persistedFeeTransfers,
+                  canonicalTransfers: persistedCanonicalTransfers,
                 })
               : params.legs
           const persistedLegs = yield* upsertTransactionLegs({
@@ -2655,7 +2655,7 @@ const make = Effect.gen(function* () {
             transaction: persistedTransaction,
             venueContext: persistedVenueContext,
             providerTransfers: persistedProviderTransfers,
-            feeTransfers: persistedFeeTransfers,
+            canonicalTransfers: persistedCanonicalTransfers,
             legs: persistedLegs,
           }
         })
