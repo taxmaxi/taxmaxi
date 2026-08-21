@@ -349,6 +349,18 @@ describe("AssetResolutionPolicy", () => {
       expect(unverified).toMatchObject({ _tag: "legitimacy_claim", verdict: "unverified" })
     })
 
+    it("gives a suspicious audit flag priority over verification", () => {
+      const claim = decodeVerdict([
+        jupiterToken({ isVerified: true, audit: { isSus: true }, tags: ["verified"] }),
+      ])
+
+      expect(claim).toMatchObject({
+        _tag: "legitimacy_claim",
+        authority: JUPITER_AUTHORITY,
+        verdict: "suspicious",
+      })
+    })
+
     it("treats a response without the exact mint as a definitive not-indexed answer", () => {
       const empty = decodeVerdict([])
       const otherMint = decodeVerdict([jupiterToken({ id: SOLANA_USDC_MINT })])
@@ -693,6 +705,29 @@ describe("AssetResolutionPolicy", () => {
       })
 
       expect(decision).toMatchObject({
+        _tag: "excluded",
+        reason: "authority_banned",
+      })
+    })
+
+    it("banned wins over unrelated registry failures when no exact attach evidence exists", () => {
+      const bannedClaim = AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })
+      const malformedRegistry = decide({
+        chain: longTailChainClaim(),
+        registry: new AssetResolutionMalformedPayload({ source: "coingecko" }),
+        legitimacy: [bannedClaim],
+      })
+      const upstreamRegistry = decide({
+        chain: longTailChainClaim(),
+        registry: new AssetResolutionUpstreamFailure({ source: "coingecko" }),
+        legitimacy: [bannedClaim],
+      })
+
+      expect(malformedRegistry).toMatchObject({
+        _tag: "excluded",
+        reason: "authority_banned",
+      })
+      expect(upstreamRegistry).toMatchObject({
         _tag: "excluded",
         reason: "authority_banned",
       })

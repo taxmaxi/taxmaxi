@@ -209,7 +209,7 @@ export class AssetCanonicalizationResponse extends Schema.Class<AssetCanonicaliz
 
 const ProviderAssetReviewQuery = Schema.Struct({
   provider: Schema.optional(Schema.String),
-  status: Schema.optional(Schema.Literals(["pending_review", "approved", "rejected"])),
+  status: Schema.optional(ProviderAssetMappingStatus),
   cursor: Schema.optional(Schema.String),
   limit: Schema.optional(
     Schema.NumberFromString.check(

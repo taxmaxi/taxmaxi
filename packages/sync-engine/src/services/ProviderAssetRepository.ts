@@ -66,6 +66,11 @@ export interface ProviderAssetApprovalResult {
   readonly mappingChanged: boolean
 }
 
+/** Result of atomically recording and applying an automatic exclusion. */
+export interface ProviderAssetExclusionResult extends ProviderAssetApprovalResult {
+  readonly decisionRecorded: boolean
+}
+
 /** Outcome of an automatic policy decision, recorded as immutable audit history. */
 export type AssetResolutionAuditOutcome =
   | "attach"
@@ -229,6 +234,11 @@ export interface ProviderAssetRepositoryShape {
     readonly mapping: ProviderAssetMappingDraft
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
+    /** Human authority used only when this approval supersedes an exclusion. */
+    readonly exclusionReversal?: {
+      readonly actor: string
+      readonly policyRevision: string
+    }
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
 
   /**
@@ -239,10 +249,11 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly excludeProviderAssetMappingAndRequestReplay: (params: {
     readonly providerAssetRowId: string
+    readonly decision: AssetResolutionDecisionRecord
     readonly sourceNotes: string | null
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
-  }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
+  }) => Effect.Effect<ProviderAssetExclusionResult, SyncEngineStorageError>
 
   /**
    * Lock and reload the provider-asset decision snapshot before a caller writes

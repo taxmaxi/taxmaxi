@@ -38,6 +38,7 @@ const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 const NFT_MINT = "NftMint111111111111111111111111111111111111"
 const UNKNOWN_MINT = "UnknownMint11111111111111111111111111111111"
+const EXCLUDED_MINT = "ExcludedMint1111111111111111111111111111111"
 const STALE_DECIMALS_MINT = "StaleDecimals1111111111111111111111111111111"
 const EIGHTEEN_DECIMALS_MINT = "EighteenDecimals11111111111111111111111111111"
 const MAX_DECIMALS_MINT = "MaxDecimals111111111111111111111111111111111"
@@ -304,60 +305,82 @@ const makeProviderLayer = ({
                               canonicalFiatCurrency: null,
                             } satisfies HeliusSolanaResolvedAsset,
                           ]
-                        : asset.mintAddress === UNKNOWN_MINT
+                        : asset.mintAddress === EXCLUDED_MINT
                           ? [
                               {
-                                kind: "review_required",
+                                kind: "excluded",
                                 assetKind: "token",
-                                representationTypeObserved: false,
+                                representationTypeObserved: true,
                                 mintAddress: asset.mintAddress,
                                 providerAssetRowId: `provider-asset-${asset.mintAddress}`,
                                 providerAssetId: asset.mintAddress,
                                 naturalKey: `spl:${asset.mintAddress}`,
-                                currencyCode: asset.mintAddress,
-                                name: null,
-                                decimals: null,
-                                tokenProgram: null,
+                                currencyCode: "EXCLUDED",
+                                name: "Excluded token",
+                                decimals: 5,
+                                tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
                                 nftHint: false,
-                                mappingStatus: "pending_review",
+                                mappingStatus: "excluded",
                                 mappingKind: "asset",
                                 canonicalAssetId: null,
                                 assetRepresentationId: null,
                                 canonicalFiatCurrency: null,
                               } satisfies HeliusSolanaResolvedAsset,
                             ]
-                          : [
-                              {
-                                kind: "canonical",
-                                assetKind: "token",
-                                ...(asset.mintAddress === OMITTED_TYPE_EVIDENCE_MINT
-                                  ? {}
-                                  : { representationTypeObserved: true }),
-                                mintAddress: asset.mintAddress,
-                                providerAssetRowId: `provider-asset-${asset.mintAddress}`,
-                                providerAssetId: asset.mintAddress,
-                                naturalKey: `spl:${asset.mintAddress}`,
-                                currencyCode: "USDC",
-                                name: "USD Coin",
-                                decimals:
-                                  asset.mintAddress === STALE_DECIMALS_MINT
-                                    ? asset.observedDecimals === 5
-                                      ? 2
-                                      : 5
-                                    : asset.mintAddress === EIGHTEEN_DECIMALS_MINT
-                                      ? 18
-                                      : asset.mintAddress === MAX_DECIMALS_MINT
-                                        ? 255
-                                        : 6,
-                                tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-                                nftHint: false,
-                                mappingStatus: "approved",
-                                mappingKind: "asset",
-                                canonicalAssetId: "asset-usdc",
-                                assetRepresentationId: "representation-usdc-solana",
-                                canonicalFiatCurrency: null,
-                              } satisfies HeliusSolanaResolvedAsset,
-                            ]
+                          : asset.mintAddress === UNKNOWN_MINT
+                            ? [
+                                {
+                                  kind: "review_required",
+                                  assetKind: "token",
+                                  representationTypeObserved: false,
+                                  mintAddress: asset.mintAddress,
+                                  providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                                  providerAssetId: asset.mintAddress,
+                                  naturalKey: `spl:${asset.mintAddress}`,
+                                  currencyCode: asset.mintAddress,
+                                  name: null,
+                                  decimals: null,
+                                  tokenProgram: null,
+                                  nftHint: false,
+                                  mappingStatus: "pending_review",
+                                  mappingKind: "asset",
+                                  canonicalAssetId: null,
+                                  assetRepresentationId: null,
+                                  canonicalFiatCurrency: null,
+                                } satisfies HeliusSolanaResolvedAsset,
+                              ]
+                            : [
+                                {
+                                  kind: "canonical",
+                                  assetKind: "token",
+                                  ...(asset.mintAddress === OMITTED_TYPE_EVIDENCE_MINT
+                                    ? {}
+                                    : { representationTypeObserved: true }),
+                                  mintAddress: asset.mintAddress,
+                                  providerAssetRowId: `provider-asset-${asset.mintAddress}`,
+                                  providerAssetId: asset.mintAddress,
+                                  naturalKey: `spl:${asset.mintAddress}`,
+                                  currencyCode: "USDC",
+                                  name: "USD Coin",
+                                  decimals:
+                                    asset.mintAddress === STALE_DECIMALS_MINT
+                                      ? asset.observedDecimals === 5
+                                        ? 2
+                                        : 5
+                                      : asset.mintAddress === EIGHTEEN_DECIMALS_MINT
+                                        ? 18
+                                        : asset.mintAddress === MAX_DECIMALS_MINT
+                                          ? 255
+                                          : 6,
+                                  tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                                  nftHint: false,
+                                  mappingStatus: "approved",
+                                  mappingKind: "asset",
+                                  canonicalAssetId: "asset-usdc",
+                                  assetRepresentationId: "representation-usdc-solana",
+                                  canonicalFiatCurrency: null,
+                                } satisfies HeliusSolanaResolvedAsset,
+                              ]
               )
             ),
         })
@@ -3866,6 +3889,74 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
       observedMintAddress: UNKNOWN_MINT,
       observedDecimals: 5,
     })
+    expect(result.legDerivationStrategy).toBe("skip")
+    expect(result.legPlans).toEqual([])
+  })
+
+  it("keeps excluded SPL movements as evidence without creating accounting or review work", async () => {
+    const payload = {
+      slot: 129,
+      transactionIndex: 4,
+      transaction: {
+        signatures: ["signature-excluded-token-balance"],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-excluded-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 0,
+        preBalances: [2_000_000_000, 0, 0],
+        postBalances: [2_000_000_000, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 5 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "123456", decimals: 5 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const result = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload }),
+          lookups,
+        })
+      }),
+      () => Effect.die("Helius client should not be called during normalization")
+    )
+
+    expect(result.canonicalTransfers).toEqual([])
+    expect(result.transactionReview).toBeNull()
+    expect(result.providerTransfers).toEqual([
+      expect.objectContaining({
+        providerAssetId: `provider-asset-${EXCLUDED_MINT}`,
+        processingMode: "evidence_only",
+        observedMintAddress: EXCLUDED_MINT,
+        observedDecimals: 5,
+        amount: "1.23456",
+      }),
+    ])
     expect(result.legDerivationStrategy).toBe("skip")
     expect(result.legPlans).toEqual([])
   })

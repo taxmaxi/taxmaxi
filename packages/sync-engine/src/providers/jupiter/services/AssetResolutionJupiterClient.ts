@@ -9,10 +9,10 @@
  * @module AssetResolutionJupiterClient
  */
 
+import type { AssetResolutionRegistryEvidence } from "@my/core/assets"
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
-import type { AssetResolutionRegistryEvidence } from "@my/core/assets"
 
 /** The only blockchain Jupiter can testify about. */
 export const JUPITER_SUPPORTED_BLOCKCHAIN = "solana"

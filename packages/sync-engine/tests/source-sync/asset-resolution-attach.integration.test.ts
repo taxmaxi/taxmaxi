@@ -23,10 +23,12 @@ import {
   AssetResolutionCoinGeckoRetryableError,
   AssetResolutionJobExecutor,
   AssetResolutionJobRepository,
-  AssetResolutionJupiterClient,
-  AssetResolutionJupiterRetryableError,
   SourceSyncService,
 } from "@my/sync-engine/services"
+import {
+  AssetResolutionJupiterClient,
+  AssetResolutionJupiterRetryableError,
+} from "../../src/providers/jupiter/services/AssetResolutionJupiterClient.ts"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
@@ -1144,6 +1146,89 @@ describe("asset resolution attach and rebuild", () => {
           mappingStatus: "approved",
           canonicalAssetId: ORB_ASSET_ID,
         })
+      })
+    )
+  })
+
+  it("fails closed and records Jupiter evidence when a settled representation is banned", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* runSync()
+        yield* insertOrbAsset()
+        yield* recordOrbSolanaObservation()
+        const firstJobId = yield* fetchPendingResolutionJobId()
+        const first = yield* runResolutionJob({ jobId: firstJobId })
+        expect(first.outcome).toBe("attached")
+
+        coinGeckoMode = "terminal"
+        jupiterMode = "banned"
+        yield* recordSecondProviderObservationOfOrbMint()
+        yield* scheduleSecondProviderResolutionJob()
+
+        const [secondJob] = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          return yield* db
+            .select({ id: schema.assetResolutionJobs.id })
+            .from(schema.assetResolutionJobs)
+            .where(eq(schema.assetResolutionJobs.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID))
+            .limit(1)
+        }).pipe(Effect.provide(TestPgClientLive))
+        if (secondJob === undefined) {
+          throw new Error("Expected a resolution job for the second provider asset")
+        }
+
+        const second = yield* runResolutionJob({ jobId: secondJob.id })
+        expect(second.outcome).toBe("fail_closed")
+
+        const result = yield* Effect.gen(function* () {
+          const db = yield* drizzle
+          const [mapping] = yield* db
+            .select({ mappingStatus: schema.providerAssetMappings.mappingStatus })
+            .from(schema.providerAssetMappings)
+            .where(
+              eq(schema.providerAssetMappings.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID)
+            )
+            .limit(1)
+          const [decision] = yield* db
+            .select({
+              id: schema.assetResolutionDecisions.id,
+              outcome: schema.assetResolutionDecisions.outcome,
+              reason: schema.assetResolutionDecisions.reason,
+            })
+            .from(schema.assetResolutionDecisions)
+            .where(
+              eq(schema.assetResolutionDecisions.providerAssetRowId, SECOND_PROVIDER_ASSET_ROW_ID)
+            )
+            .limit(1)
+          const evidence =
+            decision === undefined
+              ? []
+              : yield* db
+                  .select({
+                    authority: schema.assetResolutionEvidence.authority,
+                    decodedClaim: schema.assetResolutionEvidence.decodedClaim,
+                  })
+                  .from(schema.assetResolutionEvidence)
+                  .where(eq(schema.assetResolutionEvidence.decisionId, decision.id))
+
+          return { mapping, decision, evidence }
+        }).pipe(Effect.provide(TestPgClientLive))
+
+        expect(result.mapping).toMatchObject({ mappingStatus: "pending_review" })
+        expect(result.decision).toMatchObject({
+          outcome: "fail_closed",
+          reason: "conflicting_evidence",
+        })
+        expect(result.evidence).toHaveLength(2)
+        expect(result.evidence).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ authority: "chain" }),
+            expect.objectContaining({
+              authority: "jupiter",
+              decodedClaim: expect.objectContaining({ verdict: "banned" }),
+            }),
+          ])
+        )
       })
     )
   })

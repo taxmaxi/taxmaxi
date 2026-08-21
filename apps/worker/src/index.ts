@@ -5,11 +5,11 @@ import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   AssetResolutionCoinGeckoClientLive,
   AssetResolutionJobExecutorLive,
-  AssetResolutionJupiterClientLive,
   SourceSyncJobExecutorLive,
   SourceProviderRegistryLive,
   TransferReconciliationServiceLive,
 } from "@my/sync-engine/layers"
+import { AssetResolutionJupiterClientLive } from "@my/sync-engine/providers/jupiter/layers"
 import {
   CoinbaseLegDerivationServiceLive,
   CoinbaseRecordNormalizerLive,

@@ -254,11 +254,14 @@ const jupiterVerdict = (
   if ((token.tags ?? []).includes("banned")) {
     return "banned"
   }
+  if (token.audit?.isSus === true) {
+    return "suspicious"
+  }
   if (token.isVerified === true) {
     return "verified"
   }
 
-  return token.audit?.isSus === true ? "suspicious" : "unverified"
+  return "unverified"
 }
 
 /**
@@ -936,6 +939,9 @@ export const decideAssetResolution = ({
     registry._tag !== "registry_not_found" &&
     registry._tag !== "registry_not_queried"
   ) {
+    if (hasBannedClaim) {
+      return excluded("authority_banned")
+    }
     return failClosed(evidenceFailureReason(registry))
   }
 

@@ -506,7 +506,12 @@ const make = Effect.gen(function* () {
         )
 
   const approveProviderAssetMappingAndRequestReplay: ProviderAssetRepositoryShape["approveProviderAssetMappingAndRequestReplay"] =
-    ({ mapping, expectedObservedRepresentations, expectedProviderAssetRetrievedAt }) =>
+    ({
+      mapping,
+      expectedObservedRepresentations,
+      expectedProviderAssetRetrievedAt,
+      exclusionReversal,
+    }) =>
       db
         .transaction((tx) =>
           Effect.gen(function* () {
@@ -527,7 +532,11 @@ const make = Effect.gen(function* () {
               return { mappingChanged: false }
             }
 
-            if (currentMapping?.mappingStatus !== "pending_review") {
+            const reversesExclusion = currentMapping?.mappingStatus === "excluded"
+            if (
+              currentMapping?.mappingStatus !== "pending_review" &&
+              !(reversesExclusion && exclusionReversal !== undefined)
+            ) {
               return yield* new SyncEngineStorageError({
                 operation:
                   "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.mappingState",
@@ -536,6 +545,99 @@ const make = Effect.gen(function* () {
             }
 
             const now = nowDate()
+            if (reversesExclusion) {
+              if (
+                exclusionReversal === undefined ||
+                mapping.canonicalAssetId === null ||
+                mapping.assetRepresentationId === null
+              ) {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.exclusionReversalTarget",
+                  cause:
+                    "An excluded on-chain observation requires human authority and an approved asset representation.",
+                })
+              }
+              const reversal = exclusionReversal
+
+              const [providerAssetRevision] = yield* tx
+                .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+                .from(schema.providerAssets)
+                .where(eq(schema.providerAssets.id, mapping.providerAssetRowId))
+                .limit(1)
+              const [activeDecision] = yield* tx
+                .select({
+                  id: schema.assetResolutionDecisions.id,
+                  outcome: schema.assetResolutionDecisions.outcome,
+                })
+                .from(schema.assetResolutionDecisions)
+                .where(
+                  and(
+                    eq(
+                      schema.assetResolutionDecisions.providerAssetRowId,
+                      mapping.providerAssetRowId
+                    ),
+                    eq(
+                      schema.assetResolutionDecisions.evidenceRevision,
+                      providerAssetRevision?.evidenceRevision ?? 0
+                    ),
+                    eq(schema.assetResolutionDecisions.status, "active")
+                  )
+                )
+                .for("update")
+                .limit(1)
+
+              if (providerAssetRevision === undefined || activeDecision?.outcome !== "excluded") {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.exclusionDecision",
+                  cause: "The active exclusion decision changed before manual approval.",
+                })
+              }
+
+              const [superseded] = yield* tx
+                .update(schema.assetResolutionDecisions)
+                .set({ status: "superseded" })
+                .where(
+                  and(
+                    eq(schema.assetResolutionDecisions.id, activeDecision.id),
+                    eq(schema.assetResolutionDecisions.status, "active")
+                  )
+                )
+                .returning({ id: schema.assetResolutionDecisions.id })
+              if (superseded === undefined) {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.supersedeExclusion",
+                  cause: "A concurrent decision superseded the exclusion before manual approval.",
+                })
+              }
+
+              const observed = expectedObservedRepresentations[0]
+              yield* insertAssetResolutionDecision({
+                tx,
+                supersedesDecisionId: activeDecision.id,
+                decision: {
+                  providerAssetRowId: mapping.providerAssetRowId,
+                  evidenceRevision: providerAssetRevision.evidenceRevision,
+                  policyRevision: reversal.policyRevision,
+                  outcome: "attach",
+                  assetId: mapping.canonicalAssetId,
+                  assetRepresentationId: mapping.assetRepresentationId,
+                  blockchain: observed?.blockchainName ?? null,
+                  representationType: observed?.representationType ?? null,
+                  contractAddress: observed?.contractAddress ?? null,
+                  mintAddress: observed?.mintAddress ?? null,
+                  decimals: observed?.decimals ?? null,
+                  reason: "manual_exclusion_reversal",
+                  evidence: [],
+                  actor: reversal.actor,
+                },
+                operation:
+                  "providerAssetRepository.approveProviderAssetMappingAndRequestReplay.recordReversal",
+              })
+            }
+
             const [approved] = yield* tx
               .update(schema.providerAssetMappings)
               .set({
@@ -551,7 +653,10 @@ const make = Effect.gen(function* () {
               .where(
                 and(
                   eq(schema.providerAssetMappings.providerAssetRowId, mapping.providerAssetRowId),
-                  eq(schema.providerAssetMappings.mappingStatus, "pending_review")
+                  eq(
+                    schema.providerAssetMappings.mappingStatus,
+                    reversesExclusion ? "excluded" : "pending_review"
+                  )
                 )
               )
               .returning({ id: schema.providerAssetMappings.providerAssetRowId })
@@ -584,6 +689,7 @@ const make = Effect.gen(function* () {
   const excludeProviderAssetMappingAndRequestReplay: ProviderAssetRepositoryShape["excludeProviderAssetMappingAndRequestReplay"] =
     ({
       providerAssetRowId,
+      decision,
       sourceNotes,
       expectedObservedRepresentations,
       expectedProviderAssetRetrievedAt,
@@ -599,7 +705,7 @@ const make = Effect.gen(function* () {
             const currentMapping = snapshot.mapping
 
             if (currentMapping?.mappingStatus === "excluded") {
-              return { mappingChanged: false }
+              return { mappingChanged: false, decisionRecorded: false }
             }
 
             if (currentMapping?.mappingStatus !== "pending_review") {
@@ -611,6 +717,53 @@ const make = Effect.gen(function* () {
             }
 
             const now = nowDate()
+            const [providerAssetRevision] = yield* tx
+              .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
+              .from(schema.providerAssets)
+              .where(eq(schema.providerAssets.id, providerAssetRowId))
+              .limit(1)
+            if (
+              providerAssetRevision === undefined ||
+              decision.providerAssetRowId !== providerAssetRowId ||
+              decision.evidenceRevision !== providerAssetRevision.evidenceRevision ||
+              decision.outcome !== "excluded"
+            ) {
+              return yield* new SyncEngineStorageError({
+                operation:
+                  "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay.decision",
+                cause: "The exclusion decision does not match the current provider asset evidence.",
+              })
+            }
+
+            const insertedDecision = yield* insertAssetResolutionDecision({
+              tx,
+              decision,
+              skipOnActiveConflict: true,
+              operation:
+                "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay.recordDecision",
+            })
+            if (insertedDecision === null) {
+              const [activeDecision] = yield* tx
+                .select({ outcome: schema.assetResolutionDecisions.outcome })
+                .from(schema.assetResolutionDecisions)
+                .where(
+                  and(
+                    eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId),
+                    eq(schema.assetResolutionDecisions.evidenceRevision, decision.evidenceRevision),
+                    eq(schema.assetResolutionDecisions.status, "active")
+                  )
+                )
+                .for("update")
+                .limit(1)
+              if (activeDecision?.outcome !== "excluded") {
+                return yield* new SyncEngineStorageError({
+                  operation:
+                    "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay.activeDecision",
+                  cause: "A different active resolution decision won before exclusion.",
+                })
+              }
+            }
+
             const [excluded] = yield* tx
               .update(schema.providerAssetMappings)
               .set({
@@ -645,7 +798,7 @@ const make = Effect.gen(function* () {
               operation: "providerAssetRepository.excludeProviderAssetMappingAndRequestReplay",
             })
 
-            return { mappingChanged: true }
+            return { mappingChanged: true, decisionRecorded: insertedDecision !== null }
           })
         )
         .pipe(
@@ -792,7 +945,7 @@ const make = Effect.gen(function* () {
             if (
               mappings.some(
                 ({ mappingStatus, providerAssetRowId }) =>
-                  mappingStatus === "approved" &&
+                  (mappingStatus === "approved" || mappingStatus === "excluded") &&
                   newlyRecordedProviderAssetRowIds.has(providerAssetRowId)
               )
             ) {
@@ -966,7 +1119,8 @@ const make = Effect.gen(function* () {
               when ${schema.providerAssetMappings.mappingStatus} = 'approved' then 0
               when ${schema.providerAssetMappings.mappingStatus} = 'pending_review' then 1
               when ${schema.providerAssetMappings.mappingStatus} = 'rejected' then 2
-              else 3
+              when ${schema.providerAssetMappings.mappingStatus} = 'excluded' then 3
+              else 4
             end`,
             sql`case when ${schema.providerAssets.providerAssetId} is null then 1 else 0 end`,
             desc(schema.providerAssets.retrievedAt)

@@ -185,6 +185,30 @@ const seedObservedPendingProviderAsset = ({
     })
   )
 
+const markProviderAssetExcluded = ({
+  providerAssetRowId,
+}: {
+  readonly providerAssetRowId: string
+}) =>
+  context.runPg(
+    Effect.gen(function* () {
+      const db = yield* drizzle
+      yield* db
+        .update(schema.providerAssetMappings)
+        .set({ mappingStatus: "excluded" })
+        .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      yield* db.insert(schema.assetResolutionDecisions).values({
+        providerAssetRowId,
+        evidenceRevision: 1,
+        policyRevision: "automatic-exclusion.1",
+        outcome: "excluded",
+        status: "active",
+        reason: "explicit_banned_verdict",
+        actor: "system:asset-resolution-policy",
+      })
+    })
+  )
+
 const makeTrackedServiceLayer = ({
   coinGeckoClient,
   transactionEntered,
@@ -308,6 +332,75 @@ describe("AssetCanonicalizationServiceLive", () => {
     expect(state.jobs).toEqual([{ mode: "replay", sourceId: TEST_SOURCE_ID }])
   })
 
+  it("lets a human approval supersede an excluded mapping", async () => {
+    const providerAssetRowId = await seedObservedPendingProviderAsset({
+      providerAssetId: "manual-exclusion-reversal",
+    })
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [bitcoinRepresentation] = yield* db
+          .select({
+            blockchainId: schema.assetRepresentations.blockchainId,
+            contractAddress: schema.assetRepresentations.contractAddress,
+            decimals: schema.assetRepresentations.decimals,
+            type: schema.assetRepresentations.type,
+          })
+          .from(schema.assetRepresentations)
+          .where(eq(schema.assetRepresentations.id, TEST_BTC_REPRESENTATION_ID))
+        if (bitcoinRepresentation === undefined) {
+          return yield* Effect.die("Missing Bitcoin representation fixture")
+        }
+        yield* db
+          .update(schema.providerTransfers)
+          .set({
+            observedBlockchainId: bitcoinRepresentation.blockchainId,
+            observedRepresentationType: bitcoinRepresentation.type,
+            observedContractAddress: bitcoinRepresentation.contractAddress,
+            observedDecimals: bitcoinRepresentation.decimals,
+          })
+          .where(eq(schema.providerTransfers.providerAssetId, providerAssetRowId))
+      })
+    )
+    await markProviderAssetExcluded({ providerAssetRowId })
+
+    const result = await runService(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.approveProviderAssetMapping({
+          providerAssetRowId,
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+          reviewerNotes: "Human-reviewed exclusion reversal.",
+        })
+      )
+    )
+    const history = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            actor: schema.assetResolutionDecisions.actor,
+            outcome: schema.assetResolutionDecisions.outcome,
+            status: schema.assetResolutionDecisions.status,
+            supersedesDecisionId: schema.assetResolutionDecisions.supersedesDecisionId,
+          })
+          .from(schema.assetResolutionDecisions)
+          .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+          .orderBy(schema.assetResolutionDecisions.createdAt)
+      })
+    )
+
+    expect(result.mapping).toMatchObject({
+      mappingStatus: "approved",
+      canonicalAssetId: TEST_BTC_ASSET_ID,
+      assetRepresentationId: TEST_BTC_REPRESENTATION_ID,
+    })
+    expect(history).toMatchObject([
+      { outcome: "excluded", status: "superseded", supersedesDecisionId: null },
+      { outcome: "attach", status: "active", actor: "human:admin" },
+    ])
+  })
+
   it.each([
     {
       providerType: "crypto",
@@ -429,6 +522,42 @@ describe("AssetCanonicalizationServiceLive", () => {
 
     expect(result.providerAsset.mapping?.mappingStatus).toBe("approved")
     expect(Option.isSome(await Effect.runPromise(Deferred.poll(transactionEntered)))).toBe(true)
+  })
+
+  it("lets CoinGecko canonicalization supersede an excluded mapping", async () => {
+    const providerAssetRowId = await seedObservedPendingProviderAsset({
+      providerAssetId: "coingecko-exclusion-reversal",
+    })
+    await markProviderAssetExcluded({ providerAssetRowId })
+
+    const result = await runService(
+      Effect.flatMap(AssetCanonicalizationService, (service) =>
+        service.canonicalizeProviderAssetFromCoinGecko({
+          providerAssetRowId,
+          reviewerNotes: "Human-reviewed CoinGecko reversal.",
+        })
+      )
+    )
+
+    expect(result.providerAsset.mapping).toMatchObject({ mappingStatus: "approved" })
+    const history = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            actor: schema.assetResolutionDecisions.actor,
+            outcome: schema.assetResolutionDecisions.outcome,
+            status: schema.assetResolutionDecisions.status,
+          })
+          .from(schema.assetResolutionDecisions)
+          .where(eq(schema.assetResolutionDecisions.providerAssetRowId, providerAssetRowId))
+          .orderBy(schema.assetResolutionDecisions.createdAt)
+      })
+    )
+    expect(history).toMatchObject([
+      { outcome: "excluded", status: "superseded" },
+      { outcome: "attach", status: "active", actor: "human:admin" },
+    ])
   })
 
   it("does not enter the database transaction when CoinGecko resolution fails", async () => {

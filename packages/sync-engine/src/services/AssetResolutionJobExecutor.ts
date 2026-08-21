@@ -6,8 +6,6 @@
 
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
-import type { AssetResolutionCoinGeckoRetryableError } from "./AssetResolutionCoinGeckoClient.ts"
-import type { AssetResolutionJupiterRetryableError } from "./AssetResolutionJupiterClient.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -42,6 +40,13 @@ export interface AssetResolutionJobExecutionResult {
   readonly evidenceRevision: number | null
 }
 
+/** Provider-neutral shape of a transient evidence-fetch failure. */
+export interface AssetResolutionEvidenceRetryableError {
+  readonly status: number | null
+  readonly cause: unknown
+  readonly message: string
+}
+
 /**
  * AssetResolutionJobExecutorError - Failure of one resolution job execution
  * attempt. Storage failures and transient evidence-fetch failures both
@@ -49,8 +54,7 @@ export interface AssetResolutionJobExecutionResult {
  */
 export type AssetResolutionJobExecutorError =
   | SyncEngineStorageError
-  | AssetResolutionCoinGeckoRetryableError
-  | AssetResolutionJupiterRetryableError
+  | AssetResolutionEvidenceRetryableError
 
 /**
  * AssetResolutionJobExecutorShape - Execute one already-scheduled resolution job.

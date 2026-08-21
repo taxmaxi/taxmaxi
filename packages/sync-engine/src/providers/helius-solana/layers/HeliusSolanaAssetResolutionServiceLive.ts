@@ -392,8 +392,13 @@ const assetKindFromProviderAsset = (
 
 const resolvedKindFromMapping = (
   mapping: ResolvedProviderAssetMapping
-): HeliusSolanaResolvedAsset["kind"] =>
-  mapping.mappingStatus === "approved" ? "canonical" : "review_required"
+): HeliusSolanaResolvedAsset["kind"] => {
+  if (mapping.mappingStatus === "approved") {
+    return "canonical"
+  }
+
+  return mapping.mappingStatus === "excluded" ? "excluded" : "review_required"
+}
 
 const makeMissingProviderAssetAfterUpsertError = ({
   providerAssetId,

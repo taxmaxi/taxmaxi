@@ -545,6 +545,57 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
+  it("returns an explicit excluded result for an excluded provider asset mapping", async () => {
+    await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () =>
+        Effect.succeed([
+          makeDasAsset({
+            mintAddress: UNKNOWN_MINT,
+            name: "Excluded example",
+            decimals: 5,
+          }),
+        ])
+    )
+
+    const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    if (state === null) {
+      expect.fail("Expected the Helius provider asset fixture to exist")
+    }
+
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({ mappingStatus: "excluded" })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, state.providerAssetRowId))
+      })
+    )
+
+    const result = await runAssetService(
+      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
+        service.resolveAsset({
+          kind: "spl",
+          mintAddress: UNKNOWN_MINT,
+        })
+      ),
+      () => Effect.die("DAS metadata should already be persisted")
+    )
+
+    expect(result).toMatchObject({
+      kind: "excluded",
+      mappingStatus: "excluded",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
+    })
+  })
+
   it("automatically resolves an exact known Solana representation", async () => {
     await context.runPg(
       Effect.gen(function* () {

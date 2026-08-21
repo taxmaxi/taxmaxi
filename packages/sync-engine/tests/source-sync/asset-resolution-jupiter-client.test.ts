@@ -2,11 +2,11 @@ import { ConfigProvider, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { describe, expect, it } from "vitest"
-import { AssetResolutionJupiterClientLayer } from "../../src/layers/AssetResolutionJupiterClientLive.ts"
+import { AssetResolutionJupiterClientLayer } from "../../src/providers/jupiter/layers/AssetResolutionJupiterClientLive.ts"
 import {
   AssetResolutionJupiterClient,
   AssetResolutionJupiterRetryableError,
-} from "../../src/services/AssetResolutionJupiterClient.ts"
+} from "../../src/providers/jupiter/services/AssetResolutionJupiterClient.ts"
 
 const ORB_MINT = "OrbMint1111111111111111111111111111111111111"
 

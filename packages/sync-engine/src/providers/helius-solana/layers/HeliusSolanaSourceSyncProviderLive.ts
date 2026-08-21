@@ -2475,7 +2475,7 @@ const make = ({
       readonly resolvedTransactionType: ResolvedProviderTransactionTypeMapping
     }): SourceTransactionReviewDraft | null => {
       const hasUnresolvedAssets = movements.some(
-        (movement) => movement.asset.canonicalAssetId === null
+        (movement) => movement.asset.kind === "review_required"
       )
       const hasFailedTransaction = payload.meta?.err !== null
       const hasUnclassifiedSuccessfulTransaction =
@@ -2791,13 +2791,14 @@ const make = ({
             tokenBalanceSplMovements,
             transferRowSplMovements,
           })
-          const joinedCanonicalSplMovements =
+          const joinedCanonicalSplMovements = (
             canonicalSplMovements === transferRowSplMovements
               ? canonicalSplMovements
               : joinTransferRowEvidence({
                   authoritativeMovements: canonicalSplMovements,
                   transferRowMovements: transferRowSplMovements,
                 })
+          ).filter((movement) => movement.asset.kind !== "excluded")
 
           const contradictions = [
             ...findContradictionsForEvidence({

@@ -16,22 +16,22 @@
  * @module AssetResolutionJupiterClientLive
  */
 
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import {
+  AssetResolutionUpstreamFailure,
+  type AssetResolutionRegistryEvidence,
+} from "@my/core/assets"
 import * as Config from "effect/Config"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schedule from "effect/Schedule"
-import {
-  AssetResolutionUpstreamFailure,
-  type AssetResolutionRegistryEvidence,
-} from "@my/core/assets"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { positiveIntConfig } from "../../../shared/PositiveIntConfig.ts"
 import {
   AssetResolutionJupiterClient,
   AssetResolutionJupiterRetryableError,
   type AssetResolutionJupiterClientShape,
 } from "../services/AssetResolutionJupiterClient.ts"
-import { positiveIntConfig } from "../shared/PositiveIntConfig.ts"
 
 export const JUPITER_API_BASE_URL = "https://api.jup.ag"
 
