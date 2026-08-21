@@ -88,10 +88,6 @@
     "./providers/jupiter/layers": {
       "types": "./dist/providers/jupiter/layers/index.d.ts",
       "default": "./dist/providers/jupiter/layers/index.js"
-    },
-    "./providers/jupiter/services": {
-      "types": "./dist/providers/jupiter/services/index.d.ts",
-      "default": "./dist/providers/jupiter/services/index.js"
     }
   },
   "scripts": {

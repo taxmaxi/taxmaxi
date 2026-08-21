@@ -2800,10 +2800,18 @@ const make = ({
                 })
           ).filter((movement) => movement.asset.kind !== "excluded")
 
+          const contradictionSplMovements = splMovements.filter(
+            (movement) => movement.asset.kind !== "excluded"
+          )
+          const contradictionTransferRowSplMovements =
+            splMovements === transferRowSplMovements
+              ? contradictionSplMovements
+              : transferRowSplMovements.filter((movement) => movement.asset.kind !== "excluded")
+
           const contradictions = [
             ...findContradictionsForEvidence({
-              authoritativeSplMovements: splMovements,
-              transferRowSplMovements,
+              authoritativeSplMovements: contradictionSplMovements,
+              transferRowSplMovements: contradictionTransferRowSplMovements,
             }),
             ...ambiguousNativeSolTransfers.map(
               (transfer): MovementContradiction => ({

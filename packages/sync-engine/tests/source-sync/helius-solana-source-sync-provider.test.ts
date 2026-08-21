@@ -3961,6 +3961,113 @@ describe("HeliusSolanaSourceSyncProviderLive", () => {
     expect(result.legPlans).toEqual([])
   })
 
+  it("ignores excluded SPL contradictions while deriving valid accounting legs", async () => {
+    const signature = "signature-excluded-contradiction"
+    const walletTransferEvidence = [
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: USDC_MINT,
+        symbol: "USDC",
+        amount: 12.5,
+        amountRaw: "12500000",
+        decimals: 6,
+      },
+      {
+        signature,
+        timestamp: 1_735_689_600,
+        direction: "in",
+        counterparty: "counterparty-address",
+        mint: EXCLUDED_MINT,
+        symbol: "EXCLUDED",
+        amount: 6.54321,
+        amountRaw: "654321",
+        decimals: 5,
+      },
+    ]
+    const payload = {
+      slot: 129,
+      transactionIndex: 5,
+      transaction: {
+        signatures: [signature],
+        message: {
+          accountKeys: [
+            { pubkey: WALLET_ADDRESS, signer: true },
+            { pubkey: "counterparty-address", signer: false },
+            { pubkey: "wallet-usdc-token-account", signer: false },
+            { pubkey: "wallet-excluded-token-account", signer: false },
+          ],
+          instructions: [],
+        },
+      },
+      meta: {
+        err: null,
+        fee: 5_000,
+        preBalances: [2_000_000_000, 0, 0, 0],
+        postBalances: [1_999_995_000, 0, 0, 0],
+        preTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 6 },
+          },
+          {
+            accountIndex: 3,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "0", decimals: 5 },
+          },
+        ],
+        postTokenBalances: [
+          {
+            accountIndex: 2,
+            mint: USDC_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "12500000", decimals: 6 },
+          },
+          {
+            accountIndex: 3,
+            mint: EXCLUDED_MINT,
+            owner: WALLET_ADDRESS,
+            uiTokenAmount: { amount: "123456", decimals: 5 },
+          },
+        ],
+      },
+      blockTime: 1_735_689_600,
+    }
+
+    const prepared = await runProvider(
+      Effect.gen(function* () {
+        const provider = yield* HeliusSolanaSourceSyncProvider
+        const lookups = yield* provider.loadNormalizationLookups()
+        return yield* provider.prepareNormalization({
+          source: makeSource(),
+          sourceRecord: makeRawRecord({ fullTransaction: payload, walletTransferEvidence }),
+          lookups,
+        })
+      }),
+      () => Effect.die("Helius client should not be called during normalization")
+    )
+
+    expect(prepared.transactionReview).toBeNull()
+    expect(prepared.legDerivationStrategy).toBe("derive")
+    expect(prepared.legPlans).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "acquisition", derivationRule: "helius_solana_inbound" }),
+      ])
+    )
+    expect(
+      prepared.providerTransfers.filter(
+        (transfer) => transfer.providerAssetId === `provider-asset-${EXCLUDED_MINT}`
+      )
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ processingMode: "evidence_only" })])
+    )
+  })
+
   it("records separate SPL token and NFT facts in a multi-transfer transaction", async () => {
     const payload = {
       slot: 129,
