@@ -58,7 +58,7 @@ const SourceSyncJobExecutorRuntimeLive = SourceSyncJobExecutorLive.pipe(
   Layer.provide(RepositoriesLive)
 )
 
-const WorkerRuntimeLive = WorkerBullMqSourceSyncConsumerLive.pipe(
+const SourceSyncWorkerRuntimeLive = WorkerBullMqSourceSyncConsumerLive.pipe(
   Layer.provide(SourceSyncJobExecutorRuntimeLive),
   // Startup repair is a dependency of the consumer so reconciliation finishes before BullMQ claims work.
   Layer.provide(WorkerSourceSyncStartupRepairLive.pipe(Layer.provide(RepositoriesLive)))
@@ -76,7 +76,7 @@ const AssetResolutionWorkerRuntimeLive = WorkerBullMqAssetResolutionConsumerLive
 
 const AppLive: Layer.Layer<never, unknown, never> = Layer.mergeAll(
   WorkerHealthServerLive,
-  WorkerRuntimeLive,
+  SourceSyncWorkerRuntimeLive,
   AssetResolutionWorkerRuntimeLive
 ).pipe(Layer.provide(PgClientLive))
 
