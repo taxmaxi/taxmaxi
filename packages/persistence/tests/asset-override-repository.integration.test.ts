@@ -226,4 +226,66 @@ describe("AssetOverrideRepository", () => {
 
     expect(Option.isNone(result)).toBe(true)
   })
+
+  it("retains the inspected inclusion reason in append-only history", async () => {
+    const providerAssetRowId = await seedChainlessProviderAsset()
+    await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        yield* db
+          .update(schema.providerAssetMappings)
+          .set({
+            mappingStatus: "rejected",
+            canonicalAssetId: TEST_BTC_ASSET_ID,
+            reviewerNotes: "Rejected by TaxMaxi policy.",
+          })
+          .where(eq(schema.providerAssetMappings.providerAssetRowId, providerAssetRowId))
+      })
+    )
+
+    const target = { _tag: "provider_asset" as const, providerAssetRowId }
+    const initial = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.getProjection({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          target,
+        })
+      )
+    )
+
+    expect(initial.systemConclusion).toEqual({
+      _tag: "inclusion",
+      state: "excluded",
+      reason: "taxmaxi_policy",
+    })
+
+    const created = await runRepository(
+      Effect.flatMap(AssetOverrideRepository, (repository) =>
+        repository.setOverride({
+          principalId: TEST_PRINCIPAL_ID,
+          actorId: "00000000-0000-0000-0000-000000000181",
+          kind: "inclusion",
+          target,
+          expectedSystemRevision: initial.systemRevision,
+          expectedActiveOverrideId: null,
+          replacement: { _tag: "inclusion", state: "included" },
+          reason: "The custody statement confirms this asset is legitimate.",
+        })
+      )
+    )
+
+    expect(created._tag).toBe("accepted")
+    if (created._tag !== "accepted") return
+    expect(created.projection.history[0]?.inspectedSystemConclusion).toEqual({
+      _tag: "inclusion",
+      state: "excluded",
+      reason: "taxmaxi_policy",
+    })
+    expect(created.projection.effectiveConclusion).toEqual({
+      _tag: "inclusion",
+      state: "included",
+      reason: null,
+    })
+  })
 })

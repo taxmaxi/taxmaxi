@@ -4,7 +4,7 @@
  * @module AssetOverrideRepositoryLive
  */
 
-import { and, asc, desc, eq, inArray, isNotNull, notExists, sql } from "drizzle-orm"
+import { and, asc, desc, eq, exists, inArray, isNull, notExists, or, sql } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
@@ -146,7 +146,7 @@ const rowInspectedConclusion = (row: PrincipalAssetOverrideRow): AssetOverrideSy
     : {
         _tag: "inclusion",
         state: row.inspectedInclusionState ?? "blocked",
-        reason: null,
+        reason: row.inspectedInclusionReason,
       }
 
 const rowReplacement = (row: PrincipalAssetOverrideRow): AssetOverrideReplacement | null => {
@@ -227,17 +227,30 @@ const make = Effect.gen(function* () {
         and(
           eq(schema.sources.principalId, principalId),
           eq(schema.providerAssetSourceUses.providerAssetRowId, target.providerAssetRowId),
-          notExists(
-            executor
-              .select({ id: schema.providerTransfers.id })
-              .from(schema.providerTransfers)
-              .where(
-                and(
-                  eq(schema.providerTransfers.sourceId, schema.sources.id),
-                  eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId),
-                  isNotNull(schema.providerTransfers.observedBlockchainId)
+          or(
+            notExists(
+              executor
+                .select({ id: schema.providerTransfers.id })
+                .from(schema.providerTransfers)
+                .where(
+                  and(
+                    eq(schema.providerTransfers.sourceId, schema.sources.id),
+                    eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId)
+                  )
                 )
-              )
+            ),
+            exists(
+              executor
+                .select({ id: schema.providerTransfers.id })
+                .from(schema.providerTransfers)
+                .where(
+                  and(
+                    eq(schema.providerTransfers.sourceId, schema.sources.id),
+                    eq(schema.providerTransfers.providerAssetId, target.providerAssetRowId),
+                    isNull(schema.providerTransfers.observedBlockchainId)
+                  )
+                )
+            )
           )
         )
       )
@@ -404,7 +417,29 @@ const make = Effect.gen(function* () {
     readonly target: AssetOverrideTarget
   }) =>
     executor
-      .select()
+      .select({
+        id: schema.principalAssetOverrides.id,
+        principalId: schema.principalAssetOverrides.principalId,
+        kind: schema.principalAssetOverrides.kind,
+        targetKind: schema.principalAssetOverrides.targetKind,
+        blockchainId: schema.principalAssetOverrides.blockchainId,
+        representationType: schema.principalAssetOverrides.representationType,
+        contractAddress: schema.principalAssetOverrides.contractAddress,
+        mintAddress: schema.principalAssetOverrides.mintAddress,
+        providerAssetRowId: schema.principalAssetOverrides.providerAssetRowId,
+        action: schema.principalAssetOverrides.action,
+        inspectedSystemRevision: schema.principalAssetOverrides.inspectedSystemRevision,
+        inspectedIdentityState: schema.principalAssetOverrides.inspectedIdentityState,
+        inspectedInclusionState: schema.principalAssetOverrides.inspectedInclusionState,
+        inspectedInclusionReason: schema.principalAssetOverrides.inspectedInclusionReason,
+        inspectedAssetId: schema.principalAssetOverrides.inspectedAssetId,
+        replacementAssetId: schema.principalAssetOverrides.replacementAssetId,
+        replacementInclusionState: schema.principalAssetOverrides.replacementInclusionState,
+        actorId: schema.principalAssetOverrides.actorId,
+        reason: schema.principalAssetOverrides.reason,
+        supersedesOverrideId: schema.principalAssetOverrides.supersedesOverrideId,
+        createdAt: schema.principalAssetOverrides.createdAt,
+      })
       .from(schema.principalAssetOverrides)
       .where(
         and(
@@ -700,6 +735,7 @@ const make = Effect.gen(function* () {
           inspectedSystemRevision: before.systemRevision,
           inspectedIdentityState: inspectedIdentity?.state ?? null,
           inspectedInclusionState: inspectedInclusion?.state ?? null,
+          inspectedInclusionReason: inspectedInclusion?.reason ?? null,
           inspectedAssetId: inspectedIdentity?.assetId ?? null,
           replacementAssetId: replacement?._tag === "identity" ? replacement.assetId : null,
           replacementInclusionState: replacement?._tag === "inclusion" ? replacement.state : null,

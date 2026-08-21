@@ -2356,6 +2356,134 @@ describe("SourceNormalizationRepositoryLive", () => {
     )
   })
 
+  it("materializes a policy-excluded chainless asset after a principal inclusion override", async () => {
+    const occurredAt = new Date("2025-01-01T11:00:00.000Z")
+    const providerAssetRowId = await runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: "coinbase",
+            providerAssetId: "included-by-principal",
+            currencyCode: "INCLUDED",
+            name: "Principal Included Asset",
+            exponent: 8,
+            providerType: "crypto",
+            retrievedAt: occurredAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed provider asset")
+        }
+        yield* db.insert(schema.providerAssetMappings).values({
+          providerAssetRowId: providerAsset.id,
+          mappingKind: "asset",
+          mappingStatus: "rejected",
+          canonicalAssetId: TEST_BTC_ASSET_ID,
+          assetRepresentationId: null,
+          canonicalFiatCurrency: null,
+        })
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId: TEST_SOURCE_ID,
+        })
+        yield* db.insert(schema.principalAssetOverrides).values({
+          principalId: TEST_PRINCIPAL_ID,
+          kind: "inclusion",
+          targetKind: "provider_asset",
+          providerAssetRowId: providerAsset.id,
+          action: "set",
+          inspectedSystemRevision: "policy-rejected-revision",
+          inspectedIdentityState: null,
+          inspectedInclusionState: "excluded",
+          inspectedInclusionReason: "taxmaxi_policy",
+          inspectedAssetId: null,
+          replacementAssetId: null,
+          replacementInclusionState: "included",
+          actorId: "00000000-0000-0000-0000-000000000181",
+          reason: "The custody statement confirms this asset is legitimate.",
+        })
+        return providerAsset.id
+      })
+    )
+
+    const result = await runRepository(
+      Effect.flatMap(SourceNormalizationRepository, (repository) =>
+        repository.persistNormalizedArtifacts({
+          transaction: {
+            sourceId: TEST_SOURCE_ID,
+            sourceRawRecordId: TEST_RAW_RECORD_ID,
+            externalId: "tx-principal-included",
+            externalGroupId: "group-principal-included",
+            timestamp: occurredAt,
+            transactionType: "buy_fiat",
+            providerTransactionType: "buy",
+            providerStatus: "completed",
+            providerResourcePath: null,
+            providerDescription: null,
+            providerCreatedAt: occurredAt,
+            providerUpdatedAt: occurredAt,
+            metadata: { provider: "coinbase" },
+            principalId: TEST_PRINCIPAL_ID,
+          },
+          venueContext: {
+            venueType: "cex",
+            cexAccountId: fixture.cexAccountId,
+            externalAccountId: "coinbase-account-1",
+            externalOrderId: null,
+            externalFillId: null,
+            side: null,
+            instrument: null,
+            fillPrice: null,
+            commissionAmount: null,
+            commissionCurrency: null,
+            metadata: null,
+          },
+          providerTransfers: [
+            {
+              sourceId: TEST_SOURCE_ID,
+              sourceRawRecordId: TEST_RAW_RECORD_ID,
+              externalId: "principal-included-transfer",
+              externalGroupId: "group-principal-included",
+              providerAssetId: providerAssetRowId,
+              timestamp: occurredAt,
+              direction: "inbound",
+              processingMode: "accounting_and_evidence",
+              fromAccountRef: "external-account",
+              toAccountRef: "coinbase-account-1",
+              fromAddress: null,
+              toAddress: null,
+              networkName: null,
+              networkHash: null,
+              observedBlockchainId: null,
+              observedRepresentationType: null,
+              observedContractAddress: null,
+              observedMintAddress: null,
+              observedDecimals: null,
+              amount: "2.5",
+              metadata: { provider: "coinbase" },
+            },
+          ],
+          canonicalTransfers: [],
+          legs: [],
+          transactionReview: null,
+          resolvedTransactionType: APPROVED_MAPPING,
+        })
+      )
+    )
+
+    expect(result.legs).toEqual([
+      expect.objectContaining({
+        assetId: TEST_BTC_ASSET_ID,
+        amount: expect.stringMatching(/^2\.5(?:0+)?$/),
+        kind: "acquisition",
+        derivationRule: "principal_asset_override",
+        fiatAmount: null,
+      }),
+    ])
+  })
+
   it("persists normalized artifacts idempotently and feeds FIFO side effects", async () => {
     const acquisitionResult = await runRepository(
       Effect.flatMap(SourceNormalizationRepository, (repository) =>

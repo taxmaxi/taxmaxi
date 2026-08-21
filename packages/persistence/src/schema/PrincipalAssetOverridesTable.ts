@@ -61,6 +61,7 @@ export const principalAssetOverrides = pgTable(
     inspectedSystemRevision: text("inspected_system_revision").notNull(),
     inspectedIdentityState: principalAssetIdentityStateEnum("inspected_identity_state"),
     inspectedInclusionState: principalAssetInclusionStateEnum("inspected_inclusion_state"),
+    inspectedInclusionReason: text("inspected_inclusion_reason"),
     inspectedAssetId: uuid("inspected_asset_id").references(() => assets.id),
     replacementAssetId: uuid("replacement_asset_id").references(() => assets.id),
     replacementInclusionState: principalAssetInclusionStateEnum("replacement_inclusion_state"),
@@ -116,6 +117,7 @@ export const principalAssetOverrides = pgTable(
         ${table.kind} = 'identity'
         and ${table.inspectedIdentityState} is not null
         and ${table.inspectedInclusionState} is null
+        and ${table.inspectedInclusionReason} is null
       ) or (
         ${table.kind} = 'inclusion'
         and ${table.inspectedIdentityState} is null
