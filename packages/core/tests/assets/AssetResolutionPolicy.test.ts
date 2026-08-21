@@ -451,7 +451,7 @@ describe("AssetResolutionPolicy", () => {
       expect(decision).toMatchObject({ _tag: "attach", assetKey: "usdc" })
     })
 
-    it("stays pending when the matching registry platform has no decimals", () => {
+    it("stays pending without a ban when the matching registry platform has no decimals", () => {
       const decision = decide({
         chain: solanaUsdcChainClaim(),
         registry: CoinGeckoClaim.make({
@@ -472,6 +472,31 @@ describe("AssetResolutionPolicy", () => {
       expect(decision).toMatchObject({
         _tag: "pending",
         reason: "non_exact_platform_match",
+      })
+    })
+
+    it("excludes a banned observation when matching registry evidence has no decimals", () => {
+      const decision = decide({
+        chain: solanaUsdcChainClaim(),
+        registry: CoinGeckoClaim.make({
+          coinId: "usd-coin",
+          name: "USDC",
+          symbol: "usdc",
+          platforms: [
+            CoinGeckoPlatformMapping.make({
+              platformId: "solana",
+              contractAddress: SOLANA_USDC_MINT,
+              decimals: null,
+            }),
+          ],
+        }),
+        identity: { ...usdcIdentity(), representations: [] },
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })],
+      })
+
+      expect(decision).toMatchObject({
+        _tag: "excluded",
+        reason: "authority_banned",
       })
     })
 

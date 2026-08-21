@@ -577,13 +577,11 @@ const make = Effect.gen(function* () {
                       schema.assetResolutionDecisions.providerAssetRowId,
                       mapping.providerAssetRowId
                     ),
-                    eq(
-                      schema.assetResolutionDecisions.evidenceRevision,
-                      providerAssetRevision?.evidenceRevision ?? 0
-                    ),
+                    eq(schema.assetResolutionDecisions.outcome, "excluded"),
                     eq(schema.assetResolutionDecisions.status, "active")
                   )
                 )
+                .orderBy(desc(schema.assetResolutionDecisions.evidenceRevision))
                 .for("update")
                 .limit(1)
 

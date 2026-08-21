@@ -1,4 +1,4 @@
-import { ConfigProvider, Effect, Layer } from "effect"
+import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { HttpClientError, TransportError } from "effect/unstable/http/HttpClientError"
 import { describe, expect, it } from "vitest"
@@ -22,7 +22,7 @@ const SEARCH_PAYLOAD = [
 ]
 
 const testConfigProvider = ConfigProvider.fromEnvRecord({
-  JUPITER_API_KEY: "test-api-key",
+  JUPITER_API_KEY: "  test-api-key \n",
   JUPITER_REQUEST_TIMEOUT_MS: "50",
   JUPITER_RETRY_ATTEMPTS: "2",
   JUPITER_RETRY_BASE_DELAY_MS: "1",
@@ -139,6 +139,37 @@ describe("AssetResolutionJupiterClientLive", () => {
 
     expect(result._tag).toBe("Failure")
   })
+
+  it.each(["", " \t\n "])(
+    "fails layer construction when JUPITER_API_KEY is blank (%j)",
+    async (apiKey) => {
+      const result = await Effect.runPromise(
+        Effect.scoped(
+          Layer.build(
+            AssetResolutionJupiterClientLayer.pipe(
+              Layer.provide(
+                Layer.succeed(
+                  HttpClient.HttpClient,
+                  HttpClient.make((_request, url) => Effect.sync(() => jsonResponse(url, [])))
+                )
+              )
+            )
+          )
+        ).pipe(
+          Effect.provideService(
+            ConfigProvider.ConfigProvider,
+            ConfigProvider.fromEnvRecord({ JUPITER_API_KEY: apiKey })
+          ),
+          Effect.result
+        )
+      )
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        expect(result.failure).toBeInstanceOf(Config.ConfigError)
+      }
+    }
+  )
 
   it.each([[429], [500], [503]])(
     "retries a %s response and fails retryable once attempts are exhausted",

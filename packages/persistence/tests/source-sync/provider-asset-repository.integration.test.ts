@@ -984,7 +984,8 @@ describe("ProviderAssetRepositoryLive", () => {
       expect(state.decisions).toEqual([])
     })
 
-    it("atomically reverses an exclusion with auditable human approval", async () => {
+    it("atomically reverses an exclusion after the provider evidence revision advances", async () => {
+      const providerAssetId = "btc-approval-manual-exclusion-reversal"
       const providerAsset = await seedPendingApprovalAsset("manual-exclusion-reversal")
       await runRepository(
         Effect.flatMap(ProviderAssetRepository, (repository) =>
@@ -996,6 +997,33 @@ describe("ProviderAssetRepositoryLive", () => {
             expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
           })
         )
+      )
+      const revisedProviderAsset = await runRepository(
+        Effect.gen(function* () {
+          const repository = yield* ProviderAssetRepository
+          yield* repository.upsertProviderAssets({
+            providerKey: "coinbase",
+            entries: [
+              {
+                providerAssetId,
+                naturalKey: null,
+                currencyCode: "BTC",
+                name: "Bitcoin with revised metadata",
+                exponent: 8,
+                providerType: "crypto",
+                payload: { source: "test", revision: 2 },
+              },
+            ],
+          })
+          const revised = yield* repository.findProviderAssetByProviderAssetId({
+            providerKey: "coinbase",
+            providerAssetId,
+          })
+          if (Option.isNone(revised)) {
+            return yield* Effect.die("Expected revised approval provider asset")
+          }
+          return revised.value
+        })
       )
 
       const result = await runRepository(
@@ -1012,7 +1040,7 @@ describe("ProviderAssetRepositoryLive", () => {
               sourceNotes: "Manual approval",
             },
             expectedObservedRepresentations: [],
-            expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+            expectedProviderAssetRetrievedAt: revisedProviderAsset.retrievedAt,
             exclusionReversal: {
               actor: "human:admin",
               policyRevision: "manual-approval.1",
@@ -1041,11 +1069,12 @@ describe("ProviderAssetRepositoryLive", () => {
       })
       expect(state.history).toHaveLength(2)
       expect(state.history[0]).toMatchObject({
+        evidenceRevision: 1,
         outcome: "excluded",
         status: "superseded",
       })
       expect(state.history[1]).toMatchObject({
-        evidenceRevision: 1,
+        evidenceRevision: 2,
         policyRevision: "manual-approval.1",
         outcome: "attach",
         status: "active",

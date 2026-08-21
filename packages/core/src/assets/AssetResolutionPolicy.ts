@@ -964,7 +964,7 @@ export const decideAssetResolution = ({
         return failClosed("incompatible_type")
       }
       if (platform.decimals === null) {
-        return pending("non_exact_platform_match")
+        return hasBannedClaim ? excluded("authority_banned") : pending("non_exact_platform_match")
       }
       if (platform.decimals !== chain.decimals) {
         return failClosed("incompatible_decimals")

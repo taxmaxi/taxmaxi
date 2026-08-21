@@ -8,11 +8,7 @@ import { AssetResolutionJobRepositoryLive } from "../../../persistence/src/layer
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { drizzle } from "../../../persistence/src/layers/PgClientLive.ts"
 import { schema } from "../../../persistence/src/schema/index.ts"
-import {
-  TEST_SOURCE_ID,
-  makeIntegrationTestDatabaseContext,
-  seedSyncEngineRepositoryFixture,
-} from "../../../persistence/tests/support/integration-test-kit.ts"
+import { makeIntegrationTestDatabaseContext } from "../../../persistence/tests/support/integration-test-kit.ts"
 import { HeliusSolanaAssetResolutionServiceLive } from "../../src/providers/helius-solana/layers/HeliusSolanaAssetResolutionServiceLive.ts"
 import { HeliusSolanaAssetResolutionService } from "../../src/providers/helius-solana/services/HeliusSolanaAssetResolutionService.ts"
 import {
@@ -596,7 +592,7 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     })
   })
 
-  it("automatically resolves an exact known Solana representation", async () => {
+  it("keeps an exact known non-default representation pending and schedules resolution", async () => {
     await context.runPg(
       Effect.gen(function* () {
         const db = yield* drizzle
@@ -647,19 +643,35 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
     )
 
     const state = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
+    const resolutionJobs = await context.runPg(
+      Effect.gen(function* () {
+        const db = yield* drizzle
+        return yield* db
+          .select({
+            providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
+            status: schema.assetResolutionJobs.status,
+          })
+          .from(schema.assetResolutionJobs)
+      })
+    )
 
     expect(result).toMatchObject({
-      kind: "canonical",
-      mappingStatus: "approved",
-      canonicalAssetId: UNKNOWN_ASSET_ID,
-      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+      kind: "review_required",
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
     })
     expect(state).toMatchObject({
-      mappingStatus: "approved",
-      canonicalAssetId: UNKNOWN_ASSET_ID,
-      assetRepresentationId: UNKNOWN_REPRESENTATION_ID,
+      mappingStatus: "pending_review",
+      canonicalAssetId: null,
+      assetRepresentationId: null,
     })
-    expect(state?.sourceNotes).toContain("exact mint, type, and compatible decimals")
+    expect(resolutionJobs).toEqual([
+      {
+        providerAssetRowId: state?.providerAssetRowId,
+        status: "pending",
+      },
+    ])
   })
 
   it("keeps an exact mint pending when current raw decimals conflict", async () => {
@@ -725,174 +737,6 @@ describe("HeliusSolanaAssetResolutionServiceLive", () => {
       canonicalAssetId: null,
       assetRepresentationId: null,
     })
-  })
-
-  it("requests replay when an exact representation promotes a pending mapping", async () => {
-    const dasAsset = makeDasAsset({
-      mintAddress: UNKNOWN_MINT,
-      symbol: "DRIFT",
-      name: "Drift Example",
-      decimals: 6,
-    })
-    await runAssetService(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
-      ),
-      () => Effect.succeed([dasAsset])
-    )
-    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
-    expect(pendingState).not.toBeNull()
-    if (pendingState === null) {
-      return
-    }
-
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* seedSyncEngineRepositoryFixture()
-        const [solanaBlockchain] = yield* db
-          .select({ id: schema.blockchains.id })
-          .from(schema.blockchains)
-          .where(eq(schema.blockchains.name, "solana"))
-          .limit(1)
-        if (solanaBlockchain === undefined) {
-          return yield* Effect.die("Missing seeded Solana blockchain")
-        }
-        yield* db.insert(schema.assets).values({
-          id: UNKNOWN_ASSET_ID,
-          name: "Drift Example",
-          symbol: "DRIFT",
-          type: "fungible",
-        })
-        yield* db.insert(schema.assetRepresentations).values({
-          id: UNKNOWN_REPRESENTATION_ID,
-          assetId: UNKNOWN_ASSET_ID,
-          blockchainId: solanaBlockchain.id,
-          contractAddress: null,
-          mintAddress: UNKNOWN_MINT,
-          decimals: 6,
-          type: "token",
-        })
-        yield* db.insert(schema.providerAssetSourceUses).values({
-          providerAssetRowId: pendingState.providerAssetRowId,
-          sourceId: TEST_SOURCE_ID,
-        })
-      })
-    )
-
-    const result = await runAssetService(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
-      ),
-      () => Effect.succeed([dasAsset])
-    )
-    const jobs = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        return yield* db
-          .select({ mode: schema.processingJobs.mode, status: schema.processingJobs.status })
-          .from(schema.processingJobs)
-          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
-      })
-    )
-
-    expect(result).toMatchObject({
-      kind: "canonical",
-      mappingStatus: "approved",
-      canonicalAssetId: UNKNOWN_ASSET_ID,
-    })
-    expect(jobs).toEqual([{ mode: "replay", status: "pending" }])
-  })
-
-  it("keeps an exact mapping pending when replay scheduling fails", async () => {
-    const dasAsset = makeDasAsset({
-      mintAddress: UNKNOWN_MINT,
-      symbol: "DRIFT",
-      name: "Drift Example",
-      decimals: 6,
-    })
-    await runAssetService(
-      Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-        service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
-      ),
-      () => Effect.succeed([dasAsset])
-    )
-    const pendingState = await context.runPg(fetchProviderAssetState({ mintAddress: UNKNOWN_MINT }))
-    expect(pendingState).not.toBeNull()
-    if (pendingState === null) {
-      return
-    }
-
-    await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        yield* seedSyncEngineRepositoryFixture()
-        const [solanaBlockchain] = yield* db
-          .select({ id: schema.blockchains.id })
-          .from(schema.blockchains)
-          .where(eq(schema.blockchains.name, "solana"))
-          .limit(1)
-        if (solanaBlockchain === undefined) {
-          return yield* Effect.die("Missing seeded Solana blockchain")
-        }
-        yield* db.insert(schema.assets).values({
-          id: UNKNOWN_ASSET_ID,
-          name: "Drift Example",
-          symbol: "DRIFT",
-          type: "fungible",
-        })
-        yield* db.insert(schema.assetRepresentations).values({
-          id: UNKNOWN_REPRESENTATION_ID,
-          assetId: UNKNOWN_ASSET_ID,
-          blockchainId: solanaBlockchain.id,
-          contractAddress: null,
-          mintAddress: UNKNOWN_MINT,
-          decimals: 6,
-          type: "token",
-        })
-        yield* db.insert(schema.providerAssetSourceUses).values({
-          providerAssetRowId: pendingState.providerAssetRowId,
-          sourceId: TEST_SOURCE_ID,
-        })
-        yield* db.execute(sql`
-          create function reject_helius_replay_job() returns trigger
-          language plpgsql as $trigger$
-          begin
-            raise exception 'replay scheduling failed';
-          end;
-          $trigger$
-        `)
-        yield* db.execute(sql`
-          create trigger reject_helius_replay_job
-          before insert on processing_jobs
-          for each row execute function reject_helius_replay_job()
-        `)
-      })
-    )
-
-    const result = await runAssetService(
-      Effect.result(
-        Effect.flatMap(HeliusSolanaAssetResolutionService, (service) =>
-          service.resolveAsset({ kind: "spl", mintAddress: UNKNOWN_MINT })
-        )
-      ),
-      () => Effect.succeed([dasAsset])
-    )
-    const state = await context.runPg(
-      Effect.gen(function* () {
-        const db = yield* drizzle
-        const providerAsset = yield* fetchProviderAssetState({ mintAddress: UNKNOWN_MINT })
-        const jobs = yield* db
-          .select({ id: schema.processingJobs.id })
-          .from(schema.processingJobs)
-          .where(eq(schema.processingJobs.sourceId, TEST_SOURCE_ID))
-        return { jobs, providerAsset }
-      })
-    )
-
-    expect(result._tag).toBe("Failure")
-    expect(state.providerAsset).toMatchObject({ mappingStatus: "pending_review" })
-    expect(state.jobs).toHaveLength(0)
   })
 
   it("keeps an exact known NFT pending when DAS decimals are missing", async () => {

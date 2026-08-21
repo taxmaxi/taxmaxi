@@ -25,6 +25,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import * as Schedule from "effect/Schedule"
+import * as Schema from "effect/Schema"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { positiveIntConfig } from "../../../shared/PositiveIntConfig.ts"
 import {
@@ -39,12 +40,17 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 const DEFAULT_RETRY_ATTEMPTS = 2
 const DEFAULT_RETRY_BASE_DELAY_MS = 1_000
 
+const jupiterApiKeyConfig = Config.schema(
+  Schema.Trim.check(Schema.isNonEmpty({ message: "JUPITER_API_KEY must not be empty" })),
+  "JUPITER_API_KEY"
+)
+
 const isRetryableStatus = (status: number): boolean =>
   status === 408 || status === 429 || status >= 500
 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
-  const apiKey = yield* Config.string("JUPITER_API_KEY")
+  const apiKey = yield* jupiterApiKeyConfig
   const configuredBaseUrl = yield* Config.option(Config.string("JUPITER_API_BASE_URL"))
   const baseUrl = Option.getOrElse(configuredBaseUrl, () => JUPITER_API_BASE_URL)
   const requestTimeoutMs = yield* positiveIntConfig({

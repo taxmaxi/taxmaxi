@@ -38,6 +38,7 @@ import {
 import {
   AssetRepository,
   AssetResolutionCoinGeckoClient,
+  AssetResolutionEvidenceRetryableError,
   AssetResolutionJobExecutor,
   AssetResolutionJobRepository,
   ProviderAssetRepository,
@@ -216,7 +217,16 @@ const make = Effect.gen(function* () {
         return { legitimacy: [], evidence: [] }
       }
 
-      const jupiterEvidence = yield* jupiterClient.fetchTokenByMint({ mintAddress })
+      const jupiterEvidence = yield* jupiterClient.fetchTokenByMint({ mintAddress }).pipe(
+        Effect.mapError(
+          (error) =>
+            new AssetResolutionEvidenceRetryableError({
+              source: "jupiter",
+              status: error.status,
+              cause: error.cause,
+            })
+        )
+      )
       const retrievedAt = nowDate()
       const decodeResult =
         jupiterEvidence._tag === "payload"
@@ -379,8 +389,18 @@ const make = Effect.gen(function* () {
       }
 
       const platformId = chainResult.fact.blockchain.trim().toLowerCase()
-      const registryEvidence: AssetResolutionRegistryEvidence =
-        yield* coinGeckoClient.fetchCoinByContract({ platformId, address: factAddress })
+      const registryEvidence: AssetResolutionRegistryEvidence = yield* coinGeckoClient
+        .fetchCoinByContract({ platformId, address: factAddress })
+        .pipe(
+          Effect.mapError(
+            (error) =>
+              new AssetResolutionEvidenceRetryableError({
+                source: "coingecko",
+                status: error.status,
+                cause: error.cause,
+              })
+          )
+        )
       const registryRetrievedAt = nowDate()
       const registryDecodedClaim =
         registryEvidence._tag === "payload"

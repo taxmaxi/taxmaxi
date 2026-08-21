@@ -6,6 +6,7 @@
 
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
+import * as Schema from "effect/Schema"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -40,12 +41,15 @@ export interface AssetResolutionJobExecutionResult {
   readonly evidenceRevision: number | null
 }
 
-/** Provider-neutral shape of a transient evidence-fetch failure. */
-export interface AssetResolutionEvidenceRetryableError {
-  readonly status: number | null
-  readonly cause: unknown
-  readonly message: string
-}
+/** Provider-neutral transient evidence-fetch failure exposed by the executor. */
+export class AssetResolutionEvidenceRetryableError extends Schema.TaggedError<AssetResolutionEvidenceRetryableError>()(
+  "AssetResolutionEvidenceRetryableError",
+  {
+    source: Schema.String,
+    status: Schema.NullOr(Schema.Int),
+    cause: Schema.Unknown,
+  }
+) {}
 
 /**
  * AssetResolutionJobExecutorError - Failure of one resolution job execution

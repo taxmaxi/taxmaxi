@@ -1025,7 +1025,11 @@ describe("asset resolution attach and rebuild", () => {
         const failed = yield* runResolutionJob({ jobId }).pipe(Effect.result)
         expect(failed._tag).toBe("Failure")
         if (failed._tag === "Failure") {
-          expect(failed.failure).toBeInstanceOf(AssetResolutionCoinGeckoRetryableError)
+          expect(failed.failure).toMatchObject({
+            _tag: "AssetResolutionEvidenceRetryableError",
+            source: "coingecko",
+            status: 429,
+          })
         }
 
         const stateAfterFailure = yield* fetchAttachState()
@@ -1489,7 +1493,11 @@ describe("asset resolution attach and rebuild", () => {
         const failed = yield* runResolutionJob({ jobId }).pipe(Effect.result)
         expect(failed._tag).toBe("Failure")
         if (failed._tag === "Failure") {
-          expect(failed.failure).toBeInstanceOf(AssetResolutionJupiterRetryableError)
+          expect(failed.failure).toMatchObject({
+            _tag: "AssetResolutionEvidenceRetryableError",
+            source: "jupiter",
+            status: 429,
+          })
         }
 
         const stateAfterFailure = yield* fetchAttachState()
