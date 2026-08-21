@@ -12,11 +12,9 @@
  * @module AssetResolutionCoinGeckoClientLive
  */
 
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
-import * as Config from "effect/Config"
+import { FetchHttpClient, HttpClient } from "effect/unstable/http"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Option from "effect/Option"
 import * as Schedule from "effect/Schedule"
 import { AssetResolutionUpstreamFailure } from "@my/core/assets"
 import {
@@ -24,10 +22,8 @@ import {
   AssetResolutionCoinGeckoRetryableError,
   type AssetResolutionCoinGeckoClientShape,
 } from "../services/AssetResolutionCoinGeckoClient.ts"
+import { makeCoinGeckoRequest } from "../shared/CoinGeckoRequest.ts"
 import { positiveIntConfig } from "../shared/PositiveIntConfig.ts"
-
-const COINGECKO_PRO_API_BASE_URL = "https://pro-api.coingecko.com/api/v3"
-const COINGECKO_PUBLIC_API_BASE_URL = "https://api.coingecko.com/api/v3"
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 const DEFAULT_RETRY_ATTEMPTS = 2
@@ -40,9 +36,7 @@ const isRetryableStatus = (status: number): boolean =>
 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
-  const configuredBaseUrl = yield* Config.option(Config.string("COINGECKO_API_BASE_URL"))
-  const demoApiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
-  const proApiKey = yield* Config.option(Config.string("COINGECKO_PRO_API_KEY"))
+  const coinGeckoRequest = yield* makeCoinGeckoRequest
   const requestTimeoutMs = yield* positiveIntConfig({
     name: "COINGECKO_REQUEST_TIMEOUT_MS",
     defaultValue: DEFAULT_REQUEST_TIMEOUT_MS,
@@ -55,25 +49,11 @@ const make = Effect.gen(function* () {
     name: "COINGECKO_RETRY_BASE_DELAY_MS",
     defaultValue: DEFAULT_RETRY_BASE_DELAY_MS,
   })
-  const baseUrl = Option.getOrElse(configuredBaseUrl, () =>
-    Option.isSome(proApiKey) ? COINGECKO_PRO_API_BASE_URL : COINGECKO_PUBLIC_API_BASE_URL
-  )
 
   const upstreamFailure = new AssetResolutionUpstreamFailure({ source: "coingecko" })
 
   const fetchCoin: AssetResolutionCoinGeckoClientShape["fetchCoin"] = ({ coinGeckoCoinId }) => {
-    const baseRequest = HttpClientRequest.get(
-      `${baseUrl}/coins/${encodeURIComponent(coinGeckoCoinId)}`
-    )
-    const request = Option.match(proApiKey, {
-      onNone: () =>
-        Option.match(demoApiKey, {
-          onNone: () => baseRequest,
-          onSome: (apiKey) =>
-            baseRequest.pipe(HttpClientRequest.setHeader("x-cg-demo-api-key", apiKey)),
-        }),
-      onSome: (apiKey) => baseRequest.pipe(HttpClientRequest.setHeader("x-cg-pro-api-key", apiKey)),
-    })
+    const request = coinGeckoRequest.getRequest(`/coins/${encodeURIComponent(coinGeckoCoinId)}`)
 
     const attempt = httpClient.execute(request).pipe(
       Effect.timeout(requestTimeoutMs),

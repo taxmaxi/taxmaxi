@@ -4,12 +4,11 @@
  * @module CoinGeckoClientLive
  */
 
-import { HttpClient, HttpClientRequest } from "effect/unstable/http"
-import * as Config from "effect/Config"
+import { HttpClient } from "effect/unstable/http"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
+import { makeCoinGeckoRequest } from "@my/sync-engine/shared"
 import {
   CoinGeckoClient,
   CoinGeckoClientError,
@@ -55,9 +54,6 @@ const CoinGeckoMarket = Schema.Struct({
 
 const CoinGeckoMarketsResponse = Schema.Array(CoinGeckoMarket)
 
-const COINGECKO_PRO_API_BASE_URL = "https://pro-api.coingecko.com/api/v3"
-const COINGECKO_PUBLIC_API_BASE_URL = "https://api.coingecko.com/api/v3"
-
 const makeError = (message: string) => new CoinGeckoClientError({ message })
 
 const decodeJson = <S extends Schema.Constraint>(schema: S, endpoint: string, payload: unknown) =>
@@ -69,26 +65,11 @@ const decodeJson = <S extends Schema.Constraint>(schema: S, endpoint: string, pa
 
 const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient
-  const configuredBaseUrl = yield* Config.option(Config.string("COINGECKO_API_BASE_URL"))
-  const demoApiKey = yield* Config.option(Config.string("COINGECKO_API_KEY"))
-  const proApiKey = yield* Config.option(Config.string("COINGECKO_PRO_API_KEY"))
-  const baseUrl = Option.getOrElse(configuredBaseUrl, () =>
-    Option.isSome(proApiKey) ? COINGECKO_PRO_API_BASE_URL : COINGECKO_PUBLIC_API_BASE_URL
-  )
+  const coinGeckoRequest = yield* makeCoinGeckoRequest
 
   const executeGetJson = (endpoint: string) =>
     Effect.gen(function* () {
-      const baseRequest = HttpClientRequest.get(`${baseUrl}${endpoint}`)
-      const request = Option.match(proApiKey, {
-        onNone: () =>
-          Option.match(demoApiKey, {
-            onNone: () => baseRequest,
-            onSome: (apiKey) =>
-              baseRequest.pipe(HttpClientRequest.setHeader("x-cg-demo-api-key", apiKey)),
-          }),
-        onSome: (apiKey) =>
-          baseRequest.pipe(HttpClientRequest.setHeader("x-cg-pro-api-key", apiKey)),
-      })
+      const request = coinGeckoRequest.getRequest(endpoint)
       const response = yield* httpClient
         .execute(request)
         .pipe(
