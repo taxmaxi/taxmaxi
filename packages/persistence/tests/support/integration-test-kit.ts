@@ -22,7 +22,9 @@ const testDatabaseConfig = Effect.runSync(
   Effect.gen(function* () {
     const workerId = yield* Config.string("VITEST_WORKER_ID").pipe(Config.withDefault("1"))
     const host = yield* Config.string("PGHOST").pipe(Config.withDefault("localhost"))
-    const port = yield* Config.int("PGPORT").pipe(Config.withDefault(5432))
+    // Integration tests always target the db-test compose service, never the
+    // dev database on PGPORT. See compose.yaml.
+    const port = yield* Config.int("TEST_PGPORT").pipe(Config.withDefault(5433))
     const user = yield* Config.string("PGUSER").pipe(Config.withDefault("postgres"))
     const password = yield* Config.redacted("PGPASSWORD").pipe(
       Config.withDefault(Redacted.make("postgres"))

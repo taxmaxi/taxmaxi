@@ -19,7 +19,8 @@ const quoteIdentifier = (identifier: string) => `"${identifier.replaceAll(`"`, `
 
 const getDatabaseConfig = Effect.gen(function* () {
   const host = yield* Config.string("PGHOST").pipe(Config.withDefault("localhost"))
-  const port = yield* Config.int("PGPORT").pipe(Config.withDefault(5432))
+  // Integration tests always target the db-test compose service, never the dev database on PGPORT. See compose.yaml.
+  const port = yield* Config.int("TEST_PGPORT").pipe(Config.withDefault(5433))
   const user = yield* Config.string("PGUSER").pipe(Config.withDefault("postgres"))
   const password = yield* Config.redacted("PGPASSWORD").pipe(
     Config.withDefault(Redacted.make("postgres"))
@@ -36,13 +37,29 @@ export const prepareTemplateDatabase = <E, R, R2>({
   readonly prepareTemplate: Effect.Effect<void, E, R>
 }) => prepareTemplate.pipe(Effect.onError(() => cleanupTemplate))
 
+/**
+ * A full run leaves one database per test file behind, so drop them
+ * concurrently to keep teardown short. Note: most of the historical 40s+
+ * post-suite hang was not the drops themselves but the checkpoint that the
+ * first `DROP DATABASE` triggers, which had to fsync every file the suite
+ * created (~130k: table and index files from template clones plus a new
+ * file per table and index for every per-test TRUNCATE). That is fixed by
+ * the dedicated `db-test` compose service, which runs with `fsync=off`
+ * (see compose.yaml).
+ */
+export const TEST_DATABASE_DROP_CONCURRENCY = 8
+
 export const cleanupIntegrationTestDatabases = <E, R>({
   databaseNames,
   cleanupDatabase,
 }: {
   readonly databaseNames: ReadonlyArray<string>
   readonly cleanupDatabase: (databaseName: string) => Effect.Effect<void, E, R>
-}) => Effect.forEach(databaseNames, cleanupDatabase, { discard: true })
+}) =>
+  Effect.forEach(databaseNames, cleanupDatabase, {
+    discard: true,
+    concurrency: TEST_DATABASE_DROP_CONCURRENCY,
+  })
 
 export const setup = async (project: TestProject) => {
   const testRunId = randomUUID()
@@ -60,7 +77,7 @@ export const setup = async (project: TestProject) => {
   )
   const AdminPgClientLive = makePgClientLayerForTests({
     url: adminDatabaseUrl,
-    maxConnections: 2,
+    maxConnections: TEST_DATABASE_DROP_CONCURRENCY,
   })
   const TemplatePgClientLive = makePgClientLayerForTests({
     url: templateDatabaseUrl,
@@ -86,15 +103,10 @@ export const setup = async (project: TestProject) => {
       params: [databaseName],
     })
 
-  const dropDatabase = ({ databaseName }: { readonly databaseName: string }) =>
-    executeAdminSql({
-      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)}`,
-    })
-
+  // WITH (FORCE) disconnects remaining sessions, so no separate terminate step is needed.
   const cleanupDatabase = (databaseName: string) =>
-    Effect.gen(function* () {
-      yield* terminateDatabaseConnections({ databaseName })
-      yield* dropDatabase({ databaseName })
+    executeAdminSql({
+      statement: `DROP DATABASE IF EXISTS ${quoteIdentifier(databaseName)} WITH (FORCE)`,
     })
 
   const listIntegrationTestDatabaseNames = Effect.gen(function* () {
