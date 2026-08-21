@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, ne, or } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, ne, or, sql } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -248,7 +248,65 @@ const make = Effect.gen(function* () {
       or(
         isNull(schema.providerAssetMappings.id),
         ne(schema.providerAssetMappings.mappingStatus, "approved")
-      )
+      ),
+      sql`not exists (
+        select 1
+        from principal_asset_overrides active_override
+        where active_override.principal_id = (
+          select ${schema.sources.principalId}
+          from ${schema.sources}
+          where ${schema.sources.id} = ${sourceId}
+        )
+          and active_override.action = 'set'
+          and (
+            (
+              active_override.kind = 'identity'
+              and active_override.replacement_asset_id is not null
+            ) or (
+              active_override.kind = 'inclusion'
+              and active_override.replacement_inclusion_state = 'excluded'
+            )
+          )
+          and (
+            (
+              active_override.target_kind = 'provider_asset'
+              and active_override.provider_asset_row_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+              and not exists (
+                select 1
+                from ${schema.providerTransfers} exact_transfer
+                where exact_transfer.source_id = ${sourceId}
+                  and exact_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+                  and exact_transfer.observed_blockchain_id is not null
+              )
+            ) or (
+              active_override.target_kind = 'representation'
+              and exists (
+                select 1
+                from ${schema.providerTransfers} exact_transfer
+                where exact_transfer.source_id = ${sourceId}
+                  and exact_transfer.provider_asset_id = ${schema.providerAssetSourceUses.providerAssetRowId}
+                  and exact_transfer.observed_blockchain_id = active_override.blockchain_id
+                  and exact_transfer.observed_representation_type = active_override.representation_type
+                  and lower(exact_transfer.observed_contract_address) is not distinct from lower(active_override.contract_address)
+                  and exact_transfer.observed_mint_address is not distinct from active_override.mint_address
+              )
+            )
+          )
+          and active_override.id = (
+            select latest_override.id
+            from principal_asset_overrides latest_override
+            where latest_override.principal_id = active_override.principal_id
+              and latest_override.kind = active_override.kind
+              and latest_override.target_kind = active_override.target_kind
+              and latest_override.provider_asset_row_id is not distinct from active_override.provider_asset_row_id
+              and latest_override.blockchain_id is not distinct from active_override.blockchain_id
+              and latest_override.representation_type is not distinct from active_override.representation_type
+              and lower(latest_override.contract_address) is not distinct from lower(active_override.contract_address)
+              and latest_override.mint_address is not distinct from active_override.mint_address
+            order by latest_override.created_at desc, latest_override.id desc
+            limit 1
+          )
+      )`
     )
 
   /**
