@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended by issue 95, amended by issue 143
+Accepted, amended by issue 95, amended by issue 143, amended by issue 145
 
 ## Context
 
@@ -46,6 +46,7 @@ Trusted identity facts live in the version-controlled [asset reference catalog](
 5. Let the resolution job decide automatically or wait for a human reviewer:
    - The automatic policy may accept the job with exact chain evidence and CoinGecko evidence: it attaches a new network representation to an already-existing economic asset and records the evidence, the policy revision, the actor, and the decision as immutable audit history.
    - The automatic policy may create a standalone economic asset for an exact, supported representation when no plausible existing candidate, ownership conflict, or authoritative spam evidence exists. Names and symbols can only pause this outcome as a possible duplicate; they never prove a merge or separation.
+   - The automatic policy may exclude an observation with a typed reason when an allowlisted claim-scoped authority (Jupiter for Solana mints) reports an explicit banned verdict. Exclusion is a final answer, not an unresolved identity: the observation's raw transactions stay stored and visible, they never enter derived accounting, and the calculation completes without them. A banned verdict against evidence that would attach to an existing economic asset is a conflict between authorities and fails closed for human review. Weaker signals never exclude: a suspicious signal only pauses standalone creation, and unverified or low-activity signals decide nothing. Changed registry evidence alone never reverses an exclusion; reversal requires a human-approved superseding decision.
    - Otherwise the observation stays pending for manual review, approved the same way as before: with an economic asset ID and, when the observation identifies a network representation, that representation ID.
    - Stale evidence or a stale decision revision fails its compare-and-set check instead of silently overwriting a newer observation, and a duplicate job run is a no-op.
 6. Replay from the stored observation and approved mapping. An accepted resolution job durably schedules a replay for every affected source before any replay work starts; workers own replay retries and report persistent replay failure separately from the accepted identity decision, so a replay problem never rolls back an already-accepted mapping.

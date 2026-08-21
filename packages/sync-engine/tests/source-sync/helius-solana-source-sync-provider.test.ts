@@ -155,6 +155,8 @@ const makeProviderLayer = ({
           upsertProviderAssetMappings: () => Effect.succeed(0),
           approveProviderAssetMappingAndRequestReplay: () =>
             Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
+          excludeProviderAssetMappingAndRequestReplay: () =>
+            Effect.die("excludeProviderAssetMappingAndRequestReplay should not be called"),
           lockProviderAssetApprovalSnapshot: () =>
             Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
           recordProviderAssetSourceUses,

@@ -24,6 +24,8 @@ import {
   AttachRepresentationDecision,
   canonicalizeAddress,
   decodeCoinGeckoClaim,
+  decodeJupiterLegitimacyClaim,
+  JUPITER_AUTHORITY,
   RegistryLookupSkipped,
   evaluateAssetResolution,
   type AssetResolutionDecision,
@@ -32,6 +34,7 @@ import {
   type AssetResolutionOwnedRepresentation,
   type AssetResolutionProviderEvidence,
   type AssetResolutionRegistryEvidence,
+  type LegitimacyResolutionInput,
   ChainFactPayload,
 } from "@my/core/assets"
 import {
@@ -39,6 +42,8 @@ import {
   AssetResolutionCoinGeckoClient,
   AssetResolutionJobExecutor,
   AssetResolutionJobRepository,
+  AssetResolutionJupiterClient,
+  JUPITER_SUPPORTED_BLOCKCHAIN,
   ProviderAssetRepository,
   type AssetResolutionDecisionRecord,
   type AssetResolutionEvidenceRecord,
@@ -180,6 +185,76 @@ const make = Effect.gen(function* () {
   const assetResolutionJobRepository = yield* AssetResolutionJobRepository
   const assetRepository = yield* AssetRepository
   const coinGeckoClient = yield* AssetResolutionCoinGeckoClient
+  const jupiterClient = yield* AssetResolutionJupiterClient
+
+  /**
+   * Gather Jupiter legitimacy evidence for one exact Solana mint. Chains
+   * Jupiter cannot testify about produce no claim and no evidence record. A
+   * response without the mint is a definitive not-indexed answer and also
+   * produces no claim; a malformed payload or terminal upstream failure
+   * becomes a legitimacy failure input the policy fails closed on.
+   */
+  const gatherJupiterLegitimacy = ({
+    fact,
+    evidenceRevision,
+  }: {
+    readonly fact: ChainFactPayload
+    readonly evidenceRevision: number
+  }): Effect.Effect<
+    {
+      readonly legitimacy: ReadonlyArray<LegitimacyResolutionInput>
+      readonly evidence: ReadonlyArray<AssetResolutionEvidenceRecord>
+    },
+    AssetResolutionJobExecutorError
+  > =>
+    Effect.gen(function* () {
+      const mintAddress = fact.mintAddress
+      if (
+        fact.blockchain.trim().toLowerCase() !== JUPITER_SUPPORTED_BLOCKCHAIN ||
+        mintAddress === null
+      ) {
+        return { legitimacy: [], evidence: [] }
+      }
+
+      const jupiterEvidence = yield* jupiterClient.fetchTokenByMint({ mintAddress })
+      const retrievedAt = nowDate()
+      const decodeResult =
+        jupiterEvidence._tag === "payload"
+          ? yield* Effect.result(
+              decodeJupiterLegitimacyClaim({ payload: jupiterEvidence.payload, mintAddress })
+            )
+          : null
+
+      const legitimacy: ReadonlyArray<LegitimacyResolutionInput> =
+        jupiterEvidence._tag === "malformed_payload" || jupiterEvidence._tag === "upstream_failure"
+          ? [jupiterEvidence]
+          : decodeResult === null
+            ? []
+            : decodeResult._tag === "Failure"
+              ? [decodeResult.failure]
+              : decodeResult.success._tag === "legitimacy_claim"
+                ? [decodeResult.success]
+                : []
+      const decodedClaim =
+        decodeResult !== null &&
+        decodeResult._tag === "Success" &&
+        decodeResult.success._tag === "legitimacy_claim"
+          ? decodeResult.success
+          : null
+
+      const evidenceRecord: AssetResolutionEvidenceRecord = {
+        authority: JUPITER_AUTHORITY,
+        claimKind: "legitimacy",
+        sourceLocator: `jupiter://tokens/v2/search?query=${mintAddress}`,
+        retrievedAt,
+        evidenceRevision,
+        decodedClaim,
+        rawPayload:
+          jupiterEvidence._tag === "payload" ? jupiterEvidence : { _tag: jupiterEvidence._tag },
+      }
+
+      return { legitimacy, evidence: [evidenceRecord] }
+    })
 
   const findOwnedRepresentations = (
     fact: ChainFactPayload
@@ -318,6 +393,11 @@ const make = Effect.gen(function* () {
           registryEvidence._tag === "payload" ? registryEvidence : { _tag: registryEvidence._tag },
       }
 
+      const jupiterResult = yield* gatherJupiterLegitimacy({
+        fact: chainResult.fact,
+        evidenceRevision,
+      })
+
       const registryOwner: AssetResolutionEconomicAsset | null =
         registryDecodedClaim === null
           ? null
@@ -372,11 +452,14 @@ const make = Effect.gen(function* () {
         chain: chainResult.evidence,
         registry: registryEvidence,
         identity,
-        legitimacy: [],
+        legitimacy: jupiterResult.legitimacy,
         providerDisplay,
       })
 
-      return { decision, evidence: [chainEvidenceRecord, registryEvidenceRecord] }
+      return {
+        decision,
+        evidence: [chainEvidenceRecord, registryEvidenceRecord, ...jupiterResult.evidence],
+      }
     })
 
   // A replay after a crash between recording and the follow-up steps still
@@ -480,6 +563,19 @@ const make = Effect.gen(function* () {
       }
 
       const { providerAsset } = reviewOption.value
+
+      // An exclusion is settled. New registry evidence alone must never
+      // resurrect an excluded observation; reversal requires a human-approved
+      // superseding decision. Later jobs complete without a new decision.
+      if (reviewOption.value.mapping?.mappingStatus === "excluded") {
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
+        return {
+          outcome: "excluded",
+          providerAssetRowId,
+          evidenceRevision,
+        } satisfies AssetResolutionJobExecutionResult
+      }
+
       const observations = yield* providerAssetRepository.listProviderAssetObservedRepresentations({
         providerAssetRowId,
       })
@@ -579,6 +675,25 @@ const make = Effect.gen(function* () {
 
         return {
           outcome: "created",
+          providerAssetRowId,
+          evidenceRevision,
+        } satisfies AssetResolutionJobExecutionResult
+      }
+
+      if (decision._tag === "excluded") {
+        // The exclusion is a final answer: record the decision, flip the
+        // mapping projection to excluded, and replay affected sources so
+        // their pending counts stop blocking calculations.
+        yield* recordDecision({ jobId, record: decisionRecord })
+        yield* providerAssetRepository.excludeProviderAssetMappingAndRequestReplay({
+          providerAssetRowId,
+          sourceNotes: `Resolution policy ${decision.policyRevision} excluded the observation (${decision.reason}) and requested a replay of affected sources.`,
+          expectedObservedRepresentations: observations,
+          expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
+        })
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
+        return {
+          outcome: "excluded",
           providerAssetRowId,
           evidenceRevision,
         } satisfies AssetResolutionJobExecutionResult

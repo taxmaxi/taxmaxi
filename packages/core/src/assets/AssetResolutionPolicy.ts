@@ -1,15 +1,18 @@
 /**
  * Automatic asset resolution policy.
  *
- * Decodes exact chain facts and CoinGecko contract-lookup responses into
- * typed claims and decides attach, create-standalone, pending, or
- * fail-closed. CoinGecko may prove representation ownership for an existing
- * economic asset under exact platform, address, type, and decimals checks. A
- * new exact representation with no plausible existing candidate, no
- * ownership conflict, and no authoritative spam evidence may become a
- * standalone economic asset. Names and symbols are display data: they can
- * block automatic creation by raising a possible duplicate, but they never
- * prove a merge or separation.
+ * Decodes exact chain facts, CoinGecko contract-lookup responses, and
+ * Jupiter legitimacy responses into typed claims and decides attach,
+ * create-standalone, excluded, pending, or fail-closed. CoinGecko may prove
+ * representation ownership for an existing economic asset under exact
+ * platform, address, type, and decimals checks. A new exact representation
+ * with no plausible existing candidate, no ownership conflict, and no
+ * authoritative spam evidence may become a standalone economic asset. An
+ * explicit banned verdict from an allowlisted authority excludes the
+ * observation unless exact attach evidence contradicts it, in which case the
+ * conflict fails closed for human review. Names and symbols are display
+ * data: they can block automatic creation by raising a possible duplicate,
+ * but they never prove a merge or separation.
  *
  * @module assets/AssetResolutionPolicy
  */
@@ -18,7 +21,7 @@ import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 
 /** Policy revision recorded with every automatic resolution decision. */
-export const ASSET_RESOLUTION_POLICY_REVISION = "2026-08-21.standalone-create.1"
+export const ASSET_RESOLUTION_POLICY_REVISION = "2026-08-21.jupiter-banned-exclusion.1"
 
 const NonEmptyString = Schema.String.check(Schema.isNonEmpty())
 
@@ -208,11 +211,93 @@ export class AssetLegitimacyClaim extends Schema.TaggedClass<AssetLegitimacyClai
 /** Type guard for AssetLegitimacyClaim. */
 export const isAssetLegitimacyClaim = Schema.is(AssetLegitimacyClaim)
 
+/** Authority string recorded on Jupiter legitimacy claims and evidence. */
+export const JUPITER_AUTHORITY = "jupiter"
+
+const JupiterAudit = Schema.Struct({
+  isSus: Schema.optional(Schema.NullOr(Schema.Boolean)),
+})
+
+/**
+ * One Jupiter token search result. Only the fields the legitimacy verdict
+ * reads are decoded; the full raw payload stays in evidence storage. The
+ * banned state has no dedicated field upstream: it arrives as a `banned`
+ * entry in `tags`.
+ */
+export const JupiterTokenPayload = Schema.Struct({
+  id: NonEmptyString,
+  isVerified: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  tags: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
+  audit: Schema.optional(Schema.NullOr(JupiterAudit)),
+}).annotate({
+  identifier: "JupiterTokenPayload",
+  title: "Jupiter Token Payload",
+  description: "Jupiter token search result used as legitimacy evidence",
+})
+
+/** The JupiterTokenPayload type. */
+export type JupiterTokenPayload = typeof JupiterTokenPayload.Type
+
+/** Jupiter token search response: an array of token results. */
+export const JupiterTokenSearchPayload = Schema.Array(JupiterTokenPayload).annotate({
+  identifier: "JupiterTokenSearchPayload",
+  title: "Jupiter Token Search Payload",
+  description: "Jupiter token search response used as legitimacy evidence",
+})
+
+/** The JupiterTokenSearchPayload type. */
+export type JupiterTokenSearchPayload = typeof JupiterTokenSearchPayload.Type
+
+const jupiterVerdict = (
+  token: JupiterTokenPayload
+): "verified" | "unverified" | "suspicious" | "banned" => {
+  if ((token.tags ?? []).includes("banned")) {
+    return "banned"
+  }
+  if (token.isVerified === true) {
+    return "verified"
+  }
+
+  return token.audit?.isSus === true ? "suspicious" : "unverified"
+}
+
+/**
+ * Decode an unknown Jupiter token search response into a typed legitimacy
+ * claim for one exact mint. A response that does not contain the mint is a
+ * definitive not-indexed answer, not a verdict; it says nothing about the
+ * asset's legitimacy.
+ */
+export const decodeJupiterLegitimacyClaim = ({
+  payload,
+  mintAddress,
+}: {
+  readonly payload: unknown
+  readonly mintAddress: string
+}): Effect.Effect<AssetLegitimacyClaim | RegistryLookupNotFound, AssetResolutionMalformedPayload> =>
+  Schema.decodeUnknownEffect(JupiterTokenSearchPayload)(payload).pipe(
+    Effect.mapError(() => new AssetResolutionMalformedPayload({ source: "jupiter" })),
+    Effect.map((tokens) => {
+      const token = tokens.find((candidate) => candidate.id === mintAddress)
+      if (token === undefined) {
+        return new RegistryLookupNotFound()
+      }
+
+      return AssetLegitimacyClaim.make({
+        authority: JUPITER_AUTHORITY,
+        verdict: jupiterVerdict(token),
+      })
+    })
+  )
+
 /** Evidence source whose payload could not be decoded or fetched. */
-export const AssetResolutionEvidenceSource = Schema.Literals(["chain", "coingecko"]).annotate({
+export const AssetResolutionEvidenceSource = Schema.Literals([
+  "chain",
+  "coingecko",
+  "jupiter",
+]).annotate({
   identifier: "AssetResolutionEvidenceSource",
   title: "Asset Resolution Evidence Source",
-  description: "Chain facts or CoinGecko response that failed closed",
+  description: "Chain facts, CoinGecko, or Jupiter response that failed closed",
 })
 
 /** The AssetResolutionEvidenceSource type. */
@@ -283,6 +368,21 @@ export const FailClosedResolutionReason = Schema.Literals([
 /** The FailClosedResolutionReason type. */
 export type FailClosedResolutionReason = typeof FailClosedResolutionReason.Type
 
+/**
+ * Reason an observation is excluded from derived accounting. Exclusion is a
+ * final answer with evidence behind it, not an unresolved identity: the
+ * observation's transactions stay stored and visible but never enter
+ * derived accounting, and the calculation is complete without them.
+ */
+export const ObservationExclusionReason = Schema.Literals(["authority_banned"]).annotate({
+  identifier: "ObservationExclusionReason",
+  title: "Observation Exclusion Reason",
+  description: "Why the policy excluded the observation from derived accounting",
+})
+
+/** The ObservationExclusionReason type. */
+export type ObservationExclusionReason = typeof ObservationExclusionReason.Type
+
 const PolicyRevision = Schema.Literal(ASSET_RESOLUTION_POLICY_REVISION)
 
 /** Attach a new exact representation to an existing economic asset. */
@@ -338,6 +438,23 @@ export class PendingResolutionDecision extends Schema.TaggedClass<PendingResolut
 /** Type guard for PendingResolutionDecision. */
 export const isPendingResolutionDecision = Schema.is(PendingResolutionDecision)
 
+/**
+ * Exclude the observation from derived accounting with a final typed
+ * reason. Only an explicit banned verdict from an allowlisted authority
+ * produces this; weaker signals never do. Reversal requires a
+ * human-approved superseding decision, never new registry evidence alone.
+ */
+export class ExcludeObservationDecision extends Schema.TaggedClass<ExcludeObservationDecision>()(
+  "excluded",
+  {
+    policyRevision: PolicyRevision,
+    reason: ObservationExclusionReason,
+  }
+) {}
+
+/** Type guard for ExcludeObservationDecision. */
+export const isExcludeObservationDecision = Schema.is(ExcludeObservationDecision)
+
 /** Evidence is unsafe or unusable; do not attach or create. */
 export class FailClosedResolutionDecision extends Schema.TaggedClass<FailClosedResolutionDecision>()(
   "fail_closed",
@@ -354,6 +471,7 @@ export const isFailClosedResolutionDecision = Schema.is(FailClosedResolutionDeci
 export type AssetResolutionDecision =
   | AttachRepresentationDecision
   | CreateStandaloneAssetDecision
+  | ExcludeObservationDecision
   | FailClosedResolutionDecision
   | PendingResolutionDecision
 
@@ -361,12 +479,13 @@ export type AssetResolutionDecision =
 export const AssetResolutionDecisionSchema = Schema.Union([
   AttachRepresentationDecision,
   CreateStandaloneAssetDecision,
+  ExcludeObservationDecision,
   PendingResolutionDecision,
   FailClosedResolutionDecision,
 ]).annotate({
   identifier: "AssetResolutionDecision",
   title: "Asset Resolution Decision",
-  description: "Attach, create-standalone, pending, or fail-closed policy outcome",
+  description: "Attach, create-standalone, excluded, pending, or fail-closed policy outcome",
 })
 
 /** Type guard for AssetResolutionDecision. */
@@ -431,6 +550,20 @@ export type RegistryResolutionInput =
   | CoinGeckoClaim
   | RegistryLookupNotFound
   | RegistryLookupSkipped
+
+/**
+ * One legitimacy input at the policy boundary: a typed claim from an
+ * allowlisted authority, or the failure that prevented one. A failure fails
+ * the decision closed instead of silently deciding without spam evidence,
+ * with the same exception registry failures have: a representation whose
+ * owner is already settled locally still attaches, because settled local
+ * identity outranks a broken external lookup. A decoded banned claim is
+ * different — it conflicts with any attach and always fails closed.
+ */
+export type LegitimacyResolutionInput =
+  | AssetLegitimacyClaim
+  | AssetResolutionMalformedPayload
+  | AssetResolutionUpstreamFailure
 
 /** Provider evidence before decoding. */
 export type AssetResolutionProviderEvidence =
@@ -599,6 +732,32 @@ const failClosed = (reason: FailClosedResolutionReason): FailClosedResolutionDec
     reason,
   })
 
+const excluded = (reason: ObservationExclusionReason): ExcludeObservationDecision =>
+  ExcludeObservationDecision.make({
+    policyRevision: ASSET_RESOLUTION_POLICY_REVISION,
+    reason,
+  })
+
+const partitionLegitimacy = (
+  legitimacy: ReadonlyArray<LegitimacyResolutionInput>
+): {
+  readonly claims: ReadonlyArray<AssetLegitimacyClaim>
+  readonly failure: AssetResolutionMalformedPayload | AssetResolutionUpstreamFailure | null
+} => {
+  const claims: Array<AssetLegitimacyClaim> = []
+  let failure: AssetResolutionMalformedPayload | AssetResolutionUpstreamFailure | null = null
+
+  for (const input of legitimacy) {
+    if (isAssetLegitimacyClaim(input)) {
+      claims.push(input)
+    } else {
+      failure = failure ?? input
+    }
+  }
+
+  return { claims, failure }
+}
+
 const evidenceFailureReason = (
   evidence:
     | AssetResolutionConflictingEvidence
@@ -685,7 +844,14 @@ const decideStandaloneCreation = ({
   readonly identity: AssetResolutionIdentitySnapshot
   readonly providerDisplay: ProviderDisplayMetadata
 }): AssetResolutionDecision => {
+  // An explicit banned verdict is a final answer, not an open question: the
+  // observation is excluded from derived accounting instead of waiting for
+  // review. A suspicious signal is weaker: it blocks automatic creation but
+  // neither excludes nor approves; unverified says nothing at all.
   if (legitimacy.some((claim) => claim.verdict === "banned")) {
+    return excluded("authority_banned")
+  }
+  if (legitimacy.some((claim) => claim.verdict === "suspicious")) {
     return pending("spam_evidence")
   }
   if (!STANDALONE_CREATION_SUPPORTED_TYPES.includes(chain.type)) {
@@ -720,15 +886,18 @@ const decideStandaloneCreation = ({
 }
 
 /**
- * Decide attach, create-standalone, pending, or fail-closed from typed
- * claims or evidence failures.
+ * Decide attach, create-standalone, excluded, pending, or fail-closed from
+ * typed claims or evidence failures.
  *
  * Deterministic evidence decides: an exact representation already owned
  * locally attaches to its owner, and a registry contract lookup whose coin
  * id belongs to a local asset attaches under exact platform, address, type,
- * and decimals checks. Display metadata only blocks: a name or symbol match
- * without authoritative linkage stays pending as a possible duplicate. An
- * exact, supported, collision-free representation with no authoritative spam
+ * and decimals checks. An explicit banned verdict excludes the observation
+ * when nothing would attach; banned plus exact attach evidence is a real
+ * conflict between allowlisted authorities and fails closed for human
+ * review. Display metadata only blocks: a name or symbol match without
+ * authoritative linkage stays pending as a possible duplicate. An exact,
+ * supported, collision-free representation with no authoritative spam
  * evidence becomes a standalone economic asset.
  */
 export const decideAssetResolution = ({
@@ -741,12 +910,17 @@ export const decideAssetResolution = ({
   readonly chain: ChainResolutionInput
   readonly registry: RegistryResolutionInput
   readonly identity: AssetResolutionIdentitySnapshot
-  readonly legitimacy: ReadonlyArray<AssetLegitimacyClaim>
+  readonly legitimacy: ReadonlyArray<LegitimacyResolutionInput>
   readonly providerDisplay: ProviderDisplayMetadata
 }): AssetResolutionDecision => {
   if (chain._tag !== "chain_claim") {
     return failClosed(evidenceFailureReason(chain))
   }
+
+  const { claims: legitimacyClaims, failure: legitimacyFailure } = partitionLegitimacy(legitimacy)
+  const hasBannedClaim = legitimacyClaims.some((claim) => claim.verdict === "banned")
+  const guardAttachAgainstBan = (decision: AssetResolutionDecision): AssetResolutionDecision =>
+    decision._tag === "attach" && hasBannedClaim ? failClosed("conflicting_evidence") : decision
 
   const representationKey = exactRepresentationKey(chain)
   const owned = identity.representations.find((representation) => {
@@ -754,7 +928,7 @@ export const decideAssetResolution = ({
     return ownedKey !== null && ownedKey === representationKey
   })
   if (owned !== undefined) {
-    return decideForOwnedRepresentation({ owned, chain, registry, identity })
+    return guardAttachAgainstBan(decideForOwnedRepresentation({ owned, chain, registry, identity }))
   }
 
   if (
@@ -763,6 +937,10 @@ export const decideAssetResolution = ({
     registry._tag !== "registry_not_queried"
   ) {
     return failClosed(evidenceFailureReason(registry))
+  }
+
+  if (legitimacyFailure !== null) {
+    return failClosed(evidenceFailureReason(legitimacyFailure))
   }
 
   if (registry._tag === "coingecko_claim") {
@@ -786,7 +964,7 @@ export const decideAssetResolution = ({
         return failClosed("incompatible_decimals")
       }
 
-      return attach({ assetKey: registryOwner.assetKey, chain })
+      return guardAttachAgainstBan(attach({ assetKey: registryOwner.assetKey, chain }))
     }
 
     // No local asset owns the coin id. Registry decimals must not contradict
@@ -799,7 +977,7 @@ export const decideAssetResolution = ({
   return decideStandaloneCreation({
     chain,
     coinGecko: registry._tag === "coingecko_claim" ? registry : null,
-    legitimacy,
+    legitimacy: legitimacyClaims,
     identity,
     providerDisplay,
   })
@@ -845,7 +1023,7 @@ export const evaluateAssetResolution = ({
   readonly chain: AssetResolutionProviderEvidence
   readonly registry: AssetResolutionRegistryEvidence
   readonly identity: AssetResolutionIdentitySnapshot
-  readonly legitimacy: ReadonlyArray<AssetLegitimacyClaim>
+  readonly legitimacy: ReadonlyArray<LegitimacyResolutionInput>
   readonly providerDisplay: ProviderDisplayMetadata
 }): Effect.Effect<AssetResolutionDecision> =>
   Effect.gen(function* () {

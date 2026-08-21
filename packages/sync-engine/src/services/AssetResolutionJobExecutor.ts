@@ -7,6 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type { AssetResolutionCoinGeckoRetryableError } from "./AssetResolutionCoinGeckoClient.ts"
+import type { AssetResolutionJupiterRetryableError } from "./AssetResolutionJupiterClient.ts"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -19,6 +20,9 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  *   economic asset and durably scheduled a replay of every affected source.
  * - created: the policy created a standalone economic asset owning the new
  *   representation and durably scheduled a replay of every affected source.
+ * - excluded: the policy excluded the observation from derived accounting
+ *   as a final answer with a typed reason and durably scheduled a replay of
+ *   every affected source.
  * - pending / fail_closed: the policy decided not to attach or create;
  *   the decision is recorded as audit history.
  */
@@ -27,6 +31,7 @@ export type AssetResolutionJobOutcome =
   | "stale"
   | "attached"
   | "created"
+  | "excluded"
   | "pending"
   | "fail_closed"
 
@@ -45,6 +50,7 @@ export interface AssetResolutionJobExecutionResult {
 export type AssetResolutionJobExecutorError =
   | SyncEngineStorageError
   | AssetResolutionCoinGeckoRetryableError
+  | AssetResolutionJupiterRetryableError
 
 /**
  * AssetResolutionJobExecutorShape - Execute one already-scheduled resolution job.

@@ -47,7 +47,9 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   canonicalAssetId: Schema.NullOr(Schema.String),
   assetRepresentationId: Schema.NullOr(Schema.String),
   canonicalFiatCurrency: Schema.NullOr(Schema.String),
-  mappingStatus: Schema.NullOr(Schema.Literals(["approved", "pending_review", "rejected"])),
+  mappingStatus: Schema.NullOr(
+    Schema.Literals(["approved", "pending_review", "rejected", "excluded"])
+  ),
   reviewerNotes: Schema.NullOr(Schema.String),
   sourceNotes: Schema.NullOr(Schema.String),
 }) {}

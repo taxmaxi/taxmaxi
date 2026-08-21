@@ -18,6 +18,7 @@ import { providerAssets } from "./ProviderAssetsTable.ts"
 export const assetResolutionOutcomeEnum = pgEnum("asset_resolution_outcome", [
   "attach",
   "create_standalone",
+  "excluded",
   "pending",
   "fail_closed",
 ])

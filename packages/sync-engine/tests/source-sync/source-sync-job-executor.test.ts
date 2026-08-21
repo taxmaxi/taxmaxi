@@ -645,6 +645,8 @@ const makeExecutorLayer = ({
       Effect.die("seedProviderAssetMappingsIfMissing should not be called"),
     approveProviderAssetMappingAndRequestReplay: () =>
       Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
+    excludeProviderAssetMappingAndRequestReplay: () =>
+      Effect.die("excludeProviderAssetMappingAndRequestReplay should not be called"),
     lockProviderAssetApprovalSnapshot: () =>
       Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
     recordProviderAssetSourceUses: () => Effect.succeed(0),

@@ -16,8 +16,11 @@ export type ProviderAssetMappingKind = "asset" | "fiat"
 
 /**
  * ProviderAssetMappingStatus - Review lifecycle for provider asset mappings.
+ * `excluded` is a final answer, not an open question: the observation never
+ * maps to a canonical asset and its transactions stay outside derived
+ * accounting without blocking the calculation.
  */
-export type ProviderAssetMappingStatus = "approved" | "pending_review" | "rejected"
+export type ProviderAssetMappingStatus = "approved" | "pending_review" | "rejected" | "excluded"
 
 /**
  * ProviderAssetCatalogEntry - Durable provider asset catalog row.
@@ -69,7 +72,12 @@ export interface ProviderAssetApprovalResult {
 }
 
 /** Outcome of an automatic policy decision, recorded as immutable audit history. */
-export type AssetResolutionAuditOutcome = "attach" | "create_standalone" | "pending" | "fail_closed"
+export type AssetResolutionAuditOutcome =
+  | "attach"
+  | "create_standalone"
+  | "excluded"
+  | "pending"
+  | "fail_closed"
 
 /**
  * One evidence snapshot to store behind a decision, scoped to the authority
@@ -224,6 +232,19 @@ export interface ProviderAssetRepositoryShape {
    */
   readonly approveProviderAssetMappingAndRequestReplay: (params: {
     readonly mapping: ProviderAssetMappingDraft
+    readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
+    readonly expectedProviderAssetRetrievedAt: Date
+  }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>
+
+  /**
+   * Exclude an observation from derived accounting as a final answer and
+   * atomically request replay for every source that uses it, so affected
+   * pending counts re-evaluate. The mapping keeps no canonical target.
+   * Retrying an already-excluded observation is a successful no-op.
+   */
+  readonly excludeProviderAssetMappingAndRequestReplay: (params: {
+    readonly providerAssetRowId: string
+    readonly sourceNotes: string | null
     readonly expectedObservedRepresentations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
     readonly expectedProviderAssetRetrievedAt: Date
   }) => Effect.Effect<ProviderAssetApprovalResult, SyncEngineStorageError>

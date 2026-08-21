@@ -7,7 +7,7 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, ne, or } from "drizzle-orm"
+import { and, count, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -235,9 +235,12 @@ const make = Effect.gen(function* () {
 
   /**
    * Filter for observations used by the source whose transactions stay
-   * outside derived accounting: no mapping row yet, or a mapping that is not
-   * approved (pending_review or rejected). Shared by the count and the list
-   * so the two can never disagree about what blocks a calculation.
+   * outside derived accounting AND make the calculation incomplete: no
+   * mapping row yet, or a mapping that is still an open question
+   * (pending_review or rejected). An excluded observation also stays outside
+   * derived accounting, but it is a final answer, so it does not block the
+   * calculation. Shared by the count and the list so the two can never
+   * disagree about what blocks a calculation.
    *
    * @param sourceId - Source identifier
    * @returns Drizzle where condition over source uses joined with mappings
@@ -247,7 +250,7 @@ const make = Effect.gen(function* () {
       eq(schema.providerAssetSourceUses.sourceId, sourceId),
       or(
         isNull(schema.providerAssetMappings.id),
-        ne(schema.providerAssetMappings.mappingStatus, "approved")
+        notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"])
       )
     )
 

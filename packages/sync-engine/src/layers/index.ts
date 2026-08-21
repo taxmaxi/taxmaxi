@@ -1,6 +1,7 @@
 export * from "./ActivityClassificationServiceLive.ts"
 export * from "./AssetResolutionCoinGeckoClientLive.ts"
 export * from "./AssetResolutionJobExecutorLive.ts"
+export * from "./AssetResolutionJupiterClientLive.ts"
 export * from "./SourceSyncServiceLive.ts"
 export * from "./SourceSyncJobExecutorLive.ts"
 export * from "./SourceSyncRunServiceLive.ts"

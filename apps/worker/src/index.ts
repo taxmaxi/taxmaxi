@@ -5,6 +5,7 @@ import { PgClientLive, RepositoriesLive } from "@my/persistence/layers"
 import {
   AssetResolutionCoinGeckoClientLive,
   AssetResolutionJobExecutorLive,
+  AssetResolutionJupiterClientLive,
   SourceSyncJobExecutorLive,
   SourceProviderRegistryLive,
   TransferReconciliationServiceLive,
@@ -66,6 +67,7 @@ const SourceSyncWorkerRuntimeLive = WorkerBullMqSourceSyncConsumerLive.pipe(
 
 const AssetResolutionJobExecutorRuntimeLive = AssetResolutionJobExecutorLive.pipe(
   Layer.provide(AssetResolutionCoinGeckoClientLive),
+  Layer.provide(AssetResolutionJupiterClientLive),
   Layer.provide(RepositoriesLive)
 )
 

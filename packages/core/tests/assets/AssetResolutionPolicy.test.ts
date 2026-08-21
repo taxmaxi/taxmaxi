@@ -17,10 +17,13 @@ import {
   decideAssetResolution,
   decodeChainClaim,
   decodeCoinGeckoClaim,
+  decodeJupiterLegitimacyClaim,
   evaluateAssetResolution,
   exactRepresentationKey,
+  JUPITER_AUTHORITY,
   type AssetResolutionIdentitySnapshot,
   type ChainResolutionInput,
+  type LegitimacyResolutionInput,
   type ProviderDisplayMetadata,
   type RegistryResolutionInput,
 } from "../../src/assets/AssetResolutionPolicy.ts"
@@ -192,7 +195,7 @@ const decide = ({
   readonly chain: ChainResolutionInput
   readonly registry?: RegistryResolutionInput
   readonly identity?: AssetResolutionIdentitySnapshot
-  readonly legitimacy?: ReadonlyArray<AssetLegitimacyClaim>
+  readonly legitimacy?: ReadonlyArray<LegitimacyResolutionInput>
   readonly display?: ProviderDisplayMetadata
 }) =>
   decideAssetResolution({
@@ -307,6 +310,75 @@ describe("AssetResolutionPolicy", () => {
               ...usdcCoinPayload.platforms,
               solana: "So11111111111111111111111111111111111111112",
             },
+          })
+        )
+      ).toBe("malformed_payload")
+    })
+  })
+
+  describe("decodeJupiterLegitimacyClaim", () => {
+    const jupiterToken = (overrides: Record<string, unknown> = {}) => ({
+      id: LONG_TAIL_MINT,
+      name: "Orb Token",
+      symbol: "ORB",
+      decimals: 9,
+      holderCount: 42,
+      ...overrides,
+    })
+
+    const decodeVerdict = (payload: unknown) =>
+      Effect.runSync(decodeJupiterLegitimacyClaim({ payload, mintAddress: LONG_TAIL_MINT }))
+
+    it("maps a banned tag to a banned verdict even alongside other tags", () => {
+      const claim = decodeVerdict([jupiterToken({ tags: ["unknown", "banned"], isVerified: true })])
+
+      expect(claim).toMatchObject({
+        _tag: "legitimacy_claim",
+        authority: JUPITER_AUTHORITY,
+        verdict: "banned",
+      })
+    })
+
+    it("maps verification, suspicion, and their absence to weaker verdicts", () => {
+      const verified = decodeVerdict([jupiterToken({ isVerified: true, tags: ["verified"] })])
+      const suspicious = decodeVerdict([jupiterToken({ audit: { isSus: true } })])
+      const unverified = decodeVerdict([jupiterToken({})])
+
+      expect(verified).toMatchObject({ _tag: "legitimacy_claim", verdict: "verified" })
+      expect(suspicious).toMatchObject({ _tag: "legitimacy_claim", verdict: "suspicious" })
+      expect(unverified).toMatchObject({ _tag: "legitimacy_claim", verdict: "unverified" })
+    })
+
+    it("treats a response without the exact mint as a definitive not-indexed answer", () => {
+      const empty = decodeVerdict([])
+      const otherMint = decodeVerdict([jupiterToken({ id: SOLANA_USDC_MINT })])
+
+      expect(empty).toMatchObject({ _tag: "registry_not_found" })
+      expect(otherMint).toMatchObject({ _tag: "registry_not_found" })
+    })
+
+    it("fails closed for malformed or changed Jupiter payloads", () => {
+      expect(
+        decodeFailureTag(
+          decodeJupiterLegitimacyClaim({
+            payload: { tokens: [] },
+            mintAddress: LONG_TAIL_MINT,
+          })
+        )
+      ).toBe("malformed_payload")
+      expect(
+        decodeFailureTag(
+          decodeJupiterLegitimacyClaim({
+            payload: [jupiterToken({ id: 5 })],
+            mintAddress: LONG_TAIL_MINT,
+          })
+        )
+      ).toBe("malformed_payload")
+      expect(
+        decodeFailureTag(
+          decodeJupiterLegitimacyClaim({
+            payload: [jupiterToken({ tags: [7] })],
+            mintAddress: LONG_TAIL_MINT,
           })
         )
       ).toBe("malformed_payload")
@@ -597,24 +669,94 @@ describe("AssetResolutionPolicy", () => {
       })
     })
 
-    it("stays pending on authoritative spam evidence but not on weaker signals", () => {
-      const banned = decide({
+    it("excludes on an explicit banned verdict with a final typed reason", () => {
+      const decision = decide({
         chain: longTailChainClaim(),
         legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })],
       })
-      const weakSignals = decide({
+
+      expect(decision).toMatchObject({
+        _tag: "excluded",
+        reason: "authority_banned",
+      })
+    })
+
+    it("banned wins over weaker creation blockers such as display collisions", () => {
+      const decision = decide({
         chain: longTailChainClaim(),
-        legitimacy: [
-          AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "unverified" }),
-          AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "suspicious" }),
-        ],
+        identity: {
+          registryOwner: null,
+          displayCandidates: [{ assetKey: "orb", coingeckoCoinId: null, type: "fungible" }],
+          representations: [],
+        },
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })],
       })
 
-      expect(banned).toMatchObject({
+      expect(decision).toMatchObject({
+        _tag: "excluded",
+        reason: "authority_banned",
+      })
+    })
+
+    it("stays pending on a suspicious signal but creates on unverified alone", () => {
+      const suspicious = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "suspicious" })],
+      })
+      const unverified = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "unverified" })],
+      })
+
+      expect(suspicious).toMatchObject({
         _tag: "pending",
         reason: "spam_evidence",
       })
-      expect(weakSignals).toMatchObject({ _tag: "create_standalone" })
+      expect(unverified).toMatchObject({ _tag: "create_standalone" })
+    })
+
+    it("fails closed when banned evidence conflicts with exact attach evidence", () => {
+      const bannedClaim = AssetLegitimacyClaim.make({ authority: "jupiter", verdict: "banned" })
+      const registryAttach = decide({
+        chain: solanaUsdcChainClaim(),
+        registry: usdcCoinGeckoClaim(),
+        identity: usdcIdentity(),
+        legitimacy: [bannedClaim],
+      })
+      const ownedAttach = decide({
+        chain: ChainClaim.make(ethereumUsdcChainFact),
+        identity: usdcIdentity(),
+        legitimacy: [bannedClaim],
+      })
+
+      expect(registryAttach).toMatchObject({
+        _tag: "fail_closed",
+        reason: "conflicting_evidence",
+      })
+      expect(ownedAttach).toMatchObject({
+        _tag: "fail_closed",
+        reason: "conflicting_evidence",
+      })
+    })
+
+    it("fails closed when legitimacy evidence itself failed", () => {
+      const malformed = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [new AssetResolutionMalformedPayload({ source: "jupiter" })],
+      })
+      const upstream = decide({
+        chain: longTailChainClaim(),
+        legitimacy: [new AssetResolutionUpstreamFailure({ source: "jupiter" })],
+      })
+
+      expect(malformed).toMatchObject({
+        _tag: "fail_closed",
+        reason: "malformed_payload",
+      })
+      expect(upstream).toMatchObject({
+        _tag: "fail_closed",
+        reason: "upstream_failure",
+      })
     })
 
     it("fails closed when no usable display metadata exists", () => {

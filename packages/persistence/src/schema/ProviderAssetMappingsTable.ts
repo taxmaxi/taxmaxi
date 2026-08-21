@@ -13,11 +13,26 @@ import {
 import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
-import { providerMappingStatusEnum } from "./ProviderTransactionTypeMappingsTable.ts"
 
 export const providerAssetMappingKindEnum = pgEnum("provider_asset_mapping_kind", ["asset", "fiat"])
 
 export type ProviderAssetMappingKind = (typeof providerAssetMappingKindEnum.enumValues)[number]
+
+/**
+ * Provider-asset mapping lifecycle. Unlike the shared provider mapping
+ * status, observations have a final `excluded` state: the observation never
+ * maps to a canonical asset, its transactions stay stored and visible, and
+ * the calculation is complete without them. `rejected` stays an open
+ * question; `excluded` is a final evidence-backed answer.
+ */
+export const providerAssetMappingStatusEnum = pgEnum("provider_asset_mapping_status", [
+  "approved",
+  "pending_review",
+  "rejected",
+  "excluded",
+])
+
+export type ProviderAssetMappingStatus = (typeof providerAssetMappingStatusEnum.enumValues)[number]
 
 /**
  * Provider asset -> canonical asset / fiat mapping.
@@ -33,7 +48,9 @@ export const providerAssetMappings = pgTable(
     canonicalAssetId: uuid("canonical_asset_id").references(() => assets.id),
     assetRepresentationId: uuid("asset_representation_id"),
     canonicalFiatCurrency: text("canonical_fiat_currency"),
-    mappingStatus: providerMappingStatusEnum("mapping_status").notNull().default("pending_review"),
+    mappingStatus: providerAssetMappingStatusEnum("mapping_status")
+      .notNull()
+      .default("pending_review"),
     reviewerNotes: text("reviewer_notes"),
     sourceNotes: text("source_notes"),
     createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -50,7 +67,7 @@ export const providerAssetMappings = pgTable(
       ) or (
         ${table.mappingKind} = 'fiat'
         and ${table.canonicalFiatCurrency} is not null
-      ) or ${table.mappingStatus} in ('pending_review', 'rejected')`
+      ) or ${table.mappingStatus} in ('pending_review', 'rejected', 'excluded')`
     ),
     check(
       "provider_asset_mappings_representation_requires_asset",
