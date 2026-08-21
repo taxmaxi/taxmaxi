@@ -20,7 +20,7 @@ import {
   CATALOG_REVIEWABLE_STATUSES,
   OBSERVED_UNRESOLVED_STATUSES,
   insertUnresolvedResolutionJobs,
-} from "./AssetResolutionJobScheduling.ts"
+} from "./AssetResolutionJobRepositoryLive.ts"
 import {
   nowDate,
   wrapSyncEngineSqlError,
