@@ -7,7 +7,19 @@
  * @module TaxCalculationServiceLive
  */
 
-import { and, count, eq, gte, isNull, lt, notInArray, or } from "drizzle-orm"
+import {
+  and,
+  count,
+  eq,
+  exists,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  notExists,
+  notInArray,
+  or,
+} from "drizzle-orm"
 import { EUR } from "@my/core/currency"
 import { withObservedOperation } from "@my/core/shared/observability/ObservedOperation"
 import * as BigDecimal from "effect/BigDecimal"
@@ -237,10 +249,10 @@ const make = Effect.gen(function* () {
    * Filter for observations used by the source whose transactions stay
    * outside derived accounting AND make the calculation incomplete: no
    * mapping row yet, or a mapping that is still an open question
-   * (pending_review or rejected). An excluded observation also stays outside
-   * derived accounting, but it is a final answer, so it does not block the
-   * calculation. Shared by the count and the list so the two can never
-   * disagree about what blocks a calculation.
+   * (pending_review or rejected). An excluded observation, or an approval
+   * produced by asset resolution, stops blocking only after a replay requested
+   * after both the mapping decision and source-use discovery has completed.
+   * Shared by the count and the list so they cannot disagree.
    *
    * @param sourceId - Source identifier
    * @returns Drizzle where condition over source uses joined with mappings
@@ -250,7 +262,47 @@ const make = Effect.gen(function* () {
       eq(schema.providerAssetSourceUses.sourceId, sourceId),
       or(
         isNull(schema.providerAssetMappings.id),
-        notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"])
+        notInArray(schema.providerAssetMappings.mappingStatus, ["approved", "excluded"]),
+        and(
+          or(
+            eq(schema.providerAssetMappings.mappingStatus, "excluded"),
+            and(
+              eq(schema.providerAssetMappings.mappingStatus, "approved"),
+              exists(
+                db
+                  .select({ id: schema.assetResolutionDecisions.id })
+                  .from(schema.assetResolutionDecisions)
+                  .where(
+                    and(
+                      eq(
+                        schema.assetResolutionDecisions.providerAssetRowId,
+                        schema.providerAssetSourceUses.providerAssetRowId
+                      ),
+                      eq(schema.assetResolutionDecisions.status, "active"),
+                      inArray(schema.assetResolutionDecisions.outcome, [
+                        "attach",
+                        "create_standalone",
+                      ])
+                    )
+                  )
+              )
+            )
+          ),
+          notExists(
+            db
+              .select({ id: schema.processingJobs.id })
+              .from(schema.processingJobs)
+              .where(
+                and(
+                  eq(schema.processingJobs.sourceId, schema.providerAssetSourceUses.sourceId),
+                  eq(schema.processingJobs.mode, "replay"),
+                  eq(schema.processingJobs.status, "completed"),
+                  gte(schema.processingJobs.createdAt, schema.providerAssetMappings.updatedAt),
+                  gte(schema.processingJobs.createdAt, schema.providerAssetSourceUses.updatedAt)
+                )
+              )
+          )
+        )
       )
     )
 

@@ -76,8 +76,6 @@ const make = Effect.gen(function* () {
     ).pipe(HttpClientRequest.setHeader("x-api-key", apiKey))
 
     const attempt = httpClient.execute(request).pipe(
-      Effect.timeout(requestTimeoutMs),
-      Effect.mapError((cause) => new AssetResolutionJupiterRetryableError({ status: null, cause })),
       Effect.flatMap(
         (
           response
@@ -100,6 +98,12 @@ const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => upstreamFailure)
           )
         }
+      ),
+      Effect.timeout(requestTimeoutMs),
+      Effect.mapError((cause) =>
+        cause instanceof AssetResolutionJupiterRetryableError
+          ? cause
+          : new AssetResolutionJupiterRetryableError({ status: null, cause })
       )
     )
 

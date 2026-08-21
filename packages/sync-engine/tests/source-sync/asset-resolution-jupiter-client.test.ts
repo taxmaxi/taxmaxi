@@ -254,6 +254,44 @@ describe("AssetResolutionJupiterClientLive", () => {
     }
   }, 10_000)
 
+  it("fails retryable when a successful response stalls while reading the body", async () => {
+    const testSafetyTimeout = Symbol("test-safety-timeout")
+    const result = await Promise.race([
+      runFetch({
+        handler: (_request, url) =>
+          Effect.sync(() =>
+            HttpClientResponse.fromWeb(
+              HttpClientRequest.get(url.toString()),
+              new Response(
+                new ReadableStream<Uint8Array>({
+                  start: (controller) => {
+                    controller.enqueue(new TextEncoder().encode("["))
+                  },
+                }),
+                {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }
+              )
+            )
+          ),
+      }),
+      new Promise<typeof testSafetyTimeout>((resolve) => {
+        setTimeout(() => resolve(testSafetyTimeout), 500)
+      }),
+    ])
+
+    expect(result).not.toBe(testSafetyTimeout)
+    if (result === testSafetyTimeout) {
+      throw new Error("Jupiter response-body read exceeded the request timeout")
+    }
+    expect(result._tag).toBe("Failure")
+    if (result._tag === "Failure") {
+      expect(result.failure).toBeInstanceOf(AssetResolutionJupiterRetryableError)
+      expect(result.failure.status).toBeNull()
+    }
+  })
+
   it("treats an unexpected 4xx as a terminal upstream failure without retrying", async () => {
     let requests = 0
 

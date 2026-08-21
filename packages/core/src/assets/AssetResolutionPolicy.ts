@@ -198,13 +198,13 @@ export const isRegistryLookupSkipped = Schema.is(RegistryLookupSkipped)
 /**
  * Typed legitimacy or spam claim from an allowlisted authority such as
  * Jupiter. Only an explicit `banned` verdict is authoritative spam evidence;
- * `unverified` or `suspicious` alone never blocks a legitimate asset.
+ * `unverified`, `suspicious`, or `low_activity` alone stays non-final.
  */
 export class AssetLegitimacyClaim extends Schema.TaggedClass<AssetLegitimacyClaim>()(
   "legitimacy_claim",
   {
     authority: NonEmptyString,
-    verdict: Schema.Literals(["verified", "unverified", "suspicious", "banned"]),
+    verdict: Schema.Literals(["verified", "unverified", "suspicious", "low_activity", "banned"]),
   }
 ) {}
 
@@ -227,6 +227,7 @@ const JupiterAudit = Schema.Struct({
 export const JupiterTokenPayload = Schema.Struct({
   id: NonEmptyString,
   isVerified: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  organicScoreLabel: Schema.optional(Schema.NullOr(Schema.Literals(["high", "medium", "low"]))),
   tags: Schema.optional(Schema.NullOr(Schema.Array(Schema.String))),
   audit: Schema.optional(Schema.NullOr(JupiterAudit)),
 }).annotate({
@@ -250,12 +251,15 @@ export type JupiterTokenSearchPayload = typeof JupiterTokenSearchPayload.Type
 
 const jupiterVerdict = (
   token: JupiterTokenPayload
-): "verified" | "unverified" | "suspicious" | "banned" => {
+): "verified" | "unverified" | "suspicious" | "low_activity" | "banned" => {
   if ((token.tags ?? []).includes("banned")) {
     return "banned"
   }
   if (token.audit?.isSus === true) {
     return "suspicious"
+  }
+  if (token.organicScoreLabel === "low") {
+    return "low_activity"
   }
   if (token.isVerified === true) {
     return "verified"
@@ -849,12 +853,19 @@ const decideStandaloneCreation = ({
 }): AssetResolutionDecision => {
   // An explicit banned verdict is a final answer, not an open question: the
   // observation is excluded from derived accounting instead of waiting for
-  // review. A suspicious signal is weaker: it blocks automatic creation but
-  // neither excludes nor approves; unverified says nothing at all.
+  // review. Weaker risk signals block automatic creation but neither exclude
+  // nor approve the observation.
   if (legitimacy.some((claim) => claim.verdict === "banned")) {
     return excluded("authority_banned")
   }
-  if (legitimacy.some((claim) => claim.verdict === "suspicious")) {
+  if (
+    legitimacy.some(
+      (claim) =>
+        claim.verdict === "suspicious" ||
+        claim.verdict === "unverified" ||
+        claim.verdict === "low_activity"
+    )
+  ) {
     return pending("spam_evidence")
   }
   if (!STANDALONE_CREATION_SUPPORTED_TYPES.includes(chain.type)) {
@@ -951,6 +962,26 @@ export const decideAssetResolution = ({
 
   if (registry._tag === "coingecko_claim") {
     const platform = findMatchingPlatform({ chain, coinGecko: registry })
+    const registryOwner = identity.registryOwner
+    const matchingRegistryOwner =
+      registryOwner !== null && registryOwner.coingeckoCoinId === registry.coinId
+        ? registryOwner
+        : null
+    const hasExactRegistryAttach =
+      platform !== undefined &&
+      matchingRegistryOwner !== null &&
+      typesAreCompatible({ asset: matchingRegistryOwner, chain }) &&
+      platform.decimals !== null &&
+      platform.decimals === chain.decimals
+
+    if (hasExactRegistryAttach) {
+      return guardAttachAgainstBan(attach({ assetKey: matchingRegistryOwner.assetKey, chain }))
+    }
+
+    if (hasBannedClaim) {
+      return excluded("authority_banned")
+    }
+
     if (platform === undefined) {
       // The registry answered a lookup for this exact representation with a
       // coin that does not list it. That is contradictory evidence, not a
@@ -958,19 +989,16 @@ export const decideAssetResolution = ({
       return failClosed("conflicting_evidence")
     }
 
-    const registryOwner = identity.registryOwner
-    if (registryOwner !== null && registryOwner.coingeckoCoinId === registry.coinId) {
-      if (!typesAreCompatible({ asset: registryOwner, chain })) {
+    if (matchingRegistryOwner !== null) {
+      if (!typesAreCompatible({ asset: matchingRegistryOwner, chain })) {
         return failClosed("incompatible_type")
       }
       if (platform.decimals === null) {
-        return hasBannedClaim ? excluded("authority_banned") : pending("non_exact_platform_match")
+        return pending("non_exact_platform_match")
       }
       if (platform.decimals !== chain.decimals) {
         return failClosed("incompatible_decimals")
       }
-
-      return guardAttachAgainstBan(attach({ assetKey: registryOwner.assetKey, chain }))
     }
 
     // No local asset owns the coin id. Registry decimals must not contradict
