@@ -6,6 +6,7 @@
 
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import * as Schema from "effect/Schema"
+import { ProviderAssetMappingStatus } from "@my/core/assets"
 import { AdminAuthMiddleware } from "./AuthMiddleware.ts"
 import { InternalServerError } from "./ApiErrors.ts"
 
@@ -47,9 +48,7 @@ export class ProviderAssetReviewRow extends Schema.Class<ProviderAssetReviewRow>
   canonicalAssetId: Schema.NullOr(Schema.String),
   assetRepresentationId: Schema.NullOr(Schema.String),
   canonicalFiatCurrency: Schema.NullOr(Schema.String),
-  mappingStatus: Schema.NullOr(
-    Schema.Literals(["approved", "pending_review", "rejected", "excluded"])
-  ),
+  mappingStatus: Schema.NullOr(ProviderAssetMappingStatus),
   reviewerNotes: Schema.NullOr(Schema.String),
   sourceNotes: Schema.NullOr(Schema.String),
 }) {}

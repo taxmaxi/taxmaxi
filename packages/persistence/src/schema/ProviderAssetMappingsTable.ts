@@ -10,6 +10,7 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core"
+import { PROVIDER_ASSET_MAPPING_STATUSES } from "@my/core/assets"
 import { assetRepresentations } from "./AssetRepresentationsTable.ts"
 import { assets } from "./AssetsTable.ts"
 import { providerAssets } from "./ProviderAssetsTable.ts"
@@ -19,17 +20,13 @@ export const providerAssetMappingKindEnum = pgEnum("provider_asset_mapping_kind"
 export type ProviderAssetMappingKind = (typeof providerAssetMappingKindEnum.enumValues)[number]
 
 /**
- * Provider-asset mapping lifecycle. Unlike the shared provider mapping
- * status, observations have a final `excluded` state: the observation never
- * maps to a canonical asset, its transactions stay stored and visible, and
- * the calculation is complete without them. `rejected` stays an open
- * question; `excluded` is a final evidence-backed answer.
+ * Provider-asset mapping lifecycle, distinct from the shared provider
+ * mapping status because observations have a final `excluded` state. The
+ * values come from the core status module so the database enum, repository
+ * contract, and API schema cannot drift apart.
  */
 export const providerAssetMappingStatusEnum = pgEnum("provider_asset_mapping_status", [
-  "approved",
-  "pending_review",
-  "rejected",
-  "excluded",
+  ...PROVIDER_ASSET_MAPPING_STATUSES,
 ])
 
 export type ProviderAssetMappingStatus = (typeof providerAssetMappingStatusEnum.enumValues)[number]

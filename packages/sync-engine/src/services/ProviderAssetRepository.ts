@@ -7,6 +7,7 @@
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Option from "effect/Option"
+import type { ProviderAssetMappingStatus } from "@my/core/assets"
 import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
 
 /**
@@ -14,13 +15,7 @@ import { SyncEngineStorageError } from "./SyncEngineStorageError.ts"
  */
 export type ProviderAssetMappingKind = "asset" | "fiat"
 
-/**
- * ProviderAssetMappingStatus - Review lifecycle for provider asset mappings.
- * `excluded` is a final answer, not an open question: the observation never
- * maps to a canonical asset and its transactions stay outside derived
- * accounting without blocking the calculation.
- */
-export type ProviderAssetMappingStatus = "approved" | "pending_review" | "rejected" | "excluded"
+export type { ProviderAssetMappingStatus }
 
 /**
  * ProviderAssetCatalogEntry - Durable provider asset catalog row.

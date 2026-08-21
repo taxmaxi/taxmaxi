@@ -225,22 +225,18 @@ const make = Effect.gen(function* () {
             )
           : null
 
+      const decodedClaim =
+        decodeResult?._tag === "Success" && decodeResult.success._tag === "legitimacy_claim"
+          ? decodeResult.success
+          : null
       const legitimacy: ReadonlyArray<LegitimacyResolutionInput> =
         jupiterEvidence._tag === "malformed_payload" || jupiterEvidence._tag === "upstream_failure"
           ? [jupiterEvidence]
-          : decodeResult === null
-            ? []
-            : decodeResult._tag === "Failure"
-              ? [decodeResult.failure]
-              : decodeResult.success._tag === "legitimacy_claim"
-                ? [decodeResult.success]
-                : []
-      const decodedClaim =
-        decodeResult !== null &&
-        decodeResult._tag === "Success" &&
-        decodeResult.success._tag === "legitimacy_claim"
-          ? decodeResult.success
-          : null
+          : decodeResult?._tag === "Failure"
+            ? [decodeResult.failure]
+            : decodedClaim === null
+              ? []
+              : [decodedClaim]
 
       const evidenceRecord: AssetResolutionEvidenceRecord = {
         authority: JUPITER_AUTHORITY,
