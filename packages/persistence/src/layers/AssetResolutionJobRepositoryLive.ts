@@ -8,7 +8,7 @@
  * @module AssetResolutionJobRepositoryLive
  */
 
-import { and, asc, eq, inArray, isNull, lt, lte, or } from "drizzle-orm"
+import { and, asc, eq, isNull, lt, lte, or } from "drizzle-orm"
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
@@ -21,6 +21,8 @@ import {
 import { PgClient } from "@effect/sql-pg"
 import { drizzle } from "./PgClientLive.ts"
 import {
+  OBSERVED_UNRESOLVED_STATUSES,
+  insertUnresolvedResolutionJobs,
   nowDate,
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
@@ -28,105 +30,6 @@ import {
 import { schema } from "../schema/index.ts"
 
 const ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS = 30_000
-
-type SyncEngineDb = Effect.Success<typeof drizzle>
-
-/** One drizzle transaction handle as passed to `db.transaction` callbacks. */
-export type SyncEngineDbTransaction = Parameters<Parameters<SyncEngineDb["transaction"]>[0]>[0]
-
-/** Mapping status of an observation that still needs resolution; null means no mapping row. */
-export type UnresolvedMappingStatus = "pending_review" | null
-
-/**
- * An observed asset with no mapping row or a pending_review mapping is
- * unresolved; approved and rejected are not.
- */
-export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
-  null,
-  "pending_review",
-]
-
-/**
- * The catalog path deliberately skips assets with no mapping row: a mapping
- * row appears once an asset is actually observed, so a bare catalog entry
- * has never been seen in a transaction and must not trigger research.
- */
-export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
-  "pending_review",
-]
-
-/**
- * Insert one pending resolution job per unresolved provider asset at its
- * current evidence revision, inside the caller's transaction. Existing jobs
- * for the same (observation, revision) pair are left untouched. Also used by
- * ProviderAssetRepositoryLive so observation writes schedule jobs with the
- * same rules as the standalone scheduling API.
- */
-export const insertUnresolvedResolutionJobs = ({
-  tx,
-  providerAssetRowIds,
-  now,
-  unresolvedStatuses,
-}: {
-  readonly tx: SyncEngineDbTransaction
-  readonly providerAssetRowIds: ReadonlyArray<string>
-  readonly now: Date
-  readonly unresolvedStatuses: ReadonlyArray<UnresolvedMappingStatus>
-}) =>
-  Effect.gen(function* () {
-    if (providerAssetRowIds.length === 0) {
-      return [] as ReadonlyArray<{
-        readonly providerAssetRowId: string
-        readonly evidenceRevision: number
-      }>
-    }
-
-    const candidates = yield* tx
-      .select({
-        providerAssetRowId: schema.providerAssets.id,
-        evidenceRevision: schema.providerAssets.evidenceRevision,
-        mappingStatus: schema.providerAssetMappings.mappingStatus,
-      })
-      .from(schema.providerAssets)
-      .leftJoin(
-        schema.providerAssetMappings,
-        eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
-      )
-      .where(inArray(schema.providerAssets.id, providerAssetRowIds))
-      .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.load"))
-
-    const unresolved = candidates.filter((candidate) =>
-      unresolvedStatuses.some((status) => status === candidate.mappingStatus)
-    )
-    if (unresolved.length === 0) {
-      return []
-    }
-
-    const inserted = yield* tx
-      .insert(schema.assetResolutionJobs)
-      .values(
-        unresolved.map((candidate) => ({
-          providerAssetRowId: candidate.providerAssetRowId,
-          evidenceRevision: candidate.evidenceRevision,
-          status: "pending" as const,
-          createdAt: now,
-          updatedAt: now,
-        }))
-      )
-      .onConflictDoNothing({
-        target: [
-          schema.assetResolutionJobs.providerAssetRowId,
-          schema.assetResolutionJobs.evidenceRevision,
-        ],
-      })
-      .returning({
-        providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
-        evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
-      })
-      .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.insert"))
-
-    return inserted
-  })
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle

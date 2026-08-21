@@ -5,6 +5,7 @@
  */
 
 import * as Timestamp from "@my/core/shared/values/Timestamp"
+import { eq, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import { PersistenceError, isPersistenceError, wrapSqlError } from "../errors/RepositoryError.ts"
@@ -14,6 +15,8 @@ import {
   SyncEngineStorageError,
   type SourceSyncJobProgressSnapshot,
 } from "@my/sync-engine/services"
+import { drizzle } from "./PgClientLive.ts"
+import { schema } from "../schema/index.ts"
 
 const ProgressCounterSchema = Schema.Union([Schema.Number, Schema.NumberFromString])
 
@@ -82,6 +85,106 @@ export const wrapSyncEngineStorageError =
   (operation: string) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, SyncEngineStorageError, R> =>
     Effect.mapError(effect, (error) => toSyncEngineStorageError({ error, operation }))
+
+type SyncEngineDb = Effect.Success<typeof drizzle>
+
+/** One drizzle transaction handle as passed to `db.transaction` callbacks. */
+export type SyncEngineDbTransaction = Parameters<Parameters<SyncEngineDb["transaction"]>[0]>[0]
+
+/** Mapping status of an observation that still needs resolution; null means no mapping row. */
+export type UnresolvedMappingStatus = "pending_review" | null
+
+/**
+ * An observed asset with no mapping row or a pending_review mapping is
+ * unresolved; approved and rejected are not.
+ */
+export const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+  null,
+  "pending_review",
+]
+
+/**
+ * The catalog path deliberately skips assets with no mapping row: a mapping
+ * row appears once an asset is actually observed, so a bare catalog entry
+ * has never been seen in a transaction and must not trigger research.
+ */
+export const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
+  "pending_review",
+]
+
+/**
+ * Insert one pending resolution job per unresolved provider asset at its
+ * current evidence revision, inside the caller's transaction. Existing jobs
+ * for the same (observation, revision) pair are left untouched. Shared by
+ * AssetResolutionJobRepositoryLive (the standalone scheduling API) and
+ * ProviderAssetRepositoryLive (scheduling inside observation transactions)
+ * so both paths follow the same unresolved-status and conflict rules.
+ */
+export const insertUnresolvedResolutionJobs = ({
+  tx,
+  providerAssetRowIds,
+  now,
+  unresolvedStatuses,
+}: {
+  readonly tx: SyncEngineDbTransaction
+  readonly providerAssetRowIds: ReadonlyArray<string>
+  readonly now: Date
+  readonly unresolvedStatuses: ReadonlyArray<UnresolvedMappingStatus>
+}) =>
+  Effect.gen(function* () {
+    if (providerAssetRowIds.length === 0) {
+      return [] as ReadonlyArray<{
+        readonly providerAssetRowId: string
+        readonly evidenceRevision: number
+      }>
+    }
+
+    const candidates = yield* tx
+      .select({
+        providerAssetRowId: schema.providerAssets.id,
+        evidenceRevision: schema.providerAssets.evidenceRevision,
+        mappingStatus: schema.providerAssetMappings.mappingStatus,
+      })
+      .from(schema.providerAssets)
+      .leftJoin(
+        schema.providerAssetMappings,
+        eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
+      )
+      .where(inArray(schema.providerAssets.id, providerAssetRowIds))
+      .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.load"))
+
+    const unresolved = candidates.filter((candidate) =>
+      unresolvedStatuses.some((status) => status === candidate.mappingStatus)
+    )
+    if (unresolved.length === 0) {
+      return []
+    }
+
+    const inserted = yield* tx
+      .insert(schema.assetResolutionJobs)
+      .values(
+        unresolved.map((candidate) => ({
+          providerAssetRowId: candidate.providerAssetRowId,
+          evidenceRevision: candidate.evidenceRevision,
+          status: "pending" as const,
+          createdAt: now,
+          updatedAt: now,
+        }))
+      )
+      .onConflictDoNothing({
+        target: [
+          schema.assetResolutionJobs.providerAssetRowId,
+          schema.assetResolutionJobs.evidenceRevision,
+        ],
+      })
+      .returning({
+        providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
+        evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
+      })
+      .pipe(wrapSyncEngineSqlError("assetResolutionJobScheduling.insert"))
+
+    return inserted
+  })
 
 /**
  * Decode persisted job progress JSON into the sync-engine snapshot shape.
