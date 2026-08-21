@@ -153,7 +153,8 @@
     "scope": {
       "all": "All",
       "approved": "Approved",
-      "pending": "Pending"
+      "pending": "Pending",
+      "exceptions": "Exceptions"
     },
     "search": {
       "label": "Search assets",
@@ -225,6 +226,156 @@
       "nft": "Economic NFT identity used consistently across custody sources and network activity.",
       "fungibleOne": "Economic asset used for transfers, balances, valuation, and tax reports, with {count} known network representation.",
       "fungibleMany": "Economic asset used for transfers, balances, valuation, and tax reports, with {count} known network representations."
+    },
+    "exceptions": {
+      "loading": "Loading exception detail…",
+      "emptyDetail": "Select an exception or use exact lookup.",
+      "unknown": "Unknown",
+      "providerAssetId": "Provider observation ID",
+      "naturalKey": "Natural key",
+      "evidenceRevision": "Evidence revision {revision}",
+      "policyRevision": "Policy revision {revision}",
+      "success": "Decision accepted. Rebuilding affected data is now tracked separately.",
+      "severity": {
+        "critical": "Critical",
+        "high": "High",
+        "medium": "Medium",
+        "low": "Low"
+      },
+      "labels": {
+        "status": {
+          "active": "Active",
+          "superseded": "Superseded"
+        },
+        "outcome": {
+          "attach": "Attach representation",
+          "createStandalone": "Create standalone asset",
+          "identity": "Economic identity",
+          "excluded": "Excluded",
+          "pending": "Pending review",
+          "failClosed": "Blocked pending review"
+        },
+        "reason": {
+          "ownershipConflict": "Representation ownership conflict",
+          "conflictingEvidence": "Conflicting evidence",
+          "incompatibleDecimals": "Incompatible decimals",
+          "incompatibleType": "Incompatible asset type",
+          "displayCollision": "Display identity collision",
+          "nonExactPlatformMatch": "Non-exact platform match",
+          "spamEvidence": "Spam evidence",
+          "unsupportedRepresentationType": "Unsupported representation type"
+        },
+        "preview": {
+          "reuse": "Reuse existing",
+          "create": "Create new"
+        },
+        "action": {
+          "initial": "Initial decision",
+          "supersession": "Supersede prior decision",
+          "reversal": "Reverse prior decision"
+        }
+      },
+      "lookup": {
+        "title": "Exact observation lookup",
+        "description": "Open unresolved, approved, or excluded observations without browsing a separate dashboard.",
+        "provider": "Provider",
+        "keyType": "Lookup key",
+        "providerAssetId": "Observation ID",
+        "naturalKey": "Natural key",
+        "key": "Exact value",
+        "action": "Look up"
+      },
+      "impact": {
+        "blockedReports": "Blocked reports",
+        "principals": "Principals",
+        "transactions": "Transactions",
+        "sources": "Sources",
+        "valueEur": "Provider value (EUR)"
+      },
+      "policy": {
+        "title": "Deterministic policy output",
+        "description": "The persisted conclusion and reason produced for the current evidence revision.",
+        "outcome": "Outcome",
+        "reason": "Reason"
+      },
+      "evidence": {
+        "title": "Authority claims and evidence",
+        "description": "Select the immutable snapshots reviewed for this decision.",
+        "unavailable": "Evidence could not be displayed.",
+        "chainFact": "Chain facts",
+        "platformMapping": "Platform mapping",
+        "legitimacy": "Legitimacy",
+        "representation": "Representation facts",
+        "otherClaim": "Other claim"
+      },
+      "history": {
+        "title": "Decision history",
+        "description": "Append-only decisions with actor, rationale, revisions, and evidence links.",
+        "evidenceLinks": "linked evidence snapshots"
+      },
+      "review": {
+        "unresolved": "Unresolved",
+        "approved": "Approved",
+        "excluded": "Excluded"
+      },
+      "rematerialization": {
+        "title": "Affected data rebuild",
+        "pending": "Pending",
+        "running": "Running",
+        "complete": "Complete",
+        "operatorAttentionLabel": "Operator attention",
+        "operatorAttention": "{count} sources need operator attention."
+      },
+      "decision": {
+        "title": "Declarative decision",
+        "description": "Describe the domain conclusion. TaxMaxi derives storage and rebuild operations.",
+        "kind": "Conclusion",
+        "existingIdentity": "Existing economic identity",
+        "newIdentity": "New economic identity",
+        "exclusion": "Exclude observation",
+        "assetId": "Existing asset ID",
+        "name": "Canonical name",
+        "symbol": "Canonical symbol",
+        "assetType": "Asset type",
+        "exclusionReason": "Exclusion reason",
+        "blockchain": "Blockchain",
+        "representationType": "Representation type",
+        "addressKind": "Address kind",
+        "contractAddress": "Contract address",
+        "mintAddress": "Mint address",
+        "address": "Contract or mint address",
+        "decimals": "Decimals",
+        "rationale": "Rationale",
+        "preview": "Preview decision",
+        "confirm": "Confirm decision",
+        "edit": "Edit claim"
+      },
+      "exclusion": {
+        "authorityBanned": "Banned by an authority",
+        "confirmedSpam": "Confirmed spam",
+        "unsupportedAssetType": "Unsupported asset type",
+        "providerArtifact": "Provider artifact"
+      },
+      "preview": {
+        "title": "Decision preview",
+        "decisionAction": "Decision action",
+        "assetOutcome": "Economic identity outcome",
+        "representationOutcome": "Representation outcome",
+        "sources": "Sources scheduled for rebuild",
+        "supersedes": "Decision superseded",
+        "none": "None"
+      },
+      "errors": {
+        "load": "Exception detail could not be loaded.",
+        "lookup": "No matching observation could be loaded.",
+        "lookupFields": "Enter a provider and exact lookup value.",
+        "rationaleEvidence": "Add a rationale and select at least one evidence snapshot.",
+        "representation": "Representation facts need a blockchain and valid non-negative decimals.",
+        "claim": "Complete the selected identity claim.",
+        "preview": "The decision could not be previewed.",
+        "submit": "The decision could not be accepted.",
+        "stale": "Evidence or the active decision changed. Detail was refreshed; preview again."
+      }
     },
     "logoAlt": "{name} logo",
     "publicPage": {

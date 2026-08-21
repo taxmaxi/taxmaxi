@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { AppFocusSurface } from "#/components/app-focus-surface"
 import {
   AssetCatalogProvider,
+  type AssetExceptionActions,
   type AssetCatalogFeeds,
   useAssetCatalog,
 } from "#/components/asset-catalog-context"
@@ -15,10 +16,12 @@ import { m } from "#/paraglide/messages"
 export type { AssetCatalogFeeds }
 
 export function AssetCatalog({
+  exceptionActions,
   feeds,
   onClose,
   onQueryChange,
 }: {
+  readonly exceptionActions?: AssetExceptionActions
   readonly feeds: AssetCatalogFeeds
   readonly onClose: () => void
   readonly onQueryChange?: (query: string) => void
@@ -39,7 +42,11 @@ export function AssetCatalog({
       title={m["assetCatalog.title"]()}
       titleId="asset-catalog-title"
     >
-      <AssetCatalogProvider feeds={feeds} onQueryChange={onQueryChange}>
+      <AssetCatalogProvider
+        exceptionActions={exceptionActions}
+        feeds={feeds}
+        onQueryChange={onQueryChange}
+      >
         <AssetCatalogNavigator />
       </AssetCatalogProvider>
     </AppFocusSurface>

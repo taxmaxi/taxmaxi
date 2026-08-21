@@ -9,6 +9,7 @@ import {
   getCatalogItemDomId,
   getCatalogItemKey,
   getCatalogItemName,
+  getCatalogItemSymbol,
   type CatalogItem,
   type CatalogScope,
 } from "#/components/asset-catalog-model"
@@ -30,6 +31,7 @@ export function AssetCatalogListPane() {
     hasLoadError,
     hasMoreItems,
     isLoading,
+    exceptionsAvailable,
     mobileDetailOpen,
     onLoadMore,
     onQueryChange,
@@ -62,10 +64,20 @@ export function AssetCatalogListPane() {
         />
         <div
           aria-label={m["assetCatalog.scopeLabel"]()}
-          className="grid h-11 grid-cols-3 rounded-full bg-muted p-1"
+          className={cn(
+            "grid h-11 rounded-full bg-muted p-1",
+            exceptionsAvailable ? "grid-cols-4" : "grid-cols-3"
+          )}
           role="group"
         >
-          {(["all", "approved", "pending"] as const).map((value) => (
+          {(
+            [
+              "all",
+              "approved",
+              "pending",
+              ...(exceptionsAvailable ? ["exceptions" as const] : []),
+            ] as const
+          ).map((value) => (
             <button
               aria-pressed={scope === value}
               className={cn(
@@ -165,7 +177,7 @@ function NavigatorRow({
   readonly item: CatalogItem
   readonly onSelect: () => void
 }) {
-  const symbol = item.asset.symbol
+  const symbol = getCatalogItemSymbol(item)
   const name = getCatalogItemName(item)
 
   return (
@@ -188,6 +200,8 @@ function NavigatorRow({
           <span className="truncate text-sm font-medium">{symbol}</span>
           {item.kind === "pending" ? (
             <Badge variant="outline">{m["assetCatalog.detail.pending"]()}</Badge>
+          ) : item.kind === "exception" ? (
+            <Badge variant="outline">{getExceptionSeverityLabel(item.exception.severity)}</Badge>
           ) : null}
         </span>
         <span className="mt-0.5 block truncate text-xs text-muted-foreground">{name}</span>
@@ -241,5 +255,20 @@ function getScopeLabel(scope: CatalogScope): string {
       return m["assetCatalog.scope.approved"]()
     case "pending":
       return m["assetCatalog.scope.pending"]()
+    case "exceptions":
+      return m["assetCatalog.scope.exceptions"]()
+  }
+}
+
+function getExceptionSeverityLabel(severity: "critical" | "high" | "medium" | "low"): string {
+  switch (severity) {
+    case "critical":
+      return m["assetCatalog.exceptions.severity.critical"]()
+    case "high":
+      return m["assetCatalog.exceptions.severity.high"]()
+    case "medium":
+      return m["assetCatalog.exceptions.severity.medium"]()
+    case "low":
+      return m["assetCatalog.exceptions.severity.low"]()
   }
 }

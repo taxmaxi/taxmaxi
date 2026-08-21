@@ -10,6 +10,7 @@ import {
 } from "#/lib/assets"
 import { m } from "#/paraglide/messages"
 import { AssetCatalog as AssetCatalogView } from "#/components/asset-catalog"
+import type { TaxMaxiAssetException } from "#/components/asset-catalog-model"
 
 function AssetCatalog({
   approvedAssetsUnavailable = false,
@@ -18,6 +19,7 @@ function AssetCatalog({
   canLoadMorePending = false,
   isLoadingApproved = false,
   isLoadingPending = false,
+  exceptions,
   onClose,
   onLoadMoreApproved,
   onLoadMorePending,
@@ -33,6 +35,7 @@ function AssetCatalog({
   readonly canLoadMorePending?: boolean
   readonly isLoadingApproved?: boolean
   readonly isLoadingPending?: boolean
+  readonly exceptions?: ReadonlyArray<TaxMaxiAssetException>
   readonly onClose: () => void
   readonly onLoadMoreApproved?: () => Promise<unknown> | void
   readonly onLoadMorePending?: () => Promise<unknown> | void
@@ -61,6 +64,13 @@ function AssetCatalog({
           retry: onRetryPending,
           unavailable: pendingAssetsUnavailable,
         },
+        ...(exceptions === undefined
+          ? {}
+          : {
+              exceptions: {
+                items: exceptions,
+              },
+            }),
       }}
       onClose={onClose}
       onQueryChange={onQueryChange}
@@ -172,6 +182,37 @@ describe("AssetCatalog", () => {
     desktopViewport = false
     pixelDesktopViewport = undefined
     desktopChangeListeners.clear()
+  })
+
+  it("shows the Exceptions scope only when the admin feed is present", () => {
+    const { rerender } = render(<AssetCatalog assets={[]} onClose={vi.fn()} pendingAssets={[]} />)
+
+    expect(screen.queryByRole("button", { name: "Exceptions" })).toBeNull()
+
+    rerender(
+      <AssetCatalog
+        assets={[]}
+        exceptions={[
+          {
+            providerAssetRowId: "00000000-0000-4000-8000-000000000701",
+            provider: "coinbase",
+            providerAssetId: "exception-token",
+            naturalKey: null,
+            currencyCode: "EXC",
+            name: "Exception Token",
+            reason: "ownership_conflict",
+            severity: "critical",
+          },
+        ]}
+        onClose={vi.fn()}
+        pendingAssets={[]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Exceptions" }))
+
+    expect(screen.getByRole("option", { name: /EXC/ })).toBeTruthy()
+    expect(screen.getByText("Critical")).toBeTruthy()
   })
 
   it("moves focus to search when the catalog opens", () => {

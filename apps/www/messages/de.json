@@ -153,7 +153,8 @@
     "scope": {
       "all": "Alle",
       "approved": "Geprüft",
-      "pending": "Ausstehend"
+      "pending": "Ausstehend",
+      "exceptions": "Ausnahmen"
     },
     "search": {
       "label": "Assets durchsuchen",
@@ -225,6 +226,156 @@
       "nft": "Wirtschaftliche NFT-Identität, die über Verwahrungsquellen und Netzwerkaktivitäten hinweg einheitlich verwendet wird.",
       "fungibleOne": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannter Netzwerk Abbildungen.",
       "fungibleMany": "Wirtschaftliches Asset für Transfers, Bestände, Bewertungen und Steuerberichte mit {count} bekannten Netzwerk Abbildungen."
+    },
+    "exceptions": {
+      "loading": "Ausnahmedetails werden geladen…",
+      "emptyDetail": "Wähle eine Ausnahme oder nutze die exakte Suche.",
+      "unknown": "Unbekannt",
+      "providerAssetId": "Provider-Beobachtungs-ID",
+      "naturalKey": "Natürlicher Schlüssel",
+      "evidenceRevision": "Evidenzrevision {revision}",
+      "policyRevision": "Richtlinienrevision {revision}",
+      "success": "Entscheidung angenommen. Der Neuaufbau betroffener Daten wird separat verfolgt.",
+      "severity": {
+        "critical": "Kritisch",
+        "high": "Hoch",
+        "medium": "Mittel",
+        "low": "Niedrig"
+      },
+      "labels": {
+        "status": {
+          "active": "Aktiv",
+          "superseded": "Ersetzt"
+        },
+        "outcome": {
+          "attach": "Abbildung zuordnen",
+          "createStandalone": "Eigenständiges Asset erstellen",
+          "identity": "Wirtschaftliche Identität",
+          "excluded": "Ausgeschlossen",
+          "pending": "Prüfung ausstehend",
+          "failClosed": "Bis zur Prüfung blockiert"
+        },
+        "reason": {
+          "ownershipConflict": "Konflikt beim Eigentümer der Abbildung",
+          "conflictingEvidence": "Widersprüchliche Evidenz",
+          "incompatibleDecimals": "Unvereinbare Dezimalstellen",
+          "incompatibleType": "Unvereinbarer Asset-Typ",
+          "displayCollision": "Kollision der Anzeigeidentität",
+          "nonExactPlatformMatch": "Keine exakte Plattformübereinstimmung",
+          "spamEvidence": "Spam-Evidenz",
+          "unsupportedRepresentationType": "Nicht unterstützter Abbildungstyp"
+        },
+        "preview": {
+          "reuse": "Bestehendes verwenden",
+          "create": "Neu erstellen"
+        },
+        "action": {
+          "initial": "Erste Entscheidung",
+          "supersession": "Vorherige Entscheidung ersetzen",
+          "reversal": "Vorherige Entscheidung umkehren"
+        }
+      },
+      "lookup": {
+        "title": "Exakte Beobachtungssuche",
+        "description": "Öffne ungelöste, genehmigte oder ausgeschlossene Beobachtungen ohne separates Dashboard.",
+        "provider": "Provider",
+        "keyType": "Suchschlüssel",
+        "providerAssetId": "Beobachtungs-ID",
+        "naturalKey": "Natürlicher Schlüssel",
+        "key": "Exakter Wert",
+        "action": "Suchen"
+      },
+      "impact": {
+        "blockedReports": "Blockierte Berichte",
+        "principals": "Konten",
+        "transactions": "Transaktionen",
+        "sources": "Quellen",
+        "valueEur": "Provider-Wert (EUR)"
+      },
+      "policy": {
+        "title": "Deterministisches Richtlinienergebnis",
+        "description": "Das gespeicherte Ergebnis mit Grund für die aktuelle Evidenzrevision.",
+        "outcome": "Ergebnis",
+        "reason": "Grund"
+      },
+      "evidence": {
+        "title": "Autoritätsaussagen und Evidenz",
+        "description": "Wähle die unveränderlichen Nachweise für diese Entscheidung.",
+        "unavailable": "Evidenz konnte nicht angezeigt werden.",
+        "chainFact": "Blockchain-Fakten",
+        "platformMapping": "Plattformzuordnung",
+        "legitimacy": "Legitimität",
+        "representation": "Repräsentationsfakten",
+        "otherClaim": "Andere Aussage"
+      },
+      "history": {
+        "title": "Entscheidungsverlauf",
+        "description": "Unveränderlicher Verlauf mit Bearbeiter, Begründung, Revisionen und Evidenzverweisen.",
+        "evidenceLinks": "verknüpfte Evidenznachweise"
+      },
+      "review": {
+        "unresolved": "Ungelöst",
+        "approved": "Genehmigt",
+        "excluded": "Ausgeschlossen"
+      },
+      "rematerialization": {
+        "title": "Neuaufbau betroffener Daten",
+        "pending": "Ausstehend",
+        "running": "Läuft",
+        "complete": "Abgeschlossen",
+        "operatorAttentionLabel": "Betriebseingriff nötig",
+        "operatorAttention": "{count} Quellen benötigen einen Betriebseingriff."
+      },
+      "decision": {
+        "title": "Deklarative Entscheidung",
+        "description": "Beschreibe das fachliche Ergebnis. TaxMaxi leitet Speicherung und Neuaufbau ab.",
+        "kind": "Ergebnis",
+        "existingIdentity": "Bestehende wirtschaftliche Identität",
+        "newIdentity": "Neue wirtschaftliche Identität",
+        "exclusion": "Beobachtung ausschließen",
+        "assetId": "Bestehende Asset-ID",
+        "name": "Kanonischer Name",
+        "symbol": "Kanonisches Symbol",
+        "assetType": "Asset-Typ",
+        "exclusionReason": "Ausschlussgrund",
+        "blockchain": "Blockchain",
+        "representationType": "Abbildungstyp",
+        "addressKind": "Adresstyp",
+        "contractAddress": "Contract-Adresse",
+        "mintAddress": "Mint-Adresse",
+        "address": "Contract- oder Mint-Adresse",
+        "decimals": "Dezimalstellen",
+        "rationale": "Begründung",
+        "preview": "Entscheidung prüfen",
+        "confirm": "Entscheidung bestätigen",
+        "edit": "Aussage bearbeiten"
+      },
+      "exclusion": {
+        "authorityBanned": "Von einer Autorität gesperrt",
+        "confirmedSpam": "Bestätigter Spam",
+        "unsupportedAssetType": "Nicht unterstützter Asset-Typ",
+        "providerArtifact": "Provider-Artefakt"
+      },
+      "preview": {
+        "title": "Entscheidungsvorschau",
+        "decisionAction": "Entscheidungsaktion",
+        "assetOutcome": "Ergebnis der wirtschaftlichen Identität",
+        "representationOutcome": "Ergebnis der Abbildung",
+        "sources": "Quellen für den Neuaufbau",
+        "supersedes": "Ersetzte Entscheidung",
+        "none": "Keine"
+      },
+      "errors": {
+        "load": "Ausnahmedetails konnten nicht geladen werden.",
+        "lookup": "Keine passende Beobachtung konnte geladen werden.",
+        "lookupFields": "Gib einen Provider und einen exakten Suchwert ein.",
+        "rationaleEvidence": "Füge eine Begründung hinzu und wähle mindestens einen Evidenznachweis.",
+        "representation": "Abbildungsdaten benötigen eine Blockchain und gültige nicht-negative Dezimalstellen.",
+        "claim": "Vervollständige die gewählte Identitätsaussage.",
+        "preview": "Die Entscheidung konnte nicht geprüft werden.",
+        "submit": "Die Entscheidung konnte nicht angenommen werden.",
+        "stale": "Evidenz oder aktive Entscheidung haben sich geändert. Die Details wurden aktualisiert; prüfe erneut."
+      }
     },
     "logoAlt": "Logo von {name}",
     "publicPage": {

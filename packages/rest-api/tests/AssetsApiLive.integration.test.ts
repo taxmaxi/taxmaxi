@@ -23,6 +23,9 @@ import { describe, expect, it } from "vitest"
 import {
   AssetCatalogAssetResponse,
   AssetCatalogListResponse,
+  AssetExceptionDetailResponse,
+  AssetExceptionListResponse,
+  AssetExceptionPreviewResponse,
   PendingAssetListResponse,
   ProviderAssetReviewRow,
   ProviderAssetReviewListResponse,
@@ -56,6 +59,7 @@ const AnonSessionServiceTestLive = AnonSessionServiceLive.pipe(
   Layer.provide(ConfigProvider.layer(TestConfigProvider))
 )
 const ADMIN_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000099_admin"
+const USER_BEARER_TOKEN = "user_00000000-0000-4000-8000-000000000098_user"
 
 const SourceSyncServiceTestLive = Layer.succeed(SourceSyncService, {
   startSourceSyncJob: () =>
@@ -173,6 +177,15 @@ const getAdminStatus = (path: string) =>
   Effect.gen(function* () {
     const response = yield* HttpClientRequest.get(path).pipe(
       HttpClientRequest.bearerToken(ADMIN_BEARER_TOKEN),
+      HttpClient.execute
+    )
+    return response.status
+  })
+
+const getUserStatus = (path: string) =>
+  Effect.gen(function* () {
+    const response = yield* HttpClientRequest.get(path).pipe(
+      HttpClientRequest.bearerToken(USER_BEARER_TOKEN),
       HttpClient.execute
     )
     return response.status
@@ -1259,5 +1272,162 @@ describe("AssetsApiLive", () => {
     )
 
     expect(status).toBe(401)
+  })
+
+  it("supports the complete admin asset-exception review flow without exposing it publicly", async () => {
+    const suffix = crypto.randomUUID()
+    const userId = crypto.randomUUID()
+    const principalId = crypto.randomUUID()
+    const sourceId = crypto.randomUUID()
+    const seeded = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* seedSyncEngineRepositoryFixture({ userId, principalId, sourceId })
+        const db = yield* drizzle
+        const observedAt = new Date("2026-08-21T12:00:00.000Z")
+        const [providerAsset] = yield* db
+          .insert(schema.providerAssets)
+          .values({
+            provider: `exception-api-${suffix}`,
+            providerAssetId: `provider-observation-${suffix}`,
+            naturalKey: `currency_code:EXC-${suffix}`,
+            currencyCode: "EXC",
+            name: "Exception API Asset",
+            exponent: 6,
+            providerType: "crypto",
+            rawProviderPayload: { id: `provider-observation-${suffix}` },
+            evidenceRevision: 3,
+            discoveredAt: observedAt,
+            retrievedAt: observedAt,
+          })
+          .returning({ id: schema.providerAssets.id })
+        if (providerAsset === undefined) {
+          return yield* Effect.die("Failed to seed API exception")
+        }
+        yield* db.insert(schema.assetResolutionJobs).values({
+          providerAssetRowId: providerAsset.id,
+          evidenceRevision: 3,
+          status: "completed",
+        })
+        const [decision] = yield* db
+          .insert(schema.assetResolutionDecisions)
+          .values({
+            providerAssetRowId: providerAsset.id,
+            evidenceRevision: 3,
+            policyRevision: "api-test-policy.1",
+            outcome: "fail_closed",
+            reason: "ownership_conflict",
+            actor: "policy:api-test-policy.1",
+          })
+          .returning({ id: schema.assetResolutionDecisions.id })
+        if (decision === undefined) {
+          return yield* Effect.die("Failed to seed API decision")
+        }
+        const [evidence] = yield* db
+          .insert(schema.assetResolutionEvidence)
+          .values({
+            decisionId: decision.id,
+            authority: "coingecko",
+            claimKind: "representation_owner",
+            sourceLocator: `coingecko:${suffix}`,
+            retrievedAt: observedAt,
+            evidenceRevision: 3,
+            decodedClaim: { coinId: `exception-${suffix}` },
+            rawPayload: { id: `exception-${suffix}` },
+          })
+          .returning({ id: schema.assetResolutionEvidence.id })
+        if (evidence === undefined) {
+          return yield* Effect.die("Failed to seed API evidence")
+        }
+        yield* db.insert(schema.providerAssetSourceUses).values({
+          providerAssetRowId: providerAsset.id,
+          sourceId,
+        })
+        return {
+          provider: `exception-api-${suffix}`,
+          providerAssetId: `provider-observation-${suffix}`,
+          rowId: providerAsset.id,
+          decisionId: decision.id,
+          evidenceId: evidence.id,
+        }
+      }).pipe(Effect.provide(TestPgClientLive))
+    )
+
+    const publicStatus = await Effect.runPromise(
+      getStatus("/v1/assets/exceptions").pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const userStatus = await Effect.runPromise(
+      getUserStatus("/v1/assets/exceptions").pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const list = await Effect.runPromise(
+      getAdminJson({
+        path: "/v1/assets/exceptions?limit=10",
+        responseSchema: AssetExceptionListResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const lookup = await Effect.runPromise(
+      getAdminJson({
+        path: `/v1/assets/exceptions/lookup?provider=${encodeURIComponent(seeded.provider)}&providerAssetId=${encodeURIComponent(seeded.providerAssetId)}`,
+        responseSchema: AssetExceptionDetailResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const payload = {
+      claim: { _tag: "exclusion", reason: "provider_artifact" },
+      evidenceRevision: 3,
+      activeDecisionRevision: seeded.decisionId,
+      evidenceSnapshotIds: [seeded.evidenceId],
+      rationale: "The immutable provider evidence shows an internal provider artifact.",
+    }
+    const preview = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/exceptions/${seeded.rowId}/preview`,
+        payload,
+        responseSchema: AssetExceptionPreviewResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const confirmationPayload = {
+      ...payload,
+      expectedResultingAssetId: preview.body.resultingAssetId,
+      expectedAssetOutcome: preview.body.assetOutcome,
+      expectedRepresentationOutcome: preview.body.representationOutcome,
+    }
+    const accepted = await Effect.runPromise(
+      postAdminJson({
+        path: `/v1/assets/exceptions/${seeded.rowId}/decisions`,
+        payload: confirmationPayload,
+        responseSchema: AssetExceptionDetailResponse,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+    const staleStatus = await Effect.runPromise(
+      postAdminStatus({
+        path: `/v1/assets/exceptions/${seeded.rowId}/decisions`,
+        payload: confirmationPayload,
+      }).pipe(Effect.provide(HttpLive), Effect.scoped)
+    )
+
+    expect(publicStatus).toBe(401)
+    expect(userStatus).toBe(403)
+    expect(list.body.exceptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerAssetRowId: seeded.rowId,
+          reason: "ownership_conflict",
+          severity: "critical",
+        }),
+      ])
+    )
+    expect(lookup.body).toMatchObject({
+      providerAssetRowId: seeded.rowId,
+      policyOutput: { outcome: "fail_closed", reason: "ownership_conflict" },
+    })
+    expect(preview.body).toMatchObject({
+      assetOutcome: "none",
+      representationOutcome: "none",
+      evidenceRevision: 3,
+    })
+    expect(accepted.body).toMatchObject({
+      reviewStatus: "excluded",
+      rematerialization: { status: "pending", affectedSourceCount: 1 },
+    })
+    expect(staleStatus).toBe(409)
   })
 })
