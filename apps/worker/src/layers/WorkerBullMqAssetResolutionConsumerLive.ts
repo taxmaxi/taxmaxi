@@ -26,8 +26,8 @@ import {
   ASSET_RESOLUTION_JOB_NAME,
   ASSET_RESOLUTION_QUEUE_NAME,
   AssetResolutionJobExecutor,
+  AssetResolutionJobRepository,
   AssetResolutionQueuePayload,
-  ProviderAssetRepository,
   type AssetResolutionJobExecutionResult,
 } from "@my/sync-engine/services"
 import { positiveIntConfig } from "@my/sync-engine/shared"
@@ -325,7 +325,7 @@ export const makeWorkerBullMqAssetResolutionConsumerLive = (
   Layer.effectDiscard(
     Effect.gen(function* () {
       const config = yield* loadConfig
-      const providerAssetRepository = yield* ProviderAssetRepository
+      const assetResolutionJobRepository = yield* AssetResolutionJobRepository
       const context = yield* Effect.context<AssetResolutionJobExecutor>()
       const runPromise = Effect.runPromiseWith(context)
       const acquireWorker = options.acquireWorker ?? acquireLiveWorker
@@ -397,7 +397,7 @@ export const makeWorkerBullMqAssetResolutionConsumerLive = (
       const dispatchPending = Effect.gen(function* () {
         const now = yield* DateTime.now.pipe(Effect.map(DateTime.toDateUtc))
         const staleBefore = new Date(now.getTime() - config.staleAfterMs)
-        const jobs = yield* providerAssetRepository.listDispatchableResolutionJobs({
+        const jobs = yield* assetResolutionJobRepository.listDispatchableResolutionJobs({
           now,
           staleBefore,
           limit: config.dispatchBatchSize,

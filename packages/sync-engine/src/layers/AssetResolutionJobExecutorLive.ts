@@ -27,11 +27,13 @@ import {
   type AssetResolutionIdentitySnapshot,
   type AssetResolutionOwnedRepresentation,
   type AssetResolutionProviderEvidence,
+  ChainFactPayload,
 } from "@my/core/assets"
 import {
   AssetRepository,
   AssetResolutionCoinGeckoClient,
   AssetResolutionJobExecutor,
+  AssetResolutionJobRepository,
   ProviderAssetRepository,
   type AssetResolutionDecisionRecord,
   type AssetResolutionEvidenceRecord,
@@ -47,20 +49,12 @@ const ATTACH_ONLY_ACTOR = "system:attach-only-policy"
 const DEFAULT_ASSET_RESOLUTION_WORKER_ID = "asset-resolution-inline-executor"
 const ASSET_RESOLUTION_JOB_STALE_AFTER_MS = 5 * 60 * 1000
 
-interface ChainFact {
-  readonly blockchain: string
-  readonly type: "native" | "token" | "nft"
-  readonly contractAddress: string | null
-  readonly mintAddress: string | null
-  readonly decimals: number
-}
-
 interface ChainEvidenceResult {
   readonly evidence: AssetResolutionProviderEvidence
-  readonly fact: ChainFact | null
+  readonly fact: ChainFactPayload | null
 }
 
-const chainFactKey = (fact: ChainFact): string =>
+const chainFactKey = (fact: ChainFactPayload): string =>
   JSON.stringify([
     fact.blockchain.trim().toLowerCase(),
     fact.type,
@@ -80,14 +74,14 @@ const chainFactKey = (fact: ChainFact): string =>
 export const buildChainEvidence = (
   observations: ReadonlyArray<ProviderAssetObservedRepresentationRecord>
 ): ChainEvidenceResult => {
-  const facts = new Map<string, ChainFact>()
+  const facts = new Map<string, ChainFactPayload>()
 
   for (const observation of observations) {
     if (observation.representationType === null || observation.decimals === null) {
       continue
     }
 
-    const fact: ChainFact = {
+    const fact: ChainFactPayload = {
       blockchain: observation.blockchainName,
       type: observation.representationType,
       contractAddress: observation.contractAddress,
@@ -155,11 +149,12 @@ const decisionToRecord = ({
 
 const make = Effect.gen(function* () {
   const providerAssetRepository = yield* ProviderAssetRepository
+  const assetResolutionJobRepository = yield* AssetResolutionJobRepository
   const assetRepository = yield* AssetRepository
   const coinGeckoClient = yield* AssetResolutionCoinGeckoClient
 
   const findOwnedRepresentations = (
-    fact: ChainFact
+    fact: ChainFactPayload
   ): Effect.Effect<ReadonlyArray<AssetResolutionOwnedRepresentation>, SyncEngineStorageError> =>
     Effect.gen(function* () {
       const factAddress = fact.contractAddress ?? fact.mintAddress
@@ -364,7 +359,7 @@ const make = Effect.gen(function* () {
       })
 
       if (Option.isNone(reviewOption)) {
-        yield* providerAssetRepository.finishResolutionJob({ jobId, status: "completed" })
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
         return {
           outcome: "stale",
           providerAssetRowId,
@@ -394,7 +389,7 @@ const make = Effect.gen(function* () {
             evidence,
           }),
         })
-        yield* providerAssetRepository.finishResolutionJob({ jobId, status: "completed" })
+        yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
         return {
           outcome: decision._tag,
           providerAssetRowId,
@@ -454,7 +449,7 @@ const make = Effect.gen(function* () {
         expectedProviderAssetRetrievedAt: providerAsset.retrievedAt,
       })
 
-      yield* providerAssetRepository.finishResolutionJob({ jobId, status: "completed" })
+      yield* assetResolutionJobRepository.finishResolutionJob({ jobId, status: "completed" })
 
       return {
         outcome: "attached",
@@ -463,7 +458,7 @@ const make = Effect.gen(function* () {
       } satisfies AssetResolutionJobExecutionResult
     }).pipe(
       Effect.catch((error) =>
-        providerAssetRepository
+        assetResolutionJobRepository
           .releaseResolutionJobAfterFailure({ jobId, workerId, message: error.message })
           .pipe(Effect.andThen(Effect.fail(error)))
       )
@@ -476,7 +471,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const startedAt = nowDate()
       const staleBefore = new Date(startedAt.getTime() - ASSET_RESOLUTION_JOB_STALE_AFTER_MS)
-      const claim = yield* providerAssetRepository.claimResolutionJob({
+      const claim = yield* assetResolutionJobRepository.claimResolutionJob({
         jobId,
         workerId,
         startedAt,

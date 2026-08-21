@@ -19,6 +19,7 @@ import { CoinbaseReferenceMappingService } from "../../src/providers/coinbase/se
 import { CoinbaseSyncClient } from "../../src/providers/coinbase/services/CoinbaseSyncClient.ts"
 import { SourceSyncService } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
+import { AssetResolutionJobRepositoryLive } from "../../../persistence/src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
@@ -263,6 +264,7 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
+  Layer.provide(AssetResolutionJobRepositoryLive),
   Layer.provide(ProviderAssetRepositoryLive),
   Layer.provide(ProviderReferenceRepositoryLive),
   Layer.provide(AssetRepositoryLive)
@@ -270,6 +272,7 @@ const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive
 
 const HeliusSolanaAssetResolutionWithDepsLive = HeliusSolanaAssetResolutionServiceLive.pipe(
   Layer.provide(AssetRepositoryLive),
+  Layer.provide(AssetResolutionJobRepositoryLive),
   Layer.provide(ProviderAssetRepositoryLive),
   Layer.provide(
     Layer.succeed(

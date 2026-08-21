@@ -21,7 +21,7 @@ import {
   AssetResolutionCoinGeckoClient,
   AssetResolutionCoinGeckoRetryableError,
   AssetResolutionJobExecutor,
-  ProviderAssetRepository,
+  AssetResolutionJobRepository,
   SourceSyncService,
 } from "@my/sync-engine/services"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
@@ -424,7 +424,7 @@ const recordSecondProviderObservationOfOrbMint = () =>
 
 const scheduleSecondProviderResolutionJob = () =>
   Effect.gen(function* () {
-    const repository = yield* ProviderAssetRepository
+    const repository = yield* AssetResolutionJobRepository
     return yield* repository.scheduleUnresolvedResolutionJob({
       providerAssetRowId: SECOND_PROVIDER_ASSET_ROW_ID,
     })

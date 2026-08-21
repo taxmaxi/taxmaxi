@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import { AssetRepository } from "../../../services/AssetRepository.ts"
+import { AssetResolutionJobRepository } from "../../../services/AssetResolutionJobRepository.ts"
 import {
   ProviderAssetRepository,
   type ProviderAssetMappingDraft,
@@ -68,6 +69,7 @@ const deriveTransactionType = ({
 const make = Effect.gen(function* () {
   const providerReferenceRepository = yield* ProviderReferenceRepository
   const providerAssetRepository = yield* ProviderAssetRepository
+  const assetResolutionJobRepository = yield* AssetResolutionJobRepository
   const assetRepository = yield* AssetRepository
 
   const loadTransactionTypeMapping = ({
@@ -217,7 +219,7 @@ const make = Effect.gen(function* () {
           },
         ],
       })
-      yield* providerAssetRepository.scheduleUnresolvedResolutionJob({
+      yield* assetResolutionJobRepository.scheduleUnresolvedResolutionJob({
         providerAssetRowId,
       })
     })
@@ -284,7 +286,7 @@ const make = Effect.gen(function* () {
     readonly providerAssetRowId: string
   }) =>
     Effect.gen(function* () {
-      yield* providerAssetRepository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
+      yield* assetResolutionJobRepository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
 
       return yield* new CoinbasePendingProviderAssetMappingError({
         currencyCode,

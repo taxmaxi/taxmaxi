@@ -4,29 +4,29 @@
  * @module ProviderAssetRepositoryLive
  */
 
-import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, or, sql } from "drizzle-orm"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
 import {
   ProviderAssetRepository,
-  type AssetResolutionJobScheduleResult,
   type ProviderAssetObservedRepresentationRecord,
   type ProviderAssetRepositoryShape,
   SyncEngineStorageError,
 } from "@my/sync-engine/services"
-import { PgClient } from "@effect/sql-pg"
-import * as Context from "effect/Context"
 import { drizzle } from "./PgClientLive.ts"
+import {
+  CATALOG_REVIEWABLE_STATUSES,
+  OBSERVED_UNRESOLVED_STATUSES,
+  insertUnresolvedResolutionJobs,
+} from "./AssetResolutionJobScheduling.ts"
 import {
   nowDate,
   wrapSyncEngineSqlError,
   wrapSyncEngineStorageError,
 } from "./SyncEngineRepositorySupport.ts"
 import { schema } from "../schema/index.ts"
-
-const ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS = 30_000
 
 class ApprovalObservationSourceSetChanged extends Data.TaggedError(
   "ApprovalObservationSourceSetChanged"
@@ -79,14 +79,7 @@ const makeMissingIdentityError = ({
 
 const make = Effect.gen(function* () {
   const db = yield* drizzle
-  const pgClient = yield* PgClient.PgClient
   type ProviderAssetTransaction = Parameters<Parameters<(typeof db)["transaction"]>[0]>[0]
-
-  // Runs an effect outside whatever transaction the caller happens to be in,
-  // so its writes commit even when the caller rolls back afterwards.
-  const runDetachedFromAmbientTransaction = <A, E>(
-    effect: Effect.Effect<A, E>
-  ): Effect.Effect<A, E> => Effect.updateContext(effect, Context.omit(pgClient.transactionService))
 
   const nextEvidenceRevisionSql = sql`
     case
@@ -100,90 +93,6 @@ const make = Effect.gen(function* () {
       else ${schema.providerAssets.evidenceRevision}
     end
   `
-
-  type UnresolvedMappingStatus = "pending_review" | null
-
-  // An observed asset with no mapping row or a pending_review mapping is
-  // unresolved; approved and rejected are not.
-  const OBSERVED_UNRESOLVED_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = [
-    null,
-    "pending_review",
-  ]
-
-  // The catalog path deliberately skips assets with no mapping row: a mapping
-  // row appears once an asset is actually observed, so a bare catalog entry
-  // has never been seen in a transaction and must not trigger research.
-  const CATALOG_REVIEWABLE_STATUSES: ReadonlyArray<UnresolvedMappingStatus> = ["pending_review"]
-
-  const insertUnresolvedResolutionJobs = ({
-    tx,
-    providerAssetRowIds,
-    now,
-    unresolvedStatuses,
-  }: {
-    readonly tx: ProviderAssetTransaction
-    readonly providerAssetRowIds: ReadonlyArray<string>
-    readonly now: Date
-    readonly unresolvedStatuses: ReadonlyArray<UnresolvedMappingStatus>
-  }) =>
-    Effect.gen(function* () {
-      if (providerAssetRowIds.length === 0) {
-        return [] as ReadonlyArray<{
-          readonly providerAssetRowId: string
-          readonly evidenceRevision: number
-        }>
-      }
-
-      const candidates = yield* tx
-        .select({
-          providerAssetRowId: schema.providerAssets.id,
-          evidenceRevision: schema.providerAssets.evidenceRevision,
-          mappingStatus: schema.providerAssetMappings.mappingStatus,
-        })
-        .from(schema.providerAssets)
-        .leftJoin(
-          schema.providerAssetMappings,
-          eq(schema.providerAssetMappings.providerAssetRowId, schema.providerAssets.id)
-        )
-        .where(inArray(schema.providerAssets.id, providerAssetRowIds))
-        .pipe(
-          wrapSyncEngineSqlError("providerAssetRepository.scheduleUnresolvedResolutionJob.load")
-        )
-
-      const unresolved = candidates.filter((candidate) =>
-        unresolvedStatuses.some((status) => status === candidate.mappingStatus)
-      )
-      if (unresolved.length === 0) {
-        return []
-      }
-
-      const inserted = yield* tx
-        .insert(schema.assetResolutionJobs)
-        .values(
-          unresolved.map((candidate) => ({
-            providerAssetRowId: candidate.providerAssetRowId,
-            evidenceRevision: candidate.evidenceRevision,
-            status: "pending" as const,
-            createdAt: now,
-            updatedAt: now,
-          }))
-        )
-        .onConflictDoNothing({
-          target: [
-            schema.assetResolutionJobs.providerAssetRowId,
-            schema.assetResolutionJobs.evidenceRevision,
-          ],
-        })
-        .returning({
-          providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
-          evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
-        })
-        .pipe(
-          wrapSyncEngineSqlError("providerAssetRepository.scheduleUnresolvedResolutionJob.insert")
-        )
-
-      return inserted
-    })
 
   const upsertProviderAssets: ProviderAssetRepositoryShape["upsertProviderAssets"] = ({
     providerKey,
@@ -1108,292 +1017,6 @@ const make = Effect.gen(function* () {
       return Option.fromNullishOr(row)
     })
 
-  const scheduleUnresolvedResolutionJob: ProviderAssetRepositoryShape["scheduleUnresolvedResolutionJob"] =
-    ({ providerAssetRowId }) =>
-      // Callers schedule a job and then often fail on purpose (an unmapped
-      // asset stops normalization). The job must survive that failure even
-      // when the caller wrapped everything in one transaction.
-      runDetachedFromAmbientTransaction(
-        db
-          .transaction((tx) =>
-            Effect.gen(function* () {
-              const [providerAsset] = yield* tx
-                .select({
-                  id: schema.providerAssets.id,
-                  evidenceRevision: schema.providerAssets.evidenceRevision,
-                })
-                .from(schema.providerAssets)
-                .where(eq(schema.providerAssets.id, providerAssetRowId))
-                .limit(1)
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset"
-                  )
-                )
-
-              if (providerAsset === undefined) {
-                return yield* new SyncEngineStorageError({
-                  operation:
-                    "providerAssetRepository.scheduleUnresolvedResolutionJob.providerAsset",
-                  cause: {
-                    providerAssetRowId,
-                    message: "Provider asset observation does not exist.",
-                  },
-                })
-              }
-
-              const inserted = yield* insertUnresolvedResolutionJobs({
-                tx,
-                providerAssetRowIds: [providerAssetRowId],
-                now: nowDate(),
-                unresolvedStatuses: OBSERVED_UNRESOLVED_STATUSES,
-              })
-              const created = inserted.some((job) => job.providerAssetRowId === providerAssetRowId)
-
-              return {
-                created,
-                providerAssetRowId,
-                evidenceRevision: providerAsset.evidenceRevision,
-              } satisfies AssetResolutionJobScheduleResult
-            })
-          )
-          .pipe(
-            wrapSyncEngineStorageError("providerAssetRepository.scheduleUnresolvedResolutionJob")
-          )
-      )
-
-  const claimResolutionJob: ProviderAssetRepositoryShape["claimResolutionJob"] = ({
-    jobId,
-    workerId,
-    startedAt,
-    staleBefore,
-  }) =>
-    db
-      .transaction((tx) =>
-        Effect.gen(function* () {
-          const [job] = yield* tx
-            .select({
-              id: schema.assetResolutionJobs.id,
-              providerAssetRowId: schema.assetResolutionJobs.providerAssetRowId,
-              evidenceRevision: schema.assetResolutionJobs.evidenceRevision,
-              status: schema.assetResolutionJobs.status,
-              attemptCount: schema.assetResolutionJobs.attemptCount,
-              nextRetryAt: schema.assetResolutionJobs.nextRetryAt,
-              heartbeatAt: schema.assetResolutionJobs.heartbeatAt,
-              updatedAt: schema.assetResolutionJobs.updatedAt,
-            })
-            .from(schema.assetResolutionJobs)
-            .where(eq(schema.assetResolutionJobs.id, jobId))
-            .for("update")
-            .limit(1)
-            .pipe(wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.job"))
-
-          if (job === undefined) {
-            return { _tag: "not_claimable" } as const
-          }
-
-          const claimablePending =
-            job.status === "pending" && (job.nextRetryAt === null || job.nextRetryAt <= startedAt)
-          const claimableStaleProcessing =
-            job.status === "processing" &&
-            (job.heartbeatAt === null ? job.updatedAt < staleBefore : job.heartbeatAt < staleBefore)
-
-          if (!claimablePending && !claimableStaleProcessing) {
-            return { _tag: "not_claimable" } as const
-          }
-
-          const [providerAsset] = yield* tx
-            .select({ evidenceRevision: schema.providerAssets.evidenceRevision })
-            .from(schema.providerAssets)
-            .where(eq(schema.providerAssets.id, job.providerAssetRowId))
-            .limit(1)
-            .pipe(
-              wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.providerAsset")
-            )
-
-          if (
-            providerAsset === undefined ||
-            providerAsset.evidenceRevision !== job.evidenceRevision
-          ) {
-            yield* tx
-              .update(schema.assetResolutionJobs)
-              .set({ status: "completed", updatedAt: startedAt })
-              .where(eq(schema.assetResolutionJobs.id, jobId))
-              .pipe(
-                wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.completeStale")
-              )
-
-            return { _tag: "stale" } as const
-          }
-
-          const attemptCount = job.attemptCount + 1
-
-          yield* tx
-            .update(schema.assetResolutionJobs)
-            .set({
-              status: "processing",
-              workerId,
-              startedAt,
-              heartbeatAt: startedAt,
-              nextRetryAt: null,
-              errorMessage: null,
-              attemptCount,
-              updatedAt: startedAt,
-            })
-            .where(eq(schema.assetResolutionJobs.id, jobId))
-            .pipe(wrapSyncEngineSqlError("providerAssetRepository.claimResolutionJob.claim"))
-
-          return {
-            _tag: "claimed",
-            providerAssetRowId: job.providerAssetRowId,
-            evidenceRevision: job.evidenceRevision,
-            attemptCount,
-          } as const
-        })
-      )
-      .pipe(wrapSyncEngineStorageError("providerAssetRepository.claimResolutionJob"))
-
-  const listDispatchableResolutionJobs: ProviderAssetRepositoryShape["listDispatchableResolutionJobs"] =
-    ({ now, staleBefore, limit }) =>
-      db
-        .select({ jobId: schema.assetResolutionJobs.id })
-        .from(schema.assetResolutionJobs)
-        .where(
-          or(
-            and(
-              eq(schema.assetResolutionJobs.status, "pending"),
-              or(
-                isNull(schema.assetResolutionJobs.nextRetryAt),
-                lte(schema.assetResolutionJobs.nextRetryAt, now)
-              )
-            ),
-            and(
-              eq(schema.assetResolutionJobs.status, "processing"),
-              or(
-                and(
-                  isNull(schema.assetResolutionJobs.heartbeatAt),
-                  lt(schema.assetResolutionJobs.updatedAt, staleBefore)
-                ),
-                lt(schema.assetResolutionJobs.heartbeatAt, staleBefore)
-              )
-            )
-          )
-        )
-        .orderBy(asc(schema.assetResolutionJobs.createdAt))
-        .limit(limit)
-        .pipe(wrapSyncEngineSqlError("providerAssetRepository.listDispatchableResolutionJobs"))
-
-  const heartbeatResolutionJob: ProviderAssetRepositoryShape["heartbeatResolutionJob"] = ({
-    jobId,
-    workerId,
-    heartbeatAt,
-  }) =>
-    db
-      .update(schema.assetResolutionJobs)
-      .set({ heartbeatAt, updatedAt: heartbeatAt })
-      .where(
-        and(
-          eq(schema.assetResolutionJobs.id, jobId),
-          eq(schema.assetResolutionJobs.status, "processing"),
-          eq(schema.assetResolutionJobs.workerId, workerId)
-        )
-      )
-      .returning({ id: schema.assetResolutionJobs.id })
-      .pipe(
-        Effect.map((rows) => (rows.length > 0 ? ("heartbeated" as const) : ("not_owned" as const))),
-        wrapSyncEngineSqlError("providerAssetRepository.heartbeatResolutionJob")
-      )
-
-  const releaseResolutionJobAfterFailure: ProviderAssetRepositoryShape["releaseResolutionJobAfterFailure"] =
-    ({ jobId, workerId, message }) =>
-      db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            const now = nowDate()
-            const [job] = yield* tx
-              .select({
-                attemptCount: schema.assetResolutionJobs.attemptCount,
-                maxAttempts: schema.assetResolutionJobs.maxAttempts,
-              })
-              .from(schema.assetResolutionJobs)
-              .where(
-                and(
-                  eq(schema.assetResolutionJobs.id, jobId),
-                  eq(schema.assetResolutionJobs.status, "processing"),
-                  eq(schema.assetResolutionJobs.workerId, workerId)
-                )
-              )
-              .for("update")
-              .limit(1)
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "providerAssetRepository.releaseResolutionJobAfterFailure.job"
-                )
-              )
-
-            if (job === undefined) {
-              return { _tag: "not_owned" } as const
-            }
-
-            if (job.attemptCount >= job.maxAttempts) {
-              yield* tx
-                .update(schema.assetResolutionJobs)
-                .set({
-                  status: "failed",
-                  errorMessage: message,
-                  workerId: null,
-                  heartbeatAt: null,
-                  updatedAt: now,
-                })
-                .where(eq(schema.assetResolutionJobs.id, jobId))
-                .pipe(
-                  wrapSyncEngineSqlError(
-                    "providerAssetRepository.releaseResolutionJobAfterFailure.fail"
-                  )
-                )
-
-              return { _tag: "attempts_exhausted", attemptCount: job.attemptCount } as const
-            }
-
-            const nextRetryAt = new Date(
-              now.getTime() + ASSET_RESOLUTION_JOB_RETRY_BASE_DELAY_MS * 2 ** (job.attemptCount - 1)
-            )
-
-            yield* tx
-              .update(schema.assetResolutionJobs)
-              .set({
-                status: "pending",
-                errorMessage: message,
-                workerId: null,
-                startedAt: null,
-                heartbeatAt: null,
-                nextRetryAt,
-                updatedAt: now,
-              })
-              .where(eq(schema.assetResolutionJobs.id, jobId))
-              .pipe(
-                wrapSyncEngineSqlError(
-                  "providerAssetRepository.releaseResolutionJobAfterFailure.retry"
-                )
-              )
-
-            return { _tag: "retry_scheduled", attemptCount: job.attemptCount, nextRetryAt } as const
-          })
-        )
-        .pipe(
-          wrapSyncEngineStorageError("providerAssetRepository.releaseResolutionJobAfterFailure")
-        )
-
-  const finishResolutionJob: ProviderAssetRepositoryShape["finishResolutionJob"] = ({
-    jobId,
-    status,
-  }) =>
-    db
-      .update(schema.assetResolutionJobs)
-      .set({ status, updatedAt: nowDate() })
-      .where(eq(schema.assetResolutionJobs.id, jobId))
-      .pipe(Effect.asVoid, wrapSyncEngineSqlError("providerAssetRepository.finishResolutionJob"))
-
   const decisionInsertValues = ({
     decision,
     supersedesDecisionId = null,
@@ -1630,12 +1253,6 @@ const make = Effect.gen(function* () {
     listProviderAssetReviews,
     listProviderAssetObservedRepresentations,
     findProviderAssetMapping,
-    scheduleUnresolvedResolutionJob,
-    claimResolutionJob,
-    listDispatchableResolutionJobs,
-    heartbeatResolutionJob,
-    releaseResolutionJobAfterFailure,
-    finishResolutionJob,
     recordAssetResolutionDecision,
     appendSupersedingAssetResolutionDecision,
     findActiveAssetResolutionDecision,

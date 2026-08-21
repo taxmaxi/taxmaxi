@@ -12,13 +12,13 @@ import {
 import {
   ASSET_RESOLUTION_JOB_NAME,
   AssetResolutionJobExecutor,
+  AssetResolutionJobRepository,
   AssetResolutionQueuePayload,
-  ProviderAssetRepository,
   SyncEngineStorageError,
   type AssetResolutionJobExecutionResult,
   type AssetResolutionJobExecutorShape,
+  type AssetResolutionJobRepositoryShape,
   type DispatchableResolutionJob,
-  type ProviderAssetRepositoryShape,
 } from "@my/sync-engine/services"
 
 const attachedResult = (jobId: string): AssetResolutionJobExecutionResult => ({
@@ -42,32 +42,9 @@ const makeJob = (data: unknown): WorkerBullMqAssetResolutionJob => ({
 })
 
 const dieRepository = (
-  listDispatchableResolutionJobs: ProviderAssetRepositoryShape["listDispatchableResolutionJobs"]
-): ProviderAssetRepositoryShape =>
-  ProviderAssetRepository.of({
-    upsertProviderAssets: () => Effect.die("upsertProviderAssets should not be called"),
-    upsertProviderAssetMappings: () =>
-      Effect.die("upsertProviderAssetMappings should not be called"),
-    approveProviderAssetMappingAndRequestReplay: () =>
-      Effect.die("approveProviderAssetMappingAndRequestReplay should not be called"),
-    lockProviderAssetApprovalSnapshot: () =>
-      Effect.die("lockProviderAssetApprovalSnapshot should not be called"),
-    recordProviderAssetSourceUses: () =>
-      Effect.die("recordProviderAssetSourceUses should not be called"),
-    seedProviderAssetMappingsIfMissing: () =>
-      Effect.die("seedProviderAssetMappingsIfMissing should not be called"),
-    findProviderAssetByProviderAssetId: () =>
-      Effect.die("findProviderAssetByProviderAssetId should not be called"),
-    findProviderAssetByNaturalKey: () =>
-      Effect.die("findProviderAssetByNaturalKey should not be called"),
-    findProviderAssetByCurrencyCode: () =>
-      Effect.die("findProviderAssetByCurrencyCode should not be called"),
-    findProviderAssetReviewById: () =>
-      Effect.die("findProviderAssetReviewById should not be called"),
-    listProviderAssetReviews: () => Effect.die("listProviderAssetReviews should not be called"),
-    listProviderAssetObservedRepresentations: () =>
-      Effect.die("listProviderAssetObservedRepresentations should not be called"),
-    findProviderAssetMapping: () => Effect.die("findProviderAssetMapping should not be called"),
+  listDispatchableResolutionJobs: AssetResolutionJobRepositoryShape["listDispatchableResolutionJobs"]
+): AssetResolutionJobRepositoryShape =>
+  AssetResolutionJobRepository.of({
     scheduleUnresolvedResolutionJob: () =>
       Effect.die("scheduleUnresolvedResolutionJob should not be called"),
     claimResolutionJob: () => Effect.die("claimResolutionJob should not be called"),
@@ -76,16 +53,6 @@ const dieRepository = (
     releaseResolutionJobAfterFailure: () =>
       Effect.die("releaseResolutionJobAfterFailure should not be called"),
     finishResolutionJob: () => Effect.die("finishResolutionJob should not be called"),
-    appendSupersedingAssetResolutionDecision: () =>
-      Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
-    findActiveAssetResolutionDecision: () =>
-      Effect.die("findActiveAssetResolutionDecision should not be called"),
-    listAssetResolutionDecisions: () =>
-      Effect.die("listAssetResolutionDecisions should not be called"),
-    listAssetResolutionEvidence: () =>
-      Effect.die("listAssetResolutionEvidence should not be called"),
-    recordAssetResolutionDecision: () =>
-      Effect.die("recordAssetResolutionDecision should not be called"),
   })
 
 const runWithConsumer = <A>({
@@ -98,7 +65,7 @@ const runWithConsumer = <A>({
 }: {
   readonly effect: Effect.Effect<A>
   readonly executor: AssetResolutionJobExecutorShape
-  readonly listDispatchableResolutionJobs?: ProviderAssetRepositoryShape["listDispatchableResolutionJobs"]
+  readonly listDispatchableResolutionJobs?: AssetResolutionJobRepositoryShape["listDispatchableResolutionJobs"]
   readonly acquireWorker?: (
     config: WorkerBullMqAssetResolutionConsumerConfig,
     processor: WorkerBullMqAssetResolutionProcessor
@@ -126,7 +93,7 @@ const runWithConsumer = <A>({
               Layer.mergeAll(
                 Layer.succeed(AssetResolutionJobExecutor, executor),
                 Layer.succeed(
-                  ProviderAssetRepository,
+                  AssetResolutionJobRepository,
                   dieRepository(listDispatchableResolutionJobs ?? (() => Effect.succeed([])))
                 )
               )

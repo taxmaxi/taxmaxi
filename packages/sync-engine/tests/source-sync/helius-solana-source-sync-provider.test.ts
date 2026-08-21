@@ -25,6 +25,7 @@ import {
   ActivityFacts,
 } from "../../src/services/ActivityClassificationService.ts"
 import { AssetRepository } from "../../src/services/AssetRepository.ts"
+import { AssetResolutionJobRepository } from "../../src/services/AssetResolutionJobRepository.ts"
 import {
   ProviderAssetRepository,
   type ProviderAssetRepositoryShape,
@@ -165,6 +166,23 @@ const makeProviderLayer = ({
           findProviderAssetReviewById: () => Effect.succeed(Option.none()),
           listProviderAssetReviews: () => Effect.succeed([]),
           findProviderAssetMapping: () => Effect.succeed(Option.none()),
+          appendSupersedingAssetResolutionDecision: () =>
+            Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
+          findActiveAssetResolutionDecision: () =>
+            Effect.die("findActiveAssetResolutionDecision should not be called"),
+          listAssetResolutionDecisions: () =>
+            Effect.die("listAssetResolutionDecisions should not be called"),
+          listAssetResolutionEvidence: () =>
+            Effect.die("listAssetResolutionEvidence should not be called"),
+          recordAssetResolutionDecision: () =>
+            Effect.die("recordAssetResolutionDecision should not be called"),
+        })
+      )
+    ),
+    Layer.provide(
+      Layer.succeed(
+        AssetResolutionJobRepository,
+        AssetResolutionJobRepository.of({
           scheduleUnresolvedResolutionJob: () =>
             Effect.succeed({
               created: false,
@@ -178,16 +196,6 @@ const makeProviderLayer = ({
           releaseResolutionJobAfterFailure: () =>
             Effect.die("releaseResolutionJobAfterFailure should not be called"),
           finishResolutionJob: () => Effect.die("finishResolutionJob should not be called"),
-          appendSupersedingAssetResolutionDecision: () =>
-            Effect.die("appendSupersedingAssetResolutionDecision should not be called"),
-          findActiveAssetResolutionDecision: () =>
-            Effect.die("findActiveAssetResolutionDecision should not be called"),
-          listAssetResolutionDecisions: () =>
-            Effect.die("listAssetResolutionDecisions should not be called"),
-          listAssetResolutionEvidence: () =>
-            Effect.die("listAssetResolutionEvidence should not be called"),
-          recordAssetResolutionDecision: () =>
-            Effect.die("recordAssetResolutionDecision should not be called"),
         })
       )
     ),

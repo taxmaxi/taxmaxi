@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../src/layers/AssetRepositoryLive.ts"
 import { drizzle } from "../../src/layers/PgClientLive.ts"
+import { AssetResolutionJobRepositoryLive } from "../../src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../src/layers/ProviderReferenceRepositoryLive.ts"
 import { PortfolioRepositoryLive } from "../../src/layers/PortfolioRepositoryLive.ts"
@@ -108,6 +109,7 @@ const CoinbaseSyncClientTestLive = Layer.succeed(CoinbaseSyncClient, {
 })
 
 const CoinbaseReferenceMappingWithDepsLive = CoinbaseReferenceMappingServiceLive.pipe(
+  Layer.provide(AssetResolutionJobRepositoryLive),
   Layer.provide(ProviderAssetRepositoryLive),
   Layer.provide(ProviderReferenceRepositoryLive),
   Layer.provide(AssetRepositoryLive)

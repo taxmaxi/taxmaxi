@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { beforeEach, describe, expect, it } from "vitest"
 import { AssetRepositoryLive } from "../../../persistence/src/layers/AssetRepositoryLive.ts"
+import { AssetResolutionJobRepositoryLive } from "../../../persistence/src/layers/AssetResolutionJobRepositoryLive.ts"
 import { ProviderAssetRepositoryLive } from "../../../persistence/src/layers/ProviderAssetRepositoryLive.ts"
 import { ProviderReferenceRepositoryLive } from "../../../persistence/src/layers/ProviderReferenceRepositoryLive.ts"
 import { RepositoriesLive } from "../../../persistence/src/layers/RepositoriesLive.ts"
@@ -31,7 +32,7 @@ import { HeliusSolanaAssetResolutionService } from "../../src/providers/helius-s
 import { HeliusSolanaSyncClient } from "../../src/providers/helius-solana/services/HeliusSolanaSyncClient.ts"
 import { SourceSyncJobExecutorLive } from "../../src/layers/SourceSyncJobExecutorLive.ts"
 import { SourceProviderRegistryLive } from "../../src/layers/SourceProviderRegistryLive.ts"
-import { ProviderAssetRepository } from "../../src/services/ProviderAssetRepository.ts"
+import { AssetResolutionJobRepository } from "../../src/services/AssetResolutionJobRepository.ts"
 import { ProviderRawRecord } from "../../src/shared/SourceProviderRawBatch.ts"
 import { SourceSyncQueueInlineExecutorTestLive } from "../support/SourceSyncQueueInlineExecutorTestLive.ts"
 
@@ -236,6 +237,7 @@ const TestLayer = SourceSyncLayer.pipe(
 
 const HeliusAssetResolutionTestLive = HeliusSolanaAssetResolutionServiceLive.pipe(
   Layer.provide(AssetRepositoryLive),
+  Layer.provide(AssetResolutionJobRepositoryLive),
   Layer.provide(ProviderAssetRepositoryLive),
   Layer.provide(
     Layer.succeed(HeliusSolanaSyncClient, {
@@ -577,10 +579,10 @@ describe("asset resolution job scheduling", () => {
 
     const secondSchedule = await Effect.runPromise(
       context.runWithLayer({
-        effect: Effect.flatMap(ProviderAssetRepository, (repository) =>
+        effect: Effect.flatMap(AssetResolutionJobRepository, (repository) =>
           repository.scheduleUnresolvedResolutionJob({ providerAssetRowId })
         ),
-        layer: ProviderAssetRepositoryLive,
+        layer: AssetResolutionJobRepositoryLive,
       })
     )
     const afterSecondSchedule = await Effect.runPromise(fetchUnknownObservationState())
