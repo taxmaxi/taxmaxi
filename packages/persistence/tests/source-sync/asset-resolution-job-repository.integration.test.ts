@@ -29,9 +29,8 @@ const runPg = context.runPg
 
 await Effect.runPromise(context.recreateTestDatabase())
 
-const runProviderAssetRepository = <A, E>(
-  effect: Effect.Effect<A, E, ProviderAssetRepository>
-) => Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
+const runProviderAssetRepository = <A, E>(effect: Effect.Effect<A, E, ProviderAssetRepository>) =>
+  Effect.runPromise(context.runWithLayer({ effect, layer: ProviderAssetRepositoryLive }))
 
 const runJobRepository = <A, E>(effect: Effect.Effect<A, E, AssetResolutionJobRepository>) =>
   Effect.runPromise(context.runWithLayer({ effect, layer: AssetResolutionJobRepositoryLive }))

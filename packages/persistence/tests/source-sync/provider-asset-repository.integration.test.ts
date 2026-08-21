@@ -218,7 +218,6 @@ const scheduleResolutionJob = async (suffix: string) => {
   return { providerAssetRowId, jobId: job.id }
 }
 
-
 describe("ProviderAssetRepositoryLive", () => {
   describe("current schema", () => {
     beforeEach(async () => {

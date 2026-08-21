@@ -220,9 +220,7 @@ const make = Effect.gen(function* () {
         )
         .orderBy(asc(schema.assetResolutionJobs.createdAt))
         .limit(limit)
-        .pipe(
-          wrapSyncEngineSqlError("assetResolutionJobRepository.listDispatchableResolutionJobs")
-        )
+        .pipe(wrapSyncEngineSqlError("assetResolutionJobRepository.listDispatchableResolutionJobs"))
 
   const heartbeatResolutionJob: AssetResolutionJobRepositoryShape["heartbeatResolutionJob"] = ({
     jobId,
@@ -322,7 +320,9 @@ const make = Effect.gen(function* () {
           })
         )
         .pipe(
-          wrapSyncEngineStorageError("assetResolutionJobRepository.releaseResolutionJobAfterFailure")
+          wrapSyncEngineStorageError(
+            "assetResolutionJobRepository.releaseResolutionJobAfterFailure"
+          )
         )
 
   const finishResolutionJob: AssetResolutionJobRepositoryShape["finishResolutionJob"] = ({
